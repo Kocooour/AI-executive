@@ -17,3 +17,11 @@ npm run dev
 - Foundation for Inbox, Upcoming, Projects, Areas and Notes
 
 ### Iteration 2\n- IndexedDB persistence with Dexie\n- Persistent task creation and completion\n- Inbox backed by local entity data\n- UUID-based local entities\n\nNext: Projects, Areas, Notes and richer task scheduling.
+
+### Iteration 10–11
+- First-class relations
+- Bidirectional relation traversal
+- Area aggregates related projects and tasks
+- Project aggregates related tasks and notes
+
+Next: migrate legacy property links fully into relations and add relation-aware search.
