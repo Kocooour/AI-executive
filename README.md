@@ -25,3 +25,9 @@ npm run dev
 - Project aggregates related tasks and notes
 
 Next: migrate legacy property links fully into relations and add relation-aware search.
+
+### Iteration 13–14
+- Relation-aware Context Builder
+- Model-independent Tool API: search/get/create/update/get_context
+- Agent definitions with explicit tool allowlists
+- No LLM or Hermes dependency in Core
