@@ -31,3 +31,6 @@ Next: migrate legacy property links fully into relations and add relation-aware 
 - Model-independent Tool API: search/get/create/update/get_context
 - Agent definitions with explicit tool allowlists
 - No LLM or Hermes dependency in Core
+
+### AI provider
+The assistant calls the server-side `/api/ai` endpoint. Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` in the deployment environment. Secrets are never stored in IndexedDB or exposed to the browser. If the endpoint is unavailable, the UI falls back to LocalPreviewProvider.
