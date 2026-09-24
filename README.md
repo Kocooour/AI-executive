@@ -16,4 +16,4 @@ npm run dev
 - Quick task capture
 - Foundation for Inbox, Upcoming, Projects, Areas and Notes
 
-Next: IndexedDB persistence with Dexie and full navigation views.
+### Iteration 2\n- IndexedDB persistence with Dexie\n- Persistent task creation and completion\n- Inbox backed by local entity data\n- UUID-based local entities\n\nNext: Projects, Areas, Notes and richer task scheduling.
