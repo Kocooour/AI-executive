@@ -56,6 +56,9 @@ export default function App() {
     [assistantOpen, setAssistantOpen] = useState(false),
     [moreOpen, setMoreOpen] = useState(false),
     [startupView, setStartupView] = useState("Today"),
+    [workspaceName, setWorkspaceName] = useState("Personal"),
+    [workspaceDraft, setWorkspaceDraft] = useState("Personal"),
+    [settingsSaved, setSettingsSaved] = useState(false),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   async function load() {
@@ -109,12 +112,29 @@ export default function App() {
   }
   useEffect(() => {
     const savedView = localStorage.getItem("ai-executive-startup-view");
+    const savedWorkspaceName = localStorage.getItem(
+      "ai-executive-workspace-name",
+    );
     if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
       setView(savedView);
     }
+    if (savedWorkspaceName) {
+      setWorkspaceName(savedWorkspaceName);
+      setWorkspaceDraft(savedWorkspaceName);
+    }
     seed().then(migratePropertyRelations).then(load);
   }, []);
+
+  function saveWorkspaceName() {
+    const name = workspaceDraft.trim();
+    if (!name) return;
+    localStorage.setItem("ai-executive-workspace-name", name);
+    setWorkspaceName(name);
+    setWorkspaceDraft(name);
+    setSettingsSaved(true);
+    window.setTimeout(() => setSettingsSaved(false), 1800);
+  }
   const tasks = items.filter((x) => x.type === "task"),
     projects = items.filter((x) => x.type === "project"),
     areas = items.filter((x) => x.type === "area"),
@@ -344,7 +364,17 @@ export default function App() {
   return (
     <main>
       <aside>
-        <b>Personal⌄</b>
+        <button
+          className="workspaceButton"
+          onClick={() => {
+            setView("Settings");
+            closeDetail();
+          }}
+          aria-label="Workspace settings"
+        >
+          <b>{workspaceName}</b>
+          <span>⌄</span>
+        </button>
         <nav>
           {views.map((x) => (
             <button
@@ -475,8 +505,31 @@ export default function App() {
                 <h2>Workspace</h2>
                 <label>
                   Name
-                  <input value="Personal" readOnly />
+                  <div className="workspaceNameEditor">
+                    <input
+                      value={workspaceDraft}
+                      onChange={(e) => {
+                        setWorkspaceDraft(e.target.value);
+                        setSettingsSaved(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveWorkspaceName();
+                      }}
+                      aria-label="Workspace name"
+                    />
+                    <button
+                      onClick={saveWorkspaceName}
+                      disabled={!workspaceDraft.trim()}
+                    >
+                      Save
+                    </button>
+                  </div>
                 </label>
+                {settingsSaved && (
+                  <p className="saveConfirmation" role="status">
+                    Workspace saved.
+                  </p>
+                )}
                 <label>
                   Open on startup
                   <select

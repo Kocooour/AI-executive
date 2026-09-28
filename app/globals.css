@@ -27,6 +27,26 @@ aside {
   flex-direction: column;
   gap: 28px;
 }
+.workspaceButton {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #20212a;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.workspaceButton:hover {
+  background: #f6f6fa;
+}
+.workspaceButton span {
+  color: #888;
+}
 nav {
   display: grid;
   gap: 5px;
@@ -197,6 +217,29 @@ article small {
   background: #fff;
   color: #20212a;
   font: inherit;
+}
+.workspaceNameEditor {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+.workspaceNameEditor button {
+  padding: 0 18px;
+  border: 0;
+  border-radius: 10px;
+  background: #6557e8;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 650;
+}
+.workspaceNameEditor button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.settingsPanel .saveConfirmation {
+  color: #36804b;
+  font-size: 13px;
+  font-weight: 650;
 }
 .settingsPanel dl {
   margin: 0;
