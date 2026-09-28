@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   db,
   seed,
@@ -10,6 +10,7 @@ import {
 import { buildContext, type ContextBundle } from "../lib/context";
 import { LocalPreviewProvider, type AIMessage } from "../lib/ai-provider";
 import { assistantAgent } from "../lib/agents";
+import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 
 const views = [
     "Home",
@@ -59,11 +60,85 @@ export default function App() {
     [workspaceName, setWorkspaceName] = useState("Personal"),
     [workspaceDraft, setWorkspaceDraft] = useState("Personal"),
     [settingsSaved, setSettingsSaved] = useState(false),
+    [syncStatus, setSyncStatus] = useState<
+      "connecting" | "synced" | "syncing" | "offline"
+    >("connecting"),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
+  const serverRevision = useRef(0);
+  const syncQueue = useRef<Promise<void>>(Promise.resolve());
   async function load() {
     setItems(await db.entities.toArray());
     setRelations(await db.relations.toArray());
+  }
+  async function applySnapshot(snapshot: ServerSnapshot) {
+    await db.transaction("rw", db.entities, db.relations, async () => {
+      await db.entities.clear();
+      await db.relations.clear();
+      if (snapshot.entities.length) await db.entities.bulkAdd(snapshot.entities);
+      if (snapshot.relations.length)
+        await db.relations.bulkAdd(snapshot.relations);
+    });
+    serverRevision.current = snapshot.revision;
+    await load();
+  }
+  async function putSnapshot(
+    entities: Entity[],
+    snapshotRelations: any[],
+    baseRevision: number,
+  ) {
+    return fetch("/api/store", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision,
+        entities,
+        relations: snapshotRelations,
+      }),
+    });
+  }
+  async function syncToServer() {
+    const operation = syncQueue.current.then(async () => {
+      setSyncStatus("syncing");
+      const localEntities = await db.entities.toArray();
+      const localRelations = await db.relations.toArray();
+      let response = await putSnapshot(
+        localEntities,
+        localRelations,
+        serverRevision.current,
+      );
+      if (response.status === 409) {
+        const current = (await response.json()) as ServerSnapshot;
+        const merged = mergeSnapshots(current, localEntities, localRelations);
+        response = await putSnapshot(
+          merged.entities,
+          merged.relations,
+          current.revision,
+        );
+      }
+      if (!response.ok) throw new Error("Server synchronization failed");
+      const saved = (await response.json()) as ServerSnapshot;
+      await applySnapshot(saved);
+      localStorage.setItem("ai-executive-server-synced", "1");
+      setSyncStatus("synced");
+    });
+    syncQueue.current = operation.catch(() => {
+      setSyncStatus("offline");
+    });
+    return syncQueue.current;
+  }
+  async function pullFromServer() {
+    try {
+      const response = await fetch("/api/store", { cache: "no-store" });
+      if (!response.ok) throw new Error("Server synchronization failed");
+      const snapshot = (await response.json()) as ServerSnapshot;
+      if (snapshot.revision > serverRevision.current) {
+        await applySnapshot(snapshot);
+      }
+      setSyncStatus("synced");
+    } catch {
+      setSyncStatus("offline");
+    }
   }
   async function inspect(e: Entity) {
     setSelected(e);
@@ -123,7 +198,61 @@ export default function App() {
       setWorkspaceName(savedWorkspaceName);
       setWorkspaceDraft(savedWorkspaceName);
     }
-    seed().then(migratePropertyRelations).then(load);
+    async function initialize() {
+      await seed();
+      await migratePropertyRelations();
+      try {
+        const response = await fetch("/api/store", { cache: "no-store" });
+        if (!response.ok) throw new Error("Server synchronization failed");
+        let snapshot = (await response.json()) as ServerSnapshot;
+        const alreadySynchronized =
+          localStorage.getItem("ai-executive-server-synced") === "1";
+        if (!alreadySynchronized) {
+          const localEntities = await db.entities.toArray();
+          const localRelations = await db.relations.toArray();
+          const merged = mergeSnapshots(snapshot, localEntities, localRelations);
+          let saveResponse = await putSnapshot(
+            merged.entities,
+            merged.relations,
+            snapshot.revision,
+          );
+          if (saveResponse.status === 409) {
+            snapshot = (await saveResponse.json()) as ServerSnapshot;
+            const retry = mergeSnapshots(
+              snapshot,
+              merged.entities,
+              merged.relations,
+            );
+            saveResponse = await putSnapshot(
+              retry.entities,
+              retry.relations,
+              snapshot.revision,
+            );
+          }
+          if (!saveResponse.ok) throw new Error("Initial synchronization failed");
+          snapshot = (await saveResponse.json()) as ServerSnapshot;
+          localStorage.setItem("ai-executive-server-synced", "1");
+        }
+        await applySnapshot(snapshot);
+        setSyncStatus("synced");
+      } catch {
+        await load();
+        setSyncStatus("offline");
+      }
+    }
+    initialize();
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") pullFromServer();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, []);
 
   function saveWorkspaceName() {
@@ -243,6 +372,7 @@ export default function App() {
     });
     setText("");
     setDraft("");
+    await syncToServer();
     await load();
     if (selected) setContext(await buildContext(selected.id, 2));
     return id;
@@ -276,6 +406,7 @@ export default function App() {
           createdAt: Date.now(),
         });
     });
+    await syncToServer();
     await load();
     if (selected) setContext(await buildContext(selected.id, 2));
   }
@@ -285,12 +416,14 @@ export default function App() {
       title: title.trim(),
       updatedAt: Date.now(),
     });
+    await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
   }
   async function remove(e: Entity) {
     setUndo(e);
     await db.entities.delete(e.id);
+    await syncToServer();
     closeDetail();
     load();
   }
@@ -301,6 +434,7 @@ export default function App() {
       status: undo.status === "completed" ? "open" : undo.status,
       updatedAt: Date.now(),
     });
+    await syncToServer();
     setUndo(null);
     load();
   }
@@ -309,6 +443,7 @@ export default function App() {
       properties: { ...e.properties, ...properties },
       updatedAt: Date.now(),
     });
+    await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
   }
@@ -347,6 +482,7 @@ export default function App() {
       status: "completed",
       updatedAt: Date.now(),
     });
+    await syncToServer();
     closeDetail();
     load();
   }
@@ -565,6 +701,18 @@ export default function App() {
                   <div>
                     <dt>Relations</dt>
                     <dd>{relations.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Server sync</dt>
+                    <dd className={`syncStatus ${syncStatus}`}>
+                      {syncStatus === "synced"
+                        ? "Synced"
+                        : syncStatus === "syncing"
+                          ? "Syncing…"
+                          : syncStatus === "offline"
+                            ? "Offline"
+                            : "Connecting…"}
+                    </dd>
                   </div>
                 </dl>
               </section>

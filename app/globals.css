@@ -254,6 +254,16 @@ article small {
   margin: 0;
   font-weight: 650;
 }
+.syncStatus.synced {
+  color: #36804b;
+}
+.syncStatus.syncing,
+.syncStatus.connecting {
+  color: #8a6b24;
+}
+.syncStatus.offline {
+  color: #b33;
+}
 @media (max-width: 700px) {
   main {
     display: block;
