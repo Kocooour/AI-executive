@@ -55,6 +55,7 @@ export default function App() {
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
     [moreOpen, setMoreOpen] = useState(false),
+    [startupView, setStartupView] = useState("Today"),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   async function load() {
@@ -107,6 +108,11 @@ export default function App() {
     }
   }
   useEffect(() => {
+    const savedView = localStorage.getItem("ai-executive-startup-view");
+    if (savedView && views.includes(savedView)) {
+      setStartupView(savedView);
+      setView(savedView);
+    }
     seed().then(migratePropertyRelations).then(load);
   }, []);
   const tasks = items.filter((x) => x.type === "task"),
@@ -365,9 +371,19 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <footer>
-          ＋ New
-          <br />⚙ Settings
+        <footer className="sidebarActions">
+          <button onClick={() => openCapture()} aria-label="Create a new task">
+            ＋ New
+          </button>
+          <button
+            className={view === "Settings" ? "active" : ""}
+            onClick={() => {
+              setView("Settings");
+              closeDetail();
+            }}
+          >
+            ⚙ Settings
+          </button>
         </footer>
       </aside>
       <section>
@@ -453,13 +469,63 @@ export default function App() {
                 ))}
             </div>
           )}
-          <div
-            className={
-              "list " +
-              (view === "Home" || view === "Search" ? "secondary" : "")
-            }
-          >
-            {collection.map((x) => (
+          {view === "Settings" && (
+            <div className="settingsPanel">
+              <section>
+                <h2>Workspace</h2>
+                <label>
+                  Name
+                  <input value="Personal" readOnly />
+                </label>
+                <label>
+                  Open on startup
+                  <select
+                    value={startupView}
+                    onChange={(e) => {
+                      setStartupView(e.target.value);
+                      localStorage.setItem(
+                        "ai-executive-startup-view",
+                        e.target.value,
+                      );
+                    }}
+                  >
+                    {views
+                      .filter((item) => item !== "Home")
+                      .map((item) => (
+                        <option key={item}>{item}</option>
+                      ))}
+                  </select>
+                </label>
+              </section>
+              <section>
+                <h2>Data & AI</h2>
+                <p>
+                  Your workspace data is stored locally in this browser. AI
+                  uses the server provider when configured and falls back to a
+                  local preview otherwise.
+                </p>
+                <dl>
+                  <div>
+                    <dt>Stored items</dt>
+                    <dd>{items.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Relations</dt>
+                    <dd>{relations.length}</dd>
+                  </div>
+                </dl>
+              </section>
+            </div>
+          )}
+          {view !== "Settings" && (
+            <>
+              <div
+                className={
+                  "list " +
+                  (view === "Home" || view === "Search" ? "secondary" : "")
+                }
+              >
+                {collection.map((x) => (
               <article key={x.id} onClick={() => inspect(x)}>
                 {x.type === "task" ? (
                   <button
@@ -501,18 +567,20 @@ export default function App() {
                       : x.type}
                   </small>
                 </div>
-              </article>
-            ))}
-          </div>
-          <div className="capture">
-            <input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && create(type, text)}
-              placeholder={"+ Add " + type}
-            />
-            <button onClick={() => create(type, text)}>Add</button>
-          </div>
+                  </article>
+                ))}
+              </div>
+              <div className="capture">
+                <input
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && create(type, text)}
+                  placeholder={"+ Add " + type}
+                />
+                <button onClick={() => create(type, text)}>Add</button>
+              </div>
+            </>
+          )}
         </div>
       </section>
       <nav className="mobileNav">
