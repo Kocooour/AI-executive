@@ -283,9 +283,10 @@ article small {
   }
   .capture {
     position: fixed;
-    bottom: 15px;
-    left: 15px;
-    right: 15px;
+    z-index: 12;
+    bottom: calc(74px + env(safe-area-inset-bottom));
+    left: 12px;
+    right: 12px;
     background: #fff;
     padding: 8px;
     border-radius: 15px;
@@ -414,7 +415,7 @@ article {
 }
 @media (max-width: 700px) {
   body {
-    padding-bottom: 74px;
+    padding-bottom: calc(150px + env(safe-area-inset-bottom));
   }
   .mobileNav {
     position: fixed;
@@ -423,7 +424,8 @@ article {
     bottom: 0;
     left: 0;
     right: 0;
-    height: 64px;
+    height: calc(64px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
     background: #fff;
     border-top: 1px solid #e6e6ec;
     justify-content: space-around;
