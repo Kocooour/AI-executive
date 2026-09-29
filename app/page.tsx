@@ -385,19 +385,26 @@ export default function App() {
     setCapture(true);
   }
   async function submitCapture() {
-    if (!draft.trim()) return;
+    const title = draft.trim();
+    if (!title) return;
     const globalTask = captureType === "task" && !captureProjectId;
-    await create(captureType, draft, {
-      ...(captureProjectId ? { projectId: captureProjectId } : {}),
-      ...(captureType === "task"
-        ? { inbox: !captureProjectId, today: false }
-        : {}),
-    });
     setCapture(false);
     if (globalTask) {
       closeDetail();
       setMoreOpen(false);
       setView("Inbox");
+    }
+    try {
+      await create(captureType, title, {
+        ...(captureProjectId ? { projectId: captureProjectId } : {}),
+        ...(captureType === "task"
+          ? { inbox: !captureProjectId, today: false }
+          : {}),
+      });
+    } catch {
+      setDraft(title);
+      setCapture(true);
+      setSyncStatus("offline");
     }
   }
   async function relate(
@@ -843,17 +850,19 @@ export default function App() {
       )}
       {capture && (
         <div className="captureOverlay" onClick={() => setCapture(false)}>
-          <div className="captureModal" onClick={(e) => e.stopPropagation()}>
+          <form
+            className="captureModal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitCapture();
+            }}
+          >
             <h2>{captureType === "note" ? "Add note" : "Quick Capture"}</h2>
             <input
               autoFocus
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={async (e) => {
-                if (e.key === "Enter") {
-                  await submitCapture();
-                }
-              }}
               placeholder={
                 captureType === "note" ? "Note title" : "What needs to be done?"
               }
@@ -862,16 +871,18 @@ export default function App() {
               <p>Try “Zavolat Petrovi zítra” or “Servis 25.9.”</p>
             )}
             <div>
-              <button onClick={() => setCapture(false)}>Cancel</button>
+              <button type="button" onClick={() => setCapture(false)}>
+                Cancel
+              </button>
               <button
+                type="submit"
                 className="ai"
-                onClick={submitCapture}
                 disabled={!draft.trim()}
               >
                 {captureType === "note" ? "Add note" : "Add task"}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
       {selected && (
