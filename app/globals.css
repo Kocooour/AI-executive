@@ -197,9 +197,15 @@ article small {
 }
 .capture input {
   flex: 1;
+  min-width: 0;
   border: 1px solid #e4e4eb;
   border-radius: 12px;
   padding: 14px;
+  font-size: 16px;
+}
+.capture button {
+  flex: none;
+  min-width: 64px;
 }
 .empty {
   background: #fff;
@@ -364,6 +370,11 @@ article small {
   }
 }
 @media (max-width: 700px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
   main {
     display: block;
   }
