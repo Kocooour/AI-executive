@@ -28,12 +28,13 @@ function parsePasswordHash(encoded: string) {
       ? "$"
       : null;
   if (!separator) return null;
-  const [scheme, saltValue, hashValue, extra] = encoded.split(separator);
+  const parts = encoded.split(separator);
+  if (parts.length !== 3) return null;
+  const [scheme, saltValue, hashValue] = parts;
   if (
     scheme !== "scrypt" ||
     !saltValue ||
     !hashValue ||
-    extra ||
     !/^[A-Za-z0-9_-]+$/.test(saltValue) ||
     !/^[A-Za-z0-9_-]+$/.test(hashValue)
   ) {
