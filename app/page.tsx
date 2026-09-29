@@ -384,6 +384,22 @@ export default function App() {
     setDraft("");
     setCapture(true);
   }
+  async function submitCapture() {
+    if (!draft.trim()) return;
+    const globalTask = captureType === "task" && !captureProjectId;
+    await create(captureType, draft, {
+      ...(captureProjectId ? { projectId: captureProjectId } : {}),
+      ...(captureType === "task"
+        ? { inbox: !captureProjectId, today: false }
+        : {}),
+    });
+    setCapture(false);
+    if (globalTask) {
+      closeDetail();
+      setMoreOpen(false);
+      setView("Inbox");
+    }
+  }
   async function relate(
     sourceId: string,
     targetId: string,
@@ -835,15 +851,7 @@ export default function App() {
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={async (e) => {
                 if (e.key === "Enter") {
-                  await create(captureType, draft, {
-                    ...(captureProjectId
-                      ? { projectId: captureProjectId }
-                      : {}),
-                    ...(captureType === "task"
-                      ? { inbox: !captureProjectId, today: false }
-                      : {}),
-                  });
-                  setCapture(false);
+                  await submitCapture();
                 }
               }}
               placeholder={
@@ -857,17 +865,8 @@ export default function App() {
               <button onClick={() => setCapture(false)}>Cancel</button>
               <button
                 className="ai"
-                onClick={async () => {
-                  await create(captureType, draft, {
-                    ...(captureProjectId
-                      ? { projectId: captureProjectId }
-                      : {}),
-                    ...(captureType === "task"
-                      ? { inbox: !captureProjectId, today: false }
-                      : {}),
-                  });
-                  setCapture(false);
-                }}
+                onClick={submitCapture}
+                disabled={!draft.trim()}
               >
                 {captureType === "note" ? "Add note" : "Add task"}
               </button>
