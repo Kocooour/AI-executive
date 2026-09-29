@@ -1031,6 +1031,7 @@ export default function App() {
       .filter((r) => r.relationType === relationType)
       .toArray();
     localDataVersion.current += 1;
+    const relationTimestamp = Date.now();
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.relations.bulkDelete(existing.map((r) => r.id));
       if (targetId)
@@ -1040,9 +1041,15 @@ export default function App() {
           sourceEntityId: sourceId,
           targetEntityId: targetId,
           relationType,
-          createdAt: Date.now(),
+          createdAt: relationTimestamp,
         });
-      await db.entities.update(source.id, { updatedAt: Date.now() });
+      await db.entities.update(source.id, {
+        properties: {
+          ...source.properties,
+          relationsUpdatedAt: relationTimestamp,
+        },
+        updatedAt: relationTimestamp,
+      });
     });
     localDataVersion.current += 1;
     await syncToServer();
