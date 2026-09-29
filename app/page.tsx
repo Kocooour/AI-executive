@@ -980,7 +980,10 @@ export default function App() {
     setDraft("");
     await syncToServer();
     await load();
-    if (selected) setContext(await buildContext(selected.id, 2));
+    if (selected) {
+      setSelected((await db.entities.get(selected.id)) || null);
+      setContext(await buildContext(selected.id, 2));
+    }
     return id;
   }
 
@@ -1054,16 +1057,22 @@ export default function App() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    if (selected) setContext(await buildContext(selected.id, 2));
+    if (selected) {
+      setSelected((await db.entities.get(selected.id)) || null);
+      setContext(await buildContext(selected.id, 2));
+    }
   }
   async function rename(e: Entity, title: string) {
     if (!title.trim()) return;
-    const activity = Array.isArray(e.properties.activity) ? e.properties.activity : [];
+    const current = (await db.entities.get(e.id)) || e;
+    const activity = Array.isArray(current.properties.activity)
+      ? current.properties.activity
+      : [];
     localDataVersion.current += 1;
     await db.entities.update(e.id, {
       title: title.trim(),
       properties: {
-        ...e.properties,
+        ...current.properties,
         activity: [...activity, { at: Date.now(), action: "renamed" }].slice(-50),
       },
       updatedAt: Date.now(),
@@ -1115,11 +1124,14 @@ export default function App() {
     load();
   }
   async function patch(e: Entity, properties: Record<string, unknown>, action = "updated") {
-    const activity = Array.isArray(e.properties.activity) ? e.properties.activity : [];
+    const current = (await db.entities.get(e.id)) || e;
+    const activity = Array.isArray(current.properties.activity)
+      ? current.properties.activity
+      : [];
     localDataVersion.current += 1;
     await db.entities.update(e.id, {
       properties: {
-        ...e.properties,
+        ...current.properties,
         ...properties,
         activity: [...activity, { at: Date.now(), action }].slice(-50),
       },

@@ -54,6 +54,24 @@ export function mergeSnapshots(
       )
       .map((entity) => entity.id),
   );
+  for (const [entityId, entity] of entities) {
+    const winningRelationVersion = Math.max(
+      relationVersion(serverEntities.get(entityId)),
+      relationVersion(localEntitiesById.get(entityId)),
+    );
+    if (
+      winningRelationVersion >
+      Number(entity.properties.relationsUpdatedAt || 0)
+    ) {
+      entities.set(entityId, {
+        ...entity,
+        properties: {
+          ...entity.properties,
+          relationsUpdatedAt: winningRelationVersion,
+        },
+      });
+    }
+  }
   const mergeableServerRelations = server.relations.filter(
     (relation) => !localRelationSources.has(relation.sourceEntityId),
   );
