@@ -34,3 +34,11 @@ Next: migrate legacy property links fully into relations and add relation-aware 
 
 ### AI provider
 The assistant calls the server-side `/api/ai` endpoint. Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` in the deployment environment. Secrets are never stored in IndexedDB or exposed to the browser. If the endpoint is unavailable, the UI falls back to LocalPreviewProvider.
+
+### MVP 2 persistence and PWA
+
+- The server source of truth is SQLite at `.data/store.sqlite` (or `$AI_EXECUTIVE_DATA_DIR/store.sqlite`).
+- On first runtime access, an existing `.data/store.json` is migrated without changing entity IDs or relations and retained as a legacy recovery copy.
+- Logical JSON backups live in `.data/backups`. The Settings screen can create and restore them; restore always creates a safety backup first.
+- One automatic daily backup is created before the first data change of the day.
+- The app ships a manifest, icons, offline shell, and service worker. Installation outside localhost requires HTTPS.

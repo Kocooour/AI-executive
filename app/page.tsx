@@ -12,6 +12,14 @@ import { LocalPreviewProvider, type AIMessage } from "../lib/ai-provider";
 import { assistantAgent } from "../lib/agents";
 import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 
+interface BackupSummary {
+  name: string;
+  createdAt: number;
+  entityCount: number;
+  relationCount: number;
+  error?: string;
+}
+
 const views = [
     "Home",
     "Inbox",
@@ -63,10 +71,22 @@ export default function App() {
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting"),
+    [backups, setBackups] = useState<BackupSummary[]>([]),
+    [backupStatus, setBackupStatus] = useState(""),
+    [standalone, setStandalone] = useState(false),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   const serverRevision = useRef(0);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingKey = "ai-executive-pending-sync";
+  const deletedKey = "ai-executive-pending-deletions";
+  const pendingDeletedIds = () => {
+    try {
+      return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
   async function load() {
     setItems(await db.entities.toArray());
     setRelations(await db.relations.toArray());
@@ -86,6 +106,7 @@ export default function App() {
     entities: Entity[],
     snapshotRelations: any[],
     baseRevision: number,
+    deletedIds: string[] = [],
   ) {
     return fetch("/api/store", {
       method: "PUT",
@@ -94,32 +115,52 @@ export default function App() {
         baseRevision,
         entities,
         relations: snapshotRelations,
+        deletedIds,
       }),
     });
   }
   async function syncToServer() {
     const operation = syncQueue.current.then(async () => {
       setSyncStatus("syncing");
+      localStorage.setItem(pendingKey, "1");
       const localEntities = await db.entities.toArray();
       const localRelations = await db.relations.toArray();
       let response = await putSnapshot(
         localEntities,
         localRelations,
         serverRevision.current,
+        pendingDeletedIds(),
       );
       if (response.status === 409) {
         const current = (await response.json()) as ServerSnapshot;
-        const merged = mergeSnapshots(current, localEntities, localRelations);
+        const deletedIds = new Set(pendingDeletedIds());
+        const filteredCurrent = {
+          ...current,
+          entities: current.entities.filter((entity) => !deletedIds.has(entity.id)),
+          relations: current.relations.filter(
+            (relation) =>
+              !deletedIds.has(relation.sourceEntityId) &&
+              !deletedIds.has(relation.targetEntityId),
+          ),
+        };
+        const merged = mergeSnapshots(
+          filteredCurrent,
+          localEntities,
+          localRelations,
+        );
         response = await putSnapshot(
           merged.entities,
           merged.relations,
           current.revision,
+          pendingDeletedIds(),
         );
       }
       if (!response.ok) throw new Error("Server synchronization failed");
       const saved = (await response.json()) as ServerSnapshot;
       await applySnapshot(saved);
       localStorage.setItem("ai-executive-server-synced", "1");
+      localStorage.removeItem(pendingKey);
+      localStorage.removeItem(deletedKey);
       setSyncStatus("synced");
     });
     syncQueue.current = operation.catch(() => {
@@ -128,6 +169,10 @@ export default function App() {
     return syncQueue.current;
   }
   async function pullFromServer() {
+    if (localStorage.getItem(pendingKey) === "1") {
+      await syncToServer();
+      return;
+    }
     try {
       const response = await fetch("/api/store", { cache: "no-store" });
       if (!response.ok) throw new Error("Server synchronization failed");
@@ -198,23 +243,53 @@ export default function App() {
       setWorkspaceName(savedWorkspaceName);
       setWorkspaceDraft(savedWorkspaceName);
     }
+    setStandalone(
+      window.matchMedia("(display-mode: standalone)").matches ||
+        Boolean((navigator as Navigator & { standalone?: boolean }).standalone),
+    );
     async function initialize() {
-      await seed();
-      await migratePropertyRelations();
       try {
         const response = await fetch("/api/store", { cache: "no-store" });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
+        let localEntities = await db.entities.toArray();
+        let localRelations = await db.relations.toArray();
+        if (!localEntities.length && !snapshot.entities.length) {
+          await seed();
+          await migratePropertyRelations();
+          localEntities = await db.entities.toArray();
+          localRelations = await db.relations.toArray();
+        } else if (localEntities.length) {
+          await migratePropertyRelations();
+          localEntities = await db.entities.toArray();
+          localRelations = await db.relations.toArray();
+        }
         const alreadySynchronized =
           localStorage.getItem("ai-executive-server-synced") === "1";
-        if (!alreadySynchronized) {
-          const localEntities = await db.entities.toArray();
-          const localRelations = await db.relations.toArray();
-          const merged = mergeSnapshots(snapshot, localEntities, localRelations);
+        const hasPendingChanges = localStorage.getItem(pendingKey) === "1";
+        if (!alreadySynchronized || hasPendingChanges) {
+          const deletedIds = new Set(pendingDeletedIds());
+          const filteredSnapshot = {
+            ...snapshot,
+            entities: snapshot.entities.filter(
+              (entity) => !deletedIds.has(entity.id),
+            ),
+            relations: snapshot.relations.filter(
+              (relation) =>
+                !deletedIds.has(relation.sourceEntityId) &&
+                !deletedIds.has(relation.targetEntityId),
+            ),
+          };
+          const merged = mergeSnapshots(
+            filteredSnapshot,
+            localEntities,
+            localRelations,
+          );
           let saveResponse = await putSnapshot(
             merged.entities,
             merged.relations,
             snapshot.revision,
+            pendingDeletedIds(),
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
@@ -227,11 +302,14 @@ export default function App() {
               retry.entities,
               retry.relations,
               snapshot.revision,
+              pendingDeletedIds(),
             );
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
           snapshot = (await saveResponse.json()) as ServerSnapshot;
           localStorage.setItem("ai-executive-server-synced", "1");
+          localStorage.removeItem(pendingKey);
+          localStorage.removeItem(deletedKey);
         }
         await applySnapshot(snapshot);
         setSyncStatus("synced");
@@ -244,13 +322,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (view !== "Settings") return;
+    fetch("/api/backups", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setBackups(Array.isArray(data.backups) ? data.backups : []))
+      .catch(() => setBackupStatus("Backups unavailable while offline."));
+  }, [view]);
+
+  useEffect(() => {
     const refresh = () => {
       if (document.visibilityState === "visible") pullFromServer();
     };
     window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
       window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
   }, []);
@@ -263,6 +351,50 @@ export default function App() {
     setWorkspaceDraft(name);
     setSettingsSaved(true);
     window.setTimeout(() => setSettingsSaved(false), 1800);
+  }
+  async function createServerBackup() {
+    setBackupStatus("Creating backup…");
+    try {
+      const response = await fetch("/api/backups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "create" }),
+      });
+      if (!response.ok) throw new Error("Backup failed");
+      const listResponse = await fetch("/api/backups", { cache: "no-store" });
+      const data = await listResponse.json();
+      setBackups(data.backups || []);
+      setBackupStatus("Backup created.");
+    } catch {
+      setBackupStatus("Backup failed. Check the server connection.");
+    }
+  }
+  async function restoreServerBackup(backup: BackupSummary) {
+    if (
+      !window.confirm(
+        `Restore ${new Date(backup.createdAt).toLocaleString()}? A safety backup will be created first.`,
+      )
+    )
+      return;
+    setBackupStatus("Restoring backup…");
+    try {
+      const response = await fetch("/api/backups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "restore", name: backup.name }),
+      });
+      if (!response.ok) throw new Error("Restore failed");
+      const data = await response.json();
+      await applySnapshot(data.snapshot as ServerSnapshot);
+      localStorage.removeItem(pendingKey);
+      localStorage.removeItem(deletedKey);
+      setBackupStatus("Backup restored.");
+      const listResponse = await fetch("/api/backups", { cache: "no-store" });
+      const list = await listResponse.json();
+      setBackups(list.backups || []);
+    } catch {
+      setBackupStatus("Restore failed. Current data was not changed.");
+    }
   }
   const tasks = items.filter((x) => x.type === "task"),
     projects = items.filter((x) => x.type === "project"),
@@ -445,13 +577,29 @@ export default function App() {
   }
   async function remove(e: Entity) {
     setUndo(e);
-    await db.entities.delete(e.id);
+    const deletedIds = new Set(pendingDeletedIds());
+    deletedIds.add(e.id);
+    localStorage.setItem(deletedKey, JSON.stringify([...deletedIds]));
+    const linkedRelations = (await db.relations.toArray())
+      .filter(
+        (relation) =>
+          relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
+      )
+      .map((relation) => relation.id);
+    await db.transaction("rw", db.entities, db.relations, async () => {
+      await db.entities.delete(e.id);
+      await db.relations.bulkDelete(linkedRelations);
+    });
     await syncToServer();
     closeDetail();
     load();
   }
   async function restore() {
     if (!undo) return;
+    const deletedIds = pendingDeletedIds().filter((id) => id !== undo.id);
+    if (deletedIds.length)
+      localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
+    else localStorage.removeItem(deletedKey);
     await db.entities.put({
       ...undo,
       status: undo.status === "completed" ? "open" : undo.status,
@@ -712,9 +860,9 @@ export default function App() {
               <section>
                 <h2>Data & AI</h2>
                 <p>
-                  Your workspace data is stored locally in this browser. AI
-                  uses the server provider when configured and falls back to a
-                  local preview otherwise.
+                  Your workspace data is stored in the server database and
+                  cached locally for fast access. AI uses the server provider
+                  when configured and falls back to a local preview otherwise.
                 </p>
                 <dl>
                   <div>
@@ -738,6 +886,50 @@ export default function App() {
                     </dd>
                   </div>
                 </dl>
+              </section>
+              <section>
+                <h2>Install app</h2>
+                <p>
+                  {standalone
+                    ? "AI Executive is running as an installed app."
+                    : "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command."}
+                </p>
+                <span className={`installStatus ${standalone ? "installed" : ""}`}>
+                  {standalone ? "Installed" : "Browser mode"}
+                </span>
+              </section>
+              <section>
+                <div className="sectionHeading">
+                  <div>
+                    <h2>Backups</h2>
+                    <p>Daily safety copies are created automatically before changes.</p>
+                  </div>
+                  <button className="primaryAction" onClick={createServerBackup}>
+                    Create backup
+                  </button>
+                </div>
+                {backupStatus && <p role="status">{backupStatus}</p>}
+                <div className="backupList">
+                  {backups.length === 0 && <p>No backups yet.</p>}
+                  {backups.slice(0, 8).map((backup) => (
+                    <div key={backup.name}>
+                      <span>
+                        <strong>{new Date(backup.createdAt).toLocaleString()}</strong>
+                        <small>
+                          {backup.error
+                            ? `Invalid backup · ${backup.error}`
+                            : `${backup.entityCount} items · ${backup.relationCount} relations`}
+                        </small>
+                      </span>
+                      <button
+                        disabled={Boolean(backup.error)}
+                        onClick={() => restoreServerBackup(backup)}
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </section>
             </div>
           )}
