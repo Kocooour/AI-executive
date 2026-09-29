@@ -1,4 +1,4 @@
-const CACHE = "ai-executive-shell-v1";
+const CACHE = "ai-executive-shell-v2";
 const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -56,4 +56,38 @@ self.addEventListener("fetch", (event) => {
       ),
     );
   }
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = { body: event.data?.text() || "A task needs your attention." };
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title || "AI Executive", {
+      body: payload.body || "A task needs your attention.",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: payload.tag || "ai-executive-reminder",
+      data: { url: payload.url || "/?view=Today" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) {
+          if ("navigate" in client) client.navigate(target);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow ? self.clients.openWindow(target) : undefined;
+    }),
+  );
 });

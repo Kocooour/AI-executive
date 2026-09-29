@@ -20,10 +20,25 @@ interface BackupSummary {
   error?: string;
 }
 
+interface NotificationPreferences {
+  enabled: boolean;
+  timezone: string;
+  workdayStart: string;
+  workdayEnd: string;
+  workdays: number[];
+}
+
+interface NotificationState {
+  publicKey: string;
+  subscriptionCount: number;
+  preferences: NotificationPreferences;
+}
+
 const views = [
     "Home",
     "Inbox",
     "Today",
+    "Overdue",
     "Upcoming",
     "Anytime",
     "Someday",
@@ -31,16 +46,17 @@ const views = [
     "Projects",
     "Areas",
     "Notes",
-  ],
-  day = 86400000;
+  ];
 const moreViews = [
   "Inbox",
+  "Overdue",
   "Upcoming",
   "Anytime",
   "Someday",
   "Completed",
   "Areas",
   "Notes",
+  "Settings",
 ];
 const ymd = (d = new Date()) =>
   [
@@ -48,6 +64,54 @@ const ymd = (d = new Date()) =>
     String(d.getMonth() + 1).padStart(2, "0"),
     String(d.getDate()).padStart(2, "0"),
   ].join("-");
+const addLocalDays = (date: Date, days: number) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+};
+const toLocalDateTime = (value: unknown) => {
+  if (typeof value !== "string" || !value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.length === 16 ? value : "";
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+const fromLocalDateTime = (value: string) =>
+  value ? new Date(value).toISOString() : "";
+const zonedDateTimeToIso = (dateValue: string, timeValue: string, timeZone: string) => {
+  const [year, month, date] = dateValue.split("-").map(Number);
+  const [hour, minute] = timeValue.split(":").map(Number);
+  const desired = Date.UTC(year, month - 1, date, hour, minute);
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  let candidate = desired;
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    const values = Object.fromEntries(
+      formatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]),
+    );
+    const represented = Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute),
+    );
+    candidate += desired - represented;
+  }
+  return new Date(candidate).toISOString();
+};
+const urlBase64ToUint8Array = (base64: string) => {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
+};
 
 export default function App() {
   const [items, setItems] = useState<Entity[]>([]),
@@ -74,15 +138,33 @@ export default function App() {
     [backups, setBackups] = useState<BackupSummary[]>([]),
     [backupStatus, setBackupStatus] = useState(""),
     [standalone, setStandalone] = useState(false),
+    [notificationState, setNotificationState] = useState<NotificationState | null>(null),
+    [notificationStatus, setNotificationStatus] = useState(""),
+    [sortBy, setSortBy] = useState<"date" | "priority" | "created">("date"),
+    [priorityFilter, setPriorityFilter] = useState("all"),
+    [checklistDraft, setChecklistDraft] = useState(""),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   const serverRevision = useRef(0);
+  const deepLinkHandled = useRef(false);
+  const captureOpener = useRef<HTMLElement | null>(null);
+  const captureModalRef = useRef<HTMLFormElement | null>(null);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
+  const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
+  const localDataVersion = useRef(0);
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
+  const revivedKey = "ai-executive-pending-revivals";
   const pendingDeletedIds = () => {
     try {
       return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  const pendingRevivedIds = () => {
+    try {
+      return JSON.parse(localStorage.getItem(revivedKey) || "[]") as string[];
     } catch {
       return [];
     }
@@ -91,8 +173,12 @@ export default function App() {
     setItems(await db.entities.toArray());
     setRelations(await db.relations.toArray());
   }
-  async function applySnapshot(snapshot: ServerSnapshot) {
+  async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number) {
+    if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
     await db.transaction("rw", db.entities, db.relations, async () => {
+      if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
+        throw new Error("LOCAL_DATA_CHANGED");
+      }
       await db.entities.clear();
       await db.relations.clear();
       if (snapshot.entities.length) await db.entities.bulkAdd(snapshot.entities);
@@ -101,12 +187,14 @@ export default function App() {
     });
     serverRevision.current = snapshot.revision;
     await load();
+    return true;
   }
   async function putSnapshot(
     entities: Entity[],
     snapshotRelations: any[],
     baseRevision: number,
     deletedIds: string[] = [],
+    revivedIds: string[] = [],
   ) {
     return fetch("/api/store", {
       method: "PUT",
@@ -116,6 +204,7 @@ export default function App() {
         entities,
         relations: snapshotRelations,
         deletedIds,
+        revivedIds,
       }),
     });
   }
@@ -123,6 +212,7 @@ export default function App() {
     const operation = syncQueue.current.then(async () => {
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
+      const localVersion = localDataVersion.current;
       const localEntities = await db.entities.toArray();
       const localRelations = await db.relations.toArray();
       let response = await putSnapshot(
@@ -130,12 +220,15 @@ export default function App() {
         localRelations,
         serverRevision.current,
         pendingDeletedIds(),
+        pendingRevivedIds(),
       );
       if (response.status === 409) {
         const current = (await response.json()) as ServerSnapshot;
         const deletedIds = new Set(pendingDeletedIds());
+        const revivedIds = new Set(pendingRevivedIds());
         const filteredCurrent = {
           ...current,
+          tombstones: (current.tombstones || []).filter((item) => !revivedIds.has(item.id)),
           entities: current.entities.filter((entity) => !deletedIds.has(entity.id)),
           relations: current.relations.filter(
             (relation) =>
@@ -153,14 +246,25 @@ export default function App() {
           merged.relations,
           current.revision,
           pendingDeletedIds(),
+          pendingRevivedIds(),
         );
       }
       if (!response.ok) throw new Error("Server synchronization failed");
       const saved = (await response.json()) as ServerSnapshot;
-      await applySnapshot(saved);
+      let applied = false;
+      try {
+        applied = await applySnapshot(saved, localVersion);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+      }
+      if (!applied) {
+        serverRevision.current = saved.revision;
+        return;
+      }
       localStorage.setItem("ai-executive-server-synced", "1");
       localStorage.removeItem(pendingKey);
       localStorage.removeItem(deletedKey);
+      localStorage.removeItem(revivedKey);
       setSyncStatus("synced");
     });
     syncQueue.current = operation.catch(() => {
@@ -169,16 +273,27 @@ export default function App() {
     return syncQueue.current;
   }
   async function pullFromServer() {
+    await syncQueue.current;
     if (localStorage.getItem(pendingKey) === "1") {
       await syncToServer();
       return;
     }
     try {
+      const pullVersion = localDataVersion.current;
       const response = await fetch("/api/store", { cache: "no-store" });
       if (!response.ok) throw new Error("Server synchronization failed");
       const snapshot = (await response.json()) as ServerSnapshot;
+      await syncQueue.current;
+      if (localStorage.getItem(pendingKey) === "1") {
+        await syncToServer();
+        return;
+      }
       if (snapshot.revision > serverRevision.current) {
-        await applySnapshot(snapshot);
+        try {
+          await applySnapshot(snapshot, pullVersion);
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+        }
       }
       setSyncStatus("synced");
     } catch {
@@ -248,6 +363,7 @@ export default function App() {
         Boolean((navigator as Navigator & { standalone?: boolean }).standalone),
     );
     async function initialize() {
+      const initializationVersion = localDataVersion.current;
       try {
         const response = await fetch("/api/store", { cache: "no-store" });
         if (!response.ok) throw new Error("Server synchronization failed");
@@ -269,8 +385,10 @@ export default function App() {
         const hasPendingChanges = localStorage.getItem(pendingKey) === "1";
         if (!alreadySynchronized || hasPendingChanges) {
           const deletedIds = new Set(pendingDeletedIds());
+          const revivedIds = new Set(pendingRevivedIds());
           const filteredSnapshot = {
             ...snapshot,
+            tombstones: (snapshot.tombstones || []).filter((item) => !revivedIds.has(item.id)),
             entities: snapshot.entities.filter(
               (entity) => !deletedIds.has(entity.id),
             ),
@@ -290,11 +408,18 @@ export default function App() {
             merged.relations,
             snapshot.revision,
             pendingDeletedIds(),
+            pendingRevivedIds(),
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
+            const retrySnapshot = {
+              ...snapshot,
+              tombstones: (snapshot.tombstones || []).filter(
+                (item) => !revivedIds.has(item.id),
+              ),
+            };
             const retry = mergeSnapshots(
-              snapshot,
+              retrySnapshot,
               merged.entities,
               merged.relations,
             );
@@ -303,15 +428,22 @@ export default function App() {
               retry.relations,
               snapshot.revision,
               pendingDeletedIds(),
+              pendingRevivedIds(),
             );
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
           snapshot = (await saveResponse.json()) as ServerSnapshot;
-          localStorage.setItem("ai-executive-server-synced", "1");
-          localStorage.removeItem(pendingKey);
-          localStorage.removeItem(deletedKey);
         }
-        await applySnapshot(snapshot);
+        if (localDataVersion.current !== initializationVersion) {
+          serverRevision.current = snapshot.revision;
+          await syncToServer();
+          return;
+        }
+        await applySnapshot(snapshot, initializationVersion);
+        localStorage.setItem("ai-executive-server-synced", "1");
+        localStorage.removeItem(pendingKey);
+        localStorage.removeItem(deletedKey);
+        localStorage.removeItem(revivedKey);
         setSyncStatus("synced");
       } catch {
         await load();
@@ -322,11 +454,43 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/notifications", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((state) => setNotificationState(state as NotificationState))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!items.length || deepLinkHandled.current) return;
+    const parameters = new URLSearchParams(window.location.search);
+    const requestedView = parameters.get("view");
+    const taskId = parameters.get("task");
+    if (requestedView && views.includes(requestedView)) setView(requestedView);
+    if (taskId) {
+      const task = items.find((item) => item.id === taskId);
+      if (task) inspect(task);
+    }
+    deepLinkHandled.current = true;
+  }, [items]);
+
+  useEffect(() => {
+    if (!capture && captureOpener.current) {
+      captureOpener.current.focus();
+      captureOpener.current = null;
+    }
+  }, [capture]);
+
+  useEffect(() => {
     if (view !== "Settings") return;
-    fetch("/api/backups", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((data) => setBackups(Array.isArray(data.backups) ? data.backups : []))
-      .catch(() => setBackupStatus("Backups unavailable while offline."));
+    Promise.all([
+      fetch("/api/backups", { cache: "no-store" }).then((response) => response.json()),
+      fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json()),
+    ])
+      .then(([backupData, notificationData]) => {
+        setBackups(Array.isArray(backupData.backups) ? backupData.backups : []);
+        setNotificationState(notificationData as NotificationState);
+      })
+      .catch(() => setBackupStatus("Server settings are unavailable while offline."));
   }, [view]);
 
   useEffect(() => {
@@ -351,6 +515,86 @@ export default function App() {
     setWorkspaceDraft(name);
     setSettingsSaved(true);
     window.setTimeout(() => setSettingsSaved(false), 1800);
+  }
+  async function enableNotifications() {
+    setNotificationStatus("Requesting permission…");
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        throw new Error("Push notifications are not supported in this browser.");
+      }
+      if (!window.isSecureContext) {
+        throw new Error("Open the HTTPS address to enable notifications.");
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("Notification permission was not granted.");
+      const stateResponse = await fetch("/api/notifications", { cache: "no-store" });
+      if (!stateResponse.ok) throw new Error("Notification service is unavailable.");
+      const state = (await stateResponse.json()) as NotificationState;
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(state.publicKey),
+        });
+      }
+      const response = await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "subscribe", subscription: subscription.toJSON() }),
+      });
+      if (!response.ok) throw new Error("The device could not be registered.");
+      setNotificationState((await response.json()) as NotificationState);
+      setNotificationStatus("Notifications enabled on this device.");
+    } catch (error) {
+      setNotificationStatus(error instanceof Error ? error.message : "Notifications could not be enabled.");
+    }
+  }
+  async function disableNotifications() {
+    setNotificationStatus("Disabling notifications…");
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await fetch("/api/notifications", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "unsubscribe", endpoint: subscription.endpoint }),
+        });
+        await subscription.unsubscribe();
+      }
+      const state = await fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json());
+      setNotificationState(state as NotificationState);
+      setNotificationStatus("Notifications disabled on this device.");
+    } catch {
+      setNotificationStatus("Notifications could not be disabled.");
+    }
+  }
+  async function testNotification() {
+    setNotificationStatus("Sending test notification…");
+    const response = await fetch("/api/notifications", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "test" }),
+    });
+    const result = await response.json();
+    setNotificationStatus(result.sent ? "Test notification sent." : "No registered device received the test.");
+  }
+  async function saveNotificationSettings(preferences: NotificationPreferences) {
+    setNotificationState((current) => current ? { ...current, preferences } : current);
+    notificationSettingsQueue.current = notificationSettingsQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const response = await fetch("/api/notifications", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "preferences", preferences }),
+        });
+        if (!response.ok) throw new Error();
+        setNotificationStatus("Reminder settings saved.");
+      })
+      .catch(() => setNotificationStatus("Reminder settings could not be saved."));
+    await notificationSettingsQueue.current;
   }
   async function createServerBackup() {
     setBackupStatus("Creating backup…");
@@ -388,6 +632,7 @@ export default function App() {
       await applySnapshot(data.snapshot as ServerSnapshot);
       localStorage.removeItem(pendingKey);
       localStorage.removeItem(deletedKey);
+      localStorage.removeItem(revivedKey);
       setBackupStatus("Backup restored.");
       const listResponse = await fetch("/api/backups", { cache: "no-store" });
       const list = await listResponse.json();
@@ -409,41 +654,60 @@ export default function App() {
       .filter((r) => r.targetEntityId === targetId && r.relationType === type)
       .map((r) => r.sourceEntityId);
   const visible = useMemo(
-    () =>
-      tasks.filter((t) => {
+    () => {
+      const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
+      return tasks.filter((t) => {
+        if (priorityFilter !== "all" && String(t.properties.priority || "none") !== priorityFilter) return false;
         if (view === "Completed") return t.status === "completed";
         if (t.status !== "open") return false;
         const p = t.properties;
         if (view === "Inbox") return p.inbox === true;
-        if (view === "Today") return p.today === true || p.when === today;
+        if (view === "Today") return p.today === true || p.when === today || (typeof p.when === "string" && p.when < today);
+        if (view === "Overdue") return typeof p.when === "string" && p.when < today;
         if (view === "Upcoming")
           return typeof p.when === "string" && p.when > today;
         if (view === "Anytime")
           return !p.when && !p.someday && p.inbox !== true;
         if (view === "Someday") return p.someday === true;
         return true;
-      }),
-    [tasks, view, today],
+      }).sort((a, b) => {
+        if (sortBy === "created") return b.createdAt - a.createdAt;
+        if (sortBy === "priority") {
+          return (priorityRank[String(a.properties.priority || "none")] ?? 3) -
+            (priorityRank[String(b.properties.priority || "none")] ?? 3);
+        }
+        return String(a.properties.when || "9999-12-31").localeCompare(String(b.properties.when || "9999-12-31"));
+      });
+    },
+    [tasks, view, today, sortBy, priorityFilter],
   );
   function parseCapture(raw: string) {
     let title = raw.trim(),
-      when = "";
-    const lower = title.toLowerCase();
-    if (lower.includes(" zítra")) {
-      when = ymd(new Date(Date.now() + day));
-      title = title.replace(/\s+zítra/i, "");
-    } else if (lower.includes(" dnes")) {
+      when = "",
+      priority = "none";
+    if (/(^|\s)zítra(?=\s|$)/i.test(title)) {
+      when = ymd(addLocalDays(new Date(), 1));
+      title = title.replace(/(^|\s)zítra(?=\s|$)/i, " ");
+    } else if (/(^|\s)dnes(?=\s|$)/i.test(title)) {
       when = today;
-      title = title.replace(/\s+dnes/i, "");
+      title = title.replace(/(^|\s)dnes(?=\s|$)/i, " ");
     }
-    const m = title.match(/\s+(\d{1,2})\.(\d{1,2})\.?$/);
+    const m = title.match(/(?:^|\s)(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\.?\s*$/);
     if (m) {
-      const d = new Date();
-      d.setMonth(Number(m[2]) - 1, Number(m[1]));
-      when = ymd(d);
-      title = title.slice(0, m.index).trim();
+      const now = new Date();
+      const year = m[3] ? Number(m[3]) : now.getFullYear();
+      const d = new Date(year, Number(m[2]) - 1, Number(m[1]));
+      if (d.getFullYear() === year && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[1])) {
+        if (!m[3] && d < new Date(now.getFullYear(), now.getMonth(), now.getDate())) d.setFullYear(year + 1);
+        when = ymd(d);
+        title = title.slice(0, m.index).trim();
+      }
     }
-    return { title, when };
+    if (/(^|\s)(!|#high)(?=\s|$)/i.test(title)) priority = "high";
+    else if (/(^|\s)#medium(?=\s|$)/i.test(title)) priority = "medium";
+    else if (/(^|\s)#low(?=\s|$)/i.test(title)) priority = "low";
+    title = title.replace(/(^|\s)(!|#high|#medium|#low)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
+    return { title, when, priority };
   }
   async function create(
     type: EntityType,
@@ -452,17 +716,21 @@ export default function App() {
   ) {
     if (!title.trim()) return;
     const now = Date.now(),
-      id = crypto.randomUUID(),
+      id = typeof extra.entityId === "string" ? extra.entityId : crypto.randomUUID(),
       projectId = typeof extra.projectId === "string" ? extra.projectId : "",
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
       properties = { ...extra },
       parsed =
         type === "task"
           ? parseCapture(title)
-          : { title: title.trim(), when: "" };
+          : { title: title.trim(), when: "", priority: "none" };
     delete properties.projectId;
     delete properties.areaId;
+    delete properties.entityId;
+    localDataVersion.current += 1;
+    let created = false;
     await db.transaction("rw", db.entities, db.relations, async () => {
+      if (await db.entities.get(id)) return;
       await db.entities.add({
         id,
         type,
@@ -472,15 +740,22 @@ export default function App() {
         properties:
           type === "task"
             ? {
-                inbox: !projectId && view === "Inbox" && !parsed.when,
-                today: view === "Today" || parsed.when === today,
-                ...(parsed.when ? { when: parsed.when } : {}),
                 ...properties,
+                inbox: parsed.when
+                  ? false
+                  : Boolean(properties.inbox ?? (!projectId && view === "Inbox")),
+                today: parsed.when
+                  ? parsed.when === today
+                  : Boolean(properties.today ?? (view === "Today")),
+                ...(parsed.when ? { when: parsed.when } : {}),
+                ...(parsed.priority !== "none" ? { priority: parsed.priority } : {}),
+                activity: [{ at: now, action: "created" }],
               }
             : properties,
         createdAt: now,
         updatedAt: now,
       });
+      created = true;
       if (projectId) {
         await db.relations.add({
           id: crypto.randomUUID(),
@@ -502,6 +777,8 @@ export default function App() {
         });
       }
     });
+    localDataVersion.current += 1;
+    if (!created) return id;
     setText("");
     setDraft("");
     await syncToServer();
@@ -511,6 +788,7 @@ export default function App() {
   }
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
+    captureOpener.current = document.activeElement as HTMLElement | null;
     setCaptureType(type);
     setCaptureProjectId(projectId);
     setDraft("");
@@ -549,6 +827,7 @@ export default function App() {
       .equals(sourceId)
       .filter((r) => r.relationType === relationType)
       .toArray();
+    localDataVersion.current += 1;
     await db.transaction("rw", db.relations, async () => {
       await db.relations.bulkDelete(existing.map((r) => r.id));
       if (targetId)
@@ -561,16 +840,24 @@ export default function App() {
           createdAt: Date.now(),
         });
     });
+    localDataVersion.current += 1;
     await syncToServer();
     await load();
     if (selected) setContext(await buildContext(selected.id, 2));
   }
   async function rename(e: Entity, title: string) {
     if (!title.trim()) return;
+    const activity = Array.isArray(e.properties.activity) ? e.properties.activity : [];
+    localDataVersion.current += 1;
     await db.entities.update(e.id, {
       title: title.trim(),
+      properties: {
+        ...e.properties,
+        activity: [...activity, { at: Date.now(), action: "renamed" }].slice(-50),
+      },
       updatedAt: Date.now(),
     });
+    localDataVersion.current += 1;
     await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
@@ -586,10 +873,12 @@ export default function App() {
           relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
       )
       .map((relation) => relation.id);
+    localDataVersion.current += 1;
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.entities.delete(e.id);
       await db.relations.bulkDelete(linkedRelations);
     });
+    localDataVersion.current += 1;
     await syncToServer();
     closeDetail();
     load();
@@ -600,20 +889,32 @@ export default function App() {
     if (deletedIds.length)
       localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
     else localStorage.removeItem(deletedKey);
+    localDataVersion.current += 1;
     await db.entities.put({
       ...undo,
       status: undo.status === "completed" ? "open" : undo.status,
       updatedAt: Date.now(),
     });
+    localDataVersion.current += 1;
+    const revivedIds = new Set(pendingRevivedIds());
+    revivedIds.add(undo.id);
+    localStorage.setItem(revivedKey, JSON.stringify([...revivedIds]));
     await syncToServer();
     setUndo(null);
     load();
   }
-  async function patch(e: Entity, properties: Record<string, unknown>) {
+  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated") {
+    const activity = Array.isArray(e.properties.activity) ? e.properties.activity : [];
+    localDataVersion.current += 1;
     await db.entities.update(e.id, {
-      properties: { ...e.properties, ...properties },
+      properties: {
+        ...e.properties,
+        ...properties,
+        activity: [...activity, { at: Date.now(), action }].slice(-50),
+      },
       updatedAt: Date.now(),
     });
+    localDataVersion.current += 1;
     await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
@@ -637,25 +938,72 @@ export default function App() {
         n = Number(rec.interval || 1);
       if (rec.frequency === "daily") next.setDate(next.getDate() + n);
       if (rec.frequency === "weekly") next.setDate(next.getDate() + 7 * n);
-      if (rec.frequency === "monthly") next.setMonth(next.getMonth() + n);
-      if (rec.frequency === "yearly") next.setFullYear(next.getFullYear() + n);
+      if (rec.frequency === "monthly") {
+        const desiredDay = next.getDate();
+        next.setDate(1);
+        next.setMonth(next.getMonth() + n);
+        const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+        next.setDate(Math.min(desiredDay, lastDay));
+      }
+      if (rec.frequency === "yearly") {
+        const desiredDay = next.getDate();
+        const desiredMonth = next.getMonth();
+        next.setDate(1);
+        next.setFullYear(next.getFullYear() + n);
+        next.setMonth(desiredMonth);
+        const lastDay = new Date(next.getFullYear(), desiredMonth + 1, 0).getDate();
+        next.setDate(Math.min(desiredDay, lastDay));
+      }
+      const reminderLocal = toLocalDateTime(t.properties.reminderAt);
+      const nextReminder = reminderLocal
+        ? fromLocalDateTime(`${ymd(next)}T${reminderLocal.slice(11, 16)}`)
+        : "";
       await create("task", t.title, {
         ...t.properties,
+        entityId: `${t.id}:occurrence:${ymd(next)}`,
         projectId: targets(t.id, "belongs_to_project")[0],
         areaId: targets(t.id, "belongs_to_area")[0],
         when: ymd(next),
+        reminderAt: nextReminder,
         today: false,
         inbox: false,
       });
     }
     if (t) setUndo(t);
+    localDataVersion.current += 1;
     await db.entities.update(id, {
       status: "completed",
+      properties: {
+        ...t?.properties,
+        completedAt: Date.now(),
+        activity: [
+          ...(Array.isArray(t?.properties.activity) ? t.properties.activity : []),
+          { at: Date.now(), action: "completed" },
+        ].slice(-50),
+      },
       updatedAt: Date.now(),
     });
+    localDataVersion.current += 1;
     await syncToServer();
     closeDetail();
     load();
+  }
+  async function reopenTask(task: Entity) {
+    const activity = Array.isArray(task.properties.activity) ? task.properties.activity : [];
+    localDataVersion.current += 1;
+    await db.entities.update(task.id, {
+      status: "open",
+      properties: {
+        ...task.properties,
+        completedAt: null,
+        activity: [...activity, { at: Date.now(), action: "reopened" }].slice(-50),
+      },
+      updatedAt: Date.now(),
+    });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
+    setSelected((await db.entities.get(task.id)) || null);
   }
   const type: EntityType =
     view === "Projects"
@@ -901,6 +1249,94 @@ export default function App() {
               <section>
                 <div className="sectionHeading">
                   <div>
+                    <h2>Reminders</h2>
+                    <p>
+                      Push reminders are sent by the server even when the app is closed.
+                      On iPhone, first install the app on the Home Screen and open the HTTPS address.
+                    </p>
+                  </div>
+                  <span className={`installStatus ${notificationState?.subscriptionCount ? "installed" : ""}`}>
+                    {notificationState?.subscriptionCount
+                      ? `${notificationState.subscriptionCount} device${notificationState.subscriptionCount === 1 ? "" : "s"}`
+                      : "No device"}
+                  </span>
+                </div>
+                <div className="notificationActions">
+                  <button className="primaryAction" onClick={enableNotifications}>Enable on this device</button>
+                  <button onClick={testNotification}>Send test</button>
+                  <button onClick={disableNotifications}>Disable this device</button>
+                </div>
+                {notificationState && (
+                  <div className="preferenceGrid">
+                    <label className="preferenceToggle">
+                      <input
+                        type="checkbox"
+                        checked={notificationState.preferences.enabled}
+                        onChange={(event) => saveNotificationSettings({
+                          ...notificationState.preferences,
+                          enabled: event.target.checked,
+                        })}
+                      />
+                      Send scheduled reminders
+                    </label>
+                    <label>
+                      Timezone
+                      <input
+                        value={notificationState.preferences.timezone}
+                        onChange={(event) => setNotificationState({
+                          ...notificationState,
+                          preferences: { ...notificationState.preferences, timezone: event.target.value },
+                        })}
+                        onBlur={() => saveNotificationSettings(notificationState.preferences)}
+                      />
+                    </label>
+                    <label>
+                      Workday starts
+                      <input
+                        type="time"
+                        value={notificationState.preferences.workdayStart}
+                        onChange={(event) => saveNotificationSettings({
+                          ...notificationState.preferences,
+                          workdayStart: event.target.value,
+                        })}
+                      />
+                    </label>
+                    <label>
+                      Workday ends
+                      <input
+                        type="time"
+                        value={notificationState.preferences.workdayEnd}
+                        onChange={(event) => saveNotificationSettings({
+                          ...notificationState.preferences,
+                          workdayEnd: event.target.value,
+                        })}
+                      />
+                    </label>
+                    <fieldset>
+                      <legend>Working days</legend>
+                      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
+                        <label key={label}>
+                          <input
+                            type="checkbox"
+                            checked={notificationState.preferences.workdays.includes(day)}
+                            onChange={() => {
+                              const workdays = notificationState.preferences.workdays.includes(day)
+                                ? notificationState.preferences.workdays.filter((value) => value !== day)
+                                : [...notificationState.preferences.workdays, day].sort();
+                              saveNotificationSettings({ ...notificationState.preferences, workdays });
+                            }}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </fieldset>
+                  </div>
+                )}
+                {notificationStatus && <p role="status">{notificationStatus}</p>}
+              </section>
+              <section>
+                <div className="sectionHeading">
+                  <div>
                     <h2>Backups</h2>
                     <p>Daily safety copies are created automatically before changes.</p>
                   </div>
@@ -935,6 +1371,28 @@ export default function App() {
           )}
           {view !== "Settings" && (
             <>
+              {!["Home", "Search", "Projects", "Areas", "Notes"].includes(view) && (
+                <div className="listControls">
+                  <label>
+                    Priority
+                    <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
+                      <option value="all">All</option>
+                      <option value="high">High</option>
+                      <option value="medium">Medium</option>
+                      <option value="low">Low</option>
+                      <option value="none">None</option>
+                    </select>
+                  </label>
+                  <label>
+                    Sort
+                    <select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)}>
+                      <option value="date">Date</option>
+                      <option value="priority">Priority</option>
+                      <option value="created">Newest</option>
+                    </select>
+                  </label>
+                </div>
+              )}
               <div
                 className={
                   "list " +
@@ -985,6 +1443,9 @@ export default function App() {
                 </div>
                   </article>
                 ))}
+                {collection.length === 0 && view !== "Home" && view !== "Search" && (
+                  <div className="empty">Nothing here yet.</div>
+                )}
               </div>
               <div className="capture">
                 <input
@@ -1043,16 +1504,39 @@ export default function App() {
       {capture && (
         <div className="captureOverlay" onClick={() => setCapture(false)}>
           <form
+            ref={captureModalRef}
             className="captureModal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="capture-title"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setCapture(false);
+              if (e.key === "Tab") {
+                const focusable = [...(captureModalRef.current?.querySelectorAll<HTMLElement>(
+                  'input, button:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
+                ) || [])];
+                if (!focusable.length) return;
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                  e.preventDefault();
+                  last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                  e.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
             onSubmit={(e) => {
               e.preventDefault();
               submitCapture();
             }}
           >
-            <h2>{captureType === "note" ? "Add note" : "Quick Capture"}</h2>
+            <h2 id="capture-title">{captureType === "note" ? "Add note" : "Quick Capture"}</h2>
             <input
               autoFocus
+              aria-label={captureType === "note" ? "Note title" : "Task title"}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder={
@@ -1060,7 +1544,18 @@ export default function App() {
               }
             />
             {captureType === "task" && (
-              <p>Try “Zavolat Petrovi zítra” or “Servis 25.9.”</p>
+              <>
+                <p>Try “Zavolat Petrovi zítra” or “Servis 25.9. #high”</p>
+                {draft.trim() && (
+                  <div className="capturePreview">
+                    <strong>{parseCapture(draft).title || "Untitled task"}</strong>
+                    <span>
+                      {parseCapture(draft).when || "Inbox"}
+                      {parseCapture(draft).priority !== "none" ? ` · ${parseCapture(draft).priority}` : ""}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
             <div>
               <button type="button" onClick={() => setCapture(false)}>
@@ -1249,6 +1744,35 @@ export default function App() {
             {selected.type === "task" && (
               <div className="fields">
                 <label>
+                  List
+                  <select
+                    value={
+                      selected.properties.inbox === true
+                        ? "Inbox"
+                        : selected.properties.someday === true
+                          ? "Someday"
+                        : selected.properties.today === true ||
+                            (typeof selected.properties.when === "string" && selected.properties.when <= today)
+                            ? "Today"
+                            : "Anytime"
+                    }
+                    onChange={(event) => {
+                      const destination = event.target.value;
+                      patch(selected, {
+                        inbox: destination === "Inbox",
+                        someday: destination === "Someday",
+                        today: destination === "Today",
+                        when: destination === "Today" ? today : "",
+                      }, `moved to ${destination}`);
+                    }}
+                  >
+                    <option>Inbox</option>
+                    <option>Today</option>
+                    <option>Anytime</option>
+                    <option>Someday</option>
+                  </select>
+                </label>
+                <label>
                   When
                   <input
                     type="date"
@@ -1336,12 +1860,34 @@ export default function App() {
                   Reminder
                   <input
                     type="datetime-local"
-                    value={String(selected.properties.reminderAt || "")}
+                    value={toLocalDateTime(selected.properties.reminderAt)}
                     onChange={(e) =>
-                      patch(selected, { reminderAt: e.target.value })
+                      patch(selected, { reminderAt: fromLocalDateTime(e.target.value) }, "reminder changed")
                     }
                   />
                 </label>
+                {selected.properties.when && notificationState && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const planned = new Date(`${String(selected.properties.when)}T12:00:00Z`);
+                      const workdays = notificationState.preferences.workdays;
+                      while (workdays.length && !workdays.includes(planned.getUTCDay())) {
+                        planned.setUTCDate(planned.getUTCDate() + 1);
+                      }
+                      const date = planned.toISOString().slice(0, 10);
+                      patch(selected, {
+                        reminderAt: zonedDateTimeToIso(
+                          date,
+                          notificationState.preferences.workdayStart,
+                          notificationState.preferences.timezone,
+                        ),
+                      }, "workday reminder set");
+                    }}
+                  >
+                    Remind at next workday start
+                  </button>
+                )}
                 <label>
                   Task notes
                   <textarea
@@ -1350,22 +1896,67 @@ export default function App() {
                     placeholder="Notes…"
                   />
                 </label>
-                <label>
-                  Checklist
-                  <textarea
-                    value={
-                      Array.isArray(selected.properties.checklist)
-                        ? (selected.properties.checklist as string[]).join("\n")
-                        : ""
-                    }
-                    onChange={(e) =>
-                      patch(selected, {
-                        checklist: e.target.value.split("\n").filter(Boolean),
-                      })
-                    }
-                    placeholder={"One item per line"}
-                  />
-                </label>
+                <div className="checklistField">
+                  <span>Checklist</span>
+                  {(Array.isArray(selected.properties.checklist)
+                    ? selected.properties.checklist
+                    : []
+                  ).map((raw, index, all) => {
+                    const item = typeof raw === "string"
+                      ? { id: `${index}`, title: raw, done: false }
+                      : raw as { id?: string; title?: string; done?: boolean };
+                    return (
+                      <label className="checklistItem" key={item.id || index}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(item.done)}
+                          onChange={() => patch(selected, {
+                            checklist: all.map((entry, entryIndex) => {
+                              const normalized = typeof entry === "string"
+                                ? { id: `${entryIndex}`, title: entry, done: false }
+                                : entry as { id?: string; title?: string; done?: boolean };
+                              return entryIndex === index
+                                ? { ...normalized, done: !normalized.done }
+                                : normalized;
+                            }),
+                          }, "checklist updated")}
+                        />
+                        <span className={item.done ? "checked" : ""}>{item.title}</span>
+                      </label>
+                    );
+                  })}
+                  <div className="checklistAdd">
+                    <input
+                      value={checklistDraft}
+                      onChange={(event) => setChecklistDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" || !checklistDraft.trim()) return;
+                        event.preventDefault();
+                        const existing = Array.isArray(selected.properties.checklist)
+                          ? selected.properties.checklist
+                          : [];
+                        patch(selected, {
+                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
+                        }, "checklist item added");
+                        setChecklistDraft("");
+                      }}
+                      placeholder="Add checklist item"
+                    />
+                    <button
+                      type="button"
+                      disabled={!checklistDraft.trim()}
+                      onClick={() => {
+                        const existing = Array.isArray(selected.properties.checklist)
+                          ? selected.properties.checklist
+                          : [];
+                        patch(selected, {
+                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
+                        }, "checklist item added");
+                        setChecklistDraft("");
+                      }}
+                    >Add</button>
+                  </div>
+                </div>
                 <label>
                   Repeat
                   <select
@@ -1437,6 +2028,20 @@ export default function App() {
                     </label>
                   </>
                 )}
+                {Array.isArray(selected.properties.activity) && selected.properties.activity.length > 0 && (
+                  <div className="activityLog">
+                    <h3>HISTORY</h3>
+                    {[...selected.properties.activity]
+                      .reverse()
+                      .slice(0, 12)
+                      .map((entry: any, index) => (
+                        <div key={`${entry.at}-${index}`}>
+                          <span>{String(entry.action || "updated")}</span>
+                          <time>{new Date(Number(entry.at)).toLocaleString()}</time>
+                        </div>
+                      ))}
+                  </div>
+                )}
                 <button
                   onClick={() =>
                     patch(selected, {
@@ -1449,7 +2054,11 @@ export default function App() {
                 >
                   Move to Someday
                 </button>
-                <button onClick={() => done(selected.id)}>Complete</button>
+                {selected.status === "completed" ? (
+                  <button onClick={() => reopenTask(selected)}>Reopen</button>
+                ) : (
+                  <button onClick={() => done(selected.id)}>Complete</button>
+                )}
                 <button className="danger" onClick={() => remove(selected)}>
                   Delete
                 </button>

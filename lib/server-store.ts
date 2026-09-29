@@ -33,7 +33,7 @@ const databasePath = path.join(dataDirectory, "store.sqlite");
 const legacyStorePath = path.join(dataDirectory, "store.json");
 let databaseInstance: DatabaseSync | null = null;
 
-function getDatabase() {
+export function getDatabase() {
   if (databaseInstance) return databaseInstance;
   mkdirSync(dataDirectory, { recursive: true });
   const database = new DatabaseSync(databasePath);
@@ -56,6 +56,22 @@ function getDatabase() {
     CREATE TABLE IF NOT EXISTS tombstones (
       id TEXT PRIMARY KEY,
       deleted_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      delivery_key TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL,
+      reminder_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at INTEGER NOT NULL,
+      sent_at INTEGER,
+      error TEXT
     );
   `);
   migrateLegacyStore(database);
@@ -134,6 +150,7 @@ export function replaceSnapshot(
   entities: Entity[],
   relations: Relation[],
   deletedIds: string[] = [],
+  revivedIds: string[] = [],
 ) {
   const currentBeforeWrite = readSnapshot();
   const today = new Date().toISOString().slice(0, 10);
@@ -156,6 +173,9 @@ export function replaceSnapshot(
     const tombstones = new Map(
       (current.tombstones || []).map((item) => [item.id, item]),
     );
+    for (const id of revivedIds) {
+      if (typeof id === "string" && id) tombstones.delete(id);
+    }
     for (const id of deletedIds) {
       if (typeof id === "string" && id) {
         tombstones.set(id, { id, deletedAt: Date.now() });

@@ -24,6 +24,7 @@ export async function PUT(request: Request) {
   }
   const baseRevision = Number(body.baseRevision);
   const deletedIds = Array.isArray(body.deletedIds) ? body.deletedIds : [];
+  const revivedIds = Array.isArray(body.revivedIds) ? body.revivedIds : [];
   try {
     validateSnapshot(body);
   } catch (error) {
@@ -37,6 +38,7 @@ export async function PUT(request: Request) {
     body.entities,
     body.relations,
     deletedIds,
+    revivedIds,
   );
   return NextResponse.json(result.snapshot, {
     status: result.conflict ? 409 : 200,
