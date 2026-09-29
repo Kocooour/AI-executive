@@ -16,4 +16,6 @@ const derived = await promisify(scrypt)(password, salt, 64, {
   p: 1,
   maxmem: 64 * 1024 * 1024,
 });
-process.stdout.write(`scrypt$${salt.toString("base64url")}$${Buffer.from(derived).toString("base64url")}\n`);
+// Colons are safe in dotenv/systemd environment files. Dollar separators are
+// still accepted by the server for backwards compatibility.
+process.stdout.write(`scrypt:${salt.toString("base64url")}:${Buffer.from(derived).toString("base64url")}\n`);

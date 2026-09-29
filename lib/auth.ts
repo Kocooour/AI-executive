@@ -21,10 +21,34 @@ function insecureDevelopmentMode() {
   );
 }
 
+function parsePasswordHash(encoded: string) {
+  const separator = encoded.startsWith("scrypt:")
+    ? ":"
+    : encoded.startsWith("scrypt$")
+      ? "$"
+      : null;
+  if (!separator) return null;
+  const [scheme, saltValue, hashValue, extra] = encoded.split(separator);
+  if (
+    scheme !== "scrypt" ||
+    !saltValue ||
+    !hashValue ||
+    extra ||
+    !/^[A-Za-z0-9_-]+$/.test(saltValue) ||
+    !/^[A-Za-z0-9_-]+$/.test(hashValue)
+  ) {
+    return null;
+  }
+  const salt = Buffer.from(saltValue, "base64url");
+  const hash = Buffer.from(hashValue, "base64url");
+  if (salt.length !== 16 || hash.length !== 64) return null;
+  return { salt, hash };
+}
+
 function authConfigured() {
   const passwordHash = process.env.AI_EXECUTIVE_PASSWORD_HASH || "";
   const secret = process.env.AI_EXECUTIVE_SESSION_SECRET || "";
-  return /^scrypt\$[^$]+\$[^$]+$/.test(passwordHash) && secret.length >= 32;
+  return parsePasswordHash(passwordHash) !== null && secret.length >= 32;
 }
 
 function sessionSecret() {
@@ -103,12 +127,10 @@ export async function verifyPassword(password: string) {
   if (insecureDevelopmentMode()) return false;
   if (!authConfigured()) throw new Error("Authentication is not configured");
   const encoded = process.env.AI_EXECUTIVE_PASSWORD_HASH || "";
-  const [scheme, saltValue, hashValue, extra] = encoded.split("$");
-  if (scheme !== "scrypt" || !saltValue || !hashValue || extra) {
+  const parsed = parsePasswordHash(encoded);
+  if (!parsed) {
     throw new Error("AI_EXECUTIVE_PASSWORD_HASH is not configured correctly");
   }
-  const expected = Buffer.from(hashValue, "base64url");
-  if (expected.length !== 64) throw new Error("Password hash is invalid");
-  const derived = await derivePassword(password, Buffer.from(saltValue, "base64url"));
-  return timingSafeEqual(derived, expected);
+  const derived = await derivePassword(password, parsed.salt);
+  return timingSafeEqual(derived, parsed.hash);
 }
