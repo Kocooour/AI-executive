@@ -14,6 +14,74 @@
 body {
   margin: 0;
 }
+.authShell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f8f8fb;
+}
+.authCard {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 32px;
+  border: 1px solid #e8e8ef;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 60px #0001;
+}
+.authMark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: #6557e8;
+  color: #fff;
+  font-size: 24px;
+}
+.authCard h1,
+.authCard p {
+  margin: 0;
+}
+.authCard label {
+  display: grid;
+  gap: 8px;
+  color: #777;
+  font-size: 13px;
+}
+.authCard input {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 16px;
+}
+.authCard button,
+.secondaryAction {
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #6557e8;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 650;
+}
+.authCard button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.authCard .authError {
+  color: #b33;
+  font-size: 13px;
+}
+.settingsPanel .secondaryAction {
+  width: fit-content;
+  background: #f0efff;
+  color: #5d4ee8;
+}
 .offlinePage {
   min-height: 100vh;
   display: grid;
@@ -73,6 +141,41 @@ aside {
 }
 .workspaceButton span {
   color: #888;
+}
+.workspaceSwitcher {
+  position: relative;
+}
+.workspaceMenu {
+  position: absolute;
+  z-index: 70;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(280px, calc(100vw - 32px));
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid #e5e5ec;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 18px 50px #0002;
+}
+.workspaceMenu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #34343d;
+  text-align: left;
+}
+.workspaceMenu small {
+  color: #999;
+}
+.mobileWorkspaceButton,
+.mobileWorkspaceMenu {
+  display: none;
 }
 nav {
   display: grid;
@@ -269,6 +372,25 @@ article small {
   cursor: not-allowed;
   opacity: 0.45;
 }
+.workspaceSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #777;
+  font-size: 12px;
+}
+.workspaceSummary span,
+.workspaceBadge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f0efff;
+  color: #5d4ee8;
+}
+.workspaceBadge {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: 11px;
+}
 .settingsPanel .saveConfirmation {
   color: #36804b;
   font-size: 13px;
@@ -383,6 +505,11 @@ article small {
   }
   section header {
     padding: 0 18px;
+  }
+  section header > input {
+    flex: 1;
+    min-width: 0;
+    width: auto;
   }
   .content {
     margin: 30px auto;
@@ -765,6 +892,21 @@ article {
   border: 1px solid #ddd;
   border-radius: 11px;
 }
+.captureWorkspace {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: #777;
+  font-size: 12px;
+}
+.captureWorkspace select {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+}
 .captureModal p {
   font-size: 13px;
   color: #999;
@@ -795,6 +937,25 @@ article {
   opacity: 0.45;
 }
 @media (max-width: 700px) {
+  .mobileWorkspaceButton {
+    display: block;
+    max-width: 38vw;
+    overflow: hidden;
+    border: 0;
+    background: transparent;
+    color: #5d4ee8;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobileWorkspaceMenu {
+    display: grid;
+    position: fixed;
+    top: 62px;
+    left: 14px;
+    right: 14px;
+    width: auto;
+  }
   .captureOverlay {
     align-items: end;
     padding: 0;

@@ -1,5 +1,134 @@
-import{db,type Entity,type EntityType}from"./db";import{buildContext}from"./context";
-export type ToolName="search_entities"|"get_entity"|"create_entity"|"update_entity"|"get_context";
-export interface ToolCall{name:ToolName;arguments:Record<string,unknown>}
-export interface ToolResult{ok:boolean;data?:unknown;error?:string}
-export async function runTool(call:ToolCall):Promise<ToolResult>{try{switch(call.name){case"search_entities":{const q=String(call.arguments.query||"").toLowerCase(),type=call.arguments.type as EntityType|undefined;const all=await db.entities.toArray();return{ok:true,data:all.filter(e=>(!type||e.type===type)&&((e.title+" "+(e.content||"")).toLowerCase().includes(q))).slice(0,50)}}case"get_entity":return{ok:true,data:await db.entities.get(String(call.arguments.id))||null};case"create_entity":{const now=Date.now(),e:Entity={id:crypto.randomUUID(),type:call.arguments.type as EntityType,title:String(call.arguments.title||"Untitled"),content:String(call.arguments.content||""),status:String(call.arguments.status||"active"),workspaceId:String(call.arguments.workspaceId||"personal"),properties:(call.arguments.properties as Record<string,unknown>)||{},createdAt:now,updatedAt:now};await db.entities.add(e);return{ok:true,data:e}}case"update_entity":{const id=String(call.arguments.id),existing=await db.entities.get(id);if(!existing)return{ok:false,error:"Entity not found"};const patch={...(call.arguments.patch as Partial<Entity>),id:existing.id,updatedAt:Date.now()};await db.entities.update(id,patch);return{ok:true,data:await db.entities.get(id)}}case"get_context":return{ok:true,data:await buildContext(String(call.arguments.id),Number(call.arguments.depth||1))};default:return{ok:false,error:"Unknown tool"}}}catch(e){return{ok:false,error:e instanceof Error?e.message:String(e)}}}
+import { buildContext } from "./context";
+import { db, personalWorkspaceId, type Entity, type EntityType } from "./db";
+
+export type ToolName =
+  | "search_entities"
+  | "get_entity"
+  | "create_entity"
+  | "update_entity"
+  | "get_context";
+export interface ToolCall {
+  name: ToolName;
+  arguments: Record<string, unknown>;
+}
+export interface ToolResult {
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+const requestedWorkspace = (call: ToolCall) =>
+  String(call.arguments.workspaceId || personalWorkspaceId);
+
+export async function runTool(call: ToolCall): Promise<ToolResult> {
+  try {
+    const workspaceId = requestedWorkspace(call);
+    switch (call.name) {
+      case "search_entities": {
+        const query = String(call.arguments.query || "").toLowerCase();
+        const type = call.arguments.type as EntityType | undefined;
+        const all = await db.entities.toArray();
+        return {
+          ok: true,
+          data: all
+            .filter(
+              (entity) =>
+                entity.type !== "workspace" &&
+                (workspaceId === "all" || entity.workspaceId === workspaceId) &&
+                (!type || entity.type === type) &&
+                `${entity.title} ${entity.content || ""}`
+                  .toLowerCase()
+                  .includes(query),
+            )
+            .slice(0, 50),
+        };
+      }
+      case "get_entity": {
+        const entity = await db.entities.get(String(call.arguments.id));
+        return {
+          ok: true,
+          data:
+            entity &&
+            entity.type !== "workspace" &&
+            (workspaceId === "all" || entity.workspaceId === workspaceId)
+              ? entity
+              : null,
+        };
+      }
+      case "create_entity": {
+        if (workspaceId === "all") {
+          return { ok: false, error: "A write workspace is required" };
+        }
+        const workspace = await db.entities.get(`workspace:${workspaceId}`);
+        if (!workspace || workspace.type !== "workspace") {
+          return { ok: false, error: "Workspace not found" };
+        }
+        const now = Date.now();
+        const entity: Entity = {
+          id: crypto.randomUUID(),
+          type: call.arguments.type as EntityType,
+          title: String(call.arguments.title || "Untitled"),
+          content: String(call.arguments.content || ""),
+          status: String(call.arguments.status || "active"),
+          workspaceId,
+          properties:
+            (call.arguments.properties as Record<string, unknown>) || {},
+          createdAt: now,
+          updatedAt: now,
+        };
+        if (entity.type === "workspace") {
+          return { ok: false, error: "Workspace creation is not an agent tool" };
+        }
+        await db.entities.add(entity);
+        return { ok: true, data: entity };
+      }
+      case "update_entity": {
+        const id = String(call.arguments.id);
+        const existing = await db.entities.get(id);
+        if (
+          !existing ||
+          existing.type === "workspace" ||
+          existing.workspaceId !== workspaceId
+        ) {
+          return { ok: false, error: "Entity not found" };
+        }
+        const requestedPatch = {
+          ...(call.arguments.patch as Partial<Entity>),
+        };
+        delete requestedPatch.workspaceId;
+        delete requestedPatch.type;
+        const patch = {
+          ...requestedPatch,
+          id: existing.id,
+          updatedAt: Date.now(),
+        };
+        await db.entities.update(id, patch);
+        return { ok: true, data: await db.entities.get(id) };
+      }
+      case "get_context": {
+        const entity = await db.entities.get(String(call.arguments.id));
+        if (
+          !entity ||
+          entity.type === "workspace" ||
+          (workspaceId !== "all" && entity.workspaceId !== workspaceId)
+        ) {
+          return { ok: true, data: null };
+        }
+        return {
+          ok: true,
+          data: await buildContext(
+            entity.id,
+            Number(call.arguments.depth || 1),
+          ),
+        };
+      }
+      default:
+        return { ok: false, error: "Unknown tool" };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   db,
+  ensureDefaultWorkspace,
+  personalWorkspaceId,
   seed,
   migratePropertyRelations,
   type Entity,
@@ -129,8 +131,11 @@ export default function App() {
     [assistantOpen, setAssistantOpen] = useState(false),
     [moreOpen, setMoreOpen] = useState(false),
     [startupView, setStartupView] = useState("Today"),
-    [workspaceName, setWorkspaceName] = useState("Personal"),
     [workspaceDraft, setWorkspaceDraft] = useState("Personal"),
+    [newWorkspaceDraft, setNewWorkspaceDraft] = useState(""),
+    [activeWorkspaceId, setActiveWorkspaceId] = useState("personal"),
+    [writeWorkspaceId, setWriteWorkspaceId] = useState("personal"),
+    [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false),
     [settingsSaved, setSettingsSaved] = useState(false),
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
@@ -143,6 +148,12 @@ export default function App() {
     [sortBy, setSortBy] = useState<"date" | "priority" | "created">("date"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [checklistDraft, setChecklistDraft] = useState(""),
+    [authState, setAuthState] = useState<
+      "checking" | "ready" | "required" | "misconfigured"
+    >("checking"),
+    [authEnabled, setAuthEnabled] = useState(false),
+    [authPassword, setAuthPassword] = useState(""),
+    [authError, setAuthError] = useState(""),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   const serverRevision = useRef(0);
@@ -346,17 +357,42 @@ export default function App() {
     }
   }
   useEffect(() => {
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((state) => {
+        setAuthEnabled(Boolean(state.enabled));
+        if (state.enabled && state.configured === false) {
+          setAuthError("Authentication must be configured on the server before this app can be used.");
+          setAuthState("misconfigured");
+          return;
+        }
+        setAuthState(state.authenticated ? "ready" : "required");
+      })
+      .catch(() => {
+        setAuthError("Authentication status is unavailable.");
+        setAuthState("required");
+      });
+  }, []);
+
+  useEffect(() => {
     const savedView = localStorage.getItem("ai-executive-startup-view");
-    const savedWorkspaceName = localStorage.getItem(
-      "ai-executive-workspace-name",
+    const savedWorkspace = localStorage.getItem(
+      "ai-executive-active-workspace",
+    );
+    const savedWriteWorkspace = localStorage.getItem(
+      "ai-executive-write-workspace",
     );
     if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
       setView(savedView);
     }
-    if (savedWorkspaceName) {
-      setWorkspaceName(savedWorkspaceName);
-      setWorkspaceDraft(savedWorkspaceName);
+    if (savedWorkspace) {
+      setActiveWorkspaceId(savedWorkspace);
+      setWriteWorkspaceId(
+        savedWorkspace !== "all"
+          ? savedWorkspace
+          : savedWriteWorkspace || personalWorkspaceId,
+      );
     }
     setStandalone(
       window.matchMedia("(display-mode: standalone)").matches ||
@@ -368,9 +404,13 @@ export default function App() {
         const response = await fetch("/api/store", { cache: "no-store" });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
+        await ensureDefaultWorkspace();
         let localEntities = await db.entities.toArray();
         let localRelations = await db.relations.toArray();
-        if (!localEntities.length && !snapshot.entities.length) {
+        if (
+          !localEntities.some((entity) => entity.type !== "workspace") &&
+          !snapshot.entities.some((entity) => entity.type !== "workspace")
+        ) {
           await seed();
           await migratePropertyRelations();
           localEntities = await db.entities.toArray();
@@ -446,12 +486,40 @@ export default function App() {
         localStorage.removeItem(revivedKey);
         setSyncStatus("synced");
       } catch {
+        await ensureDefaultWorkspace();
         await load();
         setSyncStatus("offline");
       }
     }
     initialize();
   }, []);
+
+  async function login(event: React.FormEvent) {
+    event.preventDefault();
+    if (!window.isSecureContext) {
+      setAuthError("Open the HTTPS address before signing in.");
+      return;
+    }
+    setAuthError("");
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: authPassword }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      setAuthError(body.error || "Sign-in failed.");
+      return;
+    }
+    setAuthPassword("");
+    setAuthState("ready");
+    await pullFromServer();
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuthState("required");
+  }
 
   useEffect(() => {
     fetch("/api/notifications", { cache: "no-store" })
@@ -468,7 +536,10 @@ export default function App() {
     if (requestedView && views.includes(requestedView)) setView(requestedView);
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
-      if (task) inspect(task);
+      if (task && task.type !== "workspace") {
+        selectWorkspace(task.workspaceId);
+        inspect(task);
+      }
     }
     deepLinkHandled.current = true;
   }, [items]);
@@ -507,14 +578,88 @@ export default function App() {
     };
   }, []);
 
-  function saveWorkspaceName() {
+  useEffect(() => {
+    const workspaceId =
+      activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    const workspace = items.find(
+      (entity) =>
+        entity.type === "workspace" && entity.workspaceId === workspaceId,
+    );
+    const validWriteWorkspace = items.some(
+      (entity) =>
+        entity.type === "workspace" && entity.workspaceId === writeWorkspaceId,
+    );
+    if (items.some((entity) => entity.type === "workspace") && !validWriteWorkspace) {
+      setWriteWorkspaceId(personalWorkspaceId);
+      localStorage.setItem(
+        "ai-executive-write-workspace",
+        personalWorkspaceId,
+      );
+      return;
+    }
+    if (workspace) setWorkspaceDraft(workspace.title);
+  }, [activeWorkspaceId, items, writeWorkspaceId]);
+
+  async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
-    if (!name) return;
-    localStorage.setItem("ai-executive-workspace-name", name);
-    setWorkspaceName(name);
-    setWorkspaceDraft(name);
+    if (!name || name.length > 120) return;
+    const workspaceId =
+      activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    const workspace = items.find(
+      (entity) =>
+        entity.type === "workspace" && entity.workspaceId === workspaceId,
+    );
+    if (!workspace) return;
+    localDataVersion.current += 1;
+    await db.entities.update(workspace.id, {
+      title: name,
+      updatedAt: Date.now(),
+    });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
     setSettingsSaved(true);
     window.setTimeout(() => setSettingsSaved(false), 1800);
+  }
+
+  function selectWorkspace(workspaceId: string) {
+    setActiveWorkspaceId(workspaceId);
+    if (workspaceId !== "all") selectWriteWorkspace(workspaceId);
+    localStorage.setItem("ai-executive-active-workspace", workspaceId);
+    setWorkspaceMenuOpen(false);
+    closeDetail();
+  }
+
+  function selectWriteWorkspace(workspaceId: string) {
+    setWriteWorkspaceId(workspaceId);
+    localStorage.setItem("ai-executive-write-workspace", workspaceId);
+  }
+
+  async function createWorkspace() {
+    const name = newWorkspaceDraft.trim();
+    if (!name || name.length > 120) return;
+    const workspaceId = crypto.randomUUID();
+    const now = Date.now();
+    localDataVersion.current += 1;
+    await db.entities.add({
+      id: `workspace:${workspaceId}`,
+      type: "workspace",
+      title: name,
+      status: "active",
+      workspaceId,
+      properties: {
+        kind: "shared",
+        role: "owner",
+        members: [{ id: "owner", role: "owner" }],
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
+    setNewWorkspaceDraft("");
+    selectWorkspace(workspaceId);
   }
   async function enableNotifications() {
     setNotificationStatus("Requesting permission…");
@@ -641,16 +786,46 @@ export default function App() {
       setBackupStatus("Restore failed. Current data was not changed.");
     }
   }
-  const tasks = items.filter((x) => x.type === "task"),
-    projects = items.filter((x) => x.type === "project"),
-    areas = items.filter((x) => x.type === "area"),
+  const workspaces = items
+      .filter((entity) => entity.type === "workspace")
+      .sort((a, b) =>
+        a.workspaceId === personalWorkspaceId
+          ? -1
+          : b.workspaceId === personalWorkspaceId
+            ? 1
+            : a.title.localeCompare(b.title),
+      ),
+    activeWorkspace = workspaces.find(
+      (workspace) => workspace.workspaceId === activeWorkspaceId,
+    ),
+    writeWorkspace = workspaces.find(
+      (workspace) => workspace.workspaceId === writeWorkspaceId,
+    ) || workspaces[0],
+    workspaceName =
+      activeWorkspaceId === "all"
+        ? "All my work"
+        : activeWorkspace?.title || "Personal",
+    scopedItems = items.filter(
+      (entity) =>
+        entity.type !== "workspace" &&
+        (activeWorkspaceId === "all" ||
+          entity.workspaceId === activeWorkspaceId),
+    ),
+    scopedRelations = relations.filter(
+      (relation) =>
+        activeWorkspaceId === "all" ||
+        relation.workspaceId === activeWorkspaceId,
+    ),
+    tasks = scopedItems.filter((x) => x.type === "task"),
+    projects = scopedItems.filter((x) => x.type === "project"),
+    areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
   const targets = (sourceId: string, type: string) =>
-    relations
+    scopedRelations
       .filter((r) => r.sourceEntityId === sourceId && r.relationType === type)
       .map((r) => r.targetEntityId);
   const sources = (targetId: string, type: string) =>
-    relations
+    scopedRelations
       .filter((r) => r.targetEntityId === targetId && r.relationType === type)
       .map((r) => r.sourceEntityId);
   const visible = useMemo(
@@ -724,9 +899,31 @@ export default function App() {
         type === "task"
           ? parseCapture(title)
           : { title: title.trim(), when: "", priority: "none" };
+    const linkedProject = projectId ? await db.entities.get(projectId) : null;
+    const linkedArea = areaId ? await db.entities.get(areaId) : null;
+    const explicitWorkspaceId =
+      typeof extra.workspaceId === "string" ? extra.workspaceId : "";
+    const creationWorkspaceId =
+      linkedProject?.workspaceId ||
+      linkedArea?.workspaceId ||
+      explicitWorkspaceId ||
+      writeWorkspaceId;
+    const workspace = await db.entities.get(
+      `workspace:${creationWorkspaceId}`,
+    );
+    if (!workspace || workspace.type !== "workspace") {
+      throw new Error("A valid write workspace is required");
+    }
+    if (
+      (linkedProject && linkedProject.workspaceId !== creationWorkspaceId) ||
+      (linkedArea && linkedArea.workspaceId !== creationWorkspaceId)
+    ) {
+      throw new Error("Cross-workspace relations are not allowed");
+    }
     delete properties.projectId;
     delete properties.areaId;
     delete properties.entityId;
+    delete properties.workspaceId;
     localDataVersion.current += 1;
     let created = false;
     await db.transaction("rw", db.entities, db.relations, async () => {
@@ -736,7 +933,7 @@ export default function App() {
         type,
         title: parsed.title,
         status: type === "task" ? "open" : "active",
-        workspaceId: "personal",
+        workspaceId: creationWorkspaceId,
         properties:
           type === "task"
             ? {
@@ -759,7 +956,7 @@ export default function App() {
       if (projectId) {
         await db.relations.add({
           id: crypto.randomUUID(),
-          workspaceId: "personal",
+          workspaceId: creationWorkspaceId,
           sourceEntityId: id,
           targetEntityId: projectId,
           relationType: "belongs_to_project",
@@ -769,7 +966,7 @@ export default function App() {
       if (areaId) {
         await db.relations.add({
           id: crypto.randomUUID(),
-          workspaceId: "personal",
+          workspaceId: creationWorkspaceId,
           sourceEntityId: id,
           targetEntityId: areaId,
           relationType: "belongs_to_area",
@@ -822,23 +1019,30 @@ export default function App() {
     targetId: string,
     relationType: string,
   ) {
+    const source = await db.entities.get(sourceId);
+    const target = targetId ? await db.entities.get(targetId) : null;
+    if (!source || source.type === "workspace") return;
+    if (target && target.workspaceId !== source.workspaceId) {
+      throw new Error("Cross-workspace relations are not allowed");
+    }
     const existing = await db.relations
       .where("sourceEntityId")
       .equals(sourceId)
       .filter((r) => r.relationType === relationType)
       .toArray();
     localDataVersion.current += 1;
-    await db.transaction("rw", db.relations, async () => {
+    await db.transaction("rw", db.entities, db.relations, async () => {
       await db.relations.bulkDelete(existing.map((r) => r.id));
       if (targetId)
         await db.relations.add({
           id: crypto.randomUUID(),
-          workspaceId: "personal",
+          workspaceId: source.workspaceId,
           sourceEntityId: sourceId,
           targetEntityId: targetId,
           relationType,
           createdAt: Date.now(),
         });
+      await db.entities.update(source.id, { updatedAt: Date.now() });
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -960,6 +1164,7 @@ export default function App() {
         : "";
       await create("task", t.title, {
         ...t.properties,
+        workspaceId: t.workspaceId,
         entityId: `${t.id}:occurrence:${ymd(next)}`,
         projectId: targets(t.id, "belongs_to_project")[0],
         areaId: targets(t.id, "belongs_to_area")[0],
@@ -1014,22 +1219,86 @@ export default function App() {
           ? "note"
           : "task";
   const collection = ["Projects", "Areas", "Notes"].includes(view)
-    ? items.filter((x) => x.type === type)
+    ? scopedItems.filter((x) => x.type === type)
     : visible;
+  if (authState !== "ready") {
+    return (
+      <main className="authShell">
+        <form className="authCard" onSubmit={login}>
+          <div className="authMark">◇</div>
+          <p className="eyebrow">AI EXECUTIVE</p>
+          <h1>
+            {authState === "checking"
+              ? "Checking access…"
+              : authState === "misconfigured"
+                ? "Setup required"
+                : "Sign in"}
+          </h1>
+          {authState === "required" && (
+            <>
+              <label>
+                Password
+                <input
+                  autoFocus
+                  type="password"
+                  autoComplete="current-password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                />
+              </label>
+              <button type="submit" disabled={!authPassword}>Sign in</button>
+            </>
+          )}
+          {authError && <p className="authError" role="alert">{authError}</p>}
+        </form>
+      </main>
+    );
+  }
   return (
     <main>
       <aside>
-        <button
-          className="workspaceButton"
-          onClick={() => {
-            setView("Settings");
-            closeDetail();
-          }}
-          aria-label="Workspace settings"
-        >
-          <b>{workspaceName}</b>
-          <span>⌄</span>
-        </button>
+        <div className="workspaceSwitcher">
+          <button
+            className="workspaceButton"
+            onClick={() => setWorkspaceMenuOpen((open) => !open)}
+            aria-label="Switch workspace"
+            aria-expanded={workspaceMenuOpen}
+          >
+            <b>{workspaceName}</b>
+            <span>⌄</span>
+          </button>
+          {workspaceMenuOpen && (
+            <div className="workspaceMenu">
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  className={activeWorkspaceId === workspace.workspaceId ? "active" : ""}
+                  onClick={() => selectWorkspace(workspace.workspaceId)}
+                >
+                  <span>{workspace.title}</span>
+                  <small>{String(workspace.properties.kind || "shared")}</small>
+                </button>
+              ))}
+              <button
+                className={activeWorkspaceId === "all" ? "active" : ""}
+                onClick={() => selectWorkspace("all")}
+              >
+                <span>All my work</span>
+                <small>aggregate</small>
+              </button>
+              <button
+                onClick={() => {
+                  setView("Settings");
+                  setWorkspaceMenuOpen(false);
+                  closeDetail();
+                }}
+              >
+                <span>Manage workspaces</span>
+                <small>settings</small>
+              </button>
+            </div>
+          )}
+        </div>
         <nav>
           {views.map((x) => (
             <button
@@ -1073,6 +1342,26 @@ export default function App() {
       </aside>
       <section>
         <header>
+          <button
+            className="mobileWorkspaceButton"
+            onClick={() => setWorkspaceMenuOpen((open) => !open)}
+            aria-label="Switch workspace"
+          >
+            {workspaceName}⌄
+          </button>
+          {workspaceMenuOpen && (
+            <div className="mobileWorkspaceMenu workspaceMenu">
+              {workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  onClick={() => selectWorkspace(workspace.workspaceId)}
+                >
+                  {workspace.title}
+                </button>
+              ))}
+              <button onClick={() => selectWorkspace("all")}>All my work</button>
+            </div>
+          )}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -1089,7 +1378,9 @@ export default function App() {
           </button>
         </header>
         <div className="content">
-          <p className="eyebrow">PERSONAL · LOCAL</p>
+          <p className="eyebrow">
+            {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
+          </p>
           <h1>{view}</h1>
           {view === "Home" && (
             <div className="dashboard">
@@ -1124,19 +1415,19 @@ export default function App() {
           )}
           {view === "Search" && query && (
             <div className="searchResults">
-              {items
+              {scopedItems
                 .filter((x) => {
                   const q = query.toLowerCase(),
-                    linked = relations
+                    linked = scopedRelations
                       .filter(
                         (r) =>
                           r.sourceEntityId === x.id ||
                           r.targetEntityId === x.id,
                       )
                       .flatMap((r) => [
-                        items.find((i) => i.id === r.sourceEntityId)?.title ||
+                        scopedItems.find((i) => i.id === r.sourceEntityId)?.title ||
                           "",
-                        items.find((i) => i.id === r.targetEntityId)?.title ||
+                        scopedItems.find((i) => i.id === r.targetEntityId)?.title ||
                           "",
                       ])
                       .join(" ");
@@ -1159,10 +1450,40 @@ export default function App() {
               <section>
                 <h2>Workspace</h2>
                 <label>
-                  Name
+                  Current view
+                  <select
+                    value={activeWorkspaceId}
+                    onChange={(event) => selectWorkspace(event.target.value)}
+                  >
+                    {workspaces.map((workspace) => (
+                      <option key={workspace.id} value={workspace.workspaceId}>
+                        {workspace.title}
+                      </option>
+                    ))}
+                    <option value="all">All my work</option>
+                  </select>
+                </label>
+                {activeWorkspaceId === "all" && (
+                  <label>
+                    Create new items in
+                    <select
+                      value={writeWorkspaceId}
+                      onChange={(event) => selectWriteWorkspace(event.target.value)}
+                    >
+                      {workspaces.map((workspace) => (
+                        <option key={workspace.id} value={workspace.workspaceId}>
+                          {workspace.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label>
+                  Workspace name
                   <div className="workspaceNameEditor">
                     <input
                       value={workspaceDraft}
+                      maxLength={120}
                       onChange={(e) => {
                         setWorkspaceDraft(e.target.value);
                         setSettingsSaved(false);
@@ -1185,6 +1506,36 @@ export default function App() {
                     Workspace saved.
                   </p>
                 )}
+                <div className="workspaceSummary">
+                  <span>
+                    {String(writeWorkspace?.properties.kind || "personal")} workspace
+                  </span>
+                  <span>
+                    Role: {String(writeWorkspace?.properties.role || "owner")}
+                  </span>
+                </div>
+                <label>
+                  New shared workspace
+                  <div className="workspaceNameEditor">
+                    <input
+                      value={newWorkspaceDraft}
+                      maxLength={120}
+                      onChange={(event) => setNewWorkspaceDraft(event.target.value)}
+                      placeholder="Family or Work"
+                      aria-label="New workspace name"
+                    />
+                    <button
+                      onClick={createWorkspace}
+                      disabled={!newWorkspaceDraft.trim()}
+                    >
+                      Create
+                    </button>
+                  </div>
+                </label>
+                <p>
+                  Shared workspaces are ready for separate data and roles. Inviting
+                  another account will be enabled after multi-user identity is added.
+                </p>
                 <label>
                   Open on startup
                   <select
@@ -1215,11 +1566,11 @@ export default function App() {
                 <dl>
                   <div>
                     <dt>Stored items</dt>
-                    <dd>{items.length}</dd>
+                    <dd>{scopedItems.length}</dd>
                   </div>
                   <div>
                     <dt>Relations</dt>
-                    <dd>{relations.length}</dd>
+                    <dd>{scopedRelations.length}</dd>
                   </div>
                   <div>
                     <dt>Server sync</dt>
@@ -1246,6 +1597,13 @@ export default function App() {
                   {standalone ? "Installed" : "Browser mode"}
                 </span>
               </section>
+              {authEnabled && (
+                <section>
+                  <h2>Access</h2>
+                  <p>This device has an authenticated owner session.</p>
+                  <button className="secondaryAction" onClick={logout}>Sign out</button>
+                </section>
+              )}
               <section>
                 <div className="sectionHeading">
                   <div>
@@ -1440,6 +1798,13 @@ export default function App() {
                               : "Anytime")
                       : x.type}
                   </small>
+                  {activeWorkspaceId === "all" && (
+                    <span className="workspaceBadge">
+                      {workspaces.find(
+                        (workspace) => workspace.workspaceId === x.workspaceId,
+                      )?.title || "Workspace"}
+                    </span>
+                  )}
                 </div>
                   </article>
                 ))}
@@ -1534,6 +1899,21 @@ export default function App() {
             }}
           >
             <h2 id="capture-title">{captureType === "note" ? "Add note" : "Quick Capture"}</h2>
+            {activeWorkspaceId === "all" && !captureProjectId && (
+              <label className="captureWorkspace">
+                Workspace
+                <select
+                  value={writeWorkspaceId}
+                  onChange={(event) => selectWriteWorkspace(event.target.value)}
+                >
+                  {workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.workspaceId}>
+                      {workspace.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <input
               autoFocus
               aria-label={captureType === "note" ? "Note title" : "Task title"}
@@ -1662,7 +2042,7 @@ export default function App() {
                     }}
                   >
                     <option value="">None</option>
-                    {areas.map((a) => (
+                    {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
                       <option value={a.id} key={a.id}>
                         {a.title}
                       </option>
@@ -1692,7 +2072,7 @@ export default function App() {
                   ＋ Add task
                 </button>
                 <h3>NOTES</h3>
-                {items
+                {scopedItems
                   .filter(
                     (n) =>
                       n.type === "note" &&
@@ -1732,7 +2112,7 @@ export default function App() {
                     }}
                   >
                     <option value="">None</option>
-                    {projects.map((p) => (
+                    {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
                       </option>
@@ -1813,7 +2193,7 @@ export default function App() {
                     }}
                   >
                     <option value="">None</option>
-                    {projects.map((p) => (
+                    {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
                       </option>
@@ -1835,7 +2215,7 @@ export default function App() {
                     }}
                   >
                     <option value="">None</option>
-                    {areas.map((a) => (
+                    {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
                       <option value={a.id} key={a.id}>
                         {a.title}
                       </option>

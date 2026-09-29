@@ -1,9 +1,11 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -35,8 +37,10 @@ let databaseInstance: DatabaseSync | null = null;
 
 export function getDatabase() {
   if (databaseInstance) return databaseInstance;
-  mkdirSync(dataDirectory, { recursive: true });
+  mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(dataDirectory, 0o700);
   const database = new DatabaseSync(databasePath);
+  chmodSync(databasePath, 0o600);
   databaseInstance = database;
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -73,9 +77,57 @@ export function getDatabase() {
       sent_at INTEGER,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS security_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      actor_hash TEXT NOT NULL,
+      details TEXT NOT NULL
+    );
   `);
+  for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
+  }
   migrateLegacyStore(database);
+  ensureDefaultWorkspace(database);
   return database;
+}
+
+function defaultWorkspaceEntity(now = Date.now()): Entity {
+  return {
+    id: "workspace:personal",
+    type: "workspace",
+    title: "Personal",
+    status: "active",
+    workspaceId: "personal",
+    properties: {
+      kind: "personal",
+      role: "owner",
+      members: [{ id: "owner", role: "owner" }],
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function ensureDefaultWorkspace(database: DatabaseSync) {
+  const exists = database
+    .prepare("SELECT 1 FROM entities WHERE id = ?")
+    .get("workspace:personal");
+  if (exists) return;
+  const now = Date.now();
+  const workspace = defaultWorkspaceEntity(now);
+  database
+    .prepare("INSERT INTO entities (id, payload, updated_at) VALUES (?, ?, ?)")
+    .run(workspace.id, JSON.stringify(workspace), now);
+  const revision = Number(readMetadata(database, "revision")) + 1;
+  const setMetadata = database.prepare(`
+    INSERT INTO metadata (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `);
+  setMetadata.run("revision", String(revision));
+  setMetadata.run("updatedAt", String(now));
 }
 
 const readMetadata = (database: DatabaseSync, key: string, fallback = "0") =>
@@ -177,12 +229,19 @@ export function replaceSnapshot(
       if (typeof id === "string" && id) tombstones.delete(id);
     }
     for (const id of deletedIds) {
-      if (typeof id === "string" && id) {
+      if (typeof id === "string" && id && !id.startsWith("workspace:")) {
         tombstones.set(id, { id, deletedAt: Date.now() });
       }
     }
     const tombstonedIds = new Set(tombstones.keys());
-    const liveEntities = entities.filter((entity) => !tombstonedIds.has(entity.id));
+    const normalizedEntities = entities.some(
+      (entity) => entity.id === "workspace:personal",
+    )
+      ? entities
+      : [defaultWorkspaceEntity(), ...entities];
+    const liveEntities = normalizedEntities.filter(
+      (entity) => !tombstonedIds.has(entity.id),
+    );
     const liveEntityIds = new Set(liveEntities.map((entity) => entity.id));
     const next: StoreSnapshot = {
       revision: current.revision + 1,
@@ -218,28 +277,100 @@ export function validateSnapshot(snapshot: unknown): asserts snapshot is StoreSn
     throw new Error("Snapshot does not contain entity and relation arrays");
   }
   const entityIds = new Set<string>();
+  const allowedEntityTypes = new Set([
+    "area",
+    "project",
+    "task",
+    "note",
+    "workspace",
+  ]);
   for (const entity of value.entities) {
     if (
       !entity ||
       typeof entity.id !== "string" ||
+      entity.id.length === 0 ||
+      entity.id.length > 240 ||
       typeof entity.type !== "string" ||
+      !allowedEntityTypes.has(entity.type) ||
       typeof entity.title !== "string" ||
+      entity.title.length === 0 ||
+      entity.title.length > 1000 ||
+      (entity.content !== undefined &&
+        (typeof entity.content !== "string" || entity.content.length > 100000)) ||
+      typeof entity.status !== "string" ||
+      entity.status.length > 40 ||
       typeof entity.workspaceId !== "string" ||
-      typeof entity.updatedAt !== "number"
+      entity.workspaceId.length > 120 ||
+      !entity.properties ||
+      typeof entity.properties !== "object" ||
+      Array.isArray(entity.properties) ||
+      JSON.stringify(entity.properties).length > 250000 ||
+      typeof entity.createdAt !== "number" ||
+      !Number.isFinite(entity.createdAt) ||
+      typeof entity.updatedAt !== "number" ||
+      !Number.isFinite(entity.updatedAt)
     ) {
       throw new Error("Snapshot contains an invalid entity");
     }
     if (entityIds.has(entity.id)) throw new Error("Snapshot contains duplicate entity IDs");
     entityIds.add(entity.id);
   }
+  const workspaceIds = new Set(
+    value.entities
+      .filter((entity) => entity.type === "workspace")
+      .map((entity) => entity.workspaceId),
+  );
+  const workspaceEntities = value.entities.filter(
+    (entity) => entity.type === "workspace",
+  );
+  if (
+    new Set(workspaceEntities.map((entity) => entity.workspaceId)).size !==
+    workspaceEntities.length
+  ) {
+    throw new Error("Snapshot contains duplicate workspace IDs");
+  }
+  for (const workspace of workspaceEntities) {
+    if (
+      workspace.id !== `workspace:${workspace.workspaceId}` ||
+      workspace.title.trim().length === 0 ||
+      workspace.title.length > 120 ||
+      !["personal", "shared"].includes(String(workspace.properties.kind)) ||
+      workspace.properties.role !== "owner" ||
+      !Array.isArray(workspace.properties.members)
+    ) {
+      throw new Error("Snapshot contains an invalid workspace");
+    }
+  }
+  workspaceIds.add("personal");
+  if (
+    value.entities.some(
+      (entity) =>
+        entity.type !== "workspace" && !workspaceIds.has(entity.workspaceId),
+    )
+  ) {
+    throw new Error("Snapshot contains an entity in an unknown workspace");
+  }
+  const entitiesById = new Map(
+    value.entities.map((entity) => [entity.id, entity]),
+  );
   const relationIds = new Set<string>();
   for (const relation of value.relations) {
     if (
       !relation ||
       typeof relation.id !== "string" ||
+      relation.id.length === 0 ||
+      relation.id.length > 240 ||
       typeof relation.sourceEntityId !== "string" ||
+      relation.sourceEntityId.length > 240 ||
       typeof relation.targetEntityId !== "string" ||
-      typeof relation.relationType !== "string"
+      relation.targetEntityId.length > 240 ||
+      typeof relation.relationType !== "string" ||
+      relation.relationType.length === 0 ||
+      relation.relationType.length > 120 ||
+      typeof relation.workspaceId !== "string" ||
+      relation.workspaceId.length > 120 ||
+      typeof relation.createdAt !== "number" ||
+      !Number.isFinite(relation.createdAt)
     ) {
       throw new Error("Snapshot contains an invalid relation");
     }
@@ -250,7 +381,32 @@ export function validateSnapshot(snapshot: unknown): asserts snapshot is StoreSn
     ) {
       throw new Error("Snapshot contains a relation to a missing entity");
     }
+    const source = entitiesById.get(relation.sourceEntityId);
+    const target = entitiesById.get(relation.targetEntityId);
+    if (
+      !source ||
+      !target ||
+      source.workspaceId !== target.workspaceId ||
+      relation.workspaceId !== source.workspaceId
+    ) {
+      throw new Error("Snapshot contains a cross-workspace relation");
+    }
     relationIds.add(relation.id);
+  }
+  if (value.tombstones !== undefined) {
+    if (!Array.isArray(value.tombstones)) throw new Error("Snapshot tombstones are invalid");
+    for (const tombstone of value.tombstones) {
+      if (
+        !tombstone ||
+        typeof tombstone.id !== "string" ||
+        tombstone.id.length === 0 ||
+        tombstone.id.length > 240 ||
+        typeof tombstone.deletedAt !== "number" ||
+        !Number.isFinite(tombstone.deletedAt)
+      ) {
+        throw new Error("Snapshot contains an invalid tombstone");
+      }
+    }
   }
 }
 
@@ -264,7 +420,8 @@ function summarizeBackup(name: string, snapshot: StoreSnapshot): BackupSummary {
 }
 
 export function createBackup(label = "manual") {
-  mkdirSync(backupDirectory, { recursive: true });
+  mkdirSync(backupDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(backupDirectory, 0o700);
   const snapshot = readSnapshot();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const safeLabel = label.replace(/[^a-z-]/gi, "").toLowerCase() || "manual";
@@ -272,7 +429,40 @@ export function createBackup(label = "manual") {
   writeFileSync(path.join(backupDirectory, name), JSON.stringify(snapshot, null, 2), {
     encoding: "utf8",
     flag: "wx",
+    mode: 0o600,
   });
+  try {
+    const backups = readdirSync(backupDirectory)
+      .filter((entry) => entry.endsWith(".json"))
+      .map((entry) => {
+        const backupPath = path.join(backupDirectory, entry);
+        chmodSync(backupPath, 0o600);
+        return { entry, modifiedAt: statSync(backupPath).mtimeMs };
+      })
+      .sort((a, b) => b.modifiedAt - a.modifiedAt);
+    const retentionClass = (entry: string) => {
+      if (entry.endsWith("-daily.json")) return "daily";
+      if (entry.endsWith("-manual.json")) return "manual";
+      if (
+        entry.endsWith("-before-restore.json") ||
+        entry.endsWith("-json-migration.json") ||
+        entry.endsWith("-pre-sqlite.json")
+      ) {
+        return "safety";
+      }
+      return "other";
+    };
+    const limits: Record<string, number> = { daily: 30, manual: 20, safety: 20, other: 10 };
+    const seen: Record<string, number> = { daily: 0, manual: 0, safety: 0, other: 0 };
+    const expired = backups.filter(({ entry }) => {
+      const category = retentionClass(entry);
+      seen[category] += 1;
+      return seen[category] > limits[category];
+    });
+    for (const backup of expired) unlinkSync(path.join(backupDirectory, backup.entry));
+  } catch (error) {
+    console.error("Backup retention cleanup failed", error);
+  }
   return summarizeBackup(name, snapshot);
 }
 
@@ -322,7 +512,11 @@ export function restoreBackup(name: string) {
     }
     const next: StoreSnapshot = {
       revision: current.revision + 1,
-      entities: restored.entities,
+      entities: restored.entities.some(
+        (entity) => entity.id === "workspace:personal",
+      )
+        ? restored.entities
+        : [defaultWorkspaceEntity(), ...restored.entities],
       relations: restored.relations,
       tombstones: [...tombstones.values()],
       updatedAt: Date.now(),

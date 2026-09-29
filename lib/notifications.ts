@@ -84,16 +84,31 @@ export function getNotificationPreferences(): NotificationPreferences {
 
 export function saveNotificationPreferences(input: Partial<NotificationPreferences>) {
   const current = getNotificationPreferences();
+  if (
+    (input.timezone !== undefined &&
+      (typeof input.timezone !== "string" || !input.timezone.trim() || input.timezone.length > 100)) ||
+    (input.workdayStart !== undefined &&
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayStart)) ||
+    (input.workdayEnd !== undefined &&
+      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayEnd)) ||
+    (input.workdays !== undefined &&
+      (!Array.isArray(input.workdays) ||
+        input.workdays.length > 7 ||
+        new Set(input.workdays).size !== input.workdays.length ||
+        input.workdays.some((day) => !Number.isInteger(day) || day < 0 || day > 6)))
+  ) {
+    throw new Error("Invalid notification preferences");
+  }
   const next: NotificationPreferences = {
     enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
     timezone:
-      typeof input.timezone === "string" && input.timezone.trim()
+      typeof input.timezone === "string" && input.timezone.trim() && input.timezone.length <= 100
         ? input.timezone.trim()
         : current.timezone,
-    workdayStart: /^\d{2}:\d{2}$/.test(input.workdayStart || "")
+    workdayStart: /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayStart || "")
       ? input.workdayStart!
       : current.workdayStart,
-    workdayEnd: /^\d{2}:\d{2}$/.test(input.workdayEnd || "")
+    workdayEnd: /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayEnd || "")
       ? input.workdayEnd!
       : current.workdayEnd,
     workdays: Array.isArray(input.workdays)
@@ -113,13 +128,23 @@ export function saveSubscription(subscription: PushSubscription) {
   if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
     throw new Error("Invalid push subscription");
   }
+  if (
+    subscription.endpoint.length > 8192 ||
+    subscription.keys.p256dh.length > 2048 ||
+    subscription.keys.auth.length > 2048 ||
+    !/^[A-Za-z0-9_-]{32,512}$/.test(subscription.keys.p256dh) ||
+    !/^[A-Za-z0-9_-]{16,256}$/.test(subscription.keys.auth)
+  ) {
+    throw new Error("Push subscription is too large");
+  }
   const endpoint = new URL(subscription.endpoint);
   const allowedHosts = [
     "fcm.googleapis.com",
     "updates.push.services.mozilla.com",
     "web.push.apple.com",
   ];
-  const allowed = endpoint.protocol === "https:" && (
+  const allowed = endpoint.protocol === "https:" &&
+    (!endpoint.port || endpoint.port === "443") && (
     allowedHosts.includes(endpoint.hostname) || endpoint.hostname.endsWith(".notify.windows.com")
   );
   if (!allowed) throw new Error("Unsupported push service");
