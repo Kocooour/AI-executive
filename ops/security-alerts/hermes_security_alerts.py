@@ -12,6 +12,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERMES_ROOT = Path("/usr/local/lib/hermes-agent")
 sys.path.insert(0, str(HERMES_ROOT))
@@ -36,10 +37,22 @@ MAX_FILES_PER_RUN = 10
 MAX_FILE_BYTES = 16 * 1024
 RETENTION_SECONDS = 30 * 24 * 60 * 60
 RULES = {
-    "rate-limit-triggered": ("critical", "AI Executive: rate limit triggered"),
-    "unauthenticated-mutation": ("critical", "AI Executive: blocked unauthorized write"),
-    "authentication-failures": ("critical", "AI Executive: repeated authentication failures"),
-    "protected-route-reconnaissance": ("warning", "AI Executive: protected route probing"),
+    "rate-limit-triggered": (
+        "critical",
+        "Bylo překročeno povolené množství požadavků.",
+    ),
+    "unauthenticated-mutation": (
+        "critical",
+        "Někdo se bez přihlášení pokusil změnit data.",
+    ),
+    "authentication-failures": (
+        "critical",
+        "Zaznamenal jsem několik neúspěšných pokusů o přihlášení.",
+    ),
+    "protected-route-reconnaissance": (
+        "warning",
+        "Zaznamenal jsem opakované pokusy o přístup k chráněným částem aplikace.",
+    ),
 }
 
 
@@ -73,7 +86,7 @@ def validate(payload: object) -> dict[str, object]:
     rule = bounded(payload.get("rule"), 80)
     if rule not in RULES:
         raise ValueError("unsupported alert rule")
-    expected_severity, canonical_title = RULES[rule]
+    expected_severity, canonical_description = RULES[rule]
     if severity != expected_severity:
         raise ValueError("severity does not match rule")
     source = bounded(payload.get("source"), 24)
@@ -88,7 +101,7 @@ def validate(payload: object) -> dict[str, object]:
         "rule": rule,
         # Never trust free-form outbox text. The app may select only a known
         # rule; the privileged sender derives the user-facing wording.
-        "title": canonical_title,
+        "description": canonical_description,
         "eventCount": count,
         "firstAt": timestamp(payload.get("firstAt")),
         "lastAt": timestamp(payload.get("lastAt")),
@@ -98,11 +111,21 @@ def validate(payload: object) -> dict[str, object]:
 
 def deliver(alert: dict[str, object]) -> None:
     icon = "🚨" if alert["severity"] == "critical" else "⚠️"
+    heading = "Bezpečnostní upozornění z AI Executive"
+    local_time = (
+        datetime.fromisoformat(str(alert["lastAt"]).replace("Z", "+00:00"))
+        .astimezone(ZoneInfo("Europe/Prague"))
+        .strftime("%-d. %-m. %Y v %H:%M:%S")
+    )
+    attempt_count = int(alert["eventCount"])
+    attempt_label = "pokus" if attempt_count == 1 else "pokusy" if 2 <= attempt_count <= 4 else "pokusů"
     message = (
-        f"{icon} {alert['title']}\n"
-        f"Rule: {alert['rule']} · Events: {alert['eventCount']}\n"
-        f"Source: {alert['source']} · Last: {alert['lastAt']}\n"
-        "The request was blocked; review AI Executive security logs."
+        f"{icon} {heading}\n\n"
+        f"{alert['description']}\n"
+        f"Zachyceno: {attempt_count} {attempt_label}\n"
+        f"Kdy: {local_time}\n"
+        f"Zdroj: {alert['source']} (anonymizováno)\n\n"
+        "Požadavek byl zablokován a data zůstala beze změny."
     )
     raw = send_message_tool({"action": "send", "target": "telegram", "message": message})
     result = json.loads(raw) if isinstance(raw, str) else raw
