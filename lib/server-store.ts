@@ -77,6 +77,22 @@ export function getDatabase() {
       sent_at INTEGER,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS executive_briefings (
+      id TEXT PRIMARY KEY,
+      delivery_key TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      local_date TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      push_sent_at INTEGER,
+      telegram_enqueued_at INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at INTEGER,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS executive_briefings_created_idx
+      ON executive_briefings(created_at DESC);
     CREATE TABLE IF NOT EXISTS security_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at INTEGER NOT NULL,

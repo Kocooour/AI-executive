@@ -4,6 +4,7 @@ import { HttpInputError } from "./http-security";
 import { getNotificationPreferences } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { completeServerAI } from "./server-ai-provider";
+import { buildExecutiveBriefing } from "./executive-briefings";
 
 type CreateOperation = {
   kind: "create";
@@ -18,7 +19,15 @@ type UpdateOperation = {
   patch: Pick<Entity, "title" | "status" | "content" | "properties">;
 };
 
-type AIOperation = CreateOperation | UpdateOperation;
+type ProjectOperation = {
+  kind: "project";
+  entityId: string;
+  expectedUpdatedAt: number;
+  expectedRelations: Relation[];
+  relation: Relation;
+};
+
+type AIOperation = CreateOperation | UpdateOperation | ProjectOperation;
 
 export interface PublicAIProposal {
   id: string;
@@ -225,7 +234,7 @@ function updateTaskOperation(
   referencedEntity?: Entity,
 ) {
   const normalized = normalize(input);
-  if (!/\b(presun|preplanuj|naplanuj|move|reschedule)\b/.test(normalized)) return null;
+  if (!/\b(presun|preplanuj|naplanuj|odloz|move|reschedule|snooze)\b/.test(normalized)) return null;
   const date = parseRequestedDate(input);
   if (!date) return { clarification: "Na jaké datum mám úkol přesunout?" };
   const pronounReference = /\b(ho|jej|to|it)\b/.test(normalized) &&
@@ -277,6 +286,113 @@ function updateTaskOperation(
   };
 }
 
+function taskForRequest(
+  input: string,
+  workspaceId: string,
+  entities: Entity[],
+  referencedEntity?: Entity,
+) {
+  const normalized = normalize(input);
+  const referenced = referencedEntity?.type === "task" &&
+    referencedEntity.workspaceId === workspaceId ? referencedEntity : undefined;
+  const matches = entities
+    .filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId)
+    .filter((entity) => normalized.includes(normalize(entity.title)))
+    .sort((a, b) => b.title.length - a.title.length);
+  if (matches.length > 1 && matches[0].title.length === matches[1].title.length) return null;
+  return matches[0] || referenced || null;
+}
+
+function completeTaskOperation(
+  input: string,
+  workspaceId: string,
+  workspaceLabel: string,
+  entities: Entity[],
+  referencedEntity?: Entity,
+) {
+  const normalized = normalize(input);
+  if (!/\b(dokonc|spln|oznac.*hotov|complete|finish|mark.*done)\w*/.test(normalized)) return null;
+  const entity = taskForRequest(input, workspaceId, entities, referencedEntity);
+  if (!entity || entity.status !== "open") return { clarification: "Otevřený úkol jsem nenašel. Otevři jeho detail nebo napiš přesný název." };
+  const activity = [
+    ...(Array.isArray(entity.properties.activity) ? entity.properties.activity : []),
+    { at: Date.now(), action: "completed-by-ai" },
+  ].slice(-50);
+  return {
+    operation: {
+      kind: "update", entityId: entity.id, expectedUpdatedAt: entity.updatedAt,
+      patch: { title: entity.title, content: entity.content || "", status: "completed", properties: { ...entity.properties, activity } },
+    } as UpdateOperation,
+    summary: `Dokončit úkol „${entity.title}“`,
+    changes: [{ label: "Workspace", value: workspaceLabel }, { label: "Status", value: "Open → Completed" }],
+  };
+}
+
+function prioritizeTaskOperation(
+  input: string,
+  workspaceId: string,
+  workspaceLabel: string,
+  entities: Entity[],
+  referencedEntity?: Entity,
+) {
+  const normalized = normalize(input);
+  if (!/\b(priorit|priority)\w*/.test(normalized)) return null;
+  const priority = /\b(vysok|high)\w*/.test(normalized) ? "high" :
+    /\b(stred|medium)\w*/.test(normalized) ? "medium" :
+      /\b(nizk|low)\w*/.test(normalized) ? "low" :
+        /\b(bez|none)\w*/.test(normalized) ? "none" : "";
+  if (!priority) return { clarification: "Jakou prioritu mám nastavit: vysokou, střední, nízkou, nebo žádnou?" };
+  const entity = taskForRequest(input, workspaceId, entities, referencedEntity);
+  if (!entity || entity.status !== "open") return { clarification: "Otevřený úkol jsem nenašel. Otevři jeho detail nebo napiš přesný název." };
+  return {
+    operation: {
+      kind: "update", entityId: entity.id, expectedUpdatedAt: entity.updatedAt,
+      patch: { title: entity.title, content: entity.content || "", status: entity.status, properties: { ...entity.properties, priority } },
+    } as UpdateOperation,
+    summary: `Změnit prioritu úkolu „${entity.title}“`,
+    changes: [
+      { label: "Workspace", value: workspaceLabel },
+      { label: "Priority", value: `${String(entity.properties.priority || "none")} → ${priority}` },
+    ],
+  };
+}
+
+function moveTaskToProjectOperation(
+  input: string,
+  workspaceId: string,
+  workspaceLabel: string,
+  entities: Entity[],
+  relations: Relation[],
+  referencedEntity?: Entity,
+) {
+  const normalized = normalize(input);
+  if (!/\b(projekt|project)\w*/.test(normalized) || !/\b(presun|zarad|move)\w*/.test(normalized)) return null;
+  const project = projectForRequest(input, workspaceId, entities);
+  if (!project) return { clarification: "Cílový projekt jsem v tomto workspace nenašel. Napiš jeho přesný název." };
+  const entity = taskForRequest(input, workspaceId, entities, referencedEntity);
+  if (!entity || entity.status !== "open") return { clarification: "Otevřený úkol jsem nenašel. Otevři jeho detail nebo napiš přesný název." };
+  const current = relations
+    .filter((relation) => relation.workspaceId === workspaceId && relation.sourceEntityId === entity.id && relation.relationType === "belongs_to_project")
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (current.some((relation) => relation.targetEntityId === project.id)) {
+    return { clarification: `Úkol už je v projektu „${project.title}“.` };
+  }
+  const previous = current[0]
+    ? entities.find((candidate) => candidate.id === current[0].targetEntityId)?.title || "jiný projekt"
+    : "bez projektu";
+  return {
+    operation: {
+      kind: "project", entityId: entity.id, expectedUpdatedAt: entity.updatedAt, expectedRelations: current,
+      relation: { id: randomUUID(), workspaceId, sourceEntityId: entity.id, targetEntityId: project.id, relationType: "belongs_to_project", createdAt: Date.now() },
+    } as ProjectOperation,
+    summary: `Přesunout úkol „${entity.title}“ do projektu „${project.title}“`,
+    changes: [
+      { label: "Workspace", value: workspaceLabel },
+      { label: "Project", value: `${previous} → ${project.title}` },
+    ],
+  };
+}
+
 function createProposal(
   sessionBinding: string,
   workspaceId: string,
@@ -300,25 +416,13 @@ function createProposal(
 }
 
 function morningBrief(workspaceId: string, entities: Entity[]) {
-  const timezone = getNotificationPreferences().timezone;
-  const today = datePartsInTimezone(new Date(), timezone);
-  const tasks = entities.filter((entity) => entity.type === "task" && entity.status === "open");
-  const dateOf = (task: Entity) => String(task.properties.deadline || task.properties.when || "");
-  const overdue = tasks.filter((task) => dateOf(task) && dateOf(task) < today);
-  const todayTasks = tasks.filter(
-    (task) => task.properties.today === true || task.properties.when === today || task.properties.deadline === today,
-  );
-  const priority = (task: Entity) => Number(task.properties.priority || 0);
-  const unique = [...overdue, ...todayTasks]
-    .filter((task, index, all) => all.findIndex((item) => item.id === task.id) === index)
-    .sort((a, b) => priority(b) - priority(a) || dateOf(a).localeCompare(dateOf(b)))
-    .slice(0, 10);
-  if (!unique.length) return "Dnes nemáš v tomto workspace žádný naplánovaný ani zpožděný úkol.";
-  const lines = unique.map((task) => {
-    const marker = overdue.includes(task) ? "Po termínu" : "Dnes";
-    return `• ${marker}: ${task.title}`;
-  });
-  return `Dnešní přehled (${today}, ${timezone}):\n${lines.join("\n")}`;
+  void entities;
+  if (workspaceId === "all") return "Pro denní přehled vyber konkrétní workspace; souhrn All my work zůstává jen čtecí agregace.";
+  const briefing = buildExecutiveBriefing("morning", workspaceId);
+  const tasks = briefing.topTasks.length
+    ? briefing.topTasks.map((task, index) => `${index + 1}. ${task.title} — ${task.reason}`).join("\n")
+    : "Žádné prioritní otevřené úkoly.";
+  return `${briefing.title} (${briefing.localDate}, ${getNotificationPreferences().timezone})\n${briefing.summary}\n${tasks}\nDoporučení: ${briefing.suggestions.join(" ")}`;
 }
 
 function providerContext(workspaceId: string, entities: Entity[], focusEntityId?: string) {
@@ -378,6 +482,12 @@ export async function planAIRequest(input: {
     return { message: morningBrief(input.readWorkspaceId, entities), provider: "local" };
   }
 
+  const reference = referencedEntity(
+    input.sessionBinding,
+    input.writeWorkspaceId,
+    writeScope.entities,
+    input.focusEntityId,
+  );
   const writePlan =
     createTaskOperation(
       input.message,
@@ -385,18 +495,16 @@ export async function planAIRequest(input: {
       writeWorkspaceLabel,
       writeScope.entities,
     ) ||
+    moveTaskToProjectOperation(input.message, input.writeWorkspaceId, writeWorkspaceLabel, writeScope.entities, writeScope.snapshot.relations, reference) ||
     updateTaskOperation(
       input.message,
       input.writeWorkspaceId,
       writeWorkspaceLabel,
       writeScope.entities,
-      referencedEntity(
-        input.sessionBinding,
-        input.writeWorkspaceId,
-        writeScope.entities,
-        input.focusEntityId,
-      ),
-    );
+      reference,
+    ) ||
+    completeTaskOperation(input.message, input.writeWorkspaceId, writeWorkspaceLabel, writeScope.entities, reference) ||
+    prioritizeTaskOperation(input.message, input.writeWorkspaceId, writeWorkspaceLabel, writeScope.entities, reference);
   if (writePlan && "clarification" in writePlan) {
     return { message: writePlan.clarification, provider: "local" };
   }
@@ -425,7 +533,7 @@ export async function planAIRequest(input: {
   return {
     provider: "local",
     message:
-      "Model zatím není připojený. Umím ale bezpečně připravit úkol, přesunout existující úkol nebo vytvořit dnešní přehled. Zkus například „Co dnes hoří?“.",
+      "Model zatím není připojený. Umím ale bezpečně připravit úkol, přesunout ho, dokončit ho, změnit prioritu nebo vytvořit dnešní přehled. Zkus například „Co dnes hoří?“.",
   };
 }
 
@@ -473,6 +581,8 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
     const now = Date.now();
     let before: Entity | null = null;
     let after: Entity;
+    let beforeRelations: Relation[] = [];
+    let afterRelations: Relation[] = [];
     if (operation.kind === "create") {
       if (operation.entity.workspaceId !== row.workspace_id || operation.entity.type === "workspace") {
         throw new Error("Proposal workspace is invalid");
@@ -503,15 +613,37 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       if (before.workspaceId !== row.workspace_id || before.updatedAt !== operation.expectedUpdatedAt) {
         throw new Error("Entity changed after this proposal was created. Ask the assistant again.");
       }
-      after = {
-        ...before,
-        ...operation.patch,
-        id: before.id,
-        type: before.type,
-        workspaceId: before.workspaceId,
-        createdAt: before.createdAt,
-        updatedAt: now,
-      };
+      if (operation.kind === "project") {
+        const current = database.prepare("SELECT payload FROM relations").all()
+          .map((item) => JSON.parse(String((item as { payload: string }).payload)) as Relation)
+          .filter((relation) => relation.workspaceId === row.workspace_id && relation.sourceEntityId === before!.id && relation.relationType === "belongs_to_project")
+          .sort((a, b) => a.id.localeCompare(b.id));
+        if (stableJson(current) !== stableJson(operation.expectedRelations)) {
+          throw new Error("Project relation changed after this proposal was created. Ask the assistant again.");
+        }
+        const targetRow = database.prepare("SELECT payload FROM entities WHERE id = ?").get(operation.relation.targetEntityId) as { payload?: string } | undefined;
+        const target = targetRow?.payload ? JSON.parse(targetRow.payload) as Entity : null;
+        if (!target || target.type !== "project" || target.workspaceId !== row.workspace_id ||
+            operation.relation.workspaceId !== row.workspace_id || operation.relation.sourceEntityId !== before.id) {
+          throw new Error("Proposal project is invalid");
+        }
+        beforeRelations = current;
+        afterRelations = [operation.relation];
+        for (const relation of current) database.prepare("DELETE FROM relations WHERE id = ?").run(relation.id);
+        database.prepare("INSERT INTO relations (id, payload, created_at) VALUES (?, ?, ?)")
+          .run(operation.relation.id, JSON.stringify(operation.relation), operation.relation.createdAt);
+        after = { ...before, updatedAt: now };
+      } else {
+        after = {
+          ...before,
+          ...operation.patch,
+          id: before.id,
+          type: before.type,
+          workspaceId: before.workspaceId,
+          createdAt: before.createdAt,
+          updatedAt: now,
+        };
+      }
       database.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(after), after.updatedAt, after.id);
     }
@@ -529,10 +661,10 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       row.workspace_id,
       operation.kind,
       after.id,
-      before ? JSON.stringify({ entity: before }) : null,
+      before ? JSON.stringify({ entity: before, relations: beforeRelations }) : null,
       JSON.stringify({
         entity: after,
-        relations: operation.kind === "create" ? operation.relations : [],
+        relations: operation.kind === "create" ? operation.relations : afterRelations,
       }),
       now,
     );
@@ -627,10 +759,27 @@ export function undoAIAction(actionId: string, sessionBinding: string) {
         ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at
       `).run(row.entity_id, now);
     } else {
-      const beforeRecord = JSON.parse(String(row.before_payload)) as { entity?: Entity } | Entity;
+      const beforeRecord = JSON.parse(String(row.before_payload)) as { entity?: Entity; relations?: Relation[] } | Entity;
       const before = "entity" in beforeRecord && beforeRecord.entity
         ? beforeRecord.entity
         : beforeRecord as Entity;
+      if (row.action === "project") {
+        const expected = "relations" in afterRecord && Array.isArray(afterRecord.relations)
+          ? afterRecord.relations.sort((a, b) => a.id.localeCompare(b.id)) : [];
+        const currentRelations = database.prepare("SELECT payload FROM relations").all()
+          .map((item) => JSON.parse(String((item as { payload: string }).payload)) as Relation)
+          .filter((relation) => relation.workspaceId === row.workspace_id && relation.sourceEntityId === row.entity_id && relation.relationType === "belongs_to_project")
+          .sort((a, b) => a.id.localeCompare(b.id));
+        if (stableJson(currentRelations) !== stableJson(expected)) {
+          throw new Error("Project relation was changed later, so this action cannot be safely undone.");
+        }
+        for (const relation of currentRelations) database.prepare("DELETE FROM relations WHERE id = ?").run(relation.id);
+        const previousRelations = "relations" in beforeRecord && Array.isArray(beforeRecord.relations) ? beforeRecord.relations : [];
+        for (const relation of previousRelations) {
+          database.prepare("INSERT INTO relations (id, payload, created_at) VALUES (?, ?, ?)")
+            .run(relation.id, JSON.stringify(relation), relation.createdAt);
+        }
+      }
       const restored = { ...before, updatedAt: now };
       database.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(restored), restored.updatedAt, restored.id);

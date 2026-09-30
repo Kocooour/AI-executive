@@ -41,6 +41,34 @@ interface NotificationPreferences {
   workdayStart: string;
   workdayEnd: string;
   workdays: number[];
+  briefingEnabled: boolean;
+  morningBriefEnabled: boolean;
+  morningBriefTime: string;
+  eveningReviewEnabled: boolean;
+  eveningReviewTime: string;
+  briefingWorkspaceId: string;
+  briefingPush: boolean;
+  briefingTelegram: boolean;
+  dailyTaskCapacity: number;
+}
+
+interface ExecutiveBriefing {
+  id: string;
+  kind: "morning" | "evening";
+  workspaceId: string;
+  workspaceName: string;
+  localDate: string;
+  title: string;
+  summary: string;
+  topTasks: Array<{ id: string; title: string; reason: string }>;
+  overdueCount: number;
+  riskCount: number;
+  completedCount: number;
+  remainingCount: number;
+  capacity: number;
+  overloaded: boolean;
+  suggestions: string[];
+  createdAt: number;
 }
 
 interface NotificationState {
@@ -171,6 +199,8 @@ export default function App() {
     [standalone, setStandalone] = useState(false),
     [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [notificationStatus, setNotificationStatus] = useState(""),
+    [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
+    [briefingBusy, setBriefingBusy] = useState(false),
     [sortBy, setSortBy] = useState<"date" | "priority" | "created">("date"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [checklistDraft, setChecklistDraft] = useState(""),
@@ -470,6 +500,39 @@ export default function App() {
         setAuthState("required");
       });
   }, []);
+
+  async function loadBriefings(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+    const response = await fetch(`/api/executive?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Executive briefing is unavailable");
+    const data = await response.json();
+    setBriefings(Array.isArray(data.briefings) ? data.briefings : []);
+  }
+
+  async function runBriefing(kind: "morning" | "evening") {
+    if (briefingBusy) return;
+    setBriefingBusy(true);
+    setNotificationStatus("");
+    try {
+      const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+      const response = await fetch("/api/executive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind, workspaceId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Briefing failed");
+      await loadBriefings(workspaceId);
+    } catch (error) {
+      setNotificationStatus(error instanceof Error ? error.message : "Briefing failed");
+    } finally {
+      setBriefingBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (authState !== "ready") return;
+    loadBriefings().catch(() => undefined);
+  }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
     if (view !== "Settings" || authState !== "ready") return;
@@ -1619,6 +1682,7 @@ export default function App() {
           </p>
           <h1>{view}</h1>
           {view === "Home" && (
+            <>
             <div className="dashboard">
               <div>
                 <b>
@@ -1648,6 +1712,38 @@ export default function App() {
                 <span>Projects</span>
               </div>
             </div>
+            <section className="briefingCard">
+              <div className="sectionHeading">
+                <div>
+                  <p className="eyebrow">PROACTIVE EXECUTIVE</p>
+                  <h2>{briefings[0]?.title || "Denní přehled"}</h2>
+                </div>
+                <div className="notificationActions">
+                  <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>Ranní přehled</button>
+                  <button onClick={() => runBriefing("evening")} disabled={briefingBusy}>Večerní rekapitulace</button>
+                </div>
+              </div>
+              {briefings[0] ? (
+                <div>
+                  <p>{briefings[0].summary}</p>
+                  {briefings[0].overloaded && <p role="status"><strong>Kapacita je překročena.</strong> Jde o orientační odhad bez kalendáře a časových odhadů.</p>}
+                  <ol className="briefingTasks">
+                    {briefings[0].topTasks.map((task) => (
+                      <li key={task.id}>
+                        <button onClick={() => {
+                          const entity = items.find((item) => item.id === task.id);
+                          if (entity) inspect(entity);
+                        }}>{task.title}</button>
+                        <small>{task.reason}</small>
+                      </li>
+                    ))}
+                  </ol>
+                  <ul>{briefings[0].suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
+                  <small>{new Date(briefings[0].createdAt).toLocaleString()} · {briefings[0].workspaceName}</small>
+                </div>
+              ) : <p>Vytvoř první přehled, nebo zapni automatický plán v Settings.</p>}
+            </section>
+            </>
           )}
           {view === "Search" && query && (
             <div className="searchResults">
@@ -1976,6 +2072,71 @@ export default function App() {
                   </div>
                 )}
                 {notificationStatus && <p role="status">{notificationStatus}</p>}
+              </section>
+              <section>
+                <div className="sectionHeading">
+                  <div>
+                    <h2>Proactive executive</h2>
+                    <p>
+                      Automatický ranní přehled a večerní rekapitulace. Úkoly nikdy
+                      nemění bez návrhu, vašeho potvrzení a možnosti Undo.
+                    </p>
+                  </div>
+                  <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>
+                    Vytvořit teď
+                  </button>
+                </div>
+                {notificationState && (
+                  <div className="preferenceGrid">
+                    <label className="preferenceToggle">
+                      <input type="checkbox" checked={notificationState.preferences.briefingEnabled}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingEnabled: event.target.checked })} />
+                      Automatické denní přehledy
+                    </label>
+                    <label>
+                      Workspace
+                      <select value={notificationState.preferences.briefingWorkspaceId}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingWorkspaceId: event.target.value })}>
+                        {workspaces.map((workspace) => <option key={workspace.id} value={workspace.workspaceId}>{workspace.title}</option>)}
+                      </select>
+                    </label>
+                    <label className="preferenceToggle">
+                      <input type="checkbox" checked={notificationState.preferences.morningBriefEnabled}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefEnabled: event.target.checked })} />
+                      Ranní přehled
+                    </label>
+                    <label>
+                      Čas ráno
+                      <input type="time" value={notificationState.preferences.morningBriefTime}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefTime: event.target.value })} />
+                    </label>
+                    <label className="preferenceToggle">
+                      <input type="checkbox" checked={notificationState.preferences.eveningReviewEnabled}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewEnabled: event.target.checked })} />
+                      Večerní rekapitulace
+                    </label>
+                    <label>
+                      Čas večer
+                      <input type="time" value={notificationState.preferences.eveningReviewTime}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewTime: event.target.value })} />
+                    </label>
+                    <label>
+                      Orientační denní kapacita
+                      <input type="number" min="1" max="50" value={notificationState.preferences.dailyTaskCapacity}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, dailyTaskCapacity: Number(event.target.value) })} />
+                    </label>
+                    <label className="preferenceToggle">
+                      <input type="checkbox" checked={notificationState.preferences.briefingPush}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingPush: event.target.checked })} />
+                      Stručné push upozornění
+                    </label>
+                    <label className="preferenceToggle">
+                      <input type="checkbox" checked={notificationState.preferences.briefingTelegram}
+                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingTelegram: event.target.checked })} />
+                      Detail včetně názvů úkolů do nakonfigurovaného Telegram chatu
+                    </label>
+                  </div>
+                )}
               </section>
               <section>
                 <div className="sectionHeading">

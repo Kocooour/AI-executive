@@ -1,0 +1,27 @@
+[Unit]
+Description=Deliver AI Executive briefings through Hermes
+After=network-online.target hermes-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hermes
+Group=hermes
+WorkingDirectory=/usr/local/lib/hermes-agent
+Environment=HOME=/var/lib/hermes
+Environment=HERMES_HOME=/var/lib/hermes/.hermes
+Environment=PATH=/usr/local/lib/hermes-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/lib/hermes-agent/.venv/bin/python /usr/local/lib/ai-executive-briefings/hermes_executive_briefings.py
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/ai-executive-briefings

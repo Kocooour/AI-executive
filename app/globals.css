@@ -467,6 +467,28 @@ article small {
   display: grid;
   gap: 8px;
 }
+
+.briefingCard {
+  margin-top: 24px;
+  padding: 22px;
+  border: 1px solid #e8e8ef;
+  border-radius: 22px;
+  background: #fff;
+}
+
+.briefingCard h2 { margin: 2px 0 0; }
+.briefingTasks { padding-left: 22px; }
+.briefingTasks li { margin: 10px 0; }
+.briefingTasks button {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #20212a;
+  font-weight: 700;
+  text-align: left;
+}
+.briefingTasks small { display: block; color: #777; margin-top: 2px; }
 .primaryAction,
 .backupList button {
   border: 0;

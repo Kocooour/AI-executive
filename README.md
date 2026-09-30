@@ -29,6 +29,7 @@ npm run start -- --hostname 127.0.0.1
 - Installable PWA with an offline shell
 - Web Push reminders delivered by a server scheduler while the PWA is closed
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
+- Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 
 ## Persistence and backups
@@ -79,13 +80,40 @@ are stored as five-minute proposals and do not mutate data until the owner
 confirms them. Confirmation is session-bound, revision-checked and idempotent;
 successful changes have a guarded server-side Undo.
 
-The deterministic local planner provides today's brief, task creation and task
-rescheduling without an external model. For broader read-only answers, set
+The deterministic local planner provides today's brief, task creation,
+rescheduling/snoozing, completion, priority changes and project moves without
+an external model. Every mutation remains a proposal with confirmation and
+guarded Undo. For broader read-only answers, set
 `AI_PROVIDER=hermes`, `HERMES_AI_ENABLED=true`, `HERMES_BRIDGE_URL` and
 `HERMES_BRIDGE_TOKEN`, or configure `OPENAI_API_KEY` and `OPENAI_MODEL`.
 Provider secrets remain server-side. The current Hermes bridge invokes the
 Hermes agent CLI, so enable it only with a dedicated read-only profile; provider
 output never bypasses the application's proposal/confirmation boundary.
+
+## Proactive executive briefings
+
+Settings can enable a morning brief and evening review for one explicit
+workspace, IANA timezone and set of working days. The server reads canonical
+SQLite data and stores one durable briefing per kind, workspace and local date,
+so restarts and repeated DST hours do not duplicate it. A skipped wall-clock
+time is caught up on the next scheduler tick. The capacity warning is explicitly
+heuristic because the MVP does not yet read calendar availability or task effort.
+
+Push contains only summary counts; task titles stay in the authenticated app.
+Manual “Vytvořit teď” runs are in-app only and do not send notifications.
+Telegram is a separate explicit opt-in and includes workspace and top-task
+titles. Install its least-privilege Hermes adapter from a clean reviewed commit:
+
+```bash
+git diff --exit-code -- ops/executive-briefings
+sudo ./ops/executive-briefings/install.sh
+systemctl status ai-executive-briefings.timer
+```
+
+The adapter creates `/var/lib/ai-executive-briefings`; AI Executive can only
+write the outbox and receives no Hermes or Telegram credential. Delivery is
+at-least-once: an unlikely crash after Telegram accepts a message but before the
+queue file is archived can duplicate that message.
 
 ## Security alerts
 
