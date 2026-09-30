@@ -396,6 +396,31 @@ article small {
   font-size: 13px;
   font-weight: 650;
 }
+.passkeyList {
+  display: grid;
+  gap: 8px;
+}
+.passkeyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #ececf1;
+  border-radius: 12px;
+}
+.passkeyRow span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.passkeyRow small {
+  color: #777;
+  overflow-wrap: anywhere;
+}
+.passkeyRow button {
+  flex: 0 0 auto;
+}
 .settingsPanel dl {
   margin: 0;
 }

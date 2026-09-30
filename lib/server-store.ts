@@ -85,13 +85,174 @@ export function getDatabase() {
       actor_hash TEXT NOT NULL,
       details TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS passkey_credentials (
+      credential_id TEXT PRIMARY KEY,
+      public_key BLOB NOT NULL,
+      counter INTEGER NOT NULL,
+      transports TEXT NOT NULL,
+      device_type TEXT NOT NULL,
+      backed_up INTEGER NOT NULL,
+      rp_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS passkey_challenges (
+      challenge TEXT PRIMARY KEY,
+      ceremony TEXT NOT NULL,
+      rp_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      binding TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
   `);
+  const challengeColumns = database
+    .prepare("PRAGMA table_info(passkey_challenges)")
+    .all()
+    .map((row) => String((row as { name?: string }).name));
+  if (!challengeColumns.includes("binding")) {
+    database.exec(
+      "ALTER TABLE passkey_challenges ADD COLUMN binding TEXT NOT NULL DEFAULT ''",
+    );
+  }
   for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
     if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
   }
   migrateLegacyStore(database);
   ensureDefaultWorkspace(database);
   return database;
+}
+
+export interface StoredPasskeyCredential {
+  id: string;
+  publicKey: Uint8Array;
+  counter: number;
+  transports: string[];
+  deviceType: string;
+  backedUp: boolean;
+  rpId: string;
+  label: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+const passkeyFromRow = (row: Record<string, unknown>): StoredPasskeyCredential => ({
+  id: String(row.credential_id),
+  publicKey: new Uint8Array(row.public_key as Uint8Array),
+  counter: Number(row.counter),
+  transports: JSON.parse(String(row.transports || "[]")),
+  deviceType: String(row.device_type),
+  backedUp: Boolean(row.backed_up),
+  rpId: String(row.rp_id),
+  label: String(row.label),
+  createdAt: Number(row.created_at),
+  lastUsedAt: row.last_used_at == null ? null : Number(row.last_used_at),
+});
+
+export function listPasskeys(rpId?: string) {
+  const database = getDatabase();
+  const rows = rpId
+    ? database
+        .prepare("SELECT * FROM passkey_credentials WHERE rp_id = ? ORDER BY created_at")
+        .all(rpId)
+    : database.prepare("SELECT * FROM passkey_credentials ORDER BY created_at").all();
+  return rows.map((row) => passkeyFromRow(row as Record<string, unknown>));
+}
+
+export function getPasskey(id: string, rpId: string) {
+  const row = getDatabase()
+    .prepare("SELECT * FROM passkey_credentials WHERE credential_id = ? AND rp_id = ?")
+    .get(id, rpId) as Record<string, unknown> | undefined;
+  return row ? passkeyFromRow(row) : null;
+}
+
+export function savePasskey(credential: StoredPasskeyCredential) {
+  getDatabase()
+    .prepare(`
+      INSERT INTO passkey_credentials (
+        credential_id, public_key, counter, transports, device_type, backed_up,
+        rp_id, label, created_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(credential_id) DO NOTHING
+    `)
+    .run(
+      credential.id,
+      Buffer.from(credential.publicKey),
+      credential.counter,
+      JSON.stringify(credential.transports),
+      credential.deviceType,
+      credential.backedUp ? 1 : 0,
+      credential.rpId,
+      credential.label,
+      credential.createdAt,
+      credential.lastUsedAt,
+    );
+}
+
+export function updatePasskeyUse(
+  id: string,
+  counter: number,
+  backedUp: boolean,
+) {
+  getDatabase()
+    .prepare(`
+      UPDATE passkey_credentials
+      SET counter = ?, backed_up = ?, last_used_at = ?
+      WHERE credential_id = ?
+    `)
+    .run(counter, backedUp ? 1 : 0, Date.now(), id);
+}
+
+export function deletePasskey(id: string) {
+  return Number(
+    getDatabase()
+      .prepare("DELETE FROM passkey_credentials WHERE credential_id = ?")
+      .run(id).changes,
+  );
+}
+
+export function savePasskeyChallenge(
+  challenge: string,
+  ceremony: "registration" | "authentication",
+  rpId: string,
+  origin: string,
+  binding: string,
+  expiresAt: number,
+) {
+  const database = getDatabase();
+  database.prepare("DELETE FROM passkey_challenges WHERE expires_at <= ?").run(Date.now());
+  database
+    .prepare(`
+      INSERT INTO passkey_challenges (challenge, ceremony, rp_id, origin, binding, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .run(challenge, ceremony, rpId, origin, binding, expiresAt);
+}
+
+export function consumePasskeyChallenge(
+  challenge: string,
+  ceremony: "registration" | "authentication",
+  rpId: string,
+  origin: string,
+  binding: string,
+) {
+  const database = getDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database
+      .prepare(`
+        SELECT challenge FROM passkey_challenges
+        WHERE challenge = ? AND ceremony = ? AND rp_id = ? AND origin = ?
+          AND binding = ? AND expires_at > ?
+      `)
+      .get(challenge, ceremony, rpId, origin, binding, Date.now());
+    database.prepare("DELETE FROM passkey_challenges WHERE challenge = ?").run(challenge);
+    database.exec("COMMIT");
+    return Boolean(row);
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function defaultWorkspaceEntity(now = Date.now()): Entity {

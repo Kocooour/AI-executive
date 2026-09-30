@@ -1,4 +1,4 @@
-const CACHE = "ai-executive-shell-v2";
+const CACHE = "ai-executive-shell-v3";
 const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

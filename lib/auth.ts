@@ -1,4 +1,4 @@
-import { createHmac, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 export const sessionCookieName = "ai_executive_session";
 export const sessionMaxAgeSeconds = 7 * 24 * 60 * 60;
 
@@ -81,6 +81,12 @@ function cookies(request: Request) {
           : [part.slice(0, separator), part.slice(separator + 1)];
       }),
   );
+}
+
+export function authenticationBinding(request: Request) {
+  if (insecureDevelopmentMode()) return "insecure-development";
+  const token = cookies(request)[sessionCookieName] || "";
+  return createHash("sha256").update(token).digest("base64url");
 }
 
 export function createSessionToken(maxAgeSeconds = sessionMaxAgeSeconds) {

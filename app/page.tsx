@@ -1,6 +1,11 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  startRegistration,
+} from "@simplewebauthn/browser";
+import {
   db,
   ensureDefaultWorkspace,
   personalWorkspaceId,
@@ -20,6 +25,15 @@ interface BackupSummary {
   entityCount: number;
   relationCount: number;
   error?: string;
+}
+
+interface PasskeySummary {
+  id: string;
+  label: string;
+  rpId: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  backedUp: boolean;
 }
 
 interface NotificationPreferences {
@@ -154,6 +168,12 @@ export default function App() {
     [authEnabled, setAuthEnabled] = useState(false),
     [authPassword, setAuthPassword] = useState(""),
     [authError, setAuthError] = useState(""),
+    [passkeySupported, setPasskeySupported] = useState(false),
+    [passkeyBusy, setPasskeyBusy] = useState(false),
+    [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
+    [passkeyLabel, setPasskeyLabel] = useState("My passkey"),
+    [passkeyPassword, setPasskeyPassword] = useState(""),
+    [passkeyStatus, setPasskeyStatus] = useState(""),
     [aiText, setAiText] = useState(""),
     [messages, setMessages] = useState<AIMessage[]>([]);
   const serverRevision = useRef(0);
@@ -357,6 +377,7 @@ export default function App() {
     }
   }
   useEffect(() => {
+    setPasskeySupported(browserSupportsWebAuthn());
     fetch("/api/auth/status", { cache: "no-store" })
       .then((response) => response.json())
       .then((state) => {
@@ -373,6 +394,11 @@ export default function App() {
         setAuthState("required");
       });
   }, []);
+
+  useEffect(() => {
+    if (view !== "Settings" || authState !== "ready") return;
+    loadPasskeys().catch(() => setPasskeyStatus("Passkeys could not be loaded."));
+  }, [view, authState]);
 
   useEffect(() => {
     const savedView = localStorage.getItem("ai-executive-startup-view");
@@ -501,19 +527,107 @@ export default function App() {
       return;
     }
     setAuthError("");
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: authPassword }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setAuthError(body.error || "Sign-in failed.");
+        return;
+      }
+      setAuthPassword("");
+      setAuthState("ready");
+      await pullFromServer();
+    } catch {
+      setAuthError("The server could not be reached. Check your secure connection and try again.");
+    }
+  }
+
+  async function signInWithPasskey() {
+    setPasskeyBusy(true);
+    setAuthError("");
+    try {
+      const optionsResponse = await fetch("/api/auth/passkeys/login/options", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const options = await optionsResponse.json();
+      if (!optionsResponse.ok) throw new Error(options.error || "Passkey sign-in is unavailable.");
+      const credential = await startAuthentication({ optionsJSON: options });
+      const verifyResponse = await fetch("/api/auth/passkeys/login/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ challenge: options.challenge, response: credential }),
+      });
+      const result = await verifyResponse.json();
+      if (!verifyResponse.ok) throw new Error(result.error || "Passkey sign-in failed.");
+      setAuthState("ready");
+      await pullFromServer();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Passkey sign-in failed.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function loadPasskeys() {
+    const response = await fetch("/api/auth/passkeys", { cache: "no-store" });
+    if (!response.ok) throw new Error("Passkeys could not be loaded.");
+    const body = await response.json();
+    setPasskeys(body.passkeys || []);
+  }
+
+  async function registerPasskey() {
+    setPasskeyBusy(true);
+    setPasskeyStatus("");
+    try {
+      const optionsResponse = await fetch("/api/auth/passkeys/register/options", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: passkeyPassword }),
+      });
+      const options = await optionsResponse.json();
+      if (!optionsResponse.ok) throw new Error(options.error || "Passkey registration is unavailable.");
+      const credential = await startRegistration({ optionsJSON: options });
+      const verifyResponse = await fetch("/api/auth/passkeys/register/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          challenge: options.challenge,
+          response: credential,
+          label: passkeyLabel.trim() || "Passkey",
+        }),
+      });
+      const result = await verifyResponse.json();
+      if (!verifyResponse.ok) throw new Error(result.error || "Passkey registration failed.");
+      await loadPasskeys();
+      setPasskeyPassword("");
+      setPasskeyStatus("Passkey added. You can now use Face ID or Touch ID to sign in.");
+    } catch (error) {
+      setPasskeyStatus(error instanceof Error ? error.message : "Passkey registration failed.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function removePasskey(id: string) {
+    if (!window.confirm("Remove this passkey? Password sign-in will remain available.")) return;
+    const response = await fetch("/api/auth/passkeys", {
+      method: "DELETE",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password: authPassword }),
+      body: JSON.stringify({ id }),
     });
+    const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      setAuthError(body.error || "Sign-in failed.");
+      setPasskeyStatus(body.error || "Passkey could not be removed.");
       return;
     }
-    setAuthPassword("");
-    setAuthState("ready");
-    await pullFromServer();
+    await loadPasskeys();
+    setPasskeyStatus("Passkey removed.");
   }
 
   async function logout() {
@@ -1266,6 +1380,16 @@ export default function App() {
                 />
               </label>
               <button type="submit" disabled={!authPassword}>Sign in</button>
+              {passkeySupported && (
+                <button
+                  className="secondaryAction"
+                  type="button"
+                  disabled={passkeyBusy}
+                  onClick={signInWithPasskey}
+                >
+                  {passkeyBusy ? "Checking…" : "Sign in with passkey"}
+                </button>
+              )}
             </>
           )}
           {authError && <p className="authError" role="alert">{authError}</p>}
@@ -1620,6 +1744,55 @@ export default function App() {
                 <section>
                   <h2>Access</h2>
                   <p>This device has an authenticated owner session.</p>
+                  {passkeySupported && (
+                    <>
+                      <label>
+                        Passkey name
+                        <input
+                          value={passkeyLabel}
+                          maxLength={80}
+                          onChange={(event) => setPasskeyLabel(event.target.value)}
+                          placeholder="Kryštof’s iPhone"
+                        />
+                      </label>
+                      <label>
+                        Confirm current password
+                        <input
+                          type="password"
+                          autoComplete="current-password"
+                          value={passkeyPassword}
+                          maxLength={1024}
+                          onChange={(event) => setPasskeyPassword(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="primaryAction"
+                        onClick={registerPasskey}
+                        disabled={passkeyBusy || !passkeyLabel.trim() || !passkeyPassword}
+                      >
+                        {passkeyBusy ? "Waiting for device…" : "Add passkey"}
+                      </button>
+                      <div className="passkeyList">
+                        {passkeys.map((passkey) => (
+                          <div key={passkey.id} className="passkeyRow">
+                            <span>
+                              <strong>{passkey.label}</strong>
+                              <small>
+                                {passkey.rpId} · added {new Date(passkey.createdAt).toLocaleDateString()}
+                                {passkey.backedUp ? " · synced" : ""}
+                              </small>
+                            </span>
+                            <button onClick={() => removePasskey(passkey.id)}>Remove</button>
+                          </div>
+                        ))}
+                      </div>
+                      {passkeyStatus && <p role="status">{passkeyStatus}</p>}
+                      <p>
+                        Passkeys are tied to this address. Use the same HTTPS address on
+                        iPhone and Mac for an iCloud-synced passkey.
+                      </p>
+                    </>
+                  )}
                   <button className="secondaryAction" onClick={logout}>Sign out</button>
                 </section>
               )}
