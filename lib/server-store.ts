@@ -85,6 +85,28 @@ export function getDatabase() {
       actor_hash TEXT NOT NULL,
       details TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS security_events_created_idx
+      ON security_events(created_at);
+    CREATE INDEX IF NOT EXISTS security_events_action_outcome_idx
+      ON security_events(action, outcome, created_at);
+    CREATE TABLE IF NOT EXISTS security_alerts (
+      id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL UNIQUE,
+      severity TEXT NOT NULL,
+      rule TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      actor_hash TEXT NOT NULL,
+      first_at INTEGER NOT NULL,
+      last_at INTEGER NOT NULL,
+      event_count INTEGER NOT NULL,
+      hermes_enqueued_at INTEGER,
+      push_sent_at INTEGER,
+      delivery_attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS security_alerts_created_idx
+      ON security_alerts(first_at);
     CREATE TABLE IF NOT EXISTS ai_proposals (
       id TEXT PRIMARY KEY,
       session_binding TEXT NOT NULL,

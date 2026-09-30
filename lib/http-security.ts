@@ -46,10 +46,18 @@ interface RateWindow {
 
 const rateWindows = new Map<string, RateWindow>();
 
-function requestIdentity(_request: Request) {
-  // This deployment has one owner. A global bucket cannot be bypassed with
-  // attacker-controlled forwarding or user-agent headers.
-  return "single-user";
+export function trustedClientIdentity(request: Request) {
+  // The application listens on loopback and is reached through Tailscale
+  // Serve, which owns the forwarding headers. Never use user-agent or an
+  // arbitrary header value as a rate-limit key.
+  const candidate = (
+    request.headers.get("x-forwarded-for")?.split(",", 1)[0] ||
+    request.headers.get("x-real-ip") ||
+    "proxy-unknown"
+  ).trim();
+  return candidate.length <= 64 && /^[0-9a-f:.]+$/i.test(candidate)
+    ? candidate.toLowerCase()
+    : "proxy-unknown";
 }
 
 export function enforceRateLimit(
@@ -59,18 +67,31 @@ export function enforceRateLimit(
   windowMs: number,
 ) {
   const now = Date.now();
-  const key = `${bucket}:${requestIdentity(request)}`;
-  const current = rateWindows.get(key);
-  if (!current || current.resetAt <= now) {
-    rateWindows.set(key, { count: 1, resetAt: now + windowMs });
-    return null;
+  const identity = trustedClientIdentity(request);
+  const consume = (key: string, keyLimit: number) => {
+    const current = rateWindows.get(key);
+    if (!current || current.resetAt <= now) {
+      rateWindows.set(key, { count: 1, resetAt: now + windowMs });
+      return null;
+    }
+    current.count += 1;
+    return current.count > keyLimit ? current : null;
+  };
+  // Once one source is blocked it no longer consumes the global budget. The
+  // global bucket therefore limits distributed attempts without letting one
+  // noisy source lock out the legitimate owner.
+  const blocked = consume(`${bucket}:client:${identity}`, limit) ||
+    consume(`${bucket}:global`, Math.max(limit * 10, limit + 20));
+  if (rateWindows.size > 5000) {
+    for (const [key, window] of rateWindows) {
+      if (window.resetAt <= now) rateWindows.delete(key);
+    }
   }
-  current.count += 1;
-  if (current.count <= limit) return null;
+  if (!blocked) return null;
   return {
     error: "Too many requests",
     status: 429,
-    retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
+    retryAfter: Math.max(1, Math.ceil((blocked.resetAt - now) / 1000)),
   };
 }
 

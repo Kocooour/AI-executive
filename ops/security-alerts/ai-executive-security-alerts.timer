@@ -1,0 +1,13 @@
+[Unit]
+Description=Check AI Executive security alert outbox every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=ai-executive-security-alerts.service
+
+[Install]
+WantedBy=timers.target
+

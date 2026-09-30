@@ -9,6 +9,7 @@ export async function POST(request: Request) {
   try {
     requireSameOrigin(request);
   } catch {
+    recordSecurityEvent(request, "auth.logout", "rejected", { reason: "cross-origin" });
     return NextResponse.json({ error: "Cross-origin request rejected" }, { status: 403 });
   }
   const response = NextResponse.json({ authenticated: false });

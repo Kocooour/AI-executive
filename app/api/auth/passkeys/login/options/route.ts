@@ -7,7 +7,10 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   const limited = enforceRateLimit(request, "passkey-login-options", 20, 15 * 60_000);
-  if (limited) return NextResponse.json({ error: limited.error }, { status: 429, headers: { "retry-after": String(limited.retryAfter) } });
+  if (limited) {
+    recordSecurityEvent(request, "auth.passkey.login-options", "rejected", { reason: "rate-limit" });
+    return NextResponse.json({ error: limited.error }, { status: 429, headers: { "retry-after": String(limited.retryAfter) } });
+  }
   try {
     requireSameOrigin(request);
     await readJsonBody(request, 1024);

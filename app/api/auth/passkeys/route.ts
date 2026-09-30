@@ -9,14 +9,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "auth.passkey.read", "rejected", { reason: "unauthenticated" });
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
   return NextResponse.json({ passkeys: passkeySummaries() }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function DELETE(request: Request) {
-  if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "auth.passkey.delete", "rejected", { reason: "unauthenticated" });
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
   const limited = enforceRateLimit(request, "passkey-delete", 10, 15 * 60_000);
-  if (limited) return NextResponse.json({ error: limited.error }, { status: 429 });
+  if (limited) {
+    recordSecurityEvent(request, "auth.passkey.delete", "rejected", { reason: "rate-limit" });
+    return NextResponse.json({ error: limited.error }, { status: 429 });
+  }
   try {
     requireSameOrigin(request);
     const body = await readJsonBody<{ id?: unknown }>(request, 4096);

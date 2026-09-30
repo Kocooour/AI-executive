@@ -29,6 +29,7 @@ npm run start -- --hostname 127.0.0.1
 - Installable PWA with an offline shell
 - Web Push reminders delivered by a server scheduler while the PWA is closed
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
+- Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 
 ## Persistence and backups
 
@@ -85,3 +86,32 @@ rescheduling without an external model. For broader read-only answers, set
 Provider secrets remain server-side. The current Hermes bridge invokes the
 Hermes agent CLI, so enable it only with a dedicated read-only profile; provider
 output never bypasses the application's proposal/confirmation boundary.
+
+## Security alerts
+
+Rejected requests are recorded with a request ID, route, method and a keyed,
+pseudonymous source identifier. The monitor raises alerts for unauthorized
+write attempts, repeated authentication failures, protected-route probing and
+rate-limit activation. It never sends cookies, request bodies, task content or
+raw IP addresses to an alert channel.
+
+Web Push is the fallback alert channel. Production also uses the files in
+`ops/security-alerts`: AI Executive writes a narrow JSON alert to a setgid
+outbox, and a hardened oneshot service running as the unprivileged `hermes`
+account delivers it to the configured Telegram home channel through Hermes.
+The application receives no Hermes, Telegram or bridge credential.
+
+Install the production delivery service only from the clean, reviewed commit
+you intend to deploy. Before granting `sudo`, confirm that the checkout has no
+unexpected modifications and record its exact revision:
+
+```bash
+git status --short
+git rev-parse HEAD
+sudo ./ops/security-alerts/install.sh
+```
+
+The installer creates `/var/lib/ai-executive-security`, enables the one-minute
+timer, configures the application outbox and restarts AI Executive. Verify with
+`systemctl status ai-executive-security-alerts.timer` and inspect delivery
+failures with `journalctl -u ai-executive-security-alerts.service`.

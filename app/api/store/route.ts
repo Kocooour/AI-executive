@@ -17,7 +17,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "store.read", "rejected", { reason: "unauthenticated" });
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
   const limited = enforceRateLimit(request, "store-read", 600, 10 * 60_000);
   if (limited) {
     recordSecurityEvent(request, "store.read", "rejected", { reason: "rate-limit" });
@@ -39,6 +42,7 @@ export async function PUT(request: Request) {
   }
   const limited = enforceRateLimit(request, "store-write", 3000, 10 * 60_000);
   if (limited) {
+    recordSecurityEvent(request, "store.write", "rejected", { reason: "rate-limit" });
     return NextResponse.json({ error: limited.error }, {
       status: limited.status,
       headers: { "retry-after": String(limited.retryAfter) },

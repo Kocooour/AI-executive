@@ -1,4 +1,4 @@
-const CACHE = "ai-executive-shell-v4";
+const CACHE = "ai-executive-shell-v5";
 const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -71,6 +71,7 @@ self.addEventListener("push", (event) => {
       icon: "/icon-192.png",
       badge: "/icon-192.png",
       tag: payload.tag || "ai-executive-reminder",
+      requireInteraction: Boolean(payload.requireInteraction),
       data: { url: payload.url || "/?view=Today" },
     }),
   );

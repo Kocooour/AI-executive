@@ -236,6 +236,20 @@ export async function sendTestNotification() {
   });
 }
 
+export async function sendSecurityNotification(
+  title: string,
+  body: string,
+  severity: "warning" | "critical",
+) {
+  return sendToAll({
+    title,
+    body,
+    url: "/?view=Settings",
+    tag: `ai-executive-security-${severity}`,
+    requireInteraction: severity === "critical",
+  });
+}
+
 function normalizedReminder(value: unknown) {
   if (typeof value !== "string" || !value) return null;
   const timestamp = Date.parse(value);

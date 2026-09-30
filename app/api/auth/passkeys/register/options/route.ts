@@ -7,9 +7,15 @@ import { recordSecurityEvent } from "../../../../../../lib/security-audit";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "auth.passkey.registration-options", "rejected", { reason: "unauthenticated" });
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
   const limited = enforceRateLimit(request, "passkey-register-options", 10, 15 * 60_000);
-  if (limited) return NextResponse.json({ error: limited.error }, { status: 429, headers: { "retry-after": String(limited.retryAfter) } });
+  if (limited) {
+    recordSecurityEvent(request, "auth.passkey.registration-options", "rejected", { reason: "rate-limit" });
+    return NextResponse.json({ error: limited.error }, { status: 429, headers: { "retry-after": String(limited.retryAfter) } });
+  }
   try {
     requireSameOrigin(request);
     const body = await readJsonBody<{ password?: unknown }>(request, 4096);

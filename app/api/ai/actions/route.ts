@@ -19,6 +19,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) {
+    recordSecurityEvent(request, "ai.action", "rejected", { reason: "unauthenticated" });
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   let identifier = "";
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
     requireSameOrigin(request);
     const limited = enforceRateLimit(request, "ai-actions", 120, 60 * 60_000);
     if (limited) {
+      recordSecurityEvent(request, "ai.action", "rejected", { reason: "rate-limit" });
       return NextResponse.json(
         { error: limited.error },
         { status: limited.status, headers: { "retry-after": String(limited.retryAfter) } },
