@@ -70,9 +70,9 @@ export async function POST(request: Request) {
           headers: { "retry-after": String(testLimited.retryAfter) },
         });
       }
-      const sent = await sendTestNotification();
-      recordSecurityEvent(request, "notification.test", "allowed", { sent });
-      return NextResponse.json({ sent });
+      const result = await sendTestNotification();
+      recordSecurityEvent(request, "notification.test", "allowed", result);
+      return NextResponse.json(result);
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {

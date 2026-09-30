@@ -42,10 +42,35 @@ function getVapidKeys() {
   return keys;
 }
 
+function getVapidSubject() {
+  const explicit = process.env.VAPID_SUBJECT?.trim();
+  if (explicit) return explicit;
+
+  const configuredOrigins = [
+    process.env.AI_EXECUTIVE_PASSKEY_ORIGINS,
+    process.env.AI_EXECUTIVE_ALLOWED_ORIGINS,
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const httpsOrigin = configuredOrigins.find((value) => {
+    try {
+      return new URL(value).protocol === "https:";
+    } catch {
+      return false;
+    }
+  });
+
+  // Apple Push Service rejects non-public subjects such as *.local with
+  // BadJwtToken. Prefer the configured public app origin when available.
+  return httpsOrigin || "mailto:admin@example.com";
+}
+
 function configureWebPush() {
   const keys = getVapidKeys();
   webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || "mailto:admin@ai-executive.local",
+    getVapidSubject(),
     keys.publicKey,
     keys.privateKey,
   );
@@ -178,17 +203,20 @@ function subscriptions() {
 async function sendToAll(payload: Record<string, unknown>) {
   configureWebPush();
   let sent = 0;
-  for (const target of subscriptions()) {
+  let failed = 0;
+  const targets = subscriptions();
+  for (const target of targets) {
     try {
       await sendTarget(target.subscription, payload);
       sent += 1;
     } catch (error) {
+      failed += 1;
       const statusCode = Number((error as { statusCode?: number }).statusCode || 0);
       if (statusCode === 404 || statusCode === 410) removeSubscription(target.endpoint);
       else console.error("Push delivery failed", error);
     }
   }
-  return sent;
+  return { sent, failed, total: targets.length };
 }
 
 function sendTarget(subscription: PushSubscription, payload: Record<string, unknown>) {

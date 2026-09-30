@@ -42,7 +42,11 @@ The server creates and stores its VAPID key pair in SQLite. Push subscriptions a
 
 On iPhone, install the PWA from its HTTPS address first, open the installed app, then enable notifications in Settings. Explicit reminder timestamps are stored in UTC; the workday shortcut converts the configured IANA timezone and workday profile to an exact instant.
 
-Set `VAPID_SUBJECT` to a `mailto:` contact if desired.
+Set `VAPID_SUBJECT` to a public HTTPS app origin (recommended for Apple Push
+Service) or a valid `mailto:` contact. Do not use localhost or a `.local`
+address: Apple rejects those VAPID identities with `BadJwtToken`. If the value
+is omitted, the server uses the first HTTPS origin from
+`AI_EXECUTIVE_PASSKEY_ORIGINS` or `AI_EXECUTIVE_ALLOWED_ORIGINS`.
 
 ## Security deployment
 

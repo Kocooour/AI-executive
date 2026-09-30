@@ -831,13 +831,28 @@ export default function App() {
   }
   async function testNotification() {
     setNotificationStatus("Sending test notification…");
-    const response = await fetch("/api/notifications", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "test" }),
-    });
-    const result = await response.json();
-    setNotificationStatus(result.sent ? "Test notification sent." : "No registered device received the test.");
+    try {
+      const response = await fetch("/api/notifications", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test" }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The test could not be sent.");
+      if (result.sent) {
+        setNotificationStatus(
+          result.failed
+            ? `Test sent to ${result.sent} device(s); ${result.failed} delivery failed.`
+            : `Test sent to ${result.sent} device(s).`,
+        );
+      } else if (result.total) {
+        setNotificationStatus(`Delivery failed for all ${result.total} registered device(s).`);
+      } else {
+        setNotificationStatus("No device is registered for notifications.");
+      }
+    } catch (error) {
+      setNotificationStatus(error instanceof Error ? error.message : "The test could not be sent.");
+    }
   }
   async function saveNotificationSettings(preferences: NotificationPreferences) {
     setNotificationState((current) => current ? { ...current, preferences } : current);
