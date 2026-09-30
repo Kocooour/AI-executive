@@ -40,18 +40,22 @@ RULES = {
     "rate-limit-triggered": (
         "critical",
         "Bylo překročeno povolené množství požadavků.",
+        "Ověřte, zda provoz nevytváří vaše zařízení nebo automatizace. Pokud zdroj nepoznáváte, doporučuji přístup dočasně omezit.",
     ),
     "unauthenticated-mutation": (
         "critical",
         "Někdo se bez přihlášení pokusil změnit data.",
+        "Při ojedinělém pokusu stačí situaci sledovat. Pokud se bude opakovat, doporučuji dočasně omezit veřejný přístup a prověřit logy.",
     ),
     "authentication-failures": (
         "critical",
         "Zaznamenal jsem několik neúspěšných pokusů o přihlášení.",
+        "Pokud pokusy nepocházejí od vás, doporučuji prověřit jejich zdroj a při pokračování dočasně omezit přístup z internetu.",
     ),
     "protected-route-reconnaissance": (
         "warning",
         "Zaznamenal jsem opakované pokusy o přístup k chráněným částem aplikace.",
+        "Zatím doporučuji pouze sledovat další vývoj. Omezení přístupu má smysl, pokud se aktivita opakuje nebo zesiluje.",
     ),
 }
 
@@ -86,7 +90,7 @@ def validate(payload: object) -> dict[str, object]:
     rule = bounded(payload.get("rule"), 80)
     if rule not in RULES:
         raise ValueError("unsupported alert rule")
-    expected_severity, canonical_description = RULES[rule]
+    expected_severity, canonical_description, canonical_recommendation = RULES[rule]
     if severity != expected_severity:
         raise ValueError("severity does not match rule")
     source = bounded(payload.get("source"), 24)
@@ -102,6 +106,7 @@ def validate(payload: object) -> dict[str, object]:
         # Never trust free-form outbox text. The app may select only a known
         # rule; the privileged sender derives the user-facing wording.
         "description": canonical_description,
+        "recommendation": canonical_recommendation,
         "eventCount": count,
         "firstAt": timestamp(payload.get("firstAt")),
         "lastAt": timestamp(payload.get("lastAt")),
@@ -125,7 +130,14 @@ def deliver(alert: dict[str, object]) -> None:
         f"Zachyceno: {attempt_count} {attempt_label}\n"
         f"Kdy: {local_time}\n"
         f"Zdroj: {alert['source']} (anonymizováno)\n\n"
-        "Požadavek byl zablokován a data zůstala beze změny."
+        "Požadavek byl zablokován a data zůstala beze změny.\n\n"
+        f"Doporučení: {alert['recommendation']}\n\n"
+        "Jak chcete pokračovat?\n"
+        "A — Pouze sledovat další upozornění.\n"
+        "B — Připravit bezpečný postup pro dočasné omezení přístupu z internetu.\n"
+        "C — Prověřit technické logy posledního incidentu a shrnout zjištění.\n\n"
+        "Odpovězte celou volbou, například „Bezpečnost C — prověř technické logy“. "
+        "Bez vašeho potvrzení se žádný další zásah neprovede."
     )
     raw = send_message_tool({"action": "send", "target": "telegram", "message": message})
     result = json.loads(raw) if isinstance(raw, str) else raw
