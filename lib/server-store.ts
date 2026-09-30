@@ -85,6 +85,32 @@ export function getDatabase() {
       actor_hash TEXT NOT NULL,
       details TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS ai_proposals (
+      id TEXT PRIMARY KEY,
+      session_binding TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      base_revision INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ai_action_history (
+      id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL UNIQUE,
+      session_binding TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      before_payload TEXT,
+      after_payload TEXT,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      undone_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS ai_proposals_expiry_idx
+      ON ai_proposals(expires_at);
     CREATE TABLE IF NOT EXISTS passkey_credentials (
       credential_id TEXT PRIMARY KEY,
       public_key BLOB NOT NULL,

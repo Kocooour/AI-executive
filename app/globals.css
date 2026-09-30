@@ -1096,12 +1096,81 @@ article {
   overflow: auto;
   padding: 14px;
 }
+.assistantWelcome {
+  display: grid;
+  gap: 10px;
+  color: #666;
+}
+.assistantWelcome p {
+  margin: 0;
+}
+.assistantWelcome button {
+  justify-self: start;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #ece9ff;
+  color: #5546df;
+  font-weight: 700;
+}
+.assistantTurn {
+  margin: 8px 0;
+}
 .msg {
   padding: 10px 12px;
   border-radius: 12px;
-  margin: 8px 0;
+  margin: 0;
   max-width: 88%;
   font-size: 14px;
+}
+.aiProposal {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 14px;
+  border: 1px solid #dcd7ff;
+  border-radius: 14px;
+  background: #faf9ff;
+}
+.aiProposal.resolved {
+  opacity: 0.55;
+}
+.aiProposal dl {
+  margin: 0;
+}
+.aiProposal dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+.aiProposal dt {
+  color: #777;
+}
+.aiProposal dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 650;
+}
+.aiProposalActions {
+  display: flex;
+  gap: 8px;
+}
+.aiProposalActions button,
+.aiUndo {
+  padding: 9px 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+}
+.aiUndo {
+  margin-top: 7px;
+  color: #5546df;
+  font-weight: 700;
+}
+.assistantThinking {
+  color: #777;
+  font-size: 13px;
 }
 .msg.user {
   margin-left: auto;

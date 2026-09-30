@@ -28,6 +28,7 @@ npm run start -- --hostname 127.0.0.1
 - Daily/manual/safety backups and tombstones for deletion sync
 - Installable PWA with an offline shell
 - Web Push reminders delivered by a server scheduler while the PWA is closed
+- Server-verified AI briefings and an approval-based task action loop with audit and Undo
 
 ## Persistence and backups
 
@@ -71,4 +72,16 @@ Passkeys are optional and keep password sign-in as recovery. Set `AI_EXECUTIVE_P
 
 ## AI provider
 
-The assistant calls server-side `/api/ai`. Set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` in the deployment environment. Secrets are never stored in IndexedDB or exposed to the browser. If the endpoint is unavailable, the UI falls back to `LocalPreviewProvider`.
+The assistant calls server-side `/api/ai`. It reconstructs its context from the
+canonical SQLite snapshot and ignores client-supplied entity data. Task writes
+are stored as five-minute proposals and do not mutate data until the owner
+confirms them. Confirmation is session-bound, revision-checked and idempotent;
+successful changes have a guarded server-side Undo.
+
+The deterministic local planner provides today's brief, task creation and task
+rescheduling without an external model. For broader read-only answers, set
+`AI_PROVIDER=hermes`, `HERMES_AI_ENABLED=true`, `HERMES_BRIDGE_URL` and
+`HERMES_BRIDGE_TOKEN`, or configure `OPENAI_API_KEY` and `OPENAI_MODEL`.
+Provider secrets remain server-side. The current Hermes bridge invokes the
+Hermes agent CLI, so enable it only with a dedicated read-only profile; provider
+output never bypasses the application's proposal/confirmation boundary.

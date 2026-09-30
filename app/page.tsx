@@ -15,8 +15,7 @@ import {
   type EntityType,
 } from "../lib/db";
 import { buildContext, type ContextBundle } from "../lib/context";
-import { LocalPreviewProvider, type AIMessage } from "../lib/ai-provider";
-import { assistantAgent } from "../lib/agents";
+import type { AIMessage } from "../lib/ai-provider";
 import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 
 interface BackupSummary {
@@ -48,6 +47,19 @@ interface NotificationState {
   publicKey: string;
   subscriptionCount: number;
   preferences: NotificationPreferences;
+}
+
+interface AIProposal {
+  id: string;
+  summary: string;
+  changes: Array<{ label: string; value: string }>;
+  expiresAt: number;
+}
+
+interface AssistantMessage extends AIMessage {
+  proposal?: AIProposal;
+  actionId?: string;
+  resolved?: boolean;
 }
 
 const views = [
@@ -175,7 +187,8 @@ export default function App() {
     [passkeyPassword, setPasskeyPassword] = useState(""),
     [passkeyStatus, setPasskeyStatus] = useState(""),
     [aiText, setAiText] = useState(""),
-    [messages, setMessages] = useState<AIMessage[]>([]);
+    [aiBusy, setAiBusy] = useState(false),
+    [messages, setMessages] = useState<AssistantMessage[]>([]);
   const serverRevision = useRef(0);
   const deepLinkHandled = useRef(false);
   const captureOpener = useRef<HTMLElement | null>(null);
@@ -339,41 +352,104 @@ export default function App() {
     setSelected(null);
     setContext(null);
   }
-  async function askAI() {
-    if (!aiText.trim()) return;
+  async function askAI(promptOverride?: string) {
+    const prompt = typeof promptOverride === "string" ? promptOverride.trim() : aiText.trim();
+    if (!prompt || aiBusy) return;
     const user: { role: "user"; content: string } = {
       role: "user",
-      content: aiText.trim(),
+      content: prompt,
     };
     const history = [...messages, user];
     setMessages(history);
     setAiText("");
+    setAiBusy(true);
     try {
+      await syncQueue.current;
+      if (localStorage.getItem(pendingKey) === "1") await syncToServer();
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: history, context }),
+        body: JSON.stringify({
+          messages: history.map(({ role, content }) => ({ role, content })),
+          workspaceId: activeWorkspaceId,
+          writeWorkspaceId,
+          focusEntityId: context?.focus.id,
+        }),
       });
-      if (response.ok) {
-        const res = await response.json();
-        setMessages([...history, { role: "assistant", content: res.message }]);
-      } else {
-        const provider = new LocalPreviewProvider();
-        const res = await provider.complete({
-          agent: assistantAgent,
-          messages: history,
-          context,
-        });
-        setMessages([...history, { role: "assistant", content: res.message }]);
-      }
-    } catch {
-      const provider = new LocalPreviewProvider();
-      const res = await provider.complete({
-        agent: assistantAgent,
-        messages: history,
-        context,
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Assistant request failed.");
+      setMessages([...history, {
+        role: "assistant",
+        content: result.message,
+        proposal: result.proposal,
+      }]);
+    } catch (error) {
+      setMessages([...history, {
+        role: "assistant",
+        content: error instanceof Error ? error.message : "Assistant request failed.",
+      }]);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function resolveAIProposal(proposalId: string, action: "confirm" | "cancel") {
+    if (aiBusy) return;
+    setAiBusy(true);
+    try {
+      const response = await fetch("/api/ai/actions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, proposalId }),
       });
-      setMessages([...history, { role: "assistant", content: res.message }]);
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "AI action failed.");
+      setMessages((current) => [
+        ...current.map((message) =>
+          message.proposal?.id === proposalId || (action === "confirm" && message.actionId)
+            ? { ...message, resolved: true }
+            : message,
+        ),
+        {
+          role: "assistant",
+          content: action === "confirm" ? result.message : "Návrh jsem zahodil. Nic se nezměnilo.",
+          actionId: result.actionId,
+        },
+      ]);
+      if (action === "confirm") await pullFromServer();
+    } catch (error) {
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: error instanceof Error ? error.message : "AI action failed.",
+      }]);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function undoAIAction(actionId: string) {
+    if (aiBusy) return;
+    setAiBusy(true);
+    try {
+      const response = await fetch("/api/ai/actions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "undo", actionId }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Undo failed.");
+      setMessages((current) => [
+        ...current.map((message) => message.actionId === actionId ? { ...message, resolved: true } : message),
+        { role: "assistant", content: result.message },
+      ]);
+      await pullFromServer();
+    } catch (error) {
+      setMessages((current) => [...current, {
+        role: "assistant",
+        content: error instanceof Error ? error.message : "Undo failed.",
+      }]);
+    } finally {
+      setAiBusy(false);
     }
   }
   useEffect(() => {
@@ -740,6 +816,8 @@ export default function App() {
     setActiveWorkspaceId(workspaceId);
     if (workspaceId !== "all") selectWriteWorkspace(workspaceId);
     localStorage.setItem("ai-executive-active-workspace", workspaceId);
+    setMessages([]);
+    setAiText("");
     setWorkspaceMenuOpen(false);
     closeDetail();
   }
@@ -2662,18 +2740,60 @@ export default function App() {
           </div>
           <div className="assistantContext">
             {context
-              ? "Context: " + context.focus.title
-              : "No entity context selected"}
+              ? `${workspaceName} · Context: ${context.focus.title}`
+              : `${workspaceName} · server-verified workspace context`}
           </div>
           <div className="assistantMessages">
             {messages.length === 0 && (
-              <p>Ask about your tasks, projects, notes or current context.</p>
+              <div className="assistantWelcome">
+                <p>Ask about your tasks or safely propose a change.</p>
+                <button onClick={() => askAI("Co dnes hoří?")} disabled={aiBusy}>
+                  Today’s brief
+                </button>
+                <small>Writes always require confirmation.</small>
+              </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} className={"msg " + m.role}>
-                {m.content}
+              <div key={i} className={"assistantTurn " + m.role}>
+                <div className={"msg " + m.role}>{m.content}</div>
+                {m.proposal && (
+                  <div className={`aiProposal ${m.resolved ? "resolved" : ""}`}>
+                    <strong>{m.proposal.summary}</strong>
+                    <dl>
+                      {m.proposal.changes.map((change) => (
+                        <div key={`${change.label}:${change.value}`}>
+                          <dt>{change.label}</dt>
+                          <dd>{change.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {!m.resolved && (
+                      <div className="aiProposalActions">
+                        <button
+                          className="primaryAction"
+                          disabled={aiBusy}
+                          onClick={() => resolveAIProposal(m.proposal!.id, "confirm")}
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          disabled={aiBusy}
+                          onClick={() => resolveAIProposal(m.proposal!.id, "cancel")}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {m.actionId && !m.resolved && (
+                  <button className="aiUndo" disabled={aiBusy} onClick={() => undoAIAction(m.actionId!)}>
+                    Undo AI change
+                  </button>
+                )}
               </div>
             ))}
+            {aiBusy && <p className="assistantThinking">Working…</p>}
           </div>
           <div className="assistantComposer">
             <input
@@ -2683,8 +2803,9 @@ export default function App() {
                 if (e.key === "Enter") askAI();
               }}
               placeholder="Ask AI…"
+              disabled={aiBusy}
             />
-            <button onClick={askAI}>Send</button>
+            <button onClick={() => askAI()} disabled={aiBusy || !aiText.trim()}>Send</button>
           </div>
         </div>
       )}
