@@ -115,3 +115,29 @@ The installer creates `/var/lib/ai-executive-security`, enables the one-minute
 timer, configures the application outbox and restarts AI Executive. Verify with
 `systemctl status ai-executive-security-alerts.timer` and inspect delivery
 failures with `journalctl -u ai-executive-security-alerts.service`.
+
+## Server security monitoring
+
+The separate collector under `ops/server-security` monitors the host rather
+than the application. It detects repeated SSH/sudo failures, new fail2ban bans,
+stopped or failed services, new non-loopback/non-Tailscale listeners, changes
+to Tailscale Serve/Funnel or UFW, bursts of firewall blocks, and integrity
+changes to SSH, sudo, account and selected systemd configuration. The initial
+run records a baseline and does not alert on existing ports or configuration.
+
+The root collector has no network access and never sends log text, usernames,
+raw addresses, file contents or credentials. It writes a sanitized event to a
+dedicated queue that AI Executive cannot access. A separate oneshot running as
+`hermes` converts only allowlisted event types into Czech Telegram messages.
+
+Install from a clean, reviewed revision:
+
+```bash
+git diff --exit-code -- ops/server-security ops/security-alerts
+git rev-parse HEAD
+sudo ./ops/server-security/install.sh
+```
+
+The installer creates two one-minute timers. Check them with
+`systemctl status server-security-monitor.timer server-security-alerts.timer`
+and inspect failures with `journalctl -u server-security-monitor.service -u server-security-alerts.service`.

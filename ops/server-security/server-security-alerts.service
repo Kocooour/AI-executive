@@ -1,0 +1,34 @@
+[Unit]
+Description=Deliver server security alerts through Hermes
+After=network-online.target hermes-gateway.service server-security-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hermes
+Group=hermes
+WorkingDirectory=/usr/local/lib/hermes-agent
+Environment=HOME=/var/lib/hermes
+Environment=HERMES_HOME=/var/lib/hermes/.hermes
+Environment=PATH=/usr/local/lib/hermes-agent/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=SECURITY_ALERT_SCOPE=server
+Environment=AI_EXECUTIVE_SECURITY_OUTBOX=/var/lib/server-security/outbox
+Environment=AI_EXECUTIVE_SECURITY_PROCESSING=/var/lib/server-security/processing
+Environment=AI_EXECUTIVE_SECURITY_SENT=/var/lib/server-security/sent
+Environment=AI_EXECUTIVE_SECURITY_FAILED=/var/lib/server-security/failed
+ExecStart=/usr/local/lib/hermes-agent/.venv/bin/python /usr/local/lib/ai-executive-security/hermes_security_alerts.py
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/server-security
+

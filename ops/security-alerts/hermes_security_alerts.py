@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import re
+import socket
 import stat
 import sys
 import time
@@ -36,7 +37,7 @@ LOCK = PROCESSING / "delivery.lock"
 MAX_FILES_PER_RUN = 10
 MAX_FILE_BYTES = 16 * 1024
 RETENTION_SECONDS = 30 * 24 * 60 * 60
-RULES = {
+AI_RULES = {
     "rate-limit-triggered": (
         "critical",
         "Bylo překročeno povolené množství požadavků.",
@@ -58,6 +59,67 @@ RULES = {
         "Zatím doporučuji pouze sledovat další vývoj. Omezení přístupu má smysl, pokud se aktivita opakuje nebo zesiluje.",
     ),
 }
+SERVER_RULES = {
+    "server-monitor-self-test": (
+        "warning",
+        "Test serverového bezpečnostního monitoringu proběhl úspěšně.",
+        "Není potřeba nic měnit. Tato zpráva pouze potvrzuje funkční cestu od serveru přes Hermes do Telegramu.",
+    ),
+    "server-ssh-auth-failures": (
+        "critical",
+        "Na serveru proběhlo několik neúspěšných pokusů o přihlášení přes SSH.",
+        "Pokud zdroj nepoznáváte, doporučuji prověřit SSH logy a zvážit dočasné omezení přístupu.",
+    ),
+    "server-sudo-auth-failures": (
+        "critical",
+        "Na serveru proběhlo několik neúspěšných pokusů o získání oprávnění přes sudo.",
+        "Ověřte, zda pokusy pocházejí z vaší relace. V opačném případě doporučuji okamžitě prověřit uživatelské účty a logy.",
+    ),
+    "server-fail2ban-ban": (
+        "warning",
+        "Fail2ban zablokoval zdroj opakovaných pokusů o přihlášení.",
+        "Blokace funguje správně. Zatím stačí sledovat, zda se útok neopakuje z dalších zdrojů.",
+    ),
+    "server-service-down": (
+        "critical",
+        "Jedna z klíčových serverových služeb přestala běžet.",
+        "Doporučuji prověřit stav a log služby dříve, než ji znovu spustíte.",
+    ),
+    "server-unit-failed": (
+        "critical",
+        "Systemd ohlásil novou službu ve stavu failed.",
+        "Doporučuji zjistit příčinu z journalu a ověřit, zda selhání nesouvisí s bezpečnostním incidentem.",
+    ),
+    "server-new-listener": (
+        "warning",
+        "Na serveru se objevil nový naslouchající síťový port.",
+        "Ověřte, která služba port otevřela a zda má být dostupný z dané sítě.",
+    ),
+    "server-tailscale-config-changed": (
+        "warning",
+        "Změnila se konfigurace Tailscale Serve nebo Funnel.",
+        "Porovnejte změnu se svými posledními zásahy a ověřte, že se veřejně nezpřístupnila nechtěná služba.",
+    ),
+    "server-sensitive-file-changed": (
+        "critical",
+        "Změnil se citlivý konfigurační soubor serveru.",
+        "Pokud změna nebyla plánovaná, doporučuji ji považovat za incident a ihned prověřit související logy.",
+    ),
+    "server-firewall-changed": (
+        "warning",
+        "Změnila se konfigurace serverového firewallu.",
+        "Ověřte, že změna byla plánovaná a neotevřela zbytečné síťové porty.",
+    ),
+    "server-firewall-blocks": (
+        "warning",
+        "Firewall zaznamenal zvýšený počet blokovaných síťových pokusů.",
+        "Zatím doporučuji sledovat vývoj a při pokračování prověřit zdroje a cílové porty.",
+    ),
+}
+SCOPE = os.environ.get("SECURITY_ALERT_SCOPE", "ai-executive").strip().lower()
+if SCOPE not in {"ai-executive", "server"}:
+    raise RuntimeError("unsupported security alert scope")
+RULES = SERVER_RULES if SCOPE == "server" else AI_RULES
 
 
 def bounded(value: object, limit: int) -> str:
@@ -99,6 +161,9 @@ def validate(payload: object) -> dict[str, object]:
     count = int(payload.get("eventCount", 0))
     if count < 1 or count > 1_000_000:
         raise ValueError("invalid event count")
+    subject = bounded(payload.get("subject"), 120)
+    if subject and not re.fullmatch(r"[A-Za-z0-9_./:@+,\-\[\] ]{1,120}", subject):
+        raise ValueError("invalid alert subject")
     return {
         "id": alert_id,
         "severity": severity,
@@ -111,12 +176,18 @@ def validate(payload: object) -> dict[str, object]:
         "firstAt": timestamp(payload.get("firstAt")),
         "lastAt": timestamp(payload.get("lastAt")),
         "source": source,
+        "subject": subject,
     }
 
 
 def deliver(alert: dict[str, object]) -> None:
     icon = "🚨" if alert["severity"] == "critical" else "⚠️"
-    heading = "Bezpečnostní upozornění z AI Executive"
+    hostname = re.sub(r"[^A-Za-z0-9.-]", "", socket.gethostname())[:63] or "server"
+    heading = (
+        f"Bezpečnostní upozornění ze serveru {hostname}"
+        if SCOPE == "server"
+        else "Bezpečnostní upozornění z AI Executive"
+    )
     local_time = (
         datetime.fromisoformat(str(alert["lastAt"]).replace("Z", "+00:00"))
         .astimezone(ZoneInfo("Europe/Prague"))
@@ -124,18 +195,34 @@ def deliver(alert: dict[str, object]) -> None:
     )
     attempt_count = int(alert["eventCount"])
     attempt_label = "pokus" if attempt_count == 1 else "pokusy" if 2 <= attempt_count <= 4 else "pokusů"
+    subject_line = f"Týká se: {alert['subject']}\n" if alert.get("subject") else ""
+    outcome = (
+        "Událost byla zaznamenána serverovým monitoringem."
+        if SCOPE == "server"
+        else "Požadavek byl zablokován a data zůstala beze změny."
+    )
+    choices = (
+        "A — Pouze sledovat další upozornění.\n"
+        "B — Připravit bezpečný postup pro dočasné omezení dotčené služby nebo přístupu.\n"
+        "C — Prověřit technické logy a konfiguraci posledního incidentu.\n"
+        "D — Připravit cílený bezpečnostní audit dotčené části serveru."
+        if SCOPE == "server"
+        else
+        "A — Pouze sledovat další upozornění.\n"
+        "B — Připravit bezpečný postup pro dočasné omezení přístupu z internetu.\n"
+        "C — Prověřit technické logy posledního incidentu a shrnout zjištění."
+    )
     message = (
         f"{icon} {heading}\n\n"
         f"{alert['description']}\n"
+        f"{subject_line}"
         f"Zachyceno: {attempt_count} {attempt_label}\n"
         f"Kdy: {local_time}\n"
         f"Zdroj: {alert['source']} (anonymizováno)\n\n"
-        "Požadavek byl zablokován a data zůstala beze změny.\n\n"
+        f"{outcome}\n\n"
         f"Doporučení: {alert['recommendation']}\n\n"
         "Jak chcete pokračovat?\n"
-        "A — Pouze sledovat další upozornění.\n"
-        "B — Připravit bezpečný postup pro dočasné omezení přístupu z internetu.\n"
-        "C — Prověřit technické logy posledního incidentu a shrnout zjištění.\n\n"
+        f"{choices}\n\n"
         "Odpovězte celou volbou, například „Bezpečnost C — prověř technické logy“. "
         "Bez vašeho potvrzení se žádný další zásah neprovede."
     )
