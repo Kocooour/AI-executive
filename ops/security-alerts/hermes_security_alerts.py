@@ -16,7 +16,16 @@ from pathlib import Path
 HERMES_ROOT = Path("/usr/local/lib/hermes-agent")
 sys.path.insert(0, str(HERMES_ROOT))
 
+from hermes_cli.env_loader import load_hermes_dotenv  # noqa: E402
 from tools.send_message_tool import send_message_tool  # noqa: E402
+
+# The Hermes gateway entrypoint loads ~/.hermes/.env before constructing its
+# platform configuration. This narrow sender imports the delivery tool
+# directly, so it must perform the same supported initialization explicitly.
+load_hermes_dotenv(
+    hermes_home=os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")),
+    project_env=HERMES_ROOT / ".env",
+)
 
 OUTBOX = Path(os.environ.get("AI_EXECUTIVE_SECURITY_OUTBOX", "/var/lib/ai-executive-security/outbox"))
 PROCESSING = Path(os.environ.get("AI_EXECUTIVE_SECURITY_PROCESSING", "/var/lib/ai-executive-security/processing"))
