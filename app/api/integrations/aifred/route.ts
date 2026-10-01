@@ -20,6 +20,9 @@ export async function POST(request: Request) {
     if (!/^[A-Za-z0-9:_-]{1,120}$/.test(workspaceId) || workspaceId === "all") throw new HttpInputError("Explicit workspace is required");
     if (!message || message.length > 20_000) throw new HttpInputError("Message is invalid");
     const focusEntityId = body.focusEntityId == null ? undefined : String(body.focusEntityId);
+    if (focusEntityId && (focusEntityId.length > 240 || !/^[A-Za-z0-9:_-]+$/.test(focusEntityId))) {
+      throw new HttpInputError("Focus entity is invalid");
+    }
     const result = await planAIRequest({
       message,
       readWorkspaceId: workspaceId,
@@ -30,6 +33,10 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "integration.plan", "allowed", { proposedWrite: Boolean(result.proposal) });
     return NextResponse.json(result);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Integration request failed" }, { status: 400 });
+    const status = error instanceof HttpInputError ? error.status : 400;
+    recordSecurityEvent(request, "integration.plan", "failed", {
+      reason: error instanceof HttpInputError ? error.message : "invalid-request",
+    });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Integration request failed" }, { status });
   }
 }
