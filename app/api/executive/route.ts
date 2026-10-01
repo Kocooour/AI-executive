@@ -8,6 +8,7 @@ import {
 import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { readSnapshot } from "../../../lib/server-store";
+import { listPACTRuns } from "../../../lib/pact";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
   if (!readSnapshot().entities.some((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
-  return NextResponse.json({ briefings: listExecutiveBriefings(workspaceId, 7) });
+  return NextResponse.json({ briefings: listExecutiveBriefings(workspaceId, 7), agentRuns: listPACTRuns(workspaceId, 20) });
 }
 
 export async function POST(request: Request) {
