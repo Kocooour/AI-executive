@@ -5,6 +5,7 @@ import type { Entity } from "./db";
 import { getNotificationPreferences, sendExecutiveNotification } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { calendarAvailability } from "./calendar";
+import { alfredAgent, beginPACTRun, ensurePACTDefaults, finishPACTRun } from "./pact";
 
 export type BriefingKind = "morning" | "evening";
 
@@ -226,15 +227,38 @@ async function deliverBriefing(briefing: ExecutiveBriefing) {
 }
 
 export async function createExecutiveBriefing(kind: BriefingKind, workspaceId: string, now = Date.now(), manual = false) {
-  const briefing = buildExecutiveBriefing(kind, workspaceId, now);
-  const deliveryKey = manual ? `manual:${briefing.id}` : `${kind}:${workspaceId}:${briefing.localDate}`;
-  if (!saveBriefing(briefing, deliveryKey)) {
-    const existing = getDatabase().prepare("SELECT payload FROM executive_briefings WHERE delivery_key = ?").get(deliveryKey) as { payload?: string } | undefined;
-    const saved = existing?.payload ? JSON.parse(existing.payload) as ExecutiveBriefing : listExecutiveBriefings(workspaceId, 1)[0];
-    return { created: false, briefing: saved, ...(saved ? await deliverBriefing(saved) : {}) };
+  ensurePACTDefaults();
+  const runId = beginPACTRun(
+    alfredAgent.id,
+    workspaceId,
+    manual ? "manual" : "scheduled",
+    `executive-briefing:${kind}`,
+  );
+  try {
+    const briefing = buildExecutiveBriefing(kind, workspaceId, now);
+    const deliveryKey = manual ? `manual:${briefing.id}` : `${kind}:${workspaceId}:${briefing.localDate}`;
+    if (!saveBriefing(briefing, deliveryKey)) {
+      const existing = getDatabase().prepare("SELECT payload FROM executive_briefings WHERE delivery_key = ?").get(deliveryKey) as { payload?: string } | undefined;
+      const saved = existing?.payload ? JSON.parse(existing.payload) as ExecutiveBriefing : listExecutiveBriefings(workspaceId, 1)[0];
+      const delivery = saved ? await deliverBriefing(saved) : { pushSent: false, telegramEnqueued: false, error: "" };
+      finishPACTRun(runId, "completed", `briefing:${kind};created:false;delivery-retry:${Boolean(saved)}`);
+      return { created: false, briefing: saved, ...delivery };
+    }
+    if (manual) {
+      finishPACTRun(runId, "completed", `briefing:${kind};created:true;delivery:manual-suppressed`);
+      return { created: true, briefing, pushSent: false, telegramEnqueued: false, error: "" };
+    }
+    const delivery = await deliverBriefing(briefing);
+    finishPACTRun(
+      runId,
+      "completed",
+      `briefing:${kind};created:true;push:${delivery.pushSent};telegram:${delivery.telegramEnqueued};delivery-error:${Boolean(delivery.error)}`,
+    );
+    return { created: true, briefing, ...delivery };
+  } catch (error) {
+    finishPACTRun(runId, "failed", `briefing:${kind};error:${error instanceof Error ? error.name : "unknown"}`);
+    throw error;
   }
-  if (manual) return { created: true, briefing, pushSent: false, telegramEnqueued: false, error: "" };
-  return { created: true, briefing, ...(await deliverBriefing(briefing)) };
 }
 
 export async function processExecutiveBriefings(now = Date.now()) {
