@@ -1,4 +1,4 @@
-const CACHE = "ai-executive-shell-v5";
+const CACHE = "ai-executive-shell-v6";
 const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -28,7 +28,7 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: "no-store" })
         .then((response) => {
           if (url.pathname === "/") {
             const copy = response.clone();
