@@ -32,6 +32,18 @@ export interface PACTContextItem {
   updatedAt: number;
 }
 
+export interface PACTAgentRun {
+  id: string;
+  agentId: string;
+  workspaceId: string;
+  triggerMode: string;
+  status: "running" | "completed" | "failed";
+  inputSummary: string;
+  outputSummary: string | null;
+  createdAt: number;
+  completedAt: number | null;
+}
+
 export interface ResolvedPACTContext {
   workspaceId: string;
   agent: PACTAgentDefinition;
@@ -191,4 +203,27 @@ export function finishPACTRun(id: string, status: "completed" | "failed", output
   getDatabase().prepare(`UPDATE pact_agent_runs
     SET status = ?, output_summary = ?, completed_at = ? WHERE id = ?`)
     .run(status, outputSummary.slice(0, 1000), Date.now(), id);
+}
+
+export function listPACTRuns(workspaceId: string, limit = 20) {
+  assertWorkspace(workspaceId);
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit) || 20));
+  const rows = getDatabase().prepare(`SELECT id, agent_id, workspace_id, trigger_mode, status,
+    input_summary, output_summary, created_at, completed_at
+    FROM pact_agent_runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?`)
+    .all(workspaceId, safeLimit) as Array<{
+      id: string; agent_id: string; workspace_id: string; trigger_mode: string; status: string;
+      input_summary: string; output_summary: string | null; created_at: number; completed_at: number | null;
+    }>;
+  return rows.map((row) => ({
+    id: row.id,
+    agentId: row.agent_id,
+    workspaceId: row.workspace_id,
+    triggerMode: row.trigger_mode,
+    status: row.status as PACTAgentRun["status"],
+    inputSummary: row.input_summary,
+    outputSummary: row.output_summary,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  }));
 }
