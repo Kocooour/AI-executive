@@ -1,5 +1,12 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   browserSupportsWebAuthn,
   startAuthentication,
@@ -163,6 +170,19 @@ const ymd = (d = new Date()) =>
     String(d.getMonth() + 1).padStart(2, "0"),
     String(d.getDate()).padStart(2, "0"),
   ].join("-");
+const manualOrder = (entity: Entity, scope = `${entity.type}:all`) => {
+  const stored = entity.properties.manualOrders;
+  const workspaceScope = `${entity.workspaceId}:${scope}`;
+  const value = Number(
+    stored && typeof stored === "object" && !Array.isArray(stored)
+      ? (stored as Record<string, unknown>)[workspaceScope] ??
+        (stored as Record<string, unknown>)[scope]
+      : entity.properties.manualOrder,
+  );
+  return Number.isFinite(value) ? value : entity.createdAt;
+};
+const byManualOrder = (scope?: string) => (a: Entity, b: Entity) =>
+  manualOrder(a, scope) - manualOrder(b, scope) || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
 const addLocalDays = (date: Date, days: number) => {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
@@ -250,8 +270,10 @@ export default function App() {
     [calendarUrl, setCalendarUrl] = useState(""),
     [calendarBusy, setCalendarBusy] = useState(false),
     [calendarStatus, setCalendarStatus] = useState(""),
-    [sortBy, setSortBy] = useState<"date" | "priority" | "created">("date"),
+    [sortBy, setSortBy] = useState<"manual" | "date" | "priority" | "created">("manual"),
     [priorityFilter, setPriorityFilter] = useState("all"),
+    [draggingId, setDraggingId] = useState(""),
+    [dragTarget, setDragTarget] = useState(""),
     [checklistDraft, setChecklistDraft] = useState(""),
     [authState, setAuthState] = useState<
       "checking" | "ready" | "required" | "misconfigured"
@@ -272,6 +294,9 @@ export default function App() {
   const deepLinkHandled = useRef(false);
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
+  const draggingIdRef = useRef("");
+  const dragTargetRef = useRef("");
+  const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
@@ -1223,13 +1248,13 @@ export default function App() {
       task.properties.today === true || task.properties.when === today ||
       (typeof task.properties.when === "string" && task.properties.when < today)
     ))
-    .sort((a, b) => String(a.properties.when || today).localeCompare(String(b.properties.when || today)))
+    .sort(byManualOrder("task:Today"))
     .slice(0, 5);
   const homeUpcomingTasks = tasks
     .filter((task) => task.status === "open" && typeof task.properties.when === "string" && task.properties.when > today)
     .sort((a, b) => String(a.properties.when).localeCompare(String(b.properties.when)))
     .slice(0, 4);
-  const homeProjects = projects.filter((project) => project.status === "active").slice(0, 4);
+  const homeProjects = projects.filter((project) => project.status === "active").sort(byManualOrder("project:all")).slice(0, 4);
   const homeRecent = [...scopedItems]
     .filter((entity) => entity.type !== "task" || entity.status === "open")
     .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -1254,6 +1279,7 @@ export default function App() {
         if (view === "Someday") return p.someday === true;
         return true;
       }).sort((a, b) => {
+        if (sortBy === "manual") return byManualOrder(`task:${view}`)(a, b);
         if (sortBy === "created") return b.createdAt - a.createdAt;
         if (sortBy === "priority") {
           return (priorityRank[String(a.properties.priority || "none")] ?? 3) -
@@ -1646,8 +1672,286 @@ export default function App() {
           ? "note"
           : "task";
   const collection = ["Projects", "Areas", "Notes"].includes(view)
-    ? scopedItems.filter((x) => x.type === type)
+    ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
     : visible;
+  const draggedEntity = items.find((entity) => entity.id === draggingId);
+  const draggableSectionNames = ["Inbox", "Today", "Anytime", "Someday", "Completed"];
+
+  function setActiveDragTarget(target: string) {
+    dragTargetRef.current = target;
+    setDragTarget(target);
+  }
+
+  function targetAtPoint(clientX: number, clientY: number) {
+    const element = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>(
+      "[data-drop-entity], [data-drop-section]",
+    );
+    if (!element) return "";
+    return element.dataset.dropEntity
+      ? `entity:${element.dataset.dropEntity}`
+      : element.dataset.dropSection
+        ? `section:${element.dataset.dropSection}`
+        : "";
+  }
+
+  function beginPointerDrag(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
+    if (event.pointerType === "mouse") return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pointerDragRef.current = {
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    setActiveDragTarget("");
+  }
+
+  function movePointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const pending = pointerDragRef.current;
+    if (!pending.id) return;
+    event.preventDefault();
+    if (!pending.active) {
+      const distance = Math.hypot(
+        event.clientX - pending.startX,
+        event.clientY - pending.startY,
+      );
+      if (distance < 8) return;
+      pending.active = true;
+      draggingIdRef.current = pending.id;
+      setDraggingId(pending.id);
+    }
+    setActiveDragTarget(targetAtPoint(event.clientX, event.clientY));
+  }
+
+  async function persistManualOrder(ordered: Entity[], movedId: string, scope: string) {
+    const timestamp = Date.now();
+    const movedIndex = ordered.findIndex((entity) => entity.id === movedId);
+    const moved = ordered[movedIndex];
+    if (!moved) return;
+    const previous = movedIndex > 0 ? manualOrder(ordered[movedIndex - 1], scope) : null;
+    const next = movedIndex < ordered.length - 1 ? manualOrder(ordered[movedIndex + 1], scope) : null;
+    const rank = previous === null
+      ? (next === null ? 1000 : next - 1000)
+      : next === null
+        ? previous + 1000
+        : previous + (next - previous) / 2;
+    const storedOrders = moved.properties.manualOrders;
+    const manualOrders = storedOrders && typeof storedOrders === "object" && !Array.isArray(storedOrders)
+      ? { ...(storedOrders as Record<string, unknown>) }
+      : {};
+    manualOrders[`${moved.workspaceId}:${scope}`] = rank;
+    const activity = Array.isArray(moved.properties.activity)
+      ? moved.properties.activity
+      : [];
+    localDataVersion.current += 1;
+    await db.entities.update(moved.id, {
+      properties: {
+        ...moved.properties,
+        manualOrders,
+        activity: [...activity, { at: timestamp, action: "reordered" }].slice(-50),
+      },
+      updatedAt: timestamp,
+    });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
+  }
+
+  async function moveTaskToSection(task: Entity, section: string) {
+    if (task.type !== "task" || !draggableSectionNames.includes(section)) return;
+    if (section === "Completed") {
+      await done(task.id);
+      return;
+    }
+    const timestamp = Date.now();
+    const properties = { ...task.properties };
+    delete properties.when;
+    properties.inbox = section === "Inbox";
+    properties.today = section === "Today";
+    properties.someday = section === "Someday";
+    if (section === "Today") properties.when = today;
+    const peers = tasks.filter((candidate) => {
+      if (candidate.id === task.id || candidate.status !== "open" || candidate.workspaceId !== task.workspaceId) return false;
+      if (section === "Inbox") return candidate.properties.inbox === true;
+      if (section === "Today") return candidate.properties.today === true || candidate.properties.when === today ||
+        (typeof candidate.properties.when === "string" && candidate.properties.when < today);
+      if (section === "Someday") return candidate.properties.someday === true;
+      return !candidate.properties.when && !candidate.properties.someday && candidate.properties.inbox !== true;
+    });
+    const scope = `task:${section}`;
+    const storedOrders = task.properties.manualOrders;
+    const manualOrders = storedOrders && typeof storedOrders === "object" && !Array.isArray(storedOrders)
+      ? { ...(storedOrders as Record<string, unknown>) }
+      : {};
+    manualOrders[`${task.workspaceId}:${scope}`] = Math.max(0, ...peers.map((peer) => manualOrder(peer, scope))) + 1000;
+    properties.manualOrders = manualOrders;
+    const activity = Array.isArray(task.properties.activity) ? task.properties.activity : [];
+    properties.activity = [...activity, { at: timestamp, action: `moved to ${section}` }].slice(-50);
+    localDataVersion.current += 1;
+    await db.entities.update(task.id, { properties, updatedAt: timestamp });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
+  }
+
+  async function completeDrop(sourceId: string, target: string) {
+    const source = items.find((entity) => entity.id === sourceId);
+    if (!source || !target) return;
+    if (target.startsWith("section:")) {
+      await moveTaskToSection(source, target.slice("section:".length));
+      return;
+    }
+    if (!target.startsWith("entity:")) return;
+    const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
+    if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
+    if (source.type === targetEntity.type) {
+      const displayedPeers = collection.filter((entity) =>
+        entity.type === source.type && entity.workspaceId === source.workspaceId,
+      );
+      const homePeers = view === "Home" && source.type === "task"
+        ? tasks.filter((task) => task.workspaceId === source.workspaceId && task.status === "open" && (
+          task.properties.today === true || task.properties.when === today ||
+          (typeof task.properties.when === "string" && task.properties.when < today)
+        )).sort(byManualOrder("task:Today"))
+        : [];
+      const selectedProjectPeers = selected?.type === "project" && (source.type === "task" || source.type === "note")
+        ? scopedItems.filter((entity) => entity.type === source.type &&
+          (entity.type !== "task" || entity.status === "open") &&
+          sources(selected.id, "belongs_to_project").includes(entity.id))
+          .sort(byManualOrder(`${source.type}:project:${selected.id}`))
+        : [];
+      const selectedAreaPeers = selected?.type === "area" && (source.type === "task" || source.type === "project")
+        ? scopedItems.filter((entity) => entity.type === source.type && sources(selected.id, "belongs_to_area").includes(entity.id))
+          .sort(byManualOrder(`${source.type}:area:${selected.id}`))
+        : [];
+      const contextualPeers = homePeers.some((entity) => entity.id === source.id) && homePeers.some((entity) => entity.id === targetEntity.id)
+        ? homePeers
+        : selectedProjectPeers.some((entity) => entity.id === source.id) && selectedProjectPeers.some((entity) => entity.id === targetEntity.id)
+          ? selectedProjectPeers
+          : selectedAreaPeers.some((entity) => entity.id === source.id) && selectedAreaPeers.some((entity) => entity.id === targetEntity.id)
+            ? selectedAreaPeers
+            : displayedPeers;
+      const peers = contextualPeers.some((entity) => entity.id === source.id) && contextualPeers.some((entity) => entity.id === targetEntity.id)
+        ? [...contextualPeers]
+        : scopedItems.filter((entity) => entity.type === source.type && entity.workspaceId === source.workspaceId)
+          .sort(byManualOrder(`${source.type}:all`));
+      const sourceIndex = peers.findIndex((entity) => entity.id === source.id);
+      const targetIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
+      if (sourceIndex < 0 || targetIndex < 0) return;
+      const [moved] = peers.splice(sourceIndex, 1);
+      peers.splice(targetIndex, 0, moved);
+      const inSelectedProject = (source.type === "task" || source.type === "note") && selected?.type === "project" &&
+        sources(selected.id, "belongs_to_project").includes(source.id) &&
+        sources(selected.id, "belongs_to_project").includes(targetEntity.id);
+      const inSelectedArea = selected?.type === "area" &&
+        sources(selected.id, "belongs_to_area").includes(source.id) &&
+        sources(selected.id, "belongs_to_area").includes(targetEntity.id);
+      const scope = inSelectedProject
+        ? `${source.type}:project:${selected.id}`
+        : inSelectedArea
+          ? `${source.type}:area:${selected.id}`
+          : source.type === "task"
+            ? `task:${view === "Home" ? "Today" : view}`
+            : `${source.type}:all`;
+      if (source.type === "task") setSortBy("manual");
+      await persistManualOrder(peers, source.id, scope);
+      return;
+    }
+    if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {
+      await relate(source.id, targetEntity.id, "belongs_to_project");
+    } else if (source.type === "project" && targetEntity.type === "area") {
+      await relate(source.id, targetEntity.id, "belongs_to_area");
+    } else if (source.type === "task" && targetEntity.type === "area") {
+      await relate(source.id, targetEntity.id, "belongs_to_area");
+    }
+  }
+
+  async function finishPointerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const pending = pointerDragRef.current;
+    pointerDragRef.current = { id: "", startX: 0, startY: 0, active: false };
+    if (!pending.active || !draggingIdRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceId = draggingIdRef.current;
+    const target = dragTargetRef.current || targetAtPoint(event.clientX, event.clientY);
+    draggingIdRef.current = "";
+    setDraggingId("");
+    setActiveDragTarget("");
+    await completeDrop(sourceId, target);
+  }
+
+  function beginNativeDrag(event: ReactDragEvent<HTMLButtonElement>, id: string) {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    draggingIdRef.current = id;
+    setDraggingId(id);
+  }
+
+  async function acceptNativeDrop(event: ReactDragEvent<HTMLElement>, target: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceId = event.dataTransfer.getData("text/plain") || draggingIdRef.current;
+    draggingIdRef.current = "";
+    setDraggingId("");
+    setActiveDragTarget("");
+    await completeDrop(sourceId, target);
+  }
+
+  async function moveWithKeyboard(entity: Entity, direction: -1 | 1) {
+    const projectPeers = selected?.type === "project" && (entity.type === "task" || entity.type === "note")
+      ? scopedItems.filter((candidate) => candidate.type === entity.type &&
+        candidate.workspaceId === entity.workspaceId &&
+        sources(selected.id, "belongs_to_project").includes(candidate.id))
+      : [];
+    const areaPeers = selected?.type === "area" && (entity.type === "task" || entity.type === "project")
+      ? scopedItems.filter((candidate) => candidate.type === entity.type &&
+        candidate.workspaceId === entity.workspaceId &&
+        sources(selected.id, "belongs_to_area").includes(candidate.id))
+      : [];
+    const peers = projectPeers.some((candidate) => candidate.id === entity.id)
+      ? projectPeers
+      : areaPeers.some((candidate) => candidate.id === entity.id)
+        ? areaPeers
+        : collection.filter((candidate) =>
+          candidate.type === entity.type && candidate.workspaceId === entity.workspaceId,
+        );
+    const index = peers.findIndex((candidate) => candidate.id === entity.id);
+    const target = peers[index + direction];
+    if (index < 0 || !target) return;
+    await completeDrop(entity.id, `entity:${target.id}`);
+  }
+
+  const dragHandle = (entity: Entity) => (
+    <button
+      className="dragHandle"
+      draggable
+      aria-label={`Move ${entity.title}`}
+      title="Drag to reorder or move"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        event.preventDefault();
+        event.stopPropagation();
+        void moveWithKeyboard(entity, event.key === "ArrowUp" ? -1 : 1);
+      }}
+      onDragStart={(event) => beginNativeDrag(event, entity.id)}
+      onDragEnd={() => { draggingIdRef.current = ""; setDraggingId(""); setActiveDragTarget(""); }}
+      onPointerDown={(event) => beginPointerDrag(event, entity.id)}
+      onPointerMove={movePointerDrag}
+      onPointerUp={finishPointerDrag}
+      onPointerCancel={() => {
+        pointerDragRef.current = { id: "", startX: 0, startY: 0, active: false };
+        draggingIdRef.current = "";
+        setDraggingId("");
+        setActiveDragTarget("");
+      }}
+    >
+      <span aria-hidden="true">⠿</span>
+    </button>
+  );
   if (authState !== "ready") {
     return (
       <main className="authShell">
@@ -1743,7 +2047,15 @@ export default function App() {
         <nav>
           {views.map((x) => (
             <button
-              className={view === x ? "active" : ""}
+              className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
+              data-drop-section={draggableSectionNames.includes(x) ? x : undefined}
+              onDragEnter={() => draggableSectionNames.includes(x) && setActiveDragTarget(`section:${x}`)}
+              onDragOver={(event) => {
+                if (!draggableSectionNames.includes(x)) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => acceptNativeDrop(event, `section:${x}`)}
               onClick={() => {
                 setView(x);
                 closeDetail();
@@ -1843,7 +2155,15 @@ export default function App() {
                 </div>
                 <div className="homeTaskList">
                   {homeTodayTasks.map((task) => (
-                    <article key={task.id} onClick={() => inspect(task)}>
+                    <article
+                      key={task.id}
+                      className={`${draggingId === task.id ? "isDragging" : ""} ${dragTarget === `entity:${task.id}` ? "dropActive" : ""}`.trim()}
+                      data-drop-entity={task.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${task.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${task.id}`)}
+                      onClick={() => inspect(task)}
+                    >
+                      {dragHandle(task)}
                       <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
                       <div><strong>{task.title}</strong><small>{task.properties.when && task.properties.when < today ? "Overdue" : task.properties.priority && task.properties.priority !== "none" ? String(task.properties.priority) : "Today"}</small></div>
                     </article>
@@ -1860,7 +2180,14 @@ export default function App() {
                 <section className="homeSection">
                   <div className="homeSectionHead"><span><span className="sectionDot projectDot" />Projects</span><button onClick={() => setView("Projects")}>See all →</button></div>
                   <div className="homeCompactList">
-                    {homeProjects.map((project) => <button key={project.id} onClick={() => inspect(project)}><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} open</small></button>)}
+                    {homeProjects.map((project) => <button
+                      key={project.id}
+                      className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                      data-drop-entity={project.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${project.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
+                      onClick={() => inspect(project)}
+                    ><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} open</small></button>)}
                     {homeProjects.length === 0 && <p>No active projects.</p>}
                   </div>
                 </section>
@@ -2438,11 +2765,58 @@ export default function App() {
                   <label>
                     Sort
                     <select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)}>
+                      <option value="manual">Manual</option>
                       <option value="date">Date</option>
                       <option value="priority">Priority</option>
                       <option value="created">Newest</option>
                     </select>
                   </label>
+                </div>
+              )}
+              {draggedEntity && (
+                <div className="sectionDropZones" aria-label="Move task to section">
+                  {draggedEntity.type === "task" && draggableSectionNames.map((section) => (
+                    <button
+                      key={section}
+                      className={dragTarget === `section:${section}` ? "dropActive" : ""}
+                      data-drop-section={section}
+                      onDragEnter={() => setActiveDragTarget(`section:${section}`)}
+                      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                      onDrop={(event) => acceptNativeDrop(event, `section:${section}`)}
+                    >
+                      {viewIcons[section]} {section}
+                    </button>
+                  ))}
+                  {(draggedEntity.type === "task" || draggedEntity.type === "note") && projects
+                    .filter((project) => project.workspaceId === draggedEntity.workspaceId && project.status === "active")
+                    .sort(byManualOrder("project:all"))
+                    .map((project) => (
+                      <button
+                        key={project.id}
+                        className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                        data-drop-entity={project.id}
+                        onDragEnter={() => setActiveDragTarget(`entity:${project.id}`)}
+                        onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                        onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
+                      >
+                        ◇ {project.title}
+                      </button>
+                    ))}
+                  {draggedEntity.type === "project" && areas
+                    .filter((area) => area.workspaceId === draggedEntity.workspaceId && area.status === "active")
+                    .sort(byManualOrder("area:all"))
+                    .map((area) => (
+                      <button
+                        key={area.id}
+                        className={dragTarget === `entity:${area.id}` ? "dropActive" : ""}
+                        data-drop-entity={area.id}
+                        onDragEnter={() => setActiveDragTarget(`entity:${area.id}`)}
+                        onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                        onDrop={(event) => acceptNativeDrop(event, `entity:${area.id}`)}
+                      >
+                        ◎ {area.title}
+                      </button>
+                    ))}
                 </div>
               )}
               <div
@@ -2452,7 +2826,16 @@ export default function App() {
                 }
               >
                 {collection.map((x) => (
-              <article key={x.id} onClick={() => inspect(x)}>
+              <article
+                key={x.id}
+                className={`${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""}`.trim()}
+                data-drop-entity={x.id}
+                onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
+                onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
+                onClick={() => inspect(x)}
+              >
+                {x.type === "task" && priorityFilter !== "all" ? null : dragHandle(x)}
                 {x.type === "task" ? (
                   <button
                     className="check"
@@ -2689,8 +3072,17 @@ export default function App() {
                   .filter((p) =>
                     sources(selected.id, "belongs_to_area").includes(p.id),
                   )
+                  .sort(byManualOrder(`project:area:${selected.id}`))
                   .map((p) => (
-                    <article key={p.id} onClick={() => inspect(p)}>
+                    <article
+                      key={p.id}
+                      className={`${draggingId === p.id ? "isDragging" : ""} ${dragTarget === `entity:${p.id}` ? "dropActive" : ""}`.trim()}
+                      data-drop-entity={p.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${p.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${p.id}`)}
+                      onClick={() => inspect(p)}
+                    >
+                      {dragHandle(p)}
                       <div className="entityIcon">◆</div>
                       <div>
                         <strong>{p.title}</strong>
@@ -2705,8 +3097,17 @@ export default function App() {
                       t.status === "open" &&
                       sources(selected.id, "belongs_to_area").includes(t.id),
                   )
+                  .sort(byManualOrder(`task:area:${selected.id}`))
                   .map((t) => (
-                    <article key={t.id} onClick={() => inspect(t)}>
+                    <article
+                      key={t.id}
+                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""}`.trim()}
+                      data-drop-entity={t.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${t.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
+                      onClick={() => inspect(t)}
+                    >
+                      {dragHandle(t)}
                       <button
                         className="check"
                         onClick={(e) => {
@@ -2752,9 +3153,18 @@ export default function App() {
                       t.status === "open" &&
                       sources(selected.id, "belongs_to_project").includes(t.id),
                   )
+                  .sort(byManualOrder(`task:project:${selected.id}`))
                   .map((t) => (
-                    <article key={t.id}>
-                      <button className="check" onClick={() => done(t.id)}>
+                    <article
+                      key={t.id}
+                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""}`.trim()}
+                      data-drop-entity={t.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${t.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
+                      onClick={() => inspect(t)}
+                    >
+                      {dragHandle(t)}
+                      <button className="check" onClick={(event) => { event.stopPropagation(); done(t.id); }}>
                         ○
                       </button>
                       <strong>{t.title}</strong>
@@ -2774,8 +3184,17 @@ export default function App() {
                       n.type === "note" &&
                       sources(selected.id, "belongs_to_project").includes(n.id),
                   )
+                  .sort(byManualOrder(`note:project:${selected.id}`))
                   .map((n) => (
-                    <article key={n.id}>
+                    <article
+                      key={n.id}
+                      className={`${draggingId === n.id ? "isDragging" : ""} ${dragTarget === `entity:${n.id}` ? "dropActive" : ""}`.trim()}
+                      data-drop-entity={n.id}
+                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${n.id}`); }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${n.id}`)}
+                      onClick={() => inspect(n)}
+                    >
+                      {dragHandle(n)}
                       <div>
                         <strong>{n.title}</strong>
                         <p>{n.content}</p>
