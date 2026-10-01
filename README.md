@@ -105,7 +105,7 @@ A morning run can combine an Executive Assistant or Morning Planner with active 
 
 The server-side PACT foundation is now in place: SQLite persistence for agents, durable context, tool permissions and agent runs; a default AIfréd agent; a workspace-scoped Context Resolver; and a typed read-only Tool Registry. Provider-assisted reasoning now receives canonical entities and non-sensitive durable context through the resolver. Mutations continue to use the existing proposal -> confirmation -> audit -> Undo boundary.
 
-The first authenticated AIfréd integration endpoint is now implemented for external conversational clients. It uses a dedicated bearer token, requires one explicit workspace, and can run the existing server planner to return read-only answers or create approval-bound proposals. Proposal confirmation is intentionally not exposed to the external integration yet. Next: expose narrowly scoped read tools, add owner-facing context management, then migrate proactive briefings onto agent runs.
+The authenticated AIfréd integration API is now implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration yet. Next: add an integration manifest/schema for ChatGPT, owner-facing context management, then migrate proactive briefings onto agent runs.
 
 ### Implementation roadmap
 
