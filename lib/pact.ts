@@ -107,6 +107,28 @@ export function saveOwnerContext(input: Omit<PACTContextItem, "id" | "provenance
   return item;
 }
 
+
+export function listOwnerPACTContext(workspaceId: string, includeArchived = false) {
+  assertWorkspace(workspaceId);
+  const rows = includeArchived
+    ? getDatabase().prepare(`SELECT payload FROM pact_context WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 250`).all(workspaceId)
+    : getDatabase().prepare(`SELECT payload FROM pact_context WHERE workspace_id = ? AND status != 'archived' ORDER BY updated_at DESC LIMIT 250`).all(workspaceId);
+  return rows.map((row) => JSON.parse(String((row as { payload: string }).payload)) as PACTContextItem);
+}
+
+export function archiveOwnerContext(id: string, workspaceId: string) {
+  assertWorkspace(workspaceId);
+  const row = getDatabase().prepare(`SELECT payload FROM pact_context WHERE id = ? AND workspace_id = ?`).get(id, workspaceId) as { payload: string } | undefined;
+  if (!row) return null;
+  const item = JSON.parse(row.payload) as PACTContextItem;
+  if (item.provenance !== "owner") throw new Error("Only owner-authored context can be archived here");
+  const updated: PACTContextItem = { ...item, status: "archived", updatedAt: Date.now() };
+  getDatabase().prepare(`UPDATE pact_context SET payload = ?, status = 'archived', updated_at = ? WHERE id = ? AND workspace_id = ?`)
+    .run(JSON.stringify(updated), updated.updatedAt, id, workspaceId);
+  return updated;
+}
+
+
 export function resolvePACTContext(input: {
   agent?: PACTAgentDefinition;
   workspaceId: string;
