@@ -76,9 +76,9 @@ SERVER_RULES = {
         "Ověřte, zda pokusy pocházejí z vaší relace. V opačném případě doporučuji okamžitě prověřit uživatelské účty a logy.",
     ),
     "server-fail2ban-ban": (
-        "warning",
-        "Fail2ban zablokoval zdroj opakovaných pokusů o přihlášení.",
-        "Blokace funguje správně. Zatím stačí sledovat, zda se útok neopakuje z dalších zdrojů.",
+        "critical",
+        "Fail2ban během krátké doby zablokoval větší počet různých zdrojů.",
+        "Jde o rozsáhlejší pokus o přihlášení. Doporučuji prověřit SSH logy a ponechat přístup omezený jen na důvěryhodné sítě.",
     ),
     "server-service-down": (
         "critical",
@@ -91,9 +91,9 @@ SERVER_RULES = {
         "Doporučuji zjistit příčinu z journalu a ověřit, zda selhání nesouvisí s bezpečnostním incidentem.",
     ),
     "server-new-listener": (
-        "warning",
-        "Na serveru se objevil nový naslouchající síťový port.",
-        "Ověřte, která služba port otevřela a zda má být dostupný z dané sítě.",
+        "critical",
+        "Na serveru se opakovaně objevil nový veřejně naslouchající síťový port.",
+        "Doporučuji ihned ověřit vlastníka procesu a port uzavřít, pokud jeho zpřístupnění nebylo plánované.",
     ),
     "server-tailscale-config-changed": (
         "warning",
@@ -106,14 +106,14 @@ SERVER_RULES = {
         "Pokud změna nebyla plánovaná, doporučuji ji považovat za incident a ihned prověřit související logy.",
     ),
     "server-firewall-changed": (
-        "warning",
-        "Změnila se konfigurace serverového firewallu.",
-        "Ověřte, že změna byla plánovaná a neotevřela zbytečné síťové porty.",
+        "critical",
+        "Serverový firewall zůstal vypnutý v několika po sobě jdoucích kontrolách.",
+        "Doporučuji firewall bez odkladu obnovit a prověřit, zda jeho vypnutí bylo plánované.",
     ),
     "server-firewall-blocks": (
-        "warning",
-        "Firewall zaznamenal zvýšený počet blokovaných síťových pokusů.",
-        "Zatím doporučuji sledovat vývoj a při pokračování prověřit zdroje a cílové porty.",
+        "critical",
+        "Firewall během krátké doby zablokoval mimořádně vysoký počet síťových pokusů.",
+        "Doporučuji prověřit cílové porty a zdroje provozu a podle výsledku dočasně zpřísnit síťová pravidla.",
     ),
 }
 SCOPE = os.environ.get("SECURITY_ALERT_SCOPE", "ai-executive").strip().lower()
