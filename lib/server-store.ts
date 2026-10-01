@@ -151,6 +151,47 @@ export function getDatabase() {
     );
     CREATE INDEX IF NOT EXISTS security_alerts_created_idx
       ON security_alerts(first_at);
+    CREATE TABLE IF NOT EXISTS pact_agents (
+      id TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pact_context (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      sensitivity TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS pact_context_scope_idx
+      ON pact_context(workspace_id, scope, status, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS pact_tool_permissions (
+      agent_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      PRIMARY KEY(agent_id, tool_name, workspace_id)
+    );
+    CREATE TABLE IF NOT EXISTS pact_agent_runs (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      trigger_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      input_summary TEXT NOT NULL,
+      output_summary TEXT,
+      created_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS pact_agent_runs_created_idx
+      ON pact_agent_runs(agent_id, workspace_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS ai_proposals (
       id TEXT PRIMARY KEY,
       session_binding TEXT NOT NULL,
