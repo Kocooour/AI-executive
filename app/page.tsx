@@ -164,6 +164,131 @@ const viewIcons: Record<string, string> = {
   More: "•••",
 };
 const mobileViews = ["Home", "Today", "+", "Projects", "More"];
+type Language = "cs" | "en";
+const copy: Record<Language, Record<string, string>> = {
+  en: {
+    Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
+    Upcoming: "Upcoming", Anytime: "Anytime", Someday: "Someday",
+    Completed: "Completed", Projects: "Projects", Areas: "Areas",
+    Notes: "Notes", Settings: "Settings", More: "More", Search: "Search",
+    new: "New", search: "Search everything", askAi: "Ask AI",
+    goodMorning: "Good morning", goodAfternoon: "Good afternoon", goodEvening: "Good evening",
+    homeSubtitle: "Here is the shape of your day.", seeAll: "See all",
+    nothingToday: "Nothing planned for today.", addTask: "Add a task",
+    inboxDescription: "Items waiting to be organized.", openInbox: "Open inbox",
+    noProjects: "No active projects.", noUpcoming: "Nothing scheduled yet.", recent: "Recent",
+    priority: "Priority", sort: "Sort", all: "All", manual: "Manual", date: "Date",
+    newest: "Newest", high: "High", medium: "Medium", low: "Low", none: "None",
+    nothingHere: "Nothing here yet.", moveToSection: "Move item", add: "Add",
+    currentView: "Current view", allWork: "All my work", createIn: "Create new items in",
+    workspaceName: "Workspace name", save: "Save", workspaceSaved: "Workspace saved.",
+    role: "Role", newWorkspace: "New shared workspace", create: "Create",
+    openStartup: "Open on startup", language: "Language", english: "English", czech: "Czech",
+    dataAi: "Data & AI", storedItems: "Stored items", relations: "Relations",
+    serverSync: "Server sync", synced: "Synced", syncing: "Syncing…", offline: "Offline", connecting: "Connecting…", installApp: "Install app",
+    access: "Access", reminders: "Reminders", backups: "Backups",
+    yesterday: "Yesterday", tomorrow: "Tomorrow", deadline: "deadline", dueSoon: "Due soon",
+    quickCapture: "Quick Capture", addNote: "Add note", workspace: "Workspace",
+    noteTitle: "Note title", taskTitle: "Task title", taskPrompt: "What needs to be done?",
+    untitledTask: "Untitled task", cancel: "Cancel", list: "List", when: "When",
+    project: "Project", area: "Area", task: "Task", note: "Note", reminder: "Reminder", taskNotes: "Task notes",
+    captureExample: "Try “Call Peter tomorrow” or “Service 25 Sep #high”",
+    moveItemNamed: "Move", dragToMove: "Drag to reorder or move",
+    openTasks: "Open tasks", checklist: "Checklist", addChecklistItem: "Add checklist item",
+    repeat: "Repeat", never: "Never", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly",
+    every: "Every", repeatFrom: "Repeat from", scheduledDate: "Scheduled date", completionDate: "Completion date",
+    nextWorkday: "Remind at next workday start", history: "History", moveSomeday: "Move to Someday",
+    reopen: "Reopen", complete: "Complete", delete: "Delete", notesPlaceholder: "Notes…",
+    manageWorkspaces: "Manage workspaces", password: "Password", signIn: "Sign in",
+    checkingAccess: "Checking access…", setupRequired: "Setup required", signInPasskey: "Sign in with passkey",
+    checking: "Checking…", workspaceDataInfo: "Your workspace data is stored in the server database and cached locally for fast access. AI uses the server provider when configured and falls back to a local preview otherwise.",
+    installedApp: "AI Executive is running as an installed app.", installHelp: "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command.",
+    installed: "Installed", browserMode: "Browser mode", ownerSession: "This device has an authenticated owner session.",
+    passkeyName: "Passkey name", confirmPassword: "Confirm current password", addPasskey: "Add passkey",
+    waitingDevice: "Waiting for device…", remove: "Remove", signOut: "Sign out",
+    reminderInfo: "Push reminders are sent by the server even when the app is closed. On iPhone, first install the app on the Home Screen and open the HTTPS address.",
+    devices: "devices", noDevice: "No device", enableDevice: "Enable on this device", sendTest: "Send test",
+    disableDevice: "Disable this device", scheduledReminders: "Send scheduled reminders", timezone: "Timezone",
+    workdayStarts: "Workday starts", workdayEnds: "Workday ends", workingDays: "Working days",
+    createBackup: "Create backup", noBackups: "No backups yet.", restore: "Restore",
+    openCount: "open", dailyBrief: "Daily brief", morningBrief: "Morning brief", eveningReview: "Evening review",
+    capacityExceeded: "Capacity is exceeded.", capacityEstimate: "This is an indicative estimate without calendar and time estimates.",
+    firstBrief: "Create the first brief or enable the automatic schedule in Settings.", todayCapacity: "Today’s capacity",
+    calendarDisconnected: "Calendar not connected", freeHours: "h free", capacityUnknown: "Capacity unverified",
+    calendarStale: "Calendar availability is unknown or stale. Do not use free-time planning now.", noBlockingEvent: "No blocking event during working hours today.",
+    allDay: "All day", busy: "busy", freeTime: "free time", nearestFree: "Nearest free slots:", readOnlyEvents: "Events are read-only. Overlaps count as busy time only once.",
+    calendarReadonly: "Calendar · read only", calendarInfo: "Connect a private HTTPS link in ICS format. The address is encrypted on the server, is never returned to the browser after saving, and AI Executive cannot change the calendar.",
+    readOnly: "Read only", notConnected: "Not connected", sourceName: "Source name", privateIcs: "Private ICS link", connectLoad: "Connect and load",
+    events: "events", syncFailed: "Synchronization failed", lastSync: "last", refresh: "Refresh", disconnect: "Disconnect",
+    proactiveInfo: "Automatic morning brief and evening review. Tasks are never changed without a proposal, your confirmation, and an Undo option.",
+    createNow: "Create now", automaticBriefs: "Automatic daily briefs", morningTime: "Morning time", eveningTime: "Evening time",
+    dailyCapacity: "Indicative daily capacity", briefPush: "Short push notification", briefTelegram: "Details including task names to the configured Telegram chat",
+    backupInfo: "Daily safety copies are created automatically before changes.", items: "items",
+    context: "Context", assistant: "Assistant", todayBrief: "Today’s brief", confirm: "Confirm",
+    undoAi: "Undo AI change", working: "Working…", send: "Send", itemChanged: "Item changed", undo: "Undo",
+  },
+  cs: {
+    Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
+    Upcoming: "Nadcházející", Anytime: "Kdykoli", Someday: "Někdy",
+    Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",
+    Notes: "Poznámky", Settings: "Nastavení", More: "Více", Search: "Hledání",
+    new: "Nový", search: "Hledat ve všem", askAi: "Zeptat se AI",
+    goodMorning: "Dobré ráno", goodAfternoon: "Dobré odpoledne", goodEvening: "Dobrý večer",
+    homeSubtitle: "Takhle vypadá váš dnešní den.", seeAll: "Zobrazit vše",
+    nothingToday: "Na dnešek není nic naplánováno.", addTask: "Přidat úkol",
+    inboxDescription: "Položky čekající na roztřídění.", openInbox: "Otevřít doručené",
+    noProjects: "Žádné aktivní projekty.", noUpcoming: "Nic dalšího není naplánováno.", recent: "Nedávné",
+    priority: "Priorita", sort: "Řazení", all: "Vše", manual: "Ručně", date: "Datum",
+    newest: "Nejnovější", high: "Vysoká", medium: "Střední", low: "Nízká", none: "Žádná",
+    nothingHere: "Zatím tu nic není.", moveToSection: "Přesunout položku", add: "Přidat",
+    currentView: "Aktuální pohled", allWork: "Všechna práce", createIn: "Nové položky vytvářet v",
+    workspaceName: "Název workspace", save: "Uložit", workspaceSaved: "Workspace uložen.",
+    role: "Role", newWorkspace: "Nový sdílený workspace", create: "Vytvořit",
+    openStartup: "Otevřít po spuštění", language: "Jazyk", english: "Angličtina", czech: "Čeština",
+    dataAi: "Data a AI", storedItems: "Uložené položky", relations: "Vztahy",
+    serverSync: "Synchronizace", synced: "Synchronizováno", syncing: "Synchronizuji…", offline: "Offline", connecting: "Připojuji…", installApp: "Instalace aplikace",
+    access: "Přístup", reminders: "Připomínky", backups: "Zálohy",
+    yesterday: "Včera", tomorrow: "Zítra", deadline: "termín", dueSoon: "Termín se blíží",
+    quickCapture: "Rychlé zadání", addNote: "Přidat poznámku", workspace: "Workspace",
+    noteTitle: "Název poznámky", taskTitle: "Název úkolu", taskPrompt: "Co je potřeba udělat?",
+    untitledTask: "Úkol bez názvu", cancel: "Zrušit", list: "Seznam", when: "Kdy",
+    project: "Projekt", area: "Oblast", task: "Úkol", note: "Poznámka", reminder: "Připomínka", taskNotes: "Poznámky k úkolu",
+    captureExample: "Zkuste „Zavolat Petrovi zítra“ nebo „Servis 25. 9. #high“",
+    moveItemNamed: "Přesunout", dragToMove: "Přetažením změnit pořadí nebo umístění",
+    openTasks: "Otevřené úkoly", checklist: "Kontrolní seznam", addChecklistItem: "Přidat položku",
+    repeat: "Opakování", never: "Nikdy", daily: "Denně", weekly: "Týdně", monthly: "Měsíčně", yearly: "Ročně",
+    every: "Každých", repeatFrom: "Opakovat od", scheduledDate: "Plánovaného data", completionDate: "Data dokončení",
+    nextWorkday: "Připomenout na začátku příštího pracovního dne", history: "Historie", moveSomeday: "Přesunout na Někdy",
+    reopen: "Znovu otevřít", complete: "Dokončit", delete: "Smazat", notesPlaceholder: "Poznámky…",
+    manageWorkspaces: "Spravovat workspace", password: "Heslo", signIn: "Přihlásit se",
+    checkingAccess: "Ověřuji přístup…", setupRequired: "Je nutné dokončit nastavení", signInPasskey: "Přihlásit se passkeyem",
+    checking: "Ověřuji…", workspaceDataInfo: "Data workspace jsou uložená v databázi serveru a pro rychlý přístup také v místní mezipaměti. AI používá nakonfigurovaného poskytovatele na serveru, jinak místní náhled.",
+    installedApp: "AI Executive běží jako nainstalovaná aplikace.", installHelp: "Na iPhonu použijte Sdílet → Přidat na plochu. Na Macu použijte v prohlížeči Instalovat nebo Přidat do Docku.",
+    installed: "Nainstalováno", browserMode: "Režim prohlížeče", ownerSession: "Toto zařízení má ověřenou relaci vlastníka.",
+    passkeyName: "Název passkeye", confirmPassword: "Potvrďte současné heslo", addPasskey: "Přidat passkey",
+    waitingDevice: "Čekám na zařízení…", remove: "Odebrat", signOut: "Odhlásit se",
+    reminderInfo: "Push připomínky odesílá server, i když je aplikace zavřená. Na iPhonu ji nejprve přidejte na plochu a otevřete přes HTTPS adresu.",
+    devices: "zařízení", noDevice: "Žádné zařízení", enableDevice: "Povolit na tomto zařízení", sendTest: "Poslat test",
+    disableDevice: "Zakázat na tomto zařízení", scheduledReminders: "Posílat naplánované připomínky", timezone: "Časové pásmo",
+    workdayStarts: "Začátek pracovního dne", workdayEnds: "Konec pracovního dne", workingDays: "Pracovní dny",
+    createBackup: "Vytvořit zálohu", noBackups: "Zatím nejsou žádné zálohy.", restore: "Obnovit",
+    openCount: "otevřeno", dailyBrief: "Denní přehled", morningBrief: "Ranní přehled", eveningReview: "Večerní rekapitulace",
+    capacityExceeded: "Kapacita je překročena.", capacityEstimate: "Jde o orientační odhad bez kalendáře a časových odhadů.",
+    firstBrief: "Vytvořte první přehled nebo zapněte automatický plán v Nastavení.", todayCapacity: "Dnešní kapacita",
+    calendarDisconnected: "Kalendář není připojen", freeHours: "h volno", capacityUnknown: "Kapacita neověřena",
+    calendarStale: "Dostupnost kalendáře je neznámá nebo zastaralá. Plán podle volných bloků nyní nepoužívejte.", noBlockingEvent: "V pracovní době dnes nemáte žádnou blokující událost.",
+    allDay: "Celý den", busy: "obsazeno", freeTime: "volný čas", nearestFree: "Nejbližší volné bloky:", readOnlyEvents: "Události jsou pouze pro čtení. Překryvy se do obsazeného času počítají jen jednou.",
+    calendarReadonly: "Kalendář · pouze pro čtení", calendarInfo: "Připojte soukromý HTTPS odkaz ve formátu ICS. Adresa se na serveru šifruje, po uložení se už do prohlížeče nevrací a AI Executive nemůže kalendář měnit.",
+    readOnly: "Pouze pro čtení", notConnected: "Nepřipojeno", sourceName: "Název zdroje", privateIcs: "Soukromý ICS odkaz", connectLoad: "Připojit a načíst",
+    events: "událostí", syncFailed: "Synchronizace selhala", lastSync: "naposledy", refresh: "Obnovit", disconnect: "Odpojit",
+    proactiveInfo: "Automatický ranní přehled a večerní rekapitulace. Úkoly nikdy nemění bez návrhu, vašeho potvrzení a možnosti Zpět.",
+    createNow: "Vytvořit teď", automaticBriefs: "Automatické denní přehledy", morningTime: "Čas ráno", eveningTime: "Čas večer",
+    dailyCapacity: "Orientační denní kapacita", briefPush: "Stručné push upozornění", briefTelegram: "Detail včetně názvů úkolů do nakonfigurovaného Telegram chatu",
+    backupInfo: "Denní bezpečnostní kopie se vytvářejí automaticky před změnami.", items: "položek",
+    context: "Kontext", assistant: "Asistent", todayBrief: "Dnešní přehled", confirm: "Potvrdit",
+    undoAi: "Vrátit změnu AI", working: "Pracuji…", send: "Odeslat", itemChanged: "Položka změněna", undo: "Zpět",
+  },
+};
 const ymd = (d = new Date()) =>
   [
     d.getFullYear(),
@@ -188,20 +313,39 @@ const addLocalDays = (date: Date, days: number) => {
   result.setDate(result.getDate() + days);
   return result;
 };
-const friendlyDate = (value: unknown) => {
+const friendlyDate = (value: unknown, language: Language) => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return typeof value === "string" ? value : "";
   }
-  if (value === ymd(addLocalDays(new Date(), -1))) return "Včera";
-  if (value === ymd()) return "Dnes";
-  if (value === ymd(addLocalDays(new Date(), 1))) return "Zítra";
-  return new Date(`${value}T12:00:00`).toLocaleDateString("cs-CZ", {
+  if (value === ymd(addLocalDays(new Date(), -1))) return copy[language].yesterday;
+  if (value === ymd()) return copy[language].Today;
+  if (value === ymd(addLocalDays(new Date(), 1))) return copy[language].tomorrow;
+  return new Date(`${value}T12:00:00`).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB", {
     day: "numeric",
     month: "short",
     year: new Date(`${value}T12:00:00`).getFullYear() === new Date().getFullYear()
       ? undefined
       : "numeric",
   });
+};
+const taskDueTone = (entity: Entity, todayValue: string) => {
+  if (entity.type !== "task" || entity.status !== "open") return "";
+  const dueDates = [entity.properties.when, entity.properties.deadline]
+    .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value));
+  if (dueDates.some((due) => due < todayValue)) return "dueOverdue";
+  const tomorrowValue = ymd(addLocalDays(new Date(), 1));
+  if (dueDates.some((due) => due >= todayValue && due <= tomorrowValue)) return "dueSoon";
+  return "";
+};
+const taskDueSummary = (entity: Entity, todayValue: string, language: Language) => {
+  const dueDates = [entity.properties.when, entity.properties.deadline]
+    .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  const overdueDate = dueDates.find((due) => due < todayValue);
+  if (overdueDate) return `${copy[language].Overdue} · ${friendlyDate(overdueDate, language)}`;
+  const tomorrowValue = ymd(addLocalDays(new Date(), 1));
+  const soonDate = dueDates.find((due) => due <= tomorrowValue);
+  return soonDate ? `${copy[language].dueSoon} · ${friendlyDate(soonDate, language)}` : "";
 };
 const toLocalDateTime = (value: unknown) => {
   if (typeof value !== "string" || !value) return "";
@@ -269,6 +413,7 @@ export default function App() {
     [writeWorkspaceId, setWriteWorkspaceId] = useState("personal"),
     [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false),
     [settingsSaved, setSettingsSaved] = useState(false),
+    [language, setLanguage] = useState<Language>("cs"),
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting"),
@@ -306,6 +451,7 @@ export default function App() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const serverRevision = useRef(0);
+  const tr = (key: string) => copy[language][key] || key;
   const deepLinkHandled = useRef(false);
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -672,6 +818,12 @@ export default function App() {
   }, [view, authState]);
 
   useEffect(() => {
+    const savedLanguage = localStorage.getItem("ai-executive-language");
+    if (savedLanguage === "cs" || savedLanguage === "en") {
+      setLanguage(savedLanguage);
+    } else {
+      setLanguage(navigator.language.toLowerCase().startsWith("cs") ? "cs" : "en");
+    }
     const savedView = localStorage.getItem("ai-executive-startup-view");
     const savedWorkspace = localStorage.getItem(
       "ai-executive-active-workspace",
@@ -937,6 +1089,10 @@ export default function App() {
   }, [capture]);
 
   useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  useEffect(() => {
     if (view !== "Settings") return;
     Promise.all([
       fetch("/api/backups", { cache: "no-store" }).then((response) => response.json()),
@@ -982,7 +1138,9 @@ export default function App() {
       );
       return;
     }
-    if (workspace) setWorkspaceDraft(workspace.title);
+    if (workspace) {
+      setWorkspaceDraft(workspace.title);
+    }
   }, [activeWorkspaceId, items, writeWorkspaceId]);
 
   async function saveWorkspaceName() {
@@ -1005,6 +1163,11 @@ export default function App() {
     await load();
     setSettingsSaved(true);
     window.setTimeout(() => setSettingsSaved(false), 1800);
+  }
+
+  function saveLanguage(nextLanguage: Language) {
+    setLanguage(nextLanguage);
+    localStorage.setItem("ai-executive-language", nextLanguage);
   }
 
   function selectWorkspace(workspaceId: string) {
@@ -1205,7 +1368,7 @@ export default function App() {
     ) || workspaces[0],
     workspaceName =
       activeWorkspaceId === "all"
-        ? "All my work"
+        ? tr("allWork")
         : activeWorkspace?.title || "Personal",
     scopedItems = items.filter(
       (entity) =>
@@ -1275,7 +1438,7 @@ export default function App() {
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 4);
   const greetingHour = new Date().getHours();
-  const homeGreeting = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
+  const homeGreeting = greetingHour < 12 ? tr("goodMorning") : greetingHour < 18 ? tr("goodAfternoon") : tr("goodEvening");
   const visible = useMemo(
     () => {
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
@@ -1943,8 +2106,8 @@ export default function App() {
     <button
       className="dragHandle"
       draggable
-      aria-label={`Move ${entity.title}`}
-      title="Drag to reorder or move"
+      aria-label={`${tr("moveItemNamed")} ${entity.title}`}
+      title={tr("dragToMove")}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
@@ -1975,15 +2138,15 @@ export default function App() {
           <p className="eyebrow">AI EXECUTIVE</p>
           <h1>
             {authState === "checking"
-              ? "Checking access…"
+              ? tr("checkingAccess")
               : authState === "misconfigured"
-                ? "Setup required"
-                : "Sign in"}
+                ? tr("setupRequired")
+                : tr("signIn")}
           </h1>
           {authState === "required" && (
             <>
               <label>
-                Password
+                {tr("password")}
                 <input
                   autoFocus
                   type="password"
@@ -1992,7 +2155,7 @@ export default function App() {
                   onChange={(event) => setAuthPassword(event.target.value)}
                 />
               </label>
-              <button type="submit" disabled={!authPassword}>Sign in</button>
+              <button type="submit" disabled={!authPassword}>{tr("signIn")}</button>
               {passkeySupported && (
                 <button
                   className="secondaryAction"
@@ -2000,7 +2163,7 @@ export default function App() {
                   disabled={passkeyBusy}
                   onClick={signInWithPasskey}
                 >
-                  {passkeyBusy ? "Checking…" : "Sign in with passkey"}
+                  {passkeyBusy ? tr("checking") : tr("signInPasskey")}
                 </button>
               )}
             </>
@@ -2043,7 +2206,7 @@ export default function App() {
                 className={activeWorkspaceId === "all" ? "active" : ""}
                 onClick={() => selectWorkspace("all")}
               >
-                <span>All my work</span>
+                <span>{tr("allWork")}</span>
                 <small>aggregate</small>
               </button>
               <button
@@ -2053,7 +2216,7 @@ export default function App() {
                   closeDetail();
                 }}
               >
-                <span>Manage workspaces</span>
+                <span>{tr("manageWorkspaces")}</span>
                 <small>settings</small>
               </button>
             </div>
@@ -2063,6 +2226,7 @@ export default function App() {
           {views.map((x) => (
             <button
               className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
+              aria-current={view === x ? "page" : undefined}
               data-drop-section={draggableSectionNames.includes(x) ? x : undefined}
               onDragEnter={() => draggableSectionNames.includes(x) && setActiveDragTarget(`section:${x}`)}
               onDragOver={(event) => {
@@ -2077,7 +2241,7 @@ export default function App() {
               }}
               key={x}
             >
-              <span className="navLabel"><span aria-hidden="true">{viewIcons[x]}</span>{x}</span>
+              <span className="navLabel"><span aria-hidden="true">{viewIcons[x]}</span>{tr(x)}</span>
               {x === "Today" ? (
                 <span>
                   {
@@ -2094,8 +2258,8 @@ export default function App() {
           ))}
         </nav>
         <footer className="sidebarActions">
-          <button onClick={() => openCapture()} aria-label="Create a new task">
-            ＋ New
+          <button onClick={() => openCapture()} aria-label={tr("addTask")}>
+            ＋ {tr("new")}
           </button>
           <button
             className={view === "Settings" ? "active" : ""}
@@ -2104,7 +2268,7 @@ export default function App() {
               closeDetail();
             }}
           >
-            ⚙ Settings
+            ⚙ {tr("Settings")}
           </button>
         </footer>
       </aside>
@@ -2127,7 +2291,7 @@ export default function App() {
                   {workspace.title}
                 </button>
               ))}
-              <button onClick={() => selectWorkspace("all")}>All my work</button>
+              <button onClick={() => selectWorkspace("all")}>{tr("allWork")}</button>
             </div>
           )}
           <label className="searchField">
@@ -2136,17 +2300,17 @@ export default function App() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => setView("Search")}
-              placeholder="Search everything"
-              aria-label="Search"
+              placeholder={tr("search")}
+              aria-label={tr("search")}
             />
             <kbd>⌘ K</kbd>
           </label>
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
-            aria-label="Ask AI"
+            aria-label={tr("askAi")}
           >
-            ◇ Ask AI
+            ◇ {tr("askAi")}
           </button>
         </header>
         <div className="content">
@@ -2155,24 +2319,24 @@ export default function App() {
               {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
             </p>
             <div className="pageTitleRow">
-              <h1>{view === "Home" ? homeGreeting : view}</h1>
-              {view === "Today" && <time>{new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
+              <h1>{view === "Home" ? homeGreeting : tr(view)}</h1>
+              {view === "Today" && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
             </div>
-            {view === "Home" && <p className="pageSubtitle">Here is the shape of your day.</p>}
+            {view === "Home" && <p className="pageSubtitle">{tr("homeSubtitle")}</p>}
           </div>
           {view === "Home" && (
             <>
             <div className="homeOverview">
               <section className="homeSection homePrimary">
                 <div className="homeSectionHead">
-                  <span><span className="sectionDot todayDot" />Today</span>
-                  <button onClick={() => setView("Today")}>See all <span aria-hidden="true">→</span></button>
+                  <span><span className="sectionDot todayDot" />{tr("Today")}</span>
+                  <button onClick={() => setView("Today")}>{tr("seeAll")} <span aria-hidden="true">→</span></button>
                 </div>
                 <div className="homeTaskList">
                   {homeTodayTasks.map((task) => (
                     <article
                       key={task.id}
-                      className={`${draggingId === task.id ? "isDragging" : ""} ${dragTarget === `entity:${task.id}` ? "dropActive" : ""}`.trim()}
+                      className={`${draggingId === task.id ? "isDragging" : ""} ${dragTarget === `entity:${task.id}` ? "dropActive" : ""} ${taskDueTone(task, today)}`.trim()}
                       data-drop-entity={task.id}
                       onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${task.id}`); }}
                       onDrop={(event) => acceptNativeDrop(event, `entity:${task.id}`)}
@@ -2180,20 +2344,20 @@ export default function App() {
                     >
                       {dragHandle(task)}
                       <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
-                      <div><strong>{task.title}</strong><small>{typeof task.properties.when === "string" && task.properties.when <= today ? friendlyDate(task.properties.when) : task.properties.priority && task.properties.priority !== "none" ? String(task.properties.priority) : "Dnes"}</small></div>
+                      <div><strong>{task.title}</strong><small>{taskDueSummary(task, today, language) || (task.properties.priority && task.properties.priority !== "none" ? tr(String(task.properties.priority)) : tr("Today"))}</small></div>
                     </article>
                   ))}
-                  {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>Nothing planned for today.</p><button onClick={() => openCapture()}>Add a task</button></div>}
+                  {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}
                 </div>
               </section>
               <div className="homeSide">
                 <section className="homeSection">
-                  <div className="homeSectionHead"><span><span className="sectionDot inboxDot" />Inbox</span><b>{tasks.filter((task) => task.status === "open" && task.properties.inbox === true).length}</b></div>
-                  <p>Items waiting to be organized.</p>
-                  <button className="textAction" onClick={() => setView("Inbox")}>Open inbox →</button>
+                  <div className="homeSectionHead"><span><span className="sectionDot inboxDot" />{tr("Inbox")}</span><b>{tasks.filter((task) => task.status === "open" && task.properties.inbox === true).length}</b></div>
+                  <p>{tr("inboxDescription")}</p>
+                  <button className="textAction" onClick={() => setView("Inbox")}>{tr("openInbox")} →</button>
                 </section>
                 <section className="homeSection">
-                  <div className="homeSectionHead"><span><span className="sectionDot projectDot" />Projects</span><button onClick={() => setView("Projects")}>See all →</button></div>
+                  <div className="homeSectionHead"><span><span className="sectionDot projectDot" />{tr("Projects")}</span><button onClick={() => setView("Projects")}>{tr("seeAll")} →</button></div>
                   <div className="homeCompactList">
                     {homeProjects.map((project) => <button
                       key={project.id}
@@ -2202,22 +2366,22 @@ export default function App() {
                       onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${project.id}`); }}
                       onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
                       onClick={() => inspect(project)}
-                    ><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} open</small></button>)}
-                    {homeProjects.length === 0 && <p>No active projects.</p>}
+                    ><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} {tr("openCount")}</small></button>)}
+                    {homeProjects.length === 0 && <p>{tr("noProjects")}</p>}
                   </div>
                 </section>
               </div>
               <section className="homeSection">
-                <div className="homeSectionHead"><span><span className="sectionDot upcomingDot" />Upcoming</span><button onClick={() => setView("Upcoming")}>See all →</button></div>
+                <div className="homeSectionHead"><span><span className="sectionDot upcomingDot" />{tr("Upcoming")}</span><button onClick={() => setView("Upcoming")}>{tr("seeAll")} →</button></div>
                 <div className="homeCompactList">
-                  {homeUpcomingTasks.map((task) => <button key={task.id} onClick={() => inspect(task)}><span>{task.title}</span><small>{friendlyDate(task.properties.when)}</small></button>)}
-                  {homeUpcomingTasks.length === 0 && <p>Nothing scheduled yet.</p>}
+                  {homeUpcomingTasks.map((task) => <button key={task.id} onClick={() => inspect(task)}><span>{task.title}</span><small>{friendlyDate(task.properties.when, language)}</small></button>)}
+                  {homeUpcomingTasks.length === 0 && <p>{tr("noUpcoming")}</p>}
                 </div>
               </section>
               <section className="homeSection">
-                <div className="homeSectionHead"><span><span className="sectionDot recentDot" />Recent</span></div>
+                <div className="homeSectionHead"><span><span className="sectionDot recentDot" />{tr("recent")}</span></div>
                 <div className="homeCompactList">
-                  {homeRecent.map((entity) => <button key={entity.id} onClick={() => inspect(entity)}><span>{entity.title}</span><small>{entity.type}</small></button>)}
+                  {homeRecent.map((entity) => <button key={entity.id} onClick={() => inspect(entity)}><span>{entity.title}</span><small>{tr(entity.type)}</small></button>)}
                 </div>
               </section>
             </div>
@@ -2226,17 +2390,17 @@ export default function App() {
               <div className="sectionHeading">
                 <div>
                   <p className="eyebrow">PROACTIVE EXECUTIVE</p>
-                  <h2>{briefings[0]?.title || "Denní přehled"}</h2>
+                  <h2>{briefings[0]?.title || tr("dailyBrief")}</h2>
                 </div>
                 <div className="notificationActions">
-                  <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>Ranní přehled</button>
-                  <button onClick={() => runBriefing("evening")} disabled={briefingBusy}>Večerní rekapitulace</button>
+                  <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>{tr("morningBrief")}</button>
+                  <button onClick={() => runBriefing("evening")} disabled={briefingBusy}>{tr("eveningReview")}</button>
                 </div>
               </div>
               {briefings[0] ? (
                 <div>
                   <p>{briefings[0].summary}</p>
-                  {briefings[0].overloaded && <p role="status"><strong>Kapacita je překročena.</strong> Jde o orientační odhad bez kalendáře a časových odhadů.</p>}
+                  {briefings[0].overloaded && <p role="status"><strong>{tr("capacityExceeded")}</strong> {tr("capacityEstimate")}</p>}
                   <ol className="briefingTasks">
                     {briefings[0].topTasks.map((task) => (
                       <li key={task.id}>
@@ -2251,36 +2415,36 @@ export default function App() {
                   <ul>{briefings[0].suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
                   <small>{new Date(briefings[0].createdAt).toLocaleString()} · {briefings[0].workspaceName}</small>
                 </div>
-              ) : <p>Vytvoř první přehled, nebo zapni automatický plán v Settings.</p>}
+              ) : <p>{tr("firstBrief")}</p>}
             </section>
             <section className="briefingCard calendarCard">
               <div className="sectionHeading">
                 <div>
-                  <p className="eyebrow">CALENDAR · {activeWorkspaceId === "all" ? writeWorkspace?.title || "PERSONAL" : workspaceName} · READ ONLY</p>
-                  <h2>Dnešní kapacita</h2>
+                  <p className="eyebrow">{tr("calendarReadonly").toUpperCase()} · {activeWorkspaceId === "all" ? writeWorkspace?.title || "PERSONAL" : workspaceName}</p>
+                  <h2>{tr("todayCapacity")}</h2>
                 </div>
-                <strong>{calendarSources.length === 0 ? "Kalendář není připojen" : calendarFresh ? `${freeHours.toFixed(1)} h volno` : "Kapacita neověřená"}</strong>
+                <strong>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</strong>
               </div>
               {calendarSources.some((source) => source.status !== "ready") && (
-                <p role="status">Dostupnost kalendáře je neznámá nebo zastaralá. Plán podle volných bloků nyní nepoužívej.</p>
+                <p role="status">{tr("calendarStale")}</p>
               )}
-              {calendarFresh && todayCalendarEvents.length === 0 && <p>V pracovní době dnes nemáš žádnou blokující událost.</p>}
+              {calendarFresh && todayCalendarEvents.length === 0 && <p>{tr("noBlockingEvent")}</p>}
               <div className="calendarAgenda">
                 {todayCalendarEvents.map((event) => (
                   <div key={event.id} className={event.busy ? "busy" : "free"}>
-                    <span>{event.allDay ? "Celý den" : new Date(event.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}</span>
+                    <span>{event.allDay ? tr("allDay") : new Date(event.start).toLocaleTimeString(language === "cs" ? "cs-CZ" : "en-GB", { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}</span>
                     <strong>{event.title}</strong>
-                    <small>{event.busy ? "obsazeno" : "volný čas"}</small>
+                    <small>{event.busy ? tr("busy") : tr("freeTime")}</small>
                   </div>
                 ))}
               </div>
               {calendarFresh && freeWindows.length > 0 && (
                 <p>
-                  <strong>Nejbližší volné bloky:</strong>{" "}
+                  <strong>{tr("nearestFree")}</strong>{" "}
                   {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}
                 </p>
               )}
-              <small>Události jsou pouze pro čtení. Překryvy se do obsazeného času počítají jen jednou.</small>
+              <small>{tr("readOnlyEvents")}</small>
             </section>
             </div>
             </>
@@ -2311,7 +2475,7 @@ export default function App() {
                   <article key={x.id} onClick={() => inspect(x)}>
                     <div>
                       <strong>{x.title}</strong>
-                      <small>{x.type}</small>
+                      <small>{tr(x.type)}</small>
                     </div>
                   </article>
                 ))}
@@ -2320,9 +2484,19 @@ export default function App() {
           {view === "Settings" && (
             <div className="settingsPanel">
               <section>
-                <h2>Workspace</h2>
+                <h2>{tr("workspace")}</h2>
                 <label>
-                  Current view
+                  {tr("language")}
+                  <select
+                    value={language}
+                    onChange={(event) => saveLanguage(event.target.value as Language)}
+                  >
+                    <option value="cs">{tr("czech")}</option>
+                    <option value="en">{tr("english")}</option>
+                  </select>
+                </label>
+                <label>
+                  {tr("currentView")}
                   <select
                     value={activeWorkspaceId}
                     onChange={(event) => selectWorkspace(event.target.value)}
@@ -2332,12 +2506,12 @@ export default function App() {
                         {workspace.title}
                       </option>
                     ))}
-                    <option value="all">All my work</option>
+                    <option value="all">{tr("allWork")}</option>
                   </select>
                 </label>
                 {activeWorkspaceId === "all" && (
                   <label>
-                    Create new items in
+                    {tr("createIn")}
                     <select
                       value={writeWorkspaceId}
                       onChange={(event) => selectWriteWorkspace(event.target.value)}
@@ -2351,7 +2525,7 @@ export default function App() {
                   </label>
                 )}
                 <label>
-                  Workspace name
+                  {tr("workspaceName")}
                   <div className="workspaceNameEditor">
                     <input
                       value={workspaceDraft}
@@ -2369,13 +2543,13 @@ export default function App() {
                       onClick={saveWorkspaceName}
                       disabled={!workspaceDraft.trim()}
                     >
-                      Save
+                      {tr("save")}
                     </button>
                   </div>
                 </label>
                 {settingsSaved && (
                   <p className="saveConfirmation" role="status">
-                    Workspace saved.
+                    {tr("workspaceSaved")}
                   </p>
                 )}
                 <div className="workspaceSummary">
@@ -2383,11 +2557,11 @@ export default function App() {
                     {String(writeWorkspace?.properties.kind || "personal")} workspace
                   </span>
                   <span>
-                    Role: {String(writeWorkspace?.properties.role || "owner")}
+                    {tr("role")}: {String(writeWorkspace?.properties.role || "owner")}
                   </span>
                 </div>
                 <label>
-                  New shared workspace
+                  {tr("newWorkspace")}
                   <div className="workspaceNameEditor">
                     <input
                       value={newWorkspaceDraft}
@@ -2400,7 +2574,7 @@ export default function App() {
                       onClick={createWorkspace}
                       disabled={!newWorkspaceDraft.trim()}
                     >
-                      Create
+                      {tr("create")}
                     </button>
                   </div>
                 </label>
@@ -2409,7 +2583,7 @@ export default function App() {
                   another account will be enabled after multi-user identity is added.
                 </p>
                 <label>
-                  Open on startup
+                  {tr("openStartup")}
                   <select
                     value={startupView}
                     onChange={(e) => {
@@ -2423,60 +2597,58 @@ export default function App() {
                     {views
                       .filter((item) => item !== "Home")
                       .map((item) => (
-                        <option key={item}>{item}</option>
+                        <option key={item} value={item}>{tr(item)}</option>
                       ))}
                   </select>
                 </label>
               </section>
               <section>
-                <h2>Data & AI</h2>
+                <h2>{tr("dataAi")}</h2>
                 <p>
-                  Your workspace data is stored in the server database and
-                  cached locally for fast access. AI uses the server provider
-                  when configured and falls back to a local preview otherwise.
+                  {tr("workspaceDataInfo")}
                 </p>
                 <dl>
                   <div>
-                    <dt>Stored items</dt>
+                    <dt>{tr("storedItems")}</dt>
                     <dd>{scopedItems.length}</dd>
                   </div>
                   <div>
-                    <dt>Relations</dt>
+                    <dt>{tr("relations")}</dt>
                     <dd>{scopedRelations.length}</dd>
                   </div>
                   <div>
-                    <dt>Server sync</dt>
+                    <dt>{tr("serverSync")}</dt>
                     <dd className={`syncStatus ${syncStatus}`}>
                       {syncStatus === "synced"
-                        ? "Synced"
+                        ? tr("synced")
                         : syncStatus === "syncing"
-                          ? "Syncing…"
+                          ? tr("syncing")
                           : syncStatus === "offline"
-                            ? "Offline"
-                            : "Connecting…"}
+                            ? tr("offline")
+                            : tr("connecting")}
                     </dd>
                   </div>
                 </dl>
               </section>
               <section>
-                <h2>Install app</h2>
+                <h2>{tr("installApp")}</h2>
                 <p>
                   {standalone
-                    ? "AI Executive is running as an installed app."
-                    : "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command."}
+                    ? tr("installedApp")
+                    : tr("installHelp")}
                 </p>
                 <span className={`installStatus ${standalone ? "installed" : ""}`}>
-                  {standalone ? "Installed" : "Browser mode"}
+                  {standalone ? tr("installed") : tr("browserMode")}
                 </span>
               </section>
               {authEnabled && (
                 <section>
-                  <h2>Access</h2>
-                  <p>This device has an authenticated owner session.</p>
+                  <h2>{tr("access")}</h2>
+                  <p>{tr("ownerSession")}</p>
                   {passkeySupported && (
                     <>
                       <label>
-                        Passkey name
+                        {tr("passkeyName")}
                         <input
                           value={passkeyLabel}
                           maxLength={80}
@@ -2485,7 +2657,7 @@ export default function App() {
                         />
                       </label>
                       <label>
-                        Confirm current password
+                        {tr("confirmPassword")}
                         <input
                           type="password"
                           autoComplete="current-password"
@@ -2499,7 +2671,7 @@ export default function App() {
                         onClick={registerPasskey}
                         disabled={passkeyBusy || !passkeyLabel.trim() || !passkeyPassword}
                       >
-                        {passkeyBusy ? "Waiting for device…" : "Add passkey"}
+                        {passkeyBusy ? tr("waitingDevice") : tr("addPasskey")}
                       </button>
                       <div className="passkeyList">
                         {passkeys.map((passkey) => (
@@ -2511,7 +2683,7 @@ export default function App() {
                                 {passkey.backedUp ? " · synced" : ""}
                               </small>
                             </span>
-                            <button onClick={() => removePasskey(passkey.id)}>Remove</button>
+                            <button onClick={() => removePasskey(passkey.id)}>{tr("remove")}</button>
                           </div>
                         ))}
                       </div>
@@ -2522,28 +2694,25 @@ export default function App() {
                       </p>
                     </>
                   )}
-                  <button className="secondaryAction" onClick={logout}>Sign out</button>
+                  <button className="secondaryAction" onClick={logout}>{tr("signOut")}</button>
                 </section>
               )}
               <section>
                 <div className="sectionHeading">
                   <div>
-                    <h2>Reminders</h2>
-                    <p>
-                      Push reminders are sent by the server even when the app is closed.
-                      On iPhone, first install the app on the Home Screen and open the HTTPS address.
-                    </p>
+                    <h2>{tr("reminders")}</h2>
+                    <p>{tr("reminderInfo")}</p>
                   </div>
                   <span className={`installStatus ${notificationState?.subscriptionCount ? "installed" : ""}`}>
                     {notificationState?.subscriptionCount
-                      ? `${notificationState.subscriptionCount} device${notificationState.subscriptionCount === 1 ? "" : "s"}`
-                      : "No device"}
+                      ? `${notificationState.subscriptionCount} ${tr("devices")}`
+                      : tr("noDevice")}
                   </span>
                 </div>
                 <div className="notificationActions">
-                  <button className="primaryAction" onClick={enableNotifications}>Enable on this device</button>
-                  <button onClick={testNotification}>Send test</button>
-                  <button onClick={disableNotifications}>Disable this device</button>
+                  <button className="primaryAction" onClick={enableNotifications}>{tr("enableDevice")}</button>
+                  <button onClick={testNotification}>{tr("sendTest")}</button>
+                  <button onClick={disableNotifications}>{tr("disableDevice")}</button>
                 </div>
                 {notificationState && (
                   <div className="preferenceGrid">
@@ -2556,10 +2725,10 @@ export default function App() {
                           enabled: event.target.checked,
                         })}
                       />
-                      Send scheduled reminders
+                      {tr("scheduledReminders")}
                     </label>
                     <label>
-                      Timezone
+                      {tr("timezone")}
                       <input
                         value={notificationState.preferences.timezone}
                         onChange={(event) => setNotificationState({
@@ -2570,7 +2739,7 @@ export default function App() {
                       />
                     </label>
                     <label>
-                      Workday starts
+                      {tr("workdayStarts")}
                       <input
                         type="time"
                         value={notificationState.preferences.workdayStart}
@@ -2581,7 +2750,7 @@ export default function App() {
                       />
                     </label>
                     <label>
-                      Workday ends
+                      {tr("workdayEnds")}
                       <input
                         type="time"
                         value={notificationState.preferences.workdayEnd}
@@ -2592,7 +2761,7 @@ export default function App() {
                       />
                     </label>
                     <fieldset>
-                      <legend>Working days</legend>
+                      <legend>{tr("workingDays")}</legend>
                       {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
                         <label key={label}>
                           <input
@@ -2616,30 +2785,26 @@ export default function App() {
               <section>
                 <div className="sectionHeading">
                   <div>
-                    <h2>Calendar · read only</h2>
-                    <p>
-                      Připoj soukromý HTTPS odkaz ve formátu ICS. Adresa se na
-                      serveru šifruje, po uložení se už do prohlížeče nevrací a
-                      AI Executive nemůže kalendář měnit.
-                    </p>
+                    <h2>{tr("calendarReadonly")}</h2>
+                    <p>{tr("calendarInfo")}</p>
                   </div>
                   <span className={`installStatus ${calendarSources.some((source) => source.status === "ready") ? "installed" : ""}`}>
-                    {calendarSources.some((source) => source.status === "ready") ? "Read only" : "Not connected"}
+                    {calendarSources.some((source) => source.status === "ready") ? tr("readOnly") : tr("notConnected")}
                   </span>
                 </div>
                 <div className="calendarConnect">
                   <label>
-                    Název zdroje
+                    {tr("sourceName")}
                     <input value={calendarLabel} maxLength={120} onChange={(event) => setCalendarLabel(event.target.value)} />
                   </label>
                   <label>
-                    Soukromý ICS odkaz
+                    {tr("privateIcs")}
                     <input type="password" autoComplete="off" value={calendarUrl} maxLength={8192}
                       placeholder="https://…/calendar.ics"
                       onChange={(event) => setCalendarUrl(event.target.value)} />
                   </label>
                   <button className="primaryAction" disabled={calendarBusy || !calendarLabel.trim() || !calendarUrl.trim()}
-                    onClick={() => calendarAction("connect")}>Připojit a načíst</button>
+                    onClick={() => calendarAction("connect")}>{tr("connectLoad")}</button>
                 </div>
                 <div className="calendarSources">
                   {calendarSources.map((source) => (
@@ -2647,16 +2812,16 @@ export default function App() {
                       <span>
                         <strong>{source.label}</strong>
                         <small>
-                          {source.status === "ready" ? `${source.eventCount} událostí` : "Synchronizace selhala"}
-                          {source.lastSuccessAt ? ` · naposledy ${new Date(source.lastSuccessAt).toLocaleString()}` : ""}
+                          {source.status === "ready" ? `${source.eventCount} ${tr("events")}` : tr("syncFailed")}
+                          {source.lastSuccessAt ? ` · ${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : ""}
                         </small>
                         {source.lastError && <small role="status">{source.lastError}</small>}
                       </span>
                       <div className="notificationActions">
-                        <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>Obnovit</button>
+                        <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>{tr("refresh")}</button>
                         <button disabled={calendarBusy} onClick={() => {
                           if (window.confirm(`Odpojit kalendář „${source.label}“ a odstranit jeho lokální události?`)) calendarAction("disconnect", source.id);
-                        }}>Odpojit</button>
+                        }}>{tr("disconnect")}</button>
                       </div>
                     </div>
                   ))}
@@ -2667,13 +2832,10 @@ export default function App() {
                 <div className="sectionHeading">
                   <div>
                     <h2>Proactive executive</h2>
-                    <p>
-                      Automatický ranní přehled a večerní rekapitulace. Úkoly nikdy
-                      nemění bez návrhu, vašeho potvrzení a možnosti Undo.
-                    </p>
+                    <p>{tr("proactiveInfo")}</p>
                   </div>
                   <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>
-                    Vytvořit teď
+                    {tr("createNow")}
                   </button>
                 </div>
                 {notificationState && (
@@ -2681,10 +2843,10 @@ export default function App() {
                     <label className="preferenceToggle">
                       <input type="checkbox" checked={notificationState.preferences.briefingEnabled}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingEnabled: event.target.checked })} />
-                      Automatické denní přehledy
+                      {tr("automaticBriefs")}
                     </label>
                     <label>
-                      Workspace
+                      {tr("workspace")}
                       <select value={notificationState.preferences.briefingWorkspaceId}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingWorkspaceId: event.target.value })}>
                         {workspaces.map((workspace) => <option key={workspace.id} value={workspace.workspaceId}>{workspace.title}</option>)}
@@ -2693,37 +2855,37 @@ export default function App() {
                     <label className="preferenceToggle">
                       <input type="checkbox" checked={notificationState.preferences.morningBriefEnabled}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefEnabled: event.target.checked })} />
-                      Ranní přehled
+                      {tr("morningBrief")}
                     </label>
                     <label>
-                      Čas ráno
+                      {tr("morningTime")}
                       <input type="time" value={notificationState.preferences.morningBriefTime}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefTime: event.target.value })} />
                     </label>
                     <label className="preferenceToggle">
                       <input type="checkbox" checked={notificationState.preferences.eveningReviewEnabled}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewEnabled: event.target.checked })} />
-                      Večerní rekapitulace
+                      {tr("eveningReview")}
                     </label>
                     <label>
-                      Čas večer
+                      {tr("eveningTime")}
                       <input type="time" value={notificationState.preferences.eveningReviewTime}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewTime: event.target.value })} />
                     </label>
                     <label>
-                      Orientační denní kapacita
+                      {tr("dailyCapacity")}
                       <input type="number" min="1" max="50" value={notificationState.preferences.dailyTaskCapacity}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, dailyTaskCapacity: Number(event.target.value) })} />
                     </label>
                     <label className="preferenceToggle">
                       <input type="checkbox" checked={notificationState.preferences.briefingPush}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingPush: event.target.checked })} />
-                      Stručné push upozornění
+                      {tr("briefPush")}
                     </label>
                     <label className="preferenceToggle">
                       <input type="checkbox" checked={notificationState.preferences.briefingTelegram}
                         onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingTelegram: event.target.checked })} />
-                      Detail včetně názvů úkolů do nakonfigurovaného Telegram chatu
+                      {tr("briefTelegram")}
                     </label>
                   </div>
                 )}
@@ -2731,16 +2893,16 @@ export default function App() {
               <section>
                 <div className="sectionHeading">
                   <div>
-                    <h2>Backups</h2>
-                    <p>Daily safety copies are created automatically before changes.</p>
+                    <h2>{tr("backups")}</h2>
+                    <p>{tr("backupInfo")}</p>
                   </div>
                   <button className="primaryAction" onClick={createServerBackup}>
-                    Create backup
+                    {tr("createBackup")}
                   </button>
                 </div>
                 {backupStatus && <p role="status">{backupStatus}</p>}
                 <div className="backupList">
-                  {backups.length === 0 && <p>No backups yet.</p>}
+                  {backups.length === 0 && <p>{tr("noBackups")}</p>}
                   {backups.slice(0, 8).map((backup) => (
                     <div key={backup.name}>
                       <span>
@@ -2748,14 +2910,14 @@ export default function App() {
                         <small>
                           {backup.error
                             ? `Invalid backup · ${backup.error}`
-                            : `${backup.entityCount} items · ${backup.relationCount} relations`}
+                            : `${backup.entityCount} ${tr("items")} · ${backup.relationCount} ${tr("relations").toLowerCase()}`}
                         </small>
                       </span>
                       <button
                         disabled={Boolean(backup.error)}
                         onClick={() => restoreServerBackup(backup)}
                       >
-                        Restore
+                        {tr("restore")}
                       </button>
                     </div>
                   ))}
@@ -2768,28 +2930,28 @@ export default function App() {
               {!["Home", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
                   <label>
-                    Priority
+                    {tr("priority")}
                     <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
-                      <option value="all">All</option>
-                      <option value="high">High</option>
-                      <option value="medium">Medium</option>
-                      <option value="low">Low</option>
-                      <option value="none">None</option>
+                      <option value="all">{tr("all")}</option>
+                      <option value="high">{tr("high")}</option>
+                      <option value="medium">{tr("medium")}</option>
+                      <option value="low">{tr("low")}</option>
+                      <option value="none">{tr("none")}</option>
                     </select>
                   </label>
                   <label>
-                    Sort
+                    {tr("sort")}
                     <select value={sortBy} onChange={(event) => setSortBy(event.target.value as typeof sortBy)}>
-                      <option value="manual">Manual</option>
-                      <option value="date">Date</option>
-                      <option value="priority">Priority</option>
-                      <option value="created">Newest</option>
+                      <option value="manual">{tr("manual")}</option>
+                      <option value="date">{tr("date")}</option>
+                      <option value="priority">{tr("priority")}</option>
+                      <option value="created">{tr("newest")}</option>
                     </select>
                   </label>
                 </div>
               )}
               {draggedEntity && (
-                <div className="sectionDropZones" aria-label="Move task to section">
+                <div className="sectionDropZones" aria-label={tr("moveToSection")}>
                   {draggedEntity.type === "task" && draggableSectionNames.map((section) => (
                     <button
                       key={section}
@@ -2799,7 +2961,7 @@ export default function App() {
                       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
                       onDrop={(event) => acceptNativeDrop(event, `section:${section}`)}
                     >
-                      {viewIcons[section]} {section}
+                      {viewIcons[section]} {tr(section)}
                     </button>
                   ))}
                   {(draggedEntity.type === "task" || draggedEntity.type === "note") && projects
@@ -2843,7 +3005,7 @@ export default function App() {
                 {collection.map((x) => (
               <article
                 key={x.id}
-                className={`${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""}`.trim()}
+                className={`${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
                 data-drop-entity={x.id}
                 onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
                 onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
@@ -2862,7 +3024,7 @@ export default function App() {
                     ○
                   </button>
                 ) : (
-                  <div className="entityIcon">
+                  <div className={`entityIcon ${x.type}Icon`}>
                     {x.type === "project" ? "◆" : x.type === "area" ? "●" : "▤"}
                   </div>
                 )}
@@ -2873,24 +3035,30 @@ export default function App() {
                       ? [
                           x.properties.priority &&
                           x.properties.priority !== "none"
-                            ? "● " + x.properties.priority
+                            ? "● " + tr(String(x.properties.priority))
+                            : null,
+                          taskDueTone(x, today) === "dueOverdue"
+                            ? tr("Overdue")
+                            : null,
+                          taskDueTone(x, today) === "dueSoon"
+                            ? tr("dueSoon")
                             : null,
                           typeof x.properties.when === "string"
-                            ? friendlyDate(x.properties.when)
+                            ? friendlyDate(x.properties.when, language)
                             : null,
                           x.properties.deadline &&
-                            "deadline " + friendlyDate(x.properties.deadline),
+                            tr("deadline") + " " + friendlyDate(x.properties.deadline, language),
                         ]
                           .filter(Boolean)
                           .join(" · ") ||
                         (x.properties.today === true
-                          ? "Dnes"
+                          ? tr("Today")
                           : x.properties.someday === true
-                            ? "Someday"
+                            ? tr("Someday")
                             : x.properties.inbox === true
-                              ? "Inbox"
-                              : "Anytime")
-                      : x.type}
+                              ? tr("Inbox")
+                              : tr("Anytime"))
+                      : tr(x.type === "project" ? "Projects" : x.type === "area" ? "Areas" : "Notes")}
                   </small>
                   {activeWorkspaceId === "all" && (
                     <span className="workspaceBadge">
@@ -2903,7 +3071,7 @@ export default function App() {
                   </article>
                 ))}
                 {collection.length === 0 && view !== "Home" && view !== "Search" && (
-                  <div className="empty">Nothing here yet.</div>
+                  <div className="empty">{tr("nothingHere")}</div>
                 )}
               </div>
               {!['Home', 'Search'].includes(view) && (
@@ -2912,9 +3080,9 @@ export default function App() {
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && create(type, text)}
-                    placeholder={"+ Add " + type}
+                    placeholder={`+ ${tr("add")} ${tr(type === "project" ? "Projects" : type === "area" ? "Areas" : type === "note" ? "Notes" : "Today").toLowerCase()}`}
                   />
-                  <button onClick={() => create(type, text)}>Add</button>
+                  <button onClick={() => create(type, text)}>{tr("add")}</button>
                 </div>
               )}
             </>
@@ -2930,7 +3098,8 @@ export default function App() {
                 ? "active"
                 : ""
             }
-            aria-label={x === "+" ? "Quick capture" : x}
+            aria-label={x === "+" ? tr("quickCapture") : tr(x)}
+            aria-current={view === x ? "page" : undefined}
             onClick={() => {
               if (x === "+") return openCapture();
               if (x === "More") return setMoreOpen((open) => !open);
@@ -2939,7 +3108,7 @@ export default function App() {
               setView(x);
             }}
           >
-            {x === "+" ? <span className="mobileAddIcon">＋</span> : <><span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{x}</span></>}
+            {x === "+" ? <span className="mobileAddIcon">＋</span> : <><span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{tr(x)}</span></>}
           </button>
         ))}
       </nav>
@@ -2956,7 +3125,7 @@ export default function App() {
                   setMoreOpen(false);
                 }}
               >
-                {item}
+                {tr(item)}
               </button>
             ))}
           </div>
@@ -2994,10 +3163,10 @@ export default function App() {
               submitCapture();
             }}
           >
-            <h2 id="capture-title">{captureType === "note" ? "Add note" : "Quick Capture"}</h2>
+            <h2 id="capture-title">{captureType === "note" ? tr("addNote") : tr("quickCapture")}</h2>
             {activeWorkspaceId === "all" && !captureProjectId && (
               <label className="captureWorkspace">
-                Workspace
+                {tr("workspace")}
                 <select
                   value={writeWorkspaceId}
                   onChange={(event) => selectWriteWorkspace(event.target.value)}
@@ -3012,22 +3181,22 @@ export default function App() {
             )}
             <input
               autoFocus
-              aria-label={captureType === "note" ? "Note title" : "Task title"}
+              aria-label={captureType === "note" ? tr("noteTitle") : tr("taskTitle")}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder={
-                captureType === "note" ? "Note title" : "What needs to be done?"
+                captureType === "note" ? tr("noteTitle") : tr("taskPrompt")
               }
             />
             {captureType === "task" && (
               <>
-                <p>Try “Zavolat Petrovi zítra” or “Servis 25.9. #high”</p>
+                <p>{tr("captureExample")}</p>
                 {draft.trim() && (
                   <div className="capturePreview">
-                    <strong>{parseCapture(draft).title || "Untitled task"}</strong>
+                    <strong>{parseCapture(draft).title || tr("untitledTask")}</strong>
                     <span>
-                      {parseCapture(draft).when || "Inbox"}
-                      {parseCapture(draft).priority !== "none" ? ` · ${parseCapture(draft).priority}` : ""}
+                      {parseCapture(draft).when || tr("Inbox")}
+                      {parseCapture(draft).priority !== "none" ? ` · ${tr(parseCapture(draft).priority)}` : ""}
                     </span>
                   </div>
                 )}
@@ -3035,14 +3204,14 @@ export default function App() {
             )}
             <div>
               <button type="button" onClick={() => setCapture(false)}>
-                Cancel
+                {tr("cancel")}
               </button>
               <button
                 type="submit"
                 className="ai"
                 disabled={!draft.trim()}
               >
-                {captureType === "note" ? "Add note" : "Add task"}
+                {captureType === "note" ? tr("addNote") : tr("addTask")}
               </button>
             </div>
           </form>
@@ -3057,7 +3226,7 @@ export default function App() {
             >
               ×
             </button>
-            <p className="eyebrow">{selected.type}</p>
+            <p className="eyebrow">{tr(selected.type)}</p>
             <input
               className="titleEdit"
               value={selected.title}
@@ -3068,7 +3237,7 @@ export default function App() {
             />
             {context && (
               <div className="contextStrip">
-                <b>Context</b>
+                <b>{tr("context")}</b>
                 <span>
                   {context.summary.tasks} tasks · {context.summary.notes} notes
                   · {context.summary.projects} projects ·{" "}
@@ -3084,7 +3253,7 @@ export default function App() {
             )}
             {selected.type === "area" && (
               <div className="projectDetail">
-                <h3>PROJECTS</h3>
+                <h3>{tr("Projects").toUpperCase()}</h3>
                 {projects
                   .filter((p) =>
                     sources(selected.id, "belongs_to_area").includes(p.id),
@@ -3100,14 +3269,14 @@ export default function App() {
                       onClick={() => inspect(p)}
                     >
                       {dragHandle(p)}
-                      <div className="entityIcon">◆</div>
+                      <div className="entityIcon projectIcon">◆</div>
                       <div>
                         <strong>{p.title}</strong>
-                        <small>project</small>
+                        <small>{tr("project")}</small>
                       </div>
                     </article>
                   ))}
-                <h3>TASKS</h3>
+                <h3>{tr("task").toUpperCase()}</h3>
                 {tasks
                   .filter(
                     (t) =>
@@ -3118,7 +3287,7 @@ export default function App() {
                   .map((t) => (
                     <article
                       key={t.id}
-                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""}`.trim()}
+                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""} ${taskDueTone(t, today)}`.trim()}
                       data-drop-entity={t.id}
                       onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${t.id}`); }}
                       onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
@@ -3142,7 +3311,7 @@ export default function App() {
             {selected.type === "project" && (
               <div className="projectDetail">
                 <label>
-                  Area
+                  {tr("area")}
                   <select
                     value={String(
                       targets(selected.id, "belongs_to_area")[0] || "",
@@ -3155,7 +3324,7 @@ export default function App() {
                       );
                     }}
                   >
-                    <option value="">None</option>
+                    <option value="">{tr("none")}</option>
                     {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
                       <option value={a.id} key={a.id}>
                         {a.title}
@@ -3163,7 +3332,7 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <h3>OPEN TASKS</h3>
+                <h3>{tr("openTasks").toUpperCase()}</h3>
                 {tasks
                   .filter(
                     (t) =>
@@ -3174,7 +3343,7 @@ export default function App() {
                   .map((t) => (
                     <article
                       key={t.id}
-                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""}`.trim()}
+                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""} ${taskDueTone(t, today)}`.trim()}
                       data-drop-entity={t.id}
                       onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${t.id}`); }}
                       onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
@@ -3192,9 +3361,9 @@ export default function App() {
                     openCapture("task", selected.id);
                   }}
                 >
-                  ＋ Add task
+                  ＋ {tr("addTask")}
                 </button>
-                <h3>NOTES</h3>
+                <h3>{tr("Notes").toUpperCase()}</h3>
                 {scopedItems
                   .filter(
                     (n) =>
@@ -3223,14 +3392,14 @@ export default function App() {
                     openCapture("note", selected.id);
                   }}
                 >
-                  ＋ Add note
+                  ＋ {tr("addNote")}
                 </button>
               </div>
             )}
             {selected.type === "note" && (
               <div className="fields">
                 <label>
-                  Project
+                  {tr("project")}
                   <select
                     value={String(
                       targets(selected.id, "belongs_to_project")[0] || "",
@@ -3243,7 +3412,7 @@ export default function App() {
                       );
                     }}
                   >
-                    <option value="">None</option>
+                    <option value="">{tr("none")}</option>
                     {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
@@ -3256,7 +3425,7 @@ export default function App() {
             {selected.type === "task" && (
               <div className="fields">
                 <label>
-                  List
+                  {tr("list")}
                   <select
                     value={
                       selected.properties.inbox === true
@@ -3278,14 +3447,14 @@ export default function App() {
                       }, `moved to ${destination}`);
                     }}
                   >
-                    <option>Inbox</option>
-                    <option>Today</option>
-                    <option>Anytime</option>
-                    <option>Someday</option>
+                    <option value="Inbox">{tr("Inbox")}</option>
+                    <option value="Today">{tr("Today")}</option>
+                    <option value="Anytime">{tr("Anytime")}</option>
+                    <option value="Someday">{tr("Someday")}</option>
                   </select>
                 </label>
                 <label>
-                  When
+                  {tr("when")}
                   <input
                     type="date"
                     value={String(selected.properties.when || "")}
@@ -3300,7 +3469,7 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Deadline
+                  {tr("deadline")}
                   <input
                     type="date"
                     value={String(selected.properties.deadline || "")}
@@ -3310,7 +3479,7 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Project
+                  {tr("project")}
                   <select
                     value={String(
                       targets(selected.id, "belongs_to_project")[0] || "",
@@ -3324,7 +3493,7 @@ export default function App() {
                       );
                     }}
                   >
-                    <option value="">None</option>
+                    <option value="">{tr("none")}</option>
                     {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
@@ -3333,7 +3502,7 @@ export default function App() {
                   </select>
                 </label>
                 <label>
-                  Area
+                  {tr("area")}
                   <select
                     value={String(
                       targets(selected.id, "belongs_to_area")[0] || "",
@@ -3346,7 +3515,7 @@ export default function App() {
                       );
                     }}
                   >
-                    <option value="">None</option>
+                    <option value="">{tr("none")}</option>
                     {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
                       <option value={a.id} key={a.id}>
                         {a.title}
@@ -3355,21 +3524,21 @@ export default function App() {
                   </select>
                 </label>
                 <label>
-                  Priority
+                  {tr("priority")}
                   <select
                     value={String(selected.properties.priority || "none")}
                     onChange={(e) =>
                       patch(selected, { priority: e.target.value })
                     }
                   >
-                    <option value="none">None</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
+                    <option value="none">{tr("none")}</option>
+                    <option value="low">{tr("low")}</option>
+                    <option value="medium">{tr("medium")}</option>
+                    <option value="high">{tr("high")}</option>
                   </select>
                 </label>
                 <label>
-                  Reminder
+                  {tr("reminder")}
                   <input
                     type="datetime-local"
                     value={toLocalDateTime(selected.properties.reminderAt)}
@@ -3397,19 +3566,19 @@ export default function App() {
                       }, "workday reminder set");
                     }}
                   >
-                    Remind at next workday start
+                    {tr("nextWorkday")}
                   </button>
                 )}
                 <label>
-                  Task notes
+                  {tr("taskNotes")}
                   <textarea
                     value={String(selected.properties.notes || "")}
                     onChange={(e) => patch(selected, { notes: e.target.value })}
-                    placeholder="Notes…"
+                    placeholder={tr("notesPlaceholder")}
                   />
                 </label>
                 <div className="checklistField">
-                  <span>Checklist</span>
+                  <span>{tr("checklist")}</span>
                   {(Array.isArray(selected.properties.checklist)
                     ? selected.properties.checklist
                     : []
@@ -3452,7 +3621,7 @@ export default function App() {
                         }, "checklist item added");
                         setChecklistDraft("");
                       }}
-                      placeholder="Add checklist item"
+                      placeholder={tr("addChecklistItem")}
                     />
                     <button
                       type="button"
@@ -3466,11 +3635,11 @@ export default function App() {
                         }, "checklist item added");
                         setChecklistDraft("");
                       }}
-                    >Add</button>
+                    >{tr("add")}</button>
                   </div>
                 </div>
                 <label>
-                  Repeat
+                  {tr("repeat")}
                   <select
                     value={String(
                       (selected.properties.recurrence as any)?.frequency ||
@@ -3490,17 +3659,17 @@ export default function App() {
                       })
                     }
                   >
-                    <option value="">Never</option>
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="yearly">Yearly</option>
+                    <option value="">{tr("never")}</option>
+                    <option value="daily">{tr("daily")}</option>
+                    <option value="weekly">{tr("weekly")}</option>
+                    <option value="monthly">{tr("monthly")}</option>
+                    <option value="yearly">{tr("yearly")}</option>
                   </select>
                 </label>
                 {(selected.properties.recurrence as any)?.frequency && (
                   <>
                     <label>
-                      Every
+                      {tr("every")}
                       <input
                         type="number"
                         min="1"
@@ -3519,7 +3688,7 @@ export default function App() {
                       />
                     </label>
                     <label>
-                      Repeat from
+                      {tr("repeatFrom")}
                       <select
                         value={String(
                           (selected.properties.recurrence as any)?.mode ||
@@ -3534,15 +3703,15 @@ export default function App() {
                           })
                         }
                       >
-                        <option value="scheduled">Scheduled date</option>
-                        <option value="completion">Completion date</option>
+                        <option value="scheduled">{tr("scheduledDate")}</option>
+                        <option value="completion">{tr("completionDate")}</option>
                       </select>
                     </label>
                   </>
                 )}
                 {Array.isArray(selected.properties.activity) && selected.properties.activity.length > 0 && (
                   <div className="activityLog">
-                    <h3>HISTORY</h3>
+                    <h3>{tr("history").toUpperCase()}</h3>
                     {[...selected.properties.activity]
                       .reverse()
                       .slice(0, 12)
@@ -3564,15 +3733,15 @@ export default function App() {
                     })
                   }
                 >
-                  Move to Someday
+                  {tr("moveSomeday")}
                 </button>
                 {selected.status === "completed" ? (
-                  <button onClick={() => reopenTask(selected)}>Reopen</button>
+                  <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
-                  <button onClick={() => done(selected.id)}>Complete</button>
+                  <button onClick={() => done(selected.id)}>{tr("complete")}</button>
                 )}
                 <button className="danger" onClick={() => remove(selected)}>
-                  Delete
+                  {tr("delete")}
                 </button>
               </div>
             )}
@@ -3582,7 +3751,7 @@ export default function App() {
       {assistantOpen && (
         <div className="assistantPanel">
           <div className="assistantHead">
-            <b>Assistant</b>
+            <b>{tr("assistant")}</b>
             <button onClick={() => setAssistantOpen(false)}>×</button>
           </div>
           <div className="assistantContext">
@@ -3595,7 +3764,7 @@ export default function App() {
               <div className="assistantWelcome">
                 <p>Ask about your tasks or safely propose a change.</p>
                 <button onClick={() => askAI("Co dnes hoří?")} disabled={aiBusy}>
-                  Today’s brief
+                  {tr("todayBrief")}
                 </button>
                 <small>Writes always require confirmation.</small>
               </div>
@@ -3621,13 +3790,13 @@ export default function App() {
                           disabled={aiBusy}
                           onClick={() => resolveAIProposal(m.proposal!.id, "confirm")}
                         >
-                          Confirm
+                          {tr("confirm")}
                         </button>
                         <button
                           disabled={aiBusy}
                           onClick={() => resolveAIProposal(m.proposal!.id, "cancel")}
                         >
-                          Cancel
+                          {tr("cancel")}
                         </button>
                       </div>
                     )}
@@ -3635,12 +3804,12 @@ export default function App() {
                 )}
                 {m.actionId && !m.resolved && (
                   <button className="aiUndo" disabled={aiBusy} onClick={() => undoAIAction(m.actionId!)}>
-                    Undo AI change
+                    {tr("undoAi")}
                   </button>
                 )}
               </div>
             ))}
-            {aiBusy && <p className="assistantThinking">Working…</p>}
+            {aiBusy && <p className="assistantThinking">{tr("working")}</p>}
           </div>
           <div className="assistantComposer">
             <input
@@ -3649,16 +3818,16 @@ export default function App() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") askAI();
               }}
-              placeholder="Ask AI…"
+              placeholder={`${tr("askAi")}…`}
               disabled={aiBusy}
             />
-            <button onClick={() => askAI()} disabled={aiBusy || !aiText.trim()}>Send</button>
+            <button onClick={() => askAI()} disabled={aiBusy || !aiText.trim()}>{tr("send")}</button>
           </div>
         </div>
       )}
       {undo && (
         <div className="undo">
-          Item changed <button onClick={restore}>Undo</button>
+          {tr("itemChanged")} <button onClick={restore}>{tr("undo")}</button>
         </div>
       )}
     </main>

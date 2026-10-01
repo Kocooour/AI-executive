@@ -1671,6 +1671,46 @@ article {
 .searchResults article:hover {
   background: #fafafd;
 }
+.entityIcon {
+  border-radius: 9px;
+  font-weight: 700;
+}
+.entityIcon.projectIcon {
+  background: #efedff;
+  color: #6254dc;
+}
+.entityIcon.areaIcon {
+  background: #e9f7f3;
+  color: #2f826c;
+}
+.entityIcon.noteIcon {
+  background: #fff5df;
+  color: #ad7424;
+}
+.dueOverdue {
+  background: #fff5f5 !important;
+  box-shadow: inset 3px 0 0 #d84b4b;
+}
+.dueOverdue strong,
+.dueOverdue .check,
+.dueOverdue small {
+  color: #b53d3d !important;
+}
+.dueSoon {
+  background: #fff8ed !important;
+  box-shadow: inset 3px 0 0 #e39731;
+}
+.dueSoon strong,
+.dueSoon .check,
+.dueSoon small {
+  color: #ad6c18 !important;
+}
+.dueOverdue:hover {
+  background: #ffeded !important;
+}
+.dueSoon:hover {
+  background: #fff3df !important;
+}
 .list article strong,
 .searchResults article strong {
   font-size: 14px;
@@ -1743,6 +1783,7 @@ article:hover > .dragHandle,
   overflow-y: auto;
 }
 .sectionDropZones button {
+  min-width: 0;
   min-height: 36px;
   padding: 7px 11px;
   border: 1px solid var(--line);
@@ -1751,6 +1792,7 @@ article:hover > .dragHandle,
   color: var(--muted);
   font: inherit;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .listControls {
   margin-top: -18px;
@@ -2023,7 +2065,7 @@ article:hover > .dragHandle,
     z-index: 10;
     top: calc(68px + env(safe-area-inset-top));
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     box-shadow: var(--shadow-soft);
   }
   .sectionDropZones button {
