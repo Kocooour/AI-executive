@@ -105,6 +105,20 @@ interface CalendarEvent {
   private: boolean;
 }
 
+interface DurableContextItem {
+  id: string;
+  workspaceId: string;
+  scope: "me" | "work" | "family" | "rules" | "project" | "workspace";
+  sensitivity: "normal" | "sensitive";
+  provenance: "owner" | "imported" | "ai-suggested";
+  status: "active" | "archived" | "pending";
+  title: string;
+  content: string;
+  projectId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface NotificationState {
   publicKey: string;
   subscriptionCount: number;
@@ -430,6 +444,14 @@ export default function App() {
     [calendarUrl, setCalendarUrl] = useState(""),
     [calendarBusy, setCalendarBusy] = useState(false),
     [calendarStatus, setCalendarStatus] = useState(""),
+    [durableContext, setDurableContext] = useState<DurableContextItem[]>([]),
+    [contextScope, setContextScope] = useState<DurableContextItem["scope"]>("me"),
+    [contextSensitivity, setContextSensitivity] = useState<DurableContextItem["sensitivity"]>("normal"),
+    [contextTitle, setContextTitle] = useState(""),
+    [contextContent, setContextContent] = useState(""),
+    [contextProjectId, setContextProjectId] = useState(""),
+    [contextStatus, setContextStatus] = useState(""),
+    [contextBusy, setContextBusy] = useState(false),
     [sortBy, setSortBy] = useState<"manual" | "date" | "priority" | "created">("manual"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [draggingId, setDraggingId] = useState(""),
@@ -803,6 +825,42 @@ export default function App() {
     }
   }
 
+  async function loadDurableContext(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+    const response = await fetch(`/api/context?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Context is unavailable");
+    setDurableContext(Array.isArray(data.items) ? data.items : []);
+  }
+
+  async function contextAction(action: "create" | "archive", id?: string) {
+    if (contextBusy) return;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setContextBusy(true);
+    setContextStatus("");
+    try {
+      const response = await fetch("/api/context", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(action === "create" ? {
+          action, workspaceId, scope: contextScope, sensitivity: contextSensitivity,
+          title: contextTitle, content: contextContent,
+          projectId: contextScope === "project" ? contextProjectId : undefined,
+        } : { action, workspaceId, id }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Context action failed");
+      if (action === "create") {
+        setContextTitle(""); setContextContent(""); setContextProjectId("");
+        setContextStatus(language === "cs" ? "Kontext byl uložen." : "Context saved.");
+      }
+      await loadDurableContext(workspaceId);
+    } catch (error) {
+      setContextStatus(error instanceof Error ? error.message : "Context action failed");
+    } finally {
+      setContextBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (authState !== "ready") return;
     loadBriefings().catch(() => undefined);
@@ -810,6 +868,7 @@ export default function App() {
     setCalendarSources([]);
     setCalendarEvents([]);
     loadCalendar(workspaceId).catch(() => undefined);
+    loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
@@ -2483,6 +2542,24 @@ export default function App() {
           )}
           {view === "Settings" && (
             <div className="settingsPanel">
+              <section className="durableContextSection">
+                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext AIfréda" : "AIfréd context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má AIfréd používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for AIfréd. Sensitive context is not sent to external AI services."}</p></div></div>
+                <div className="contextForm">
+                  <div className="preferenceGrid">
+                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}><option value="me">Me</option><option value="work">Work</option><option value="family">Family</option><option value="rules">Rules</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
+                    <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžný" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivý" : "Sensitive"}</option></select></label>
+                  </div>
+                  {contextScope === "project" && <label>{tr("project")}<select value={contextProjectId} onChange={(e) => setContextProjectId(e.target.value)}><option value="">—</option>{items.filter((item) => item.type === "project" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>}
+                  <label>{language === "cs" ? "Název" : "Title"}<input maxLength={200} value={contextTitle} onChange={(e) => setContextTitle(e.target.value)} placeholder={language === "cs" ? "Např. Jak plánuji pracovní den" : "e.g. How I plan my workday"} /></label>
+                  <label>{language === "cs" ? "Obsah" : "Content"}<textarea maxLength={10000} value={contextContent} onChange={(e) => setContextContent(e.target.value)} placeholder={language === "cs" ? "Informace, preference nebo pravidlo…" : "Fact, preference or rule…"} /></label>
+                  <div className="notificationActions"><button onClick={() => contextAction("create")} disabled={contextBusy || !contextTitle.trim() || !contextContent.trim() || (contextScope === "project" && !contextProjectId)}>{contextBusy ? tr("working") : tr("save")}</button></div>
+                  {contextStatus && <p className="saveConfirmation" role="status">{contextStatus}</p>}
+                </div>
+                <div className="contextItems">
+                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{item.scope} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
+                  {!durableContext.length && <p>{language === "cs" ? "Zatím není uložen žádný trvalý kontext." : "No durable context saved yet."}</p>}
+                </div>
+              </section>
               <section>
                 <h2>{tr("workspace")}</h2>
                 <label>
