@@ -2137,7 +2137,7 @@ article:hover > .dragHandle,
 }
 .contextItems article {
   display: flex;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
   padding: 15px 0;
@@ -2171,5 +2171,634 @@ article:hover > .dragHandle,
   }
   .contextItems article > button {
     justify-self: start;
+  }
+}
+
+/* Things-inspired shell and explicit light/dark appearance. */
+:root {
+  --app-bg: #f4f3f1;
+  --sidebar-bg: #ecebe9;
+  --surface: #ffffff;
+  --surface-subtle: #eeedeb;
+  --surface-raised: #ffffff;
+  --input-bg: #f8f7f5;
+  --line: #dcdad6;
+  --line-strong: #ccc9c4;
+  --text: #242426;
+  --muted: #747477;
+  --muted-light: #98989c;
+  --hover: rgba(25, 25, 28, 0.055);
+  --selected: #d9d8d5;
+  --selected-text: #1f1f21;
+  --overlay: rgba(28, 28, 30, 0.3);
+  --accent: #5d64d8;
+  --accent-soft: #e9e8f8;
+  --today-accent: #d6aa00;
+  --danger: #9f2334;
+  --warning: #7f4300;
+  --success: #27713d;
+  --success-soft: #e2f1e6;
+  --warning-soft: #f5eadb;
+  --danger-soft: #f5e2e5;
+  --shadow-soft: 0 18px 55px rgba(34, 33, 31, 0.13);
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #1f1f20;
+  --sidebar-bg: #19191a;
+  --surface: #29292b;
+  --surface-subtle: #313133;
+  --surface-raised: #333335;
+  --input-bg: #252527;
+  --line: #3a3a3d;
+  --line-strong: #4a4a4e;
+  --text: #f1f1f2;
+  --muted: #ababaf;
+  --muted-light: #85858a;
+  --hover: rgba(255, 255, 255, 0.065);
+  --selected: #38383b;
+  --selected-text: #ffffff;
+  --overlay: rgba(0, 0, 0, 0.55);
+  --accent: #8e89f2;
+  --accent-soft: #37344e;
+  --today-accent: #f4ca22;
+  --danger: #ff6673;
+  --warning: #f1a343;
+  --success: #8bd39e;
+  --success-soft: #294035;
+  --warning-soft: #483a24;
+  --danger-soft: #482b30;
+  --shadow-soft: 0 20px 70px rgba(0, 0, 0, 0.42);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --app-bg: #1f1f20;
+    --sidebar-bg: #19191a;
+    --surface: #29292b;
+    --surface-subtle: #313133;
+    --surface-raised: #333335;
+    --input-bg: #252527;
+    --line: #3a3a3d;
+    --line-strong: #4a4a4e;
+    --text: #f1f1f2;
+    --muted: #ababaf;
+    --muted-light: #85858a;
+    --hover: rgba(255, 255, 255, 0.065);
+    --selected: #38383b;
+    --selected-text: #ffffff;
+    --overlay: rgba(0, 0, 0, 0.55);
+    --today-accent: #f4ca22;
+    color-scheme: dark;
+  }
+}
+
+html,
+body,
+.appShell,
+.authShell,
+.offlinePage {
+  background: var(--app-bg);
+  color: var(--text);
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+.appShell {
+  grid-template-columns: 226px minmax(0, 1fr);
+}
+
+.appShell > aside {
+  padding: 18px 12px 14px;
+  gap: 13px;
+  border-color: var(--line);
+  background: var(--sidebar-bg);
+}
+
+.appIdentity {
+  padding: 1px 8px 8px;
+}
+
+.appIdentity strong,
+.appIdentity small,
+.workspaceButton,
+.workspaceMenu button,
+.sidebarActions button {
+  color: var(--text);
+}
+
+.brandMark {
+  border-radius: 8px;
+  background: #4a83d8;
+  box-shadow: none;
+}
+
+.workspaceButton {
+  min-height: 37px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.workspaceButton:hover,
+.sidebarActions button:hover {
+  background: var(--hover);
+}
+
+.workspaceMenu,
+.mobileMore,
+.captureModal,
+.detail,
+.assistantPanel,
+.authCard {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+.workspaceMenu button:hover,
+.mobileMore button:hover {
+  background: var(--hover);
+}
+
+.appShell nav {
+  gap: 1px;
+}
+
+.appShell nav button {
+  min-height: 35px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.appShell nav button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.appShell nav button.active {
+  background: var(--selected) !important;
+  color: var(--selected-text) !important;
+  font-weight: 680;
+}
+
+.navLabel {
+  gap: 8px;
+}
+
+.navLabel > span {
+  color: var(--muted-light);
+  font-size: 14px;
+}
+
+.appShell nav button:nth-child(2) .navLabel > span { color: #3e92d4; }
+.appShell nav button:nth-child(3) .navLabel > span { color: var(--today-accent); }
+.appShell nav button:nth-child(4) .navLabel > span { color: #e95c70; }
+.appShell nav button:nth-child(5) .navLabel > span { color: #d54a86; }
+.appShell nav button:nth-child(6) .navLabel > span { color: #45a99d; }
+.appShell nav button:nth-child(7) .navLabel > span { color: #b9ad69; }
+.appShell nav button:nth-child(8) .navLabel > span { color: #55ae67; }
+
+.navCount {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--muted-light);
+  font-size: 11px;
+}
+
+.appShell nav button.active .navCount {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--muted);
+}
+
+.sidebarActions {
+  border-color: var(--line);
+}
+
+.appPane .topbar {
+  height: 58px;
+  padding: 0 24px;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.searchField {
+  min-height: 34px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  color: var(--muted-light);
+}
+
+.searchField:focus-within {
+  border-color: var(--line-strong);
+  background: var(--input-bg);
+  box-shadow: none;
+}
+
+.searchField input,
+.assistantComposer input {
+  color: var(--text);
+}
+
+.searchField kbd {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--muted-light);
+}
+
+.themeToggle,
+.aiButton {
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.themeToggle {
+  padding: 0;
+  font-size: 16px;
+}
+
+.themeToggle:hover,
+.aiButton:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.aiButton {
+  min-width: auto;
+  color: var(--accent);
+}
+
+.content {
+  width: min(100%, 900px);
+  margin: 30px auto 90px;
+  padding: 0 42px;
+}
+
+.pageIntro {
+  margin-bottom: 22px;
+}
+
+.pageIntro .eyebrow {
+  display: none;
+}
+
+.pageTitleRow h1 {
+  color: var(--text);
+  font-size: clamp(28px, 3.4vw, 36px);
+  font-weight: 760;
+  letter-spacing: -0.032em;
+}
+
+.view-today .pageTitleRow h1::before {
+  content: "★";
+  margin-right: 8px;
+  color: var(--today-accent);
+  font-size: 0.78em;
+  vertical-align: 0.08em;
+}
+
+.pageTitleRow time,
+.pageSubtitle,
+.eyebrow,
+h3 {
+  color: var(--muted);
+}
+
+.list,
+.searchResults {
+  overflow: visible;
+  border-width: 1px 0 0;
+  border-color: var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.list article,
+.searchResults article,
+.homeTaskList article {
+  min-height: 48px;
+  padding: 10px 4px;
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text);
+}
+
+.list article:hover,
+.searchResults article:hover,
+.homeTaskList article:hover {
+  background: var(--hover);
+}
+
+.list article strong,
+.searchResults article strong,
+.homeTaskList strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 590;
+}
+
+.list article small,
+.searchResults article small,
+.homeTaskList small,
+.homeCompactList button small {
+  color: var(--muted-light);
+}
+
+.check {
+  color: var(--muted-light);
+}
+
+.dragHandle {
+  color: var(--muted-light);
+}
+
+.homeOverview {
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+}
+
+.homeSection,
+.briefingCard,
+.settingsPanel section,
+.dashboard div {
+  border-color: var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.homeCompactList button {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.calendarAgenda > div,
+.calendarSources > div,
+.passkeyRow,
+.activityLog,
+.projectDetail article,
+.contextItems,
+.contextItems article {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text);
+}
+
+.settingsPanel p,
+.settingsPanel label,
+.fields label,
+.checklistField,
+.contextItems p,
+.calendarAgenda small,
+.calendarSources small,
+.backupList small {
+  color: var(--muted);
+}
+
+.settingsPanel input,
+.settingsPanel select,
+.fields input,
+.fields select,
+.fields textarea,
+.fields button,
+.contextForm input,
+.contextForm select,
+.contextForm textarea,
+.captureModal input,
+.captureWorkspace select,
+.listControls select,
+.assistantComposer input,
+.notificationActions button {
+  border-color: var(--line);
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.titleEdit,
+.close,
+.projectDetail > button {
+  color: var(--text);
+  background: transparent;
+}
+
+.capturePreview,
+.contextStrip,
+.assistantContext,
+.msg.user,
+.aiProposal {
+  border-color: var(--line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.msg.assistant,
+.assistantWelcome button,
+.workspaceSummary span,
+.workspaceBadge,
+.backupList button,
+.settingsPanel .secondaryAction {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.assistantHead,
+.assistantComposer,
+.assistantPanel,
+.backupList > div,
+.settingsPanel dl div,
+.activityLog > div {
+  border-color: var(--line);
+}
+
+.backdrop,
+.captureOverlay,
+.mobileMoreBackdrop {
+  background: var(--overlay);
+}
+
+.dueOverdue {
+  background: color-mix(in srgb, var(--danger) 9%, transparent) !important;
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.dueOverdue strong,
+.dueOverdue .check,
+.dueOverdue small {
+  color: var(--danger) !important;
+}
+
+.dueSoon {
+  background: color-mix(in srgb, var(--warning) 10%, transparent) !important;
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+.dueSoon strong,
+.dueSoon .check,
+.dueSoon small {
+  color: var(--warning) !important;
+}
+
+.dueOverdue:hover,
+.dueSoon:hover {
+  filter: brightness(0.98);
+}
+.dueOverdue:hover {
+  background: color-mix(in srgb, var(--danger) 13%, transparent) !important;
+}
+.dueSoon:hover {
+  background: color-mix(in srgb, var(--warning) 14%, transparent) !important;
+}
+.danger {
+  color: var(--danger) !important;
+}
+.undo {
+  color: #ff8a94 !important;
+}
+
+:root[data-theme="dark"] .entityIcon.projectIcon { background: #393550; color: #aaa4ff; }
+:root[data-theme="dark"] .entityIcon.areaIcon { background: #263e39; color: #7fd1bb; }
+:root[data-theme="dark"] .entityIcon.noteIcon { background: #493b25; color: #f2bf65; }
+:root[data-theme="dark"] .calmEmpty > span { background: #294035; color: #7cc291; }
+:root[data-theme="dark"] .installStatus.installed { background: #294035; color: #8bd39e; }
+
+.syncStatus.synced { color: var(--success); }
+.syncStatus.syncing,
+.syncStatus.connecting { color: var(--warning); }
+.syncStatus.offline { color: var(--danger); }
+.installStatus {
+  background: var(--surface-subtle);
+  color: var(--muted);
+}
+.installStatus.installed {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.sectionDropZones {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+}
+.dropActive {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.authCard label,
+.checklistField,
+.passkeyRow small {
+  color: var(--muted);
+}
+.authCard input,
+.preferenceGrid fieldset,
+.preferenceGrid .preferenceToggle,
+.checklistItem {
+  border-color: var(--line);
+  background: var(--input-bg);
+  color: var(--text) !important;
+}
+.preferenceGrid .preferenceToggle,
+.checklistItem {
+  background: transparent;
+}
+.checklistItem .checked { color: var(--muted-light); }
+
+.mobileNav {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--sidebar-bg) 94%, transparent);
+  backdrop-filter: blur(20px);
+}
+
+.mobileNav button,
+.mobileMore button,
+.mobileWorkspaceButton {
+  color: var(--muted);
+}
+
+.mobileNav button.active {
+  color: var(--accent) !important;
+}
+
+@media (max-width: 860px) and (min-width: 701px) {
+  .appShell { grid-template-columns: 205px minmax(0, 1fr); }
+}
+
+@media (max-width: 700px) {
+  .appPane .topbar {
+    background: color-mix(in srgb, var(--app-bg) 91%, transparent);
+  }
+  .appPane .topbar .themeToggle,
+  .appPane .topbar .aiButton {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .appPane .topbar .aiButton {
+    font-size: 0;
+  }
+  .appPane .topbar .aiButton::after {
+    content: "◇";
+    font-size: 17px;
+  }
+  .content {
+    margin-top: 22px;
+    padding: 0 18px;
+  }
+  .homeSection,
+  .briefingCard,
+  .list,
+  .searchResults {
+    background: transparent;
+  }
+  .captureModal > div:last-child {
+    background: color-mix(in srgb, var(--surface-raised) 96%, transparent);
+  }
+  .close {
+    background: color-mix(in srgb, var(--surface-subtle) 92%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body,
+  .appShell,
+  .appShell > aside,
+  .appPane .topbar,
+  .homeSection,
+  .briefingCard,
+  .settingsPanel section,
+  .captureModal,
+  .detail,
+  .assistantPanel {
+    transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
   }
 }

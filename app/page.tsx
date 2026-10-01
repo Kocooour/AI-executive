@@ -179,6 +179,7 @@ const viewIcons: Record<string, string> = {
 };
 const mobileViews = ["Home", "Today", "+", "Projects", "More"];
 type Language = "cs" | "en";
+type ThemeMode = "system" | "light" | "dark";
 const copy: Record<Language, Record<string, string>> = {
   en: {
     Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
@@ -186,6 +187,8 @@ const copy: Record<Language, Record<string, string>> = {
     Completed: "Completed", Projects: "Projects", Areas: "Areas",
     Notes: "Notes", Settings: "Settings", More: "More", Search: "Search",
     new: "New", search: "Search everything", askAi: "Ask AI",
+    appearance: "Appearance", systemTheme: "System", lightTheme: "Light", darkTheme: "Dark",
+    switchLight: "Switch to light mode", switchDark: "Switch to dark mode",
     goodMorning: "Good morning", goodAfternoon: "Good afternoon", goodEvening: "Good evening",
     homeSubtitle: "Here is the shape of your day.", seeAll: "See all",
     nothingToday: "Nothing planned for today.", addTask: "Add a task",
@@ -247,6 +250,8 @@ const copy: Record<Language, Record<string, string>> = {
     Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",
     Notes: "Poznámky", Settings: "Nastavení", More: "Více", Search: "Hledání",
     new: "Nový", search: "Hledat ve všem", askAi: "Zeptat se AI",
+    appearance: "Vzhled", systemTheme: "Podle systému", lightTheme: "Světlý", darkTheme: "Tmavý",
+    switchLight: "Přepnout na světlý režim", switchDark: "Přepnout na tmavý režim",
     goodMorning: "Dobré ráno", goodAfternoon: "Dobré odpoledne", goodEvening: "Dobrý večer",
     homeSubtitle: "Takhle vypadá váš dnešní den.", seeAll: "Zobrazit vše",
     nothingToday: "Na dnešek není nic naplánováno.", addTask: "Přidat úkol",
@@ -449,6 +454,9 @@ export default function App() {
     [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false),
     [settingsSaved, setSettingsSaved] = useState(false),
     [language, setLanguage] = useState<Language>("cs"),
+    [themeMode, setThemeMode] = useState<ThemeMode>("system"),
+    [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light"),
+    [themeReady, setThemeReady] = useState(false),
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting"),
@@ -1173,6 +1181,30 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
+    const savedTheme = localStorage.getItem("ai-executive-theme");
+    if (savedTheme === "system" || savedTheme === "light" || savedTheme === "dark") {
+      setThemeMode(savedTheme);
+    }
+    setThemeReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!themeReady) return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const resolved = themeMode === "system" ? (media.matches ? "dark" : "light") : themeMode;
+      setResolvedTheme(resolved);
+      document.documentElement.dataset.theme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+      document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+        ?.setAttribute("content", resolved === "dark" ? "#1c1c1e" : "#f4f3f1");
+    };
+    applyTheme();
+    if (themeMode === "system") media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [themeMode, themeReady]);
+
+  useEffect(() => {
     if (view !== "Settings") return;
     Promise.all([
       fetch("/api/backups", { cache: "no-store" }).then((response) => response.json()),
@@ -1248,6 +1280,12 @@ export default function App() {
   function saveLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
     localStorage.setItem("ai-executive-language", nextLanguage);
+  }
+
+  function saveTheme(nextTheme: ThemeMode) {
+    setThemeReady(true);
+    setThemeMode(nextTheme);
+    localStorage.setItem("ai-executive-theme", nextTheme);
   }
 
   function selectWorkspace(workspaceId: string) {
@@ -2255,7 +2293,7 @@ export default function App() {
     );
   }
   return (
-    <main className="appShell">
+    <main className={`appShell view-${view.toLowerCase()}`}>
       <aside>
         <div className="appIdentity" aria-label="AI Executive">
           <span className="brandMark">◇</span>
@@ -2377,6 +2415,15 @@ export default function App() {
             />
             <kbd>⌘ K</kbd>
           </label>
+          <button
+            className="themeToggle"
+            type="button"
+            aria-label={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
+            title={resolvedTheme === "dark" ? tr("switchLight") : tr("switchDark")}
+            onClick={() => saveTheme(resolvedTheme === "dark" ? "light" : "dark")}
+          >
+            <span aria-hidden="true">{resolvedTheme === "dark" ? "☀" : "☾"}</span>
+          </button>
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
@@ -2583,6 +2630,17 @@ export default function App() {
                   >
                     <option value="cs">{tr("czech")}</option>
                     <option value="en">{tr("english")}</option>
+                  </select>
+                </label>
+                <label>
+                  {tr("appearance")}
+                  <select
+                    value={themeMode}
+                    onChange={(event) => saveTheme(event.target.value as ThemeMode)}
+                  >
+                    <option value="system">{tr("systemTheme")}</option>
+                    <option value="light">{tr("lightTheme")}</option>
+                    <option value="dark">{tr("darkTheme")}</option>
                   </select>
                 </label>
                 <label>
