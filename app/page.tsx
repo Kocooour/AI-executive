@@ -141,6 +141,22 @@ const moreViews = [
   "Notes",
   "Settings",
 ];
+const viewIcons: Record<string, string> = {
+  Home: "⌂",
+  Inbox: "↓",
+  Today: "○",
+  Overdue: "!",
+  Upcoming: "→",
+  Anytime: "•",
+  Someday: "☾",
+  Completed: "✓",
+  Projects: "◇",
+  Areas: "◎",
+  Notes: "▤",
+  Settings: "⚙",
+  More: "•••",
+};
+const mobileViews = ["Home", "Today", "+", "Projects", "More"];
 const ymd = (d = new Date()) =>
   [
     d.getFullYear(),
@@ -1202,6 +1218,24 @@ export default function App() {
     scopedRelations
       .filter((r) => r.targetEntityId === targetId && r.relationType === type)
       .map((r) => r.sourceEntityId);
+  const homeTodayTasks = tasks
+    .filter((task) => task.status === "open" && (
+      task.properties.today === true || task.properties.when === today ||
+      (typeof task.properties.when === "string" && task.properties.when < today)
+    ))
+    .sort((a, b) => String(a.properties.when || today).localeCompare(String(b.properties.when || today)))
+    .slice(0, 5);
+  const homeUpcomingTasks = tasks
+    .filter((task) => task.status === "open" && typeof task.properties.when === "string" && task.properties.when > today)
+    .sort((a, b) => String(a.properties.when).localeCompare(String(b.properties.when)))
+    .slice(0, 4);
+  const homeProjects = projects.filter((project) => project.status === "active").slice(0, 4);
+  const homeRecent = [...scopedItems]
+    .filter((entity) => entity.type !== "task" || entity.status === "open")
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 4);
+  const greetingHour = new Date().getHours();
+  const homeGreeting = greetingHour < 12 ? "Good morning" : greetingHour < 18 ? "Good afternoon" : "Good evening";
   const visible = useMemo(
     () => {
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
@@ -1658,8 +1692,12 @@ export default function App() {
     );
   }
   return (
-    <main>
+    <main className="appShell">
       <aside>
+        <div className="appIdentity" aria-label="AI Executive">
+          <span className="brandMark">◇</span>
+          <span><strong>AI Executive</strong><small>Personal OS</small></span>
+        </div>
         <div className="workspaceSwitcher">
           <button
             className="workspaceButton"
@@ -1712,7 +1750,7 @@ export default function App() {
               }}
               key={x}
             >
-              {x}
+              <span className="navLabel"><span aria-hidden="true">{viewIcons[x]}</span>{x}</span>
               {x === "Today" ? (
                 <span>
                   {
@@ -1743,8 +1781,8 @@ export default function App() {
           </button>
         </footer>
       </aside>
-      <section>
-        <header>
+      <section className="appPane">
+        <header className="topbar">
           <button
             className="mobileWorkspaceButton"
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
@@ -1765,13 +1803,17 @@ export default function App() {
               <button onClick={() => selectWorkspace("all")}>All my work</button>
             </div>
           )}
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setView("Search")}
-            placeholder="Search…"
-            aria-label="Search"
-          />
+          <label className="searchField">
+            <span aria-hidden="true">⌕</span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setView("Search")}
+              placeholder="Search everything"
+              aria-label="Search"
+            />
+            <kbd>⌘ K</kbd>
+          </label>
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
@@ -1781,41 +1823,63 @@ export default function App() {
           </button>
         </header>
         <div className="content">
-          <p className="eyebrow">
-            {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
-          </p>
-          <h1>{view}</h1>
+          <div className="pageIntro">
+            <p className="eyebrow">
+              {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
+            </p>
+            <div className="pageTitleRow">
+              <h1>{view === "Home" ? homeGreeting : view}</h1>
+              {view === "Today" && <time>{new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
+            </div>
+            {view === "Home" && <p className="pageSubtitle">Here is the shape of your day.</p>}
+          </div>
           {view === "Home" && (
             <>
-            <div className="dashboard">
-              <div>
-                <b>
-                  {
-                    tasks.filter(
-                      (t) =>
-                        t.status === "open" &&
-                        (t.properties.today === true ||
-                          t.properties.when === today),
-                    ).length
-                  }
-                </b>
-                <span>Today</span>
+            <div className="homeOverview">
+              <section className="homeSection homePrimary">
+                <div className="homeSectionHead">
+                  <span><span className="sectionDot todayDot" />Today</span>
+                  <button onClick={() => setView("Today")}>See all <span aria-hidden="true">→</span></button>
+                </div>
+                <div className="homeTaskList">
+                  {homeTodayTasks.map((task) => (
+                    <article key={task.id} onClick={() => inspect(task)}>
+                      <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
+                      <div><strong>{task.title}</strong><small>{task.properties.when && task.properties.when < today ? "Overdue" : task.properties.priority && task.properties.priority !== "none" ? String(task.properties.priority) : "Today"}</small></div>
+                    </article>
+                  ))}
+                  {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>Nothing planned for today.</p><button onClick={() => openCapture()}>Add a task</button></div>}
+                </div>
+              </section>
+              <div className="homeSide">
+                <section className="homeSection">
+                  <div className="homeSectionHead"><span><span className="sectionDot inboxDot" />Inbox</span><b>{tasks.filter((task) => task.status === "open" && task.properties.inbox === true).length}</b></div>
+                  <p>Items waiting to be organized.</p>
+                  <button className="textAction" onClick={() => setView("Inbox")}>Open inbox →</button>
+                </section>
+                <section className="homeSection">
+                  <div className="homeSectionHead"><span><span className="sectionDot projectDot" />Projects</span><button onClick={() => setView("Projects")}>See all →</button></div>
+                  <div className="homeCompactList">
+                    {homeProjects.map((project) => <button key={project.id} onClick={() => inspect(project)}><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} open</small></button>)}
+                    {homeProjects.length === 0 && <p>No active projects.</p>}
+                  </div>
+                </section>
               </div>
-              <div>
-                <b>
-                  {
-                    tasks.filter(
-                      (t) => t.status === "open" && t.properties.inbox === true,
-                    ).length
-                  }
-                </b>
-                <span>Inbox</span>
-              </div>
-              <div>
-                <b>{projects.filter((p) => p.status === "active").length}</b>
-                <span>Projects</span>
-              </div>
+              <section className="homeSection">
+                <div className="homeSectionHead"><span><span className="sectionDot upcomingDot" />Upcoming</span><button onClick={() => setView("Upcoming")}>See all →</button></div>
+                <div className="homeCompactList">
+                  {homeUpcomingTasks.map((task) => <button key={task.id} onClick={() => inspect(task)}><span>{task.title}</span><small>{new Date(`${task.properties.when}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</small></button>)}
+                  {homeUpcomingTasks.length === 0 && <p>Nothing scheduled yet.</p>}
+                </div>
+              </section>
+              <section className="homeSection">
+                <div className="homeSectionHead"><span><span className="sectionDot recentDot" />Recent</span></div>
+                <div className="homeCompactList">
+                  {homeRecent.map((entity) => <button key={entity.id} onClick={() => inspect(entity)}><span>{entity.title}</span><small>{entity.type}</small></button>)}
+                </div>
+              </section>
             </div>
+            <div className="homeInsights">
             <section className="briefingCard">
               <div className="sectionHeading">
                 <div>
@@ -1876,6 +1940,7 @@ export default function App() {
               )}
               <small>Události jsou pouze pro čtení. Překryvy se do obsazeného času počítají jen jednou.</small>
             </section>
+            </div>
             </>
           )}
           {view === "Search" && query && (
@@ -2441,21 +2506,23 @@ export default function App() {
                   <div className="empty">Nothing here yet.</div>
                 )}
               </div>
-              <div className="capture">
-                <input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && create(type, text)}
-                  placeholder={"+ Add " + type}
-                />
-                <button onClick={() => create(type, text)}>Add</button>
-              </div>
+              {!['Home', 'Search'].includes(view) && (
+                <div className="capture">
+                  <input
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && create(type, text)}
+                    placeholder={"+ Add " + type}
+                  />
+                  <button onClick={() => create(type, text)}>Add</button>
+                </div>
+              )}
             </>
           )}
         </div>
       </section>
       <nav className="mobileNav">
-        {["Home", "Today", "+", "Projects", "More"].map((x) => (
+        {mobileViews.map((x) => (
           <button
             key={x}
             className={
@@ -2472,7 +2539,7 @@ export default function App() {
               setView(x);
             }}
           >
-            {x}
+            {x === "+" ? <span className="mobileAddIcon">＋</span> : <><span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{x}</span></>}
           </button>
         ))}
       </nav>
