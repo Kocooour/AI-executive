@@ -212,6 +212,7 @@ def deliver(alert: dict[str, object]) -> None:
         "B — Připravit bezpečný postup pro dočasné omezení přístupu z internetu.\n"
         "C — Prověřit technické logy posledního incidentu a shrnout zjištění."
     )
+    available_choices = "A, B, C nebo D" if SCOPE == "server" else "A, B nebo C"
     message = (
         f"{icon} {heading}\n\n"
         f"{alert['description']}\n"
@@ -223,7 +224,8 @@ def deliver(alert: dict[str, object]) -> None:
         f"Doporučení: {alert['recommendation']}\n\n"
         "Jak chcete pokračovat?\n"
         f"{choices}\n\n"
-        "Odpovězte celou volbou, například „Bezpečnost C — prověř technické logy“. "
+        f"Stačí odpovědět jediným písmenem: {available_choices}. "
+        "Písmeno se vždy použije jako volba pro nejnovější bezpečnostní hlášení. "
         "Bez vašeho potvrzení se žádný další zásah neprovede."
     )
     raw = send_message_tool({"action": "send", "target": "telegram", "message": message})
