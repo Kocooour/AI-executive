@@ -188,6 +188,21 @@ const addLocalDays = (date: Date, days: number) => {
   result.setDate(result.getDate() + days);
   return result;
 };
+const friendlyDate = (value: unknown) => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return typeof value === "string" ? value : "";
+  }
+  if (value === ymd(addLocalDays(new Date(), -1))) return "Včera";
+  if (value === ymd()) return "Dnes";
+  if (value === ymd(addLocalDays(new Date(), 1))) return "Zítra";
+  return new Date(`${value}T12:00:00`).toLocaleDateString("cs-CZ", {
+    day: "numeric",
+    month: "short",
+    year: new Date(`${value}T12:00:00`).getFullYear() === new Date().getFullYear()
+      ? undefined
+      : "numeric",
+  });
+};
 const toLocalDateTime = (value: unknown) => {
   if (typeof value !== "string" || !value) return "";
   const date = new Date(value);
@@ -2165,7 +2180,7 @@ export default function App() {
                     >
                       {dragHandle(task)}
                       <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
-                      <div><strong>{task.title}</strong><small>{task.properties.when && task.properties.when < today ? "Overdue" : task.properties.priority && task.properties.priority !== "none" ? String(task.properties.priority) : "Today"}</small></div>
+                      <div><strong>{task.title}</strong><small>{typeof task.properties.when === "string" && task.properties.when <= today ? friendlyDate(task.properties.when) : task.properties.priority && task.properties.priority !== "none" ? String(task.properties.priority) : "Dnes"}</small></div>
                     </article>
                   ))}
                   {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>Nothing planned for today.</p><button onClick={() => openCapture()}>Add a task</button></div>}
@@ -2195,7 +2210,7 @@ export default function App() {
               <section className="homeSection">
                 <div className="homeSectionHead"><span><span className="sectionDot upcomingDot" />Upcoming</span><button onClick={() => setView("Upcoming")}>See all →</button></div>
                 <div className="homeCompactList">
-                  {homeUpcomingTasks.map((task) => <button key={task.id} onClick={() => inspect(task)}><span>{task.title}</span><small>{new Date(`${task.properties.when}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</small></button>)}
+                  {homeUpcomingTasks.map((task) => <button key={task.id} onClick={() => inspect(task)}><span>{task.title}</span><small>{friendlyDate(task.properties.when)}</small></button>)}
                   {homeUpcomingTasks.length === 0 && <p>Nothing scheduled yet.</p>}
                 </div>
               </section>
@@ -2860,14 +2875,16 @@ export default function App() {
                           x.properties.priority !== "none"
                             ? "● " + x.properties.priority
                             : null,
-                          x.properties.when,
+                          typeof x.properties.when === "string"
+                            ? friendlyDate(x.properties.when)
+                            : null,
                           x.properties.deadline &&
-                            "deadline " + x.properties.deadline,
+                            "deadline " + friendlyDate(x.properties.deadline),
                         ]
                           .filter(Boolean)
                           .join(" · ") ||
                         (x.properties.today === true
-                          ? "Today"
+                          ? "Dnes"
                           : x.properties.someday === true
                             ? "Someday"
                             : x.properties.inbox === true
