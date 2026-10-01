@@ -105,7 +105,7 @@ A morning run can combine an Executive Assistant or Morning Planner with active 
 
 The server-side PACT foundation is now in place: SQLite persistence for agents, durable context, tool permissions and agent runs; a default AIfréd agent; a workspace-scoped Context Resolver; and a typed read-only Tool Registry. Provider-assisted reasoning now receives canonical entities and non-sensitive durable context through the resolver. Mutations continue to use the existing proposal -> confirmation -> audit -> Undo boundary.
 
-The authenticated AIfréd integration API is now implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration yet. Next: add an integration manifest/schema for ChatGPT, owner-facing context management, then migrate proactive briefings onto agent runs.
+The authenticated AIfréd integration API is now implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration. A versioned OpenAPI 3.1 schema lives at `docs/aifred-openapi.json`, and the running app serves an origin-aware copy at `/api/integrations/aifred/openapi`. This is the contract for a future ChatGPT/Voice connector; it advertises only planning and allowlisted read operations. Next: add owner-facing context management, then migrate proactive briefings onto agent runs.
 
 ### Implementation roadmap
 
@@ -118,6 +118,14 @@ The authenticated AIfréd integration API is now implemented for external conver
 7. Controlled proactivity: event-driven runs and configurable approval policies while retaining least privilege, auditability and reversible local mutations.
 
 The first PACT milestone is complete when an Executive Assistant can read one workspace, receive a minimal resolved context bundle, inspect tasks/projects/calendar through registered read tools, produce a structured daily recommendation and propose task changes through the existing confirmation mechanism without direct database or provider credentials.
+
+### ChatGPT / Voice integration contract
+
+External conversational clients authenticate with `Authorization: Bearer <AI_EXECUTIVE_INTEGRATION_TOKEN>`. Use a dedicated random token of at least 32 characters and never reuse the browser password, session secret, Hermes token or calendar secret. The connector must select one explicit workspace for every call; `all` is rejected.
+
+The OpenAPI contract exposes two operations: `planWithAifred` for reasoning and approval-bound proposals, and `readAifredTool` for the allowlisted read-only Tool Registry. A proposal returned to ChatGPT is only a pending proposal; the owner must confirm it through AI Executive. The integration has no confirmation, Undo, arbitrary database or provider-credential endpoint.
+
+Before connecting an external client in production, deploy the new code, set `AI_EXECUTIVE_INTEGRATION_TOKEN` in the root-managed service environment, restart AI Executive, and verify that the OpenAPI endpoint is reachable only over the intended HTTPS/Tailscale path. Do not expose the local Node listener directly to the public Internet.
 
 ## Persistence and backups
 
