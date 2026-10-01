@@ -1,0 +1,89 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AIfréd Integration API",
+    "version": "0.1.0",
+    "description": "Workspace-scoped interface for AIfréd. Read tools are read-only. Planning may create a proposal but never confirms or applies it."
+  },
+  "servers": [{ "url": "https://YOUR-AIFRED-HOST" }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "WorkspaceRequest": {
+        "type": "object",
+        "required": ["workspaceId"],
+        "properties": {
+          "workspaceId": { "type": "string", "minLength": 1, "maxLength": 120 }
+        }
+      }
+    }
+  },
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/api/integrations/aifred": {
+      "post": {
+        "operationId": "planWithAifred",
+        "summary": "Ask AIfréd to reason or prepare an approval-bound proposal",
+        "description": "Uses one explicit workspace. A returned proposal is not applied until confirmed inside AIfréd.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["workspaceId", "message"],
+                "properties": {
+                  "workspaceId": { "type": "string", "minLength": 1, "maxLength": 120 },
+                  "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
+                  "focusEntityId": { "type": "string", "maxLength": 240 }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Answer and optional approval-bound proposal" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Authentication required" },
+          "429": { "description": "Rate limited" }
+        }
+      }
+    },
+    "/api/integrations/aifred/tools": {
+      "post": {
+        "operationId": "readAifredTool",
+        "summary": "Run one allowlisted read-only AIfréd tool",
+        "description": "Allowed tools: task.read, project.read, note.read, calendar.read, calendar.free_time, context.read.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["workspaceId", "tool"],
+                "properties": {
+                  "workspaceId": { "type": "string", "minLength": 1, "maxLength": 120 },
+                  "tool": {
+                    "type": "string",
+                    "enum": ["task.read", "project.read", "note.read", "calendar.read", "calendar.free_time", "context.read"]
+                  },
+                  "input": { "type": "object", "additionalProperties": true }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Read-only tool result" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Authentication required" },
+          "429": { "description": "Rate limited" }
+        }
+      }
+    }
+  }
+}
