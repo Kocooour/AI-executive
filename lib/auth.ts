@@ -120,6 +120,26 @@ export function isAuthenticated(request: Request) {
   }
 }
 
+function integrationToken() {
+  return process.env.AI_EXECUTIVE_INTEGRATION_TOKEN || "";
+}
+
+export function isIntegrationAuthenticated(request: Request) {
+  const configured = integrationToken();
+  if (configured.length < 32) return false;
+  const authorization = request.headers.get("authorization") || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) return false;
+  const supplied = Buffer.from(match[1]);
+  const expected = Buffer.from(configured);
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+}
+
+export function integrationBinding(request: Request) {
+  const authorization = request.headers.get("authorization") || "";
+  return "integration:" + createHash("sha256").update(authorization).digest("base64url");
+}
+
 export function getAuthState(request: Request) {
   const enabled = !insecureDevelopmentMode();
   const configured = !enabled || authConfigured();
