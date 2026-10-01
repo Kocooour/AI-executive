@@ -93,6 +93,34 @@ export function getDatabase() {
     );
     CREATE INDEX IF NOT EXISTS executive_briefings_created_idx
       ON executive_briefings(created_at DESC);
+    CREATE TABLE IF NOT EXISTS calendar_sources (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      label TEXT NOT NULL,
+      encrypted_url TEXT NOT NULL,
+      status TEXT NOT NULL,
+      last_sync_at INTEGER,
+      last_success_at INTEGER,
+      last_error TEXT,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      occurrence_key TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      start_at INTEGER NOT NULL,
+      end_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(source_id, occurrence_key)
+    );
+    CREATE INDEX IF NOT EXISTS calendar_events_range_idx
+      ON calendar_events(workspace_id, start_at, end_at);
     CREATE TABLE IF NOT EXISTS security_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at INTEGER NOT NULL,

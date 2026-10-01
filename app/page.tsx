@@ -71,6 +71,33 @@ interface ExecutiveBriefing {
   createdAt: number;
 }
 
+interface CalendarSourceState {
+  id: string;
+  workspaceId: string;
+  label: string;
+  status: string;
+  configured: boolean;
+  lastSyncAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string;
+  eventCount: number;
+  revision: number;
+}
+
+interface CalendarEvent {
+  id: string;
+  sourceId: string;
+  workspaceId: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  timezone: string;
+  status: string;
+  busy: boolean;
+  private: boolean;
+}
+
 interface NotificationState {
   publicKey: string;
   subscriptionCount: number;
@@ -201,6 +228,12 @@ export default function App() {
     [notificationStatus, setNotificationStatus] = useState(""),
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
+    [calendarSources, setCalendarSources] = useState<CalendarSourceState[]>([]),
+    [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]),
+    [calendarLabel, setCalendarLabel] = useState("Outlook calendar"),
+    [calendarUrl, setCalendarUrl] = useState(""),
+    [calendarBusy, setCalendarBusy] = useState(false),
+    [calendarStatus, setCalendarStatus] = useState(""),
     [sortBy, setSortBy] = useState<"date" | "priority" | "created">("date"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [checklistDraft, setChecklistDraft] = useState(""),
@@ -226,6 +259,9 @@ export default function App() {
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
+  const calendarLoadVersion = useRef(0);
+  const calendarWorkspaceSelection = useRef("personal");
+  calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
@@ -529,9 +565,49 @@ export default function App() {
     }
   }
 
+  async function loadCalendar(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+    const loadVersion = ++calendarLoadVersion.current;
+    const from = Date.now() - 24 * 60 * 60_000;
+    const to = Date.now() + 14 * 24 * 60 * 60_000;
+    const response = await fetch(`/api/calendar?workspaceId=${encodeURIComponent(workspaceId)}&from=${from}&to=${to}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Calendar is unavailable");
+    const data = await response.json();
+    if (loadVersion !== calendarLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
+    setCalendarSources(Array.isArray(data.sources) ? data.sources : []);
+    setCalendarEvents(Array.isArray(data.events) ? data.events : []);
+  }
+
+  async function calendarAction(action: "connect" | "refresh" | "disconnect", sourceId?: string) {
+    if (calendarBusy) return;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setCalendarBusy(true);
+    setCalendarStatus("");
+    try {
+      const response = await fetch("/api/calendar", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, sourceId, workspaceId, label: calendarLabel, url: calendarUrl }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Calendar action failed");
+      setCalendarUrl("");
+      await loadCalendar(workspaceId);
+      setCalendarStatus(action === "connect" ? "Kalendář je připojený pouze pro čtení." : action === "refresh" ? "Kalendář byl obnoven." : "Kalendář byl odpojen a jeho data odstraněna.");
+    } catch (error) {
+      setCalendarUrl("");
+      await loadCalendar(workspaceId).catch(() => undefined);
+      setCalendarStatus(error instanceof Error ? error.message : "Calendar action failed");
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (authState !== "ready") return;
     loadBriefings().catch(() => undefined);
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setCalendarSources([]);
+    setCalendarEvents([]);
+    loadCalendar(workspaceId).catch(() => undefined);
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
@@ -1090,6 +1166,34 @@ export default function App() {
     projects = scopedItems.filter((x) => x.type === "project"),
     areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
+  const calendarTimezone = notificationState?.preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+  const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
+  const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
+  const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
+  const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
+  const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) => source.status === "ready");
+  const mergedBusy = todayCalendarEvents.filter((event) => event.busy).map((event) => [
+    Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
+  ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
+    const last = merged[merged.length - 1];
+    if (!last || interval[0] > last[1]) merged.push(interval);
+    else last[1] = Math.max(last[1], interval[1]);
+    return merged;
+  }, []);
+  const freeHours = Math.max(0, (dayEnd - dayStart - mergedBusy.reduce((total, interval) => total + interval[1] - interval[0], 0)) / 3_600_000);
+  const freeWindows = (() => {
+    const result: Array<[number, number]> = [];
+    let cursor = dayStart;
+    for (const interval of mergedBusy) {
+      if (interval[0] - cursor >= 30 * 60_000) result.push([cursor, interval[0]]);
+      cursor = Math.max(cursor, interval[1]);
+    }
+    if (dayEnd - cursor >= 30 * 60_000) result.push([cursor, dayEnd]);
+    return result;
+  })();
   const targets = (sourceId: string, type: string) =>
     scopedRelations
       .filter((r) => r.sourceEntityId === sourceId && r.relationType === type)
@@ -1743,6 +1847,35 @@ export default function App() {
                 </div>
               ) : <p>Vytvoř první přehled, nebo zapni automatický plán v Settings.</p>}
             </section>
+            <section className="briefingCard calendarCard">
+              <div className="sectionHeading">
+                <div>
+                  <p className="eyebrow">CALENDAR · {activeWorkspaceId === "all" ? writeWorkspace?.title || "PERSONAL" : workspaceName} · READ ONLY</p>
+                  <h2>Dnešní kapacita</h2>
+                </div>
+                <strong>{calendarSources.length === 0 ? "Kalendář není připojen" : calendarFresh ? `${freeHours.toFixed(1)} h volno` : "Kapacita neověřená"}</strong>
+              </div>
+              {calendarSources.some((source) => source.status !== "ready") && (
+                <p role="status">Dostupnost kalendáře je neznámá nebo zastaralá. Plán podle volných bloků nyní nepoužívej.</p>
+              )}
+              {calendarFresh && todayCalendarEvents.length === 0 && <p>V pracovní době dnes nemáš žádnou blokující událost.</p>}
+              <div className="calendarAgenda">
+                {todayCalendarEvents.map((event) => (
+                  <div key={event.id} className={event.busy ? "busy" : "free"}>
+                    <span>{event.allDay ? "Celý den" : new Date(event.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}</span>
+                    <strong>{event.title}</strong>
+                    <small>{event.busy ? "obsazeno" : "volný čas"}</small>
+                  </div>
+                ))}
+              </div>
+              {calendarFresh && freeWindows.length > 0 && (
+                <p>
+                  <strong>Nejbližší volné bloky:</strong>{" "}
+                  {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}
+                </p>
+              )}
+              <small>Události jsou pouze pro čtení. Překryvy se do obsazeného času počítají jen jednou.</small>
+            </section>
             </>
           )}
           {view === "Search" && query && (
@@ -2072,6 +2205,56 @@ export default function App() {
                   </div>
                 )}
                 {notificationStatus && <p role="status">{notificationStatus}</p>}
+              </section>
+              <section>
+                <div className="sectionHeading">
+                  <div>
+                    <h2>Calendar · read only</h2>
+                    <p>
+                      Připoj soukromý HTTPS odkaz ve formátu ICS. Adresa se na
+                      serveru šifruje, po uložení se už do prohlížeče nevrací a
+                      AI Executive nemůže kalendář měnit.
+                    </p>
+                  </div>
+                  <span className={`installStatus ${calendarSources.some((source) => source.status === "ready") ? "installed" : ""}`}>
+                    {calendarSources.some((source) => source.status === "ready") ? "Read only" : "Not connected"}
+                  </span>
+                </div>
+                <div className="calendarConnect">
+                  <label>
+                    Název zdroje
+                    <input value={calendarLabel} maxLength={120} onChange={(event) => setCalendarLabel(event.target.value)} />
+                  </label>
+                  <label>
+                    Soukromý ICS odkaz
+                    <input type="password" autoComplete="off" value={calendarUrl} maxLength={8192}
+                      placeholder="https://…/calendar.ics"
+                      onChange={(event) => setCalendarUrl(event.target.value)} />
+                  </label>
+                  <button className="primaryAction" disabled={calendarBusy || !calendarLabel.trim() || !calendarUrl.trim()}
+                    onClick={() => calendarAction("connect")}>Připojit a načíst</button>
+                </div>
+                <div className="calendarSources">
+                  {calendarSources.map((source) => (
+                    <div key={source.id}>
+                      <span>
+                        <strong>{source.label}</strong>
+                        <small>
+                          {source.status === "ready" ? `${source.eventCount} událostí` : "Synchronizace selhala"}
+                          {source.lastSuccessAt ? ` · naposledy ${new Date(source.lastSuccessAt).toLocaleString()}` : ""}
+                        </small>
+                        {source.lastError && <small role="status">{source.lastError}</small>}
+                      </span>
+                      <div className="notificationActions">
+                        <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>Obnovit</button>
+                        <button disabled={calendarBusy} onClick={() => {
+                          if (window.confirm(`Odpojit kalendář „${source.label}“ a odstranit jeho lokální události?`)) calendarAction("disconnect", source.id);
+                        }}>Odpojit</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {calendarStatus && <p role="status">{calendarStatus}</p>}
               </section>
               <section>
                 <div className="sectionHeading">

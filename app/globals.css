@@ -489,6 +489,29 @@ article small {
   text-align: left;
 }
 .briefingTasks small { display: block; color: #777; margin-top: 2px; }
+.calendarAgenda, .calendarSources { display: grid; gap: 10px; margin: 14px 0; }
+.calendarAgenda > div, .calendarSources > div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e8e8ef;
+  border-radius: 12px;
+}
+.calendarAgenda .busy { border-left: 4px solid #6557e8; }
+.calendarAgenda .free { opacity: .72; }
+.calendarAgenda small, .calendarSources small { color: #777; }
+.calendarSources > div { grid-template-columns: minmax(0, 1fr) auto; }
+.calendarSources span { display: grid; gap: 3px; min-width: 0; }
+.calendarConnect { display: grid; gap: 12px; margin-top: 16px; }
+.calendarConnect label { display: grid; gap: 6px; }
+
+@media (max-width: 640px) {
+  .calendarAgenda > div { grid-template-columns: 72px minmax(0, 1fr); }
+  .calendarAgenda small { grid-column: 2; }
+  .calendarSources > div { grid-template-columns: 1fr; }
+}
 .primaryAction,
 .backupList button {
   border: 0;

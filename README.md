@@ -30,6 +30,7 @@ npm run start -- --hostname 127.0.0.1
 - Web Push reminders delivered by a server scheduler while the PWA is closed
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
 - Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
+- Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 
 ## Persistence and backups
@@ -114,6 +115,31 @@ The adapter creates `/var/lib/ai-executive-briefings`; AI Executive can only
 write the outbox and receives no Hermes or Telegram credential. Delivery is
 at-least-once: an unlikely crash after Telegram accepts a message but before the
 queue file is archived can duplicate that message.
+
+## Read-only calendar planning
+
+MVP7 accepts a private HTTPS ICS feed for one explicit workspace. The bearer
+URL is encrypted at rest and is never returned by the API, copied into normal
+entities/backups, sent to AI, or included in audit records. Set a stable random
+`AI_EXECUTIVE_CALENDAR_SECRET` (at least 32 characters); otherwise encryption
+falls back to the session secret, and rotating that secret requires reconnecting
+calendar feeds.
+
+The fetcher pins a validated public DNS answer for each HTTPS hop, rejects
+loopback/private/link-local destinations and credentials in URLs, revalidates
+redirects, and bounds redirects, time, bytes, lines, events and recurrence
+frequency. Parsing uses `node-ical` for TZID, RRULE, EXDATE and recurrence
+overrides. Only normalized title/time/status data is kept; descriptions,
+attendees and locations are discarded. Private events are stored under the
+generic title “Soukromá událost”.
+
+Calendar events remain read-only. The Home view merges overlapping busy
+intervals and shows actual free blocks inside the configured workday. A failed
+or older-than-24-hours source is marked stale, and executive briefings will not
+claim a free slot from stale data. The current horizon is 14 days back and 90
+days forward; sources refresh at most every 30 minutes in the single always-on
+Node process. Microsoft Graph can later implement the same normalized adapter
+without changing the planning model.
 
 ## Security alerts
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Entity } from "./db";
 import { getNotificationPreferences, sendExecutiveNotification } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
+import { calendarAvailability } from "./calendar";
 
 export type BriefingKind = "morning" | "evening";
 
@@ -22,6 +23,7 @@ export interface ExecutiveBriefing {
   remainingCount: number;
   capacity: number;
   overloaded: boolean;
+  calendar?: { configured: boolean; fresh: boolean; freeHours: number; busyHours: number };
   suggestions: string[];
   createdAt: number;
 }
@@ -108,11 +110,24 @@ export function buildExecutiveBriefing(
   const overdueCount = ranked.filter((item) => item.overdue).length;
   const riskCount = ranked.filter((item) => item.overdue || item.nearDeadline).length;
   const workload = dueToday.length;
-  const overloaded = workload > preferences.dailyTaskCapacity;
+  const availability = calendarAvailability(workspaceId, local.date, preferences.timezone, preferences.workdayStart, preferences.workdayEnd);
+  const overloaded = availability.configured && availability.fresh
+    ? workload > Math.max(1, Math.floor(availability.freeHours))
+    : workload > preferences.dailyTaskCapacity;
   const topTasks = ranked.slice(0, 3).map(({ task, reason }) => ({ id: task.id, title: task.title, reason }));
   const suggestions: string[] = [];
   if (overdueCount) suggestions.push(`Prověř ${overdueCount} úkolů po termínu a potvrď nový realistický termín.`);
-  if (overloaded) suggestions.push(`Dnešní zátěž (${workload}) překračuje orientační kapacitu ${preferences.dailyTaskCapacity}; navrhni přesun méně důležitých úkolů.`);
+  if (overloaded) suggestions.push(
+    availability.configured && availability.fresh
+      ? `Dnešní zátěž (${workload} úkolů) je pravděpodobně vyšší než ${availability.freeHours.toFixed(1)} h volného času; navrhni přesun méně důležitých úkolů.`
+      : `Dnešní zátěž (${workload}) překračuje orientační kapacitu ${preferences.dailyTaskCapacity}; navrhni přesun méně důležitých úkolů.`,
+  );
+  if (availability.configured && !availability.fresh) suggestions.push("Kalendář není čerstvý, proto nyní netvrdím, které bloky jsou volné. Nejprve ho obnov.");
+  if (availability.configured && availability.fresh && availability.windows[0]) {
+    const window = availability.windows[0];
+    const time = new Intl.DateTimeFormat("cs-CZ", { timeZone: preferences.timezone, hour: "2-digit", minute: "2-digit" });
+    suggestions.push(`První volný blok je ${time.format(new Date(window.start))}–${time.format(new Date(window.end))} (${window.hours.toFixed(1)} h).`);
+  }
   if (kind === "evening" && open.length) suggestions.push("Nedokončené úkoly zůstaly beze změny. O přesunu rozhodni přes Ask AI a potvrď návrh.");
   if (!suggestions.length) suggestions.push(kind === "morning" ? "Začni prvním doporučeným úkolem." : "Není potřeba nic přesouvat.");
   const summary = kind === "morning"
@@ -123,6 +138,7 @@ export function buildExecutiveBriefing(
     title: kind === "morning" ? "Ranní přehled" : "Večerní rekapitulace",
     summary, topTasks, overdueCount, riskCount, completedCount: completedToday.length,
     remainingCount: open.length, capacity: preferences.dailyTaskCapacity, overloaded, suggestions, createdAt: now,
+    calendar: { configured: availability.configured, fresh: availability.fresh, freeHours: availability.freeHours, busyHours: availability.busyHours },
   };
 }
 
