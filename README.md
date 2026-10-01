@@ -1,5 +1,7 @@
 # AI Executive
 
+**Product name: AIfréd** — a proactive personal chief of staff. AI Executive remains the technical repository/service name.
+
 Local-first Personal AI OS prototype built with Next.js, Dexie and SQLite.
 
 ## Run
@@ -98,6 +100,12 @@ Scheduled/proactive agents may perform read-only analysis automatically and crea
      Proposal -> Approval -> Execute -> Audit -> Undo
 
 A morning run can combine an Executive Assistant or Morning Planner with active projects/tasks, relevant personal/work/project context and read-only calendar tools. It identifies risks, capacity and next actions, then proposes changes instead of silently mutating the plan.
+
+### PACT implementation status
+
+The server-side PACT foundation is now in place: SQLite persistence for agents, durable context, tool permissions and agent runs; a default AIfréd agent; a workspace-scoped Context Resolver; and a typed read-only Tool Registry. Provider-assisted reasoning now receives canonical entities and non-sensitive durable context through the resolver. Mutations continue to use the existing proposal -> confirmation -> audit -> Undo boundary.
+
+Next milestone: expose the server Tool Registry through an authenticated AIfréd integration/API suitable for ChatGPT, then add owner-facing context management and migrate proactive briefings onto agent runs.
 
 ### Implementation roadmap
 
