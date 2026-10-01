@@ -33,6 +33,84 @@ npm run start -- --hostname 127.0.0.1
 - Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 
+## PACT architecture
+
+AI Executive uses PACT (Projects, Agents, Context, Tools) as the target operating model for the Personal AI OS. PACT is an architectural layer over the existing local-first task model, not a replacement for it.
+
+### P — Projects
+
+Existing Areas, Projects, Tasks, Notes and Relations form the P layer and retain their IDs, workspace boundaries, recurrence, history and offline/sync behavior. Projects can reference project-scoped context, preferred agents and allowed tools. All my work remains an aggregate read view, never a write target.
+
+### A — Agents
+
+Agents are reusable, versioned definitions of repeatable AI work, not unrestricted chatbots. Each agent declares its purpose/instructions, permitted context scopes, tool capabilities, workspace/project scope, trigger mode, output contract and mutation/approval policy.
+
+Initial built-ins: Executive Assistant, Morning Planner, Evening Reviewer, Inbox Processor, Project Manager, Researcher and Meeting Prep. Existing deterministic briefings remain a safe fallback and validation layer.
+
+Agents never receive provider credentials or bypass authorization. Model-proposed actions always pass through the Tool Registry and policy layer.
+
+### C — Context
+
+Context becomes a first-class structured layer separate from tasks and notes. Supported scopes include me, work, family, rules, project-specific and workspace-specific context.
+
+Each context item records provenance, workspace, sensitivity, timestamps and lifecycle. Owner-authored facts must remain distinguishable from AI-derived context. Material AI-suggested durable context requires confirmation.
+
+A Context Resolver builds the minimum permitted context bundle for each agent run. It selects only scopes allowed by the agent, workspace/project and operation. Sensitive context cannot silently cross workspace boundaries or be sent to external providers unless policy permits it.
+
+### T — Tools
+
+Agent capabilities are exposed through a typed Tool Registry rather than direct database/provider access. Initial tools include task read/propose-create/propose-update/propose-complete, project read/search, note read/search, calendar read/find-free-time, context read and briefing read.
+
+Future adapters can add email search/draft, calendar writes, Microsoft Graph, files, web research and other services without changing agent definitions. Every tool declares input/output schemas, read/write classification, scope, audit behavior and approval policy.
+
+### Executive Orchestrator
+
+For each run the orchestrator resolves workspace/project, loads the agent, resolves minimum context, exposes only allowlisted tools, runs deterministic and/or model reasoning, validates structured output, executes permitted reads and converts mutations into proposals. Confirmation, audit and guarded Undo remain server-controlled.
+
+The model is never the authority for access control or writes.
+
+### Permission model
+
+- READ: automatic only inside explicitly allowed scopes.
+- PROPOSE: AI may prepare a mutation but cannot apply it.
+- WRITE: a validated proposal is applied only after required approval.
+- SEND / EXTERNAL SIDE EFFECT: explicit approval by default plus a dedicated tool policy.
+
+Scheduled/proactive agents may perform read-only analysis automatically and create briefings/proposals. Autonomous external side effects require a separately configured policy.
+
+### Target execution flow
+
+    Inputs / events / schedules
+              |
+              v
+     Executive Orchestrator
+              |
+       +------+------+ 
+       |      |      |
+     Agents Context Tools
+       |      |      |
+       +------+------+ 
+              |
+              v
+     Projects / Tasks / Notes
+              |
+              v
+     Proposal -> Approval -> Execute -> Audit -> Undo
+
+A morning run can combine an Executive Assistant or Morning Planner with active projects/tasks, relevant personal/work/project context and read-only calendar tools. It identifies risks, capacity and next actions, then proposes changes instead of silently mutating the plan.
+
+### Implementation roadmap
+
+1. PACT foundation: schemas/tables for agents, context, tool permissions and agent runs; preserve all current entities.
+2. Context Resolver: scoped retrieval, provenance, sensitivity and owner editing.
+3. Tool Registry: wrap current task/project/note/calendar operations behind typed capabilities and the existing proposal boundary.
+4. Executive Orchestrator: deterministic orchestration first, then provider-assisted structured reasoning.
+5. Built-in agents: migrate Morning Brief and Evening Review, then add Executive Assistant, Project Manager and Meeting Prep.
+6. External adapters: email, Microsoft Graph/files/web and other connectors through normalized tools.
+7. Controlled proactivity: event-driven runs and configurable approval policies while retaining least privilege, auditability and reversible local mutations.
+
+The first PACT milestone is complete when an Executive Assistant can read one workspace, receive a minimal resolved context bundle, inspect tasks/projects/calendar through registered read tools, produce a structured daily recommendation and propose task changes through the existing confirmation mechanism without direct database or provider credentials.
+
 ## Persistence and backups
 
 - SQLite lives at `.data/store.sqlite` or `$AI_EXECUTIVE_DATA_DIR/store.sqlite`.
