@@ -2080,3 +2080,78 @@ article:hover > .dragHandle,
     white-space: normal;
   }
 }
+
+.durableContextSection .sectionHeading p {
+  max-width: 680px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.contextForm {
+  display: grid;
+  gap: 14px;
+}
+.contextForm label {
+  display: grid;
+  gap: 7px;
+}
+.contextForm input,
+.contextForm select,
+.contextForm textarea {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.contextForm textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.contextItems {
+  display: grid;
+  gap: 0;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.contextItems article {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+.contextItems article > div {
+  min-width: 0;
+}
+.contextItems strong,
+.contextItems small {
+  display: block;
+}
+.contextItems small {
+  margin-top: 3px;
+  color: var(--muted-light);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.contextItems p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .contextItems article {
+    display: grid;
+    gap: 10px;
+  }
+  .contextItems article > button {
+    justify-self: start;
+  }
+}
