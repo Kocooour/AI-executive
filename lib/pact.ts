@@ -91,6 +91,14 @@ export function listPACTContext(workspaceId: string, scopes: ContextScope[]) {
 
 export function saveOwnerContext(input: Omit<PACTContextItem, "id" | "provenance" | "status" | "createdAt" | "updatedAt">) {
   assertWorkspace(input.workspaceId);
+  if (input.scope === "project") {
+    const project = readSnapshot().entities.find(
+      (entity) => entity.id === input.projectId && entity.type === "project" && entity.workspaceId === input.workspaceId,
+    );
+    if (!project) throw new Error("Project context requires a project in the same workspace");
+  } else if (input.projectId) {
+    throw new Error("projectId is only valid for project context");
+  }
   const now = Date.now();
   const item: PACTContextItem = {
     ...input,
