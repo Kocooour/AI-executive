@@ -361,6 +361,27 @@ const taskDueSummary = (entity: Entity, todayValue: string, language: Language) 
   const soonDate = dueDates.find((due) => due <= tomorrowValue);
   return soonDate ? `${copy[language].dueSoon} · ${friendlyDate(soonDate, language)}` : "";
 };
+const taskMatchesView = (task: Entity, targetView: string, todayValue: string) => {
+  if (targetView === "Completed") return task.status === "completed";
+  if (task.status !== "open") return false;
+  const properties = task.properties;
+  if (targetView === "Inbox") return properties.inbox === true;
+  if (targetView === "Today") {
+    return properties.today === true || properties.when === todayValue ||
+      (typeof properties.when === "string" && properties.when < todayValue);
+  }
+  if (targetView === "Overdue") {
+    return typeof properties.when === "string" && properties.when < todayValue;
+  }
+  if (targetView === "Upcoming") {
+    return typeof properties.when === "string" && properties.when > todayValue;
+  }
+  if (targetView === "Anytime") {
+    return !properties.when && !properties.someday && properties.inbox !== true;
+  }
+  if (targetView === "Someday") return properties.someday === true;
+  return true;
+};
 const toLocalDateTime = (value: unknown) => {
   if (typeof value !== "string" || !value) return "";
   const date = new Date(value);
@@ -1444,6 +1465,18 @@ export default function App() {
     projects = scopedItems.filter((x) => x.type === "project"),
     areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
+  const sidebarCounts: Record<string, number> = {
+    Inbox: tasks.filter((task) => taskMatchesView(task, "Inbox", today)).length,
+    Today: tasks.filter((task) => taskMatchesView(task, "Today", today)).length,
+    Overdue: tasks.filter((task) => taskMatchesView(task, "Overdue", today)).length,
+    Upcoming: tasks.filter((task) => taskMatchesView(task, "Upcoming", today)).length,
+    Anytime: tasks.filter((task) => taskMatchesView(task, "Anytime", today)).length,
+    Someday: tasks.filter((task) => taskMatchesView(task, "Someday", today)).length,
+    Completed: tasks.filter((task) => taskMatchesView(task, "Completed", today)).length,
+    Projects: projects.length,
+    Areas: areas.length,
+    Notes: scopedItems.filter((entity) => entity.type === "note").length,
+  };
   const calendarTimezone = notificationState?.preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -1503,18 +1536,7 @@ export default function App() {
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
       return tasks.filter((t) => {
         if (priorityFilter !== "all" && String(t.properties.priority || "none") !== priorityFilter) return false;
-        if (view === "Completed") return t.status === "completed";
-        if (t.status !== "open") return false;
-        const p = t.properties;
-        if (view === "Inbox") return p.inbox === true;
-        if (view === "Today") return p.today === true || p.when === today || (typeof p.when === "string" && p.when < today);
-        if (view === "Overdue") return typeof p.when === "string" && p.when < today;
-        if (view === "Upcoming")
-          return typeof p.when === "string" && p.when > today;
-        if (view === "Anytime")
-          return !p.when && !p.someday && p.inbox !== true;
-        if (view === "Someday") return p.someday === true;
-        return true;
+        return taskMatchesView(t, view, today);
       }).sort((a, b) => {
         if (sortBy === "manual") return byManualOrder(`task:${view}`)(a, b);
         if (sortBy === "created") return b.createdAt - a.createdAt;
@@ -2301,17 +2323,8 @@ export default function App() {
               key={x}
             >
               <span className="navLabel"><span aria-hidden="true">{viewIcons[x]}</span>{tr(x)}</span>
-              {x === "Today" ? (
-                <span>
-                  {
-                    tasks.filter(
-                      (t) =>
-                        t.status === "open" &&
-                        (t.properties.today === true ||
-                          t.properties.when === today),
-                    ).length
-                  }
-                </span>
+              {sidebarCounts[x] !== undefined ? (
+                <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
             </button>
           ))}

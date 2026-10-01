@@ -1357,6 +1357,24 @@ article {
 .active .navLabel > span {
   color: currentColor;
 }
+.navCount {
+  min-width: 23px;
+  height: 23px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #f0f0f4;
+  color: #747580;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.appShell nav button.active .navCount {
+  background: rgba(97, 85, 231, 0.13);
+  color: #5145cf;
+}
 .sidebarActions {
   padding-top: 10px;
   border-top: 1px solid var(--line);
