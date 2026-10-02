@@ -532,6 +532,11 @@ article small {
 .dayPlanActions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .dayPlanActions button { min-height: 36px; padding: 5px 10px; border: 1px solid currentColor; border-radius: 8px; background: transparent; }
 @media (max-width: 600px) { .dayPlanCard { padding: 15px; } .dayPlanBlock { grid-template-columns: 1fr; gap: 5px; } .dayPlanActions button { flex: 1 1 42%; } }
+@media (max-width: 700px) {
+  .dayPlanCard .sectionHeading { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .dayPlanCard .sectionHeading > .dayPlanActions { display: flex; width: 100%; min-width: 0; align-items: center; }
+  .dayPlanCard .sectionHeading > .dayPlanActions button { flex: 1 1 auto; }
+}
 .calendarAgenda, .calendarSources { display: grid; gap: 10px; margin: 14px 0; }
 .calendarAgenda > div, .calendarSources > div {
   display: grid;

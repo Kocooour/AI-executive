@@ -39,15 +39,19 @@ export async function POST(request: Request) {
     const taskId = String(body.taskId || "");
     const start = String(body.start || "");
     const end = String(body.end || "");
+    const decision = String(body.decision || "accepted");
     const revision = Number(body.revision);
     const parsedDate = new Date(`${date}T00:00:00Z`);
     if (!/^[A-Za-z0-9:_-]{1,120}$/.test(workspaceId) || workspaceId === "all" ||
         !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date ||
         !/^[A-Za-z0-9:_-]{1,240}$/.test(taskId) || !Number.isSafeInteger(revision) || revision < 0 ||
-        !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || end.length > 40 || start.length > 40) {
+        !["accepted", "tomorrow", "dismissed"].includes(decision) || end.length > 40 || start.length > 40 ||
+        (decision === "accepted" && (!Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)))) ||
+        (decision !== "accepted" && !(start === "" && end === "") && (!Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end))))) {
       throw new HttpInputError("Invalid day plan request");
     }
-    const proposal = proposeDayPlanBlock({ sessionBinding: authenticationBinding(request), workspaceId, date, taskId, start, end, revision });
+    const proposal = proposeDayPlanBlock({ sessionBinding: authenticationBinding(request), workspaceId, date, taskId, start, end, revision,
+      decision: decision as "accepted" | "tomorrow" | "dismissed" });
     recordSecurityEvent(request, "day-plan.propose", "allowed", { workspaceScope: "single" });
     return NextResponse.json({ proposal });
   } catch (error) {

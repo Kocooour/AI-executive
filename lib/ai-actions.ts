@@ -6,6 +6,7 @@ import { getDatabase, readSnapshot } from "./server-store";
 import { completeServerAI } from "./server-ai-provider";
 import { buildExecutiveBriefing } from "./executive-briefings";
 import { buildDayPlan, currentDayPlanDate } from "./day-plan";
+import { matchesDayPlanCandidate, type DayPlanDecision } from "./day-plan-decision";
 import { resolvePACTContext } from "./pact";
 
 type CreateOperation = {
@@ -425,28 +426,34 @@ export function proposeDayPlanBlock(input: {
   start: string;
   end: string;
   revision: number;
+  decision: DayPlanDecision;
 }) {
   if (input.date !== currentDayPlanDate()) throw new HttpInputError("Day plan date changed; review it again", 409);
   const plan = buildDayPlan(input.workspaceId, input.date);
-  if (plan.revision !== input.revision || plan.calendar !== "ready" ||
-      !plan.planBlocks.some((block) => block.taskId === input.taskId && block.start === input.start && block.end === input.end)) {
+  if (plan.revision !== input.revision || !matchesDayPlanCandidate(plan, input)) {
     throw new HttpInputError("Day plan changed; review it again", 409);
   }
   const snapshot = readSnapshot();
   const task = snapshot.entities.find((entity) => entity.id === input.taskId && entity.type === "task" && entity.status === "open" && entity.workspaceId === input.workspaceId);
   if (!task) throw new HttpInputError("Task changed; review the plan again", 409);
-  const feedback = { date: input.date, decision: "accepted", at: Date.now(), proposedStart: input.start };
+  const feedback = { source: "albert-day-plan", date: input.date, decision: input.decision, at: Date.now(), proposedStart: input.start,
+    proposedEnd: input.end, ...(input.decision === "accepted" ? { plannedMinutes: Math.round((Date.parse(input.end) - Date.parse(input.start)) / 60_000) } : {}) };
   const history = Array.isArray(task.properties.planningHistory) ? task.properties.planningHistory : [];
+  const properties = input.decision === "accepted"
+    ? { ...task.properties, plannedStart: input.start, plannedEnd: input.end, planningSource: "albert-day-plan" }
+    : input.decision === "tomorrow"
+      ? { ...task.properties, when: addCalendarDays(input.date, 1), today: false, plannedStart: "", plannedEnd: "", inbox: false, someday: false }
+      : { ...task.properties };
   return createProposal(input.sessionBinding, input.workspaceId, snapshot.revision, {
     kind: "update", entityId: task.id, expectedUpdatedAt: task.updatedAt,
     patch: {
       title: task.title, status: task.status, content: task.content || "",
-      properties: { ...task.properties, plannedStart: input.start, plannedEnd: input.end,
-        planningSource: "albert-day-plan", planningFeedback: feedback, planningHistory: [...history, feedback].slice(-50) },
+      properties: { ...properties, planningFeedback: feedback, planningHistory: [...history, feedback].slice(-50) },
     },
-  }, `Naplánovat úkol „${task.title}“`, [
+  }, `${input.decision === "accepted" ? "Naplánovat" : input.decision === "tomorrow" ? "Přesunout na zítra" : "Dnes neplánovat"} úkol „${task.title}“`, [
     { label: "Úkol", value: task.title },
-    { label: "Čas", value: `${input.start} – ${input.end}` },
+    { label: "Rozhodnutí", value: input.decision },
+    ...(input.decision === "accepted" ? [{ label: "Čas", value: `${input.start} – ${input.end}` }] : []),
   ]);
 }
 
@@ -625,24 +632,32 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       summary: string;
     };
     const operation = payload.operation;
-    if (operation.kind === "update" && operation.patch.properties.planningSource === "albert-day-plan" &&
-        (operation.patch.properties.planningFeedback as { decision?: string } | undefined)?.decision === "accepted") {
+    if (operation.kind === "update" && (
+        (operation.patch.properties.planningFeedback as { source?: string } | undefined)?.source === "albert-day-plan" ||
+        (operation.patch.properties.planningFeedback as { decision?: string } | undefined)?.decision === "accepted" &&
+          operation.patch.properties.planningSource === "albert-day-plan")) {
       const properties = operation.patch.properties;
-      const feedback = properties.planningFeedback as { date?: string };
+      const feedback = properties.planningFeedback as { date?: string; decision?: string; proposedStart?: string; proposedEnd?: string };
       if (feedback.date !== currentDayPlanDate()) throw new Error("Day plan date changed; review it again");
       const plan = buildDayPlan(String(row.workspace_id), String(feedback.date || ""));
-      const valid = plan.calendar === "ready" && plan.planBlocks.some((block) =>
-        block.taskId === operation.entityId && block.start === properties.plannedStart && block.end === properties.plannedEnd);
+      const validDecision = feedback.decision === "accepted" || feedback.decision === "tomorrow" || feedback.decision === "dismissed";
+      const valid = validDecision && matchesDayPlanCandidate(plan, {
+        taskId: operation.entityId, start: feedback.proposedStart || "",
+        end: feedback.proposedEnd || (feedback.decision === "accepted" ? String(properties.plannedEnd || "") : ""),
+        decision: feedback.decision as DayPlanDecision,
+      }) && (feedback.decision !== "accepted" || properties.plannedStart === feedback.proposedStart && properties.plannedEnd === (feedback.proposedEnd || properties.plannedEnd));
       if (!valid) throw new Error("Day plan changed; review it again");
-      const start = Date.parse(String(properties.plannedStart || ""));
-      const end = Date.parse(String(properties.plannedEnd || ""));
-      const overlap = readSnapshot().entities.some((entity) => {
-        if (entity.id === operation.entityId || entity.type !== "task" || entity.status !== "open" || entity.workspaceId !== row.workspace_id) return false;
-        const otherStart = Date.parse(String(entity.properties.plannedStart || ""));
-        const otherEnd = Date.parse(String(entity.properties.plannedEnd || ""));
-        return Number.isFinite(otherStart) && Number.isFinite(otherEnd) && start < otherEnd && end > otherStart;
-      });
-      if (overlap) throw new Error("Day plan changed; another task uses this time");
+      if (feedback.decision === "accepted") {
+        const start = Date.parse(String(properties.plannedStart || ""));
+        const end = Date.parse(String(properties.plannedEnd || ""));
+        const overlap = readSnapshot().entities.some((entity) => {
+          if (entity.id === operation.entityId || entity.type !== "task" || entity.status !== "open" || entity.workspaceId !== row.workspace_id) return false;
+          const otherStart = Date.parse(String(entity.properties.plannedStart || ""));
+          const otherEnd = Date.parse(String(entity.properties.plannedEnd || ""));
+          return Number.isFinite(otherStart) && Number.isFinite(otherEnd) && start < otherEnd && end > otherStart;
+        });
+        if (overlap) throw new Error("Day plan changed; another task uses this time");
+      }
     }
     const now = Date.now();
     let before: Entity | null = null;

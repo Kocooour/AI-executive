@@ -5,6 +5,7 @@ import type { Entity } from "./db";
 import { getNotificationPreferences, sendExecutiveNotification } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { calendarAvailability } from "./calendar";
+import { reviewPlan, type PlanReview } from "./day-plan-review";
 import { beginPACTRun, ensurePACTDefaults, finishPACTRun } from "./pact";
 
 export type BriefingKind = "morning" | "evening";
@@ -25,6 +26,7 @@ export interface ExecutiveBriefing {
   capacity: number;
   overloaded: boolean;
   calendar?: { configured: boolean; fresh: boolean; freeHours: number; busyHours: number };
+  planReview?: PlanReview;
   suggestions: string[];
   createdAt: number;
 }
@@ -73,6 +75,7 @@ export function buildExecutiveBriefing(
   const allTasks = snapshot.entities.filter(
     (entity) => entity.type === "task" && entity.workspaceId === workspaceId,
   );
+  const planReview = reviewPlan(allTasks, local.date, preferences.timezone, preferences.workdays);
   const open = allTasks.filter((task) => task.status === "open");
   const completedToday = allTasks.filter((task) => {
     if (task.status !== "completed") return false;
@@ -129,17 +132,19 @@ export function buildExecutiveBriefing(
     const time = new Intl.DateTimeFormat("cs-CZ", { timeZone: preferences.timezone, hour: "2-digit", minute: "2-digit" });
     suggestions.push(`První volný blok je ${time.format(new Date(window.start))}–${time.format(new Date(window.end))} (${window.hours.toFixed(1)} h).`);
   }
-  if (kind === "evening" && open.length) suggestions.push("Nedokončené úkoly zůstaly beze změny. O přesunu rozhodni přes Ask AI a potvrď návrh.");
+  if (kind === "evening" && planReview.carryover.length && planReview.nextWorkday) {
+    suggestions.push(`Zkontroluj ${planReview.carryover.length} nedokončených či přesunutých úkolů a případný přesun na ${planReview.nextWorkday} potvrď jednotlivě.`);
+  }
   if (!suggestions.length) suggestions.push(kind === "morning" ? "Začni prvním doporučeným úkolem." : "Není potřeba nic přesouvat.");
   const summary = kind === "morning"
     ? `${topTasks.length ? `Vybral jsem ${topTasks.length} hlavní úkoly.` : "Na dnešek nemáš žádný otevřený úkol."} ${overdueCount ? `${overdueCount} je po termínu.` : "Nic není po termínu."}`
-    : `Dnes dokončeno: ${completedToday.length}. Otevřeno zůstává: ${open.length}.`;
+    : `Z dnešního plánu: ${planReview.planned} naplánováno, ${planReview.completed} dokončeno, ${planReview.open} otevřeno, ${planReview.moved} přesunuto, ${planReview.dismissed} neplánováno.`;
   return {
     id: randomUUID(), kind, workspaceId, workspaceName: workspace.title, localDate: local.date,
     title: kind === "morning" ? "Ranní přehled" : "Večerní rekapitulace",
     summary, topTasks, overdueCount, riskCount, completedCount: completedToday.length,
     remainingCount: open.length, capacity: preferences.dailyTaskCapacity, overloaded, suggestions, createdAt: now,
-    calendar: { configured: availability.configured, fresh: availability.fresh, freeHours: availability.freeHours, busyHours: availability.busyHours },
+    calendar: { configured: availability.configured, fresh: availability.fresh, freeHours: availability.freeHours, busyHours: availability.busyHours }, planReview: kind === "evening" ? planReview : undefined,
   };
 }
 

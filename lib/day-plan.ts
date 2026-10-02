@@ -2,6 +2,7 @@ import type { Entity } from "./db";
 import { calendarAvailability } from "./calendar";
 import { getNotificationPreferences } from "./notifications";
 import { readSnapshot } from "./server-store";
+import { learnPlanning, type LearnedPlanning } from "./day-plan-learning";
 
 export interface DayPlanItem {
   taskId: string;
@@ -10,6 +11,11 @@ export interface DayPlanItem {
   reason: "overdue" | "today" | "deadline" | "priority";
   start?: string;
   end?: string;
+  estimateSource?: LearnedPlanning["estimateSource"];
+  estimateSamples?: number;
+  preferredMinute?: number | null;
+  timeSamples?: number;
+  planningSource?: "albert-day-plan" | "manual" | "other";
 }
 
 export interface DayPlan {
@@ -43,9 +49,26 @@ function addDays(date: string, count: number) {
   return value.toISOString().slice(0, 10);
 }
 
-function estimate(task: Entity) {
-  const value = Number(task.properties.estimatedMinutes);
-  return Number.isFinite(value) && value >= 10 && value <= 480 ? Math.ceil(value / 5) * 5 : 60;
+function estimate(task: Entity, peers: Entity[], timezone: string) {
+  return learnPlanning(task, peers, timezone);
+}
+
+function minuteInZone(at: number, timezone: string) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(at)).map((part) => [part.type, part.value]));
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+function preferredFit(windows: Array<[number, number]>, duration: number, preferredMinute: number | null, timezone: string) {
+  const candidates: number[] = [];
+  for (const [from, to] of windows) {
+    for (let at = Math.ceil(from / 900_000) * 900_000; at + duration * 60_000 <= to; at += 900_000) candidates.push(at);
+  }
+  if (!candidates.length) return null;
+  if (preferredMinute === null) return candidates[0];
+  return candidates.sort((left, right) =>
+    Math.abs(minuteInZone(left, timezone) - preferredMinute) - Math.abs(minuteInZone(right, timezone) - preferredMinute) || left - right)[0];
 }
 
 function interval(task: Entity): [number, number] | null {
@@ -75,13 +98,20 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   const workday = preferences.workdays.includes(new Date(`${date}T12:00:00Z`).getUTCDay());
   const availability = calendarAvailability(workspaceId, date, timezone, preferences.workdayStart, preferences.workdayEnd);
   const calendar: DayPlan["calendar"] = !workday ? "non-workday" : !availability.configured ? "missing" : !availability.fresh ? "stale" : "ready";
-  const tasks = snapshot.entities.filter((entity) => entity.type === "task" && entity.status === "open" && entity.workspaceId === workspaceId);
+  const projects = new Map(snapshot.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project")
+    .map((relation) => [relation.sourceEntityId, relation.targetEntityId]));
+  const allTasks = snapshot.entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId)
+    .map((task): Entity => ({ ...task, properties: { ...task.properties, projectId: projects.get(task.id) || task.properties.projectId } }));
+  const tasks = allTasks.filter((task) => task.status === "open");
   const existingBlocks: DayPlanItem[] = [];
   const occupied: Array<[number, number]> = [];
   for (const task of tasks) {
     const slot = interval(task);
     if (!slot || dateInZone(timezone, slot[0]) > date || dateInZone(timezone, slot[1] - 1) < date) continue;
-    existingBlocks.push({ taskId: task.id, title: task.title, estimatedMinutes: estimate(task), reason: "today", start: new Date(slot[0]).toISOString(), end: new Date(slot[1]).toISOString() });
+    const learning = estimate(task, allTasks, timezone);
+    existingBlocks.push({ taskId: task.id, title: task.title, ...learning, reason: "today",
+      planningSource: task.properties.planningSource === "albert-day-plan" ? "albert-day-plan" : task.properties.planningSource === "manual" ? "manual" : "other",
+      start: new Date(slot[0]).toISOString(), end: new Date(slot[1]).toISOString() });
     occupied.push(slot);
   }
   existingBlocks.sort((a, b) => String(a.start).localeCompare(String(b.start)));
@@ -100,7 +130,7 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const score = (overdue ? 100 : 0) + (dueToday ? 70 : 0) + (dueSoon ? 25 : 0) + ({ high: 30, medium: 20, low: 10 }[priority] || 0);
     return [{ task, score, reason, earliest: [when, deadline].filter(Boolean).sort()[0] || "" }];
   }).sort((a, b) => b.score - a.score || a.earliest.localeCompare(b.earliest) || a.task.createdAt - b.task.createdAt || a.task.id.localeCompare(b.task.id));
-  const requiredMinutes = ranked.reduce((total, item) => total + estimate(item.task), 0);
+  const requiredMinutes = ranked.reduce((total, item) => total + estimate(item.task, allTasks, timezone).estimatedMinutes, 0);
   const unscheduled: DayPlanItem[] = [];
   const planBlocks: DayPlanItem[] = [];
   let windows = calendar === "ready"
@@ -110,10 +140,9 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   for (const slot of occupied) windows = subtract(windows, slot);
   const freeMinutes = calendar === "ready" ? Math.floor(windows.reduce((total, [start, end]) => total + end - start, 0) / 60_000) : null;
   for (const { task, reason } of ranked) {
-    const item: DayPlanItem = { taskId: task.id, title: task.title, estimatedMinutes: estimate(task), reason };
-    const fit = calendar === "ready" ? windows.find(([start, end]) => end - Math.ceil(start / 900_000) * 900_000 >= item.estimatedMinutes * 60_000) : undefined;
-    if (!fit) { unscheduled.push(item); continue; }
-    const start = Math.ceil(fit[0] / 900_000) * 900_000;
+    const item: DayPlanItem = { taskId: task.id, title: task.title, ...estimate(task, allTasks, timezone), reason };
+    const start = calendar === "ready" ? preferredFit(windows, item.estimatedMinutes, item.preferredMinute ?? null, timezone) : null;
+    if (start === null) { unscheduled.push(item); continue; }
     const end = start + item.estimatedMinutes * 60_000;
     planBlocks.push({ ...item, start: new Date(start).toISOString(), end: new Date(end).toISOString() });
     windows = subtract(windows, [start, end]);
