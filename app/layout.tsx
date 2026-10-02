@@ -36,11 +36,44 @@ const themeBootstrap = `
   } catch {}
 `;
 
+const clientErrorBootstrap = `
+  (() => {
+    const report = (payload) => {
+      try {
+        fetch("/api/client-errors", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...payload, userAgent: navigator.userAgent }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch {}
+    };
+    addEventListener("error", (event) => report({
+      kind: "error",
+      message: event.message || "Unknown client error",
+      source: event.filename || "",
+      line: event.lineno || null,
+      column: event.colno || null,
+      stack: event.error && event.error.stack ? String(event.error.stack) : "",
+    }));
+    addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason;
+      report({
+        kind: "unhandledrejection",
+        message: reason && reason.message ? String(reason.message) : String(reason || "Unhandled rejection"),
+        source: location.href,
+        stack: reason && reason.stack ? String(reason.stack) : "",
+      });
+    });
+  })();
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="cs" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
+        <script dangerouslySetInnerHTML={{ __html: clientErrorBootstrap }} />
       </head>
       <body>
         <PWARegister />
