@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <title>AI Executive – obnova aplikace</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+      body { min-height: 100dvh; margin: 0; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+      main { width: min(82vw, 360px); text-align: center; }
+      span { display: inline-grid; width: 52px; height: 52px; place-items: center; border-radius: 14px; background: #5d64d8; color: white; font-size: 26px; }
+      h1 { margin: 22px 0 10px; font-size: 25px; }
+      p { margin: 0; color: GrayText; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span aria-hidden="true">◇</span>
+      <h1>Obnovuji AI Executive…</h1>
+      <p id="status">Odstraňuji starou mezipaměť. Vaše data a passkey zůstanou zachované.</p>
+    </main>
+    <script>
+      (async () => {
+        try {
+          if ("serviceWorker" in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map((registration) => registration.unregister()));
+          }
+          if ("caches" in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.filter((key) => key.startsWith("ai-executive-")).map((key) => caches.delete(key)));
+          }
+          location.replace("/?cache-reset=" + Date.now());
+        } catch (error) {
+          document.getElementById("status").textContent =
+            "Automatická obnova se nezdařila. Zavřete Safari a zkuste stránku otevřít znovu.";
+        }
+      })();
+    </script>
+  </body>
+</html>
