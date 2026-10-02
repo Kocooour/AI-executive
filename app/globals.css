@@ -2826,3 +2826,160 @@ h3 {
     transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
   }
 }
+
+/* Portrait dashboard: keep every control and card inside the phone viewport. */
+@media (max-width: 700px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .appShell,
+  .appPane,
+  .content,
+  .homeOverview,
+  .homeSide,
+  .homeInsights,
+  .homeSection,
+  .briefingCard {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .appPane .topbar {
+    height: auto;
+    min-height: calc(108px + env(safe-area-inset-top));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
+    grid-template-areas:
+      "workspace theme assistant"
+      "search search search";
+    align-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: calc(8px + env(safe-area-inset-top)) 14px 10px;
+  }
+
+  .mobileWorkspaceButton {
+    grid-area: workspace;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 4px;
+  }
+
+  .searchField {
+    grid-area: search;
+    width: 100%;
+    max-width: 100%;
+    min-height: 42px;
+  }
+
+  .appPane .topbar .themeToggle {
+    grid-area: theme;
+  }
+
+  .appPane .topbar .aiButton {
+    grid-area: assistant;
+  }
+
+  .mobileWorkspaceMenu {
+    top: calc(62px + env(safe-area-inset-top));
+    max-height: calc(100dvh - 92px - env(safe-area-inset-top));
+    overflow-y: auto;
+  }
+
+  .content {
+    margin-top: 20px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .pageTitleRow {
+    min-width: 0;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+  }
+
+  .pageTitleRow h1 {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .homeOverview,
+  .homeInsights {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .homeSectionHead,
+  .sectionHeading {
+    min-width: 0;
+  }
+
+  .homeSectionHead > span,
+  .sectionHeading > div,
+  .homeTaskList article > div,
+  .homeCompactList button > span {
+    min-width: 0;
+  }
+
+  .homeSectionHead > span,
+  .homeSectionHead > button,
+  .homeCompactList button small {
+    flex-shrink: 1;
+  }
+
+  .homeCompactList button {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .homeCompactList button span {
+    white-space: normal;
+  }
+
+  .homeTaskList article,
+  .list article,
+  .searchResults article {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .notificationActions {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .calendarAgenda > div,
+  .calendarSources > div {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .sectionDropZones {
+    top: calc(116px + env(safe-area-inset-top));
+  }
+}
+
+@media (max-width: 380px) {
+  .appPane .topbar {
+    grid-template-columns: minmax(0, 1fr) 42px 42px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .pageTitleRow h1 {
+    font-size: 28px;
+  }
+}
