@@ -78,6 +78,29 @@ interface ExecutiveBriefing {
   createdAt: number;
 }
 
+interface DayPlanItem {
+  taskId: string;
+  title: string;
+  estimatedMinutes: number;
+  reason: "overdue" | "today" | "deadline" | "priority";
+  start?: string;
+  end?: string;
+}
+
+interface DayPlan {
+  revision: number;
+  workspaceId: string;
+  date: string;
+  timezone: string;
+  calendar: "ready" | "missing" | "stale" | "non-workday";
+  freeMinutes: number | null;
+  requiredMinutes: number;
+  overloaded: boolean;
+  existingBlocks: DayPlanItem[];
+  planBlocks: DayPlanItem[];
+  unscheduled: DayPlanItem[];
+}
+
 interface PACTAgentSummary {
   id: string;
   name: string;
@@ -290,6 +313,15 @@ const copy: Record<Language, Record<string, string>> = {
     workdayStarts: "Workday starts", workdayEnds: "Workday ends", workingDays: "Working days",
     createBackup: "Create backup", noBackups: "No backups yet.", restore: "Restore",
     openCount: "open", dailyBrief: "Daily brief", morningBrief: "Morning brief", eveningReview: "Evening review",
+    dayPlanTitle: "Albert’s day plan", dayPlanReady: "Available calendar time; proposed blocks need your approval.",
+    dayPlanMissing: "Connect a calendar to get reliable time blocks. Tasks are listed without exact times.",
+    dayPlanStale: "Refresh the calendar before scheduling exact times.", dayPlanNonWorkday: "This is outside your working days; no time blocks are suggested.",
+    dayPlanOverloaded: "Today’s work exceeds the available capacity.", dayPlanExisting: "Already planned", dayPlanSuggested: "Suggested", dayPlanUnscheduled: "No suitable block",
+    dayPlanEmpty: "No tasks need a new block today.", dayPlanChanged: "The plan changed. Review the updated suggestion.",
+    dayPlanSyncFirst: "Sync your pending changes before confirming the plan.", dayPlanUndo: "Undo last accepted block",
+    acceptBlock: "Accept", anotherTime: "Another time", moveTomorrow: "Tomorrow", skipPlanning: "Do not schedule",
+    confirmDayPlanAction: "Confirm for task:",
+    dayPlanReasonOverdue: "Overdue", dayPlanReasonToday: "Due today", dayPlanReasonDeadline: "Deadline soon", dayPlanReasonPriority: "High priority",
     capacityExceeded: "Capacity is exceeded.", capacityEstimate: "This is an indicative estimate without calendar and time estimates.",
     firstBrief: "Create the first brief or enable the automatic schedule in Settings.", todayCapacity: "Today’s capacity",
     calendarDisconnected: "Calendar not connected", freeHours: "h free", capacityUnknown: "Capacity unverified",
@@ -369,6 +401,15 @@ const copy: Record<Language, Record<string, string>> = {
     workdayStarts: "Začátek pracovního dne", workdayEnds: "Konec pracovního dne", workingDays: "Pracovní dny",
     createBackup: "Vytvořit zálohu", noBackups: "Zatím nejsou žádné zálohy.", restore: "Obnovit",
     openCount: "otevřeno", dailyBrief: "Denní přehled", morningBrief: "Ranní přehled", eveningReview: "Večerní rekapitulace",
+    dayPlanTitle: "Albertův plán dne", dayPlanReady: "Volný čas v kalendáři; navržené bloky čekají na schválení.",
+    dayPlanMissing: "Pro spolehlivé časové bloky připojte kalendář. Úkoly jsou zatím bez přesného času.",
+    dayPlanStale: "Před plánováním přesného času obnovte kalendář.", dayPlanNonWorkday: "Dnes není pracovní den; časové bloky nenavrhuji.",
+    dayPlanOverloaded: "Dnešní práce přesahuje dostupnou kapacitu.", dayPlanExisting: "Již naplánováno", dayPlanSuggested: "Návrh", dayPlanUnscheduled: "Bez vhodného bloku",
+    dayPlanEmpty: "Dnes není potřeba plánovat další úkoly.", dayPlanChanged: "Plán se změnil. Zkontrolujte nový návrh.",
+    dayPlanSyncFirst: "Před potvrzením plánu synchronizujte čekající změny.", dayPlanUndo: "Vrátit poslední přijatý blok",
+    acceptBlock: "Přijmout", anotherTime: "Jiný čas", moveTomorrow: "Zítra", skipPlanning: "Neplánovat",
+    confirmDayPlanAction: "Potvrdit pro úkol:",
+    dayPlanReasonOverdue: "Po termínu", dayPlanReasonToday: "Na dnes", dayPlanReasonDeadline: "Blízký termín", dayPlanReasonPriority: "Vysoká priorita",
     capacityExceeded: "Kapacita je překročena.", capacityEstimate: "Jde o orientační odhad bez kalendáře a časových odhadů.",
     firstBrief: "Vytvořte první přehled nebo zapněte automatický plán v Nastavení.", todayCapacity: "Dnešní kapacita",
     calendarDisconnected: "Kalendář není připojen", freeHours: "h volno", capacityUnknown: "Kapacita neověřena",
@@ -553,6 +594,10 @@ export default function App() {
     [notificationStatus, setNotificationStatus] = useState(""),
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
+    [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
+    [dayPlanStatus, setDayPlanStatus] = useState(""),
+    [dayPlanBusy, setDayPlanBusy] = useState(false),
+    [dayPlanUndo, setDayPlanUndo] = useState<{ actionId: string; workspaceId: string; date: string } | null>(null),
     [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
     [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
     [agentResult, setAgentResult] = useState<PACTAgentResult | null>(null),
@@ -605,6 +650,7 @@ export default function App() {
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const calendarLoadVersion = useRef(0);
+  const dayPlanLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   const pendingKey = "ai-executive-pending-sync";
@@ -889,6 +935,15 @@ export default function App() {
     setBriefings(Array.isArray(data.briefings) ? data.briefings : []);
     setPactAgents(Array.isArray(data.agents) ? data.agents : []);
     setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
+  }
+
+  async function loadDayPlan(workspaceId: string, date: string) {
+    const version = ++dayPlanLoadVersion.current;
+    const response = await fetch(`/api/day-plan?workspaceId=${encodeURIComponent(workspaceId)}&date=${date}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Day plan unavailable");
+    if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
+    return data as DayPlan;
   }
 
   async function runBriefing(kind: "morning" | "evening") {
@@ -1714,9 +1769,18 @@ export default function App() {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
+  const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
+  useEffect(() => {
+    if (authState !== "ready") return;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setDayPlan(null);
+    setDayPlanStatus("");
+    loadDayPlan(workspaceId, calendarToday)
+      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
+  }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
   const attentionTaskCount = items.filter((task) => {
     if (task.type !== "task" || task.status !== "open") return false;
     return [task.properties.when, task.properties.deadline].some(
@@ -2169,6 +2233,67 @@ export default function App() {
     await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
+  }
+  async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
+    if (dayPlanBusy || !dayPlan) return;
+    if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
+    const task = items.find((candidate) => candidate.id === item.taskId && candidate.type === "task" && candidate.status === "open" && candidate.workspaceId === dayPlan.workspaceId);
+    if (!task) { setDayPlanStatus(tr("dayPlanChanged")); return; }
+    setDayPlanBusy(true);
+    setDayPlanStatus("");
+    try {
+      await syncQueue.current;
+      if (localStorage.getItem(pendingKey) === "1") throw new Error(tr("dayPlanSyncFirst"));
+      const current = await loadDayPlan(dayPlan.workspaceId, dayPlan.date);
+      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
+      const stillProposed = current.planBlocks.find((block) => block.taskId === item.taskId && block.start === item.start && block.end === item.end);
+      const stillUnscheduled = current.unscheduled.some((candidate) => candidate.taskId === item.taskId);
+      if (!stillProposed && !stillUnscheduled) throw new Error(tr("dayPlanChanged"));
+      if (decision === "accepted" && (!stillProposed || !item.start || !item.end)) throw new Error(tr("dayPlanChanged"));
+      if (decision === "accepted") {
+        const proposeResponse = await fetch("/api/day-plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: current.workspaceId, date: current.date, revision: current.revision, taskId: item.taskId, start: item.start, end: item.end }) });
+        const proposed = await proposeResponse.json().catch(() => ({}));
+        if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
+        const proposal = proposed.proposal as AIProposal;
+        if (!window.confirm(`${tr("acceptBlock")} — ${tr("confirmDayPlanAction")} ${task.title.replace(/\s+/g, " ").slice(0, 160)}\n${item.start} – ${item.end}`)) {
+          await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", proposalId: proposal.id }) });
+          return;
+        }
+        if (calendarWorkspaceSelection.current !== dayPlan.workspaceId) throw new Error(tr("dayPlanChanged"));
+        const confirmResponse = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "confirm", proposalId: proposal.id }) });
+        const confirmed = await confirmResponse.json().catch(() => ({}));
+        if (!confirmResponse.ok) throw new Error(confirmed.error || tr("dayPlanChanged"));
+        setDayPlanUndo({ actionId: confirmed.actionId, workspaceId: current.workspaceId, date: current.date });
+        await pullFromServer();
+        await loadDayPlan(current.workspaceId, current.date);
+        return;
+      }
+      if (!window.confirm(`${tr(decision === "tomorrow" ? "moveTomorrow" : "skipPlanning")} — ${tr("confirmDayPlanAction")} ${task.title.replace(/\s+/g, " ").slice(0, 160)}`)) return;
+      const feedback = { date: dayPlan.date, decision, at: Date.now(), proposedStart: item.start || "" };
+      const history = Array.isArray(task.properties.planningHistory) ? task.properties.planningHistory : [];
+      const changes = decision === "tomorrow"
+          ? { when: calendarTomorrow, today: false, plannedStart: "", plannedEnd: "", inbox: false, someday: false, planningFeedback: feedback, planningHistory: [...history, feedback].slice(-50) }
+          : { planningFeedback: feedback, planningHistory: [...history, feedback].slice(-50) };
+      await patch(task, changes, `day plan ${decision}`);
+      await loadDayPlan(dayPlan.workspaceId, dayPlan.date);
+    } catch (error) {
+      setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged"));
+    } finally {
+      setDayPlanBusy(false);
+    }
+  }
+  async function undoDayPlanBlock() {
+    if (!dayPlanUndo || dayPlanBusy) return;
+    setDayPlanBusy(true);
+    try {
+      const response = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", actionId: dayPlanUndo.actionId }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || tr("dayPlanChanged"));
+      setDayPlanUndo(null);
+      await pullFromServer();
+      await loadDayPlan(dayPlanUndo.workspaceId, dayPlanUndo.date);
+    } catch (error) { setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")); }
+    finally { setDayPlanBusy(false); }
   }
   async function done(id: string) {
     const t = await db.entities.get(id);
@@ -2864,6 +2989,49 @@ export default function App() {
             </section>
             </div>
             </>
+          )}
+          {(view === "Home" || view === "Today") && (
+            <section className="dayPlanCard" aria-labelledby="day-plan-title">
+              <div className="sectionHeading">
+                <div><p className="eyebrow">ALBERT</p><h2 id="day-plan-title">{tr("dayPlanTitle")}</h2></div>
+                {visibleDayPlan?.calendar === "ready" && <strong>{Math.floor((visibleDayPlan.freeMinutes || 0) / 60)} h {(visibleDayPlan.freeMinutes || 0) % 60} min</strong>}
+              </div>
+              {dayPlanStatus && <p role="status">{dayPlanStatus}</p>}
+              {visibleDayPlan ? <>
+                <p>{tr(visibleDayPlan.calendar === "ready" ? "dayPlanReady" : visibleDayPlan.calendar === "missing" ? "dayPlanMissing" : visibleDayPlan.calendar === "stale" ? "dayPlanStale" : "dayPlanNonWorkday")}</p>
+                {visibleDayPlan.overloaded && <p role="status" className="dayPlanWarning">{tr("dayPlanOverloaded")} ({visibleDayPlan.requiredMinutes} min)</p>}
+                {dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date && <button disabled={dayPlanBusy} onClick={undoDayPlanBlock}>{tr("dayPlanUndo")}</button>}
+                {visibleDayPlan.existingBlocks.length + visibleDayPlan.planBlocks.length + visibleDayPlan.unscheduled.length === 0 && <p>{tr("dayPlanEmpty")}</p>}
+                <div className="dayPlanTimeline">
+                  {[...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })), ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))]
+                    .sort((a, b) => String(a.start).localeCompare(String(b.start))).map((item) => (
+                    <article className={`dayPlanBlock ${item.existing ? "existing" : "proposed"}`} key={`${item.taskId}:${item.start}`}>
+                      <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.start!))}–{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.end!))}</time>
+                      <div><strong>{item.title}</strong><small>{tr(item.existing ? "dayPlanExisting" : "dayPlanSuggested")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min</small>
+                        {!item.existing && <div className="dayPlanActions">
+                          <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "accepted")}>{tr("acceptBlock")}</button>
+                          <button disabled={dayPlanBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) inspect(task); }}>{tr("anotherTime")}</button>
+                          <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "tomorrow")}>{tr("moveTomorrow")}</button>
+                          <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "dismissed")}>{tr("skipPlanning")}</button>
+                        </div>}
+                      </div>
+                    </article>
+                  ))}
+                  {visibleDayPlan.unscheduled.map((item) => (
+                    <article className="dayPlanBlock unscheduled" key={item.taskId}>
+                      <span>{tr("dayPlanUnscheduled")}</span>
+                      <div><strong>{item.title}</strong><small>{tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min</small>
+                        <div className="dayPlanActions">
+                          <button disabled={dayPlanBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) inspect(task); }}>{tr("anotherTime")}</button>
+                          <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "tomorrow")}>{tr("moveTomorrow")}</button>
+                          <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "dismissed")}>{tr("skipPlanning")}</button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </> : !dayPlanStatus && <p>{tr("checking")}</p>}
+            </section>
           )}
           {view === "Search" && query && (
             <div className="searchResults">
@@ -4216,9 +4384,14 @@ export default function App() {
                     onChange={(event) => {
                       const plannedStart = fromLocalDateTime(event.target.value);
                       const estimatedMinutes = Number(selected.properties.estimatedMinutes || 30);
+                      const feedback = { date: calendarToday, decision: "adjusted", at: Date.now(), chosenStart: plannedStart };
+                      const history = Array.isArray(selected.properties.planningHistory) ? selected.properties.planningHistory : [];
                       patch(selected, {
                         plannedStart,
                         plannedEnd: plannedStart ? new Date(Date.parse(plannedStart) + estimatedMinutes * 60_000).toISOString() : "",
+                        planningSource: plannedStart ? "manual" : "",
+                        planningFeedback: feedback,
+                        planningHistory: [...history, feedback].slice(-50),
                         ...(event.target.value ? { when: event.target.value.slice(0, 10), inbox: false, someday: false } : {}),
                       }, "planned time changed");
                     }}

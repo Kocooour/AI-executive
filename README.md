@@ -33,6 +33,7 @@ npm run start -- --hostname 127.0.0.1
 - OS-level urgent-task badges for installed iOS/iPadOS Home Screen and macOS Dock web apps
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
 - Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
+- Albert's day plan previews ranked tasks in a mobile-friendly timeline. Exact blocks require a fresh connected calendar and avoid existing planned tasks. Accepting a block uses a server-side, single-task proposal with a current-revision and overlap check, audit history and Undo; it does not change the task's due date. When the calendar is missing or stale, the plan lists tasks without claiming exact free times. Decisions and manual time changes are recorded as task planning feedback.
 - Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 

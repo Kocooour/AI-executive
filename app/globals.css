@@ -518,6 +518,20 @@ article small {
   text-align: left;
 }
 .briefingTasks small { display: block; color: #777; margin-top: 2px; }
+.dayPlanCard { margin: 22px 0; padding: 20px; border: 1px solid var(--border, #d9d9d9); border-radius: 18px; background: var(--surface, #fff); }
+.dayPlanCard .sectionHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dayPlanCard .sectionHeading h2 { margin: 2px 0 0; }
+.dayPlanWarning { color: #a64220; font-weight: 650; }
+.dayPlanTimeline { display: grid; gap: 10px; margin-top: 16px; }
+.dayPlanBlock { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 12px; padding: 12px; border-left: 4px solid #6756cc; border-radius: 10px; background: rgba(112, 93, 200, .08); }
+.dayPlanBlock.existing { border-left-color: #339578; background: rgba(51, 149, 120, .08); }
+.dayPlanBlock.unscheduled { border-left-color: #ba8151; background: rgba(186, 129, 81, .08); }
+.dayPlanBlock time, .dayPlanBlock > span { font-size: .88rem; font-weight: 700; }
+.dayPlanBlock strong, .dayPlanBlock small { display: block; }
+.dayPlanBlock small { margin-top: 3px; color: var(--muted, #777); }
+.dayPlanActions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.dayPlanActions button { min-height: 36px; padding: 5px 10px; border: 1px solid currentColor; border-radius: 8px; background: transparent; }
+@media (max-width: 600px) { .dayPlanCard { padding: 15px; } .dayPlanBlock { grid-template-columns: 1fr; gap: 5px; } .dayPlanActions button { flex: 1 1 42%; } }
 .calendarAgenda, .calendarSources { display: grid; gap: 10px; margin: 14px 0; }
 .calendarAgenda > div, .calendarSources > div {
   display: grid;

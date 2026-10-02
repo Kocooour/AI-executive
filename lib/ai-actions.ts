@@ -5,6 +5,7 @@ import { getNotificationPreferences } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { completeServerAI } from "./server-ai-provider";
 import { buildExecutiveBriefing } from "./executive-briefings";
+import { buildDayPlan, currentDayPlanDate } from "./day-plan";
 import { resolvePACTContext } from "./pact";
 
 type CreateOperation = {
@@ -416,6 +417,39 @@ function createProposal(
   return { id, summary, changes, expiresAt };
 }
 
+export function proposeDayPlanBlock(input: {
+  sessionBinding: string;
+  workspaceId: string;
+  date: string;
+  taskId: string;
+  start: string;
+  end: string;
+  revision: number;
+}) {
+  if (input.date !== currentDayPlanDate()) throw new HttpInputError("Day plan date changed; review it again", 409);
+  const plan = buildDayPlan(input.workspaceId, input.date);
+  if (plan.revision !== input.revision || plan.calendar !== "ready" ||
+      !plan.planBlocks.some((block) => block.taskId === input.taskId && block.start === input.start && block.end === input.end)) {
+    throw new HttpInputError("Day plan changed; review it again", 409);
+  }
+  const snapshot = readSnapshot();
+  const task = snapshot.entities.find((entity) => entity.id === input.taskId && entity.type === "task" && entity.status === "open" && entity.workspaceId === input.workspaceId);
+  if (!task) throw new HttpInputError("Task changed; review the plan again", 409);
+  const feedback = { date: input.date, decision: "accepted", at: Date.now(), proposedStart: input.start };
+  const history = Array.isArray(task.properties.planningHistory) ? task.properties.planningHistory : [];
+  return createProposal(input.sessionBinding, input.workspaceId, snapshot.revision, {
+    kind: "update", entityId: task.id, expectedUpdatedAt: task.updatedAt,
+    patch: {
+      title: task.title, status: task.status, content: task.content || "",
+      properties: { ...task.properties, plannedStart: input.start, plannedEnd: input.end,
+        planningSource: "albert-day-plan", planningFeedback: feedback, planningHistory: [...history, feedback].slice(-50) },
+    },
+  }, `Naplánovat úkol „${task.title}“`, [
+    { label: "Úkol", value: task.title },
+    { label: "Čas", value: `${input.start} – ${input.end}` },
+  ]);
+}
+
 function morningBrief(workspaceId: string, entities: Entity[]) {
   void entities;
   if (workspaceId === "all") return "Pro denní přehled vyber konkrétní workspace; souhrn All my work zůstává jen čtecí agregace.";
@@ -591,6 +625,25 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       summary: string;
     };
     const operation = payload.operation;
+    if (operation.kind === "update" && operation.patch.properties.planningSource === "albert-day-plan" &&
+        (operation.patch.properties.planningFeedback as { decision?: string } | undefined)?.decision === "accepted") {
+      const properties = operation.patch.properties;
+      const feedback = properties.planningFeedback as { date?: string };
+      if (feedback.date !== currentDayPlanDate()) throw new Error("Day plan date changed; review it again");
+      const plan = buildDayPlan(String(row.workspace_id), String(feedback.date || ""));
+      const valid = plan.calendar === "ready" && plan.planBlocks.some((block) =>
+        block.taskId === operation.entityId && block.start === properties.plannedStart && block.end === properties.plannedEnd);
+      if (!valid) throw new Error("Day plan changed; review it again");
+      const start = Date.parse(String(properties.plannedStart || ""));
+      const end = Date.parse(String(properties.plannedEnd || ""));
+      const overlap = readSnapshot().entities.some((entity) => {
+        if (entity.id === operation.entityId || entity.type !== "task" || entity.status !== "open" || entity.workspaceId !== row.workspace_id) return false;
+        const otherStart = Date.parse(String(entity.properties.plannedStart || ""));
+        const otherEnd = Date.parse(String(entity.properties.plannedEnd || ""));
+        return Number.isFinite(otherStart) && Number.isFinite(otherEnd) && start < otherEnd && end > otherStart;
+      });
+      if (overlap) throw new Error("Day plan changed; another task uses this time");
+    }
     const now = Date.now();
     let before: Entity | null = null;
     let after: Entity;
