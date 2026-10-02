@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import "./globals.css";
 import { PWARegister } from "./pwa-register";
 
@@ -71,11 +72,13 @@ const clientErrorBootstrap = `
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="cs" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
-        <script dangerouslySetInnerHTML={{ __html: clientErrorBootstrap }} />
-      </head>
       <body>
+        <Script id="theme-bootstrap" strategy="beforeInteractive">
+          {themeBootstrap}
+        </Script>
+        <Script id="client-error-bootstrap" strategy="beforeInteractive">
+          {clientErrorBootstrap}
+        </Script>
         <PWARegister />
         {children}
       </body>
