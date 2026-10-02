@@ -1515,6 +1515,7 @@ export default function App() {
     Areas: areas.length,
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
+  const attentionTaskCount = tasks.filter((task) => taskDueTone(task, today) !== "").length;
   const calendarTimezone = notificationState?.preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -2427,9 +2428,14 @@ export default function App() {
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
-            aria-label={tr("askAi")}
+            aria-label={`${tr("askAi")}${attentionTaskCount ? ` · ${attentionTaskCount}` : ""}`}
           >
             ◇ {tr("askAi")}
+            {attentionTaskCount > 0 && (
+              <span className="aiAlertBadge" aria-hidden="true">
+                {attentionTaskCount > 99 ? "99+" : attentionTaskCount}
+              </span>
+            )}
           </button>
         </header>
         <div className="content">
