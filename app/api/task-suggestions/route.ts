@@ -27,7 +27,13 @@ export async function POST(request: Request) {
     const language = body.language === "en" ? "en" : "cs";
     if (!title || title.length > 1000) throw new HttpInputError("Task title is invalid");
     if (!/^[A-Za-z0-9:_-]{1,120}$/.test(workspaceId) || workspaceId === "all") throw new HttpInputError("Explicit workspace is required");
-    if (requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) throw new HttpInputError("Requested date is invalid");
+    if (requestedDate) {
+      const parsedDate = new Date(`${requestedDate}T00:00:00Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || Number.isNaN(parsedDate.getTime()) ||
+          parsedDate.toISOString().slice(0, 10) !== requestedDate) {
+        throw new HttpInputError("Requested date is invalid");
+      }
+    }
     if (explicitPriority && !["none", "low", "medium", "high"].includes(explicitPriority)) throw new HttpInputError("Priority is invalid");
     const suggestion = suggestTask({ title, workspaceId, requestedDate, explicitPriority, language });
     recordSecurityEvent(request, "task.suggest", "allowed", {

@@ -532,6 +532,7 @@ export default function App() {
     [backupStatus, setBackupStatus] = useState(""),
     [standalone, setStandalone] = useState(false),
     [notificationState, setNotificationState] = useState<NotificationState | null>(null),
+    [badgeNow, setBadgeNow] = useState(() => Date.now()),
     [notificationStatus, setNotificationStatus] = useState(""),
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
@@ -1694,7 +1695,7 @@ export default function App() {
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+  }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
@@ -1705,6 +1706,21 @@ export default function App() {
       (due) => typeof due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= calendarTomorrow,
     );
   }).length;
+  useEffect(() => {
+    if (authState !== "ready" || !notificationState) return;
+    const nextMidnight = Date.parse(zonedDateTimeToIso(calendarTomorrow, "00:00", calendarTimezone));
+    const timer = window.setTimeout(() => setBadgeNow(Date.now()), Math.max(1000, nextMidnight - Date.now() + 1000));
+    const refresh = () => {
+      if (document.visibilityState === "visible") setBadgeNow(Date.now());
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [authState, notificationState, calendarTomorrow, calendarTimezone]);
   useEffect(() => {
     const badgeNavigator = navigator as Navigator & {
       setAppBadge?: (count?: number) => Promise<void>;
