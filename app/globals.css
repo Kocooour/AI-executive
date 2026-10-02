@@ -1025,6 +1025,101 @@ article {
   cursor: not-allowed;
   opacity: 0.45;
 }
+.captureSuggestionState {
+  margin: 12px 0;
+  color: #6b5de7;
+  font-size: 13px;
+}
+.captureSuggestionState.error {
+  color: #c44747;
+}
+.captureModal > .captureSuggestion {
+  display: grid;
+  gap: 13px;
+  margin: 14px 0;
+  padding: 15px;
+  border: 1px solid var(--line, #dddaf9);
+  border-radius: 13px;
+  background: var(--surface-subtle, #faf9ff);
+  color: var(--text, #202127);
+}
+.captureSuggestionHead,
+.capturePlannedTime {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.captureSuggestionHead span {
+  color: var(--muted, #777);
+  font-size: 12px;
+}
+.captureSuggestionToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent, #4e43b8);
+  font-size: 13px;
+  font-weight: 650;
+}
+.captureSuggestionToggle input {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+}
+.captureSuggestionGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.captureSuggestionGrid[aria-disabled="true"] {
+  opacity: 0.5;
+}
+.captureSuggestionGrid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted, #777);
+  font-size: 12px;
+}
+.captureSuggestionGrid select,
+.captureSuggestionGrid input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #ddd;
+  border-radius: 9px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+.captureDurationInput {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+.capturePlannedTime {
+  padding-top: 3px;
+  font-size: 13px;
+}
+.capturePlannedTime span {
+  color: var(--muted, #666);
+  text-align: right;
+}
+.captureSuggestion details {
+  color: var(--muted, #777);
+  font-size: 12px;
+}
+.captureSuggestion summary {
+  cursor: pointer;
+  color: var(--accent, #5d55a8);
+  font-weight: 650;
+}
+.captureSuggestion ul {
+  margin: 7px 0 10px;
+  padding-left: 19px;
+}
 @media (max-width: 700px) {
   .mobileWorkspaceButton {
     display: block;
@@ -2621,6 +2716,8 @@ h3 {
 .contextForm textarea,
 .captureModal input,
 .captureWorkspace select,
+.captureSuggestionGrid select,
+.captureSuggestionGrid input,
 .listControls select,
 .assistantComposer input,
 .notificationActions button {

@@ -107,6 +107,21 @@ interface PACTAgentResult {
   createdAt: number;
 }
 
+interface CaptureSuggestion {
+  projectId: string;
+  projectTitle: string;
+  areaId: string;
+  areaTitle: string;
+  priority: "none" | "low" | "medium" | "high";
+  estimatedMinutes: number;
+  scheduledStart: string;
+  scheduledEnd: string;
+  scheduledDate: string;
+  confidence: "low" | "medium" | "high";
+  reasons: string[];
+  constraints: string[];
+}
+
 interface CalendarSourceState {
   id: string;
   workspaceId: string;
@@ -242,6 +257,10 @@ const copy: Record<Language, Record<string, string>> = {
     untitledTask: "Untitled task", cancel: "Cancel", list: "List", when: "When",
     project: "Project", area: "Area", task: "Task", note: "Note", reminder: "Reminder", taskNotes: "Task notes",
     captureExample: "Try “Call Peter tomorrow” or “Service 25 Sep #high”",
+    albertSuggestion: "Albert’s suggestion", suggesting: "Albert is preparing a suggestion…",
+    useSuggestion: "Use Albert’s suggestion", confidence: "Confidence", duration: "Estimated duration",
+    minutes: "minutes", plannedTime: "Suggested time", noFreeSlot: "No reliable free slot found",
+    whySuggested: "Why", constraintsUsed: "Constraints used", suggestionUnavailable: "Suggestion is temporarily unavailable.", retry: "Retry",
     moveItemNamed: "Move", dragToMove: "Drag to reorder or move",
     openTasks: "Open tasks", checklist: "Checklist", addChecklistItem: "Add checklist item",
     repeat: "Repeat", never: "Never", daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly",
@@ -308,6 +327,10 @@ const copy: Record<Language, Record<string, string>> = {
     untitledTask: "Úkol bez názvu", cancel: "Zrušit", list: "Seznam", when: "Kdy",
     project: "Projekt", area: "Oblast", task: "Úkol", note: "Poznámka", reminder: "Připomínka", taskNotes: "Poznámky k úkolu",
     captureExample: "Zkuste „Zavolat Petrovi zítra“ nebo „Servis 25. 9. #high“",
+    albertSuggestion: "Albertův návrh", suggesting: "Albert připravuje návrh…",
+    useSuggestion: "Použít Albertův návrh", confidence: "Jistota", duration: "Odhadovaná náročnost",
+    minutes: "minut", plannedTime: "Navržený čas", noFreeSlot: "Spolehlivý volný blok nebyl nalezen",
+    whySuggested: "Proč", constraintsUsed: "Použitá omezení", suggestionUnavailable: "Návrh se teď nepodařilo připravit.", retry: "Zkusit znovu",
     moveItemNamed: "Přesunout", dragToMove: "Přetažením změnit pořadí nebo umístění",
     openTasks: "Otevřené úkoly", checklist: "Kontrolní seznam", addChecklistItem: "Přidat položku",
     repeat: "Opakování", never: "Nikdy", daily: "Denně", weekly: "Týdně", monthly: "Měsíčně", yearly: "Ročně",
@@ -480,6 +503,10 @@ export default function App() {
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
     [captureProjectId, setCaptureProjectId] = useState(""),
     [draft, setDraft] = useState(""),
+    [captureSuggestion, setCaptureSuggestion] = useState<CaptureSuggestion | null>(null),
+    [captureSuggestionBusy, setCaptureSuggestionBusy] = useState(false),
+    [captureSuggestionError, setCaptureSuggestionError] = useState(""),
+    [useCaptureSuggestion, setUseCaptureSuggestion] = useState(true),
     [undo, setUndo] = useState<Entity | null>(null),
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
@@ -549,6 +576,7 @@ export default function App() {
   const deepLinkHandled = useRef(false);
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
+  const captureSuggestionVersion = useRef(0);
   const draggingIdRef = useRef("");
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
@@ -1338,6 +1366,63 @@ export default function App() {
     }
   }, [activeWorkspaceId, items, writeWorkspaceId]);
 
+  useEffect(() => {
+    const parsed = parseCapture(draft);
+    if (!capture || captureType !== "task" || parsed.title.length < 3) {
+      captureSuggestionVersion.current += 1;
+      setCaptureSuggestion(null);
+      setCaptureSuggestionBusy(false);
+      setCaptureSuggestionError("");
+      return;
+    }
+    const version = ++captureSuggestionVersion.current;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setCaptureSuggestion(null);
+    setCaptureSuggestionBusy(true);
+    setCaptureSuggestionError("");
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), 7000);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch("/api/task-suggestions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            title: parsed.title,
+            workspaceId,
+            requestedDate: parsed.when || undefined,
+            explicitPriority: parsed.priority,
+            language,
+          }),
+          signal: controller.signal,
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Suggestion failed");
+        if (captureSuggestionVersion.current !== version) return;
+        const suggestion = body.suggestion as CaptureSuggestion;
+        if (captureProjectId) {
+          const project = items.find((item) => item.id === captureProjectId && item.type === "project");
+          suggestion.projectId = captureProjectId;
+          suggestion.projectTitle = project?.title || suggestion.projectTitle;
+        }
+        setCaptureSuggestion(suggestion);
+      } catch {
+        if (captureSuggestionVersion.current === version) {
+          setCaptureSuggestion(null);
+          setCaptureSuggestionError(tr("suggestionUnavailable"));
+        }
+      } finally {
+        window.clearTimeout(abortTimer);
+        if (captureSuggestionVersion.current === version) setCaptureSuggestionBusy(false);
+      }
+    }, 650);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(abortTimer);
+      controller.abort();
+    };
+  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, items, language]);
+
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
     if (!name || name.length > 120) return;
@@ -1807,23 +1892,44 @@ export default function App() {
     setCaptureType(type);
     setCaptureProjectId(projectId);
     setDraft("");
+    setCaptureSuggestion(null);
+    setCaptureSuggestionError("");
+    setCaptureSuggestionBusy(false);
+    setUseCaptureSuggestion(true);
     setCapture(true);
   }
   async function submitCapture() {
     const title = draft.trim();
     if (!title) return;
+    const parsed = parseCapture(title);
+    const suggestion = captureType === "task" && useCaptureSuggestion ? captureSuggestion : null;
+    const suggestedProjectId = captureProjectId || suggestion?.projectId || "";
+    const suggestedAreaId = suggestion?.areaId || "";
+    const suggestedDate = parsed.when || suggestion?.scheduledDate || "";
     const globalTask = captureType === "task" && !captureProjectId;
     setCapture(false);
     if (globalTask) {
       closeDetail();
       setMoreOpen(false);
-      setView("Inbox");
+      setView(suggestedDate === today ? "Today" : "Inbox");
     }
     try {
       await create(captureType, title, {
-        ...(captureProjectId ? { projectId: captureProjectId } : {}),
+        ...(suggestedProjectId ? { projectId: suggestedProjectId } : {}),
+        ...(suggestedAreaId ? { areaId: suggestedAreaId } : {}),
         ...(captureType === "task"
-          ? { inbox: !captureProjectId, today: false }
+          ? {
+              inbox: !suggestedProjectId && !suggestedDate,
+              today: suggestedDate === today,
+              ...(suggestedDate ? { when: suggestedDate } : {}),
+              ...(suggestion && parsed.priority === "none" ? { priority: suggestion.priority } : {}),
+              ...(suggestion ? {
+                estimatedMinutes: suggestion.estimatedMinutes,
+                plannedStart: suggestion.scheduledStart,
+                plannedEnd: suggestion.scheduledEnd,
+                planningSource: "albert-suggestion",
+              } : {}),
+            }
           : {}),
       });
     } catch {
@@ -3499,6 +3605,99 @@ export default function App() {
                     </span>
                   </div>
                 )}
+                {captureSuggestionBusy && <div className="captureSuggestionState">◇ {tr("suggesting")}</div>}
+                {captureSuggestionError && !captureSuggestionBusy && (
+                  <div className="captureSuggestionState error">{captureSuggestionError}</div>
+                )}
+                {captureSuggestion && !captureSuggestionBusy && (
+                  <div className="captureSuggestion">
+                    <div className="captureSuggestionHead">
+                      <strong>◇ {tr("albertSuggestion")}</strong>
+                      <span>{tr("confidence")}: {tr(captureSuggestion.confidence)}</span>
+                    </div>
+                    <label className="captureSuggestionToggle">
+                      <input
+                        type="checkbox"
+                        checked={useCaptureSuggestion}
+                        onChange={(event) => setUseCaptureSuggestion(event.target.checked)}
+                      />
+                      {tr("useSuggestion")}
+                    </label>
+                    <div className="captureSuggestionGrid" aria-disabled={!useCaptureSuggestion}>
+                      <label>
+                        {tr("project")}
+                        <select
+                          value={captureSuggestion.projectId}
+                          disabled={!useCaptureSuggestion || Boolean(captureProjectId)}
+                          onChange={(event) => {
+                            const entity = items.find((item) => item.id === event.target.value);
+                            setCaptureSuggestion({ ...captureSuggestion, projectId: event.target.value, projectTitle: entity?.title || "" });
+                          }}
+                        >
+                          <option value="">—</option>
+                          {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            <option key={item.id} value={item.id}>{item.title}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        {tr("area")}
+                        <select
+                          value={captureSuggestion.areaId}
+                          disabled={!useCaptureSuggestion}
+                          onChange={(event) => {
+                            const entity = items.find((item) => item.id === event.target.value);
+                            setCaptureSuggestion({ ...captureSuggestion, areaId: event.target.value, areaTitle: entity?.title || "" });
+                          }}
+                        >
+                          <option value="">—</option>
+                          {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            <option key={item.id} value={item.id}>{item.title}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        {tr("priority")}
+                        <select
+                          value={captureSuggestion.priority}
+                          disabled={!useCaptureSuggestion || parseCapture(draft).priority !== "none"}
+                          onChange={(event) => setCaptureSuggestion({ ...captureSuggestion, priority: event.target.value as CaptureSuggestion["priority"] })}
+                        >
+                          {(["none", "low", "medium", "high"] as const).map((priority) => (
+                            <option key={priority} value={priority}>{tr(priority)}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        {tr("duration")}
+                        <span className="captureDurationInput">
+                          <input
+                            type="number"
+                            min="10"
+                            max="480"
+                            step="5"
+                            value={captureSuggestion.estimatedMinutes}
+                            disabled={!useCaptureSuggestion}
+                            onChange={(event) => setCaptureSuggestion({ ...captureSuggestion, estimatedMinutes: Math.max(10, Math.min(480, Number(event.target.value) || 10)) })}
+                          />
+                          {tr("minutes")}
+                        </span>
+                      </label>
+                    </div>
+                    <div className="capturePlannedTime">
+                      <b>{tr("plannedTime")}</b>
+                      <span>{captureSuggestion.scheduledStart
+                        ? new Date(captureSuggestion.scheduledStart).toLocaleString(language === "cs" ? "cs-CZ" : "en-US", { weekday: "short", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })
+                        : tr("noFreeSlot")}</span>
+                    </div>
+                    <details>
+                      <summary>{tr("whySuggested")}</summary>
+                      <ul>{captureSuggestion.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                      <b>{tr("constraintsUsed")}</b>
+                      <ul>{captureSuggestion.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul>
+                    </details>
+                  </div>
+                )}
               </>
             )}
             <div>
@@ -3508,7 +3707,7 @@ export default function App() {
               <button
                 type="submit"
                 className="ai"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || (captureType === "task" && captureSuggestionBusy)}
               >
                 {captureType === "note" ? tr("addNote") : tr("addTask")}
               </button>
@@ -3835,6 +4034,40 @@ export default function App() {
                     <option value="medium">{tr("medium")}</option>
                     <option value="high">{tr("high")}</option>
                   </select>
+                </label>
+                <label>
+                  {tr("duration")}
+                  <input
+                    type="number"
+                    min="10"
+                    max="480"
+                    step="5"
+                    value={String(selected.properties.estimatedMinutes || "")}
+                    onChange={(event) => {
+                      const estimatedMinutes = Math.max(10, Math.min(480, Number(event.target.value) || 10));
+                      const plannedStart = String(selected.properties.plannedStart || "");
+                      patch(selected, {
+                        estimatedMinutes,
+                        ...(plannedStart ? { plannedEnd: new Date(Date.parse(plannedStart) + estimatedMinutes * 60_000).toISOString() } : {}),
+                      }, "duration changed");
+                    }}
+                  />
+                </label>
+                <label>
+                  {tr("plannedTime")}
+                  <input
+                    type="datetime-local"
+                    value={toLocalDateTime(selected.properties.plannedStart)}
+                    onChange={(event) => {
+                      const plannedStart = fromLocalDateTime(event.target.value);
+                      const estimatedMinutes = Number(selected.properties.estimatedMinutes || 30);
+                      patch(selected, {
+                        plannedStart,
+                        plannedEnd: plannedStart ? new Date(Date.parse(plannedStart) + estimatedMinutes * 60_000).toISOString() : "",
+                        ...(event.target.value ? { when: event.target.value.slice(0, 10), inbox: false, someday: false } : {}),
+                      }, "planned time changed");
+                    }}
+                  />
                 </label>
                 <label>
                   {tr("reminder")}

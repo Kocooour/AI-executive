@@ -25,7 +25,7 @@ npm run start -- --hostname 127.0.0.1
 - Projects, areas, notes, relations and relation-aware search/context
 - Persistent Personal and Shared workspaces, scoped views, and an All my work aggregate
 - Task dates, deadlines, priority, notes, checklist, recurrence and history
-- Quick Capture with Czech today/tomorrow/date parsing and priority tokens
+- Quick Capture with Czech today/tomorrow/date parsing, priority tokens and a reviewable Albert suggestion for project, area, priority, effort and the first suitable free calendar block
 - SQLite server source of truth with local IndexedDB cache and conflict-aware sync
 - Daily/manual/safety backups and tombstones for deletion sync
 - Installable PWA with an offline shell
@@ -236,6 +236,15 @@ claim a free slot from stale data. The current horizon is 14 days back and 90
 days forward; sources refresh at most every 30 minutes in the single always-on
 Node process. Microsoft Graph can later implement the same normalized adapter
 without changing the planning model.
+
+Albert's task suggestion endpoint is authenticated, same-origin protected and
+workspace-scoped. It compares the new title with project names and earlier
+related tasks, estimates effort from explicit duration or task type, and checks
+the next 14 configured workdays for a sufficiently long free interval. The
+suggestion is advisory: Quick Capture shows every proposed field before save,
+allows edits or one-click opt-out, and never blocks task creation when calendar
+data or the suggestion service is unavailable. Only the confirmed values are
+stored on the task.
 
 ## Security alerts
 
