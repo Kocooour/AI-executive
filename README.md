@@ -53,11 +53,11 @@ Agents never receive provider credentials or bypass authorization. Model-propose
 
 ### C — Context
 
-Context becomes a first-class structured layer separate from tasks and notes. Supported scopes include me, work, family, rules, project-specific and workspace-specific context.
+Context is a first-class structured layer over the existing canonical entities, tasks and notes. The next specification is [Personal Context Graph v2](#personal-context-graph-v2--target-specification): evidence-backed claims and typed relations, claim-level review, durable revision history and an Obsidian-inspired owner workspace.
 
-Each context item records provenance, workspace, sensitivity, timestamps and lifecycle. Owner-authored facts must remain distinguishable from AI-derived context. Material AI-suggested durable context requires confirmation.
+Supported PACT scopes remain me, work, family, rules, project and workspace. Scope is not a substitute for workspace authorization or sensitivity. Owner statements, imported evidence and AI inferences remain distinguishable; confirmation applies to an individual claim and never implicitly completes a task or verifies every fact about a person.
 
-A Context Resolver builds the minimum permitted context bundle for each agent run. It selects only scopes allowed by the agent, workspace/project and operation. Sensitive context cannot silently cross workspace boundaries or be sent to external providers unless policy permits it.
+The Context Resolver builds the minimum permitted bundle for each agent run from the canonical SQLite state. It enforces workspace/project, agent/tool, sensitivity, review status and freshness before returning data. Sensitive context cannot silently cross workspace boundaries or reach external providers. Graph v2 is a planned extension of this resolver and the existing proposal -> approval -> audit -> Undo boundary, not a second assistant or an independent source of truth.
 
 ### T — Tools
 
@@ -107,19 +107,19 @@ The server-side PACT foundation is now in place: SQLite persistence for agents, 
 
 The owner UI now exposes a dedicated Agents view with Morning Planner, Evening Reviewer, Project Manager and Meeting Prep. Each manual run requires one explicit workspace, uses only the agent's declared tools and context scopes, and records a sanitized operational run without task titles or context contents. Project Manager and Meeting Prep currently return deterministic recommendations and never write data; Morning Planner and Evening Reviewer use the existing briefing engine. Rich results are returned only to the authenticated owner session, while persisted history contains status and bounded operational metadata.
 
-The authenticated AIfréd integration API is now implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration. A versioned OpenAPI 3.1 schema lives at `docs/aifred-openapi.json`, and the running app serves an origin-aware copy at `/api/integrations/aifred/openapi`. This is the contract for a future ChatGPT/Voice connector; it advertises only planning and allowlisted read operations. Owner-only durable context management is available through `/api/context` and the Settings UI. The owner can list, create and archive context, choose scope and sensitivity, and bind project context only to a project in the same workspace. Sensitive items remain visible to the owner UI/API but are excluded from the external `context.read` tool and provider reasoning by default. Morning and evening briefings now execute as tracked PACT agent runs for both manual and scheduled paths. Run history records only sanitized operational summaries (kind, trigger, status and delivery outcome), not task titles or durable context, and is visible in the owner Agents view. Next: add build/CI verification for the PACT integration, then introduce normalized external adapters.
+The authenticated AIfréd integration API is now implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration. A versioned OpenAPI 3.1 schema lives at `docs/aifred-openapi.json`, and the running app serves an origin-aware copy at `/api/integrations/aifred/openapi`. This is the contract for a future ChatGPT/Voice connector; it advertises only planning and allowlisted read operations. Owner-only durable context management is available through `/api/context` and the Settings UI. The owner can list, create and archive context, choose scope and sensitivity, and bind project context only to a project in the same workspace. Sensitive items remain visible to the owner UI/API but are excluded from the external `context.read` tool and provider reasoning by default. Morning and evening briefings now execute as tracked PACT agent runs for both manual and scheduled paths. Run history records only sanitized operational summaries (kind, trigger, status and delivery outcome), not task titles or durable context, and is visible in the owner Agents view. Next: verify the PACT integration in build/CI and complete the Context Graph v2 reliability, provenance, review and export gates below before adding new account adapters. Existing read-only ICS planning remains supported.
 
 ### Implementation roadmap
 
-1. PACT foundation: schemas/tables for agents, context, tool permissions and agent runs; preserve all current entities.
-2. Context Resolver: scoped retrieval, provenance, sensitivity and owner editing.
-3. Tool Registry: wrap current task/project/note/calendar operations behind typed capabilities and the existing proposal boundary.
-4. Executive Orchestrator: deterministic orchestration first, then provider-assisted structured reasoning.
-5. Built-in agents: migrate Morning Brief and Evening Review, then add Executive Assistant, Project Manager and Meeting Prep.
-6. External adapters: email, Microsoft Graph/files/web and other connectors through normalized tools.
-7. Controlled proactivity: event-driven runs and configurable approval policies while retaining least privilege, auditability and reversible local mutations.
+1. Verify and preserve the current PACT foundation: agents, durable context, Context Resolver, Tool Registry, tracked runs and owner-confirmed task actions.
+2. Extend the existing SQLite and mutation service with claim/source schemas, revision checks, idempotent commands and transactional context history; prepare a non-destructive migration.
+3. Add claim-level review, explicit evidence, conflict handling and guarded multi-step Undo/Redo. Keep task execution state separate from claim review.
+4. Add the Context workspace: Markdown editing, search, dynamic graph, relation details, review queue and history in the current PWA.
+5. Complete portable export/import, encrypted backup/restore and server-enforced data-boundary checks before connecting new real accounts.
+6. Introduce normalized external adapters incrementally: one selected personal calendar first, then approved M365 and selective email. Preserve current ICS planning throughout.
+7. Extend the Context Resolver and typed tools for evidence-backed briefings and proposals; then expand controlled proactivity under existing approval policies.
 
-The first PACT milestone is complete when an Executive Assistant can read one workspace, receive a minimal resolved context bundle, inspect tasks/projects/calendar through registered read tools, produce a structured daily recommendation and propose task changes through the existing confirmation mechanism without direct database or provider credentials.
+The original PACT milestone remains the integration baseline: an Executive Assistant can read one workspace, receive a minimal resolved context bundle, inspect tasks/projects/calendar through registered tools, produce a structured recommendation and propose changes without direct database access or provider credentials. Context Graph v2 adds the acceptance gates below; they must not be described as already implemented.
 
 ### ChatGPT / Voice integration contract
 
@@ -129,12 +129,177 @@ The OpenAPI contract exposes two operations: `planWithAifred` for reasoning and 
 
 Before connecting an external client in production, deploy the new code, set `AI_EXECUTIVE_INTEGRATION_TOKEN` in the root-managed service environment, restart AI Executive, and verify that the OpenAPI endpoint is reachable only over the intended HTTPS/Tailscale path. Do not expose the local Node listener directly to the public Internet.
 
+## Personal Context Graph v2 — target specification
+
+Specification revision: 2026-10-02. This section is a product and implementation contract, not a declaration of shipped functionality. It incorporates the reviewed Albert context prototype into AI Executive / AIfréd while preserving the application's existing architecture.
+
+### Product and deployment boundaries
+
+- Provide an owner-controlled knowledge workspace with an Obsidian-inspired layout, Markdown notes, backlinks, evidence, a relationship map and a review queue. No Obsidian installation, account, subscription or plugin is required.
+- Reuse the existing Next.js application, server-side SQLite, authenticated APIs, Dexie cache and PACT services. Do not add a competing Python server, a second task store or an independent approval mechanism.
+- Preserve the installable desktop/mobile PWA and the existing always-on self-hosted Node deployment. A Mac-local installation is an optional deployment profile; a native desktop wrapper is not required to deliver the feature.
+- The owner chooses the canonical host. In self-hosted mode, data resides on that host and in explicitly permitted device caches; it is not represented as existing only on the Mac. In a Mac-local profile, remote delivery/scheduled work cannot be promised while the host is off.
+- Keep the data contract and core portable across operating systems. There is no mandatory third-party synchronization service, model provider or separate graph database.
+- Existing task/project/area/note IDs, workspaces, recurrence, calendar scheduling, notification behavior, tombstones and task-action approval policies remain intact.
+
+### Current foundation versus planned work
+
+| Area | Existing application foundation | Graph v2 requirement |
+|---|---|---|
+| Canonical storage | server SQLite and local Dexie entity/relation cache | versioned claims, sources, evidence and transactional context history |
+| Durable context | PACT context items, scopes, provenance and normal/sensitive classification | independently reviewed claims, validity and source-level evidence |
+| Owner context UI | list, create and archive in Settings | edit claims, inspect evidence, review conflicts and navigate a graph |
+| Mutations | task proposals, owner confirmation, audit and guarded Undo | reusable revision-safe context commands and durable multi-step Undo/Redo |
+| External API | planning and allowlisted read tools | versioned evidence-aware reads/proposals, with no external confirmation or Undo |
+| Backups | logical JSON and safety backups | complete context coverage, encrypted backup option and tested round-trip restore |
+| Calendar | normalized read-only ICS planning | additional adapters only after the context acceptance gates pass |
+
+The separate Markdown Atlas pilot is migration input, not production infrastructure. Its fixed graph coordinates, entity-wide confirmation, single last-change snapshot, plain ZIP backup and uncalibrated confidence values must not be carried forward as guarantees.
+
+### Entity, claim and evidence model
+
+Reuse canonical task, project, area and note entities by stable ID. Add person, organization, topic, tool, meeting and decision subjects through an explicitly versioned schema or typed subject reference. Do not duplicate a task as a new independently editable commitment: a commitment refers to its canonical task, or remains a proposal until the owner creates one.
+
+A claim records a subject, a typed predicate and exactly one target entity/reference or literal value. A relationship is a claim whose value is another subject. Entity existence, a Markdown mention and claim confirmation are distinct operations.
+
+Required logical records:
+
+| Record | Required information |
+|---|---|
+| Subject reference | stable ID, subject type, canonical entity ID when applicable, workspace, display title and revision |
+| Claim | ID, revision, subject, predicate, typed value or target, review status, freshness, provenance, evidence references, validity interval and recording time |
+| Review event | claim/revision, authenticated actor, decision, timestamp and any correction/reason |
+| Source | workspace/account, provider, external ID, accessible URL/locator, author/role, source timestamp, ingestion timestamp, content coverage and sensitivity |
+| Evidence | source ID, exact message/section locator or bounded excerpt, supported claim and whether it supports or contradicts it |
+| Change event | command ID, workspace, actor, object ID, before/after revisions, operation, time and Undo/Redo linkage |
+
+Source IDs, authors, dates and quotes are never fabricated. A missing source remains explicitly missing. A source with metadata-only coverage cannot support claims requiring its unavailable body.
+
+Conversation titles and cached summaries are discovery signals, not biographies. A conversation about a car does not establish ownership; an assistant suggestion does not establish a user commitment. Preserve the distinction between owner statement, source extraction, inference and legacy import. Owner-authored information may be recorded as such without requiring an external citation.
+
+Do not display invented truth probabilities or auto-merge people using an arbitrary confidence threshold. Ambiguous identity matches require review. Conflicting evidence creates a reviewable proposal rather than silently replacing an accepted claim.
+
+### Independent state dimensions
+
+| Dimension | Target semantics |
+|---|---|
+| Claim review | proposed / confirmed / rejected; confirmation means accepted by the owner |
+| Freshness | current / needs_review / stale |
+| Canonical task execution | existing task statuses and scheduling semantics; never overwritten by claim review |
+| Decision lifecycle | pending / decided / superseded, including the selected outcome |
+| PACT scope | existing me / work / family / rules / project / workspace |
+| Authorization boundary | one explicit workspace; All my work is read-only aggregation |
+| Sensitivity | normal / confidential / restricted in the versioned target schema |
+
+Maintain compatibility with the current normal/sensitive API until a schema migration is deployed. Map normal to normal and sensitive to protected confidential; both confidential and restricted remain excluded from external tools/provider reasoning by default. Preserve stricter imported labels. Unknown mappings fail closed and require review. Changes to public schemas, validators and clients must ship together; documentation alone does not enable new enum values.
+
+Reviewing a claim that a hosting decision is needed must not mark the task done or choose a hosting option. Archived context must not become active during migration. A new claim about a confirmed person still needs its own review.
+
+Track both when a claim was valid and when the system learned it. Unknown dates remain unknown. A time view must distinguish these two meanings.
+
+### Relations and graph semantics
+
+Retain existing canonical relations such as belongs_to_project and belongs_to_area. Add a typed semantic predicate registry with Czech labels, permitted endpoint types, direction and inverse display where useful:
+
+- uses — používá;
+- responsible_for — odpovídá za;
+- works_for — pracuje pro;
+- participates_in — účastní se;
+- assigned_to — přiřazeno;
+- blocked_by — blokováno;
+- arose_from — vzniklo z;
+- related_to — souvisí s (symmetric);
+- supersedes — nahrazuje.
+
+Disambiguate legacy owns during review instead of equating ownership with responsibility. A suggested next step is not evidence for blocked_by. Keep documentary provenance in evidence records. A wiki link only creates a navigational mention; it must not silently create a confirmed semantic claim.
+
+Every semantic relation has its own evidence, review state, freshness and temporal validity. Confirming a subject must not confirm its incident edges. Preserve the current prohibition on cross-workspace relations; multi-workspace display does not authorize cross-workspace writes or hidden-node disclosure.
+
+### Persistence, automatic saving and history
+
+SQLite on the selected canonical host is the source of truth. Store Markdown note content with revisions there; Markdown exports are portable editing artifacts, not a concurrent second database. Reuse or extend existing persistence and mutation services instead of duplicating them.
+
+Each command includes an idempotency key, object ID, explicit workspace and expected revision. Validate authorization and schema, commit state plus change history in one transaction, and return the authoritative saved object/revision. A failed transaction must leave neither a partial object change nor an orphaned history entry.
+
+- UI saves owner edits automatically after field completion, with visible saving/saved/error state. A redundant Save button is not required.
+- AI edits remain proposals requiring the existing owner confirmation. Owner autosave must not bypass that boundary for AI-generated changes.
+- Bind each response to the requested object, not the current selection. Handle fast switching, repeated clicks, stale responses and overlapping edits.
+- No-op commands do not consume an Undo step. Retry of one command does not duplicate it.
+- Extend the existing guarded Undo model with durable, workspace-scoped multi-step Undo/Redo. A reversal is a new compensating transaction; it does not erase history.
+- Show what will be undone and its target. Revision conflicts must never overwrite later edits.
+- Preserve task proposal expiry and session binding. Context history must not make expired task proposals executable.
+- Keep content-bearing owner history protected and separate from sanitized agent-run/security logs.
+- Offline edits, where allowed by sensitivity, remain explicitly pending until the canonical server accepts them. They cannot be consumed as confirmed context by agents. Scope or session changes must not leak cached data.
+- Update backup, restore, tombstone, schema-version and sync handling alongside the context tables; an old client must not erase unknown new data.
+
+### Owner workspace and interaction design
+
+Use the current app shell. Left: areas, projects, search and navigation. Center: Markdown note, graph or review list. Right: properties, claims, evidence and history. Keep Czech labels, keyboard access and mobile layout.
+
+Review operates on a specific claim or relationship and shows its source and proposed difference. Actions are confirm, correct, reject and defer. Bulk confirmation, if added, shows the exact set being approved.
+
+The active review action has a filled background after successful save. Do not add checkmarks, crosses or question marks to graph bubbles. Confirmation does not change task completion.
+
+Graph requirements:
+
+- automatic layout for arbitrary subjects; zoom, pan, pinning and persistent layout preferences;
+- views around a person/project, open commitments, and changes awaiting review;
+- filters for workspace, relation type, review/freshness and time, consistent with list/search;
+- directed edges with Czech labels and selectable evidence/history;
+- orange for proposed, green for confirmed, red for rejected, gray for stale/archived, with explicit text state in the detail;
+- an entity with several claims shows a documented summary: pending current claims take precedence over an all-confirmed appearance; no claims means neutral;
+- entity type and workspace use text/shape labels instead of competing status colors;
+- distinguish a rejected relationship from a rejected subject and a stale claim from a completed task.
+
+A generic entity-level badge must never imply that every personal fact has been verified. Each successful edit offers a concrete result and Undo. Failed saves retain the draft and explain the conflict/error.
+
+### Context Resolver and external integration
+
+Extend the existing resolver in lib/pact.ts and registered capabilities in lib/pact-tools.ts. The browser-side relation navigator is not an authorization authority.
+
+Every resolved bundle must obey workspace, project, agent/tool permissions, sensitivity, review and freshness before serialization. Canonical task state and confirmed eligible claims form the factual basis. If an operation explicitly asks for proposals, conflicts or stale context, return them clearly separated and labeled. Source evidence cannot be read through a claim if the source itself is forbidden.
+
+Add versioned logical operations for context search, claim explanation and proposed context changes through the Tool Registry. Register them explicitly; do not automatically expose them through the external tools allowlist. Update docs/aifred-openapi.json and route schemas only when implementation and authorization tests are complete.
+
+External ChatGPT/Voice and other conversational clients retain their dedicated-token, single-workspace read/propose boundary. They cannot confirm claims, invoke owner Undo/Redo, read arbitrary files or obtain provider credentials. Owner UI mutations require the owner session and existing same-origin protections.
+
+Morning Planner, Evening Reviewer, Project Manager and Meeting Prep should cite eligible evidence, report missing/conflicting context and avoid converting inference into a commitment. Scheduled runs may prepare proposals; they do not self-approve them.
+
+### Security, export and recovery
+
+- Apply authorization server-side to claims, sources, evidence, attachments, history, search, exports and provider bundles. UI filters are not security boundaries.
+- Keep database files, raw imports, history snapshots, credentials and backups outside static serving. Preserve production authentication, size/rate limits, origin checks and security headers.
+- Render Markdown and labels as untrusted content; no unsanitized HTML or execution of source instructions.
+- Treat metadata and derived summaries as potentially sensitive. Derivations inherit source restrictions unless the owner explicitly reviews a downgrade with a recorded reason.
+- Keep secrets in existing protected server/OS secret storage, never in context exports or agent bundles. Localhost binding and SQLite do not by themselves provide encryption.
+- Support complete versioned exports: manifest, Markdown notes, JSON subjects/claims/relations/sources, JSONL owner history and permitted attachments with checksums. Markdown alone is not a full history/graph backup.
+- External Markdown editing requires import against a recorded base revision, diff preview and conflict handling; it must not silently overwrite canonical data.
+- Add encrypted consistent backups covering database and attachments, key recovery instructions and a tested restore. Existing logical JSON backups are not described as encrypted.
+- Define retention, archive and explicit erasure separately, including derived copies, caches, indexes, content-bearing history and expiry from older backups.
+- A private note or source must remain private even if referenced by an otherwise visible subject.
+
+### Migration and acceptance gates
+
+**A — Reliability and canonical integration.** Preserve current data and active features; add schemas and command/history handling. Test interrupted transactions, retries, no-op edits, concurrent revisions, rapid selection changes, rename round-trips and all review statuses. Undo/Redo must survive restart and refuse conflicting reversal.
+
+**B — Provenance and review.** Migrate current pact_context and any separately imported Atlas files using an explicit dry run, backup and ID mapping. Preserve original content, scope, sensitivity, archive/pending state and owner confirmations. Owner-origin legacy entries remain attributable owner statements, but active is not blanket confirmation of newly extracted claims. Preserve Atlas entity-wide confirmation as legacy review rather than inventing claim-by-claim approval, actor or time. Retain uncalibrated confidence only in the migration record. Flag unresolved sources and mappings; repeated import must be idempotent.
+
+**C — Owner experience.** Add the Context view, editor, review queue, automatic graph layout and history. Verify that a new entity renders without code changes; all displayed states are correct; confirming a claim does not finish a task or confirm edges; mobile and keyboard flows work; the UI uses the server's saved values.
+
+**D — Portability and security.** Demonstrate full export/restore with IDs, relations, evidence and history preserved. Test unauthorized writes, cross-workspace reads/links, sensitive-source access, cache/session isolation and static-file exposure. This gate is required before adding new real-account connectors; existing ICS behavior remains supported.
+
+**E — Incremental sources and agent use.** Add one chosen personal calendar, then approved work sources and selective email. Target Gmail through its read-only API, M365 through approved delegated Microsoft Graph access and an Apple/iCloud adapter appropriate to the actual backing account. Apple Calendar may display Google or M365 data, so deduplicate by provider/account/source identity. Validate recurrence, timezone, incremental import and disconnect behavior. Metadata-only ingestion must not invent commitments from unread message bodies. Expand agent briefings only after evidence and review behavior is verified.
+
+Acceptance tests must cover integration with existing tasks, workspaces, offline/sync, scheduler and external API—not only the graph in isolation. No live account connection, deployment migration or runtime behavior change is authorized merely by this specification.
+
 ## Persistence and backups
 
 - SQLite lives at `.data/store.sqlite` or `$AI_EXECUTIVE_DATA_DIR/store.sqlite`.
 - An existing `.data/store.json` is migrated on first access without changing entity IDs or relations and remains as a recovery copy.
 - Logical JSON backups live in `.data/backups`. Settings can create and restore them; restore creates a safety backup first.
 - One automatic daily backup is created before the first data change of the day.
+
+These describe current backups. Graph v2's complete context export, encrypted recovery and history coverage are target requirements above, not claims about existing logical JSON backups.
 
 ## Push reminders
 
