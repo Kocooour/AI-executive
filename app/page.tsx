@@ -1691,25 +1691,34 @@ export default function App() {
     Areas: areas.length,
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
-  const attentionTaskCount = items.filter((task) => taskDueTone(task, today) !== "").length;
+  const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
+  const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+  const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
+  const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
+  calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
+  const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
+  const attentionTaskCount = items.filter((task) => {
+    if (task.type !== "task" || task.status !== "open") return false;
+    return [task.properties.when, task.properties.deadline].some(
+      (due) => typeof due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= calendarTomorrow,
+    );
+  }).length;
   useEffect(() => {
     const badgeNavigator = navigator as Navigator & {
       setAppBadge?: (count?: number) => Promise<void>;
       clearAppBadge?: () => Promise<void>;
     };
     if (typeof badgeNavigator.setAppBadge !== "function") return;
+    if (authState === "ready" && !notificationState) return;
     const update = authState === "ready" && attentionTaskCount > 0
       ? badgeNavigator.setAppBadge(attentionTaskCount)
       : typeof badgeNavigator.clearAppBadge === "function"
         ? badgeNavigator.clearAppBadge()
         : badgeNavigator.setAppBadge(0);
     update.catch(() => undefined);
-  }, [attentionTaskCount, authState]);
-  const calendarTimezone = notificationState?.preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
-  const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
+  }, [attentionTaskCount, authState, notificationState]);
   const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
   const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
