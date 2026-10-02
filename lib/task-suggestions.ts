@@ -13,6 +13,7 @@ export interface TaskSuggestion {
   scheduledStart: string;
   scheduledEnd: string;
   scheduledDate: string;
+  scheduledOptions: Array<{ start: string; end: string; date: string }>;
   confidence: "low" | "medium" | "high";
   reasons: string[];
   constraints: string[];
@@ -102,33 +103,35 @@ function weekday(date: string) {
   return new Date(`${date}T12:00:00Z`).getUTCDay();
 }
 
-function suggestedWindow(workspaceId: string, estimatedMinutes: number, requestedDate?: string) {
+function suggestedWindows(workspaceId: string, estimatedMinutes: number, requestedDate?: string) {
   const preferences = getNotificationPreferences();
   const today = localDateParts(Date.now(), preferences.timezone).date;
   const dates = requestedDate
     ? [requestedDate]
     : Array.from({ length: 14 }, (_, index) => addDays(today, index));
+  const options: Array<{ start: string; end: string; date: string }> = [];
+  let configured = false;
+  let fresh = false;
   for (const date of dates) {
     if (!preferences.workdays.includes(weekday(date))) continue;
     const availability = calendarAvailability(workspaceId, date, preferences.timezone, preferences.workdayStart, preferences.workdayEnd);
+    configured ||= availability.configured;
+    fresh ||= availability.fresh;
     if (!availability.configured || !availability.fresh) continue;
     for (const candidate of availability.windows) {
       const start = Math.max(Date.parse(candidate.start), Date.now() + 15 * 60_000);
       const roundedStart = Math.ceil(start / (15 * 60_000)) * 15 * 60_000;
       if (Date.parse(candidate.end) - roundedStart >= estimatedMinutes * 60_000) {
-        return {
+        options.push({
           start: new Date(roundedStart).toISOString(),
           end: new Date(roundedStart + estimatedMinutes * 60_000).toISOString(),
           date,
-          configured: true,
-          fresh: true,
-        };
+        });
+        if (options.length >= 3) return { options, configured, fresh };
       }
     }
   }
-  const firstWorkday = dates.find((date) => preferences.workdays.includes(weekday(date))) || dates[0] || today;
-  const availability = calendarAvailability(workspaceId, firstWorkday, preferences.timezone, preferences.workdayStart, preferences.workdayEnd);
-  return { start: "", end: "", date: requestedDate || "", configured: availability.configured, fresh: availability.fresh };
+  return { options, configured, fresh };
 }
 
 export function suggestTask(input: { title: string; workspaceId: string; requestedDate?: string; explicitPriority?: string; language?: "cs" | "en" }) {
@@ -143,7 +146,8 @@ export function suggestTask(input: { title: string; workspaceId: string; request
     if (projectArea) areaMatch = { entity: projectArea, score: Math.max(1, projectMatch.score) };
   }
   const estimatedMinutes = estimateMinutes(input.title);
-  const window = suggestedWindow(input.workspaceId, estimatedMinutes, input.requestedDate);
+  const windows = suggestedWindows(input.workspaceId, estimatedMinutes, input.requestedDate);
+  const window = windows.options[0];
   const priority = (["none", "low", "medium", "high"].includes(input.explicitPriority || "")
     ? input.explicitPriority
     : inferredPriority(input.title)) as TaskSuggestion["priority"];
@@ -159,7 +163,7 @@ export function suggestTask(input: { title: string; workspaceId: string; request
   reasons.push(english
     ? `Estimate based on the task type and scope: ${estimatedMinutes} min`
     : `Odhad podle typu a rozsahu zadání: ${estimatedMinutes} min`);
-  if (window.start) reasons.push(english
+  if (window?.start) reasons.push(english
     ? "First sufficiently long free block in the work calendar"
     : "První dostatečně dlouhý volný blok v pracovním kalendáři");
   const constraints = [
@@ -174,13 +178,13 @@ export function suggestTask(input: { title: string; workspaceId: string; request
   if (rules.length) constraints.push(english
     ? `${rules.length} workspace rules were included as context; only structured working hours were applied automatically.`
     : `${rules.length} pravidla workspace byla zahrnuta do kontextu; automaticky se použila pouze strukturovaná pracovní doba.`);
-  if (!window.configured) constraints.push(english
+  if (!windows.configured) constraints.push(english
     ? "The calendar is not connected; no exact time was suggested."
     : "Kalendář není připojený; přesný čas nebyl navržen.");
-  else if (!window.fresh) constraints.push(english
+  else if (!windows.fresh) constraints.push(english
     ? "The calendar is stale; no exact time was suggested."
     : "Kalendář není aktuální; přesný čas nebyl navržen.");
-  else if (!window.start) constraints.push(english
+  else if (!window?.start) constraints.push(english
     ? "No sufficiently long free block was found in the checked period."
     : "V kontrolovaném období není dostatečně dlouhý volný blok.");
   return {
@@ -190,9 +194,10 @@ export function suggestTask(input: { title: string; workspaceId: string; request
     areaTitle: areaMatch?.entity.title || "",
     priority,
     estimatedMinutes,
-    scheduledStart: window.start,
-    scheduledEnd: window.end,
-    scheduledDate: window.start ? window.date : input.requestedDate || "",
+    scheduledStart: window?.start || "",
+    scheduledEnd: window?.end || "",
+    scheduledDate: window?.date || input.requestedDate || "",
+    scheduledOptions: windows.options,
     confidence: bestScore >= 12 ? "high" : bestScore >= 4 ? "medium" : "low",
     reasons,
     constraints,

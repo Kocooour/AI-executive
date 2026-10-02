@@ -117,6 +117,7 @@ interface CaptureSuggestion {
   scheduledStart: string;
   scheduledEnd: string;
   scheduledDate: string;
+  scheduledOptions: Array<{ start: string; end: string; date: string }>;
   confidence: "low" | "medium" | "high";
   reasons: string[];
   constraints: string[];
@@ -260,6 +261,7 @@ const copy: Record<Language, Record<string, string>> = {
     albertSuggestion: "Albert’s suggestion", suggesting: "Albert is preparing a suggestion…",
     useSuggestion: "Use Albert’s suggestion", confidence: "Confidence", duration: "Estimated duration",
     minutes: "minutes", plannedTime: "Suggested time", noFreeSlot: "No reliable free slot found",
+    noPlannedTime: "Do not schedule yet",
     whySuggested: "Why", constraintsUsed: "Constraints used", suggestionUnavailable: "Suggestion is temporarily unavailable.", retry: "Retry",
     moveItemNamed: "Move", dragToMove: "Drag to reorder or move",
     openTasks: "Open tasks", checklist: "Checklist", addChecklistItem: "Add checklist item",
@@ -330,6 +332,7 @@ const copy: Record<Language, Record<string, string>> = {
     albertSuggestion: "Albertův návrh", suggesting: "Albert připravuje návrh…",
     useSuggestion: "Použít Albertův návrh", confidence: "Jistota", duration: "Odhadovaná náročnost",
     minutes: "minut", plannedTime: "Navržený čas", noFreeSlot: "Spolehlivý volný blok nebyl nalezen",
+    noPlannedTime: "Zatím neplánovat",
     whySuggested: "Proč", constraintsUsed: "Použitá omezení", suggestionUnavailable: "Návrh se teď nepodařilo připravit.", retry: "Zkusit znovu",
     moveItemNamed: "Přesunout", dragToMove: "Přetažením změnit pořadí nebo umístění",
     openTasks: "Otevřené úkoly", checklist: "Kontrolní seznam", addChecklistItem: "Přidat položku",
@@ -1400,6 +1403,11 @@ export default function App() {
         if (!response.ok) throw new Error(body.error || "Suggestion failed");
         if (captureSuggestionVersion.current !== version) return;
         const suggestion = body.suggestion as CaptureSuggestion;
+        suggestion.scheduledOptions = Array.isArray(suggestion.scheduledOptions)
+          ? suggestion.scheduledOptions
+          : suggestion.scheduledStart
+            ? [{ start: suggestion.scheduledStart, end: suggestion.scheduledEnd, date: suggestion.scheduledDate }]
+            : [];
         if (captureProjectId) {
           const project = items.find((item) => item.id === captureProjectId && item.type === "project");
           suggestion.projectId = captureProjectId;
@@ -1683,7 +1691,20 @@ export default function App() {
     Areas: areas.length,
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
-  const attentionTaskCount = tasks.filter((task) => taskDueTone(task, today) !== "").length;
+  const attentionTaskCount = items.filter((task) => taskDueTone(task, today) !== "").length;
+  useEffect(() => {
+    const badgeNavigator = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (typeof badgeNavigator.setAppBadge !== "function") return;
+    const update = authState === "ready" && attentionTaskCount > 0
+      ? badgeNavigator.setAppBadge(attentionTaskCount)
+      : typeof badgeNavigator.clearAppBadge === "function"
+        ? badgeNavigator.clearAppBadge()
+        : badgeNavigator.setAppBadge(0);
+    update.catch(() => undefined);
+  }, [attentionTaskCount, authState]);
   const calendarTimezone = notificationState?.preferences.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -2617,14 +2638,9 @@ export default function App() {
           <button
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
-            aria-label={`${tr("askAi")}${attentionTaskCount ? ` · ${attentionTaskCount}` : ""}`}
+            aria-label={tr("askAi")}
           >
             ◇ {tr("askAi")}
-            {attentionTaskCount > 0 && (
-              <span className="aiAlertBadge" aria-hidden="true">
-                {attentionTaskCount > 99 ? "99+" : attentionTaskCount}
-              </span>
-            )}
           </button>
         </header>
         <div className="content">
@@ -3678,7 +3694,14 @@ export default function App() {
                             step="5"
                             value={captureSuggestion.estimatedMinutes}
                             disabled={!useCaptureSuggestion}
-                            onChange={(event) => setCaptureSuggestion({ ...captureSuggestion, estimatedMinutes: Math.max(10, Math.min(480, Number(event.target.value) || 10)) })}
+                            onChange={(event) => setCaptureSuggestion({
+                              ...captureSuggestion,
+                              estimatedMinutes: Math.max(10, Math.min(480, Number(event.target.value) || 10)),
+                              scheduledStart: "",
+                              scheduledEnd: "",
+                              scheduledDate: parseCapture(draft).when,
+                              scheduledOptions: [],
+                            })}
                           />
                           {tr("minutes")}
                         </span>
@@ -3686,9 +3709,28 @@ export default function App() {
                     </div>
                     <div className="capturePlannedTime">
                       <b>{tr("plannedTime")}</b>
-                      <span>{captureSuggestion.scheduledStart
-                        ? new Date(captureSuggestion.scheduledStart).toLocaleString(language === "cs" ? "cs-CZ" : "en-US", { weekday: "short", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })
-                        : tr("noFreeSlot")}</span>
+                      {captureSuggestion.scheduledOptions.length ? (
+                        <select
+                          value={captureSuggestion.scheduledStart}
+                          disabled={!useCaptureSuggestion}
+                          onChange={(event) => {
+                            const option = captureSuggestion.scheduledOptions.find((candidate) => candidate.start === event.target.value);
+                            setCaptureSuggestion({
+                              ...captureSuggestion,
+                              scheduledStart: option?.start || "",
+                              scheduledEnd: option?.end || "",
+                              scheduledDate: option?.date || parseCapture(draft).when,
+                            });
+                          }}
+                        >
+                          <option value="">{tr("noPlannedTime")}</option>
+                          {captureSuggestion.scheduledOptions.map((option) => (
+                            <option key={option.start} value={option.start}>
+                              {new Date(option.start).toLocaleString(language === "cs" ? "cs-CZ" : "en-US", { weekday: "short", day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            </option>
+                          ))}
+                        </select>
+                      ) : <span>{tr("noFreeSlot")}</span>}
                     </div>
                     <details>
                       <summary>{tr("whySuggested")}</summary>

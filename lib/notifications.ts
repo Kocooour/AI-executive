@@ -244,6 +244,26 @@ function subscriptions() {
     }));
 }
 
+export function currentAttentionTaskCount(now = Date.now()) {
+  const timezone = getNotificationPreferences().timezone;
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
+  const today = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+  const tomorrowDate = new Date(`${today}T12:00:00Z`);
+  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
+  const tomorrow = tomorrowDate.toISOString().slice(0, 10);
+  return readSnapshot().entities.filter((entity) => {
+    if (entity.type !== "task" || entity.status !== "open") return false;
+    const dueDates = [entity.properties.when, entity.properties.deadline]
+      .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value));
+    return dueDates.some((due) => due <= tomorrow);
+  }).length;
+}
+
 async function sendToAll(payload: Record<string, unknown>) {
   configureWebPush();
   let sent = 0;
@@ -265,7 +285,10 @@ async function sendToAll(payload: Record<string, unknown>) {
 
 function sendTarget(subscription: PushSubscription, payload: Record<string, unknown>) {
   configureWebPush();
-  return webpush.sendNotification(subscription, JSON.stringify(payload), {
+  return webpush.sendNotification(subscription, JSON.stringify({
+    ...payload,
+    appBadge: currentAttentionTaskCount(),
+  }), {
     TTL: 60 * 60 * 24,
     urgency: "normal",
   });

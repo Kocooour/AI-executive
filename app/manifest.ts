@@ -5,6 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "AI Executive",
     short_name: "Executive",
     description: "A calm personal workspace for tasks, projects and notes.",
+    id: "/",
     start_url: "/",
     scope: "/",
     display: "standalone",

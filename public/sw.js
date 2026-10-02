@@ -1,4 +1,4 @@
-const CACHE = "ai-executive-shell-v6";
+const CACHE = "ai-executive-shell-v7";
 const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -65,15 +65,25 @@ self.addEventListener("push", (event) => {
   } catch {
     payload = { body: event.data?.text() || "A task needs your attention." };
   }
+  const badgeCount = Number.isInteger(payload.appBadge) && payload.appBadge > 0
+    ? Math.min(999, payload.appBadge)
+    : 0;
+  const badgePromise = typeof self.navigator.setAppBadge === "function"
+    ? badgeCount > 0
+      ? self.navigator.setAppBadge(badgeCount)
+      : typeof self.navigator.clearAppBadge === "function"
+        ? self.navigator.clearAppBadge()
+        : self.navigator.setAppBadge(0)
+    : Promise.resolve();
   event.waitUntil(
-    self.registration.showNotification(payload.title || "AI Executive", {
+    Promise.all([badgePromise, self.registration.showNotification(payload.title || "AI Executive", {
       body: payload.body || "A task needs your attention.",
       icon: "/icon-192.png",
       badge: "/icon-192.png",
       tag: payload.tag || "ai-executive-reminder",
       requireInteraction: Boolean(payload.requireInteraction),
       data: { url: payload.url || "/?view=Today" },
-    }),
+    })]),
   );
 });
 

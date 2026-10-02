@@ -30,6 +30,7 @@ npm run start -- --hostname 127.0.0.1
 - Daily/manual/safety backups and tombstones for deletion sync
 - Installable PWA with an offline shell
 - Web Push reminders delivered by a server scheduler while the PWA is closed
+- OS-level urgent-task badges for installed iOS/iPadOS Home Screen and macOS Dock web apps
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
 - Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
 - Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
@@ -240,11 +241,20 @@ without changing the planning model.
 Albert's task suggestion endpoint is authenticated, same-origin protected and
 workspace-scoped. It compares the new title with project names and earlier
 related tasks, estimates effort from explicit duration or task type, and checks
-the next 14 configured workdays for a sufficiently long free interval. The
+the next 14 configured workdays for up to three sufficiently long free intervals. The
 suggestion is advisory: Quick Capture shows every proposed field before save,
 allows edits or one-click opt-out, and never blocks task creation when calendar
 data or the suggestion service is unavailable. Only the confirmed values are
-stored on the task.
+stored on the task; those final project and area relations become historical
+evidence for future suggestions, including when the owner corrected Albert.
+
+The application badge counts all open tasks whose scheduled date or deadline
+is overdue, today or tomorrow. Foreground sync updates it through the Badging
+API and every visible Web Push carries the current canonical count for the
+service worker to apply while the installed app is closed. The count is cleared
+at zero. iOS requires a Home Screen installation, HTTPS, notification permission
+and the system Badges toggle; macOS requires an installed web app (for Safari,
+Add to Dock). Browsers without the Badging API continue without an in-app badge.
 
 ## Security alerts
 
