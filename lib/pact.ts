@@ -68,6 +68,47 @@ export const alfredAgent: PACTAgentDefinition = {
   triggerModes: ["manual", "scheduled"],
 };
 
+export const builtInPACTAgents: PACTAgentDefinition[] = [
+  {
+    id: "morning-planner",
+    name: "Morning Planner",
+    version: 1,
+    instructions: "Prepare a concise start-of-day plan from tasks, risks and calendar capacity. Never mutate data directly.",
+    contextScopes: ["me", "work", "family", "rules", "project", "workspace"],
+    tools: ["task.read", "project.read", "calendar.read", "calendar.free_time", "context.read", "task.propose"],
+    triggerModes: ["manual", "scheduled"],
+  },
+  {
+    id: "evening-reviewer",
+    name: "Evening Reviewer",
+    version: 1,
+    instructions: "Review the day, surface unfinished commitments and propose a safe next step. Never mutate data directly.",
+    contextScopes: ["me", "work", "family", "rules", "project", "workspace"],
+    tools: ["task.read", "project.read", "calendar.read", "context.read", "task.propose"],
+    triggerModes: ["manual", "scheduled"],
+  },
+  {
+    id: "project-manager",
+    name: "Project Manager",
+    version: 1,
+    instructions: "Inspect active projects, identify overdue work and projects without a next action, then recommend priorities. Never mutate data directly.",
+    contextScopes: ["work", "family", "rules", "project", "workspace"],
+    tools: ["task.read", "project.read", "note.read", "context.read", "task.propose"],
+    triggerModes: ["manual"],
+  },
+  {
+    id: "meeting-prep",
+    name: "Meeting Prep",
+    version: 1,
+    instructions: "Inspect the upcoming read-only calendar and relevant context, then prepare concise meeting guidance. Never write to the calendar or send messages.",
+    contextScopes: ["me", "work", "rules", "project", "workspace"],
+    tools: ["task.read", "project.read", "note.read", "calendar.read", "context.read"],
+    triggerModes: ["manual"],
+  },
+];
+
+export const pactAgentCatalog = [alfredAgent, ...builtInPACTAgents];
+
 function assertWorkspace(workspaceId: string) {
   if (workspaceId === "all") throw new Error("PACT agent runs require one explicit workspace");
   const exists = readSnapshot().entities.some(
@@ -79,15 +120,29 @@ function assertWorkspace(workspaceId: string) {
 export function ensurePACTDefaults() {
   const db = getDatabase();
   const now = Date.now();
-  db.prepare(`INSERT INTO pact_agents (id, payload, version, enabled, created_at, updated_at)
+  const upsertAgent = db.prepare(`INSERT INTO pact_agents (id, payload, version, enabled, created_at, updated_at)
     VALUES (?, ?, ?, 1, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, version=excluded.version, updated_at=excluded.updated_at`)
-    .run(alfredAgent.id, JSON.stringify(alfredAgent), alfredAgent.version, now, now);
+    ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, version=excluded.version, updated_at=excluded.updated_at`);
   const insertPermission = db.prepare(`INSERT OR IGNORE INTO pact_tool_permissions
     (agent_id, tool_name, permission, workspace_id) VALUES (?, ?, ?, '*')`);
-  for (const tool of alfredAgent.tools) {
-    insertPermission.run(alfredAgent.id, tool, tool.endsWith(".propose") ? "propose" : "read");
+  for (const agent of pactAgentCatalog) {
+    upsertAgent.run(agent.id, JSON.stringify(agent), agent.version, now, now);
+    for (const tool of agent.tools) {
+      insertPermission.run(agent.id, tool, tool.endsWith(".propose") ? "propose" : "read");
+    }
   }
+}
+
+export function listPACTAgents() {
+  ensurePACTDefaults();
+  return getDatabase().prepare(`SELECT payload FROM pact_agents WHERE enabled = 1 ORDER BY created_at ASC`)
+    .all()
+    .map((row) => JSON.parse(String((row as { payload: string }).payload)) as PACTAgentDefinition);
+}
+
+export function getPACTAgent(agentId: string) {
+  ensurePACTDefaults();
+  return pactAgentCatalog.find((agent) => agent.id === agentId) || null;
 }
 
 export function listPACTContext(workspaceId: string, scopes: ContextScope[]) {

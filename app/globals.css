@@ -2983,3 +2983,200 @@ h3 {
     font-size: 28px;
   }
 }
+
+.agentsPanel {
+  display: grid;
+  gap: 22px;
+}
+
+.agentsIntro {
+  max-width: 680px;
+  margin: -8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.agentGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.agentCard {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.agentCard header {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 11px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.agentCard header > div {
+  min-width: 0;
+}
+
+.agentCard h2,
+.agentResult h2,
+.agentHistory h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+}
+
+.agentCard header small,
+.agentCard > small,
+.agentRunList small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted-light);
+  font-size: 11px;
+}
+
+.agentCard > p {
+  min-height: 42px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.agentGlyph {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 17px;
+}
+
+.agentMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agentMeta span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.agentCard > button {
+  width: 100%;
+  margin-top: auto;
+}
+
+.agentResult,
+.agentHistory {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.agentResult ol {
+  margin: 10px 0 0;
+  padding-left: 22px;
+}
+
+.agentResult li {
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.agentSafetyNote {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agentRunList {
+  display: grid;
+  margin-top: 14px;
+}
+
+.agentRunList article {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.agentRunList article > div {
+  min-width: 0;
+}
+
+.agentRunList p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agentRunList .runSummary {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.runStatus {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runStatus.completed { background: var(--success-soft); color: var(--success); }
+.runStatus.failed { background: color-mix(in srgb, var(--danger) 11%, transparent); color: var(--danger); }
+
+@media (max-width: 700px) {
+  .agentGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agentCard,
+  .agentResult,
+  .agentHistory {
+    padding: 16px;
+  }
+
+  .agentCard > p {
+    min-height: 0;
+  }
+
+  .agentResult .sectionHeading {
+    gap: 8px;
+  }
+}

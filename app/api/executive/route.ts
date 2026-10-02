@@ -8,7 +8,8 @@ import {
 import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { readSnapshot } from "../../../lib/server-store";
-import { listPACTRuns } from "../../../lib/pact";
+import { listPACTAgents, listPACTRuns } from "../../../lib/pact";
+import { runManualPACTAgent, type ManualPACTAgentId } from "../../../lib/pact-agent-runs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +25,11 @@ export async function GET(request: Request) {
   if (!readSnapshot().entities.some((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
-  return NextResponse.json({ briefings: listExecutiveBriefings(workspaceId, 7), agentRuns: listPACTRuns(workspaceId, 20) });
+  return NextResponse.json({
+    briefings: listExecutiveBriefings(workspaceId, 7),
+    agents: listPACTAgents().filter((agent) => agent.id !== "aifred"),
+    agentRuns: listPACTRuns(workspaceId, 40),
+  });
 }
 
 export async function POST(request: Request) {
@@ -33,17 +38,28 @@ export async function POST(request: Request) {
     requireSameOrigin(request);
     const limited = enforceRateLimit(request, "executive-run", 12, 60 * 60_000);
     if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
-    const body = await readJsonBody<{ kind?: BriefingKind; workspaceId?: string }>(request, 4096);
-    if (!(["morning", "evening"] as unknown[]).includes(body.kind) ||
-        typeof body.workspaceId !== "string" ||
+    const body = await readJsonBody<{
+      kind?: BriefingKind;
+      agentId?: ManualPACTAgentId;
+      workspaceId?: string;
+      language?: "cs" | "en";
+    }>(request, 4096);
+    if (typeof body.workspaceId !== "string" ||
         !/^[A-Za-z0-9:_-]{1,120}$/.test(body.workspaceId) || body.workspaceId === "all") {
-      return NextResponse.json({ error: "Invalid briefing request" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid agent request" }, { status: 400 });
     }
-    const result = await createExecutiveBriefing(body.kind!, body.workspaceId, Date.now(), true);
-    recordSecurityEvent(request, "executive.briefing", "allowed", { kind: body.kind });
+    let result;
+    if ((["morning", "evening"] as unknown[]).includes(body.kind)) {
+      result = await createExecutiveBriefing(body.kind!, body.workspaceId, Date.now(), true);
+    } else if ((["project-manager", "meeting-prep"] as unknown[]).includes(body.agentId)) {
+      result = { agentResult: runManualPACTAgent(body.agentId!, body.workspaceId, body.language === "en" ? "en" : "cs") };
+    } else {
+      return NextResponse.json({ error: "Unknown or non-runnable agent" }, { status: 400 });
+    }
+    recordSecurityEvent(request, "executive.agent-run", "allowed", { kind: body.kind || body.agentId });
     return NextResponse.json(result);
   } catch (error) {
-    recordSecurityEvent(request, "executive.briefing", "failed");
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Briefing failed" }, { status: 400 });
+    recordSecurityEvent(request, "executive.agent-run", "failed");
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent run failed" }, { status: 400 });
   }
 }

@@ -5,7 +5,7 @@ import type { Entity } from "./db";
 import { getNotificationPreferences, sendExecutiveNotification } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { calendarAvailability } from "./calendar";
-import { alfredAgent, beginPACTRun, ensurePACTDefaults, finishPACTRun } from "./pact";
+import { beginPACTRun, ensurePACTDefaults, finishPACTRun } from "./pact";
 
 export type BriefingKind = "morning" | "evening";
 
@@ -229,7 +229,7 @@ async function deliverBriefing(briefing: ExecutiveBriefing) {
 export async function createExecutiveBriefing(kind: BriefingKind, workspaceId: string, now = Date.now(), manual = false) {
   ensurePACTDefaults();
   const runId = beginPACTRun(
-    alfredAgent.id,
+    kind === "morning" ? "morning-planner" : "evening-reviewer",
     workspaceId,
     manual ? "manual" : "scheduled",
     `executive-briefing:${kind}`,

@@ -78,6 +78,35 @@ interface ExecutiveBriefing {
   createdAt: number;
 }
 
+interface PACTAgentSummary {
+  id: string;
+  name: string;
+  version: number;
+  instructions: string;
+  tools: string[];
+  triggerModes: string[];
+}
+
+interface PACTAgentRunSummary {
+  id: string;
+  agentId: string;
+  workspaceId: string;
+  triggerMode: string;
+  status: "running" | "completed" | "failed";
+  inputSummary: string;
+  outputSummary: string | null;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+interface PACTAgentResult {
+  agentId: string;
+  title: string;
+  summary: string;
+  recommendations: string[];
+  createdAt: number;
+}
+
 interface CalendarSourceState {
   id: string;
   workspaceId: string;
@@ -150,6 +179,7 @@ const views = [
     "Projects",
     "Areas",
     "Notes",
+    "Agents",
   ];
 const moreViews = [
   "Inbox",
@@ -160,6 +190,7 @@ const moreViews = [
   "Completed",
   "Areas",
   "Notes",
+  "Agents",
   "Settings",
 ];
 const viewIcons: Record<string, string> = {
@@ -174,6 +205,7 @@ const viewIcons: Record<string, string> = {
   Projects: "◇",
   Areas: "◎",
   Notes: "▤",
+  Agents: "◇",
   Settings: "⚙",
   More: "•••",
 };
@@ -185,7 +217,7 @@ const copy: Record<Language, Record<string, string>> = {
     Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
     Upcoming: "Upcoming", Anytime: "Anytime", Someday: "Someday",
     Completed: "Completed", Projects: "Projects", Areas: "Areas",
-    Notes: "Notes", Settings: "Settings", More: "More", Search: "Search",
+    Notes: "Notes", Agents: "Agents", Settings: "Settings", More: "More", Search: "Search",
     new: "New", search: "Search everything", askAi: "Ask AI",
     appearance: "Appearance", systemTheme: "System", lightTheme: "Light", darkTheme: "Dark",
     switchLight: "Switch to light mode", switchDark: "Switch to dark mode",
@@ -243,12 +275,15 @@ const copy: Record<Language, Record<string, string>> = {
     backupInfo: "Daily safety copies are created automatically before changes.", items: "items",
     context: "Context", assistant: "Assistant", todayBrief: "Today’s brief", confirm: "Confirm",
     undoAi: "Undo AI change", working: "Working…", send: "Send", itemChanged: "Item changed", undo: "Undo",
+    agentsIntro: "Run focused AIfréd agents for one workspace. Agents can read only their allowed context and tools; changes remain approval-bound.",
+    runAgent: "Run agent", latestResult: "Latest result", runHistory: "Run history", noAgentRuns: "No agent has run in this workspace yet.",
+    completedRun: "Completed", failedRun: "Failed", runningRun: "Running", recommendations: "Recommendations",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
     Upcoming: "Nadcházející", Anytime: "Kdykoli", Someday: "Někdy",
     Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",
-    Notes: "Poznámky", Settings: "Nastavení", More: "Více", Search: "Hledání",
+    Notes: "Poznámky", Agents: "Agenti", Settings: "Nastavení", More: "Více", Search: "Hledání",
     new: "Nový", search: "Hledat ve všem", askAi: "Zeptat se AI",
     appearance: "Vzhled", systemTheme: "Podle systému", lightTheme: "Světlý", darkTheme: "Tmavý",
     switchLight: "Přepnout na světlý režim", switchDark: "Přepnout na tmavý režim",
@@ -306,6 +341,9 @@ const copy: Record<Language, Record<string, string>> = {
     backupInfo: "Denní bezpečnostní kopie se vytvářejí automaticky před změnami.", items: "položek",
     context: "Kontext", assistant: "Asistent", todayBrief: "Dnešní přehled", confirm: "Potvrdit",
     undoAi: "Vrátit změnu AI", working: "Pracuji…", send: "Odeslat", itemChanged: "Položka změněna", undo: "Zpět",
+    agentsIntro: "Spouštějte specializované agenty AIfréda nad jedním workspace. Agenti vidí jen povolený kontext a nástroje; změny nadále vyžadují potvrzení.",
+    runAgent: "Spustit agenta", latestResult: "Poslední výsledek", runHistory: "Historie běhů", noAgentRuns: "V tomto workspace zatím žádný agent neběžel.",
+    completedRun: "Dokončeno", failedRun: "Selhalo", runningRun: "Probíhá", recommendations: "Doporučení",
   },
 };
 const ymd = (d = new Date()) =>
@@ -467,6 +505,11 @@ export default function App() {
     [notificationStatus, setNotificationStatus] = useState(""),
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
+    [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
+    [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
+    [agentResult, setAgentResult] = useState<PACTAgentResult | null>(null),
+    [agentBusyId, setAgentBusyId] = useState(""),
+    [agentStatus, setAgentStatus] = useState(""),
     [calendarSources, setCalendarSources] = useState<CalendarSourceState[]>([]),
     [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]),
     [calendarLabel, setCalendarLabel] = useState("Outlook calendar"),
@@ -795,6 +838,8 @@ export default function App() {
     if (!response.ok) throw new Error("Executive briefing is unavailable");
     const data = await response.json();
     setBriefings(Array.isArray(data.briefings) ? data.briefings : []);
+    setPactAgents(Array.isArray(data.agents) ? data.agents : []);
+    setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
   }
 
   async function runBriefing(kind: "morning" | "evening") {
@@ -815,6 +860,44 @@ export default function App() {
       setNotificationStatus(error instanceof Error ? error.message : "Briefing failed");
     } finally {
       setBriefingBusy(false);
+    }
+  }
+
+  async function runPACTAgent(agentId: string) {
+    if (agentBusyId) return;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    setAgentBusyId(agentId);
+    setAgentStatus("");
+    setAgentResult(null);
+    try {
+      const body = agentId === "morning-planner"
+        ? { kind: "morning", workspaceId, language }
+        : agentId === "evening-reviewer"
+          ? { kind: "evening", workspaceId, language }
+          : { agentId, workspaceId, language };
+      const response = await fetch("/api/executive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Agent run failed");
+      if (data.agentResult) setAgentResult(data.agentResult as PACTAgentResult);
+      if (data.briefing) {
+        const briefing = data.briefing as ExecutiveBriefing;
+        setAgentResult({
+          agentId,
+          title: briefing.title,
+          summary: briefing.summary,
+          recommendations: briefing.suggestions,
+          createdAt: briefing.createdAt,
+        });
+      }
+      await loadBriefings(workspaceId);
+    } catch (error) {
+      setAgentStatus(error instanceof Error ? error.message : "Agent run failed");
+    } finally {
+      setAgentBusyId("");
     }
   }
 
@@ -2606,6 +2689,68 @@ export default function App() {
                 ))}
             </div>
           )}
+          {view === "Agents" && (
+            <div className="agentsPanel">
+              <p className="agentsIntro">{tr("agentsIntro")}</p>
+              <div className="agentGrid">
+                {pactAgents.map((agent) => {
+                  const latest = agentRuns.find((run) => run.agentId === agent.id);
+                  const description = agent.id === "morning-planner"
+                    ? (language === "cs" ? "Sestaví priority dne, rizika a kapacitní doporučení." : "Builds daily priorities, risks and capacity guidance.")
+                    : agent.id === "evening-reviewer"
+                      ? (language === "cs" ? "Zhodnotí dokončenou práci a neuzavřené závazky." : "Reviews completed work and unfinished commitments.")
+                      : agent.id === "project-manager"
+                        ? (language === "cs" ? "Najde rizikové projekty a projekty bez dalšího kroku." : "Finds at-risk projects and projects without a next action.")
+                        : (language === "cs" ? "Připraví podklady k nejbližší události z kalendáře." : "Prepares guidance for the next calendar event.");
+                  const displayName = agent.id === "morning-planner"
+                    ? tr("morningBrief")
+                    : agent.id === "evening-reviewer"
+                      ? tr("eveningReview")
+                      : agent.id === "project-manager"
+                        ? (language === "cs" ? "Projektový manažer" : "Project Manager")
+                        : (language === "cs" ? "Příprava na schůzku" : "Meeting Prep");
+                  return (
+                    <article className="agentCard" key={agent.id}>
+                      <header>
+                        <span className="agentGlyph" aria-hidden="true">◇</span>
+                        <div><h2>{displayName}</h2><small>v{agent.version} · {agent.triggerModes.join(" / ")}</small></div>
+                      </header>
+                      <p>{description}</p>
+                      <div className="agentMeta">
+                        <span>{agent.tools.filter((tool) => tool.endsWith(".read") || tool.includes("calendar")).length} READ</span>
+                        {agent.tools.some((tool) => tool.endsWith(".propose")) && <span>PROPOSE</span>}
+                        <span>0 WRITE</span>
+                      </div>
+                      {latest && <small>{tr("latestResult")}: {latest.status === "completed" ? tr("completedRun") : latest.status === "failed" ? tr("failedRun") : tr("runningRun")} · {new Date(latest.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</small>}
+                      <button className="primaryAction" disabled={Boolean(agentBusyId) || !agent.triggerModes.includes("manual")} onClick={() => runPACTAgent(agent.id)}>
+                        {agentBusyId === agent.id ? tr("working") : tr("runAgent")}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+              {agentResult && (
+                <section className="agentResult" aria-live="polite">
+                  <div className="sectionHeading"><div><p className="eyebrow">{tr("latestResult")}</p><h2>{agentResult.title}</h2></div><small>{new Date(agentResult.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</small></div>
+                  <p>{agentResult.summary}</p>
+                  <h3>{tr("recommendations")}</h3>
+                  <ol>{agentResult.recommendations.map((recommendation) => <li key={recommendation}>{recommendation}</li>)}</ol>
+                  <p className="agentSafetyNote">{language === "cs" ? "Agent nic nezměnil. Případné změny se nejprve zobrazí jako návrh k potvrzení." : "The agent changed nothing. Any mutation is shown as a proposal for confirmation first."}</p>
+                </section>
+              )}
+              {agentStatus && <p className="saveConfirmation" role="status">{agentStatus}</p>}
+              <section className="agentHistory">
+                <div className="sectionHeading"><div><h2>{tr("runHistory")}</h2><p>{language === "cs" ? "Sanitizovaný provozní záznam bez názvů úkolů a obsahu kontextu." : "Sanitized operational history without task titles or context contents."}</p></div></div>
+                <div className="agentRunList">
+                  {agentRuns.map((run) => {
+                    const agent = pactAgents.find((candidate) => candidate.id === run.agentId);
+                    return <article key={run.id}><span className={`runStatus ${run.status}`}>{run.status === "completed" ? "✓" : run.status === "failed" ? "!" : "…"}</span><div><strong>{agent?.name || run.agentId}</strong><small>{run.triggerMode} · {new Date(run.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</small><p>{run.status === "completed" ? tr("completedRun") : run.status === "failed" ? tr("failedRun") : tr("runningRun")}</p>{run.outputSummary && <small className="runSummary">{run.outputSummary.split(";").join(" · ")}</small>}</div></article>;
+                  })}
+                  {!agentRuns.length && <p>{tr("noAgentRuns")}</p>}
+                </div>
+              </section>
+            </div>
+          )}
           {view === "Settings" && (
             <div className="settingsPanel">
               <section className="durableContextSection">
@@ -3079,7 +3224,7 @@ export default function App() {
               </section>
             </div>
           )}
-          {view !== "Settings" && (
+          {view !== "Settings" && view !== "Agents" && (
             <>
               {!["Home", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
