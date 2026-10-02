@@ -419,7 +419,10 @@ API and every visible Web Push carries the current canonical count for the
 service worker to apply while the installed app is closed. The count is cleared
 at zero. iOS requires a Home Screen installation, HTTPS, notification permission
 and the system Badges toggle; macOS requires an installed web app (for Safari,
-Add to Dock). Browsers without the Badging API continue without an in-app badge.
+Add to Dock). The Install app settings card reports installation, permission,
+Badging API support and the canonical count, and provides a one-item badge test
+plus a control to restore the real count. Browsers without the Badging API
+continue without an in-app badge.
 
 ## Security alerts
 

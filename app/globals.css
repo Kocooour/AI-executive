@@ -470,6 +470,22 @@ article small {
   background: #eaf7ed;
   color: #36804b;
 }
+.badgeDiagnostics {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #eee;
+}
+.badgeDiagnostics h3,
+.badgeDiagnostics p {
+  margin: 0;
+}
+.badgeDiagnostics .settingsHint {
+  color: #777;
+  font-size: 13px;
+  line-height: 1.45;
+}
 .sectionHeading {
   display: flex;
   justify-content: space-between;

@@ -274,6 +274,14 @@ const copy: Record<Language, Record<string, string>> = {
     checking: "Checking…", workspaceDataInfo: "Your workspace data is stored in the server database and cached locally for fast access. AI uses the server provider when configured and falls back to a local preview otherwise.",
     installedApp: "AI Executive is running as an installed app.", installHelp: "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command.",
     installed: "Installed", browserMode: "Browser mode", ownerSession: "This device has an authenticated owner session.",
+    appBadge: "App icon badge", badgeApi: "Badge API", notificationPermission: "Notification permission",
+    currentBadgeCount: "Current attention count", supported: "Supported", unsupported: "Not supported", allowed: "Allowed", notAllowed: "Not allowed",
+    testBadge: "Test badge (1)", restoreBadge: "Restore current count", badgeTesting: "Testing the app icon badge…",
+    badgeTestReady: "Test badge set to 1. Leave the app and check its Home Screen icon.",
+    badgeRestored: "The current task count was applied to the app icon.", badgeInstallRequired: "Open Albert from its Home Screen icon; badges are unavailable in a regular Safari tab.",
+    badgePermissionRequired: "Allow notifications for Albert before testing the badge.", badgeUnavailable: "This installation does not expose the App Badging API.",
+    badgeFailed: "The badge could not be changed. Check the system Badges setting and try again.",
+    badgeSystemHint: "iOS does not let websites read the system Badges switch. If the test still does not appear, open Settings → Apps → AI Executive → Notifications and enable Badges.",
     passkeyName: "Passkey name", confirmPassword: "Confirm current password", addPasskey: "Add passkey",
     waitingDevice: "Waiting for device…", remove: "Remove", signOut: "Sign out",
     reminderInfo: "Push reminders are sent by the server even when the app is closed. On iPhone, first install the app on the Home Screen and open the HTTPS address.",
@@ -345,6 +353,14 @@ const copy: Record<Language, Record<string, string>> = {
     checking: "Ověřuji…", workspaceDataInfo: "Data workspace jsou uložená v databázi serveru a pro rychlý přístup také v místní mezipaměti. AI používá nakonfigurovaného poskytovatele na serveru, jinak místní náhled.",
     installedApp: "AI Executive běží jako nainstalovaná aplikace.", installHelp: "Na iPhonu použijte Sdílet → Přidat na plochu. Na Macu použijte v prohlížeči Instalovat nebo Přidat do Docku.",
     installed: "Nainstalováno", browserMode: "Režim prohlížeče", ownerSession: "Toto zařízení má ověřenou relaci vlastníka.",
+    appBadge: "Odznak na ikoně aplikace", badgeApi: "API odznaku", notificationPermission: "Oprávnění oznámení",
+    currentBadgeCount: "Aktuální počet důležitých úkolů", supported: "Podporováno", unsupported: "Nepodporováno", allowed: "Povoleno", notAllowed: "Nepovoleno",
+    testBadge: "Otestovat odznak (1)", restoreBadge: "Obnovit skutečný počet", badgeTesting: "Testuji odznak na ikoně…",
+    badgeTestReady: "Testovací odznak je nastavený na 1. Opusťte aplikaci a zkontrolujte její ikonu na ploše.",
+    badgeRestored: "Na ikonu byl nastaven aktuální počet úkolů.", badgeInstallRequired: "Otevřete Alberta jeho ikonou na ploše; v běžném panelu Safari nejsou odznaky dostupné.",
+    badgePermissionRequired: "Před testem odznaku povolte Albertovi oznámení.", badgeUnavailable: "Tato instalace neposkytuje API pro odznak aplikace.",
+    badgeFailed: "Odznak se nepodařilo změnit. Zkontrolujte systémové nastavení Odznaky a zkuste to znovu.",
+    badgeSystemHint: "iOS webu neumožňuje zjistit stav systémového přepínače Odznaky. Pokud se test neukáže, otevřete Nastavení → Aplikace → AI Executive → Oznámení a zapněte Odznaky.",
     passkeyName: "Název passkeye", confirmPassword: "Potvrďte současné heslo", addPasskey: "Přidat passkey",
     waitingDevice: "Čekám na zařízení…", remove: "Odebrat", signOut: "Odhlásit se",
     reminderInfo: "Push připomínky odesílá server, i když je aplikace zavřená. Na iPhonu ji nejprve přidejte na plochu a otevřete přes HTTPS adresu.",
@@ -533,6 +549,7 @@ export default function App() {
     [standalone, setStandalone] = useState(false),
     [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [badgeNow, setBadgeNow] = useState(() => Date.now()),
+    [badgeStatus, setBadgeStatus] = useState(""),
     [notificationStatus, setNotificationStatus] = useState(""),
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
@@ -1735,6 +1752,50 @@ export default function App() {
         : badgeNavigator.setAppBadge(0);
     update.catch(() => undefined);
   }, [attentionTaskCount, authState, notificationState]);
+  async function testAppBadge() {
+    setBadgeStatus(tr("badgeTesting"));
+    const badgeNavigator = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+    };
+    if (!standalone) {
+      setBadgeStatus(tr("badgeInstallRequired"));
+      return;
+    }
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+      setBadgeStatus(tr("badgePermissionRequired"));
+      return;
+    }
+    if (typeof badgeNavigator.setAppBadge !== "function") {
+      setBadgeStatus(tr("badgeUnavailable"));
+      return;
+    }
+    try {
+      await badgeNavigator.setAppBadge(1);
+      setBadgeStatus(tr("badgeTestReady"));
+    } catch (error) {
+      console.warn("App badge test failed", error);
+      setBadgeStatus(tr("badgeFailed"));
+    }
+  }
+  async function restoreAppBadge() {
+    const badgeNavigator = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (typeof badgeNavigator.setAppBadge !== "function") {
+      setBadgeStatus(tr("badgeUnavailable"));
+      return;
+    }
+    try {
+      if (attentionTaskCount > 0) await badgeNavigator.setAppBadge(attentionTaskCount);
+      else if (typeof badgeNavigator.clearAppBadge === "function") await badgeNavigator.clearAppBadge();
+      else await badgeNavigator.setAppBadge(0);
+      setBadgeStatus(tr("badgeRestored"));
+    } catch (error) {
+      console.warn("App badge restore failed", error);
+      setBadgeStatus(tr("badgeFailed"));
+    }
+  }
   const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
   const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
@@ -3086,6 +3147,33 @@ export default function App() {
                 <span className={`installStatus ${standalone ? "installed" : ""}`}>
                   {standalone ? tr("installed") : tr("browserMode")}
                 </span>
+                <div className="badgeDiagnostics">
+                  <h3>{tr("appBadge")}</h3>
+                  <dl>
+                    <div>
+                      <dt>{tr("installApp")}</dt>
+                      <dd>{standalone ? tr("installed") : tr("browserMode")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("notificationPermission")}</dt>
+                      <dd>{typeof Notification !== "undefined" && Notification.permission === "granted" ? tr("allowed") : tr("notAllowed")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("badgeApi")}</dt>
+                      <dd>{typeof navigator !== "undefined" && typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function" ? tr("supported") : tr("unsupported")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("currentBadgeCount")}</dt>
+                      <dd>{attentionTaskCount}</dd>
+                    </div>
+                  </dl>
+                  <div className="notificationActions">
+                    <button className="primaryAction" onClick={testAppBadge}>{tr("testBadge")}</button>
+                    <button onClick={restoreAppBadge}>{tr("restoreBadge")}</button>
+                  </div>
+                  {badgeStatus && <p role="status">{badgeStatus}</p>}
+                  <p className="settingsHint">{tr("badgeSystemHint")}</p>
+                </div>
               </section>
               {authEnabled && (
                 <section>
