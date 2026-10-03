@@ -22,3 +22,9 @@ Do not treat an implementation as complete before both independent testers have 
 - If a proposed change materially diverges from the original brief or requires a product decision, ask the user before implementing that divergence.
 - Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
 - The primary model remains accountable for the delivered result and must not accept agent findings without review.
+
+## Delivery policy
+
+- After a development iteration passes the required reviews and final verification, commit it, push `main`, and deploy it to the configured Albert server without asking for an additional confirmation.
+- Before deployment, preserve unrelated server changes, create and verify a recoverable database backup, use a fast-forward-only update, build the production application, restart it through the configured service manager, and verify the service, database integrity, authentication boundary, and configured HTTPS route.
+- If credentials, server state, a failed check, or a destructive/conflicting condition prevents safe delivery, stop at that boundary and report the concrete blocker instead of weakening safeguards.
