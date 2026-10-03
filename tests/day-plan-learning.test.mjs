@@ -38,6 +38,17 @@ test("even number of planning samples uses the conventional median", () => {
   assert.equal(result.estimateSamples, 4);
 });
 
+test("measured work takes precedence after three sessions while an explicit estimate remains authoritative", () => {
+  const measured = [25, 40, 95].map((minutes, index) => task(String(index), "Write item", {
+    workSessionHistory: [{ sessionId: `s${index}`, actualMinutes: minutes, completedAt: Date.now() }],
+    planningHistory: [feedback(120)],
+  }));
+  const learned = learnPlanning(task("target", "Write report"), measured, "Europe/Prague");
+  assert.deepEqual([learned.estimatedMinutes, learned.estimateSource, learned.estimateSamples], [40, "actual", 3]);
+  const explicit = learnPlanning(task("explicit", "Write report", { estimatedMinutes: 15 }), measured, "Europe/Prague");
+  assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [15, "explicit"]);
+});
+
 test("evening review compares approved plan with status and finds the next working date", () => {
   const tasks = [
     task("completed", "Write report", { plannedStart: "2026-10-02T08:00:00Z" }, "completed"),
@@ -69,6 +80,14 @@ test("review carries an accepted then moved task only once", () => {
   assert.equal(review.planned, 1);
   assert.equal(review.moved, 1);
   assert.deepEqual(review.carryover.map((entry) => entry.id), ["one"]);
+});
+
+test("evening review compares immutable session estimate with measured time", () => {
+  const item = task("one", "Write report", { estimatedMinutes: 999, workSessionHistory: [
+    { sessionId: "session", completedAt: Date.parse("2026-10-02T12:00:00Z"), actualMinutes: 42, estimatedMinutes: 30 },
+  ] }, "completed");
+  const review = reviewPlan([item], "2026-10-02", "Europe/Prague", [1, 2, 3, 4, 5]);
+  assert.deepEqual([review.measuredSessions, review.measuredMinutes, review.estimatedMinutes], [1, 42, 30]);
 });
 
 test("day-plan decisions require the exact current proposal or unscheduled task", () => {

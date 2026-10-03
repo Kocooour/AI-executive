@@ -75,7 +75,7 @@ interface ExecutiveBriefing {
   capacity: number;
   overloaded: boolean;
   suggestions: string[];
-  planReview?: { planned: number; completed: number; open: number; moved: number; dismissed: number; nextWorkday: string; carryover: Array<{ id: string; title: string }> };
+  planReview?: { planned: number; completed: number; open: number; moved: number; dismissed: number; measuredSessions: number; measuredMinutes: number; estimatedMinutes: number; nextWorkday: string; carryover: Array<{ id: string; title: string }> };
   createdAt: number;
 }
 
@@ -86,7 +86,7 @@ interface DayPlanItem {
   reason: "overdue" | "today" | "deadline" | "priority";
   start?: string;
   end?: string;
-  estimateSource?: "explicit" | "learned" | "default";
+  estimateSource?: "explicit" | "actual" | "learned" | "default";
   estimateSamples?: number;
   preferredMinute?: number | null;
   timeSamples?: number;
@@ -105,6 +105,13 @@ interface DayPlan {
   existingBlocks: DayPlanItem[];
   planBlocks: DayPlanItem[];
   unscheduled: DayPlanItem[];
+}
+
+interface WorkSession {
+  id: string; workspaceId: string; taskId: string; taskTitle: string;
+  state: "running" | "paused" | "completed"; revision: number;
+  accumulatedMs: number; runningSince: number | null; elapsedMs: number;
+  startedAt: number; completedAt: number | null; estimatedMinutes: number | null; overrun: boolean;
 }
 
 interface PACTAgentSummary {
@@ -351,10 +358,13 @@ const copy: Record<Language, Record<string, string>> = {
     dayPlanEmpty: "No tasks need a new block today.", dayPlanChanged: "The plan changed. Review the updated suggestion.",
     dayPlanSyncFirst: "Sync your pending changes before confirming the plan.", dayPlanUndo: "Undo last day-plan change",
     dayPlanRefresh: "Refresh preview", dayPlanRefreshed: "Preview updated.", dayPlanCurrent: "Current", dayPlanNext: "Next",
-    dayPlanExplicitEstimate: "Your estimate", dayPlanLearnedEstimate: "Learned planning estimate", dayPlanDefaultEstimate: "Default estimate",
+    dayPlanExplicitEstimate: "Your estimate", dayPlanActualEstimate: "Learned from measured work", dayPlanLearnedEstimate: "Learned planning estimate", dayPlanDefaultEstimate: "Default estimate",
     dayPlanPreferredTime: "Preferred time from previous planning", dayPlanApproved: "Approved block", dayPlanProposed: "Proposed block",
     dayPlanReviewCounts: "Plan review", dayPlanReviewPlanned: "planned", dayPlanReviewCompleted: "completed", dayPlanReviewOpen: "still open",
     dayPlanReviewMoved: "moved", dayPlanReviewDismissed: "not planned", dayPlanReviewNextWorkday: "Next working day",
+    workNow: "Now", workNotRunning: "No task is running.", workStart: "Start", workPause: "Pause", workResume: "Resume", workFinish: "Finish",
+    workElapsed: "Elapsed", workOverrun: "The estimate has been exceeded. Refresh the remaining-day preview before changing the schedule.", workReplan: "Refresh remaining-day preview",
+    workFinishFinal: "Finishing records measured time and completes the task. This action has no one-click Undo.", workConflict: "Work state changed on another device. The latest state was loaded.",
     acceptBlock: "Accept", anotherTime: "Another time", moveTomorrow: "Tomorrow", skipPlanning: "Do not schedule",
     confirmDayPlanAction: "Confirm for task:",
     dayPlanReasonOverdue: "Overdue", dayPlanReasonToday: "Due today", dayPlanReasonDeadline: "Deadline soon", dayPlanReasonPriority: "High priority",
@@ -444,10 +454,13 @@ const copy: Record<Language, Record<string, string>> = {
     dayPlanEmpty: "Dnes není potřeba plánovat další úkoly.", dayPlanChanged: "Plán se změnil. Zkontrolujte nový návrh.",
     dayPlanSyncFirst: "Před potvrzením plánu synchronizujte čekající změny.", dayPlanUndo: "Vrátit poslední změnu plánu",
     dayPlanRefresh: "Obnovit náhled", dayPlanRefreshed: "Náhled je aktuální.", dayPlanCurrent: "Právě teď", dayPlanNext: "Další",
-    dayPlanExplicitEstimate: "Váš odhad", dayPlanLearnedEstimate: "Odhad z předchozího plánování", dayPlanDefaultEstimate: "Výchozí odhad",
+    dayPlanExplicitEstimate: "Váš odhad", dayPlanActualEstimate: "Odhad ze změřené práce", dayPlanLearnedEstimate: "Odhad z předchozího plánování", dayPlanDefaultEstimate: "Výchozí odhad",
     dayPlanPreferredTime: "Preferovaný čas z předchozího plánování", dayPlanApproved: "Schválený blok", dayPlanProposed: "Navržený blok",
     dayPlanReviewCounts: "Rekapitulace plánu", dayPlanReviewPlanned: "naplánováno", dayPlanReviewCompleted: "dokončeno", dayPlanReviewOpen: "otevřeno",
     dayPlanReviewMoved: "přesunuto", dayPlanReviewDismissed: "neplánováno", dayPlanReviewNextWorkday: "Další pracovní den",
+    workNow: "Právě teď", workNotRunning: "Žádný úkol právě neběží.", workStart: "Spustit", workPause: "Pozastavit", workResume: "Pokračovat", workFinish: "Dokončit",
+    workElapsed: "Uplynulo", workOverrun: "Odhad byl překročen. Před změnou rozvrhu obnovte náhled zbývajícího dne.", workReplan: "Obnovit náhled zbývajícího dne",
+    workFinishFinal: "Dokončení uloží změřený čas a dokončí úkol. Tato akce nemá rychlé Zpět.", workConflict: "Pracovní stav se změnil na jiném zařízení. Načetl jsem aktuální stav.",
     acceptBlock: "Přijmout", anotherTime: "Jiný čas", moveTomorrow: "Zítra", skipPlanning: "Neplánovat",
     confirmDayPlanAction: "Potvrdit pro úkol:",
     dayPlanReasonOverdue: "Po termínu", dayPlanReasonToday: "Na dnes", dayPlanReasonDeadline: "Blízký termín", dayPlanReasonPriority: "Vysoká priorita",
@@ -640,6 +653,11 @@ export default function App() {
     [dayPlanStatus, setDayPlanStatus] = useState(""),
     [dayPlanBusy, setDayPlanBusy] = useState(false),
     [dayPlanUndo, setDayPlanUndo] = useState<{ actionId: string; workspaceId: string; date: string } | null>(null),
+    [workSession, setWorkSession] = useState<WorkSession | null>(null),
+    [workSessionBusy, setWorkSessionBusy] = useState(false),
+    [workSessionStatus, setWorkSessionStatus] = useState(""),
+    [workSessionNow, setWorkSessionNow] = useState(() => Date.now()),
+    [workSessionLoadedAt, setWorkSessionLoadedAt] = useState(() => Date.now()),
     [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
     [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
     [agentResult, setAgentResult] = useState<PACTAgentResult | null>(null),
@@ -710,6 +728,7 @@ export default function App() {
   const calendarLoadVersion = useRef(0);
   const contextClaimLoadVersion = useRef(0);
   const dayPlanLoadVersion = useRef(0);
+  const workSessionLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   const pendingKey = "ai-executive-pending-sync";
@@ -1003,6 +1022,52 @@ export default function App() {
     if (!response.ok) throw new Error(data.error || "Day plan unavailable");
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
+  }
+
+  async function loadWorkSession(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+    const version = ++workSessionLoadVersion.current;
+    const response = await fetch(`/api/work-sessions?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Work session unavailable");
+    if (version !== workSessionLoadVersion.current) return data.active as WorkSession | null;
+    setWorkSession(data.active || null);
+    const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
+    return data.active as WorkSession | null;
+  }
+
+  async function workSessionAction(action: "start" | "pause" | "resume" | "finish", task?: Entity) {
+    if (workSessionBusy) return;
+    const workspaceId = action === "start" && task ? task.workspaceId
+      : workSession?.workspaceId || (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId);
+    if (action === "start" && task && activeWorkspaceId === "all" && task.workspaceId !== writeWorkspaceId) {
+      calendarWorkspaceSelection.current = task.workspaceId;
+      selectWorkspace(task.workspaceId);
+    }
+    workSessionLoadVersion.current += 1;
+    if (action === "finish" && !window.confirm(tr("workFinishFinal"))) return;
+    setWorkSessionBusy(true); setWorkSessionStatus("");
+    try {
+      const current = workSession;
+      const response = await fetch("/api/work-sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        action, workspaceId, idempotencyKey: crypto.randomUUID(), taskId: task?.id,
+        expectedTaskUpdatedAt: task?.updatedAt, expectedRevision: current?.revision || 0, expectedState: current?.state || "idle",
+      }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
+        throw new Error(data.error || "Work session failed");
+      }
+      workSessionLoadVersion.current += 1;
+      if (calendarWorkspaceSelection.current !== workspaceId) {
+        if (data.taskCompleted) await pullFromServer();
+        await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined);
+        return;
+      }
+      setWorkSession(data.session?.state === "completed" ? null : data.session);
+      const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
+      if (data.taskCompleted) { closeDetail(); await pullFromServer(); await loadDayPlan(workspaceId, calendarToday).catch(() => undefined); }
+    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : "Work session failed"); }
+    finally { setWorkSessionBusy(false); }
   }
 
   async function runBriefing(kind: "morning" | "evening") {
@@ -1961,6 +2026,9 @@ export default function App() {
     ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
   const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
   const nextDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") > dayPlanNow);
+  const workElapsedMs = workSession ? workSession.elapsedMs + (workSession.state === "running" ? Math.max(0, workSessionNow - workSessionLoadedAt) : 0) : 0;
+  const workElapsedText = `${String(Math.floor(workElapsedMs / 3_600_000)).padStart(2, "0")}:${String(Math.floor(workElapsedMs / 60_000) % 60).padStart(2, "0")}:${String(Math.floor(workElapsedMs / 1000) % 60).padStart(2, "0")}`;
+  const workOverrun = Boolean(workSession?.estimatedMinutes && workElapsedMs > workSession.estimatedMinutes * 60_000);
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
@@ -1984,6 +2052,20 @@ export default function App() {
     document.addEventListener("visibilitychange", refresh);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [authState, calendarToday]);
+  useEffect(() => {
+    if (authState !== "ready") return;
+    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : "Work session unavailable"));
+    const refresh = () => { if (document.visibilityState === "visible") loadWorkSession(workspaceId).catch(() => undefined); };
+    const poll = window.setInterval(refresh, 15_000);
+    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
+    return () => { workSessionLoadVersion.current += 1; window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [authState, activeWorkspaceId, writeWorkspaceId]);
+  useEffect(() => {
+    if (workSession?.state !== "running") return;
+    const timer = window.setInterval(() => setWorkSessionNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [workSession?.id, workSession?.state]);
   const attentionTaskCount = items.filter((task) => {
     if (task.type !== "task" || task.status !== "open") return false;
     return [task.properties.when, task.properties.deadline].some(
@@ -2489,6 +2571,7 @@ export default function App() {
     finally { setDayPlanBusy(false); }
   }
   async function done(id: string) {
+    if (workSession?.taskId === id) { await workSessionAction("finish"); return; }
     const t = await db.entities.get(id);
     if (
       t?.type === "task" &&
@@ -3139,6 +3222,7 @@ export default function App() {
                     {" "}{briefings[0].planReview.open} {tr("dayPlanReviewOpen")},
                     {" "}{briefings[0].planReview.moved} {tr("dayPlanReviewMoved")},
                     {" "}{briefings[0].planReview.dismissed} {tr("dayPlanReviewDismissed")}.
+                    {briefings[0].planReview.measuredSessions > 0 && <> {language === "cs" ? "Změřeno" : "Measured"}: {briefings[0].planReview.measuredMinutes} min{briefings[0].planReview.estimatedMinutes > 0 ? ` / ${briefings[0].planReview.estimatedMinutes} min` : ""}.</>}
                     {briefings[0].planReview.nextWorkday && <> {tr("dayPlanReviewNextWorkday")}: {briefings[0].planReview.nextWorkday}.</>}
                   </p> : <p>{briefings[0].summary}</p>}
                   {briefings[0].overloaded && <p role="status"><strong>{tr("capacityExceeded")}</strong> {tr("capacityEstimate")}</p>}
@@ -3191,6 +3275,21 @@ export default function App() {
             </>
           )}
           {(view === "Home" || view === "Today") && (
+            <section className={`workNowCard ${workOverrun ? "overrun" : ""}`} aria-labelledby="work-now-title">
+              <div>
+                <p className="eyebrow">ALBERT · {tr("workNow").toUpperCase()}</p>
+                <h2 id="work-now-title">{workSession?.taskTitle || tr("workNotRunning")}</h2>
+                {workSession && <p><strong>{tr("workElapsed")}:</strong> <time>{workElapsedText}</time>{workSession.estimatedMinutes ? ` · ${workSession.estimatedMinutes} min` : ""}</p>}
+              </div>
+              {workSession && <div className="workNowActions">
+                {workSession.state === "running" ? <button disabled={workSessionBusy} onClick={() => workSessionAction("pause")}>{tr("workPause")}</button> : <button disabled={workSessionBusy} onClick={() => workSessionAction("resume")}>{tr("workResume")}</button>}
+                <button className="primaryAction" disabled={workSessionBusy} onClick={() => workSessionAction("finish")}>{tr("workFinish")}</button>
+              </div>}
+              {workOverrun && <div><p className="dayPlanWarning" role="status">{tr("workOverrun")}</p><button disabled={dayPlanBusy} onClick={() => loadDayPlan(activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId, calendarToday).catch((error) => setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")))}>{tr("workReplan")}</button></div>}
+              {workSessionStatus && <p role="status">{workSessionStatus}</p>}
+            </section>
+          )}
+          {(view === "Home" || view === "Today") && (
             <section className="dayPlanCard" aria-labelledby="day-plan-title">
               <div className="sectionHeading">
                 <div><p className="eyebrow">ALBERT</p><h2 id="day-plan-title">{tr("dayPlanTitle")}</h2></div>
@@ -3213,20 +3312,23 @@ export default function App() {
                   {dayPlanTimeline.map((item) => (
                     <article className={`dayPlanBlock ${item.existing ? "existing" : "proposed"}`} key={`${item.taskId}:${item.start}`}>
                       <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.start!))}–{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.end!))}</time>
-                      <div><strong>{item.title}</strong><small>{tr(item.existing ? item.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}{item.estimateSource === "learned" ? ` (${item.estimateSamples})` : ""}{item.preferredMinute !== null && item.preferredMinute !== undefined ? ` · ${tr("dayPlanPreferredTime")} (${item.timeSamples})` : ""}</small>
-                        {!item.existing && <div className="dayPlanActions">
+                      <div><strong>{item.title}</strong><small>{tr(item.existing ? item.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}{item.estimateSource === "learned" || item.estimateSource === "actual" ? ` (${item.estimateSamples})` : ""}{item.preferredMinute !== null && item.preferredMinute !== undefined ? ` · ${tr("dayPlanPreferredTime")} (${item.timeSamples})` : ""}</small>
+                        <div className="dayPlanActions">
+                          {!workSession && <button disabled={workSessionBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) workSessionAction("start", task); }}>{tr("workStart")}</button>}
+                        {!item.existing && <>
                           <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "accepted")}>{tr("acceptBlock")}</button>
                           <button disabled={dayPlanBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) inspect(task); }}>{tr("anotherTime")}</button>
                           <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "tomorrow")}>{tr("moveTomorrow")}</button>
                           <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "dismissed")}>{tr("skipPlanning")}</button>
-                        </div>}
+                        </>}
+                        </div>
                       </div>
                     </article>
                   ))}
                   {visibleDayPlan.unscheduled.map((item) => (
                     <article className="dayPlanBlock unscheduled" key={item.taskId}>
                       <span>{tr("dayPlanUnscheduled")}</span>
-                      <div><strong>{item.title}</strong><small>{tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}</small>
+                      <div><strong>{item.title}</strong><small>{tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}</small>
                         <div className="dayPlanActions">
                           <button disabled={dayPlanBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) inspect(task); }}>{tr("anotherTime")}</button>
                           <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "tomorrow")}>{tr("moveTomorrow")}</button>
@@ -4858,7 +4960,10 @@ export default function App() {
                 {selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
-                  <button onClick={() => done(selected.id)}>{tr("complete")}</button>
+                  <>
+                    {!workSession && <button className="primaryAction" disabled={workSessionBusy} onClick={() => workSessionAction("start", selected)}>{tr("workStart")}</button>}
+                    <button onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
+                  </>
                 )}
                 <button className="danger" onClick={() => remove(selected)}>
                   {tr("delete")}

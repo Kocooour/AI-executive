@@ -519,6 +519,12 @@ article small {
 }
 .briefingTasks small { display: block; color: #777; margin-top: 2px; }
 .dayPlanCard { margin: 22px 0; padding: 20px; border: 1px solid var(--border, #d9d9d9); border-radius: 18px; background: var(--surface, #fff); }
+.workNowCard { margin: 22px 0; padding: 22px; border: 1px solid rgba(103,86,204,.35); border-radius: 20px; background: linear-gradient(135deg, rgba(103,86,204,.13), var(--surface,#fff)); display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px; }
+.workNowCard h2 { margin: 4px 0; font-size: clamp(1.35rem, 3vw, 2rem); }
+.workNowCard time { font-variant-numeric: tabular-nums; font-size: 1.15rem; }
+.workNowCard.overrun { border-color: #ba5b36; }
+.workNowActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.workNowActions button { min-height: 42px; padding: 8px 14px; }
 .dayPlanCard .sectionHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dayPlanCard .sectionHeading h2 { margin: 2px 0 0; }
 .dayPlanWarning { color: #a64220; font-weight: 650; }
@@ -532,6 +538,7 @@ article small {
 .dayPlanActions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .dayPlanActions button { min-height: 36px; padding: 5px 10px; border: 1px solid currentColor; border-radius: 8px; background: transparent; }
 @media (max-width: 600px) { .dayPlanCard { padding: 15px; } .dayPlanBlock { grid-template-columns: 1fr; gap: 5px; } .dayPlanActions button { flex: 1 1 42%; } }
+@media (max-width: 600px) { .workNowCard { grid-template-columns: 1fr; padding: 16px; position: relative; } .workNowActions button { flex: 1 1 40%; } }
 @media (max-width: 700px) {
   .dayPlanCard .sectionHeading { display: grid; grid-template-columns: minmax(0, 1fr); }
   .dayPlanCard .sectionHeading > .dayPlanActions { display: flex; width: 100%; min-width: 0; align-items: center; }

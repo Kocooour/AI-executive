@@ -7,6 +7,7 @@ import { getDatabase, readSnapshot } from "./server-store";
 import { calendarAvailability } from "./calendar";
 import { reviewPlan, type PlanReview } from "./day-plan-review";
 import { beginPACTRun, ensurePACTDefaults, finishPACTRun } from "./pact";
+import { measuredWorkHistory } from "./work-sessions";
 
 export type BriefingKind = "morning" | "evening";
 
@@ -72,9 +73,10 @@ export function buildExecutiveBriefing(
     (entity) => entity.type === "workspace" && entity.workspaceId === workspaceId,
   );
   if (!workspace || workspaceId === "all") throw new Error("Briefing workspace does not exist");
+  const measured = measuredWorkHistory(workspaceId);
   const allTasks = snapshot.entities.filter(
     (entity) => entity.type === "task" && entity.workspaceId === workspaceId,
-  );
+  ).map((task): Entity => ({ ...task, properties: { ...task.properties, workSessionHistory: measured.get(task.id) || [] } }));
   const planReview = reviewPlan(allTasks, local.date, preferences.timezone, preferences.workdays);
   const open = allTasks.filter((task) => task.status === "open");
   const completedToday = allTasks.filter((task) => {

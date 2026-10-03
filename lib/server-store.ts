@@ -247,6 +247,56 @@ export function getDatabase() {
       created_at INTEGER NOT NULL,
       PRIMARY KEY(workspace_id, idempotency_key)
     );
+    CREATE TABLE IF NOT EXISTS work_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('running','paused','completed')),
+      revision INTEGER NOT NULL,
+      accumulated_ms INTEGER NOT NULL DEFAULT 0,
+      running_since INTEGER,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      estimated_minutes INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS work_sessions_one_active_idx
+      ON work_sessions(workspace_id) WHERE state IN ('running','paused');
+    CREATE INDEX IF NOT EXISTS work_sessions_workspace_history_idx
+      ON work_sessions(workspace_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS work_session_intervals (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS work_session_one_open_interval_idx
+      ON work_session_intervals(session_id) WHERE ended_at IS NULL;
+    CREATE TABLE IF NOT EXISTS work_session_commands (
+      workspace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      result_payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(workspace_id, idempotency_key)
+    );
+    CREATE TABLE IF NOT EXISTS work_session_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      from_state TEXT,
+      to_state TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS work_session_events_history_idx
+      ON work_session_events(workspace_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS pact_tool_permissions (
       agent_id TEXT NOT NULL,
       tool_name TEXT NOT NULL,
@@ -315,6 +365,11 @@ export function getDatabase() {
     );
   `);
   migrateContextChangeEventScope(database);
+  const workSessionColumns = database.prepare("PRAGMA table_info(work_sessions)").all()
+    .map((row) => String((row as { name?: string }).name));
+  if (!workSessionColumns.includes("estimated_minutes")) {
+    database.exec("ALTER TABLE work_sessions ADD COLUMN estimated_minutes INTEGER");
+  }
   const challengeColumns = database
     .prepare("PRAGMA table_info(passkey_challenges)")
     .all()

@@ -6,6 +6,9 @@ export interface PlanReview {
   open: number;
   moved: number;
   dismissed: number;
+  measuredSessions: number;
+  measuredMinutes: number;
+  estimatedMinutes: number;
   nextWorkday: string;
   carryover: Array<{ id: string; title: string }>;
 }
@@ -28,11 +31,22 @@ export function nextWorkingDate(date: string, workdays: number[]) {
 
 export function reviewPlan(tasks: Entity[], date: string, timezone: string, workdays: number[]): PlanReview {
   const nextWorkday = nextWorkingDate(date, workdays);
-  let planned = 0, completed = 0, open = 0, moved = 0, dismissed = 0;
+  let planned = 0, completed = 0, open = 0, moved = 0, dismissed = 0, measuredSessions = 0, measuredMinutes = 0, estimatedMinutes = 0;
   const carryover: PlanReview["carryover"] = [];
   const carryoverIds = new Set<string>();
   for (const task of tasks) {
     if (task.type !== "task") continue;
+    const sessions = Array.isArray(task.properties.workSessionHistory) ? task.properties.workSessionHistory : [];
+    for (const session of sessions.slice(-30)) {
+      if (!session || typeof session !== "object") continue;
+      const item = session as { completedAt?: unknown; actualMinutes?: unknown; estimatedMinutes?: unknown };
+      const completedAt = Number(item.completedAt), actual = Number(item.actualMinutes);
+      if (Number.isFinite(completedAt) && localDate(completedAt, timezone) === date && Number.isFinite(actual) && actual > 0) {
+        measuredSessions += 1; measuredMinutes += actual;
+        const estimate = Number(item.estimatedMinutes);
+        if (Number.isFinite(estimate) && estimate > 0) estimatedMinutes += estimate;
+      }
+    }
     const history = Array.isArray(task.properties.planningHistory) ? task.properties.planningHistory : [];
     const latest = task.properties.planningFeedback;
     const decisions = [...history, latest].filter((entry): entry is { date: unknown; decision: unknown } =>
@@ -51,5 +65,5 @@ export function reviewPlan(tasks: Entity[], date: string, timezone: string, work
     if (decision === "tomorrow") { moved += 1; if (task.status === "open" && !carryoverIds.has(task.id)) { carryover.push({ id: task.id, title: task.title }); carryoverIds.add(task.id); } }
     if (decision === "dismissed") dismissed += 1;
   }
-  return { planned, completed, open, moved, dismissed, nextWorkday, carryover: carryover.slice(0, 5) };
+  return { planned, completed, open, moved, dismissed, measuredSessions, measuredMinutes, estimatedMinutes, nextWorkday, carryover: carryover.slice(0, 5) };
 }

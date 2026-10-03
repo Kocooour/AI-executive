@@ -3,6 +3,7 @@ import { calendarAvailability } from "./calendar";
 import { getNotificationPreferences } from "./notifications";
 import { readSnapshot } from "./server-store";
 import { learnPlanning, type LearnedPlanning } from "./day-plan-learning";
+import { measuredWorkHistory } from "./work-sessions";
 
 export interface DayPlanItem {
   taskId: string;
@@ -100,8 +101,10 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   const calendar: DayPlan["calendar"] = !workday ? "non-workday" : !availability.configured ? "missing" : !availability.fresh ? "stale" : "ready";
   const projects = new Map(snapshot.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project")
     .map((relation) => [relation.sourceEntityId, relation.targetEntityId]));
+  const measured = measuredWorkHistory(workspaceId);
   const allTasks = snapshot.entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId)
-    .map((task): Entity => ({ ...task, properties: { ...task.properties, projectId: projects.get(task.id) || task.properties.projectId } }));
+    .map((task): Entity => ({ ...task, properties: { ...task.properties, projectId: projects.get(task.id) || task.properties.projectId,
+      workSessionHistory: measured.get(task.id) || [] } }));
   const tasks = allTasks.filter((task) => task.status === "open");
   const existingBlocks: DayPlanItem[] = [];
   const occupied: Array<[number, number]> = [];
