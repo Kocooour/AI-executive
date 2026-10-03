@@ -26,6 +26,7 @@ npm run start -- --hostname 127.0.0.1
 - Persistent Personal and Shared workspaces, scoped views, and an All my work aggregate
 - Task dates, deadlines, priority, notes, checklist, recurrence and history
 - Quick Capture with Czech today/tomorrow/date parsing, priority tokens and a reviewable Albert suggestion for project, area, priority, effort and the first suitable free calendar block
+- Manual Context Inbox for pasted meeting, email or Copilot summaries. It creates an in-memory preview, matches only existing workspace entities, defaults extracted claims to protected sensitivity and persists them only as reviewable proposals after an explicit owner action. Action items remain editable drafts until reviewed in Quick Capture.
 - SQLite server source of truth with local IndexedDB cache and conflict-aware sync
 - Daily/manual/safety backups and tombstones for deletion sync
 - Installable PWA with an offline shell
@@ -33,7 +34,7 @@ npm run start -- --hostname 127.0.0.1
 - OS-level urgent-task badges for installed iOS/iPadOS Home Screen and macOS Dock web apps
 - Server-verified AI briefings and an approval-based task action loop with audit and Undo
 - Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
-- Albert's day plan previews ranked tasks in a mobile-friendly timeline. Exact blocks require a fresh connected calendar and avoid existing planned tasks. Accepting a block uses a server-side, single-task proposal with a current-revision and overlap check, audit history and Undo; it does not change the task's due date. When the calendar is missing or stale, the plan lists tasks without claiming exact free times. Decisions and manual time changes are recorded as task planning feedback.
+- Albert's day plan previews ranked tasks in a mobile-friendly timeline and explains why each item matters now. Ranking can use confirmed, current, non-sensitive task/project importance and waiting-party claims in addition to deadlines, priority, calendar availability and measured duration. Exact blocks require a fresh connected calendar and avoid existing planned tasks. Accepting a block uses a server-side, single-task proposal with a current-revision and overlap check, audit history and Undo; it does not change the task's due date. When the calendar is missing or stale, the plan lists tasks without claiming exact free times. Decisions and manual time changes are recorded as task planning feedback.
 - Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
 

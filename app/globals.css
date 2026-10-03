@@ -2396,6 +2396,24 @@ article:hover > .dragHandle,
 }
 .contextClaimActions { margin-top: 12px; }
 .contextConflict { color: #b53a31; font-weight: 600; }
+.contextInboxInput { display: grid; gap: 6px; }
+.contextInbox textarea { width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--line, #d9d9dd); border-radius: 10px; background: var(--input, transparent); color: inherit; padding: 11px; font: inherit; }
+.contextInboxActions, .contextInboxProposal .contextClaimActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.contextInboxList { display: grid; gap: 12px; margin-top: 14px; }
+.contextInboxProposal { border: 1px solid var(--line, #e2e2e5); border-left: 4px solid #e49b26; border-radius: 12px; padding: 14px; }
+.contextInboxProposal.taskDraft { border-left-color: #6756cc; }
+.contextInboxProposal header { display: grid; gap: 4px; margin-bottom: 10px; }
+.contextInboxProposal header small { color: var(--muted, #666); }
+.contextInboxProposal label { display: grid; gap: 6px; }
+.contextInboxProposal input, .contextInboxProposal select { width: 100%; min-height: 40px; border: 1px solid var(--line, #d9d9dd); border-radius: 9px; background: var(--input, transparent); color: inherit; padding: 9px 11px; font: inherit; }
+.contextInboxProposal blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line, #d9d9dd); color: var(--muted, #666); }
+.whyNow { margin-top: 7px; color: var(--muted, #666); }
+.whyNow summary { cursor: pointer; font-weight: 650; }
+.whyNow ul { margin: 6px 0; padding-left: 20px; }
+.detailKnowledge { margin: 18px 0; padding: 12px; border-radius: 12px; background: var(--surface-subtle, rgba(127,127,127,.08)); }
+.detailKnowledge article { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line, #ddd); }
+.detailKnowledge article:last-of-type { border-bottom: 0; }
+.detailKnowledge small { color: var(--muted, #666); }
 
 @media (max-width: 720px) {
   .contextWorkspace { gap: 12px; }
@@ -2403,6 +2421,7 @@ article:hover > .dragHandle,
   .contextClaimForm .preferenceGrid { grid-template-columns: 1fr; }
   .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
   .contextClaimCard header { align-items: flex-start; }
+  .contextInboxActions button, .contextInboxProposal .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
 }
 @media (max-width: 700px) {
   .contextItems article {

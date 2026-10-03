@@ -4,12 +4,13 @@ import { getNotificationPreferences } from "./notifications";
 import { readSnapshot } from "./server-store";
 import { learnPlanning, type LearnedPlanning } from "./day-plan-learning";
 import { measuredWorkHistory } from "./work-sessions";
+import { listEligibleClaims } from "./context-claims";
 
 export interface DayPlanItem {
   taskId: string;
   title: string;
   estimatedMinutes: number;
-  reason: "overdue" | "today" | "deadline" | "priority";
+  reason: "overdue" | "today" | "deadline" | "priority" | "context";
   start?: string;
   end?: string;
   estimateSource?: LearnedPlanning["estimateSource"];
@@ -17,6 +18,7 @@ export interface DayPlanItem {
   preferredMinute?: number | null;
   timeSamples?: number;
   planningSource?: "albert-day-plan" | "manual" | "other";
+  whyNow: string[];
 }
 
 export interface DayPlan {
@@ -102,6 +104,7 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   const projects = new Map(snapshot.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project")
     .map((relation) => [relation.sourceEntityId, relation.targetEntityId]));
   const measured = measuredWorkHistory(workspaceId);
+  const eligibleClaims = listEligibleClaims(workspaceId);
   const allTasks = snapshot.entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId)
     .map((task): Entity => ({ ...task, properties: { ...task.properties, projectId: projects.get(task.id) || task.properties.projectId,
       workSessionHistory: measured.get(task.id) || [] } }));
@@ -112,7 +115,7 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const slot = interval(task);
     if (!slot || dateInZone(timezone, slot[0]) > date || dateInZone(timezone, slot[1] - 1) < date) continue;
     const learning = estimate(task, allTasks, timezone);
-    existingBlocks.push({ taskId: task.id, title: task.title, ...learning, reason: "today",
+    existingBlocks.push({ taskId: task.id, title: task.title, ...learning, reason: "today", whyNow: ["already_planned"],
       planningSource: task.properties.planningSource === "albert-day-plan" ? "albert-day-plan" : task.properties.planningSource === "manual" ? "manual" : "other",
       start: new Date(slot[0]).toISOString(), end: new Date(slot[1]).toISOString() });
     occupied.push(slot);
@@ -128,10 +131,17 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const dueToday = when === date || deadline === date || task.properties.today === true && !when && date === today;
     const dueSoon = Boolean(deadline && deadline > date && deadline <= addDays(date, 2));
     const priority = String(task.properties.priority || "none");
-    if (!overdue && !dueToday && !dueSoon && priority !== "high") return [];
-    const reason: DayPlanItem["reason"] = overdue ? "overdue" : dueToday ? "today" : dueSoon ? "deadline" : "priority";
-    const score = (overdue ? 100 : 0) + (dueToday ? 70 : 0) + (dueSoon ? 25 : 0) + ({ high: 30, medium: 20, low: 10 }[priority] || 0);
-    return [{ task, score, reason, earliest: [when, deadline].filter(Boolean).sort()[0] || "" }];
+    const projectId = String(task.properties.projectId || projects.get(task.id) || "");
+    const claims = eligibleClaims.filter((claim) => claim.subject.canonicalEntityId === task.id || claim.subject.canonicalEntityId === projectId);
+    const importance = claims.some((claim) => claim.predicate === "importance" && /critical|high|krit|vysok/i.test(String(claim.literal?.value || "")));
+    const waiting = claims.some((claim) => claim.predicate === "waiting_for" || claim.predicate === "stakeholder");
+    if (!overdue && !dueToday && !dueSoon && priority !== "high" && !importance && !waiting) return [];
+    const reason: DayPlanItem["reason"] = overdue ? "overdue" : dueToday ? "today" : dueSoon ? "deadline" : priority === "high" ? "priority" : "context";
+    const score = (overdue ? 100 : 0) + (dueToday ? 70 : 0) + (dueSoon ? 25 : 0) + ({ high: 30, medium: 20, low: 10 }[priority] || 0) + (importance ? 20 : 0) + (waiting ? 15 : 0);
+    const primaryReason = overdue ? "overdue" : dueToday ? "due_today" : dueSoon ? "deadline_close"
+      : priority === "high" ? "high_priority" : importance ? "context_importance" : "context_waiting";
+    const whyNow = [...new Set([primaryReason, importance ? "context_importance" : "", waiting ? "context_waiting" : ""].filter(Boolean))];
+    return [{ task, score, reason, whyNow, earliest: [when, deadline].filter(Boolean).sort()[0] || "" }];
   }).sort((a, b) => b.score - a.score || a.earliest.localeCompare(b.earliest) || a.task.createdAt - b.task.createdAt || a.task.id.localeCompare(b.task.id));
   const requiredMinutes = ranked.reduce((total, item) => total + estimate(item.task, allTasks, timezone).estimatedMinutes, 0);
   const unscheduled: DayPlanItem[] = [];
@@ -142,12 +152,14 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   if (date === today) windows = windows.map(([start, end]): [number, number] => [Math.max(start, Math.ceil((now + 15 * 60_000) / 900_000) * 900_000), end]).filter(([start, end]) => end > start);
   for (const slot of occupied) windows = subtract(windows, slot);
   const freeMinutes = calendar === "ready" ? Math.floor(windows.reduce((total, [start, end]) => total + end - start, 0) / 60_000) : null;
-  for (const { task, reason } of ranked) {
-    const item: DayPlanItem = { taskId: task.id, title: task.title, ...estimate(task, allTasks, timezone), reason };
+  for (const { task, reason, whyNow } of ranked) {
+    const learned = estimate(task, allTasks, timezone);
+    const item: DayPlanItem = { taskId: task.id, title: task.title, ...learned, reason,
+      whyNow: [...whyNow, `duration:${learned.estimatedMinutes}`] };
     const start = calendar === "ready" ? preferredFit(windows, item.estimatedMinutes, item.preferredMinute ?? null, timezone) : null;
     if (start === null) { unscheduled.push(item); continue; }
     const end = start + item.estimatedMinutes * 60_000;
-    planBlocks.push({ ...item, start: new Date(start).toISOString(), end: new Date(end).toISOString() });
+    planBlocks.push({ ...item, whyNow: [...item.whyNow, "calendar_free"], start: new Date(start).toISOString(), end: new Date(end).toISOString() });
     windows = subtract(windows, [start, end]);
   }
   return { revision: snapshot.revision, workspaceId, date, timezone, calendar, freeMinutes, requiredMinutes,

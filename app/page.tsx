@@ -83,7 +83,7 @@ interface DayPlanItem {
   taskId: string;
   title: string;
   estimatedMinutes: number;
-  reason: "overdue" | "today" | "deadline" | "priority";
+  reason: "overdue" | "today" | "deadline" | "priority" | "context";
   start?: string;
   end?: string;
   estimateSource?: "explicit" | "actual" | "learned" | "default";
@@ -91,6 +91,7 @@ interface DayPlanItem {
   preferredMinute?: number | null;
   timeSamples?: number;
   planningSource?: "albert-day-plan" | "manual" | "other";
+  whyNow: string[];
 }
 
 interface DayPlan {
@@ -221,6 +222,18 @@ interface ContextClaimItem {
   updatedAt: number;
   eligibleForAI?: boolean;
 }
+
+interface ContextInboxProposal {
+  id: string; kind: "claim";
+  subject: { entityId: string; type: string; title: string };
+  predicate: string;
+  literal: { type: "string" | "number" | "boolean" | "date"; value: string | number | boolean };
+  freshness: "current" | "needs_review" | "stale";
+  sensitivity: "normal" | "sensitive";
+  validFrom: string | null; validTo: string | null; evidenceExcerpt: string; reason: "waiting" | "importance" | "deadline" | "preference";
+}
+
+interface ContextInboxTaskDraft { id: string; title: string; subject: { entityId: string; type: string; title: string }; suggestedDate: string | null; suggestedPriority: "none" | "low" | "medium" | "high"; reason: "action_item"; }
 
 interface NotificationState {
   publicKey: string;
@@ -367,7 +380,7 @@ const copy: Record<Language, Record<string, string>> = {
     workFinishFinal: "Finishing records measured time and completes the task. This action has no one-click Undo.", workConflict: "Work state changed on another device. The latest state was loaded.",
     acceptBlock: "Accept", anotherTime: "Another time", moveTomorrow: "Tomorrow", skipPlanning: "Do not schedule",
     confirmDayPlanAction: "Confirm for task:",
-    dayPlanReasonOverdue: "Overdue", dayPlanReasonToday: "Due today", dayPlanReasonDeadline: "Deadline soon", dayPlanReasonPriority: "High priority",
+    dayPlanReasonOverdue: "Overdue", dayPlanReasonToday: "Due today", dayPlanReasonDeadline: "Deadline soon", dayPlanReasonPriority: "High priority", dayPlanReasonContext: "Relevant context",
     capacityExceeded: "Capacity is exceeded.", capacityEstimate: "This is an indicative estimate without calendar and time estimates.",
     firstBrief: "Create the first brief or enable the automatic schedule in Settings.", todayCapacity: "Today’s capacity",
     calendarDisconnected: "Calendar not connected", freeHours: "h free", capacityUnknown: "Capacity unverified",
@@ -463,7 +476,7 @@ const copy: Record<Language, Record<string, string>> = {
     workFinishFinal: "Dokončení uloží změřený čas a dokončí úkol. Tato akce nemá rychlé Zpět.", workConflict: "Pracovní stav se změnil na jiném zařízení. Načetl jsem aktuální stav.",
     acceptBlock: "Přijmout", anotherTime: "Jiný čas", moveTomorrow: "Zítra", skipPlanning: "Neplánovat",
     confirmDayPlanAction: "Potvrdit pro úkol:",
-    dayPlanReasonOverdue: "Po termínu", dayPlanReasonToday: "Na dnes", dayPlanReasonDeadline: "Blízký termín", dayPlanReasonPriority: "Vysoká priorita",
+    dayPlanReasonOverdue: "Po termínu", dayPlanReasonToday: "Na dnes", dayPlanReasonDeadline: "Blízký termín", dayPlanReasonPriority: "Vysoká priorita", dayPlanReasonContext: "Relevantní kontext",
     capacityExceeded: "Kapacita je překročena.", capacityEstimate: "Jde o orientační odhad bez kalendáře a časových odhadů.",
     firstBrief: "Vytvořte první přehled nebo zapněte automatický plán v Nastavení.", todayCapacity: "Dnešní kapacita",
     calendarDisconnected: "Kalendář není připojen", freeHours: "h volno", capacityUnknown: "Kapacita neověřena",
@@ -693,6 +706,11 @@ export default function App() {
     [editingClaim, setEditingClaim] = useState<ContextClaimItem | null>(null),
     [claimStatus, setClaimStatus] = useState(""),
     [claimBusyId, setClaimBusyId] = useState(""),
+    [contextInboxText, setContextInboxText] = useState(""),
+    [contextInboxProposals, setContextInboxProposals] = useState<ContextInboxProposal[]>([]),
+    [contextInboxTasks, setContextInboxTasks] = useState<ContextInboxTaskDraft[]>([]),
+    [contextInboxBusy, setContextInboxBusy] = useState(""),
+    [contextInboxStatus, setContextInboxStatus] = useState(""),
     [sortBy, setSortBy] = useState<"manual" | "date" | "priority" | "created">("manual"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [draggingId, setDraggingId] = useState(""),
@@ -715,6 +733,32 @@ export default function App() {
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const serverRevision = useRef(0);
   const tr = (key: string) => copy[language][key] || key;
+  const dayPlanWhy = (reason: string) => {
+    if (reason.startsWith("duration:")) return language === "cs" ? `Odhad trvání je ${reason.slice(9)} minut.` : `Estimated duration is ${reason.slice(9)} minutes.`;
+    const labels: Record<string, [string, string]> = {
+      already_planned: ["Úkol už je v kalendáři.", "The task is already in the calendar."],
+      overdue: ["Úkol je po termínu.", "The task is overdue."], due_today: ["Úkol má termín dnes.", "The task is due today."],
+      deadline_close: ["Termín se blíží.", "The deadline is close."], high_priority: ["Úkol má vysokou prioritu.", "The task has high priority."],
+      context_importance: ["Potvrzený kontext označuje úkol nebo projekt jako důležitý.", "Confirmed context marks the task or project as important."],
+      context_waiting: ["Podle potvrzeného kontextu někdo čeká na výsledek.", "Confirmed context says someone is waiting for the result."],
+      calendar_free: ["V kalendáři je vhodné volné okno.", "A suitable free calendar window is available."],
+    };
+    return labels[reason]?.[language === "cs" ? 0 : 1] || reason;
+  };
+  const contextInboxReason = (reason: ContextInboxProposal["reason"] | ContextInboxTaskDraft["reason"]) => ({
+    waiting: language === "cs" ? "Text zmiňuje osobu nebo stranu čekající na výsledek." : "The text mentions a person or party waiting for the result.",
+    importance: language === "cs" ? "Text výslovně popisuje prioritu nebo důležitost." : "The text explicitly describes priority or importance.",
+    deadline: language === "cs" ? "Text obsahuje výslovný termín." : "The text contains an explicit deadline.",
+    preference: language === "cs" ? "Text obsahuje preferenci nebo omezení." : "The text contains a preference or constraint.",
+    action_item: language === "cs" ? "Řádek vypadá jako akční položka. Před vytvořením jej zkontrolujte v rychlém zadání." : "This line looks like an action item. Review it in Quick Capture before creating it.",
+  })[reason];
+  const taskDraftCaptureText = (task: ContextInboxTaskDraft) => {
+    const localDate = task.suggestedDate
+      ? `${Number(task.suggestedDate.slice(8, 10))}.${Number(task.suggestedDate.slice(5, 7))}.${task.suggestedDate.slice(0, 4)}`
+      : "";
+    const priority = task.suggestedPriority === "high" ? "!" : task.suggestedPriority === "medium" ? "#medium" : task.suggestedPriority === "low" ? "#low" : "";
+    return [task.title, priority, localDate].filter(Boolean).join(" ");
+  };
   const deepLinkHandled = useRef(false);
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -1324,6 +1368,43 @@ export default function App() {
     }
   }
 
+  async function previewContextInbox() {
+    if (!contextInboxText.trim() || contextInboxBusy) return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    setContextInboxBusy("preview"); setContextInboxStatus("");
+    try {
+      const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview", workspaceId, text: contextInboxText }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Context preview failed");
+      if (calendarWorkspaceSelection.current !== workspaceId) return;
+      setContextInboxProposals(Array.isArray(data.proposals) ? data.proposals : []);
+      setContextInboxTasks(Array.isArray(data.taskDrafts) ? data.taskDrafts : []);
+      setContextInboxStatus(language === "cs" ? "Náhled je připravený. Původní text nebyl uložen." : "Preview ready. The original text was not stored.");
+    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : "Context preview failed"); }
+    finally { setContextInboxBusy(""); }
+  }
+
+  async function approveContextInbox(proposal: ContextInboxProposal) {
+    if (contextInboxBusy) return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    setContextInboxBusy(proposal.id); setContextInboxStatus("");
+    try {
+      const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        action: "approve", workspaceId, idempotencyKey: proposal.id, id: proposal.id,
+        subjectId: proposal.subject.entityId, predicate: proposal.predicate, literal: proposal.literal,
+        freshness: proposal.freshness, validFrom: proposal.validFrom,
+        validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
+      }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Context proposal could not be saved");
+      setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
+      await loadContextClaims(workspaceId);
+      setContextInboxStatus(language === "cs" ? "Návrh byl přidán do fronty ke kontrole." : "Proposal added to the review queue.");
+    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : "Context proposal could not be saved"); }
+    finally { setContextInboxBusy(""); }
+  }
+
   useEffect(() => {
     if (authState !== "ready") return;
     loadBriefings().catch(() => undefined);
@@ -1333,6 +1414,9 @@ export default function App() {
     loadCalendar(workspaceId).catch(() => undefined);
     loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
     setContextClaims([]);
+    setContextInboxProposals([]);
+    setContextInboxTasks([]);
+    setContextInboxStatus("");
     setClaimFilterId("all");
     setClaimStatus("");
     resetClaimDraft();
@@ -3312,7 +3396,7 @@ export default function App() {
                   {dayPlanTimeline.map((item) => (
                     <article className={`dayPlanBlock ${item.existing ? "existing" : "proposed"}`} key={`${item.taskId}:${item.start}`}>
                       <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.start!))}–{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.end!))}</time>
-                      <div><strong>{item.title}</strong><small>{tr(item.existing ? item.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}{item.estimateSource === "learned" || item.estimateSource === "actual" ? ` (${item.estimateSamples})` : ""}{item.preferredMinute !== null && item.preferredMinute !== undefined ? ` · ${tr("dayPlanPreferredTime")} (${item.timeSamples})` : ""}</small>
+                      <div><strong>{item.title}</strong><small>{tr(item.existing ? item.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}{item.estimateSource === "learned" || item.estimateSource === "actual" ? ` (${item.estimateSamples})` : ""}{item.preferredMinute !== null && item.preferredMinute !== undefined ? ` · ${tr("dayPlanPreferredTime")} (${item.timeSamples})` : ""}</small>{item.whyNow?.length > 0 && <details className="whyNow"><summary>{language === "cs" ? "Proč právě teď" : "Why now"}</summary><ul>{item.whyNow.map((reason) => <li key={reason}>{dayPlanWhy(reason)}</li>)}</ul></details>}
                         <div className="dayPlanActions">
                           {!workSession && <button disabled={workSessionBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) workSessionAction("start", task); }}>{tr("workStart")}</button>}
                         {!item.existing && <>
@@ -3328,7 +3412,7 @@ export default function App() {
                   {visibleDayPlan.unscheduled.map((item) => (
                     <article className="dayPlanBlock unscheduled" key={item.taskId}>
                       <span>{tr("dayPlanUnscheduled")}</span>
-                      <div><strong>{item.title}</strong><small>{tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}</small>
+                      <div><strong>{item.title}</strong><small>{tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}</small>{item.whyNow?.length > 0 && <details className="whyNow"><summary>{language === "cs" ? "Proč právě teď" : "Why now"}</summary><ul>{item.whyNow.map((reason) => <li key={reason}>{dayPlanWhy(reason)}</li>)}</ul></details>}
                         <div className="dayPlanActions">
                           <button disabled={dayPlanBusy} onClick={() => { const task = items.find((candidate) => candidate.id === item.taskId); if (task) inspect(task); }}>{tr("anotherTime")}</button>
                           <button disabled={dayPlanBusy} onClick={() => applyDayPlanAction(item, "tomorrow")}>{tr("moveTomorrow")}</button>
@@ -3388,6 +3472,23 @@ export default function App() {
                   <span><strong>{contextClaims.length}</strong>{language === "cs" ? " tvrzení" : " claims"}</span>
                   <span><strong>{contextClaims.filter((claim) => claim.reviewStatus === "proposed").length}</strong>{language === "cs" ? " ke kontrole" : " to review"}</span>
                   <span><strong>{contextClaims.filter((claim) => claim.eligibleForAI).length}</strong>{language === "cs" ? " pro Alberta" : " for Albert"}</span>
+                </div>
+              </section>
+
+              <section className="contextInbox" aria-labelledby="context-inbox-title">
+                <div className="sectionHeading"><div><h2 id="context-inbox-title">{language === "cs" ? "Kontextová schránka" : "Context Inbox"}</h2><p>{language === "cs" ? "Vložte shrnutí schůzky, e-mailu nebo Copilota. Albert připraví pouze náhled; text neukládá a bez vašeho schválení nic nezmění." : "Paste a meeting, email or Copilot summary. Albert creates a preview only; it does not store the text or change anything without approval."}</p></div></div>
+                <label className="contextInboxInput">{language === "cs" ? "Shrnutí nebo poznámky" : "Summary or notes"}<textarea value={contextInboxText} maxLength={20000} onChange={(event) => setContextInboxText(event.target.value)} placeholder={language === "cs" ? "Např. Projekt Albert – priorita: vysoká\nNa výsledek čeká Jana\nTermín: 2026-10-10" : "E.g. Project Albert – priority: high\nJana is waiting for the result\nDeadline: 2026-10-10"} /></label>
+                <div className="contextInboxActions"><button className="primaryAction" disabled={Boolean(contextInboxBusy) || !contextInboxText.trim()} onClick={previewContextInbox}>{contextInboxBusy === "preview" ? (language === "cs" ? "Analyzuji…" : "Analysing…") : (language === "cs" ? "Připravit náhled" : "Prepare preview")}</button><button disabled={Boolean(contextInboxBusy) || (!contextInboxProposals.length && !contextInboxTasks.length)} onClick={() => { setContextInboxProposals([]); setContextInboxTasks([]); setContextInboxStatus(language === "cs" ? "Náhled byl zahozen." : "Preview discarded."); }}>{language === "cs" ? "Zahodit vše" : "Discard all"}</button></div>
+                {contextInboxStatus && <p role="status">{contextInboxStatus}</p>}
+                <div className="contextInboxList">
+                  {contextInboxProposals.map((proposal) => <article key={proposal.id} className="contextInboxProposal">
+                    <header><strong>{proposal.subject.title}</strong><small>{contextInboxReason(proposal.reason)}</small></header>
+                    <label>{language === "cs" ? "Přiřadit k" : "Assign to"}<select value={proposal.subject.entityId} onChange={(event) => { const subject = items.find((item) => item.id === event.target.value && item.workspaceId === calendarWorkspaceSelection.current); if (subject) setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, subject: { entityId: subject.id, type: subject.type, title: subject.title } } : item)); }}>{items.filter((item) => item.workspaceId === calendarWorkspaceSelection.current && ["workspace", "area", "project", "task", "note"].includes(item.type)).map((item) => <option key={item.id} value={item.id}>{tr(item.type)}: {item.title}</option>)}</select></label>
+                    <div className="preferenceGrid"><label>{language === "cs" ? "Vlastnost" : "Predicate"}<input value={proposal.predicate} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, predicate: event.target.value } : item))} /></label><label>{language === "cs" ? "Hodnota" : "Value"}<input type={proposal.literal.type === "date" ? "date" : proposal.literal.type === "number" ? "number" : "text"} value={String(proposal.literal.value)} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, literal: { ...item.literal, value: item.literal.type === "number" ? Number(event.target.value) : event.target.value } } : item))} /></label></div>
+                    <div className="preferenceGrid"><label>{language === "cs" ? "Aktuálnost" : "Freshness"}<select value={proposal.freshness} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, freshness: event.target.value as ContextInboxProposal["freshness"] } : item))}><option value="current">{language === "cs" ? "Aktuální" : "Current"}</option><option value="needs_review">{language === "cs" ? "Prověřit" : "Needs review"}</option><option value="stale">{language === "cs" ? "Zastaralé" : "Stale"}</option></select></label><label>{language === "cs" ? "Platí do" : "Valid to"}<input type="date" value={proposal.validTo || ""} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, validTo: event.target.value || null } : item))} /></label></div><small>{language === "cs" ? "Návrh se uloží jako chráněný. Zpřístupnění externí AI vyžaduje pozdější samostatnou úpravu a potvrzení tvrzení." : "The proposal is saved as protected. Making it available to external AI requires a separate later edit and claim confirmation."}</small>
+                    <blockquote>{proposal.evidenceExcerpt}</blockquote><div className="contextClaimActions"><button className="primaryAction" disabled={Boolean(contextInboxBusy) || !proposal.predicate.trim() || String(proposal.literal.value) === ""} onClick={() => approveContextInbox(proposal)}>{language === "cs" ? "Uložit ke kontrole" : "Save for review"}</button><button disabled={Boolean(contextInboxBusy)} onClick={() => setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id))}>{language === "cs" ? "Odmítnout" : "Reject"}</button></div>
+                  </article>)}
+                  {contextInboxTasks.map((task) => <article key={task.id} className="contextInboxProposal taskDraft"><header><strong>{language === "cs" ? "Návrh úkolu" : "Task draft"}</strong><small>{contextInboxReason(task.reason)}</small></header><label>{language === "cs" ? "Název" : "Title"}<input value={task.title} onChange={(event) => setContextInboxTasks((current) => current.map((item) => item.id === task.id ? { ...item, title: event.target.value } : item))} /></label><div className="preferenceGrid"><label>{language === "cs" ? "Navržený termín" : "Suggested date"}<input type="date" value={task.suggestedDate || ""} onChange={(event) => setContextInboxTasks((current) => current.map((item) => item.id === task.id ? { ...item, suggestedDate: event.target.value || null } : item))} /></label><label>{language === "cs" ? "Navržená priorita" : "Suggested priority"}<select value={task.suggestedPriority} onChange={(event) => setContextInboxTasks((current) => current.map((item) => item.id === task.id ? { ...item, suggestedPriority: event.target.value as ContextInboxTaskDraft["suggestedPriority"] } : item))}>{(["none", "low", "medium", "high"] as const).map((priority) => <option key={priority} value={priority}>{tr(priority)}</option>)}</select></label></div><div className="contextClaimActions"><button disabled={!task.title.trim()} onClick={() => { openCapture("task", task.subject.type === "project" ? task.subject.entityId : ""); setDraft(taskDraftCaptureText(task)); setContextInboxTasks((current) => current.filter((item) => item.id !== task.id)); }}>{language === "cs" ? "Zkontrolovat v rychlém zadání" : "Review in quick capture"}</button><button onClick={() => setContextInboxTasks((current) => current.filter((item) => item.id !== task.id))}>{language === "cs" ? "Odmítnout" : "Reject"}</button></div></article>)}
                 </div>
               </section>
 
@@ -4432,6 +4533,16 @@ export default function App() {
                     .join(" · ") || "No related entities"}
                 </small>
               </div>
+            )}
+            {(selected.type === "task" || selected.type === "project") && (
+              <section className="detailKnowledge" aria-label={language === "cs" ? "Co Albert ví" : "What Albert knows"}>
+                <h3>{language === "cs" ? "CO ALBERT VÍ" : "WHAT ALBERT KNOWS"}</h3>
+                {contextClaims.filter((claim) => claim.subject.canonicalEntityId === selected.id && !claim.archivedAt).map((claim) => <article key={claim.id}>
+                  <strong>{claim.predicate}: {String(claim.literal?.value ?? claim.target?.title ?? "—")}</strong>
+                  <small>{claim.reviewStatus === "confirmed" ? (language === "cs" ? "potvrzeno" : "confirmed") : claim.reviewStatus === "proposed" ? (language === "cs" ? "ke kontrole" : "to review") : (language === "cs" ? "odmítnuto" : "rejected")} · {claim.freshness === "current" ? (language === "cs" ? "aktuální" : "current") : claim.freshness === "needs_review" ? (language === "cs" ? "prověřit" : "needs review") : (language === "cs" ? "zastaralé" : "stale")}{claim.validTo ? ` · ${language === "cs" ? "platí do" : "valid to"} ${claim.validTo}` : ""}</small>
+                </article>)}
+                {!contextClaims.some((claim) => claim.subject.canonicalEntityId === selected.id && !claim.archivedAt) && <p>{language === "cs" ? "K této položce zatím nejsou žádná tvrzení." : "No claims for this item yet."}</p>}
+              </section>
             )}
             {selected.type === "area" && (
               <div className="projectDetail">
