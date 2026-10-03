@@ -1,5 +1,5 @@
-const CACHE = "ai-executive-shell-v7";
-const SHELL = ["/", "/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
+const CACHE = "ai-executive-shell-v8";
+const SHELL = ["/offline", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
@@ -29,14 +29,7 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request, { cache: "no-store" })
-        .then((response) => {
-          if (url.pathname === "/") {
-            const copy = response.clone();
-            caches.open(CACHE).then((cache) => cache.put("/", copy));
-          }
-          return response;
-        })
-        .catch(async () => (await caches.match("/")) || caches.match("/offline")),
+        .catch(async () => (await caches.match("/offline")) || Response.error()),
     );
     return;
   }

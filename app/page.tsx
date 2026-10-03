@@ -24,6 +24,7 @@ import {
 import { buildContext, type ContextBundle } from "../lib/context";
 import type { AIMessage } from "../lib/ai-provider";
 import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
+import { fetchClientAuthStatus } from "../lib/client-auth-status";
 
 interface BackupSummary {
   name: string;
@@ -349,6 +350,7 @@ const copy: Record<Language, Record<string, string>> = {
     reopen: "Reopen", complete: "Complete", delete: "Delete", notesPlaceholder: "Notes…",
     manageWorkspaces: "Manage workspaces", password: "Password", signIn: "Sign in",
     checkingAccess: "Checking access…", setupRequired: "Setup required", signInPasskey: "Sign in with passkey",
+    accessUnavailable: "Cannot verify access", accessUnavailableDetail: "The server could not confirm access. Check your connection and try again.",
     checking: "Checking…", workspaceDataInfo: "Your workspace data is stored in the server database and cached locally for fast access. AI uses the server provider when configured and falls back to a local preview otherwise.",
     installedApp: "AI Executive is running as an installed app.", installHelp: "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command.",
     installed: "Installed", browserMode: "Browser mode", ownerSession: "This device has an authenticated owner session.",
@@ -445,6 +447,7 @@ const copy: Record<Language, Record<string, string>> = {
     reopen: "Znovu otevřít", complete: "Dokončit", delete: "Smazat", notesPlaceholder: "Poznámky…",
     manageWorkspaces: "Spravovat workspace", password: "Heslo", signIn: "Přihlásit se",
     checkingAccess: "Ověřuji přístup…", setupRequired: "Je nutné dokončit nastavení", signInPasskey: "Přihlásit se passkeyem",
+    accessUnavailable: "Nelze ověřit přístup", accessUnavailableDetail: "Server nemohl ověřit přístup. Zkontrolujte připojení a zkuste to znovu.",
     checking: "Ověřuji…", workspaceDataInfo: "Data workspace jsou uložená v databázi serveru a pro rychlý přístup také v místní mezipaměti. AI používá nakonfigurovaného poskytovatele na serveru, jinak místní náhled.",
     installedApp: "AI Executive běží jako nainstalovaná aplikace.", installHelp: "Na iPhonu použijte Sdílet → Přidat na plochu. Na Macu použijte v prohlížeči Instalovat nebo Přidat do Docku.",
     installed: "Nainstalováno", browserMode: "Režim prohlížeče", ownerSession: "Toto zařízení má ověřenou relaci vlastníka.",
@@ -733,7 +736,7 @@ export default function App() {
     [dragTarget, setDragTarget] = useState(""),
     [checklistDraft, setChecklistDraft] = useState(""),
     [authState, setAuthState] = useState<
-      "checking" | "ready" | "required" | "misconfigured"
+      "checking" | "ready" | "required" | "misconfigured" | "unavailable"
     >("checking"),
     [authEnabled, setAuthEnabled] = useState(false),
     [authPassword, setAuthPassword] = useState(""),
@@ -1066,23 +1069,32 @@ export default function App() {
       setAiBusy(false);
     }
   }
+  const authCheckVersion = useRef(0);
+  async function checkAccess() {
+    const version = ++authCheckVersion.current;
+    setAuthError("");
+    setAuthState("checking");
+    try {
+      const state = await fetchClientAuthStatus();
+      if (version !== authCheckVersion.current) return;
+      setAuthEnabled(state.enabled);
+      if (state.enabled && !state.configured) {
+        setAuthError("Authentication must be configured on the server before this app can be used.");
+        setAuthState("misconfigured");
+        return;
+      }
+      setAuthState(state.authenticated ? "ready" : "required");
+    } catch {
+      if (version !== authCheckVersion.current) return;
+      setAuthState("unavailable");
+    }
+  }
   useEffect(() => {
-    setPasskeySupported(browserSupportsWebAuthn());
-    fetch("/api/auth/status", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((state) => {
-        setAuthEnabled(Boolean(state.enabled));
-        if (state.enabled && state.configured === false) {
-          setAuthError("Authentication must be configured on the server before this app can be used.");
-          setAuthState("misconfigured");
-          return;
-        }
-        setAuthState(state.authenticated ? "ready" : "required");
-      })
-      .catch(() => {
-        setAuthError("Authentication status is unavailable.");
-        setAuthState("required");
-      });
+    try { setPasskeySupported(browserSupportsWebAuthn()); } catch { setPasskeySupported(false); }
+    void checkAccess();
+    return () => { authCheckVersion.current += 1; };
+  // The first access check runs once; retries are initiated by the user.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadBriefings(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
@@ -3156,6 +3168,8 @@ export default function App() {
               ? tr("checkingAccess")
               : authState === "misconfigured"
                 ? tr("setupRequired")
+                : authState === "unavailable"
+                  ? tr("accessUnavailable")
                 : tr("signIn")}
           </h1>
           {authState === "required" && (
@@ -3184,6 +3198,12 @@ export default function App() {
             </>
           )}
           {authError && <p className="authError" role="alert">{authError}</p>}
+          {authState === "unavailable" && (
+            <>
+              <p className="authError" role="alert">{tr("accessUnavailableDetail")}</p>
+              <button type="button" onClick={() => void checkAccess()}>{tr("retry")}</button>
+            </>
+          )}
         </form>
       </main>
     );
