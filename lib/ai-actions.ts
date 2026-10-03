@@ -487,6 +487,13 @@ function providerContext(workspaceId: string, entities: Entity[], focusEntityId?
     content: item.content,
     provenance: item.provenance,
   }));
+  const confirmedClaims = (resolved?.claims || []).slice(0, 40).map((claim) => ({
+    subject: claim.subject.title,
+    predicate: claim.predicate,
+    value: claim.literal?.value ?? claim.target?.title,
+    provenance: claim.provenance,
+    source: claim.source ? "available" : "missing",
+  }));
   return [
     "You are AIfréd, the read-only reasoning layer inside AI Executive.",
     "Act as a calm proactive personal chief of staff. Prefer concise recommendations.",
@@ -496,6 +503,7 @@ function providerContext(workspaceId: string, entities: Entity[], focusEntityId?
     focusEntityId ? `Focus entity ID: ${focusEntityId}` : "",
     `Canonical entities: ${JSON.stringify(compact)}`,
     durableContext.length ? `Durable context: ${JSON.stringify(durableContext)}` : "",
+    confirmedClaims.length ? `Confirmed current context claims: ${JSON.stringify(confirmedClaims)}` : "",
   ].filter(Boolean).join("\n");
 }
 

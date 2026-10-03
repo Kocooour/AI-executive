@@ -193,6 +193,28 @@ interface DurableContextItem {
   updatedAt: number;
 }
 
+interface ContextClaimItem {
+  id: string;
+  workspaceId: string;
+  subject: { id: string; type: string; canonicalEntityId: string; title: string };
+  predicate: string;
+  literal: { type: "string" | "number" | "boolean" | "date"; value: string | number | boolean } | null;
+  target: { id: string; type: string; canonicalEntityId: string; title: string } | null;
+  reviewStatus: "proposed" | "confirmed" | "rejected";
+  freshness: "current" | "needs_review" | "stale";
+  sensitivity: "normal" | "sensitive";
+  provenance: "owner";
+  validFrom: string | null;
+  validTo: string | null;
+  source: { provider?: string; locator?: string; author?: string; sourceAt?: string; coverage?: string } | null;
+  evidence: { locator?: string; excerpt?: string; stance?: string } | null;
+  revision: number;
+  archivedAt: number | null;
+  recordedAt: number;
+  updatedAt: number;
+  eligibleForAI?: boolean;
+}
+
 interface NotificationState {
   publicKey: string;
   subscriptionCount: number;
@@ -224,6 +246,7 @@ const views = [
     "Projects",
     "Areas",
     "Notes",
+    "Context",
     "Agents",
   ];
 const moreViews = [
@@ -235,6 +258,7 @@ const moreViews = [
   "Completed",
   "Areas",
   "Notes",
+  "Context",
   "Agents",
   "Settings",
 ];
@@ -250,6 +274,7 @@ const viewIcons: Record<string, string> = {
   Projects: "◇",
   Areas: "◎",
   Notes: "▤",
+  Context: "◫",
   Agents: "◇",
   Settings: "⚙",
   More: "•••",
@@ -262,7 +287,7 @@ const copy: Record<Language, Record<string, string>> = {
     Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
     Upcoming: "Upcoming", Anytime: "Anytime", Someday: "Someday",
     Completed: "Completed", Projects: "Projects", Areas: "Areas",
-    Notes: "Notes", Agents: "Agents", Settings: "Settings", More: "More", Search: "Search",
+    Notes: "Notes", Context: "Context", Agents: "Agents", Settings: "Settings", More: "More", Search: "Search",
     new: "New", search: "Search everything", askAi: "Ask AI",
     appearance: "Appearance", systemTheme: "System", lightTheme: "Light", darkTheme: "Dark",
     switchLight: "Switch to light mode", switchDark: "Switch to dark mode",
@@ -355,7 +380,7 @@ const copy: Record<Language, Record<string, string>> = {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
     Upcoming: "Nadcházející", Anytime: "Kdykoli", Someday: "Někdy",
     Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",
-    Notes: "Poznámky", Agents: "Agenti", Settings: "Nastavení", More: "Více", Search: "Hledání",
+    Notes: "Poznámky", Context: "Kontext", Agents: "Agenti", Settings: "Nastavení", More: "Více", Search: "Hledání",
     new: "Nový", search: "Hledat ve všem", askAi: "Zeptat se AI",
     appearance: "Vzhled", systemTheme: "Podle systému", lightTheme: "Světlý", darkTheme: "Tmavý",
     switchLight: "Přepnout na světlý režim", switchDark: "Přepnout na tmavý režim",
@@ -634,6 +659,22 @@ export default function App() {
     [contextProjectId, setContextProjectId] = useState(""),
     [contextStatus, setContextStatus] = useState(""),
     [contextBusy, setContextBusy] = useState(false),
+    [contextClaims, setContextClaims] = useState<ContextClaimItem[]>([]),
+    [claimFilterId, setClaimFilterId] = useState("all"),
+    [claimSubjectId, setClaimSubjectId] = useState(""),
+    [claimPredicate, setClaimPredicate] = useState("preference"),
+    [claimValue, setClaimValue] = useState(""),
+    [claimValueType, setClaimValueType] = useState<"string" | "number" | "boolean" | "date">("string"),
+    [claimFreshness, setClaimFreshness] = useState<ContextClaimItem["freshness"]>("current"),
+    [claimSensitivity, setClaimSensitivity] = useState<ContextClaimItem["sensitivity"]>("normal"),
+    [claimValidFrom, setClaimValidFrom] = useState(""),
+    [claimValidTo, setClaimValidTo] = useState(""),
+    [claimSourceProvider, setClaimSourceProvider] = useState(""),
+    [claimSourceLocator, setClaimSourceLocator] = useState(""),
+    [claimEvidence, setClaimEvidence] = useState(""),
+    [editingClaim, setEditingClaim] = useState<ContextClaimItem | null>(null),
+    [claimStatus, setClaimStatus] = useState(""),
+    [claimBusyId, setClaimBusyId] = useState(""),
     [sortBy, setSortBy] = useState<"manual" | "date" | "priority" | "created">("manual"),
     [priorityFilter, setPriorityFilter] = useState("all"),
     [draggingId, setDraggingId] = useState(""),
@@ -667,6 +708,7 @@ export default function App() {
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const calendarLoadVersion = useRef(0);
+  const contextClaimLoadVersion = useRef(0);
   const dayPlanLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
@@ -1095,6 +1137,128 @@ export default function App() {
     }
   }
 
+  async function loadContextClaims(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+    const loadVersion = ++contextClaimLoadVersion.current;
+    const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Context claims are unavailable");
+    if (loadVersion !== contextClaimLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
+    setContextClaims(Array.isArray(data.claims) ? data.claims : []);
+  }
+
+  async function reloadContextClaims() {
+    const workspaceId = calendarWorkspaceSelection.current;
+    setClaimStatus(language === "cs" ? "Načítám…" : "Reloading…");
+    try {
+      await loadContextClaims(workspaceId);
+      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(language === "cs" ? "Tvrzení byla obnovena; rozepsaný návrh zůstal zachován." : "Claims reloaded; your draft was preserved.");
+    } catch (error) {
+      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : "Context claims are unavailable");
+    }
+  }
+
+  function resetClaimDraft() {
+    setEditingClaim(null);
+    setClaimSubjectId("");
+    setClaimPredicate("preference");
+    setClaimValue("");
+    setClaimValueType("string");
+    setClaimFreshness("current");
+    setClaimSensitivity("normal");
+    setClaimValidFrom("");
+    setClaimValidTo("");
+    setClaimSourceProvider("");
+    setClaimSourceLocator("");
+    setClaimEvidence("");
+  }
+
+  function editContextClaim(claim: ContextClaimItem) {
+    if (!claim.literal) return;
+    setEditingClaim(claim);
+    setClaimSubjectId(claim.subject.canonicalEntityId);
+    setClaimPredicate(claim.predicate);
+    setClaimValue(String(claim.literal.value));
+    setClaimValueType(claim.literal.type);
+    setClaimFreshness(claim.freshness);
+    setClaimSensitivity(claim.sensitivity);
+    setClaimValidFrom(claim.validFrom || "");
+    setClaimValidTo(claim.validTo || "");
+    setClaimSourceProvider(claim.source?.provider || "");
+    setClaimSourceLocator(claim.source?.locator || "");
+    setClaimEvidence(claim.evidence?.excerpt || "");
+    setClaimStatus("");
+    window.setTimeout(() => document.getElementById("context-claim-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }
+
+  async function saveContextClaim() {
+    if (claimBusyId) return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    const claimId = editingClaim?.id || crypto.randomUUID();
+    setClaimBusyId(claimId);
+    setClaimStatus(language === "cs" ? "Ukládám…" : "Saving…");
+    try {
+      const parsedValue = claimValueType === "number" ? Number(claimValue)
+        : claimValueType === "boolean" ? claimValue === "true" : claimValue;
+      const hasSource = Boolean(claimSourceProvider.trim() || claimSourceLocator.trim());
+      const response = await fetch("/api/context/claims", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: editingClaim ? "update" : "create", idempotencyKey: crypto.randomUUID(), workspaceId,
+          id: claimId, expectedRevision: editingClaim?.revision || 0,
+          subject: editingClaim ? undefined : { entityId: claimSubjectId },
+          predicate: claimPredicate.trim(), literal: { type: claimValueType, value: parsedValue },
+          freshness: claimFreshness, sensitivity: claimSensitivity,
+          validFrom: claimValidFrom || null, validTo: claimValidTo || null,
+          source: hasSource ? { provider: claimSourceProvider.trim() || undefined, locator: claimSourceLocator.trim() || undefined } : null,
+          evidence: hasSource && claimEvidence.trim() ? { excerpt: claimEvidence.trim(), stance: "supports" } : null,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409) throw new Error(language === "cs" ? "Konflikt: tvrzení se změnilo na jiném zařízení. Návrh zůstal zachován; použijte Obnovit tvrzení a potom otevřete aktuální verzi." : "Conflict: the claim changed on another device. Your draft was kept; use Reload claims, then open the current version.");
+        throw new Error(data.error || "Context claim could not be saved");
+      }
+      if (calendarWorkspaceSelection.current !== workspaceId) return;
+      await loadContextClaims(workspaceId);
+      resetClaimDraft();
+      setClaimStatus(language === "cs" ? "Uloženo. Nové tvrzení čeká na kontrolu." : "Saved. A new claim awaits review.");
+    } catch (error) {
+      if (calendarWorkspaceSelection.current === workspaceId) {
+        setClaimStatus(error instanceof Error ? error.message : "Context claim could not be saved");
+      }
+    } finally {
+      setClaimBusyId("");
+    }
+  }
+
+  async function contextClaimAction(claim: ContextClaimItem, action: "review" | "archive", decision?: ContextClaimItem["reviewStatus"]) {
+    if (claimBusyId) return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    setClaimBusyId(claim.id);
+    setClaimStatus(language === "cs" ? "Ukládám…" : "Saving…");
+    try {
+      const response = await fetch("/api/context/claims", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, idempotencyKey: crypto.randomUUID(), workspaceId, id: claim.id,
+          expectedRevision: claim.revision, decision }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409) throw new Error(language === "cs" ? "Konflikt: načtěte aktuální verzi tvrzení." : "Conflict: reload the current claim version.");
+        throw new Error(data.error || "Context claim action failed");
+      }
+      if (calendarWorkspaceSelection.current !== workspaceId) return;
+      await loadContextClaims(workspaceId);
+      setClaimStatus(language === "cs" ? "Uloženo." : "Saved.");
+    } catch (error) {
+      if (calendarWorkspaceSelection.current === workspaceId) {
+        setClaimStatus(error instanceof Error ? error.message : "Context claim action failed");
+      }
+    } finally {
+      setClaimBusyId("");
+    }
+  }
+
   useEffect(() => {
     if (authState !== "ready") return;
     loadBriefings().catch(() => undefined);
@@ -1103,6 +1267,11 @@ export default function App() {
     setCalendarEvents([]);
     loadCalendar(workspaceId).catch(() => undefined);
     loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
+    setContextClaims([]);
+    setClaimFilterId("all");
+    setClaimStatus("");
+    resetClaimDraft();
+    loadContextClaims(workspaceId).catch(() => setClaimStatus(language === "cs" ? "Strukturovaný kontext nelze načíst." : "Structured context is unavailable."));
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
@@ -3102,6 +3271,59 @@ export default function App() {
                 ))}
             </div>
           )}
+          {view === "Context" && (
+            <div className="contextWorkspace">
+              <section className="contextOverview">
+                <div className="sectionHeading">
+                  <div>
+                    <p className="eyebrow">ALBERT · CONTEXT V2</p>
+                    <h2>{language === "cs" ? "Co Albert ví" : "What Albert knows"}</h2>
+                    <p>{language === "cs" ? "Vlastníkem řízená tvrzení pro tento workspace. Do AI se dostanou pouze potvrzená, aktuální a běžná tvrzení." : "Owner-controlled claims for this workspace. Only confirmed, current and normal claims may reach AI."}</p>
+                  </div>
+                  <div className="contextHeaderActions"><button onClick={reloadContextClaims} disabled={Boolean(claimBusyId)}>{language === "cs" ? "Obnovit tvrzení" : "Reload claims"}</button><button className="primaryAction" onClick={resetClaimDraft}>{language === "cs" ? "Nové tvrzení" : "New claim"}</button></div>
+                </div>
+                <div className="contextStats">
+                  <span><strong>{contextClaims.length}</strong>{language === "cs" ? " tvrzení" : " claims"}</span>
+                  <span><strong>{contextClaims.filter((claim) => claim.reviewStatus === "proposed").length}</strong>{language === "cs" ? " ke kontrole" : " to review"}</span>
+                  <span><strong>{contextClaims.filter((claim) => claim.eligibleForAI).length}</strong>{language === "cs" ? " pro Alberta" : " for Albert"}</span>
+                </div>
+              </section>
+
+              <section className="contextClaimEditor" id="context-claim-editor">
+                <div className="sectionHeading"><div><h2>{editingClaim ? (language === "cs" ? "Upravit tvrzení" : "Edit claim") : (language === "cs" ? "Přidat tvrzení" : "Add claim")}</h2><p>{language === "cs" ? "Zdroj nechte prázdný, pokud žádný nemáte. Albert jej nebude domýšlet." : "Leave source empty when none exists. Albert will not invent one."}</p></div></div>
+                <div className="contextClaimForm">
+                  <label>{language === "cs" ? "O kom / čem" : "Subject"}<select value={claimSubjectId} disabled={Boolean(editingClaim)} onChange={(event) => setClaimSubjectId(event.target.value)}><option value="">—</option>{items.filter((item) => item.workspaceId === calendarWorkspaceSelection.current && (item.type === "workspace" || item.type === "project")).map((item) => <option key={item.id} value={item.id}>{item.type === "project" ? `${tr("project")}: ` : ""}{item.title}</option>)}</select></label>
+                  <label>{language === "cs" ? "Vlastnost" : "Predicate"}<input value={claimPredicate} maxLength={120} pattern="[a-z][a-z0-9_.-]*" onChange={(event) => setClaimPredicate(event.target.value)} placeholder="preference" /></label>
+                  <div className="preferenceGrid">
+                    <label>{language === "cs" ? "Typ hodnoty" : "Value type"}<select value={claimValueType} onChange={(event) => setClaimValueType(event.target.value as typeof claimValueType)}><option value="string">Text</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="date">Date</option></select></label>
+                    <label>{language === "cs" ? "Hodnota" : "Value"}{claimValueType === "boolean" ? <select value={claimValue} onChange={(event) => setClaimValue(event.target.value)}><option value="">—</option><option value="true">true</option><option value="false">false</option></select> : <input type={claimValueType === "number" ? "number" : claimValueType === "date" ? "date" : "text"} value={claimValue} maxLength={10000} onChange={(event) => setClaimValue(event.target.value)} />}</label>
+                  </div>
+                  <div className="preferenceGrid">
+                    <label>{language === "cs" ? "Aktuálnost" : "Freshness"}<select value={claimFreshness} onChange={(event) => setClaimFreshness(event.target.value as ContextClaimItem["freshness"])}><option value="current">{language === "cs" ? "Aktuální" : "Current"}</option><option value="needs_review">{language === "cs" ? "Prověřit" : "Needs review"}</option><option value="stale">{language === "cs" ? "Zastaralé" : "Stale"}</option></select></label>
+                    <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={claimSensitivity} onChange={(event) => setClaimSensitivity(event.target.value as ContextClaimItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžné" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivé" : "Sensitive"}</option></select></label>
+                  </div>
+                  <div className="preferenceGrid"><label>{language === "cs" ? "Platí od (volitelné)" : "Valid from (optional)"}<input type="date" value={claimValidFrom} onChange={(event) => setClaimValidFrom(event.target.value)} /></label><label>{language === "cs" ? "Platí do (volitelné)" : "Valid to (optional)"}<input type="date" value={claimValidTo} onChange={(event) => setClaimValidTo(event.target.value)} /></label></div>
+                  <details><summary>{language === "cs" ? "Zdroj a důkaz (volitelné)" : "Source and evidence (optional)"}</summary><div className="preferenceGrid"><label>Provider<input value={claimSourceProvider} maxLength={80} onChange={(event) => setClaimSourceProvider(event.target.value)} /></label><label>{language === "cs" ? "Odkaz / lokátor" : "URL / locator"}<input value={claimSourceLocator} maxLength={2000} onChange={(event) => setClaimSourceLocator(event.target.value)} /></label></div><label>{language === "cs" ? "Výňatek důkazu" : "Evidence excerpt"}<textarea value={claimEvidence} maxLength={2000} onChange={(event) => setClaimEvidence(event.target.value)} /></label></details>
+                  <div className="notificationActions"><button className="primaryAction" disabled={Boolean(claimBusyId) || !claimSubjectId || !claimPredicate.trim() || claimValue === "" || (claimValueType === "number" && !Number.isFinite(Number(claimValue)))} onClick={saveContextClaim}>{claimBusyId ? (language === "cs" ? "Ukládám…" : "Saving…") : tr("save")}</button>{editingClaim && <button disabled={Boolean(claimBusyId)} onClick={resetClaimDraft}>{language === "cs" ? "Zrušit" : "Cancel"}</button>}</div>
+                  {claimStatus && <p className={claimStatus.toLowerCase().includes("konflikt") || claimStatus.toLowerCase().includes("conflict") ? "contextConflict" : "saveConfirmation"} role="status">{claimStatus}</p>}
+                </div>
+              </section>
+
+              <section className="contextReviewQueue">
+                <div className="sectionHeading"><div><h2>{language === "cs" ? "Tvrzení a kontrola" : "Claims and review"}</h2><p>{language === "cs" ? "Potvrzení platí jen pro konkrétní tvrzení, nikoli pro celý projekt nebo související úkoly." : "Confirmation applies only to this claim, not the whole project or related tasks."}</p></div><label>{language === "cs" ? "Zobrazit" : "Show"}<select value={claimFilterId} onChange={(event) => setClaimFilterId(event.target.value)}><option value="all">{language === "cs" ? "Celý workspace" : "Whole workspace"}</option><option value="review">{language === "cs" ? "Ke kontrole" : "Review queue"}</option>{items.filter((item) => item.type === "project" && item.workspaceId === calendarWorkspaceSelection.current).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label></div>
+                <div className="contextClaimList">
+                  {[...contextClaims].filter((claim) => claimFilterId === "all" || (claimFilterId === "review" ? claim.reviewStatus === "proposed" : claim.subject.canonicalEntityId === claimFilterId)).sort((a, b) => Number(a.reviewStatus !== "proposed") - Number(b.reviewStatus !== "proposed") || b.updatedAt - a.updatedAt).map((claim) => <article key={claim.id} className={`contextClaimCard ${claim.reviewStatus} ${claim.freshness}`}>
+                    <header><div><strong>{claim.subject.title}</strong><small>{claim.subject.type} · rev. {claim.revision}</small></div><span className={`claimState ${claim.reviewStatus}`}>{claim.reviewStatus === "proposed" ? (language === "cs" ? "Ke kontrole" : "Proposed") : claim.reviewStatus === "confirmed" ? (language === "cs" ? "Potvrzeno" : "Confirmed") : (language === "cs" ? "Odmítnuto" : "Rejected")}</span></header>
+                    <p><b>{claim.predicate}</b> → {String(claim.literal?.value ?? claim.target?.title ?? "—")}</p>
+                    <div className="claimMeta"><span>{claim.freshness === "current" ? (language === "cs" ? "aktuální" : "current") : claim.freshness === "needs_review" ? (language === "cs" ? "prověřit" : "needs review") : (language === "cs" ? "zastaralé" : "stale")}</span><span>{claim.sensitivity === "sensitive" ? (language === "cs" ? "citlivé" : "sensitive") : (language === "cs" ? "běžné" : "normal")}</span><span className={claim.source ? "hasSource" : "missingSource"}>{claim.source ? (claim.source.provider || claim.source.locator || (language === "cs" ? "zdroj uveden" : "source available")) : (language === "cs" ? "bez zdroje · tvrzení vlastníka" : "missing source · owner statement")}</span></div>
+                    {claim.evidence?.excerpt && <blockquote>{claim.evidence.excerpt}</blockquote>}
+                    <div className="contextClaimActions">{claim.reviewStatus !== "confirmed" && <button className="primaryAction" disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "review", "confirmed")}>{language === "cs" ? "Potvrdit" : "Confirm"}</button>}{claim.reviewStatus !== "rejected" && <button disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "review", "rejected")}>{language === "cs" ? "Odmítnout" : "Reject"}</button>}{claim.literal && <button disabled={Boolean(claimBusyId)} onClick={() => editContextClaim(claim)}>{language === "cs" ? "Opravit" : "Edit"}</button>}<button className="textAction danger" disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "archive")}>{language === "cs" ? "Archivovat" : "Archive"}</button></div>
+                  </article>)}
+                  {!contextClaims.some((claim) => claimFilterId === "all" || (claimFilterId === "review" ? claim.reviewStatus === "proposed" : claim.subject.canonicalEntityId === claimFilterId)) && <p>{language === "cs" ? "V tomto výběru nejsou žádná strukturovaná tvrzení." : "No structured claims in this selection."}</p>}
+                </div>
+              </section>
+            </div>
+          )}
           {view === "Agents" && (
             <div className="agentsPanel">
               <p className="agentsIntro">{tr("agentsIntro")}</p>
@@ -3664,7 +3886,7 @@ export default function App() {
               </section>
             </div>
           )}
-          {view !== "Settings" && view !== "Agents" && (
+          {view !== "Settings" && view !== "Agents" && view !== "Context" && (
             <>
               {!["Home", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { calendarAvailability, listCalendarEvents } from "./calendar";
+import { listEligibleClaims, type ContextClaim } from "./context-claims";
 import type { Entity } from "./db";
 import { getDatabase, readSnapshot } from "./server-store";
 
@@ -49,6 +50,7 @@ export interface ResolvedPACTContext {
   agent: PACTAgentDefinition;
   entities: Entity[];
   context: PACTContextItem[];
+  claims: ContextClaim[];
   calendar: {
     configured: boolean;
     fresh: boolean;
@@ -227,6 +229,7 @@ export function resolvePACTContext(input: {
   const context = listPACTContext(input.workspaceId, agent.contextScopes)
     .filter((item) => input.includeSensitive || item.sensitivity !== "sensitive")
     .filter((item) => !item.projectId || !input.projectId || item.projectId === input.projectId);
+  const claims = agent.tools.includes("context.read") ? listEligibleClaims(input.workspaceId, input.projectId) : [];
   let calendar: ResolvedPACTContext["calendar"] = null;
   if (input.calendarRange && agent.tools.includes("calendar.read")) {
     const availability = calendarAvailability(
@@ -241,7 +244,7 @@ export function resolvePACTContext(input: {
       .map((event) => ({ title: event.title, start: event.start, end: event.end, private: event.private }));
     calendar = { ...availability, events };
   }
-  return { workspaceId: input.workspaceId, agent, entities, context, calendar };
+  return { workspaceId: input.workspaceId, agent, entities, context, claims, calendar };
 }
 
 export function beginPACTRun(agentId: string, workspaceId: string, triggerMode: string, inputSummary: string) {

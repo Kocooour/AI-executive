@@ -172,6 +172,81 @@ export function getDatabase() {
     );
     CREATE INDEX IF NOT EXISTS pact_context_scope_idx
       ON pact_context(workspace_id, scope, status, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS context_subjects (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      subject_type TEXT NOT NULL,
+      canonical_entity_id TEXT,
+      display_title TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(workspace_id, canonical_entity_id)
+    );
+    CREATE INDEX IF NOT EXISTS context_subjects_workspace_idx
+      ON context_subjects(workspace_id, subject_type, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS context_claims (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      literal_type TEXT,
+      literal_value TEXT,
+      target_subject_id TEXT,
+      review_status TEXT NOT NULL,
+      freshness TEXT NOT NULL,
+      sensitivity TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      valid_from TEXT,
+      valid_to TEXT,
+      source_metadata TEXT,
+      evidence_metadata TEXT,
+      revision INTEGER NOT NULL,
+      archived_at INTEGER,
+      recorded_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS context_claims_workspace_idx
+      ON context_claims(workspace_id, review_status, freshness, archived_at, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS context_claims_subject_idx
+      ON context_claims(subject_id, archived_at, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS context_review_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      claim_id TEXT NOT NULL,
+      claim_revision INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      reason TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS context_review_events_claim_idx
+      ON context_review_events(workspace_id, claim_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS context_change_events (
+      id TEXT PRIMARY KEY,
+      command_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      before_revision INTEGER,
+      after_revision INTEGER,
+      before_payload TEXT,
+      after_payload TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS context_change_events_object_idx
+      ON context_change_events(workspace_id, object_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS context_change_events_command_idx
+      ON context_change_events(workspace_id, command_id);
+    CREATE TABLE IF NOT EXISTS context_commands (
+      workspace_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      result_payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(workspace_id, idempotency_key)
+    );
     CREATE TABLE IF NOT EXISTS pact_tool_permissions (
       agent_id TEXT NOT NULL,
       tool_name TEXT NOT NULL,
@@ -239,6 +314,7 @@ export function getDatabase() {
       expires_at INTEGER NOT NULL
     );
   `);
+  migrateContextChangeEventScope(database);
   const challengeColumns = database
     .prepare("PRAGMA table_info(passkey_challenges)")
     .all()
@@ -254,6 +330,44 @@ export function getDatabase() {
   migrateLegacyStore(database);
   ensureDefaultWorkspace(database);
   return database;
+}
+
+function migrateContextChangeEventScope(database: DatabaseSync) {
+  const row = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='context_change_events'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || !/command_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(row.sql)) return;
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(`
+      ALTER TABLE context_change_events RENAME TO context_change_events_legacy;
+      CREATE TABLE context_change_events (
+        id TEXT PRIMARY KEY,
+        command_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        before_revision INTEGER,
+        after_revision INTEGER,
+        before_payload TEXT,
+        after_payload TEXT,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO context_change_events
+        SELECT id, command_id, workspace_id, actor, object_id, operation, before_revision,
+          after_revision, before_payload, after_payload, created_at
+        FROM context_change_events_legacy;
+      DROP TABLE context_change_events_legacy;
+      CREATE INDEX context_change_events_object_idx
+        ON context_change_events(workspace_id, object_id, created_at DESC);
+      CREATE UNIQUE INDEX context_change_events_command_idx
+        ON context_change_events(workspace_id, command_id);
+    `);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export interface StoredPasskeyCredential {

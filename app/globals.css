@@ -2305,6 +2305,98 @@ article:hover > .dragHandle,
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.contextWorkspace {
+  display: grid;
+  gap: 18px;
+  max-width: 980px;
+}
+.contextWorkspace > section {
+  border: 1px solid var(--line, #e5e5e7);
+  border-radius: 16px;
+  background: var(--surface, #fff);
+  padding: 20px;
+}
+.contextStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.contextHeaderActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.contextStats span,
+.claimMeta span {
+  border-radius: 999px;
+  background: var(--surface-subtle, rgba(127, 127, 127, .1));
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.contextClaimForm {
+  display: grid;
+  gap: 12px;
+}
+.contextClaimForm label,
+.contextClaimForm details {
+  display: grid;
+  gap: 6px;
+}
+.contextClaimForm input,
+.contextClaimForm select,
+.contextClaimForm textarea {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line, #d9d9dd);
+  border-radius: 9px;
+  background: var(--input, transparent);
+  color: inherit;
+  padding: 9px 11px;
+  font: inherit;
+}
+.contextClaimForm textarea { min-height: 82px; resize: vertical; }
+.contextClaimForm summary { cursor: pointer; margin-bottom: 10px; }
+.contextClaimList { display: grid; gap: 12px; }
+.contextClaimCard {
+  border: 1px solid var(--line, #e2e2e5);
+  border-left: 4px solid #e49b26;
+  border-radius: 12px;
+  padding: 14px;
+}
+.contextClaimCard.confirmed { border-left-color: #2c9c69; }
+.contextClaimCard.rejected { border-left-color: #d94a4a; }
+.contextClaimCard.stale { border-left-color: #8c8c91; opacity: .82; }
+.contextClaimCard header,
+.contextClaimActions,
+.claimMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.contextClaimCard header { justify-content: space-between; }
+.contextClaimCard header div { display: grid; gap: 2px; }
+.contextClaimCard p { overflow-wrap: anywhere; }
+.claimState { font-size: 12px; font-weight: 700; }
+.claimState.proposed { color: #b56d00; }
+.claimState.confirmed { color: #248155; }
+.claimState.rejected { color: #bd3434; }
+.claimMeta .missingSource { color: #8b5d12; }
+.claimMeta .hasSource { color: #287354; }
+.contextClaimCard blockquote {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--line, #d9d9dd);
+  color: var(--muted, #666);
+}
+.contextClaimActions { margin-top: 12px; }
+.contextConflict { color: #b53a31; font-weight: 600; }
+
+@media (max-width: 720px) {
+  .contextWorkspace { gap: 12px; }
+  .contextWorkspace > section { padding: 15px; border-radius: 12px; }
+  .contextClaimForm .preferenceGrid { grid-template-columns: 1fr; }
+  .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
+  .contextClaimCard header { align-items: flex-start; }
+}
 @media (max-width: 700px) {
   .contextItems article {
     display: grid;
