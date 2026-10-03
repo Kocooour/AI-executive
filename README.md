@@ -26,7 +26,8 @@ npm run start -- --hostname 127.0.0.1
 - Persistent Personal and Shared workspaces, scoped views, and an All my work aggregate
 - Task dates, deadlines, priority, notes, checklist, recurrence and history
 - Quick Capture with Czech today/tomorrow/date parsing, priority tokens and a reviewable Albert suggestion for project, area, priority, effort and the first suitable free calendar block
-- Manual Context Inbox for pasted meeting, email or Copilot summaries. It creates an in-memory preview, matches only existing workspace entities, defaults extracted claims to protected sensitivity and persists them only as reviewable proposals after an explicit owner action. Action items remain editable drafts until reviewed in Quick Capture.
+- Manual Context Inbox for pasted meeting, email or Copilot summaries. It creates an in-memory preview, matches existing workspace entities, and may suggest a person waiting for a result. The owner selects an existing person or explicitly creates one, then separately saves the relationship as a protected reviewable claim. Ambiguous lines remain literal proposals. Action items remain editable drafts until reviewed in Quick Capture.
+- First-class people and organizations in the Context workspace, with workspace-scoped names, duplicate warnings, revision-safe rename/archive, change history and searchable relationships to tasks and projects. Each relationship remains an independently reviewed claim; archiving a person or organization removes its claims from AI eligibility without deleting history.
 - SQLite server source of truth with local IndexedDB cache and conflict-aware sync
 - Daily/manual/safety backups and tombstones for deletion sync
 - Installable PWA with an offline shell

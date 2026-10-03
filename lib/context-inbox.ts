@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createOwnerClaim, type ClaimFreshness, type ClaimLiteralType, type ClaimSensitivity } from "./context-claims";
 import { readSnapshot } from "./server-store";
+import { matchingStandaloneSubjects } from "./context-subjects";
 
 export interface ContextInboxProposal {
   id: string;
@@ -14,6 +15,7 @@ export interface ContextInboxProposal {
   validTo: string | null;
   evidenceExcerpt: string;
   reason: "waiting" | "importance" | "deadline" | "preference";
+  suggestedTarget?: { type: "person" | "organization"; title: string; matches: Array<{ id: string; title: string }> };
 }
 
 export interface ContextInboxTaskDraft {
@@ -53,6 +55,13 @@ function actionTitle(line: string) {
     .replace(/[\s,;–—-]+$/u, "").replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
+function waitingPerson(line: string) {
+  const czech = /(?:^|[–—;:]\s*|\s)na\s+(?:v[ýy]sledek|odpov[ěe][ďd]|rozhodnut[íi]|potvrzen[íi])\s+[čc]ek[áa]\s+([\p{L}'-]{2,60}(?:\s+[\p{L}'-]{2,60})?)(?=\s*[,.;]|\s*$)/iu.exec(line);
+  const english = /^\s*([\p{L}'-]{2,60}(?:\s+[\p{L}'-]{2,60})?)\s+is\s+waiting\s+for\s+.+(?:result|reply|decision|confirmation)(?:\s*[,.])?\s*$/iu.exec(line);
+  const name = czech?.[1] || english?.[1] || "";
+  return /^\p{Lu}/u.test(name) && !/\s(?:a|and)\s/i.test(name) && !/,\s*\p{Lu}/u.test(line) ? name : null;
+}
+
 export function previewContextInbox(workspaceId: string, text: string) {
   const snapshot = readSnapshot();
   const workspace = snapshot.entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
@@ -71,9 +80,12 @@ export function previewContextInbox(workspaceId: string, text: string) {
     const key = `${subject.id}:${predicate}:${JSON.stringify(literal)}`;
     if (seen.has(key)) return;
     seen.add(key);
+    const person = reason === "waiting" ? waitingPerson(line) : null;
     proposals.push({ id: randomUUID(), kind: "claim", subject: { entityId: subject.id, type: subject.type, title: subject.title },
       predicate, literal, freshness: "needs_review", sensitivity: "sensitive", validFrom: null, validTo,
-      evidenceExcerpt: line.slice(0, 500), reason });
+      evidenceExcerpt: line.slice(0, 500), reason,
+      ...(person ? { suggestedTarget: { type: "person" as const, title: person,
+        matches: matchingStandaloneSubjects(workspaceId, "person", person).map((match) => ({ id: match.id, title: match.title })) } } : {}) });
   };
   for (const line of lines) {
     const plain = normalize(line);
@@ -114,11 +126,12 @@ export function previewContextInbox(workspaceId: string, text: string) {
 
 export function approveContextInboxClaim(input: {
   commandId: string; workspaceId: string; id: string; subjectId: string; predicate: string;
-  literal: { type: ClaimLiteralType; value: string | number | boolean }; freshness: ClaimFreshness;
+  literal?: { type: ClaimLiteralType; value: string | number | boolean }; targetSubjectId?: string; freshness: ClaimFreshness;
   validFrom?: string | null; validTo?: string | null; evidenceExcerpt?: string;
 }) {
   return createOwnerClaim({ commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, expectedRevision: 0,
     subject: { entityId: input.subjectId }, predicate: input.predicate, literal: input.literal,
+    target: input.targetSubjectId ? { subjectId: input.targetSubjectId } : undefined,
     freshness: input.freshness, sensitivity: "sensitive", validFrom: input.validFrom, validTo: input.validTo,
     source: { provider: "manual-context-inbox", ingestedAt: new Date().toISOString(), coverage: "excerpt" },
     evidence: input.evidenceExcerpt ? { excerpt: input.evidenceExcerpt.slice(0, 500), stance: "supports" } : null });

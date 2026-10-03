@@ -132,7 +132,8 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const dueSoon = Boolean(deadline && deadline > date && deadline <= addDays(date, 2));
     const priority = String(task.properties.priority || "none");
     const projectId = String(task.properties.projectId || projects.get(task.id) || "");
-    const claims = eligibleClaims.filter((claim) => claim.subject.canonicalEntityId === task.id || claim.subject.canonicalEntityId === projectId);
+    const claims = eligibleClaims.filter((claim) => claim.subject.canonicalEntityId === task.id || claim.subject.canonicalEntityId === projectId ||
+      claim.target?.canonicalEntityId === task.id || claim.target?.canonicalEntityId === projectId);
     const importance = claims.some((claim) => claim.predicate === "importance" && /critical|high|krit|vysok/i.test(String(claim.literal?.value || "")));
     const waiting = claims.some((claim) => claim.predicate === "waiting_for" || claim.predicate === "stakeholder");
     if (!overdue && !dueToday && !dueSoon && priority !== "high" && !importance && !waiting) return [];

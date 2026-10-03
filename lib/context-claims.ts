@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getNotificationPreferences } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
+import { getStandaloneSubject } from "./context-subjects";
 
 export type ClaimReviewStatus = "proposed" | "confirmed" | "rejected";
 export type ClaimFreshness = "current" | "needs_review" | "stale";
@@ -10,8 +11,10 @@ export type ClaimLiteralType = "string" | "number" | "boolean" | "date";
 export interface ClaimSubjectRef {
   id: string;
   type: string;
-  canonicalEntityId: string;
+  canonicalEntityId: string | null;
   title: string;
+  revision?: number;
+  archivedAt?: number | null;
 }
 
 export interface ClaimSourceMetadata {
@@ -63,7 +66,7 @@ export class ContextClaimError extends Error {
   }
 }
 
-type CanonicalRefInput = { entityId: string };
+type CanonicalRefInput = { entityId?: string; subjectId?: string };
 
 type ClaimValueInput = {
   literal?: { type: ClaimLiteralType; value: string | number | boolean };
@@ -143,7 +146,20 @@ function assertWorkspace(workspaceId: string) {
 }
 
 function canonicalSubject(workspaceId: string, input: CanonicalRefInput): ClaimSubjectRef {
-  if (!input || !idPattern.test(String(input.entityId || ""))) throw new ContextClaimError("Subject reference is invalid");
+  if (!input || Boolean(input.entityId) === Boolean(input.subjectId)) throw new ContextClaimError("Subject reference is invalid");
+  if (input.subjectId) {
+    if (!idPattern.test(input.subjectId)) throw new ContextClaimError("Subject reference is invalid");
+    try {
+      const subject = getStandaloneSubject(workspaceId, input.subjectId);
+      if (subject.archivedAt) throw new ContextClaimError("Archived people or organizations cannot receive new claims", 409, "archived_subject");
+      return { id: subject.id, type: subject.type, canonicalEntityId: null, title: subject.title,
+        revision: subject.revision, archivedAt: subject.archivedAt };
+    } catch (error) {
+      if (error instanceof ContextClaimError) throw error;
+      throw new ContextClaimError("Subject must exist in the same workspace", 400, "invalid_subject");
+    }
+  }
+  if (!idPattern.test(String(input.entityId || ""))) throw new ContextClaimError("Subject reference is invalid");
   const entity = readSnapshot().entities.find((candidate) => candidate.id === input.entityId);
   if (!entity || entity.workspaceId !== workspaceId || !allowedCanonicalTypes.has(entity.type)) {
     throw new ContextClaimError("Subject must reference an entity in the same workspace", 400, "invalid_subject");
@@ -228,7 +244,18 @@ function cleanLiteral(value: { type: ClaimLiteralType; value: string | number | 
 }
 
 function ensureSubject(workspaceId: string, subject: ClaimSubjectRef) {
-  getDatabase().prepare(`INSERT OR IGNORE INTO context_subjects
+  const database = getDatabase();
+  const existing = database.prepare(`SELECT workspace_id, subject_type, canonical_entity_id
+    FROM context_subjects WHERE id = ?`).get(subject.id) as
+    { workspace_id: string; subject_type: string; canonical_entity_id: string | null } | undefined;
+  if (existing) {
+    if (existing.workspace_id !== workspaceId || existing.subject_type !== subject.type ||
+      existing.canonical_entity_id !== subject.canonicalEntityId) {
+      throw new ContextClaimError("Subject identifier conflicts with another context item", 409, "subject_identity_conflict");
+    }
+    return;
+  }
+  database.prepare(`INSERT INTO context_subjects
     (id, workspace_id, subject_type, canonical_entity_id, display_title, revision, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 1, ?, ?)`).run(
       subject.id, workspaceId,
@@ -245,13 +272,15 @@ type ClaimRow = {
 };
 
 function readSubject(id: string): ClaimSubjectRef {
-  const row = getDatabase().prepare(`SELECT id, subject_type, canonical_entity_id, display_title
+  const row = getDatabase().prepare(`SELECT id, subject_type, canonical_entity_id, display_title, revision, archived_at
     FROM context_subjects WHERE id = ?`).get(id) as {
-      id: string; subject_type: string; canonical_entity_id: string; display_title: string;
+      id: string; subject_type: string; canonical_entity_id: string | null; display_title: string;
+      revision: number; archived_at: number | null;
     } | undefined;
   if (!row) throw new ContextClaimError("Claim subject is missing", 500, "missing_subject");
   const canonical = readSnapshot().entities.find((entity) => entity.id === row.canonical_entity_id);
-  return { id: row.id, type: row.subject_type, canonicalEntityId: row.canonical_entity_id, title: canonical?.title || row.display_title };
+  return { id: row.id, type: row.subject_type, canonicalEntityId: row.canonical_entity_id, title: canonical?.title || row.display_title,
+    revision: Number(row.revision), archivedAt: row.archived_at == null ? null : Number(row.archived_at) };
 }
 
 function deserialize(row: ClaimRow): ContextClaim {
@@ -360,6 +389,8 @@ export function updateOwnerClaim(input: UpdateClaimInput) {
     const row = rowForClaim(input.id, input.workspaceId);
     if (!row) throw new ContextClaimError("Claim not found", 404, "not_found");
     const before = deserialize(row);
+    canonicalSubject(input.workspaceId, before.subject.canonicalEntityId
+      ? { entityId: before.subject.canonicalEntityId } : { subjectId: before.subject.id });
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be edited", 409, "archived");
     if (clean.target) ensureSubject(input.workspaceId, clean.target);
@@ -428,7 +459,8 @@ export function listOwnerClaims(workspaceId: string, options: { includeArchived?
   const rows = getDatabase().prepare(`SELECT * FROM context_claims WHERE workspace_id = ?
     ${options.includeArchived ? "" : "AND archived_at IS NULL"} ORDER BY updated_at DESC LIMIT 500`)
     .all(workspaceId) as unknown as ClaimRow[];
-  return rows.map(deserialize).filter((claim) => !options.projectId || claim.subject.canonicalEntityId === options.projectId);
+  return rows.map(deserialize).filter((claim) => !options.projectId ||
+    claim.subject.canonicalEntityId === options.projectId || claim.target?.canonicalEntityId === options.projectId);
 }
 
 export function listEligibleClaims(workspaceId: string, projectId?: string) {
@@ -445,8 +477,12 @@ function localDate(timezone: string, now = Date.now()) {
 }
 
 function liveCanonicalReference(workspaceId: string, reference: ClaimSubjectRef) {
+  if (!reference.canonicalEntityId) {
+    try { return !getStandaloneSubject(workspaceId, reference.id).archivedAt; } catch { return false; }
+  }
   return readSnapshot().entities.some((entity) => entity.id === reference.canonicalEntityId &&
-    entity.workspaceId === workspaceId && entity.type === reference.type && allowedCanonicalTypes.has(entity.type));
+    entity.workspaceId === workspaceId && entity.type === reference.type && entity.status !== "archived" &&
+    allowedCanonicalTypes.has(entity.type));
 }
 
 export function currentContextDate() {
@@ -458,7 +494,7 @@ export function isEligibleClaim(claim: ContextClaim, projectId?: string, today =
     claim.sensitivity === "normal" && (!claim.validFrom || claim.validFrom <= today) &&
     (!claim.validTo || claim.validTo >= today) && liveCanonicalReference(claim.workspaceId, claim.subject) &&
     (!claim.target || liveCanonicalReference(claim.workspaceId, claim.target)) &&
-    (!projectId || claim.subject.type === "workspace" || claim.subject.canonicalEntityId === projectId);
+    (!projectId || claim.subject.type === "workspace" || claim.subject.canonicalEntityId === projectId || claim.target?.canonicalEntityId === projectId);
 }
 
 export function listClaimHistory(workspaceId: string, claimId: string) {

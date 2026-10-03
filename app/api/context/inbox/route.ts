@@ -28,9 +28,11 @@ export async function POST(request: Request) {
     if (action === "approve") {
       const literal = body.literal && typeof body.literal === "object" && !Array.isArray(body.literal)
         ? body.literal as { type: "string" | "number" | "boolean" | "date"; value: string | number | boolean } : null;
-      if (!literal) throw new HttpInputError("Literal is required");
+      const targetSubjectId = body.targetSubjectId == null ? undefined : String(body.targetSubjectId);
+      if (Boolean(literal) === Boolean(targetSubjectId)) throw new HttpInputError("Exactly one literal or target is required");
       const result = approveContextInboxClaim({ commandId: String(body.idempotencyKey || ""), workspaceId,
-        id: String(body.id || ""), subjectId: String(body.subjectId || ""), predicate: String(body.predicate || ""), literal,
+        id: String(body.id || ""), subjectId: String(body.subjectId || ""), predicate: String(body.predicate || ""), literal: literal || undefined,
+        targetSubjectId,
         freshness: String(body.freshness || "needs_review") as "current" | "needs_review" | "stale",
         validFrom: body.validFrom == null ? null : String(body.validFrom), validTo: body.validTo == null ? null : String(body.validTo),
         evidenceExcerpt: body.evidenceExcerpt == null ? undefined : String(body.evidenceExcerpt) });

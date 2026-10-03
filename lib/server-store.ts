@@ -365,6 +365,11 @@ export function getDatabase() {
     );
   `);
   migrateContextChangeEventScope(database);
+  const subjectColumns = database.prepare("PRAGMA table_info(context_subjects)").all()
+    .map((row) => String((row as { name?: string }).name));
+  if (!subjectColumns.includes("archived_at")) {
+    database.exec("ALTER TABLE context_subjects ADD COLUMN archived_at INTEGER");
+  }
   const workSessionColumns = database.prepare("PRAGMA table_info(work_sessions)").all()
     .map((row) => String((row as { name?: string }).name));
   if (!workSessionColumns.includes("estimated_minutes")) {

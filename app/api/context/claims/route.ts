@@ -33,7 +33,9 @@ function literal(body: Body) {
 
 function ref(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return { entityId: String((value as Record<string, unknown>).entityId || "") };
+  const object = value as Record<string, unknown>;
+  return { entityId: object.entityId == null ? undefined : String(object.entityId),
+    subjectId: object.subjectId == null ? undefined : String(object.subjectId) };
 }
 
 export async function GET(request: Request) {

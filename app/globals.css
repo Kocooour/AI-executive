@@ -2407,6 +2407,18 @@ article:hover > .dragHandle,
 .contextInboxProposal label { display: grid; gap: 6px; }
 .contextInboxProposal input, .contextInboxProposal select { width: 100%; min-height: 40px; border: 1px solid var(--line, #d9d9dd); border-radius: 9px; background: var(--input, transparent); color: inherit; padding: 9px 11px; font: inherit; }
 .contextInboxProposal blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line, #d9d9dd); color: var(--muted, #666); }
+.contextPeopleForm { display: grid; grid-template-columns: minmax(130px, 180px) minmax(180px, 1fr) auto; align-items: end; gap: 10px; }
+.contextPeopleForm label, .contextPeopleSearch, .contextTargetChoice label { display: grid; gap: 6px; }
+.contextPeopleForm input, .contextPeopleForm select, .contextPeopleSearch input, .contextTargetChoice select { width: 100%; min-height: 40px; border: 1px solid var(--line, #d9d9dd); border-radius: 9px; background: var(--input, transparent); color: inherit; padding: 9px 11px; font: inherit; }
+.contextPeopleSearch { margin: 14px 0; }
+.contextPeopleList { display: grid; gap: 10px; }
+.contextPeopleList article { border: 1px solid var(--line, #e2e2e5); border-radius: 12px; padding: 12px; display: grid; gap: 5px; }
+.contextPeopleList small, .contextPersonKnowledge small { color: var(--muted, #666); }
+.contextPersonKnowledge { margin-top: 8px; overflow-wrap: anywhere; }
+.contextPersonKnowledge summary { cursor: pointer; }
+.contextPersonKnowledge p { margin: 8px 0; }
+.contextTargetChoice { display: grid; gap: 9px; padding: 10px; border-radius: 9px; background: var(--surface-subtle, rgba(127,127,127,.08)); }
+.contextTargetChoice p { margin: 0; }
 .whyNow { margin-top: 7px; color: var(--muted, #666); }
 .whyNow summary { cursor: pointer; font-weight: 650; }
 .whyNow ul { margin: 6px 0; padding-left: 20px; }
@@ -2422,6 +2434,8 @@ article:hover > .dragHandle,
   .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
   .contextClaimCard header { align-items: flex-start; }
   .contextInboxActions button, .contextInboxProposal .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
+  .contextPeopleForm { grid-template-columns: 1fr; }
+  .contextPeopleList .contextClaimActions button { min-height: 42px; }
 }
 @media (max-width: 700px) {
   .contextItems article {
