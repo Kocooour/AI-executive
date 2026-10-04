@@ -1696,6 +1696,25 @@ article {
   grid-template-columns: minmax(0, 1fr) 300px;
   gap: 16px;
 }
+.attentionSection { margin-bottom: 16px; }
+.attentionMeta, .attentionEmpty, .attentionLimits, .attentionItem small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.attentionMeta { margin: 0 0 12px; }
+.attentionList { display: grid; gap: 0; }
+.attentionItem { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.attentionItem > div { min-width: 0; }
+.attentionItem strong { overflow-wrap: anywhere; }
+.attentionItem p { margin: 4px 0; line-height: 1.4; }
+.attentionItem button { flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 12px; cursor: pointer; }
+.attentionItem button:hover { color: var(--accent); border-color: var(--accent); }
+.attentionItem button:disabled { opacity: .55; cursor: wait; }
+.attentionActions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.attentionSources { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.attentionSources summary { cursor: pointer; }
+.attentionSources ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.attentionLimits { margin-top: 10px; }
+.attentionLimits summary { cursor: pointer; }
+.attentionError { color: #b44848; }
+@media (max-width: 700px) { .attentionItem { display: block; } .attentionActions { justify-content: flex-start; margin-top: 10px; } .attentionItem button { min-height: 44px; } }
 .homeSection {
   min-width: 0;
   padding: 18px;

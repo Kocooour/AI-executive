@@ -1,0 +1,87 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+const { evaluateAttention } = await import("../lib/attention.ts");
+const NOW = Date.parse("2026-10-04T12:00:00Z");
+const DAY = 86_400_000;
+const entity = (id, type, overrides = {}) => ({
+  id, type, title: id, status: type === "task" ? "open" : "active", workspaceId: "personal",
+  properties: {}, createdAt: NOW - 30 * DAY, updatedAt: NOW - 30 * DAY, ...overrides,
+});
+const evaluate = (entities, relations = [], overrides = {}) => evaluateAttention({
+  entities, relations, workspaceId: "personal", timezone: "Europe/Prague", evaluatedAt: NOW,
+  dataRevision: 7, ...overrides,
+});
+
+test("all-day deadline ends at local midnight, including DST shift", () => {
+  const task = entity("deadline", "task", { properties: { deadline: "2026-10-25" } });
+  const before = evaluate([task], [], { evaluatedAt: Date.parse("2026-10-25T22:59:59.999Z") });
+  assert.equal(before[0].ruleId, "deadline_soon");
+  assert.equal(before[0].relevantAt, Date.parse("2026-10-25T23:00:00Z"));
+  const after = evaluate([task], [], { evaluatedAt: Date.parse("2026-10-25T23:00:00Z") });
+  assert.equal(after[0].ruleId, "deadline_overdue");
+});
+
+test("timed deadline is soon at 48 hours and overdue strictly after the instant", () => {
+  const task = entity("timed", "task", { properties: { deadline: "2026-10-06T12:00:00Z" } });
+  assert.equal(evaluate([task])[0].ruleId, "deadline_soon");
+  assert.equal(evaluate([task], [], { evaluatedAt: Date.parse("2026-10-06T12:00:00Z") })[0].ruleId, "deadline_soon");
+  assert.equal(evaluate([task], [], { evaluatedAt: Date.parse("2026-10-06T12:00:00.001Z") })[0].ruleId, "deadline_overdue");
+  assert.equal(evaluate([task], [], { evaluatedAt: NOW - 1 })[0]?.ruleId, undefined);
+});
+
+test("invalid dates and completed tasks produce no deadline candidate", () => {
+  assert.deepEqual(evaluate([
+    entity("bad", "task", { properties: { deadline: "2026-02-30" } }),
+    entity("bad-timed-day", "task", { properties: { deadline: "2026-02-30T12:00:00Z" } }),
+    entity("bad-timed-hour", "task", { properties: { deadline: "2026-10-04T24:00:00Z" } }),
+    entity("bad-timed-offset", "task", { properties: { deadline: "2026-10-04T12:00:00+25:00" } }),
+    entity("unsupported", "task", { properties: { deadline: "next week" } }),
+    entity("done", "task", { status: "completed", properties: { deadline: "2026-10-01" } }),
+  ]), []);
+});
+
+test("project signals use recorded activity and suppress missing action for waiting or actionable tasks", () => {
+  const project = entity("project", "project", { updatedAt: NOW - 15 * DAY });
+  const result = evaluate([project]);
+  assert.deepEqual(result.map((item) => item.ruleId), ["project_no_next_action", "project_idle"]);
+  assert.match(result[0].reason, /24 hours/);
+  assert.match(result[1].reason, /14 days/);
+  const task = entity("action", "task", { updatedAt: NOW - 15 * DAY });
+  const relation = { id: "rel", workspaceId: "personal", sourceEntityId: task.id, targetEntityId: project.id,
+    relationType: "belongs_to_project", createdAt: NOW - 15 * DAY };
+  assert.equal(evaluate([project, task], [relation]).some((item) => item.ruleId === "project_no_next_action"), false);
+  assert.equal(evaluate([entity("waiting", "project", { properties: { waiting: true } })]).some((item) => item.ruleId === "project_no_next_action"), false);
+  assert.equal(evaluate([project], [], { claims: [{ id: "claim", workspaceId: "personal", projectId: project.id, predicate: "waiting_for", revision: 1,
+    updatedAt: NOW - 15 * DAY, confirmed: true, current: true }] }).some((item) => item.ruleId === "project_no_next_action"), false);
+  assert.equal(evaluate([project], [], { claims: [{ id: "recent", workspaceId: "personal", projectId: project.id, predicate: "importance", revision: 2,
+    updatedAt: NOW - DAY, confirmed: true, current: true }] }).some((item) => item.ruleId === "project_idle"), false);
+});
+
+test("project thresholds are inclusive and do not trigger early", () => {
+  const at24 = entity("at24", "project", { createdAt: NOW - DAY, updatedAt: NOW - DAY });
+  const before24 = entity("before24", "project", { createdAt: NOW - DAY + 1, updatedAt: NOW - DAY + 1 });
+  const at14 = entity("at14", "project", { createdAt: NOW - 14 * DAY, updatedAt: NOW - 14 * DAY });
+  const before14 = entity("before14", "project", { createdAt: NOW - 14 * DAY + 1, updatedAt: NOW - 14 * DAY + 1 });
+  const result = evaluate([at24, before24, at14, before14]);
+  assert.equal(result.some((item) => item.subjectId === "at24" && item.ruleId === "project_no_next_action"), true);
+  assert.equal(result.some((item) => item.subjectId === "before24"), false);
+  assert.equal(result.some((item) => item.subjectId === "at14" && item.ruleId === "project_idle"), true);
+  assert.equal(result.some((item) => item.subjectId === "before14" && item.ruleId === "project_idle"), false);
+});
+
+test("workspace scope, deterministic order, stable keys, and source revisions", () => {
+  const overdue = entity("overdue", "task", { properties: { deadline: "2026-10-01", priority: "low" } });
+  const soonLow = entity("soon-low", "task", { properties: { deadline: "2026-10-05", priority: "low" } });
+  const soonHigh = entity("soon-high", "task", { properties: { deadline: "2026-10-05", priority: "high" } });
+  const other = entity("other", "task", { workspaceId: "other", properties: { deadline: "2026-10-01" } });
+  const original = evaluate([soonLow, other, overdue, soonHigh]);
+  const reversed = evaluate([soonHigh, overdue, other, soonLow]);
+  assert.deepEqual(original.map((item) => item.subjectId), ["overdue", "soon-high", "soon-low"]);
+  assert.deepEqual(original.map((item) => item.attentionKey), reversed.map((item) => item.attentionKey));
+  assert.equal(original[0].sourceRevisions.overdue, overdue.updatedAt);
+  assert.equal(original[0].evaluatedDataRevision, 7);
+  assert.equal(original[0].evaluatedAt, NOW);
+  const renamed = evaluate([{ ...overdue, title: "Changed", updatedAt: NOW }, soonLow, soonHigh]);
+  assert.equal(original[0].attentionKey, renamed[0].attentionKey);
+});

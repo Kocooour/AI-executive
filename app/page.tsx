@@ -26,6 +26,19 @@ import type { AIMessage } from "../lib/ai-provider";
 import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 import { fetchClientAuthStatus } from "../lib/client-auth-status";
 import { findActiveProjectWithTitle } from "../lib/project-title";
+import type { AttentionItem } from "../lib/attention";
+
+interface AttentionResponse {
+  items: Array<AttentionItem & { sourceFingerprint: string; lifecycleState: "active" }>;
+  hidden: { snoozed: number; dismissed: number };
+  workspaceId: string;
+  timezone: string;
+  evaluatedAt: number;
+  dataRevision: number;
+  source: string;
+  sourceUpdatedAt: number;
+  coverage: { rules: string[]; excluded: string[]; projectActivity: string; deletedTaskHistory: boolean; externalActivity: boolean };
+}
 
 interface BackupSummary {
   name: string;
@@ -316,6 +329,28 @@ const viewIcons: Record<string, string> = {
 };
 const mobileViews = ["Home", "Today", "+", "Projects", "More"];
 type Language = "cs" | "en";
+
+function attentionReason(item: AttentionItem, language: Language): string {
+  const locale = language === "cs" ? "cs-CZ" : "en-GB";
+  const last = item.reasonFacts.lastActivityAt
+    ? new Date(item.reasonFacts.lastActivityAt).toLocaleString(locale, { timeZone: item.timezone }) : "";
+  const date = item.reasonFacts.deadlineAllDay ? item.relevantDate
+    : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone });
+  if (language === "cs") {
+    switch (item.reasonCode) {
+      case "deadline_overdue": return `Termín ${date} (${item.timezone}) již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
+      case "deadline_soon": return `Termín ${date} (${item.timezone}) je v příštích 48 hodinách.`;
+      case "project_no_next_action": return `Projekt nemá otevřený proveditelný úkol alespoň 24 hodin. Poslední zaznamenaná změna: ${last}.`;
+      case "project_idle": return `Bez zaznamenané aktivity projektu, propojených úkolů nebo potvrzeného kontextu alespoň 14 dní. Poslední změna: ${last}.`;
+    }
+  }
+  switch (item.reasonCode) {
+    case "deadline_overdue": return `Deadline ${date} (${item.timezone}) has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
+    case "deadline_soon": return `Deadline ${date} (${item.timezone}) is within 48 hours.`;
+    case "project_no_next_action": return `No open actionable task for at least 24 hours. Last recorded change: ${last}.`;
+    case "project_idle": return `No recorded project, linked task, or confirmed context activity for at least 14 days. Last change: ${last}.`;
+  }
+}
 type ThemeMode = "system" | "light" | "dark";
 const copy: Record<Language, Record<string, string>> = {
   en: {
@@ -689,6 +724,10 @@ export default function App() {
     [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
     [briefingBusy, setBriefingBusy] = useState(false),
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
+    [attention, setAttention] = useState<AttentionResponse | null>(null),
+    [attentionError, setAttentionError] = useState(""),
+    [attentionBusyKey, setAttentionBusyKey] = useState(""),
+    [showAllAttention, setShowAllAttention] = useState(false),
     [dayPlanStatus, setDayPlanStatus] = useState(""),
     [dayPlanBusy, setDayPlanBusy] = useState(false),
     [dayPlanUndo, setDayPlanUndo] = useState<{ actionId: string; workspaceId: string; date: string } | null>(null),
@@ -829,6 +868,7 @@ export default function App() {
   const calendarLoadVersion = useRef(0);
   const contextClaimLoadVersion = useRef(0);
   const dayPlanLoadVersion = useRef(0);
+  const attentionLoadVersion = useRef(0);
   const workSessionLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
@@ -1132,6 +1172,36 @@ export default function App() {
     if (!response.ok) throw new Error(data.error || "Day plan unavailable");
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
+  }
+
+  async function loadAttention(workspaceId: string) {
+    const version = ++attentionLoadVersion.current;
+    const response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Attention is unavailable");
+    if (version === attentionLoadVersion.current) {
+      setAttention(data as AttentionResponse);
+      setAttentionError("");
+    }
+  }
+
+  async function actOnAttention(item: AttentionResponse["items"][number], action: "snooze" | "dismiss") {
+    if (!attention || syncStatus !== "synced") return;
+    setAttentionBusyKey(item.attentionKey);
+    setAttentionError("");
+    try {
+      const response = await fetch("/api/attention", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: item.workspaceId, attentionKey: item.attentionKey, sourceFingerprint: item.sourceFingerprint,
+          expectedDataRevision: attention.dataRevision, action, ...(action === "snooze" ? { snoozeUntil: Date.now() + 24 * 3_600_000 } : {}) }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Attention action failed");
+      await loadAttention(activeWorkspaceId);
+    } catch (error) {
+      await loadAttention(activeWorkspaceId).catch(() => undefined);
+      setAttentionError(error instanceof Error ? error.message : "Attention action failed");
+    } finally {
+      setAttentionBusyKey("");
+    }
   }
 
   async function loadWorkSession(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
@@ -2259,6 +2329,7 @@ export default function App() {
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
   const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
+  const visibleAttention = syncStatus === "synced" && attention?.workspaceId === activeWorkspaceId ? attention : null;
   const dayPlanTimeline = visibleDayPlan ? [...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })),
     ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
   const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
@@ -2277,6 +2348,18 @@ export default function App() {
     loadDayPlan(workspaceId, calendarToday)
       .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
   }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
+  useEffect(() => {
+    attentionLoadVersion.current += 1;
+    setAttention(null);
+    setShowAllAttention(false);
+    if (authState !== "ready" || syncStatus !== "synced") return;
+    const workspaceId = activeWorkspaceId;
+    let cancelled = false;
+    const refresh = () => loadAttention(workspaceId).catch((error) => { if (!cancelled) setAttentionError(error instanceof Error ? error.message : "Attention is unavailable"); });
+    void refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 60_000);
+    return () => { cancelled = true; attentionLoadVersion.current += 1; window.clearInterval(timer); };
+  }, [authState, activeWorkspaceId, syncStatus]);
   useEffect(() => {
     if (authState !== "ready") return;
     const refresh = () => {
@@ -3460,6 +3543,38 @@ export default function App() {
           </div>
           {view === "Home" && (
             <>
+            <section className="homeSection attentionSection" aria-labelledby="attention-title">
+              <div className="homeSectionHead">
+                <span id="attention-title"><span className="sectionDot todayDot" />{language === "cs" ? "Vyžaduje pozornost" : "Needs attention"}</span>
+                <button type="button" onClick={() => { if (syncStatus === "synced") void loadAttention(activeWorkspaceId).catch((error) => setAttentionError(error instanceof Error ? error.message : "Attention is unavailable")); }} disabled={syncStatus !== "synced"}>
+                  {language === "cs" ? "Obnovit" : "Refresh"}
+                </button>
+              </div>
+              {visibleAttention ? <>
+                <p className="attentionMeta">{language === "cs" ? "Zdroj: serverová data" : "Source: server data"} · {language === "cs" ? "Vyhodnoceno" : "Evaluated"} {new Date(visibleAttention.evaluatedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleAttention.timezone })} · rev. {visibleAttention.dataRevision} · {visibleAttention.timezone}</p>
+                {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{language === "cs" ? "Teď žádný viditelný kandidát." : "No visible attention items right now."}</p> : <div className="attentionList">
+                  {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
+                    <div><strong>{candidate.title}</strong><p>{attentionReason(candidate, language)}</p>
+                      <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {candidate.workspaceId} · {candidate.confidence === "limited" ? (language === "cs" ? "omezené pokrytí" : "limited coverage") : (language === "cs" ? "zaznamenaný termín" : "recorded deadline")} · {language === "cs" ? "vyhodnoceno" : "evaluated"} {new Date(candidate.evaluatedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: candidate.timezone })} · rev. {candidate.evaluatedDataRevision}</small>
+                      <details className="attentionSources"><summary>{language === "cs" ? "Zdroje a revize" : "Sources and revisions"}</summary><ul>{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul></details>
+                    </div>
+                    <div className="attentionActions">
+                      <button type="button" onClick={() => {
+                        const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
+                        if (entity) void inspect(entity);
+                        else setAttentionError(language === "cs" ? "Detail není v místních datech; obnovte synchronizaci." : "Detail is not in local data; refresh synchronization.");
+                      }}>{language === "cs" ? "Detail" : "Open detail"}</button>
+                      <button type="button" disabled={Boolean(attentionBusyKey)} onClick={() => void actOnAttention(candidate, "snooze")}>{language === "cs" ? "Odložit o 24 h" : "Snooze 24h"}</button>
+                      <button type="button" disabled={Boolean(attentionBusyKey)} onClick={() => void actOnAttention(candidate, "dismiss")}>{language === "cs" ? "Skrýt" : "Dismiss"}</button>
+                    </div>
+                  </article>)}
+                </div>}
+                {visibleAttention.items.length > 5 && <button className="textAction" type="button" onClick={() => setShowAllAttention((current) => !current)}>{showAllAttention ? (language === "cs" ? "Zobrazit méně" : "Show fewer") : (language === "cs" ? `Zobrazit dalších ${visibleAttention.items.length - 5}` : `Show ${visibleAttention.items.length - 5} more`)}</button>}
+                {(visibleAttention.hidden.snoozed > 0 || visibleAttention.hidden.dismissed > 0) && <p className="attentionMeta">{language === "cs" ? `Odloženo: ${visibleAttention.hidden.snoozed} · skryto: ${visibleAttention.hidden.dismissed}` : `Snoozed: ${visibleAttention.hidden.snoozed} · dismissed: ${visibleAttention.hidden.dismissed}`}</p>}
+                <details className="attentionLimits"><summary>{language === "cs" ? "Pokrytí a čerstvost" : "Coverage and freshness"}</summary><p>{language === "cs" ? "Vyhodnocujeme termíny a aktivitu projektů z uložených projektů, úkolů a potvrzeného kontextu. Čekající návaznosti, kalendářní konflikty a kapacitu zatím nevyhodnocujeme. Historie smazaných úkolů a externí aktivita nejsou zahrnuty." : "We evaluate deadlines and project activity from stored projects, tasks, and confirmed context. Waiting follow-ups, calendar conflicts, and capacity are not evaluated yet. Deleted task history and external activity are not included."} {language === "cs" ? "Poslední změna dat" : "Last source update"}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB") : (language === "cs" ? "neznámá" : "unknown")}.</p></details>
+              </> : <p className="attentionEmpty" role="status">{syncStatus === "offline" ? (language === "cs" ? "Pozornost není dostupná offline." : "Attention is unavailable offline.") : syncStatus !== "synced" ? (language === "cs" ? "Čeká na synchronizaci…" : "Waiting for synchronization…") : (language === "cs" ? "Vyhodnocuji…" : "Evaluating…")}</p>}
+              {attentionError && <p role="alert" className="attentionError">{attentionError}</p>}
+            </section>
             <div className="homeOverview">
               <section className="homeSection homePrimary">
                 <div className="homeSectionHead">

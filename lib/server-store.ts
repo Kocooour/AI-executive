@@ -61,6 +61,29 @@ export function getDatabase() {
       id TEXT PRIMARY KEY,
       deleted_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS attention_states (
+      workspace_id TEXT NOT NULL,
+      attention_key TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      rule_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      snooze_until INTEGER,
+      changed_at INTEGER NOT NULL,
+      PRIMARY KEY(workspace_id, attention_key)
+    );
+    CREATE TABLE IF NOT EXISTS attention_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL,
+      attention_key TEXT NOT NULL,
+      from_state TEXT,
+      to_state TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      source_fingerprint TEXT NOT NULL,
+      changed_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS attention_history_key_idx
+      ON attention_history(workspace_id, attention_key, changed_at);
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       endpoint TEXT PRIMARY KEY,
       payload TEXT NOT NULL,
