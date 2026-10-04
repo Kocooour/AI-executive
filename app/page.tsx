@@ -287,26 +287,31 @@ const views = [
     "Home",
     "Inbox",
     "Today",
-    "Overdue",
     "Upcoming",
-    "Anytime",
-    "Someday",
-    "Completed",
     "Projects",
     "Areas",
     "Notes",
+    "Calendar",
+    "Search",
+    "Overdue",
+    "Anytime",
+    "Someday",
+    "Completed",
     "Context",
     "Agents",
   ];
+const primaryViews = ["Home", "Inbox", "Today", "Upcoming", "Projects", "Areas", "Notes", "Calendar", "Search"];
+const secondaryViews = ["Overdue", "Anytime", "Someday", "Completed", "Context", "Agents"];
 const moreViews = [
-  "Inbox",
-  "Overdue",
   "Upcoming",
+  "Projects",
+  "Areas",
+  "Notes",
+  "Search",
+  "Overdue",
   "Anytime",
   "Someday",
   "Completed",
-  "Areas",
-  "Notes",
   "Context",
   "Agents",
   "Settings",
@@ -323,12 +328,14 @@ const viewIcons: Record<string, string> = {
   Projects: "◇",
   Areas: "◎",
   Notes: "▤",
+  Calendar: "▦",
+  Search: "⌕",
   Context: "◫",
   Agents: "◇",
   Settings: "⚙",
   More: "•••",
 };
-const mobileViews = ["Home", "Today", "+", "Projects", "More"];
+const mobileViews = ["Home", "Inbox", "Today", "Calendar", "More"];
 type Language = "cs" | "en";
 
 function attentionReason(item: AttentionItem, language: Language): string {
@@ -359,7 +366,7 @@ const copy: Record<Language, Record<string, string>> = {
     Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
     Upcoming: "Upcoming", Anytime: "Anytime", Someday: "Someday",
     Completed: "Completed", Projects: "Projects", Areas: "Areas",
-    Notes: "Notes", Context: "Context", Agents: "Agents", Settings: "Settings", More: "More", Search: "Search",
+    Notes: "Notes", Calendar: "Calendar", Context: "Context", Agents: "Agents", Settings: "Settings", More: "More", Search: "Search",
     new: "New", search: "Search everything", askAi: "Ask AI",
     appearance: "Appearance", systemTheme: "System", lightTheme: "Light", darkTheme: "Dark",
     switchLight: "Switch to light mode", switchDark: "Switch to dark mode",
@@ -462,7 +469,7 @@ const copy: Record<Language, Record<string, string>> = {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
     Upcoming: "Nadcházející", Anytime: "Kdykoli", Someday: "Někdy",
     Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",
-    Notes: "Poznámky", Context: "Kontext", Agents: "Agenti", Settings: "Nastavení", More: "Více", Search: "Hledání",
+    Notes: "Poznámky", Calendar: "Kalendář", Context: "Kontext", Agents: "Agenti", Settings: "Nastavení", More: "Více", Search: "Hledání",
     new: "Nový", search: "Hledat ve všem", askAi: "Zeptat se AI",
     appearance: "Vzhled", systemTheme: "Podle systému", lightTheme: "Světlý", darkTheme: "Tmavý",
     switchLight: "Přepnout na světlý režim", switchDark: "Přepnout na tmavý režim",
@@ -698,7 +705,7 @@ const urlBase64ToUint8Array = (base64: string) => {
 export default function App() {
   const [items, setItems] = useState<Entity[]>([]),
     [relations, setRelations] = useState<any[]>([]),
-    [view, setView] = useState("Today"),
+    [view, setView] = useState("Home"),
     [text, setText] = useState(""),
     [selected, setSelected] = useState<Entity | null>(null),
     [query, setQuery] = useState(""),
@@ -716,7 +723,7 @@ export default function App() {
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
     [moreOpen, setMoreOpen] = useState(false),
-    [startupView, setStartupView] = useState("Today"),
+    [startupView, setStartupView] = useState("Home"),
     [workspaceDraft, setWorkspaceDraft] = useState("Personal"),
     [newWorkspaceDraft, setNewWorkspaceDraft] = useState(""),
     [activeWorkspaceId, setActiveWorkspaceId] = useState("personal"),
@@ -760,6 +767,7 @@ export default function App() {
     [agentStatus, setAgentStatus] = useState(""),
     [calendarSources, setCalendarSources] = useState<CalendarSourceState[]>([]),
     [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]),
+    [calendarFreshNow, setCalendarFreshNow] = useState(() => Date.now()),
     [calendarLabel, setCalendarLabel] = useState("Outlook calendar"),
     [calendarUrl, setCalendarUrl] = useState(""),
     [calendarBusy, setCalendarBusy] = useState(false),
@@ -884,6 +892,8 @@ export default function App() {
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const calendarLoadVersion = useRef(0);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
+  const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
   const dayPlanLoadVersion = useRef(0);
   const attentionLoadVersion = useRef(0);
@@ -1337,6 +1347,7 @@ export default function App() {
     if (loadVersion !== calendarLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setCalendarSources(Array.isArray(data.sources) ? data.sources : []);
     setCalendarEvents(Array.isArray(data.events) ? data.events : []);
+    setCalendarFreshNow(Date.now());
   }
 
   async function calendarAction(action: "connect" | "refresh" | "disconnect", sourceId?: string) {
@@ -1937,6 +1948,45 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
+    const updateClock = () => setCalendarFreshNow(Date.now());
+    const nextExpiry = calendarSources
+      .filter((source) => source.status === "ready" && source.lastSuccessAt !== null)
+      .map((source) => Number(source.lastSuccessAt) + 30 * 60_000 + 1)
+      .filter((expiry) => expiry > Date.now())
+      .sort((a, b) => a - b)[0];
+    const timer = nextExpiry ? window.setTimeout(updateClock, Math.max(1, nextExpiry - Date.now())) : null;
+    window.addEventListener("focus", updateClock);
+    document.addEventListener("visibilitychange", updateClock);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("focus", updateClock);
+      document.removeEventListener("visibilitychange", updateClock);
+    };
+  }, [calendarSources]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    moreDialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => moreTriggerRef.current?.focus();
+  }, [moreOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setView("Search");
+        document.querySelector<HTMLInputElement>(".searchField input")?.focus();
+      } else if (event.shiftKey && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        setAssistantOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
     const savedTheme = localStorage.getItem("ai-executive-theme");
     if (savedTheme === "system" || savedTheme === "light" || savedTheme === "dark") {
       setThemeMode(savedTheme);
@@ -2486,7 +2536,13 @@ export default function App() {
   const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
   const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
-  const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) => source.status === "ready");
+  const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) =>
+    source.status === "ready" && source.lastSuccessAt !== null &&
+    calendarFreshNow >= source.lastSuccessAt && calendarFreshNow - source.lastSuccessAt <= 30 * 60_000,
+  );
+  const nearbyCalendarEvents = calendarEvents
+    .filter((event) => Date.parse(event.end) > calendarFreshNow && Date.parse(event.start) < calendarFreshNow + 7 * 24 * 60 * 60_000)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const mergedBusy = todayCalendarEvents.filter((event) => event.busy).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
@@ -3457,8 +3513,8 @@ export default function App() {
             </div>
           )}
         </div>
-        <nav>
-          {views.map((x) => (
+        <nav aria-label={language === "cs" ? "Hlavní navigace" : "Main navigation"}>
+          {primaryViews.map((x) => (
             <button
               className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
               aria-current={view === x ? "page" : undefined}
@@ -3487,6 +3543,10 @@ export default function App() {
           <button onClick={() => openCapture()} aria-label={tr("addTask")}>
             ＋ {tr("new")}
           </button>
+          <details className="secondaryNav">
+            <summary>{language === "cs" ? "Další pohledy" : "More views"}</summary>
+            {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
+          </details>
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={() => {
@@ -3544,6 +3604,7 @@ export default function App() {
             className="aiButton"
             onClick={() => setAssistantOpen(true)}
             aria-label={tr("askAi")}
+            title={`${tr("askAi")} · ⌘⇧L`}
           >
             ◇ {tr("askAi")}
           </button>
@@ -3559,6 +3620,23 @@ export default function App() {
             </div>
             {view === "Home" && <p className="pageSubtitle">{tr("homeSubtitle")}</p>}
           </div>
+          {view === "Calendar" && (
+            <section className="calendarView homeSection" aria-labelledby="calendar-view-title">
+              <div className="homeSectionHead"><span id="calendar-view-title"><span className="sectionDot todayDot" />{language === "cs" ? "Dnešní kalendář" : "Today's calendar"}</span><button type="button" onClick={() => void loadCalendar().catch(() => setCalendarStatus(language === "cs" ? "Kalendář se nepodařilo načíst." : "Calendar could not be loaded."))}>{tr("refresh")}</button></div>
+              <p className="attentionMeta">{language === "cs" ? "Zdroj: připojený kalendář pouze pro čtení" : "Source: connected read-only calendar"} · {calendarTimezone}</p>
+              <p role="status">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
+              {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty">{tr("calendarStale")} {language === "cs" ? "Volné časy nezobrazujeme, dokud není zdroj čerstvý (do 30 minut)." : "Free windows are hidden until the source is fresh (within 30 minutes)."}</p>}
+              {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
+              <div className="calendarAgenda">{todayCalendarEvents.map((event) => <div key={event.id} className={event.busy ? "busy" : "free"}><span>{event.allDay ? tr("allDay") : new Date(event.start).toLocaleTimeString(language === "cs" ? "cs-CZ" : "en-GB", { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}</small></div>)}</div>
+              {calendarFresh && todayCalendarEvents.length === 0 && <p className="attentionEmpty">{tr("noBlockingEvent")}</p>}
+              {calendarFresh && freeWindows.length > 0 && <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
+              <h3>{language === "cs" ? "Nadcházející události · 7 dní" : "Upcoming events · 7 days"}</h3>
+              {nearbyCalendarEvents.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : language === "cs" ? "Žádné události v příštích 7 dnech." : "No events in the next 7 days."}</p> : <div className="calendarAgenda">{nearbyCalendarEvents.map((event) => <div key={event.id} className={event.busy ? "busy" : "free"}><span>{new Date(event.start).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short", ...(event.allDay ? {} : { hour: "2-digit", minute: "2-digit" }), timeZone: calendarTimezone })}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}</small></div>)}</div>}
+              <button type="button" className="textAction" onClick={() => setView("Today")}>{language === "cs" ? "Přejít na dnešní práci" : "Open today's work"} →</button>
+              <button type="button" className="textAction" onClick={() => setView("Settings")}>{language === "cs" ? "Spravovat kalendáře" : "Manage calendars"} →</button>
+              {calendarStatus && <p role="status">{calendarStatus}</p>}
+            </section>
+          )}
           {view === "Home" && (
             <>
             <section className="homeSection attentionSection" aria-labelledby="attention-title">
@@ -3699,7 +3777,7 @@ export default function App() {
                 </div>
                 <strong>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</strong>
               </div>
-              {calendarSources.some((source) => source.status !== "ready") && (
+              {calendarSources.length > 0 && !calendarFresh && (
                 <p role="status">{tr("calendarStale")}</p>
               )}
               {calendarFresh && todayCalendarEvents.length === 0 && <p>{tr("noBlockingEvent")}</p>}
@@ -4498,7 +4576,7 @@ export default function App() {
           )}
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
             <>
-              {!["Home", "Search", "Projects", "Areas", "Notes"].includes(view) && (
+              {!["Home", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
                   <label>
                     {tr("priority")}
@@ -4666,28 +4744,36 @@ export default function App() {
         {mobileViews.map((x) => (
           <button
             key={x}
-            className={
-              (view === x || (x === "More" && moreOpen)) && x !== "+"
-                ? "active"
-                : ""
-            }
-            aria-label={x === "+" ? tr("quickCapture") : tr(x)}
-            aria-current={view === x ? "page" : undefined}
+            ref={x === "More" ? moreTriggerRef : undefined}
+            className={view === x || (x === "More" && (moreOpen || moreViews.includes(view))) ? "active" : ""}
+            aria-label={tr(x)}
+            aria-current={view === x || (x === "More" && moreViews.includes(view)) ? "page" : undefined}
+            aria-expanded={x === "More" ? moreOpen : undefined}
+            aria-controls={x === "More" ? "mobile-more-dialog" : undefined}
+            aria-haspopup={x === "More" ? "dialog" : undefined}
             onClick={() => {
-              if (x === "+") return openCapture();
               if (x === "More") return setMoreOpen((open) => !open);
               setMoreOpen(false);
               closeDetail();
               setView(x);
             }}
           >
-            {x === "+" ? <span className="mobileAddIcon">＋</span> : <><span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{tr(x)}</span></>}
+            <span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{tr(x)}</span>
           </button>
         ))}
       </nav>
+      <button className="mobileCaptureButton" type="button" onClick={() => openCapture()} aria-label={tr("quickCapture")} title={tr("quickCapture")}>＋</button>
       {moreOpen && (
         <div className="mobileMoreBackdrop" onClick={() => setMoreOpen(false)}>
-          <div className="mobileMore" onClick={(e) => e.stopPropagation()}>
+          <div id="mobile-more-dialog" className="mobileMore" role="dialog" aria-modal="true" aria-label={tr("More")} ref={moreDialogRef} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => {
+            if (event.key === "Escape") { event.preventDefault(); setMoreOpen(false); return; }
+            if (event.key !== "Tab") return;
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+            if (!buttons.length) return;
+            if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons[buttons.length - 1].focus(); }
+            else if (!event.shiftKey && document.activeElement === buttons[buttons.length - 1]) { event.preventDefault(); buttons[0].focus(); }
+          }}>
+            <button type="button" className="mobileMoreClose" onClick={() => setMoreOpen(false)}>{language === "cs" ? "Zavřít nabídku" : "Close menu"}</button>
             {moreViews.map((item) => (
               <button
                 key={item}

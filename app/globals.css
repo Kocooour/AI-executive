@@ -3539,6 +3539,46 @@ h3 {
 .runStatus.completed { background: var(--success-soft); color: var(--success); }
 .runStatus.failed { background: color-mix(in srgb, var(--danger) 11%, transparent); color: var(--danger); }
 
+.secondaryNav { border-top: 1px solid var(--line); padding-top: 8px; }
+.secondaryNav summary { color: var(--muted); cursor: pointer; padding: 8px; font-size: 13px; }
+.secondaryNav button { width: 100%; }
+.calendarView { display: grid; gap: 12px; margin-bottom: 18px; }
+.calendarView p { margin: 0; }
+.calendarView .calendarAgenda { display: grid; gap: 8px; }
+.calendarView .textAction { justify-self: start; min-height: 44px; }
+.mobileCaptureButton { display: none; }
+
+@media (max-width: 700px) {
+  .mobileNav button:nth-child(3) {
+    width: auto;
+    height: auto;
+    min-width: 50px;
+    min-height: 50px;
+    margin-top: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .mobileCaptureButton {
+    position: fixed;
+    right: 16px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    z-index: 16;
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border: 0;
+    border-radius: 16px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: var(--shadow-soft);
+    font-size: 30px;
+    cursor: pointer;
+  }
+  .mobileCaptureButton:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
+}
+
 @media (max-width: 700px) {
   .agentGrid {
     grid-template-columns: minmax(0, 1fr);
