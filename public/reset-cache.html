@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex" />
-    <title>AI Executive – obnova aplikace</title>
+    <title>Lumi – obnova aplikace</title>
     <style>
       :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
       body { min-height: 100dvh; margin: 0; display: grid; place-items: center; background: Canvas; color: CanvasText; }
@@ -17,7 +17,7 @@
   <body>
     <main>
       <span aria-hidden="true">◇</span>
-      <h1 id="title">Obnovuji AI Executive…</h1>
+      <h1 id="title">Obnovuji Lumi…</h1>
       <p id="status">Odstraňuji lokální kopii a starou mezipaměť. Serverová data a passkey zůstanou zachované.</p>
     </main>
     <script>
@@ -48,10 +48,10 @@
           ].forEach((key) => localStorage.removeItem(key));
           document.getElementById("title").textContent = "Obnova dokončena";
           document.getElementById("status").textContent =
-            "Teď Safari úplně ukončete a znovu otevřete adresu AI Executive. Data se načtou ze serveru.";
+            "Teď Safari úplně ukončete a znovu otevřete Lumi. Data se načtou ze serveru.";
         } catch (error) {
           document.getElementById("status").textContent =
-            "Obnovu blokuje jiná otevřená karta AI Executive. Zavřete ostatní karty, ukončete Safari a zkuste tuto stránku znovu.";
+            "Obnovu blokuje jiná otevřená karta Lumi. Zavřete ostatní karty, ukončete Safari a zkuste tuto stránku znovu.";
         }
       })();
     </script>

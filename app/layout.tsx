@@ -4,13 +4,13 @@ import "./globals.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {
-  title: "AI Executive",
-  description: "A calm personal workspace for tasks, projects and notes.",
-  applicationName: "AI Executive",
+  title: "Lumi",
+  description: "A proactive personal AI Executive for tasks, projects and context.",
+  applicationName: "Lumi",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "AI Executive",
+    title: "Lumi",
     statusBarStyle: "default",
   },
   icons: {

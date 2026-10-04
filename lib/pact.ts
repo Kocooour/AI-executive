@@ -62,7 +62,7 @@ export interface ResolvedPACTContext {
 
 export const alfredAgent: PACTAgentDefinition = {
   id: "aifred",
-  name: "AIfréd",
+  name: "Lumi",
   version: 1,
   instructions: "Act as a calm proactive personal chief of staff. Prefer concise recommendations. Never claim that a mutation happened unless the server confirms it.",
   contextScopes: ["me", "work", "family", "rules", "project", "workspace"],

@@ -347,8 +347,8 @@ const copy: Record<Language, Record<string, string>> = {
     untitledTask: "Untitled task", cancel: "Cancel", list: "List", when: "When",
     project: "Project", area: "Area", task: "Task", note: "Note", reminder: "Reminder", taskNotes: "Task notes",
     captureExample: "Try “Call Peter tomorrow” or “Service 25 Sep #high”",
-    albertSuggestion: "Albert’s suggestion", suggesting: "Albert is preparing a suggestion…",
-    useSuggestion: "Use Albert’s suggestion", confidence: "Confidence", duration: "Estimated duration",
+    albertSuggestion: "Lumi’s suggestion", suggesting: "Lumi is preparing a suggestion…",
+    useSuggestion: "Use Lumi’s suggestion", confidence: "Confidence", duration: "Estimated duration",
     projectChoice: "Where should this task go?", createSuggestedProject: "Create and assign to a new project",
     assignExistingProject: "Assign to an existing project", withoutProject: "Keep without a project",
     newProjectName: "New project name", chooseProjectBeforeAdding: "Choose what to do with the proposed project before adding the task.",
@@ -366,16 +366,16 @@ const copy: Record<Language, Record<string, string>> = {
     checkingAccess: "Checking access…", setupRequired: "Setup required", signInPasskey: "Sign in with passkey",
     accessUnavailable: "Cannot verify access", accessUnavailableDetail: "The server could not confirm access. Check your connection and try again.",
     checking: "Checking…", workspaceDataInfo: "Your workspace data is stored in the server database and cached locally for fast access. AI uses the server provider when configured and falls back to a local preview otherwise.",
-    installedApp: "AI Executive is running as an installed app.", installHelp: "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command.",
+    installedApp: "Lumi is running as an installed app.", installHelp: "On iPhone, use Share → Add to Home Screen. On Mac, use your browser’s Install or Add to Dock command.",
     installed: "Installed", browserMode: "Browser mode", ownerSession: "This device has an authenticated owner session.",
     appBadge: "App icon badge", badgeApi: "Badge API", notificationPermission: "Notification permission",
     currentBadgeCount: "Current attention count", supported: "Supported", unsupported: "Not supported", allowed: "Allowed", notAllowed: "Not allowed",
     testBadge: "Test badge (1)", restoreBadge: "Restore current count", badgeTesting: "Testing the app icon badge…",
     badgeTestReady: "Test badge set to 1. Leave the app and check its Home Screen icon.",
-    badgeRestored: "The current task count was applied to the app icon.", badgeInstallRequired: "Open Albert from its Home Screen icon; badges are unavailable in a regular Safari tab.",
-    badgePermissionRequired: "Allow notifications for Albert before testing the badge.", badgeUnavailable: "This installation does not expose the App Badging API.",
+    badgeRestored: "The current task count was applied to the app icon.", badgeInstallRequired: "Open Lumi from its Home Screen icon; badges are unavailable in a regular Safari tab.",
+    badgePermissionRequired: "Allow notifications for Lumi before testing the badge.", badgeUnavailable: "This installation does not expose the App Badging API.",
     badgeFailed: "The badge could not be changed. Check the system Badges setting and try again.",
-    badgeSystemHint: "iOS does not let websites read the system Badges switch. If the test still does not appear, open Settings → Apps → AI Executive → Notifications and enable Badges.",
+    badgeSystemHint: "iOS does not let websites read the system Badges switch. If the test still does not appear, open Settings → Apps → Lumi → Notifications and enable Badges.",
     passkeyName: "Passkey name", confirmPassword: "Confirm current password", addPasskey: "Add passkey",
     waitingDevice: "Waiting for device…", remove: "Remove", signOut: "Sign out",
     reminderInfo: "Push reminders are sent by the server even when the app is closed. On iPhone, first install the app on the Home Screen and open the HTTPS address.",
@@ -384,7 +384,7 @@ const copy: Record<Language, Record<string, string>> = {
     workdayStarts: "Workday starts", workdayEnds: "Workday ends", workingDays: "Working days",
     createBackup: "Create backup", noBackups: "No backups yet.", restore: "Restore",
     openCount: "open", dailyBrief: "Daily brief", morningBrief: "Morning brief", eveningReview: "Evening review",
-    dayPlanTitle: "Albert’s day plan", dayPlanReady: "Available calendar time; proposed blocks need your approval.",
+    dayPlanTitle: "Lumi’s day plan", dayPlanReady: "Available calendar time; proposed blocks need your approval.",
     dayPlanMissing: "Connect a calendar to get reliable time blocks. Tasks are listed without exact times.",
     dayPlanStale: "Refresh the calendar before scheduling exact times.", dayPlanNonWorkday: "This is outside your working days; no time blocks are suggested.",
     dayPlanOverloaded: "Today’s work exceeds the available capacity.", dayPlanExisting: "Already planned", dayPlanSuggested: "Suggested", dayPlanUnscheduled: "No suitable block",
@@ -406,7 +406,7 @@ const copy: Record<Language, Record<string, string>> = {
     calendarDisconnected: "Calendar not connected", freeHours: "h free", capacityUnknown: "Capacity unverified",
     calendarStale: "Calendar availability is unknown or stale. Do not use free-time planning now.", noBlockingEvent: "No blocking event during working hours today.",
     allDay: "All day", busy: "busy", freeTime: "free time", nearestFree: "Nearest free slots:", readOnlyEvents: "Events are read-only. Overlaps count as busy time only once.",
-    calendarReadonly: "Calendar · read only", calendarInfo: "Connect a private HTTPS link in ICS format. The address is encrypted on the server, is never returned to the browser after saving, and AI Executive cannot change the calendar.",
+    calendarReadonly: "Calendar · read only", calendarInfo: "Connect a private HTTPS link in ICS format. The address is encrypted on the server, is never returned to the browser after saving, and Lumi cannot change the calendar.",
     readOnly: "Read only", notConnected: "Not connected", sourceName: "Source name", privateIcs: "Private ICS link", connectLoad: "Connect and load",
     events: "events", syncFailed: "Synchronization failed", lastSync: "last", refresh: "Refresh", disconnect: "Disconnect",
     proactiveInfo: "Automatic morning brief and evening review. Tasks are never changed without a proposal, your confirmation, and an Undo option.",
@@ -415,7 +415,7 @@ const copy: Record<Language, Record<string, string>> = {
     backupInfo: "Daily safety copies are created automatically before changes.", items: "items",
     context: "Context", assistant: "Assistant", todayBrief: "Today’s brief", confirm: "Confirm",
     undoAi: "Undo AI change", working: "Working…", send: "Send", itemChanged: "Item changed", undo: "Undo",
-    agentsIntro: "Run focused AIfréd agents for one workspace. Agents can read only their allowed context and tools; changes remain approval-bound.",
+    agentsIntro: "Run focused Lumi agents for one workspace. Agents can read only their allowed context and tools; changes remain approval-bound.",
     runAgent: "Run agent", latestResult: "Latest result", runHistory: "Run history", noAgentRuns: "No agent has run in this workspace yet.",
     completedRun: "Completed", failedRun: "Failed", runningRun: "Running", recommendations: "Recommendations",
   },
@@ -448,8 +448,8 @@ const copy: Record<Language, Record<string, string>> = {
     untitledTask: "Úkol bez názvu", cancel: "Zrušit", list: "Seznam", when: "Kdy",
     project: "Projekt", area: "Oblast", task: "Úkol", note: "Poznámka", reminder: "Připomínka", taskNotes: "Poznámky k úkolu",
     captureExample: "Zkuste „Zavolat Petrovi zítra“ nebo „Servis 25. 9. #high“",
-    albertSuggestion: "Albertův návrh", suggesting: "Albert připravuje návrh…",
-    useSuggestion: "Použít Albertův návrh", confidence: "Jistota", duration: "Odhadovaná náročnost",
+    albertSuggestion: "Lumi návrh", suggesting: "Lumi připravuje návrh…",
+    useSuggestion: "Použít návrh Lumi", confidence: "Jistota", duration: "Odhadovaná náročnost",
     projectChoice: "Kam má úkol patřit?", createSuggestedProject: "Vytvořit nový projekt a přiřadit do něj",
     assignExistingProject: "Přiřadit do existujícího projektu", withoutProject: "Ponechat bez projektu",
     newProjectName: "Název nového projektu", chooseProjectBeforeAdding: "Před přidáním úkolu zvolte, co se má stát s navrženým projektem.",
@@ -467,16 +467,16 @@ const copy: Record<Language, Record<string, string>> = {
     checkingAccess: "Ověřuji přístup…", setupRequired: "Je nutné dokončit nastavení", signInPasskey: "Přihlásit se passkeyem",
     accessUnavailable: "Nelze ověřit přístup", accessUnavailableDetail: "Server nemohl ověřit přístup. Zkontrolujte připojení a zkuste to znovu.",
     checking: "Ověřuji…", workspaceDataInfo: "Data workspace jsou uložená v databázi serveru a pro rychlý přístup také v místní mezipaměti. AI používá nakonfigurovaného poskytovatele na serveru, jinak místní náhled.",
-    installedApp: "AI Executive běží jako nainstalovaná aplikace.", installHelp: "Na iPhonu použijte Sdílet → Přidat na plochu. Na Macu použijte v prohlížeči Instalovat nebo Přidat do Docku.",
+    installedApp: "Lumi běží jako nainstalovaná aplikace.", installHelp: "Na iPhonu použijte Sdílet → Přidat na plochu. Na Macu použijte v prohlížeči Instalovat nebo Přidat do Docku.",
     installed: "Nainstalováno", browserMode: "Režim prohlížeče", ownerSession: "Toto zařízení má ověřenou relaci vlastníka.",
     appBadge: "Odznak na ikoně aplikace", badgeApi: "API odznaku", notificationPermission: "Oprávnění oznámení",
     currentBadgeCount: "Aktuální počet důležitých úkolů", supported: "Podporováno", unsupported: "Nepodporováno", allowed: "Povoleno", notAllowed: "Nepovoleno",
     testBadge: "Otestovat odznak (1)", restoreBadge: "Obnovit skutečný počet", badgeTesting: "Testuji odznak na ikoně…",
     badgeTestReady: "Testovací odznak je nastavený na 1. Opusťte aplikaci a zkontrolujte její ikonu na ploše.",
-    badgeRestored: "Na ikonu byl nastaven aktuální počet úkolů.", badgeInstallRequired: "Otevřete Alberta jeho ikonou na ploše; v běžném panelu Safari nejsou odznaky dostupné.",
-    badgePermissionRequired: "Před testem odznaku povolte Albertovi oznámení.", badgeUnavailable: "Tato instalace neposkytuje API pro odznak aplikace.",
+    badgeRestored: "Na ikonu byl nastaven aktuální počet úkolů.", badgeInstallRequired: "Otevřete Lumi její ikonou na ploše; v běžném panelu Safari nejsou odznaky dostupné.",
+    badgePermissionRequired: "Před testem odznaku povolte Lumi oznámení.", badgeUnavailable: "Tato instalace neposkytuje API pro odznak aplikace.",
     badgeFailed: "Odznak se nepodařilo změnit. Zkontrolujte systémové nastavení Odznaky a zkuste to znovu.",
-    badgeSystemHint: "iOS webu neumožňuje zjistit stav systémového přepínače Odznaky. Pokud se test neukáže, otevřete Nastavení → Aplikace → AI Executive → Oznámení a zapněte Odznaky.",
+    badgeSystemHint: "iOS webu neumožňuje zjistit stav systémového přepínače Odznaky. Pokud se test neukáže, otevřete Nastavení → Aplikace → Lumi → Oznámení a zapněte Odznaky.",
     passkeyName: "Název passkeye", confirmPassword: "Potvrďte současné heslo", addPasskey: "Přidat passkey",
     waitingDevice: "Čekám na zařízení…", remove: "Odebrat", signOut: "Odhlásit se",
     reminderInfo: "Push připomínky odesílá server, i když je aplikace zavřená. Na iPhonu ji nejprve přidejte na plochu a otevřete přes HTTPS adresu.",
@@ -485,7 +485,7 @@ const copy: Record<Language, Record<string, string>> = {
     workdayStarts: "Začátek pracovního dne", workdayEnds: "Konec pracovního dne", workingDays: "Pracovní dny",
     createBackup: "Vytvořit zálohu", noBackups: "Zatím nejsou žádné zálohy.", restore: "Obnovit",
     openCount: "otevřeno", dailyBrief: "Denní přehled", morningBrief: "Ranní přehled", eveningReview: "Večerní rekapitulace",
-    dayPlanTitle: "Albertův plán dne", dayPlanReady: "Volný čas v kalendáři; navržené bloky čekají na schválení.",
+    dayPlanTitle: "Plán dne Lumi", dayPlanReady: "Volný čas v kalendáři; navržené bloky čekají na schválení.",
     dayPlanMissing: "Pro spolehlivé časové bloky připojte kalendář. Úkoly jsou zatím bez přesného času.",
     dayPlanStale: "Před plánováním přesného času obnovte kalendář.", dayPlanNonWorkday: "Dnes není pracovní den; časové bloky nenavrhuji.",
     dayPlanOverloaded: "Dnešní práce přesahuje dostupnou kapacitu.", dayPlanExisting: "Již naplánováno", dayPlanSuggested: "Návrh", dayPlanUnscheduled: "Bez vhodného bloku",
@@ -507,7 +507,7 @@ const copy: Record<Language, Record<string, string>> = {
     calendarDisconnected: "Kalendář není připojen", freeHours: "h volno", capacityUnknown: "Kapacita neověřena",
     calendarStale: "Dostupnost kalendáře je neznámá nebo zastaralá. Plán podle volných bloků nyní nepoužívejte.", noBlockingEvent: "V pracovní době dnes nemáte žádnou blokující událost.",
     allDay: "Celý den", busy: "obsazeno", freeTime: "volný čas", nearestFree: "Nejbližší volné bloky:", readOnlyEvents: "Události jsou pouze pro čtení. Překryvy se do obsazeného času počítají jen jednou.",
-    calendarReadonly: "Kalendář · pouze pro čtení", calendarInfo: "Připojte soukromý HTTPS odkaz ve formátu ICS. Adresa se na serveru šifruje, po uložení se už do prohlížeče nevrací a AI Executive nemůže kalendář měnit.",
+    calendarReadonly: "Kalendář · pouze pro čtení", calendarInfo: "Připojte soukromý HTTPS odkaz ve formátu ICS. Adresa se na serveru šifruje, po uložení se už do prohlížeče nevrací a Lumi nemůže kalendář měnit.",
     readOnly: "Pouze pro čtení", notConnected: "Nepřipojeno", sourceName: "Název zdroje", privateIcs: "Soukromý ICS odkaz", connectLoad: "Připojit a načíst",
     events: "událostí", syncFailed: "Synchronizace selhala", lastSync: "naposledy", refresh: "Obnovit", disconnect: "Odpojit",
     proactiveInfo: "Automatický ranní přehled a večerní rekapitulace. Úkoly nikdy nemění bez návrhu, vašeho potvrzení a možnosti Zpět.",
@@ -516,7 +516,7 @@ const copy: Record<Language, Record<string, string>> = {
     backupInfo: "Denní bezpečnostní kopie se vytvářejí automaticky před změnami.", items: "položek",
     context: "Kontext", assistant: "Asistent", todayBrief: "Dnešní přehled", confirm: "Potvrdit",
     undoAi: "Vrátit změnu AI", working: "Pracuji…", send: "Odeslat", itemChanged: "Položka změněna", undo: "Zpět",
-    agentsIntro: "Spouštějte specializované agenty AIfréda nad jedním workspace. Agenti vidí jen povolený kontext a nástroje; změny nadále vyžadují potvrzení.",
+    agentsIntro: "Spouštějte specializované agenty Lumi nad jedním workspace. Agenti vidí jen povolený kontext a nástroje; změny nadále vyžadují potvrzení.",
     runAgent: "Spustit agenta", latestResult: "Poslední výsledek", runHistory: "Historie běhů", noAgentRuns: "V tomto workspace zatím žádný agent neběžel.",
     completedRun: "Dokončeno", failedRun: "Selhalo", runningRun: "Probíhá", recommendations: "Doporučení",
   },
@@ -3261,7 +3261,7 @@ export default function App() {
       <main className="authShell">
         <form className="authCard" onSubmit={login}>
           <div className="authMark">◇</div>
-          <p className="eyebrow">AI EXECUTIVE</p>
+          <p className="eyebrow">LUMI</p>
           <h1>
             {authState === "checking"
               ? tr("checkingAccess")
@@ -3310,9 +3310,9 @@ export default function App() {
   return (
     <main className={`appShell view-${view.toLowerCase()}`}>
       <aside>
-        <div className="appIdentity" aria-label="AI Executive">
+        <div className="appIdentity" aria-label="Lumi">
           <span className="brandMark">◇</span>
-          <span><strong>AI Executive</strong><small>Personal OS</small></span>
+          <span><strong>Lumi</strong><small>Personal AI Executive</small></span>
         </div>
         <div className="workspaceSwitcher">
           <button
@@ -3594,7 +3594,7 @@ export default function App() {
           {(view === "Home" || view === "Today") && (
             <section className={`workNowCard ${workOverrun ? "overrun" : ""}`} aria-labelledby="work-now-title">
               <div>
-                <p className="eyebrow">ALBERT · {tr("workNow").toUpperCase()}</p>
+                <p className="eyebrow">LUMI · {tr("workNow").toUpperCase()}</p>
                 <h2 id="work-now-title">{workSession?.taskTitle || tr("workNotRunning")}</h2>
                 {workSession && <p><strong>{tr("workElapsed")}:</strong> <time>{workElapsedText}</time>{workSession.estimatedMinutes ? ` · ${workSession.estimatedMinutes} min` : ""}</p>}
               </div>
@@ -3609,7 +3609,7 @@ export default function App() {
           {(view === "Home" || view === "Today") && (
             <section className="dayPlanCard" aria-labelledby="day-plan-title">
               <div className="sectionHeading">
-                <div><p className="eyebrow">ALBERT</p><h2 id="day-plan-title">{tr("dayPlanTitle")}</h2></div>
+                <div><p className="eyebrow">LUMI</p><h2 id="day-plan-title">{tr("dayPlanTitle")}</h2></div>
                 <div className="dayPlanActions">
                   {visibleDayPlan?.calendar === "ready" && <strong>{Math.floor((visibleDayPlan.freeMinutes || 0) / 60)} h {(visibleDayPlan.freeMinutes || 0) % 60} min</strong>}
                   <button disabled={dayPlanBusy} onClick={() => loadDayPlan(calendarWorkspaceSelection.current, calendarToday)
@@ -3695,8 +3695,8 @@ export default function App() {
               <section className="contextOverview">
                 <div className="sectionHeading">
                   <div>
-                    <p className="eyebrow">ALBERT · CONTEXT V2</p>
-                    <h2>{language === "cs" ? "Co Albert ví" : "What Albert knows"}</h2>
+                    <p className="eyebrow">LUMI · CONTEXT V2</p>
+                    <h2>{language === "cs" ? "Co Lumi ví" : "What Lumi knows"}</h2>
                     <p>{language === "cs" ? "Vlastníkem řízená tvrzení pro tento workspace. Do AI se dostanou pouze potvrzená, aktuální a běžná tvrzení." : "Owner-controlled claims for this workspace. Only confirmed, current and normal claims may reach AI."}</p>
                   </div>
                   <div className="contextHeaderActions"><button onClick={reloadContextClaims} disabled={Boolean(claimBusyId)}>{language === "cs" ? "Obnovit tvrzení" : "Reload claims"}</button><button className="primaryAction" onClick={resetClaimDraft}>{language === "cs" ? "Nové tvrzení" : "New claim"}</button></div>
@@ -3704,7 +3704,7 @@ export default function App() {
                 <div className="contextStats">
                   <span><strong>{contextClaims.length}</strong>{language === "cs" ? " tvrzení" : " claims"}</span>
                   <span><strong>{contextClaims.filter((claim) => claim.reviewStatus === "proposed").length}</strong>{language === "cs" ? " ke kontrole" : " to review"}</span>
-                  <span><strong>{contextClaims.filter((claim) => claim.eligibleForAI).length}</strong>{language === "cs" ? " pro Alberta" : " for Albert"}</span>
+                  <span><strong>{contextClaims.filter((claim) => claim.eligibleForAI).length}</strong>{language === "cs" ? " pro Lumi" : " for Lumi"}</span>
                 </div>
               </section>
 
@@ -3732,7 +3732,7 @@ export default function App() {
                       {!subject.archivedAt && <button className="textAction danger" disabled={subjectBusy} onClick={() => subjectAction("archive", subject)}>{language === "cs" ? "Archivovat" : "Archive"}</button>}
                     </div>
                     {subjectHistory[subject.id] && <ol className="contextSubjectHistory">{subjectHistory[subject.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{contextPredicateLabel(event.operation.replace("subject.", ""))}{event.beforeTitle && event.afterTitle && event.beforeTitle !== event.afterTitle ? `: ${event.beforeTitle} → ${event.afterTitle}` : event.afterTitle ? `: ${event.afterTitle}` : ""} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
-                    <details className="contextPersonKnowledge"><summary>{language === "cs" ? "Co Albert ví" : "What Albert knows"}</summary>
+                    <details className="contextPersonKnowledge"><summary>{language === "cs" ? "Co Lumi ví" : "What Lumi knows"}</summary>
                       {contextClaims.filter((claim) => !claim.archivedAt && (claim.subject.id === subject.id || claim.target?.id === subject.id)).map((claim) => <p key={claim.id}>{claim.subject.title} · {contextPredicateLabel(claim.predicate)} → {String(claim.literal?.value ?? claim.target?.title ?? "—")} <small>({claim.reviewStatus === "confirmed" ? (language === "cs" ? "potvrzené tvrzení" : "confirmed claim") : claim.reviewStatus === "proposed" ? (language === "cs" ? "ke kontrole" : "to review") : (language === "cs" ? "odmítnuto" : "rejected")})</small></p>)}
                       {!contextClaims.some((claim) => !claim.archivedAt && (claim.subject.id === subject.id || claim.target?.id === subject.id)) && <p>{language === "cs" ? "Zatím žádná tvrzení." : "No claims yet."}</p>}
                     </details>
@@ -3741,8 +3741,8 @@ export default function App() {
               </section>
 
               <section className="contextInbox" aria-labelledby="context-inbox-title">
-                <div className="sectionHeading"><div><h2 id="context-inbox-title">{language === "cs" ? "Kontextová schránka" : "Context Inbox"}</h2><p>{language === "cs" ? "Vložte shrnutí schůzky, e-mailu nebo Copilota. Albert připraví pouze náhled; text neukládá a bez vašeho schválení nic nezmění." : "Paste a meeting, email or Copilot summary. Albert creates a preview only; it does not store the text or change anything without approval."}</p></div></div>
-                <label className="contextInboxInput">{language === "cs" ? "Shrnutí nebo poznámky" : "Summary or notes"}<textarea value={contextInboxText} maxLength={20000} onChange={(event) => setContextInboxText(event.target.value)} placeholder={language === "cs" ? "Např. Projekt Albert – priorita: vysoká\nNa výsledek čeká Jana\nTermín: 2026-10-10" : "E.g. Project Albert – priority: high\nJana is waiting for the result\nDeadline: 2026-10-10"} /></label>
+                <div className="sectionHeading"><div><h2 id="context-inbox-title">{language === "cs" ? "Kontextová schránka" : "Context Inbox"}</h2><p>{language === "cs" ? "Vložte shrnutí schůzky, e-mailu nebo Copilota. Lumi připraví pouze náhled; text neukládá a bez vašeho schválení nic nezmění." : "Paste a meeting, email or Copilot summary. Lumi creates a preview only; it does not store the text or change anything without approval."}</p></div></div>
+                <label className="contextInboxInput">{language === "cs" ? "Shrnutí nebo poznámky" : "Summary or notes"}<textarea value={contextInboxText} maxLength={20000} onChange={(event) => setContextInboxText(event.target.value)} placeholder={language === "cs" ? "Např. Projekt Lumi – priorita: vysoká\nNa výsledek čeká Jana\nTermín: 2026-10-10" : "E.g. Project Lumi – priority: high\nJana is waiting for the result\nDeadline: 2026-10-10"} /></label>
                 <div className="contextInboxActions"><button className="primaryAction" disabled={Boolean(contextInboxBusy) || !contextInboxText.trim()} onClick={previewContextInbox}>{contextInboxBusy === "preview" ? (language === "cs" ? "Analyzuji…" : "Analysing…") : (language === "cs" ? "Připravit náhled" : "Prepare preview")}</button><button disabled={Boolean(contextInboxBusy) || (!contextInboxProposals.length && !contextInboxTasks.length)} onClick={() => { setContextInboxProposals([]); setContextInboxTasks([]); setContextInboxStatus(language === "cs" ? "Náhled byl zahozen." : "Preview discarded."); }}>{language === "cs" ? "Zahodit vše" : "Discard all"}</button></div>
                 {contextInboxStatus && <p role="status">{contextInboxStatus}</p>}
                 <div className="contextInboxList">
@@ -3751,7 +3751,7 @@ export default function App() {
                     <label>{language === "cs" ? "Přiřadit k" : "Assign to"}<select value={proposal.subject.entityId} onChange={(event) => { const subject = items.find((item) => item.id === event.target.value && item.workspaceId === calendarWorkspaceSelection.current); if (subject) setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, subject: { entityId: subject.id, type: subject.type, title: subject.title } } : item)); }}>{items.filter((item) => item.workspaceId === calendarWorkspaceSelection.current && ["workspace", "area", "project", "task", "note"].includes(item.type)).map((item) => <option key={item.id} value={item.id}>{tr(item.type)}: {item.title}</option>)}</select></label>
                     <div className="preferenceGrid"><label>{language === "cs" ? "Vlastnost" : "Predicate"}<input value={proposal.predicate} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, predicate: event.target.value } : item))} /></label>{!proposal.suggestedTarget && <label>{language === "cs" ? "Hodnota" : "Value"}<input type={proposal.literal.type === "date" ? "date" : proposal.literal.type === "number" ? "number" : "text"} value={String(proposal.literal.value)} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, literal: { ...item.literal, value: item.literal.type === "number" ? Number(event.target.value) : event.target.value } } : item))} /></label>}</div>
                     {proposal.suggestedTarget && <div className="contextTargetChoice">
-                      <p>{language === "cs" ? `Albert rozpoznal možnou osobu „${proposal.suggestedTarget.title}“. Vyberte existující osobu nebo ji výslovně vytvořte.` : `Albert found a possible person “${proposal.suggestedTarget.title}”. Select an existing person or explicitly create one.`}</p>
+                      <p>{language === "cs" ? `Lumi rozpoznala možnou osobu „${proposal.suggestedTarget.title}“. Vyberte existující osobu nebo ji výslovně vytvořte.` : `Lumi found a possible person “${proposal.suggestedTarget.title}”. Select an existing person or explicitly create one.`}</p>
                       <label>{language === "cs" ? "Osoba pro vztah" : "Person for relationship"}<select value={proposal.selectedTargetId || ""} onChange={(event) => setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: event.target.value } : item))}><option value="">{language === "cs" ? "Vyberte osobu" : "Select a person"}</option>{standaloneSubjects.filter((subject) => subject.type === "person" && !subject.archivedAt).map((subject) => <option key={subject.id} value={subject.id}>{subject.title}{proposal.suggestedTarget?.matches.some((match) => match.id === subject.id) ? (language === "cs" ? " · možná shoda" : " · possible match") : ""}</option>)}</select></label>
                       <button disabled={Boolean(contextInboxBusy)} onClick={() => createSuggestedTarget(proposal)}>{language === "cs" ? `Výslovně vytvořit: ${proposal.suggestedTarget.title}` : `Explicitly create: ${proposal.suggestedTarget.title}`}</button>
                     </div>}
@@ -3763,7 +3763,7 @@ export default function App() {
               </section>
 
               <section className="contextClaimEditor" id="context-claim-editor">
-                <div className="sectionHeading"><div><h2>{editingClaim ? (language === "cs" ? "Upravit tvrzení" : "Edit claim") : (language === "cs" ? "Přidat tvrzení" : "Add claim")}</h2><p>{language === "cs" ? "Zdroj nechte prázdný, pokud žádný nemáte. Albert jej nebude domýšlet." : "Leave source empty when none exists. Albert will not invent one."}</p></div></div>
+                <div className="sectionHeading"><div><h2>{editingClaim ? (language === "cs" ? "Upravit tvrzení" : "Edit claim") : (language === "cs" ? "Přidat tvrzení" : "Add claim")}</h2><p>{language === "cs" ? "Zdroj nechte prázdný, pokud žádný nemáte. Lumi jej nebude domýšlet." : "Leave source empty when none exists. Lumi will not invent one."}</p></div></div>
                 <div className="contextClaimForm">
                   <label>{language === "cs" ? "O kom / čem" : "Subject"}<select value={claimSubjectId} disabled={Boolean(editingClaim)} onChange={(event) => setClaimSubjectId(event.target.value)}><option value="">—</option>{items.filter((item) => item.workspaceId === calendarWorkspaceSelection.current && (item.type === "workspace" || item.type === "project" || item.type === "task")).map((item) => <option key={item.id} value={item.id}>{item.type === "project" ? `${tr("project")}: ` : ""}{item.title}</option>)}{standaloneSubjects.filter((subject) => !subject.archivedAt).map((subject) => <option key={subject.id} value={subject.id}>{subject.type === "person" ? (language === "cs" ? "Osoba" : "Person") : (language === "cs" ? "Organizace" : "Organization")}: {subject.title}</option>)}</select></label>
                   <label>{language === "cs" ? "Vztah nebo vlastnost" : "Relationship or property"}<input value={claimPredicate} maxLength={120} pattern="[a-z][a-z0-9_.-]*" list="context-predicates" onChange={(event) => setClaimPredicate(event.target.value)} placeholder="preference" /><datalist id="context-predicates">{["waiting_for", "responsible_for", "works_for", "participates_in", "assigned_to", "blocked_by", "related_to", "importance", "preference"].map((predicate) => <option key={predicate} value={predicate} label={contextPredicateLabel(predicate)} />)}</datalist></label>
@@ -3867,7 +3867,7 @@ export default function App() {
           {view === "Settings" && (
             <div className="settingsPanel">
               <section className="durableContextSection">
-                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext AIfréda" : "AIfréd context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má AIfréd používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for AIfréd. Sensitive context is not sent to external AI services."}</p></div></div>
+                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext Lumi" : "Lumi context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má Lumi používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for Lumi. Sensitive context is not sent to external AI services."}</p></div></div>
                 <div className="contextForm">
                   <div className="preferenceGrid">
                     <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}><option value="me">Me</option><option value="work">Work</option><option value="family">Family</option><option value="rules">Rules</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
@@ -4885,8 +4885,8 @@ export default function App() {
               </div>
             )}
             {(selected.type === "task" || selected.type === "project") && (
-              <section className="detailKnowledge" aria-label={language === "cs" ? "Co Albert ví" : "What Albert knows"}>
-                <h3>{language === "cs" ? "CO ALBERT VÍ" : "WHAT ALBERT KNOWS"}</h3>
+              <section className="detailKnowledge" aria-label={language === "cs" ? "Co Lumi ví" : "What Lumi knows"}>
+                <h3>{language === "cs" ? "CO LUMI VÍ" : "WHAT LUMI KNOWS"}</h3>
                 {contextClaims.filter((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt).map((claim) => <article key={claim.id}>
                   <strong>{claim.subject.title} · {contextPredicateLabel(claim.predicate)}: {String(claim.literal?.value ?? claim.target?.title ?? "—")}</strong>
                   <small>{claim.reviewStatus === "confirmed" ? (language === "cs" ? "potvrzeno" : "confirmed") : claim.reviewStatus === "proposed" ? (language === "cs" ? "ke kontrole" : "to review") : (language === "cs" ? "odmítnuto" : "rejected")} · {claim.freshness === "current" ? (language === "cs" ? "aktuální" : "current") : claim.freshness === "needs_review" ? (language === "cs" ? "prověřit" : "needs review") : (language === "cs" ? "zastaralé" : "stale")}{claim.validTo ? ` · ${language === "cs" ? "platí do" : "valid to"} ${claim.validTo}` : ""}</small>

@@ -52,7 +52,7 @@ function classify(signal: SecuritySignal) {
     return {
       severity: "critical" as const,
       rule: "rate-limit-triggered",
-      title: "AI Executive: rate limit triggered",
+      title: "Lumi: rate limit triggered",
       summary: `${method} ${route} was blocked by a rate limit.`,
       count: 1,
       windowMs: 10 * 60_000,
@@ -63,7 +63,7 @@ function classify(signal: SecuritySignal) {
     return {
       severity: "critical" as const,
       rule: "unauthenticated-mutation",
-      title: "AI Executive: blocked unauthorized write",
+      title: "Lumi: blocked unauthorized write",
       summary: `${method} ${route} was rejected before any data changed.`,
       count: 1,
       windowMs: 5 * 60_000,
@@ -80,7 +80,7 @@ function classify(signal: SecuritySignal) {
       return {
         severity: "critical" as const,
         rule: "authentication-failures",
-        title: "AI Executive: repeated authentication failures",
+        title: "Lumi: repeated authentication failures",
         summary: `${count} authentication attempts from one source were rejected in 10 minutes.`,
         count,
         windowMs: 10 * 60_000,
@@ -98,7 +98,7 @@ function classify(signal: SecuritySignal) {
       return {
         severity: "warning" as const,
         rule: "protected-route-reconnaissance",
-        title: "AI Executive: protected route probing",
+        title: "Lumi: protected route probing",
         summary: `${count} unauthenticated reads from one source were rejected in 5 minutes.`,
         count,
         windowMs: 5 * 60_000,

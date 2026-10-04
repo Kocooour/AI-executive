@@ -42,12 +42,12 @@ function projectManagerResult(workspaceId: string, language: "cs" | "en"): Manua
   const recommendations = language === "cs"
     ? [
         atRisk[0] ? `Nejdřív projděte projekt „${atRisk[0].project.title}“: má ${atRisk[0].overdue} úkolů po termínu.` : "Žádný aktivní projekt nyní nemá úkol po termínu.",
-        withoutNextAction[0] ? `Doplňte další konkrétní krok do projektu „${withoutNextAction[0].project.title}“.` : projectStats.length ? "Všechny aktivní projekty mají alespoň jeden otevřený krok." : "Nejdřív vytvořte nebo aktivujte projekt, který má AIfréd sledovat.",
+        withoutNextAction[0] ? `Doplňte další konkrétní krok do projektu „${withoutNextAction[0].project.title}“.` : projectStats.length ? "Všechny aktivní projekty mají alespoň jeden otevřený krok." : "Nejdřív vytvořte nebo aktivujte projekt, který má Lumi sledovat.",
         busiest ? `Ověřte rozsah projektu „${busiest.project.title}“ (${busiest.open} otevřených úkolů).` : "Není evidován žádný otevřený projektový úkol.",
       ]
     : [
         atRisk[0] ? `Review “${atRisk[0].project.title}” first: it has ${atRisk[0].overdue} overdue tasks.` : "No active project currently has an overdue task.",
-        withoutNextAction[0] ? `Add one concrete next action to “${withoutNextAction[0].project.title}”.` : projectStats.length ? "Every active project has at least one open next action." : "Create or activate a project for AIfréd to monitor first.",
+        withoutNextAction[0] ? `Add one concrete next action to “${withoutNextAction[0].project.title}”.` : projectStats.length ? "Every active project has at least one open next action." : "Create or activate a project for Lumi to monitor first.",
         busiest ? `Check the scope of “${busiest.project.title}” (${busiest.open} open tasks).` : "There are no open project tasks.",
       ];
   return {

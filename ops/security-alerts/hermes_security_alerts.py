@@ -186,7 +186,7 @@ def deliver(alert: dict[str, object]) -> None:
     heading = (
         f"Bezpečnostní upozornění ze serveru {hostname}"
         if SCOPE == "server"
-        else "Bezpečnostní upozornění z AI Executive"
+        else "Bezpečnostní upozornění z Lumi"
     )
     local_time = (
         datetime.fromisoformat(str(alert["lastAt"]).replace("Z", "+00:00"))

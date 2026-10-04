@@ -8,9 +8,9 @@ export async function GET(request: Request) {
   return NextResponse.json({
     openapi: "3.1.0",
     info: {
-      title: "AIfréd Integration API",
+      title: "Lumi Integration API",
       version: "0.1.0",
-      description: "Workspace-scoped AIfréd API. Planning may prepare proposals; external confirmation is not exposed.",
+      description: "Workspace-scoped Lumi API. Planning may prepare proposals; external confirmation is not exposed.",
     },
     servers: [{ url: origin }],
     components: {
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       "/api/integrations/aifred": {
         post: {
           operationId: "planWithAifred",
-          summary: "Ask AIfréd to reason or prepare an approval-bound proposal",
+          summary: "Ask Lumi to reason or prepare an approval-bound proposal",
           requestBody: {
             required: true,
             content: { "application/json": { schema: {
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
       "/api/integrations/aifred/tools": {
         post: {
           operationId: "readAifredTool",
-          summary: "Run an allowlisted read-only AIfréd tool",
+          summary: "Run an allowlisted read-only Lumi tool",
           requestBody: {
             required: true,
             content: { "application/json": { schema: {

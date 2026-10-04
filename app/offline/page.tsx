@@ -5,7 +5,7 @@ export default function OfflinePage() {
         <span className="offlineIcon">◇</span>
         <h1>You&apos;re offline</h1>
         <p>
-          AI Executive will reconnect and synchronize when this device is back
+          Lumi will reconnect and synchronize when this device is back
           online.
         </p>
         <a href="/">Try again</a>
@@ -13,4 +13,3 @@ export default function OfflinePage() {
     </main>
   );
 }
-

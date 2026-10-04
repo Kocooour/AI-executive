@@ -296,7 +296,7 @@ function sendTarget(subscription: PushSubscription, payload: Record<string, unkn
 
 export async function sendTestNotification() {
   return sendToAll({
-    title: "AI Executive",
+    title: "Lumi",
     body: "Notifications are ready on this device.",
     url: "/?view=Today",
     tag: "ai-executive-test",

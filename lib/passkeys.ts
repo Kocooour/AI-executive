@@ -50,11 +50,11 @@ export async function registrationOptions(
   const { origin, rpId } = passkeyRequestContext(request);
   const credentials = listPasskeys(rpId);
   const options = await generateRegistrationOptions({
-    rpName: "AI Executive",
+    rpName: "Lumi",
     rpID: rpId,
     userID: isoUint8Array.fromUTF8String("ai-executive-owner-v1"),
     userName: "owner",
-    userDisplayName: "AI Executive owner",
+    userDisplayName: "Lumi owner",
     timeout: challengeLifetimeMs,
     attestationType: "none",
     excludeCredentials: credentials.map((credential) => ({

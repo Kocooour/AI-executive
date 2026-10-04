@@ -76,7 +76,7 @@ export async function seed() {
   const project = crypto.randomUUID();
   await db.entities.bulkAdd([
     { id: area, type: "area", title: "Work", status: "active", workspaceId: personalWorkspaceId, properties: {}, createdAt: now, updatedAt: now },
-    { id: project, type: "project", title: "AI Executive", status: "active", workspaceId: personalWorkspaceId, properties: { areaId: area }, createdAt: now, updatedAt: now },
+    { id: project, type: "project", title: "Lumi", status: "active", workspaceId: personalWorkspaceId, properties: { areaId: area }, createdAt: now, updatedAt: now },
     { id: crypto.randomUUID(), type: "note", title: "Product direction", content: "Local-first, calm and extensible.", status: "active", workspaceId: personalWorkspaceId, properties: { projectId: project }, createdAt: now, updatedAt: now },
     { id: crypto.randomUUID(), type: "task", title: "Zavolat Petrovi", status: "open", workspaceId: personalWorkspaceId, properties: { area: "Work", projectId: project, today: true, inbox: false }, createdAt: now, updatedAt: now },
     { id: crypto.randomUUID(), type: "task", title: "Objednat servis", status: "open", workspaceId: personalWorkspaceId, properties: { area: "Cars", today: true, inbox: false }, createdAt: now, updatedAt: now },

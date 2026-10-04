@@ -29,7 +29,7 @@ export default function ErrorPage({
     <main className="offlinePage">
       <div className="offlineCard">
         <div className="authMark">◇</div>
-        <p className="eyebrow">AI EXECUTIVE</p>
+        <p className="eyebrow">LUMI</p>
         <h1>Aplikaci se nepodařilo načíst</h1>
         <p>Chyba byla bezpečně odeslána k diagnostice.</p>
         <button type="button" onClick={reset}>Zkusit znovu</button>

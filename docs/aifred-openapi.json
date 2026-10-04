@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "AIfréd Integration API",
+    "title": "Lumi Integration API",
     "version": "0.1.0",
-    "description": "Workspace-scoped interface for AIfréd. Read tools are read-only. Planning may create a proposal but never confirms or applies it."
+    "description": "Workspace-scoped interface for Lumi. Read tools are read-only. Planning may create a proposal but never confirms or applies it."
   },
   "servers": [{ "url": "https://YOUR-AIFRED-HOST" }],
   "components": {
@@ -25,8 +25,8 @@
     "/api/integrations/aifred": {
       "post": {
         "operationId": "planWithAifred",
-        "summary": "Ask AIfréd to reason or prepare an approval-bound proposal",
-        "description": "Uses one explicit workspace. A returned proposal is not applied until confirmed inside AIfréd.",
+        "summary": "Ask Lumi to reason or prepare an approval-bound proposal",
+        "description": "Uses one explicit workspace. A returned proposal is not applied until confirmed inside Lumi.",
         "requestBody": {
           "required": true,
           "content": {
@@ -55,7 +55,7 @@
     "/api/integrations/aifred/tools": {
       "post": {
         "operationId": "readAifredTool",
-        "summary": "Run one allowlisted read-only AIfréd tool",
+        "summary": "Run one allowlisted read-only Lumi tool",
         "description": "Allowed tools: task.read, project.read, note.read, calendar.read, calendar.free_time, context.read.",
         "requestBody": {
           "required": true,

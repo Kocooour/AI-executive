@@ -69,7 +69,7 @@ self.addEventListener("push", (event) => {
         : self.navigator.setAppBadge(0)
     : Promise.resolve();
   event.waitUntil(
-    Promise.all([badgePromise, self.registration.showNotification(payload.title || "AI Executive", {
+    Promise.all([badgePromise, self.registration.showNotification(payload.title || "Lumi", {
       body: payload.body || "A task needs your attention.",
       icon: "/icon-192.png",
       badge: "/icon-192.png",
