@@ -20,6 +20,7 @@ import {
   migratePropertyRelations,
   type Entity,
   type EntityType,
+  type Relation,
 } from "../lib/db";
 import { buildContext, type ContextBundle } from "../lib/context";
 import type { AIMessage } from "../lib/ai-provider";
@@ -334,19 +335,20 @@ function attentionReason(item: AttentionItem, language: Language): string {
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const last = item.reasonFacts.lastActivityAt
     ? new Date(item.reasonFacts.lastActivityAt).toLocaleString(locale, { timeZone: item.timezone }) : "";
-  const date = item.reasonFacts.deadlineAllDay ? item.relevantDate
+  const date = item.reasonFacts.deadlineAllDay ? friendlyDate(item.relevantDate, language, item.timezone)
     : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone });
+  const zone = item.reasonFacts.deadlineAllDay ? "" : ` (${item.timezone})`;
   if (language === "cs") {
     switch (item.reasonCode) {
-      case "deadline_overdue": return `Termín ${date} (${item.timezone}) již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
-      case "deadline_soon": return `Termín ${date} (${item.timezone}) je v příštích 48 hodinách.`;
+      case "deadline_overdue": return `Termín ${date}${zone} již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
+      case "deadline_soon": return `Termín ${date}${zone} je v příštích 48 hodinách.`;
       case "project_no_next_action": return `Projekt nemá otevřený proveditelný úkol alespoň 24 hodin. Poslední zaznamenaná změna: ${last}.`;
       case "project_idle": return `Bez zaznamenané aktivity projektu, propojených úkolů nebo potvrzeného kontextu alespoň 14 dní. Poslední změna: ${last}.`;
     }
   }
   switch (item.reasonCode) {
-    case "deadline_overdue": return `Deadline ${date} (${item.timezone}) has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
-    case "deadline_soon": return `Deadline ${date} (${item.timezone}) is within 48 hours.`;
+    case "deadline_overdue": return `Deadline ${date}${zone} has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
+    case "deadline_soon": return `Deadline ${date}${zone} is within 48 hours.`;
     case "project_no_next_action": return `No open actionable task for at least 24 hours. Last recorded change: ${last}.`;
     case "project_idle": return `No recorded project, linked task, or confirmed context activity for at least 14 days. Last change: ${last}.`;
   }
@@ -397,6 +399,8 @@ const copy: Record<Language, Record<string, string>> = {
     every: "Every", repeatFrom: "Repeat from", scheduledDate: "Scheduled date", completionDate: "Completion date",
     nextWorkday: "Remind at next workday start", history: "History", moveSomeday: "Move to Someday",
     reopen: "Reopen", complete: "Complete", delete: "Delete", notesPlaceholder: "Notes…",
+    scheduleToday: "Today", scheduleTomorrow: "Tomorrow", scheduleSomeday: "Someday", scheduleClear: "No date",
+    projectDeleteConfirm: "Delete project “{title}”? Its tasks and notes will remain, but their project link will be removed.",
     manageWorkspaces: "Manage workspaces", password: "Password", signIn: "Sign in",
     checkingAccess: "Checking access…", setupRequired: "Setup required", signInPasskey: "Sign in with passkey",
     accessUnavailable: "Cannot verify access", accessUnavailableDetail: "The server could not confirm access. Check your connection and try again.",
@@ -498,6 +502,8 @@ const copy: Record<Language, Record<string, string>> = {
     every: "Každých", repeatFrom: "Opakovat od", scheduledDate: "Plánovaného data", completionDate: "Data dokončení",
     nextWorkday: "Připomenout na začátku příštího pracovního dne", history: "Historie", moveSomeday: "Přesunout na Někdy",
     reopen: "Znovu otevřít", complete: "Dokončit", delete: "Smazat", notesPlaceholder: "Poznámky…",
+    scheduleToday: "Dnes", scheduleTomorrow: "Zítra", scheduleSomeday: "Někdy", scheduleClear: "Bez data",
+    projectDeleteConfirm: "Smazat projekt „{title}“? Úkoly a poznámky zůstanou zachovány, odstraní se jen jejich vazba na projekt.",
     manageWorkspaces: "Spravovat workspace", password: "Heslo", signIn: "Přihlásit se",
     checkingAccess: "Ověřuji přístup…", setupRequired: "Je nutné dokončit nastavení", signInPasskey: "Přihlásit se passkeyem",
     accessUnavailable: "Nelze ověřit přístup", accessUnavailableDetail: "Server nemohl ověřit přístup. Zkontrolujte připojení a zkuste to znovu.",
@@ -580,13 +586,23 @@ const addLocalDays = (date: Date, days: number) => {
   result.setDate(result.getDate() + days);
   return result;
 };
-const friendlyDate = (value: unknown, language: Language) => {
+const friendlyDate = (value: unknown, language: Language, timezone?: string) => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return typeof value === "string" ? value : "";
   }
-  if (value === ymd(addLocalDays(new Date(), -1))) return copy[language].yesterday;
-  if (value === ymd()) return copy[language].Today;
-  if (value === ymd(addLocalDays(new Date(), 1))) return copy[language].tomorrow;
+  const referenceDay = timezone
+    ? new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(new Date()).reduce<Record<string, string>>((parts, part) => ({ ...parts, [part.type]: part.value }), {})
+    : null;
+  const todayValue = referenceDay ? `${referenceDay.year}-${referenceDay.month}-${referenceDay.day}` : ymd();
+  const relativeDate = (days: number) => {
+    const date = new Date(`${todayValue}T12:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  };
+  if (value === relativeDate(-1)) return copy[language].yesterday;
+  if (value === todayValue) return copy[language].Today;
+  if (value === relativeDate(1)) return copy[language].tomorrow;
   return new Date(`${value}T12:00:00`).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB", {
     day: "numeric",
     month: "short",
@@ -696,6 +712,7 @@ export default function App() {
     [useCaptureSuggestion, setUseCaptureSuggestion] = useState(true),
     [captureProjectAction, setCaptureProjectAction] = useState<CaptureProjectAction>("none"),
     [undo, setUndo] = useState<Entity | null>(null),
+    [undoRelations, setUndoRelations] = useState<Relation[]>([]),
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
     [moreOpen, setMoreOpen] = useState(false),
@@ -860,6 +877,7 @@ export default function App() {
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
   const draggingIdRef = useRef("");
+  const dragScopeRef = useRef("");
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
@@ -2505,7 +2523,7 @@ export default function App() {
     .slice(0, 5);
   const homeUpcomingTasks = tasks
     .filter((task) => task.status === "open" && typeof task.properties.when === "string" && task.properties.when > today)
-    .sort((a, b) => String(a.properties.when).localeCompare(String(b.properties.when)))
+    .sort((a, b) => String(a.properties.when).localeCompare(String(b.properties.when)) || byManualOrder("task:Upcoming")(a, b))
     .slice(0, 4);
   const homeProjects = projects.filter((project) => project.status === "active").sort(byManualOrder("project:all")).slice(0, 4);
   const homeRecent = [...scopedItems]
@@ -2794,6 +2812,7 @@ export default function App() {
     const source = await db.entities.get(sourceId);
     const target = targetId ? await db.entities.get(targetId) : null;
     if (!source || source.type === "workspace") return;
+    if (targetId && !target) throw new Error("The selected relation target no longer exists");
     if (target && target.workspaceId !== source.workspaceId) {
       throw new Error("Cross-workspace relations are not allowed");
     }
@@ -2852,44 +2871,66 @@ export default function App() {
     setSelected((await db.entities.get(e.id)) || null);
   }
   async function remove(e: Entity) {
-    setUndo(e);
-    const deletedIds = new Set(pendingDeletedIds());
-    deletedIds.add(e.id);
-    localStorage.setItem(deletedKey, JSON.stringify([...deletedIds]));
-    const linkedRelations = (await db.relations.toArray())
-      .filter(
-        (relation) =>
-          relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
-      )
-      .map((relation) => relation.id);
+    const linkedRelations = (await db.relations.toArray()).filter(
+      (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
+    );
     localDataVersion.current += 1;
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.entities.delete(e.id);
-      await db.relations.bulkDelete(linkedRelations);
+      await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
     });
     localDataVersion.current += 1;
+    const deletedIds = new Set(pendingDeletedIds());
+    deletedIds.add(e.id);
+    localStorage.setItem(deletedKey, JSON.stringify([...deletedIds]));
+    setUndo(e);
+    setUndoRelations(linkedRelations);
     await syncToServer();
     closeDetail();
     load();
   }
+  async function setProjectStatus(project: Entity, status: "active" | "completed") {
+    if (project.type !== "project") return;
+    const current = (await db.entities.get(project.id)) || project;
+    const timestamp = Date.now();
+    const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+    localDataVersion.current += 1;
+    await db.entities.update(project.id, {
+      status,
+      properties: {
+        ...current.properties,
+        completedAt: status === "completed" ? timestamp : null,
+        activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
+      },
+      updatedAt: timestamp,
+    });
+    localDataVersion.current += 1;
+    await syncToServer();
+    await load();
+    setSelected((await db.entities.get(project.id)) || null);
+  }
   async function restore() {
     if (!undo) return;
+    localDataVersion.current += 1;
+    await db.transaction("rw", db.entities, db.relations, async () => {
+      await db.entities.put({
+        ...undo,
+        status: undo.type === "task" && undo.status === "completed" ? "open" : undo.status,
+        updatedAt: Date.now(),
+      });
+      if (undoRelations.length) await db.relations.bulkPut(undoRelations);
+    });
+    localDataVersion.current += 1;
     const deletedIds = pendingDeletedIds().filter((id) => id !== undo.id);
     if (deletedIds.length)
       localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
     else localStorage.removeItem(deletedKey);
-    localDataVersion.current += 1;
-    await db.entities.put({
-      ...undo,
-      status: undo.status === "completed" ? "open" : undo.status,
-      updatedAt: Date.now(),
-    });
-    localDataVersion.current += 1;
     const revivedIds = new Set(pendingRevivedIds());
     revivedIds.add(undo.id);
     localStorage.setItem(revivedKey, JSON.stringify([...revivedIds]));
     await syncToServer();
     setUndo(null);
+    setUndoRelations([]);
     load();
   }
   async function patch(e: Entity, properties: Record<string, unknown>, action = "updated") {
@@ -2910,6 +2951,17 @@ export default function App() {
     await syncToServer();
     await load();
     setSelected((await db.entities.get(e.id)) || null);
+  }
+  function scheduleTask(task: Entity, destination: "today" | "tomorrow" | "someday" | "clear" | string) {
+    const when = destination === "today" ? ymd()
+      : destination === "tomorrow" ? ymd(addLocalDays(new Date(), 1))
+        : destination === "someday" || destination === "clear" ? "" : destination;
+    return patch(task, {
+      when,
+      today: destination === "today" || when === ymd(),
+      someday: destination === "someday",
+      inbox: false,
+    }, `scheduled ${destination}`);
   }
   async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
     if (dayPlanBusy || !dayPlan) return;
@@ -3014,7 +3066,7 @@ export default function App() {
         inbox: false,
       });
     }
-    if (t) setUndo(t);
+    if (t) { setUndo(t); setUndoRelations([]); }
     localDataVersion.current += 1;
     await db.entities.update(id, {
       status: "completed",
@@ -3081,7 +3133,7 @@ export default function App() {
         : "";
   }
 
-  function beginPointerDrag(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
+  function beginPointerDrag(event: ReactPointerEvent<HTMLButtonElement>, id: string, scope: string) {
     if (event.pointerType === "mouse") return;
     event.preventDefault();
     event.stopPropagation();
@@ -3092,6 +3144,7 @@ export default function App() {
       startY: event.clientY,
       active: false,
     };
+    dragScopeRef.current = scope;
     setActiveDragTarget("");
   }
 
@@ -3183,7 +3236,22 @@ export default function App() {
     await load();
   }
 
-  async function completeDrop(sourceId: string, target: string) {
+  function peersForScope(scope: string, workspaceId: string) {
+    if (view === "Home" && scope === "project:all") {
+      return homeProjects.filter((project) => project.workspaceId === workspaceId);
+    }
+    const [entityType, kind, ...rest] = scope.split(":");
+    const id = rest.join(":");
+    return scopedItems.filter((entity) => {
+      if (entity.type !== entityType || entity.workspaceId !== workspaceId) return false;
+      if (kind === "project") return entity.status !== "completed" && sources(id, "belongs_to_project").includes(entity.id);
+      if (kind === "area") return (entity.type !== "task" || entity.status === "open") && sources(id, "belongs_to_area").includes(entity.id);
+      if (entityType === "task") return taskMatchesView(entity, kind, today);
+      return kind === "all";
+    }).sort(byManualOrder(scope));
+  }
+
+  async function completeDrop(sourceId: string, target: string, scope = dragScopeRef.current) {
     const source = items.find((entity) => entity.id === sourceId);
     if (!source || !target) return;
     if (target.startsWith("section:")) {
@@ -3194,56 +3262,18 @@ export default function App() {
     const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
-      const displayedPeers = collection.filter((entity) =>
-        entity.type === source.type && entity.workspaceId === source.workspaceId,
-      );
-      const homePeers = view === "Home" && source.type === "task"
-        ? tasks.filter((task) => task.workspaceId === source.workspaceId && task.status === "open" && (
-          task.properties.today === true || task.properties.when === today ||
-          (typeof task.properties.when === "string" && task.properties.when < today)
-        )).sort(byManualOrder("task:Today"))
-        : [];
-      const selectedProjectPeers = selected?.type === "project" && (source.type === "task" || source.type === "note")
-        ? scopedItems.filter((entity) => entity.type === source.type &&
-          (entity.type !== "task" || entity.status === "open") &&
-          sources(selected.id, "belongs_to_project").includes(entity.id))
-          .sort(byManualOrder(`${source.type}:project:${selected.id}`))
-        : [];
-      const selectedAreaPeers = selected?.type === "area" && (source.type === "task" || source.type === "project")
-        ? scopedItems.filter((entity) => entity.type === source.type && sources(selected.id, "belongs_to_area").includes(entity.id))
-          .sort(byManualOrder(`${source.type}:area:${selected.id}`))
-        : [];
-      const contextualPeers = homePeers.some((entity) => entity.id === source.id) && homePeers.some((entity) => entity.id === targetEntity.id)
-        ? homePeers
-        : selectedProjectPeers.some((entity) => entity.id === source.id) && selectedProjectPeers.some((entity) => entity.id === targetEntity.id)
-          ? selectedProjectPeers
-          : selectedAreaPeers.some((entity) => entity.id === source.id) && selectedAreaPeers.some((entity) => entity.id === targetEntity.id)
-            ? selectedAreaPeers
-            : displayedPeers;
-      const peers = contextualPeers.some((entity) => entity.id === source.id) && contextualPeers.some((entity) => entity.id === targetEntity.id)
-        ? [...contextualPeers]
-        : scopedItems.filter((entity) => entity.type === source.type && entity.workspaceId === source.workspaceId)
-          .sort(byManualOrder(`${source.type}:all`));
+      const peers = peersForScope(scope, source.workspaceId);
       const sourceIndex = peers.findIndex((entity) => entity.id === source.id);
       const targetIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       if (sourceIndex < 0 || targetIndex < 0) return;
       const [moved] = peers.splice(sourceIndex, 1);
-      peers.splice(targetIndex, 0, moved);
-      const inSelectedProject = (source.type === "task" || source.type === "note") && selected?.type === "project" &&
-        sources(selected.id, "belongs_to_project").includes(source.id) &&
-        sources(selected.id, "belongs_to_project").includes(targetEntity.id);
-      const inSelectedArea = selected?.type === "area" &&
-        sources(selected.id, "belongs_to_area").includes(source.id) &&
-        sources(selected.id, "belongs_to_area").includes(targetEntity.id);
-      const scope = inSelectedProject
-        ? `${source.type}:project:${selected.id}`
-        : inSelectedArea
-          ? `${source.type}:area:${selected.id}`
-          : source.type === "task"
-            ? `task:${view === "Home" ? "Today" : view}`
-            : `${source.type}:all`;
+      const insertionIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
+      peers.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, moved);
       if (source.type === "task") setSortBy("manual");
-      await persistManualOrder(peers, source.id, scope);
+      const ordered = view === "Home" && scope === "project:all"
+        ? [...peers, ...projects.filter((project) => project.workspaceId === source.workspaceId && project.status === "active" && !peers.some((peer) => peer.id === project.id)).sort(byManualOrder(scope))]
+        : peers;
+      await persistManualOrder(ordered, source.id, scope);
       return;
     }
     if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {
@@ -3266,14 +3296,15 @@ export default function App() {
     draggingIdRef.current = "";
     setDraggingId("");
     setActiveDragTarget("");
-    await completeDrop(sourceId, target);
+    await completeDrop(sourceId, target, dragScopeRef.current);
   }
 
-  function beginNativeDrag(event: ReactDragEvent<HTMLButtonElement>, id: string) {
+  function beginNativeDrag(event: ReactDragEvent<HTMLButtonElement>, id: string, scope: string) {
     event.stopPropagation();
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", id);
     draggingIdRef.current = id;
+    dragScopeRef.current = scope;
     setDraggingId(id);
   }
 
@@ -3284,34 +3315,21 @@ export default function App() {
     draggingIdRef.current = "";
     setDraggingId("");
     setActiveDragTarget("");
-    await completeDrop(sourceId, target);
+    await completeDrop(sourceId, target, dragScopeRef.current);
   }
 
-  async function moveWithKeyboard(entity: Entity, direction: -1 | 1) {
-    const projectPeers = selected?.type === "project" && (entity.type === "task" || entity.type === "note")
-      ? scopedItems.filter((candidate) => candidate.type === entity.type &&
-        candidate.workspaceId === entity.workspaceId &&
-        sources(selected.id, "belongs_to_project").includes(candidate.id))
-      : [];
-    const areaPeers = selected?.type === "area" && (entity.type === "task" || entity.type === "project")
-      ? scopedItems.filter((candidate) => candidate.type === entity.type &&
-        candidate.workspaceId === entity.workspaceId &&
-        sources(selected.id, "belongs_to_area").includes(candidate.id))
-      : [];
-    const peers = projectPeers.some((candidate) => candidate.id === entity.id)
-      ? projectPeers
-      : areaPeers.some((candidate) => candidate.id === entity.id)
-        ? areaPeers
-        : collection.filter((candidate) =>
-          candidate.type === entity.type && candidate.workspaceId === entity.workspaceId,
-        );
+  async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
+    const peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
+      : view === "Home" && scope === "project:all" ? homeProjects.filter((project) => project.workspaceId === entity.workspaceId)
+        : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
+          : peersForScope(scope, entity.workspaceId);
     const index = peers.findIndex((candidate) => candidate.id === entity.id);
     const target = peers[index + direction];
     if (index < 0 || !target) return;
-    await completeDrop(entity.id, `entity:${target.id}`);
+    await completeDrop(entity.id, `entity:${target.id}`, scope);
   }
 
-  const dragHandle = (entity: Entity) => (
+  const dragHandle = (entity: Entity, scope: string) => (
     <button
       className="dragHandle"
       draggable
@@ -3322,11 +3340,11 @@ export default function App() {
         if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
         event.preventDefault();
         event.stopPropagation();
-        void moveWithKeyboard(entity, event.key === "ArrowUp" ? -1 : 1);
+        void moveWithKeyboard(entity, event.key === "ArrowUp" ? -1 : 1, scope);
       }}
-      onDragStart={(event) => beginNativeDrag(event, entity.id)}
+      onDragStart={(event) => beginNativeDrag(event, entity.id, scope)}
       onDragEnd={() => { draggingIdRef.current = ""; setDraggingId(""); setActiveDragTarget(""); }}
-      onPointerDown={(event) => beginPointerDrag(event, entity.id)}
+      onPointerDown={(event) => beginPointerDrag(event, entity.id, scope)}
       onPointerMove={movePointerDrag}
       onPointerUp={finishPointerDrag}
       onPointerCancel={() => {
@@ -3591,7 +3609,7 @@ export default function App() {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${task.id}`)}
                       onClick={() => inspect(task)}
                     >
-                      {dragHandle(task)}
+                      {dragHandle(task, "task:Today")}
                       <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
                       <div><strong>{task.title}</strong><small>{taskDueSummary(task, today, language) || (task.properties.priority && task.properties.priority !== "none" ? tr(String(task.properties.priority)) : tr("Today"))}</small></div>
                     </article>
@@ -3608,14 +3626,13 @@ export default function App() {
                 <section className="homeSection">
                   <div className="homeSectionHead"><span><span className="sectionDot projectDot" />{tr("Projects")}</span><button onClick={() => setView("Projects")}>{tr("seeAll")} →</button></div>
                   <div className="homeCompactList">
-                    {homeProjects.map((project) => <button
-                      key={project.id}
-                      className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                    {homeProjects.map((project) => <article key={project.id} className={`homeCompactRow ${dragTarget === `entity:${project.id}` ? "dropActive" : ""}`}
                       data-drop-entity={project.id}
                       onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${project.id}`); }}
-                      onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}>
+                      {dragHandle(project, "project:all")}<button
                       onClick={() => inspect(project)}
-                    ><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} {tr("openCount")}</small></button>)}
+                    ><span>{project.title}</span><small>{tasks.filter((task) => task.status === "open" && sources(project.id, "belongs_to_project").includes(task.id)).length} {tr("openCount")}</small></button></article>)}
                     {homeProjects.length === 0 && <p>{tr("noProjects")}</p>}
                   </div>
                 </section>
@@ -4566,7 +4583,7 @@ export default function App() {
                 onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
                 onClick={() => inspect(x)}
               >
-                {x.type === "task" && priorityFilter !== "all" ? null : dragHandle(x)}
+                {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
                 {x.type === "task" ? (
                   <button
                     className="check"
@@ -4612,7 +4629,9 @@ export default function App() {
                             : x.properties.inbox === true
                               ? tr("Inbox")
                               : tr("Anytime"))
-                      : tr(x.type === "project" ? "Projects" : x.type === "area" ? "Areas" : "Notes")}
+                      : x.type === "project" && x.properties.deadline
+                        ? `${tr("Projects")} · ${tr("deadline")} ${friendlyDate(x.properties.deadline, language)}`
+                        : tr(x.type === "project" ? "Projects" : x.type === "area" ? "Areas" : "Notes")}
                   </small>
                   {activeWorkspaceId === "all" && (
                     <span className="workspaceBadge">
@@ -5026,7 +5045,7 @@ export default function App() {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${p.id}`)}
                       onClick={() => inspect(p)}
                     >
-                      {dragHandle(p)}
+                      {dragHandle(p, `project:area:${selected.id}`)}
                       <div className="entityIcon projectIcon">◆</div>
                       <div>
                         <strong>{p.title}</strong>
@@ -5051,7 +5070,7 @@ export default function App() {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
                       onClick={() => inspect(t)}
                     >
-                      {dragHandle(t)}
+                      {dragHandle(t, `task:area:${selected.id}`)}
                       <button
                         className="check"
                         onClick={(e) => {
@@ -5068,6 +5087,17 @@ export default function App() {
             )}
             {selected.type === "project" && (
               <div className="projectDetail">
+                <div className="projectActions">
+                  <button type="button" onClick={() => void setProjectStatus(selected, selected.status === "completed" ? "active" : "completed")}>{tr(selected.status === "completed" ? "reopen" : "complete")}</button>
+                  <button type="button" className="danger" onClick={() => {
+                    if (window.confirm(tr("projectDeleteConfirm").replace("{title}", selected.title))) void remove(selected);
+                  }}>{tr("delete")}</button>
+                </div>
+                <label>
+                  {tr("deadline")}
+                  <input type="date" value={String(selected.properties.deadline || "")}
+                    onChange={(event) => void patch(selected, { deadline: event.target.value }, "deadline changed")} />
+                </label>
                 <label>
                   {tr("area")}
                   <select
@@ -5107,7 +5137,7 @@ export default function App() {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
                       onClick={() => inspect(t)}
                     >
-                      {dragHandle(t)}
+                      {dragHandle(t, `task:project:${selected.id}`)}
                       <button className="check" onClick={(event) => { event.stopPropagation(); done(t.id); }}>
                         ○
                       </button>
@@ -5138,7 +5168,7 @@ export default function App() {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${n.id}`)}
                       onClick={() => inspect(n)}
                     >
-                      {dragHandle(n)}
+                      {dragHandle(n, `note:project:${selected.id}`)}
                       <div>
                         <strong>{n.title}</strong>
                         <p>{n.content}</p>
@@ -5171,7 +5201,7 @@ export default function App() {
                     }}
                   >
                     <option value="">{tr("none")}</option>
-                    {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
+                    {projects.filter((project) => project.workspaceId === selected.workspaceId && (project.status === "active" || targets(selected.id, "belongs_to_project").includes(project.id))).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
                       </option>
@@ -5211,21 +5241,25 @@ export default function App() {
                     <option value="Someday">{tr("Someday")}</option>
                   </select>
                 </label>
-                <label>
-                  {tr("when")}
+                <div className="scheduleField">
+                  <span>{tr("when")}</span>
+                  <div className="scheduleChoices" role="group" aria-label={tr("when")}>
+                    {(["today", "tomorrow", "someday", "clear"] as const).map((choice) => (
+                      <button key={choice} type="button"
+                        className={choice === "today" ? (selected.properties.when === today ? "active" : "")
+                          : choice === "tomorrow" ? (selected.properties.when === ymd(addLocalDays(new Date(), 1)) ? "active" : "")
+                            : choice === "someday" ? (selected.properties.someday === true ? "active" : "")
+                              : (!selected.properties.when && selected.properties.someday !== true && selected.properties.inbox !== true ? "active" : "")}
+                        onClick={() => void scheduleTask(selected, choice)}>{tr(`schedule${choice[0].toUpperCase()}${choice.slice(1)}`)}</button>
+                    ))}
+                  </div>
                   <input
                     type="date"
+                    aria-label={tr("when")}
                     value={String(selected.properties.when || "")}
-                    onChange={(e) =>
-                      patch(selected, {
-                        when: e.target.value,
-                        today: e.target.value === today,
-                        inbox: false,
-                        someday: false,
-                      })
-                    }
+                    onChange={(e) => void scheduleTask(selected, e.target.value || "clear")}
                   />
-                </label>
+                </div>
                 <label>
                   {tr("deadline")}
                   <input
@@ -5243,7 +5277,6 @@ export default function App() {
                       targets(selected.id, "belongs_to_project")[0] || "",
                     )}
                     onChange={async (e) => {
-                      await patch(selected, { inbox: false });
                       await relate(
                         selected.id,
                         e.target.value,
@@ -5252,7 +5285,7 @@ export default function App() {
                     }}
                   >
                     <option value="">{tr("none")}</option>
-                    {projects.filter((project) => project.workspaceId === selected.workspaceId).map((p) => (
+                    {projects.filter((project) => project.workspaceId === selected.workspaceId && (project.status === "active" || targets(selected.id, "belongs_to_project").includes(project.id))).map((p) => (
                       <option value={p.id} key={p.id}>
                         {p.title}
                       </option>

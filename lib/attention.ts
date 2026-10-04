@@ -136,6 +136,7 @@ export function evaluateAttention(input: {
     const tasks = linked.map((relation) => entityById.get(relation.sourceEntityId)).filter((entity): entity is Entity => entity?.type === "task");
     const legacyTasks = entities.filter((entity) => entity.type === "task" && entity.properties.projectId === project.id && !tasks.some((task) => task.id === entity.id));
     const projectTasks = [...tasks, ...legacyTasks];
+    if (projectTasks.length === 0 && !deadline(project.properties.deadline, timezone)) continue;
     const projectClaims = claims.filter((claim) => claim.projectId === project.id);
     const sources = [{ id: project.id, revision: project.updatedAt },
       ...projectTasks.map((task) => ({ id: task.id, revision: task.updatedAt })),

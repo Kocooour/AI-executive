@@ -42,7 +42,7 @@ test("invalid dates and completed tasks produce no deadline candidate", () => {
 });
 
 test("project signals use recorded activity and suppress missing action for waiting or actionable tasks", () => {
-  const project = entity("project", "project", { updatedAt: NOW - 15 * DAY });
+  const project = entity("project", "project", { updatedAt: NOW - 15 * DAY, properties: { deadline: "2026-10-01" } });
   const result = evaluate([project]);
   assert.deepEqual(result.map((item) => item.ruleId), ["project_no_next_action", "project_idle"]);
   assert.match(result[0].reason, /24 hours/);
@@ -59,15 +59,20 @@ test("project signals use recorded activity and suppress missing action for wait
 });
 
 test("project thresholds are inclusive and do not trigger early", () => {
-  const at24 = entity("at24", "project", { createdAt: NOW - DAY, updatedAt: NOW - DAY });
-  const before24 = entity("before24", "project", { createdAt: NOW - DAY + 1, updatedAt: NOW - DAY + 1 });
-  const at14 = entity("at14", "project", { createdAt: NOW - 14 * DAY, updatedAt: NOW - 14 * DAY });
-  const before14 = entity("before14", "project", { createdAt: NOW - 14 * DAY + 1, updatedAt: NOW - 14 * DAY + 1 });
+  const withDeadline = { deadline: "2026-10-01" };
+  const at24 = entity("at24", "project", { createdAt: NOW - DAY, updatedAt: NOW - DAY, properties: withDeadline });
+  const before24 = entity("before24", "project", { createdAt: NOW - DAY + 1, updatedAt: NOW - DAY + 1, properties: withDeadline });
+  const at14 = entity("at14", "project", { createdAt: NOW - 14 * DAY, updatedAt: NOW - 14 * DAY, properties: withDeadline });
+  const before14 = entity("before14", "project", { createdAt: NOW - 14 * DAY + 1, updatedAt: NOW - 14 * DAY + 1, properties: withDeadline });
   const result = evaluate([at24, before24, at14, before14]);
   assert.equal(result.some((item) => item.subjectId === "at24" && item.ruleId === "project_no_next_action"), true);
   assert.equal(result.some((item) => item.subjectId === "before24"), false);
   assert.equal(result.some((item) => item.subjectId === "at14" && item.ruleId === "project_idle"), true);
   assert.equal(result.some((item) => item.subjectId === "before14" && item.ruleId === "project_idle"), false);
+});
+
+test("empty project without a deadline does not create Attention", () => {
+  assert.deepEqual(evaluate([entity("empty", "project")]), []);
 });
 
 test("workspace scope, deterministic order, stable keys, and source revisions", () => {

@@ -1819,6 +1819,22 @@ article {
 .homeCompactList {
   display: grid;
 }
+.homeCompactRow {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+.homeCompactRow:first-child { border-top: 0; }
+.homeCompactRow > button:last-child { flex: 1; }
+.homeCompactList .homeCompactRow > .dragHandle {
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 0;
+  justify-content: center;
+}
 .homeCompactList button {
   min-width: 0;
   display: flex;
@@ -1834,6 +1850,9 @@ article {
   text-align: left;
 }
 .homeCompactList button:first-child {
+  border-top: 0;
+}
+.homeCompactList .homeCompactRow > button {
   border-top: 0;
 }
 .homeCompactList button span {
@@ -1994,9 +2013,33 @@ article {
   color: #b1b2ba;
   cursor: grab;
   font-size: 17px;
-  opacity: 0;
+  opacity: 1;
   touch-action: none;
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.scheduleChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+.scheduleField { display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
+.scheduleChoices button {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+.scheduleChoices button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.projectActions { display: flex; gap: 8px; }
+.projectActions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+@media (pointer: coarse) {
+  .dragHandle, .homeCompactList .homeCompactRow > .dragHandle { width: 44px; min-width: 44px; min-height: 44px; flex-basis: 44px; }
 }
 article:hover > .dragHandle,
 .dragHandle:focus-visible,
