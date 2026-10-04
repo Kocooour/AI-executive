@@ -1109,6 +1109,65 @@ article {
   height: 17px;
   padding: 0;
 }
+.captureProjectChoice {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 11px;
+  background: var(--surface, #fff);
+}
+.captureProjectChoice legend {
+  padding: 0 5px;
+  color: var(--text, #202127);
+  font-size: 13px;
+  font-weight: 700;
+}
+.captureProjectChoice > label:not(.captureNewProjectName) {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--text, #202127);
+  font-size: 13px;
+}
+.captureProjectChoice > label > input[type="radio"] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+}
+.captureProjectChoice label span,
+.captureNewProjectName {
+  display: grid;
+  gap: 3px;
+}
+.captureProjectChoice label small {
+  color: var(--muted, #666);
+  line-height: 1.35;
+}
+.captureProjectChoice > select,
+.captureNewProjectName input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 9px;
+  background: var(--input-bg, #fff);
+  color: var(--text, #202127);
+  font: inherit;
+  font-size: 16px;
+}
+.captureNewProjectName {
+  padding-left: 27px;
+  color: var(--muted, #666);
+  font-size: 12px;
+}
+.captureProjectRequired {
+  color: var(--danger, #a22);
+  line-height: 1.35;
+}
 .captureSuggestionGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1174,6 +1233,12 @@ article {
   padding-left: 19px;
 }
 @media (max-width: 700px) {
+  .captureProjectChoice {
+    padding: 11px;
+  }
+  .captureNewProjectName {
+    padding-left: 0;
+  }
   .mobileWorkspaceButton {
     display: block;
     max-width: 38vw;

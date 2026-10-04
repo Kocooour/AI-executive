@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "task.suggest", "allowed", {
       workspaceScope: "single",
       projectSuggested: Boolean(suggestion.projectId),
+      newProjectSuggested: Boolean(suggestion.newProjectSuggestion),
       scheduled: Boolean(suggestion.scheduledStart),
     });
     return NextResponse.json({ suggestion });

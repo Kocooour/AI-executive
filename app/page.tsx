@@ -25,6 +25,7 @@ import { buildContext, type ContextBundle } from "../lib/context";
 import type { AIMessage } from "../lib/ai-provider";
 import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 import { fetchClientAuthStatus } from "../lib/client-auth-status";
+import { findActiveProjectWithTitle } from "../lib/project-title";
 
 interface BackupSummary {
   name: string;
@@ -159,7 +160,16 @@ interface CaptureSuggestion {
   confidence: "low" | "medium" | "high";
   reasons: string[];
   constraints: string[];
+  newProjectSuggestion: {
+    title: string;
+    areaId: string;
+    areaTitle: string;
+    confidence: "medium" | "high";
+    reason: string;
+  } | null;
 }
+
+type CaptureProjectAction = "" | "existing" | "new" | "none";
 
 interface CalendarSourceState {
   id: string;
@@ -339,6 +349,10 @@ const copy: Record<Language, Record<string, string>> = {
     captureExample: "Try “Call Peter tomorrow” or “Service 25 Sep #high”",
     albertSuggestion: "Albert’s suggestion", suggesting: "Albert is preparing a suggestion…",
     useSuggestion: "Use Albert’s suggestion", confidence: "Confidence", duration: "Estimated duration",
+    projectChoice: "Where should this task go?", createSuggestedProject: "Create and assign to a new project",
+    assignExistingProject: "Assign to an existing project", withoutProject: "Keep without a project",
+    newProjectName: "New project name", chooseProjectBeforeAdding: "Choose what to do with the proposed project before adding the task.",
+    projectAlreadyExists: "An active project with this name already exists. Choose that project explicitly or change the new project name.",
     minutes: "minutes", plannedTime: "Suggested time", noFreeSlot: "No reliable free slot found",
     noPlannedTime: "Do not schedule yet",
     whySuggested: "Why", constraintsUsed: "Constraints used", suggestionUnavailable: "Suggestion is temporarily unavailable.", retry: "Retry",
@@ -436,6 +450,10 @@ const copy: Record<Language, Record<string, string>> = {
     captureExample: "Zkuste „Zavolat Petrovi zítra“ nebo „Servis 25. 9. #high“",
     albertSuggestion: "Albertův návrh", suggesting: "Albert připravuje návrh…",
     useSuggestion: "Použít Albertův návrh", confidence: "Jistota", duration: "Odhadovaná náročnost",
+    projectChoice: "Kam má úkol patřit?", createSuggestedProject: "Vytvořit nový projekt a přiřadit do něj",
+    assignExistingProject: "Přiřadit do existujícího projektu", withoutProject: "Ponechat bez projektu",
+    newProjectName: "Název nového projektu", chooseProjectBeforeAdding: "Před přidáním úkolu zvolte, co se má stát s navrženým projektem.",
+    projectAlreadyExists: "Aktivní projekt s tímto názvem už existuje. Výslovně ho vyberte, nebo změňte název nového projektu.",
     minutes: "minut", plannedTime: "Navržený čas", noFreeSlot: "Spolehlivý volný blok nebyl nalezen",
     noPlannedTime: "Zatím neplánovat",
     whySuggested: "Proč", constraintsUsed: "Použitá omezení", suggestionUnavailable: "Návrh se teď nepodařilo připravit.", retry: "Zkusit znovu",
@@ -641,6 +659,7 @@ export default function App() {
     [captureSuggestionBusy, setCaptureSuggestionBusy] = useState(false),
     [captureSuggestionError, setCaptureSuggestionError] = useState(""),
     [useCaptureSuggestion, setUseCaptureSuggestion] = useState(true),
+    [captureProjectAction, setCaptureProjectAction] = useState<CaptureProjectAction>("none"),
     [undo, setUndo] = useState<Entity | null>(null),
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
@@ -1938,6 +1957,7 @@ export default function App() {
         if (!response.ok) throw new Error(body.error || "Suggestion failed");
         if (captureSuggestionVersion.current !== version) return;
         const suggestion = body.suggestion as CaptureSuggestion;
+        suggestion.newProjectSuggestion = suggestion.newProjectSuggestion || null;
         suggestion.scheduledOptions = Array.isArray(suggestion.scheduledOptions)
           ? suggestion.scheduledOptions
           : suggestion.scheduledStart
@@ -1948,6 +1968,13 @@ export default function App() {
           suggestion.projectId = captureProjectId;
           suggestion.projectTitle = project?.title || suggestion.projectTitle;
         }
+        setCaptureProjectAction(captureProjectId
+          ? "existing"
+          : suggestion.newProjectSuggestion
+            ? ""
+            : suggestion.projectId
+              ? "existing"
+              : "none");
         setCaptureSuggestion(suggestion);
       } catch {
         if (captureSuggestionVersion.current === version) {
@@ -2460,6 +2487,7 @@ export default function App() {
       id = typeof extra.entityId === "string" ? extra.entityId : crypto.randomUUID(),
       projectId = typeof extra.projectId === "string" ? extra.projectId : "",
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
+      newProjectTitle = typeof extra.newProjectTitle === "string" ? extra.newProjectTitle.trim() : "",
       properties = { ...extra },
       parsed =
         type === "task"
@@ -2467,6 +2495,15 @@ export default function App() {
           : { title: title.trim(), when: "", priority: "none" };
     const linkedProject = projectId ? await db.entities.get(projectId) : null;
     const linkedArea = areaId ? await db.entities.get(areaId) : null;
+    if (projectId && (!linkedProject || linkedProject.type !== "project" || linkedProject.status !== "active")) {
+      throw new Error("The selected project is invalid");
+    }
+    if (areaId && (!linkedArea || linkedArea.type !== "area" || linkedArea.status !== "active")) {
+      throw new Error("The selected area is invalid");
+    }
+    if (newProjectTitle && (type !== "task" || projectId || newProjectTitle.length > 120)) {
+      throw new Error("The proposed project is invalid");
+    }
     const explicitWorkspaceId =
       typeof extra.workspaceId === "string" ? extra.workspaceId : "";
     const creationWorkspaceId =
@@ -2490,10 +2527,38 @@ export default function App() {
     delete properties.areaId;
     delete properties.entityId;
     delete properties.workspaceId;
+    delete properties.newProjectTitle;
     localDataVersion.current += 1;
     let created = false;
     await db.transaction("rw", db.entities, db.relations, async () => {
       if (await db.entities.get(id)) return;
+      if (newProjectTitle) {
+        const duplicate = findActiveProjectWithTitle(await db.entities.toArray(), creationWorkspaceId, newProjectTitle);
+        if (duplicate) throw new Error("PROJECT_ALREADY_EXISTS");
+      }
+      const createdProjectId = newProjectTitle ? crypto.randomUUID() : "";
+      if (createdProjectId) {
+        await db.entities.add({
+          id: createdProjectId,
+          type: "project",
+          title: newProjectTitle,
+          status: "active",
+          workspaceId: creationWorkspaceId,
+          properties: {},
+          createdAt: now,
+          updatedAt: now,
+        });
+        if (areaId) {
+          await db.relations.add({
+            id: crypto.randomUUID(),
+            workspaceId: creationWorkspaceId,
+            sourceEntityId: createdProjectId,
+            targetEntityId: areaId,
+            relationType: "belongs_to_area",
+            createdAt: now,
+          });
+        }
+      }
       await db.entities.add({
         id,
         type,
@@ -2506,7 +2571,7 @@ export default function App() {
                 ...properties,
                 inbox: parsed.when
                   ? false
-                  : Boolean(properties.inbox ?? (!projectId && view === "Inbox")),
+                  : Boolean(properties.inbox ?? (!projectId && !newProjectTitle && view === "Inbox")),
                 today: parsed.when
                   ? parsed.when === today
                   : Boolean(properties.today ?? (view === "Today")),
@@ -2519,12 +2584,12 @@ export default function App() {
         updatedAt: now,
       });
       created = true;
-      if (projectId) {
+      if (projectId || createdProjectId) {
         await db.relations.add({
           id: crypto.randomUUID(),
           workspaceId: creationWorkspaceId,
           sourceEntityId: id,
-          targetEntityId: projectId,
+          targetEntityId: projectId || createdProjectId,
           relationType: "belongs_to_project",
           createdAt: now,
         });
@@ -2544,11 +2609,20 @@ export default function App() {
     if (!created) return id;
     setText("");
     setDraft("");
-    await syncToServer();
-    await load();
-    if (selected) {
-      setSelected((await db.entities.get(selected.id)) || null);
-      setContext(await buildContext(selected.id, 2));
+    // The IndexedDB transaction above is the local-first commit boundary. Once it
+    // succeeds, a network or refresh failure must not reopen Quick Capture and let
+    // a retry duplicate the task/project pair. syncToServer keeps pendingKey set
+    // on failure, so focus/online recovery can safely retry the same snapshot.
+    try {
+      await syncToServer();
+      await load();
+      if (selected) {
+        setSelected((await db.entities.get(selected.id)) || null);
+        setContext(await buildContext(selected.id, 2));
+      }
+    } catch {
+      setSyncStatus("offline");
+      await load().catch(() => undefined);
     }
     return id;
   }
@@ -2562,6 +2636,7 @@ export default function App() {
     setCaptureSuggestionError("");
     setCaptureSuggestionBusy(false);
     setUseCaptureSuggestion(true);
+    setCaptureProjectAction(projectId ? "existing" : "none");
     setCapture(true);
   }
   async function submitCapture() {
@@ -2569,7 +2644,18 @@ export default function App() {
     if (!title) return;
     const parsed = parseCapture(title);
     const suggestion = captureType === "task" && useCaptureSuggestion ? captureSuggestion : null;
-    const suggestedProjectId = captureProjectId || suggestion?.projectId || "";
+    if (suggestion?.newProjectSuggestion && (
+      !captureProjectAction ||
+      (captureProjectAction === "new" && !suggestion.newProjectSuggestion.title.trim()) ||
+      (captureProjectAction === "existing" && !suggestion.projectId)
+    )) {
+      setCaptureSuggestionError(tr("chooseProjectBeforeAdding"));
+      return;
+    }
+    const suggestedProjectId = captureProjectId || (captureProjectAction === "existing" ? suggestion?.projectId : "") || "";
+    const suggestedNewProjectTitle = captureProjectAction === "new"
+      ? suggestion?.newProjectSuggestion?.title.trim() || ""
+      : "";
     const suggestedAreaId = suggestion?.areaId || "";
     const suggestedDate = parsed.when || suggestion?.scheduledDate || "";
     const globalTask = captureType === "task" && !captureProjectId;
@@ -2582,10 +2668,11 @@ export default function App() {
     try {
       await create(captureType, title, {
         ...(suggestedProjectId ? { projectId: suggestedProjectId } : {}),
+        ...(suggestedNewProjectTitle ? { newProjectTitle: suggestedNewProjectTitle } : {}),
         ...(suggestedAreaId ? { areaId: suggestedAreaId } : {}),
         ...(captureType === "task"
           ? {
-              inbox: !suggestedProjectId && !suggestedDate,
+              inbox: !suggestedProjectId && !suggestedNewProjectTitle && !suggestedDate,
               today: suggestedDate === today,
               ...(suggestedDate ? { when: suggestedDate } : {}),
               ...(suggestion && parsed.priority === "none" ? { priority: suggestion.priority } : {}),
@@ -2598,10 +2685,22 @@ export default function App() {
             }
           : {}),
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
+        const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+        const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
+        setCaptureSuggestion(duplicate ? {
+          ...captureSuggestion,
+          projectId: duplicate.id,
+          projectTitle: duplicate.title,
+        } : captureSuggestion);
+        setCaptureProjectAction("");
+        setCaptureSuggestionError(tr("projectAlreadyExists"));
+      } else {
+        setSyncStatus("offline");
+      }
       setDraft(title);
       setCapture(true);
-      setSyncStatus("offline");
     }
   }
   async function relate(
@@ -4558,23 +4657,92 @@ export default function App() {
                       />
                       {tr("useSuggestion")}
                     </label>
+                    {captureSuggestion.newProjectSuggestion && !captureProjectId && useCaptureSuggestion && (
+                      <fieldset className="captureProjectChoice">
+                        <legend>{tr("projectChoice")}</legend>
+                        <label>
+                          <input
+                            type="radio"
+                            name="capture-project-action"
+                            checked={captureProjectAction === "new"}
+                            onChange={() => { setCaptureProjectAction("new"); setCaptureSuggestionError(""); }}
+                          />
+                          <span>
+                            <b>{tr("createSuggestedProject")}</b>
+                            <small>{captureSuggestion.newProjectSuggestion.reason}</small>
+                          </span>
+                        </label>
+                        {captureProjectAction === "new" && (
+                          <label className="captureNewProjectName">
+                            {tr("newProjectName")}
+                            <input
+                              value={captureSuggestion.newProjectSuggestion.title}
+                              maxLength={120}
+                              onChange={(event) => setCaptureSuggestion({
+                                ...captureSuggestion,
+                                newProjectSuggestion: captureSuggestion.newProjectSuggestion
+                                  ? { ...captureSuggestion.newProjectSuggestion, title: event.target.value }
+                                  : null,
+                              })}
+                            />
+                          </label>
+                        )}
+                        <label>
+                          <input
+                            type="radio"
+                            name="capture-project-action"
+                            checked={captureProjectAction === "existing"}
+                            onChange={() => { setCaptureProjectAction("existing"); setCaptureSuggestionError(""); }}
+                          />
+                          <span><b>{tr("assignExistingProject")}</b></span>
+                        </label>
+                        {captureProjectAction === "existing" && (
+                          <select
+                            aria-label={tr("project")}
+                            value={captureSuggestion.projectId}
+                            onChange={(event) => {
+                              const entity = items.find((item) => item.id === event.target.value);
+                              setCaptureSuggestion({ ...captureSuggestion, projectId: event.target.value, projectTitle: entity?.title || "" });
+                            }}
+                          >
+                            <option value="">—</option>
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                              <option key={item.id} value={item.id}>{item.title}</option>
+                            ))}
+                          </select>
+                        )}
+                        <label>
+                          <input
+                            type="radio"
+                            name="capture-project-action"
+                            checked={captureProjectAction === "none"}
+                            onChange={() => { setCaptureProjectAction("none"); setCaptureSuggestionError(""); }}
+                          />
+                          <span><b>{tr("withoutProject")}</b></span>
+                        </label>
+                        {!captureProjectAction && <small className="captureProjectRequired">{tr("chooseProjectBeforeAdding")}</small>}
+                      </fieldset>
+                    )}
                     <div className="captureSuggestionGrid" aria-disabled={!useCaptureSuggestion}>
-                      <label>
-                        {tr("project")}
-                        <select
-                          value={captureSuggestion.projectId}
-                          disabled={!useCaptureSuggestion || Boolean(captureProjectId)}
-                          onChange={(event) => {
-                            const entity = items.find((item) => item.id === event.target.value);
-                            setCaptureSuggestion({ ...captureSuggestion, projectId: event.target.value, projectTitle: entity?.title || "" });
-                          }}
-                        >
-                          <option value="">—</option>
-                          {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
-                            <option key={item.id} value={item.id}>{item.title}</option>
-                          ))}
-                        </select>
-                      </label>
+                      {(!captureSuggestion.newProjectSuggestion || Boolean(captureProjectId)) && (
+                        <label>
+                          {tr("project")}
+                          <select
+                            value={captureSuggestion.projectId}
+                            disabled={!useCaptureSuggestion || Boolean(captureProjectId)}
+                            onChange={(event) => {
+                              const entity = items.find((item) => item.id === event.target.value);
+                              setCaptureSuggestion({ ...captureSuggestion, projectId: event.target.value, projectTitle: entity?.title || "" });
+                              setCaptureProjectAction(event.target.value ? "existing" : "none");
+                            }}
+                          >
+                            <option value="">—</option>
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                              <option key={item.id} value={item.id}>{item.title}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <label>
                         {tr("area")}
                         <select
@@ -4668,7 +4836,13 @@ export default function App() {
               <button
                 type="submit"
                 className="ai"
-                disabled={!draft.trim() || (captureType === "task" && captureSuggestionBusy)}
+                disabled={!draft.trim() || (captureType === "task" && (
+                  captureSuggestionBusy || Boolean(useCaptureSuggestion && captureSuggestion?.newProjectSuggestion && (
+                    !captureProjectAction ||
+                    (captureProjectAction === "new" && !captureSuggestion.newProjectSuggestion.title.trim()) ||
+                    (captureProjectAction === "existing" && !captureSuggestion.projectId)
+                  ))
+                ))}
               >
                 {captureType === "note" ? tr("addNote") : tr("addTask")}
               </button>

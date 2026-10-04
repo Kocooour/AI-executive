@@ -17,6 +17,13 @@ export interface TaskSuggestion {
   confidence: "low" | "medium" | "high";
   reasons: string[];
   constraints: string[];
+  newProjectSuggestion: {
+    title: string;
+    areaId: string;
+    areaTitle: string;
+    confidence: "medium" | "high";
+    reason: string;
+  } | null;
 }
 
 const normalize = (value: string) => value.toLocaleLowerCase("cs-CZ")
@@ -26,6 +33,59 @@ const normalize = (value: string) => value.toLocaleLowerCase("cs-CZ")
 const stopWords = new Set(["a", "an", "and", "at", "do", "for", "i", "in", "na", "o", "of", "pro", "s", "se", "the", "to", "u", "v", "ve", "z", "za"]);
 const tokens = (value: string) => normalize(value).split(/\s+/).filter((token) => token.length > 1 && !stopWords.has(token));
 const overlap = (left: string[], right: string[]) => left.reduce((score, token) => score + (right.includes(token) ? Math.max(1, token.length - 2) : 0), 0);
+
+const projectIntentPatterns = [
+  /\b(?:projekt\w*|rekonstruk\w*|stehov\w*|svatb\w*|dovolen\w*|kampan\w*|implement\w*|migra\w*|spust\w*|zavest\w*|vybud\w*|zorganiz\w*|naplan\w*)\b/,
+  /\b(?:project\w*|renovat\w*|remodel\w*|relocat\w*|wedding\w*|campaign\w*|implement\w*|migrat\w*|launch\w*|rollout\w*|build\w*|organiz\w*|plan\w*)\b/,
+];
+const strongProjectIntent = /\b(?:projekt\w*|project\w*|rekonstruk\w*|renovat\w*|remodel\w*|stehov\w*|relocat\w*|svatb\w*|wedding\w*|dovolen\w*|kampan\w*|campaign\w*|implement\w*|migra\w*|spust\w*|launch\w*|rollout\w*|vybud\w*|build\w*)\b/;
+const projectScopePatterns = [
+  /\b(?:vcetne|rozpoc\w*|dodavatel\w*|harmonogram\w*|etap\w*|vice kroku|od .* do)\b/,
+  /\b(?:including|budget\w*|vendor\w*|timeline\w*|milestone\w*|multiple steps|from .* to)\b/,
+];
+
+function proposedProjectTitle(input: string) {
+  const cleaned = input.trim()
+    .replace(/^(?:projekt|project)\s*[:\-]?\s*/i, "")
+    .replace(/^(?:naplánovat|naplanovat|zorganizovat|spustit|zavést|zavest|vybudovat|plan|organize|launch|roll out|build)\s+(?:projekt\s+|project\s+)?/i, "")
+    .replace(/\s+(?:včetně|vcetne|including)(?=\s|$).*$/i, "")
+    .replace(/[.!?]+$/, "")
+    .trim();
+  const title = cleaned || input.trim();
+  const concise = title.length > 120 ? title.slice(0, 117).trimEnd() + "…" : title;
+  return concise ? concise[0].toLocaleUpperCase("cs-CZ") + concise.slice(1) : concise;
+}
+
+export function inferNewProjectSuggestion(input: {
+  title: string;
+  existingProjectScore: number;
+  areaId?: string;
+  areaTitle?: string;
+  language?: "cs" | "en";
+}): TaskSuggestion["newProjectSuggestion"] {
+  // A meaningful existing match wins. This prevents duplicate projects even when
+  // the input itself contains project-like wording.
+  if (input.existingProjectScore >= 4) return null;
+  const text = normalize(input.title);
+  const intentSignals = projectIntentPatterns.filter((pattern) => pattern.test(text)).length;
+  const scopeSignals = projectScopePatterns.filter((pattern) => pattern.test(text)).length;
+  if ((!strongProjectIntent.test(text) && !(intentSignals && scopeSignals)) || (tokens(input.title).length < 3 && !scopeSignals)) return null;
+  const highConfidence = intentSignals + scopeSignals >= 2;
+  const english = input.language === "en";
+  return {
+    title: proposedProjectTitle(input.title),
+    areaId: input.areaId || "",
+    areaTitle: input.areaTitle || "",
+    confidence: highConfidence ? "high" : "medium",
+    reason: english
+      ? highConfidence
+        ? "The request describes a multi-step outcome and no sufficiently relevant active project exists."
+        : "The request looks broader than a single action and no sufficiently relevant active project exists."
+      : highConfidence
+        ? "Zadání popisuje vícekrokový výsledek a neexistuje dostatečně relevantní aktivní projekt."
+        : "Zadání působí širší než jednotlivý úkol a neexistuje dostatečně relevantní aktivní projekt.",
+  };
+}
 
 function relationTargets(snapshot: ReturnType<typeof readSnapshot>, sourceId: string, relationType: string, workspaceId: string) {
   return snapshot.relations.filter((relation) =>
@@ -153,6 +213,13 @@ export function suggestTask(input: { title: string; workspaceId: string; request
     : inferredPriority(input.title)) as TaskSuggestion["priority"];
   const bestScore = Math.max(projectMatch?.score || 0, areaMatch?.score || 0);
   const english = input.language === "en";
+  const newProjectSuggestion = inferNewProjectSuggestion({
+    title: input.title,
+    existingProjectScore: projectMatch?.score || 0,
+    areaId: areaMatch?.entity.id,
+    areaTitle: areaMatch?.entity.title,
+    language: input.language,
+  });
   const reasons: string[] = [];
   if (projectMatch) reasons.push(english
     ? `Similarity to earlier tasks and the “${projectMatch.entity.title}” project`
@@ -201,5 +268,6 @@ export function suggestTask(input: { title: string; workspaceId: string; request
     confidence: bestScore >= 12 ? "high" : bestScore >= 4 ? "medium" : "low",
     reasons,
     constraints,
+    newProjectSuggestion,
   } satisfies TaskSuggestion;
 }
