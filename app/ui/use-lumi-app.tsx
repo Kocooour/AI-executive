@@ -3,6 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
+import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -64,6 +65,8 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [addressReady, setAddressReady] = useState(false),
+    [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
     [logoutError, setLogoutError] = useState(""),
@@ -199,6 +202,7 @@ export function useLumiApp() {
     return [task.title, priority, localDate].filter(Boolean).join(" ");
   };
   const deepLinkHandled = useRef(false);
+  const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
@@ -1007,6 +1011,10 @@ export function useLumiApp() {
       setStartupView(savedView);
       setView(savedView);
     }
+    // A view named in the address wins over the start view.
+    const addressedView = viewFromSearch(window.location.search, addressableViews);
+    if (addressedView) setView(addressedView);
+    setAddressReady(true);
     if (savedWorkspace) {
       setActiveWorkspaceId(savedWorkspace);
       setWriteWorkspaceId(
@@ -1283,9 +1291,7 @@ export function useLumiApp() {
   useEffect(() => {
     if (!items.length || deepLinkHandled.current) return;
     const parameters = new URLSearchParams(window.location.search);
-    const requestedView = parameters.get("view");
     const taskId = parameters.get("task");
-    if (requestedView && views.includes(requestedView)) setView(requestedView);
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
       if (task && task.type !== "workspace") {
@@ -1294,7 +1300,35 @@ export function useLumiApp() {
       }
     }
     deepLinkHandled.current = true;
+    setDeepLinkDone(true);
   }, [items]);
+
+  // The address follows the view: a change of view adds a history step, so Back and Forward move
+  // between views and a reload stays where the user was. A record id from a notification link is
+  // dropped from the address once it has been opened.
+  const addressedView = useRef<string | null>(null);
+  useEffect(() => {
+    if (!addressReady) return;
+    const hasRecordLink = new URLSearchParams(window.location.search).has("task");
+    if (hasRecordLink && !deepLinkDone) return;
+    const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
+      navigated: addressedView.current !== null && addressedView.current !== view });
+    addressedView.current = view;
+    if (!update) return;
+    const address = `${window.location.pathname}${update.search}`;
+    if (update.mode === "push") window.history.pushState(null, "", address);
+    else window.history.replaceState(null, "", address);
+  }, [addressReady, deepLinkDone, view, startupView]);
+  useEffect(() => {
+    const followAddress = () => {
+      const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
+      addressedView.current = next;
+      setView(addressableViews.includes(next) ? next : "Home");
+      closeDetail();
+    };
+    window.addEventListener("popstate", followAddress);
+    return () => window.removeEventListener("popstate", followAddress);
+  }, []);
 
   useEffect(() => {
     if (!capture && captureOpener.current) {
