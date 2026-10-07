@@ -7,7 +7,7 @@ These instructions apply to Codex, Claude Code, Hermes, and human contributors.
 ## Product invariants
 
 - Preserve **Tasks / Projects / Areas / Notes / Relations** as canonical records. Chat, imported text, claims, and model output are not canonical task state.
-- Every mutation selects one explicit writable workspace. **All my work** is a read-only aggregate; do not permit cross-workspace reads, writes, relations, cached data, or search results.
+- Every mutation selects one explicit writable workspace. **All my work** is the authorized read-only aggregate; otherwise, do not permit cross-workspace reads, writes, relations, cached data, or search-result leakage.
 - Prefer local-first behavior. Make pending sync, conflicts, freshness, and offline limits visible. Do not claim live calendar availability, delivery, or proactive activity when unavailable.
 - AI may read authorized context, summarize, and prepare proposals. It must not bypass **proposal → explicit approval → revision-checked action → audit / guarded Undo**.
 - Keep integrations behind adapters. Never expose provider credentials, raw imports, restricted context, or protected user data through clients, logs, backups, or model bundles.
