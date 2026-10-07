@@ -84,7 +84,7 @@ Every source mutation, workspace setting change, calendar refresh/disconnect or 
 
 ### Proactivity and notification contract — target requirement
 
-Scheduled morning brief and evening review, accepted task/project/context changes, due-time crossings, calendar refresh/conflict, completed snooze and Inbox arrivals may trigger read-only reevaluation. Trigger handling is idempotent and coalesced by workspace, source revision and time window; it never bypasses approval to write or send. The owner configures timezone, brief times, enabled rules/channels and quiet hours. Target defaults are morning 08:00 and evening 18:00 local time, quiet hours 22:00–08:00, no more than one routine digest per scheduled period and three routine interruptive notifications per rolling 24 hours per owner. Candidate identity plus notification channel/window prevents duplicate sends across scheduler retries, restart and reconnect. A changed reason may update Home without sending again.
+Accepted task/project/context changes, due-time crossings, calendar refresh/conflict, completed snooze and Inbox arrivals may trigger read-only reevaluation. Trigger handling is idempotent and coalesced by workspace, source revision and time window; it never bypasses approval to write or send. The owner configures timezone, enabled rules/channels and quiet hours. Target defaults are quiet hours 22:00–08:00 and three routine interruptive notifications per rolling 24 hours per owner. Lumi sends no scheduled morning or evening digest: Home always shows the current state (owner decision 2026-10-07). Candidate identity plus notification channel/window prevents duplicate sends across scheduler retries, restart and reconnect. A changed reason may update Home without sending again.
 
 Quiet hours defer routine sends to the next allowed window. A controlled urgent exception is limited by default to a newly detected deadline overdue within 24 hours or a fresh same-day calendar conflict affecting an accepted block, at most one urgent send per incident and one per quiet period; it is independently disableable. “Urgent” is not inferred by a model. Explicit user-set reminders retain their separate configured behavior. When notification permission, push subscription, server, calendar or another source is missing, Lumi records delivery state and shows an in-app explanation when available; it does not claim a notification was delivered or an unavailable calendar checked. Disconnect invalidates affected calendar conclusions and prevents new exact-time alerts. Pausing proactivity suppresses automated sends and scheduled analysis until resumed, while manual Home refresh and manual capture remain available. Reconnect reevaluates once and respects existing dedup and snooze decisions.
 
@@ -96,7 +96,7 @@ Reads run automatically only inside explicit permitted scopes. The server valida
 
 ### Shipped foundation and phased delivery
 
-The **current MVP** below and PACT implementation status describe implemented foundations: task/workspace views, Quick Capture suggestions, Context Inbox and partial Graph v2 claims, deterministic briefs/planning, read-only ICS, approval-bound task actions, basic audit/Undo, PWA shell and reminders. They do not establish an attention-item engine, attention-led Home, universal in-app chat, full offline context editing, complete Graph v2, new account adapters or the notification controls above as shipped. The external integration API provides planning and allowlisted reads; it is not yet universal chat in the app.
+The **current MVP** below and PACT implementation status describe implemented foundations: task/workspace views, Quick Capture suggestions, Context Inbox and partial Graph v2 claims, deterministic planning, read-only ICS, approval-bound task actions, basic audit/Undo, PWA shell and reminders. They do not establish an attention-item engine, attention-led Home, universal in-app chat, full offline context editing, complete Graph v2, new account adapters or the notification controls above as shipped. The external integration API provides planning and allowlisted reads; it is not yet universal chat in the app.
 
 1. **Foundation:** product naming, deterministic attention candidates, ranking, reasons and lifecycle as prerequisites for the attention-oriented Home/brief; Quick Capture and Inbox triage improvements; make source/freshness/pending states legible while preserving current task, workspace and sync behavior.
 2. **Planning and control:** connect calendar-aware planning, global search and universal chat to the existing Context Resolver, Tool Registry and proposal boundary; validate mobile, offline, accessibility, audit and Undo.
@@ -115,7 +115,7 @@ Privacy-preserving product metrics are activation (first captured and organized 
 4. **Approval safety:** A proposal approved after expiry, from another session or workspace, or after its target changes is rejected without a task/calendar mutation. Its audit shows the rejected attempt. Undo of a reversible accepted change restores it only if the current revision permits it; an irreversible external send is identified before approval and never falsely offered as reversible.
 5. **Workspace and evidence privacy:** A Shared viewer cannot retrieve Personal task titles, private note snippets, sensitive evidence or owner history through Home, chat, search, an attention reason, a relation or a provider bundle. Signing out or switching workspace cannot expose cached Personal content in the Shared view, including while offline. Confirming one claim does not confirm another claim or mark a task complete. A metadata-only source cannot support a body-derived fact.
 6. **Offline and missing calendar:** An offline mobile capture stays visibly pending, survives app restart, and becomes canonical once with a successful sync or shows a resolvable conflict. It is not used by agents before acceptance. A disconnected/stale calendar removes exact free-block and conflict claims; the day plan still orders tasks and explains the limitation.
-7. **Proactivity controls:** Across daylight-saving change, brief scheduling follows the configured local time once per period. Routine events inside quiet hours defer, the bounded urgent exception sends at most once when enabled, pause sends nothing, and reconnect/restart does not duplicate an already delivered incident. Missing push permission is reported as undelivered.
+7. **Proactivity controls:** Routine events inside quiet hours defer, the bounded urgent exception sends at most once when enabled, pause sends nothing, and reconnect/restart does not duplicate an already delivered incident. Missing push permission is reported as undelivered.
 
 A release meets the full Lumi target only when the user can capture, triage and find work; understand a reasoned Home brief; receive an honest plan; ask chat to prepare a change; approve it in scope; and inspect audit/Undo, including mobile/offline and restricted-workspace cases. Each roadmap phase can ship independently if its partial status is stated accurately.
 
@@ -148,9 +148,8 @@ npm run start -- --hostname 127.0.0.1
 - Installable PWA with an offline shell
 - Web Push reminders delivered by a server scheduler while the PWA is closed
 - OS-level urgent-task badges for installed iOS/iPadOS Home Screen and macOS Dock web apps
-- Server-verified AI briefings and an approval-based task action loop with audit and Undo
+- Server-verified on-demand priorities in chat and an approval-based task action loop with audit and Undo
 - Home now uses a server-evaluated Attention foundation for overdue and soon deadlines, projects without a next action, and idle projects. Candidates have stable identities, deterministic ordering, explicit reasons, source revisions and evaluation freshness. The five highest-ranked items are shown first; snooze and dismiss are stored in SQLite with content-free lifecycle history, expire or resurface when the underlying condition changes, and are shared across devices. Waiting follow-ups, calendar conflicts and capacity risk remain planned rules and are disclosed as unavailable rather than inferred.
-- Proactive morning briefs and evening reviews with deterministic top-three, risk and capacity heuristics
 - Lumi's day plan previews ranked tasks in a mobile-friendly timeline and explains why each item matters now. Ranking can use confirmed, current, non-sensitive task/project importance and waiting-party claims in addition to deadlines, priority, calendar availability and measured duration. Exact blocks require a fresh connected calendar and avoid existing planned tasks. Accepting a block uses a server-side, single-task proposal with a current-revision and overlap check, audit history and Undo; it does not change the task's due date. When the calendar is missing or stale, the plan lists tasks without claiming exact free times. Decisions and manual time changes are recorded as task planning feedback.
 - Read-only private ICS calendars with normalized recurring events, busy-time merging and free-window planning
 - Deterministic threat detection with Web Push fallback and a least-privilege Hermes Telegram outbox
@@ -167,7 +166,7 @@ Existing Areas, Projects, Tasks, Notes and Relations form the P layer and retain
 
 Agents are reusable, versioned definitions of repeatable AI work, not unrestricted chatbots. Each agent declares its purpose/instructions, permitted context scopes, tool capabilities, workspace/project scope, trigger mode, output contract and mutation/approval policy.
 
-Initial built-ins: Executive Assistant, Morning Planner, Evening Reviewer, Inbox Processor, Project Manager, Researcher and Meeting Prep. Existing deterministic briefings remain a safe fallback and validation layer.
+Initial built-ins: Executive Assistant, Inbox Processor, Project Manager, Researcher and Meeting Prep. Deterministic ranking remains a safe fallback and validation layer.
 
 Agents never receive provider credentials or bypass authorization. Model-proposed actions always pass through the Tool Registry and policy layer.
 
@@ -181,7 +180,7 @@ The Context Resolver builds the minimum permitted bundle for each agent run from
 
 ### T — Tools
 
-Agent capabilities are exposed through a typed Tool Registry rather than direct database/provider access. Initial tools include task read/propose-create/propose-update/propose-complete, project read/search, note read/search, calendar read/find-free-time, context read and briefing read.
+Agent capabilities are exposed through a typed Tool Registry rather than direct database/provider access. Initial tools include task read/propose-create/propose-update/propose-complete, project read/search, note read/search, calendar read/find-free-time and context read.
 
 Future adapters can add email search/draft, calendar writes, Microsoft Graph, files, web research and other services without changing agent definitions. Every tool declares input/output schemas, read/write classification, scope, audit behavior and approval policy.
 
@@ -198,7 +197,7 @@ The model is never the authority for access control or writes.
 - WRITE: a validated proposal is applied only after required approval.
 - SEND / EXTERNAL SIDE EFFECT: explicit approval by default plus a dedicated tool policy.
 
-Scheduled/proactive agents may perform read-only analysis automatically and create briefings/proposals. Autonomous external side effects require a separately configured policy.
+Scheduled/proactive agents may perform read-only analysis automatically and create proposals. Autonomous external side effects require a separately configured policy.
 
 ### Target execution flow
 
@@ -219,15 +218,15 @@ Scheduled/proactive agents may perform read-only analysis automatically and crea
               v
      Proposal -> Approval -> Execute -> Audit -> Undo
 
-A morning run can combine an Executive Assistant or Morning Planner with active projects/tasks, relevant personal/work/project context and read-only calendar tools. It identifies risks, capacity and next actions, then proposes changes instead of silently mutating the plan.
+A run can combine an Executive Assistant with active projects/tasks, relevant personal/work/project context and read-only calendar tools. It identifies risks, capacity and next actions, then proposes changes instead of silently mutating the plan.
 
 ### PACT implementation status
 
 The server-side PACT foundation is now in place: SQLite persistence for agents, durable context, tool permissions and agent runs; a default Lumi agent (with the stable internal ID `aifred`); a workspace-scoped Context Resolver; and a typed read-only Tool Registry. Provider-assisted reasoning now receives canonical entities and non-sensitive durable context through the resolver. Mutations continue to use the existing proposal -> confirmation -> audit -> Undo boundary.
 
-The owner UI now exposes a dedicated Agents view with Morning Planner, Evening Reviewer, Project Manager and Meeting Prep. Each manual run requires one explicit workspace, uses only the agent's declared tools and context scopes, and records a sanitized operational run without task titles or context contents. Project Manager and Meeting Prep currently return deterministic recommendations and never write data; Morning Planner and Evening Reviewer use the existing briefing engine. Rich results are returned only to the authenticated owner session, while persisted history contains status and bounded operational metadata.
+The owner UI now exposes a dedicated Agents view with Project Manager and Meeting Prep. Each manual run requires one explicit workspace, uses only the agent's declared tools and context scopes, and records a sanitized operational run without task titles or context contents. Project Manager and Meeting Prep currently return deterministic recommendations and never write data. The former Morning Planner and Evening Reviewer agents and their scheduled briefings were removed on 2026-10-07; their past runs remain in the sanitized history. Rich results are returned only to the authenticated owner session, while persisted history contains status and bounded operational metadata.
 
-The authenticated Lumi integration API is implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration. Its versioned OpenAPI 3.1 schema remains at the compatibility path `docs/aifred-openapi.json`, and the running app serves it at `/api/integrations/aifred/openapi`. This is the contract for a future ChatGPT/Voice connector; it advertises only planning and allowlisted read operations. Owner-only durable context management is available through `/api/context` and the Settings UI. The owner can list, create and archive context, choose scope and sensitivity, and bind project context only to a project in the same workspace. Sensitive items remain visible to the owner UI/API but are excluded from the external `context.read` tool and provider reasoning by default. Morning and evening briefings now execute as tracked PACT agent runs for both manual and scheduled paths. Run history records only sanitized operational summaries (kind, trigger, status and delivery outcome), not task titles or durable context, and is visible in the owner Agents view. Next: verify the PACT integration in build/CI and complete the Context Graph v2 reliability, provenance, review and export gates below before adding new account adapters. Existing read-only ICS planning remains supported.
+The authenticated Lumi integration API is implemented for external conversational clients. It uses a dedicated bearer token and requires one explicit workspace. The planning endpoint can return read-only answers or create approval-bound proposals. A separate read-only tools endpoint exposes only task.read, project.read, note.read, calendar.read, calendar.free_time and context.read; task.propose cannot be invoked through that endpoint. Proposal confirmation is intentionally not exposed to the external integration. Its versioned OpenAPI 3.1 schema remains at the compatibility path `docs/aifred-openapi.json`, and the running app serves it at `/api/integrations/aifred/openapi`. This is the contract for a future ChatGPT/Voice connector; it advertises only planning and allowlisted read operations. Owner-only durable context management is available through `/api/context` and the Settings UI. The owner can list, create and archive context, choose scope and sensitivity, and bind project context only to a project in the same workspace. Sensitive items remain visible to the owner UI/API but are excluded from the external `context.read` tool and provider reasoning by default. Run history records only sanitized operational summaries (kind, trigger and status), not task titles or durable context, and is visible in the owner Agents view. Next: verify the PACT integration in build/CI and complete the Context Graph v2 reliability, provenance, review and export gates below before adding new account adapters. Existing read-only ICS planning remains supported.
 
 The first Context Graph v2 foundation is additive to `pact_context`: owner-authored, workspace-bound claims have stable revisions, independent review/freshness/sensitivity state, optional non-fabricated source/evidence metadata, idempotent transaction commands and content-bearing owner history. The Context view supports create, edit, claim-level review and archive. The resolver adds only confirmed, current, normal and non-archived claims while retaining eligible legacy PACT context. This slice does not migrate legacy context, expose context mutations to external Lumi tools, implement graph/import/export/Undo, or satisfy the full Graph v2 acceptance gates. Existing logical JSON backups still cover canonical entities and relations only; they do not yet cover PACT or Graph v2 context tables.
 
@@ -239,7 +238,7 @@ The first Context Graph v2 foundation is additive to `pact_context`: owner-autho
 4. Add the Context workspace: Markdown editing, search, dynamic graph, relation details, review queue and history in the current PWA.
 5. Complete portable export/import, encrypted backup/restore and server-enforced data-boundary checks before connecting new real accounts.
 6. Introduce normalized external adapters incrementally: one selected personal calendar first, then approved M365 and selective email. Preserve current ICS planning throughout.
-7. Extend the Context Resolver and typed tools for evidence-backed briefings and proposals; then expand controlled proactivity under existing approval policies.
+7. Extend the Context Resolver and typed tools for evidence-backed recommendations and proposals; then expand controlled proactivity under existing approval policies.
 
 The original PACT milestone remains the integration baseline: an Executive Assistant can read one workspace, receive a minimal resolved context bundle, inspect tasks/projects/calendar through registered tools, produce a structured recommendation and propose changes without direct database access or provider credentials. Context Graph v2 adds the acceptance gates below; they must not be described as already implemented.
 
@@ -385,7 +384,7 @@ Add versioned logical operations for context search, claim explanation and propo
 
 External ChatGPT/Voice and other conversational clients retain their dedicated-token, single-workspace read/propose boundary. They cannot confirm claims, invoke owner Undo/Redo, read arbitrary files or obtain provider credentials. Owner UI mutations require the owner session and existing same-origin protections.
 
-Morning Planner, Evening Reviewer, Project Manager and Meeting Prep should cite eligible evidence, report missing/conflicting context and avoid converting inference into a commitment. Scheduled runs may prepare proposals; they do not self-approve them.
+Project Manager and Meeting Prep should cite eligible evidence, report missing/conflicting context and avoid converting inference into a commitment. Scheduled runs may prepare proposals; they do not self-approve them.
 
 ### Security, export and recovery
 
@@ -464,7 +463,7 @@ are stored as five-minute proposals and do not mutate data until the owner
 confirms them. Confirmation is session-bound, revision-checked and idempotent;
 successful changes have a guarded server-side Undo.
 
-The deterministic local planner provides today's brief, task creation,
+The deterministic local planner provides current priorities on request, task creation,
 rescheduling/snoozing, completion, priority changes and project moves without
 an external model. Every mutation remains a proposal with confirmation and
 guarded Undo. For broader read-only answers, set
@@ -474,30 +473,30 @@ Provider secrets remain server-side. The current Hermes bridge invokes the
 Hermes agent CLI, so enable it only with a dedicated read-only profile; provider
 output never bypasses the application's proposal/confirmation boundary.
 
-## Proactive executive briefings
+## Removed: scheduled briefings
 
-Settings can enable a morning brief and evening review for one explicit
-workspace, IANA timezone and set of working days. The server reads canonical
-SQLite data and stores one durable briefing per kind, workspace and local date,
-so restarts and repeated DST hours do not duplicate it. A skipped wall-clock
-time is caught up on the next scheduler tick. The capacity warning is explicitly
-heuristic because the MVP does not yet read calendar availability or task effort.
+Scheduled morning briefs and evening reviews, their push and Telegram delivery
+and the related settings were removed on 2026-10-07 by owner decision. Home is
+the brief of the current state, and chat answers "what matters today" on request
+from canonical data without storing or sending anything.
 
-Push contains only summary counts; task titles stay in the authenticated app.
-Manual “Vytvořit teď” runs are in-app only and do not send notifications.
-Telegram is a separate explicit opt-in and includes workspace and top-task
-titles. Install its least-privilege Hermes adapter from a clean reviewed commit:
+Existing databases keep the `executive_briefings` table and old rows untouched;
+new databases no longer create it. A server that installed the Telegram adapter
+should retire it during the next maintenance window:
 
 ```bash
-git diff --exit-code -- ops/executive-briefings
-sudo ./ops/executive-briefings/install.sh
-systemctl status ai-executive-briefings.timer
+sudo systemctl disable --now ai-executive-briefings.timer ai-executive-briefings.service
+sudo rm /etc/systemd/system/ai-executive-briefings.service /etc/systemd/system/ai-executive-briefings.timer
+sudo rm /etc/systemd/system/ai-executive.service.d/30-executive-briefings.conf
+sudo systemctl daemon-reload
+sudo systemctl restart ai-executive
 ```
 
-The adapter creates `/var/lib/ai-executive-briefings`; AI Executive can only
-write the outbox and receives no Hermes or Telegram credential. Delivery is
-at-least-once: an unlikely crash after Telegram accepts a message but before the
-queue file is archived can duplicate that message.
+`AI_EXECUTIVE_BRIEFING_OUTBOX_DIR` is no longer read. The adapter's script in
+`/usr/local/lib/ai-executive-briefings` and its queue in
+`/var/lib/ai-executive-briefings` can be deleted once any undelivered files
+there have been reviewed. The server security monitor watches the service
+drop-in directory, so removing the drop-in raises one expected integrity alert.
 
 ## Read-only calendar planning
 
@@ -519,7 +518,7 @@ generic title “Soukromá událost”.
 Calendar events remain read-only. The Calendar view merges overlapping busy
 intervals and shows actual free blocks inside the configured workday; Home shows
 today's fixed events and the resulting free capacity. A failed
-or older-than-24-hours source is marked stale, and executive briefings will not
+or older-than-24-hours source is marked stale, and on-demand priorities will not
 claim a free slot from stale data. The current horizon is 14 days back and 90
 days forward; sources refresh at most every 30 minutes in the single always-on
 Node process. Microsoft Graph can later implement the same normalized adapter

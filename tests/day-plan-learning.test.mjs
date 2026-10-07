@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { learnPlanning } from "../lib/day-plan-learning.ts";
-import { nextWorkingDate, reviewPlan } from "../lib/day-plan-review.ts";
 import { matchesDayPlanCandidate } from "../lib/day-plan-decision.ts";
 
 const task = (id, title, properties = {}, status = "open") => ({ id, title, type: "task", status,
@@ -47,47 +46,6 @@ test("measured work takes precedence after three sessions while an explicit esti
   assert.deepEqual([learned.estimatedMinutes, learned.estimateSource, learned.estimateSamples], [40, "actual", 3]);
   const explicit = learnPlanning(task("explicit", "Write report", { estimatedMinutes: 15 }), measured, "Europe/Prague");
   assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [15, "explicit"]);
-});
-
-test("evening review compares approved plan with status and finds the next working date", () => {
-  const tasks = [
-    task("completed", "Write report", { plannedStart: "2026-10-02T08:00:00Z" }, "completed"),
-    task("open", "Write memo", { plannedStart: "2026-10-02T10:00:00Z" }),
-    task("moved", "Write notes", { planningFeedback: { date: "2026-10-02", decision: "tomorrow" } }),
-    task("dismissed", "Write later", { planningFeedback: { date: "2026-10-02", decision: "dismissed" } }),
-  ];
-  const review = reviewPlan(tasks, "2026-10-02", "Europe/Prague", [1, 2, 3, 4, 5]);
-  assert.deepEqual([review.planned, review.completed, review.open, review.moved, review.dismissed, review.nextWorkday],
-    [2, 1, 1, 1, 1, "2026-10-05"]);
-  assert.equal(review.carryover.length, 2);
-  assert.equal(nextWorkingDate("2026-10-02", []), "");
-});
-
-test("review retains an accepted block after later feedback replaced the latest marker", () => {
-  const item = task("one", "Write report", {
-    planningHistory: [{ date: "2026-10-02", decision: "accepted" }, { date: "2026-10-03", decision: "adjusted" }],
-    planningFeedback: { date: "2026-10-03", decision: "adjusted" },
-  });
-  assert.equal(reviewPlan([item], "2026-10-02", "Europe/Prague", [1, 2, 3, 4, 5]).planned, 1);
-});
-
-test("review carries an accepted then moved task only once", () => {
-  const item = task("one", "Write report", {
-    planningHistory: [{ date: "2026-10-02", decision: "accepted" }, { date: "2026-10-02", decision: "tomorrow" }],
-    planningFeedback: { date: "2026-10-02", decision: "tomorrow" },
-  });
-  const review = reviewPlan([item], "2026-10-02", "Europe/Prague", [1, 2, 3, 4, 5]);
-  assert.equal(review.planned, 1);
-  assert.equal(review.moved, 1);
-  assert.deepEqual(review.carryover.map((entry) => entry.id), ["one"]);
-});
-
-test("evening review compares immutable session estimate with measured time", () => {
-  const item = task("one", "Write report", { estimatedMinutes: 999, workSessionHistory: [
-    { sessionId: "session", completedAt: Date.parse("2026-10-02T12:00:00Z"), actualMinutes: 42, estimatedMinutes: 30 },
-  ] }, "completed");
-  const review = reviewPlan([item], "2026-10-02", "Europe/Prague", [1, 2, 3, 4, 5]);
-  assert.deepEqual([review.measuredSessions, review.measuredMinutes, review.estimatedMinutes], [1, 42, 30]);
 });
 
 test("day-plan decisions require the exact current proposal or unscheduled task", () => {

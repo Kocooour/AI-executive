@@ -72,24 +72,6 @@ export const alfredAgent: PACTAgentDefinition = {
 
 export const builtInPACTAgents: PACTAgentDefinition[] = [
   {
-    id: "morning-planner",
-    name: "Morning Planner",
-    version: 1,
-    instructions: "Prepare a concise start-of-day plan from tasks, risks and calendar capacity. Never mutate data directly.",
-    contextScopes: ["me", "work", "family", "rules", "project", "workspace"],
-    tools: ["task.read", "project.read", "calendar.read", "calendar.free_time", "context.read", "task.propose"],
-    triggerModes: ["manual", "scheduled"],
-  },
-  {
-    id: "evening-reviewer",
-    name: "Evening Reviewer",
-    version: 1,
-    instructions: "Review the day, surface unfinished commitments and propose a safe next step. Never mutate data directly.",
-    contextScopes: ["me", "work", "family", "rules", "project", "workspace"],
-    tools: ["task.read", "project.read", "calendar.read", "context.read", "task.propose"],
-    triggerModes: ["manual", "scheduled"],
-  },
-  {
     id: "project-manager",
     name: "Project Manager",
     version: 1,
@@ -111,6 +93,9 @@ export const builtInPACTAgents: PACTAgentDefinition[] = [
 
 export const pactAgentCatalog = [alfredAgent, ...builtInPACTAgents];
 
+// Built-in agents that no longer exist. Their rows and run history stay in the database; they are only switched off.
+const retiredPACTAgentIds = ["morning-planner", "evening-reviewer"];
+
 function assertWorkspace(workspaceId: string) {
   if (workspaceId === "all") throw new Error("PACT agent runs require one explicit workspace");
   const exists = readSnapshot().entities.some(
@@ -127,6 +112,8 @@ export function ensurePACTDefaults() {
     ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, version=excluded.version, updated_at=excluded.updated_at`);
   const insertPermission = db.prepare(`INSERT OR IGNORE INTO pact_tool_permissions
     (agent_id, tool_name, permission, workspace_id) VALUES (?, ?, ?, '*')`);
+  const retireAgent = db.prepare("UPDATE pact_agents SET enabled = 0, updated_at = ? WHERE id = ? AND enabled = 1");
+  for (const agentId of retiredPACTAgentIds) retireAgent.run(now, agentId);
   for (const agent of pactAgentCatalog) {
     upsertAgent.run(agent.id, JSON.stringify(agent), agent.version, now, now);
     for (const tool of agent.tools) {

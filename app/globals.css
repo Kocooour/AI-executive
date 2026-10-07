@@ -497,18 +497,6 @@ article small {
   gap: 8px;
 }
 
-.briefingTasks { padding-left: 22px; }
-.briefingTasks li { margin: 10px 0; }
-.briefingTasks button {
-  display: inline;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-weight: 700;
-  text-align: left;
-}
-.briefingTasks small { display: block; color: var(--muted); margin-top: 2px; }
 .dayPlanCard { margin: 22px 0; padding: 20px; border: 1px solid var(--border, #d9d9d9); border-radius: 18px; background: var(--surface, #fff); }
 .workNowCard { margin: 22px 0; padding: 22px; border: 1px solid rgba(103,86,204,.35); border-radius: 20px; background: linear-gradient(135deg, rgba(103,86,204,.13), var(--surface,#fff)); display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px; }
 .workNowCard h2 { margin: 4px 0; font-size: clamp(1.35rem, 3vw, 2rem); }
@@ -1708,15 +1696,9 @@ article {
 .homePlan { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .homePlan p { margin: 0 0 6px; line-height: 1.5; }
 .homePlan .dayPlanWarning { font-size: 13px; }
-.homeBrief > summary { cursor: pointer; }
-.homeBrief > summary > span { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; }
-.homeBrief > summary > small { margin-left: 10px; color: var(--muted); font-size: 12px; }
-.homeBrief[open] > summary { margin-bottom: 14px; }
-.homeBrief .notificationActions { margin-bottom: 12px; }
 @media (max-width: 700px) {
   .homeStatus button, .homeSync { min-height: 44px; }
-  .homeBrief > summary { padding: 13px 0; }
-  .homeSectionHead button, .homeSection .textAction, .homeBrief .notificationActions button, .homeBrief .briefingTasks button { min-height: 44px; }
+  .homeSectionHead button, .homeSection .textAction { min-height: 44px; }
 }
 .homeSection {
   min-width: 0;
@@ -1763,7 +1745,6 @@ article {
   background: #9b9ca5;
 }
 .todayDot { background: #6557e8; }
-.recentDot { background: #999aa4; }
 .homeSection > p {
   margin: 4px 0 8px;
   color: var(--muted);

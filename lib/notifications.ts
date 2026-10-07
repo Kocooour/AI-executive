@@ -8,15 +8,6 @@ export interface NotificationPreferences {
   workdayStart: string;
   workdayEnd: string;
   workdays: number[];
-  briefingEnabled: boolean;
-  morningBriefEnabled: boolean;
-  morningBriefTime: string;
-  eveningReviewEnabled: boolean;
-  eveningReviewTime: string;
-  briefingWorkspaceId: string;
-  briefingPush: boolean;
-  briefingTelegram: boolean;
-  dailyTaskCapacity: number;
 }
 
 const defaultPreferences: NotificationPreferences = {
@@ -25,15 +16,6 @@ const defaultPreferences: NotificationPreferences = {
   workdayStart: "08:00",
   workdayEnd: "18:00",
   workdays: [1, 2, 3, 4, 5],
-  briefingEnabled: false,
-  morningBriefEnabled: true,
-  morningBriefTime: "07:30",
-  eveningReviewEnabled: true,
-  eveningReviewTime: "18:00",
-  briefingWorkspaceId: "personal",
-  briefingPush: true,
-  briefingTelegram: false,
-  dailyTaskCapacity: 5,
 };
 
 function metadata(key: string) {
@@ -134,14 +116,6 @@ export function saveNotificationPreferences(input: Partial<NotificationPreferenc
       !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayStart)) ||
     (input.workdayEnd !== undefined &&
       !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.workdayEnd)) ||
-    (input.morningBriefTime !== undefined &&
-      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.morningBriefTime)) ||
-    (input.eveningReviewTime !== undefined &&
-      !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.eveningReviewTime)) ||
-    (input.briefingWorkspaceId !== undefined &&
-      (typeof input.briefingWorkspaceId !== "string" || !/^[A-Za-z0-9:_-]{1,120}$/.test(input.briefingWorkspaceId))) ||
-    (input.dailyTaskCapacity !== undefined &&
-      (!Number.isInteger(input.dailyTaskCapacity) || input.dailyTaskCapacity < 1 || input.dailyTaskCapacity > 50)) ||
     (input.workdays !== undefined &&
       (!Array.isArray(input.workdays) ||
         input.workdays.length > 7 ||
@@ -165,29 +139,11 @@ export function saveNotificationPreferences(input: Partial<NotificationPreferenc
     workdays: Array.isArray(input.workdays)
       ? input.workdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
       : current.workdays,
-    briefingEnabled: typeof input.briefingEnabled === "boolean" ? input.briefingEnabled : current.briefingEnabled,
-    morningBriefEnabled: typeof input.morningBriefEnabled === "boolean" ? input.morningBriefEnabled : current.morningBriefEnabled,
-    morningBriefTime: /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.morningBriefTime || "")
-      ? input.morningBriefTime! : current.morningBriefTime,
-    eveningReviewEnabled: typeof input.eveningReviewEnabled === "boolean" ? input.eveningReviewEnabled : current.eveningReviewEnabled,
-    eveningReviewTime: /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(input.eveningReviewTime || "")
-      ? input.eveningReviewTime! : current.eveningReviewTime,
-    briefingWorkspaceId: typeof input.briefingWorkspaceId === "string"
-      ? input.briefingWorkspaceId : current.briefingWorkspaceId,
-    briefingPush: typeof input.briefingPush === "boolean" ? input.briefingPush : current.briefingPush,
-    briefingTelegram: typeof input.briefingTelegram === "boolean" ? input.briefingTelegram : current.briefingTelegram,
-    dailyTaskCapacity: Number.isInteger(input.dailyTaskCapacity)
-      ? input.dailyTaskCapacity! : current.dailyTaskCapacity,
   };
   try {
     new Intl.DateTimeFormat("en", { timeZone: next.timezone }).format();
   } catch {
     throw new Error("Invalid timezone");
-  }
-  if (!readSnapshot().entities.some(
-    (entity) => entity.type === "workspace" && entity.workspaceId === next.briefingWorkspaceId,
-  )) {
-    throw new Error("Briefing workspace does not exist");
   }
   setMetadata("notificationPreferences", JSON.stringify(next));
   return next;
@@ -315,50 +271,6 @@ export async function sendSecurityNotification(
     tag: `ai-executive-security-${severity}`,
     requireInteraction: severity === "critical",
   });
-}
-
-export async function sendExecutiveNotification(
-  kind: "morning" | "evening",
-  body: string,
-  briefingId: string,
-) {
-  const database = getDatabase();
-  const targets = subscriptions();
-  let sent = 0;
-  let failed = 0;
-  for (const target of targets) {
-    const endpointKey = createHash("sha256").update(target.endpoint).digest("hex").slice(0, 20);
-    const deliveryKey = `briefing:${briefingId}:${endpointKey}`;
-    const existing = database.prepare("SELECT status FROM notification_deliveries WHERE delivery_key = ?")
-      .get(deliveryKey) as { status?: string } | undefined;
-    if (existing?.status === "sent") continue;
-    database.prepare(`
-      INSERT INTO notification_deliveries
-        (delivery_key, entity_id, reminder_at, status, attempts, last_attempt_at)
-      VALUES (?, ?, ?, 'pending', 1, ?)
-      ON CONFLICT(delivery_key) DO UPDATE SET
-        status = 'pending', attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, error = NULL
-      WHERE notification_deliveries.status != 'sent'
-    `).run(deliveryKey, briefingId, kind, Date.now());
-    try {
-      await sendTarget(target.subscription, {
-        title: kind === "morning" ? "Ranní přehled" : "Večerní rekapitulace",
-        body,
-        url: "/?view=Home&briefing=latest",
-        tag: `ai-executive-briefing-${kind}`,
-      });
-      database.prepare("UPDATE notification_deliveries SET status = 'sent', sent_at = ?, error = NULL WHERE delivery_key = ?")
-        .run(Date.now(), deliveryKey);
-      sent += 1;
-    } catch (error) {
-      failed += 1;
-      const statusCode = Number((error as { statusCode?: number }).statusCode || 0);
-      if (statusCode === 404 || statusCode === 410) removeSubscription(target.endpoint);
-      database.prepare("UPDATE notification_deliveries SET status = 'failed', error = ? WHERE delivery_key = ?")
-        .run(error instanceof Error ? error.message : "Push failed", deliveryKey);
-    }
-  }
-  return { sent, failed, total: targets.length };
 }
 
 function normalizedReminder(value: unknown) {

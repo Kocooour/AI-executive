@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
-import {
-  createExecutiveBriefing,
-  listExecutiveBriefings,
-  type BriefingKind,
-} from "../../../lib/executive-briefings";
 import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { readSnapshot } from "../../../lib/server-store";
@@ -26,7 +21,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
   return NextResponse.json({
-    briefings: listExecutiveBriefings(workspaceId, 7),
+    // Morning and evening briefings were removed; clients cached before that still read this field.
+    briefings: [],
     agents: listPACTAgents().filter((agent) => agent.id !== "aifred"),
     agentRuns: listPACTRuns(workspaceId, 40),
   });
@@ -39,7 +35,6 @@ export async function POST(request: Request) {
     const limited = enforceRateLimit(request, "executive-run", 12, 60 * 60_000);
     if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
     const body = await readJsonBody<{
-      kind?: BriefingKind;
       agentId?: ManualPACTAgentId;
       workspaceId?: string;
       language?: "cs" | "en";
@@ -48,15 +43,11 @@ export async function POST(request: Request) {
         !/^[A-Za-z0-9:_-]{1,120}$/.test(body.workspaceId) || body.workspaceId === "all") {
       return NextResponse.json({ error: "Invalid agent request" }, { status: 400 });
     }
-    let result;
-    if ((["morning", "evening"] as unknown[]).includes(body.kind)) {
-      result = await createExecutiveBriefing(body.kind!, body.workspaceId, Date.now(), true);
-    } else if ((["project-manager", "meeting-prep"] as unknown[]).includes(body.agentId)) {
-      result = { agentResult: runManualPACTAgent(body.agentId!, body.workspaceId, body.language === "en" ? "en" : "cs") };
-    } else {
+    if (!(["project-manager", "meeting-prep"] as unknown[]).includes(body.agentId)) {
       return NextResponse.json({ error: "Unknown or non-runnable agent" }, { status: 400 });
     }
-    recordSecurityEvent(request, "executive.agent-run", "allowed", { kind: body.kind || body.agentId });
+    const result = { agentResult: runManualPACTAgent(body.agentId!, body.workspaceId, body.language === "en" ? "en" : "cs") };
+    recordSecurityEvent(request, "executive.agent-run", "allowed", { kind: body.agentId });
     return NextResponse.json(result);
   } catch (error) {
     recordSecurityEvent(request, "executive.agent-run", "failed");

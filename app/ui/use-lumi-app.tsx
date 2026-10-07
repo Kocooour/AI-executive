@@ -8,7 +8,7 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type ExecutiveBriefing, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
+import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { urlBase64ToUint8Array } from "./format";
@@ -58,8 +58,6 @@ export function useLumiApp() {
     [dayPlanNow, setDayPlanNow] = useState(() => Date.now()),
     [badgeStatus, setBadgeStatus] = useState(""),
     [notificationStatus, setNotificationStatus] = useState(""),
-    [briefings, setBriefings] = useState<ExecutiveBriefing[]>([]),
-    [briefingBusy, setBriefingBusy] = useState(false),
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
@@ -497,11 +495,10 @@ export function useLumiApp() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadBriefings(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
+  async function loadAgents(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/executive?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Executive briefing is unavailable");
+    if (!response.ok) throw new Error("Agents are unavailable");
     const data = await response.json();
-    setBriefings(Array.isArray(data.briefings) ? data.briefings : []);
     setPactAgents(Array.isArray(data.agents) ? data.agents : []);
     setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
   }
@@ -591,27 +588,6 @@ export function useLumiApp() {
     finally { setWorkSessionBusy(false); }
   }
 
-  async function runBriefing(kind: "morning" | "evening") {
-    if (briefingBusy) return;
-    setBriefingBusy(true);
-    setNotificationStatus("");
-    try {
-      const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
-      const response = await fetch("/api/executive", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind, workspaceId }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Briefing failed");
-      await loadBriefings(workspaceId);
-    } catch (error) {
-      setNotificationStatus(error instanceof Error ? error.message : "Briefing failed");
-    } finally {
-      setBriefingBusy(false);
-    }
-  }
-
   async function runPACTAgent(agentId: string) {
     if (agentBusyId) return;
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
@@ -619,30 +595,15 @@ export function useLumiApp() {
     setAgentStatus("");
     setAgentResult(null);
     try {
-      const body = agentId === "morning-planner"
-        ? { kind: "morning", workspaceId, language }
-        : agentId === "evening-reviewer"
-          ? { kind: "evening", workspaceId, language }
-          : { agentId, workspaceId, language };
       const response = await fetch("/api/executive", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ agentId, workspaceId, language }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Agent run failed");
       if (data.agentResult) setAgentResult(data.agentResult as PACTAgentResult);
-      if (data.briefing) {
-        const briefing = data.briefing as ExecutiveBriefing;
-        setAgentResult({
-          agentId,
-          title: briefing.title,
-          summary: briefing.summary,
-          recommendations: briefing.suggestions,
-          createdAt: briefing.createdAt,
-        });
-      }
-      await loadBriefings(workspaceId);
+      await loadAgents(workspaceId);
     } catch (error) {
       setAgentStatus(error instanceof Error ? error.message : "Agent run failed");
     } finally {
@@ -960,7 +921,7 @@ export function useLumiApp() {
 
   useEffect(() => {
     if (authState !== "ready") return;
-    loadBriefings().catch(() => undefined);
+    loadAgents().catch(() => undefined);
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
     setCalendarSources([]);
     setCalendarEvents([]);
@@ -2706,8 +2667,6 @@ export function useLumiApp() {
     backupStatus,
     backups,
     badgeStatus,
-    briefingBusy,
-    briefings,
     calendarAction,
     calendarBusy,
     calendarFresh,
@@ -2839,7 +2798,6 @@ export function useLumiApp() {
     restore,
     restoreAppBadge,
     restoreServerBackup,
-    runBriefing,
     runPACTAgent,
     saveContextClaim,
     saveLanguage,

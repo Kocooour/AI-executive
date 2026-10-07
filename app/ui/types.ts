@@ -33,34 +33,6 @@ export interface NotificationPreferences {
   workdayStart: string;
   workdayEnd: string;
   workdays: number[];
-  briefingEnabled: boolean;
-  morningBriefEnabled: boolean;
-  morningBriefTime: string;
-  eveningReviewEnabled: boolean;
-  eveningReviewTime: string;
-  briefingWorkspaceId: string;
-  briefingPush: boolean;
-  briefingTelegram: boolean;
-  dailyTaskCapacity: number;
-}
-export interface ExecutiveBriefing {
-  id: string;
-  kind: "morning" | "evening";
-  workspaceId: string;
-  workspaceName: string;
-  localDate: string;
-  title: string;
-  summary: string;
-  topTasks: Array<{ id: string; title: string; reason: string }>;
-  overdueCount: number;
-  riskCount: number;
-  completedCount: number;
-  remainingCount: number;
-  capacity: number;
-  overloaded: boolean;
-  suggestions: string[];
-  planReview?: { planned: number; completed: number; open: number; moved: number; dismissed: number; measuredSessions: number; measuredMinutes: number; estimatedMinutes: number; nextWorkday: string; carryover: Array<{ id: string; title: string }> };
-  createdAt: number;
 }
 export interface DayPlanItem {
   taskId: string;
