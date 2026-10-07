@@ -3425,3 +3425,5 @@ h3 {
 .confirmDialogActions .confirmPrimary { border-color: var(--text); background: var(--text); color: var(--surface, #fff); }
 .confirmDialogActions .confirmDanger { border-color: var(--danger); background: var(--danger); color: var(--surface, #fff); }
 .confirmDialogActions button:focus-visible { outline: 2px solid var(--accent, #5b5bd6); outline-offset: 2px; }
+html:has(dialog.confirmDialog[open]) { overflow: hidden; }
+.confirmDialog { max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; }

@@ -224,10 +224,15 @@ export function useLumiApp() {
   }
   function answerConfirm(confirmed: boolean) {
     const resolve = confirmResolver.current;
+    if (!resolve) return;
     confirmResolver.current = null;
     setConfirmRequest(null);
-    resolve?.(confirmed);
+    resolve(confirmed);
   }
+  // A question must not outlive the screen it was asked on.
+  useEffect(() => {
+    if (authState !== "ready") answerConfirm(false);
+  }, [authState]);
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
@@ -1276,6 +1281,7 @@ export function useLumiApp() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
+      if (confirmResolver.current) return;
       if (event.key.toLowerCase() === "k") {
         event.preventDefault();
         setView("Search");
@@ -1622,7 +1628,7 @@ export function useLumiApp() {
   }
   async function restoreServerBackup(backup: BackupSummary) {
     if (!(await askConfirm({ title: tr("backupRestoreTitle"), confirmLabel: tr("restore"), danger: true,
-      message: tr("backupRestoreConfirm").replace("{date}", new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")) }))) return;
+      message: tr("backupRestoreConfirm").replace("{date}", () => new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")) }))) return;
     setBackupStatus("Restoring backup…");
     try {
       const response = await fetch("/api/backups", {
@@ -2307,6 +2313,7 @@ export function useLumiApp() {
   }
   async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
     if (dayPlanBusy || !dayPlan) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
     const task = items.find((candidate) => candidate.id === item.taskId && candidate.type === "task" && candidate.status === "open" && candidate.workspaceId === dayPlan.workspaceId);
     if (!task) { setDayPlanStatus(tr("dayPlanChanged")); return; }
@@ -2327,8 +2334,10 @@ export function useLumiApp() {
       if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
       const proposal = proposed.proposal as AIProposal;
       const actionLabel = tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
-      if (!(await askConfirm({ title: `${actionLabel}?`, confirmLabel: actionLabel,
-        message: `${tr("confirmDayPlanAction")} ${task.title.replace(/\s+/g, " ").slice(0, 160)}${decision === "accepted" ? `\n${item.start} – ${item.end}` : ""}` }))) {
+      const planTitle = task.title.replace(/\s+/g, " ").slice(0, 160);
+      const planKey = decision === "accepted" ? "dayPlanAccept" : decision === "tomorrow" ? "dayPlanTomorrow" : "dayPlanSkip";
+      if (!(await askConfirm({ title: tr(`${planKey}Title`), confirmLabel: actionLabel, returnFocus: trigger,
+        message: tr(`${planKey}Confirm`).replace("{title}", () => planTitle).replace("{time}", () => `${item.start} – ${item.end}`) }))) {
         await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", proposalId: proposal.id }) });
         return;
       }

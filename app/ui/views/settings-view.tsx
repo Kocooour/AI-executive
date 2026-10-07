@@ -492,7 +492,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       <div className="notificationActions">
                         <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>{tr("refresh")}</button>
                         <button disabled={calendarBusy} onClick={async () => {
-                          if (await askConfirm({ title: tr("calendarDisconnectTitle"), message: tr("calendarDisconnectConfirm").replace("{label}", source.label), confirmLabel: tr("disconnect"), danger: true })) calendarAction("disconnect", source.id);
+                          if (await askConfirm({ title: tr("calendarDisconnectTitle"), message: tr("calendarDisconnectConfirm").replace("{label}", () => source.label), confirmLabel: tr("disconnect"), danger: true })) calendarAction("disconnect", source.id);
                         }}>{tr("disconnect")}</button>
                       </div>
                     </div>

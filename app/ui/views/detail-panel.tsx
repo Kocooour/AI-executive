@@ -154,7 +154,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <button type="button" onClick={() => void setProjectStatus(selected, selected.status === "completed" ? "active" : "completed")}>{tr(selected.status === "completed" ? "reopen" : "complete")}</button>
                   <button type="button" className="danger" onClick={async () => {
                     const project = selected;
-                    if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
+                    if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", () => project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
                   }}>{tr("delete")}</button>
                 </div>
                 <label>

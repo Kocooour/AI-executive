@@ -6,6 +6,8 @@ export interface ConfirmRequest {
   message: string;
   confirmLabel?: string;
   danger?: boolean;
+  // The control to return focus to when it is not the focused element at the time of asking.
+  returnFocus?: HTMLElement | null;
 }
 
 export interface AttentionResponse {
