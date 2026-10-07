@@ -79,14 +79,12 @@ export const copy: Record<Language, Record<string, string>> = {
     dayPlanExplicitEstimate: "Your estimate", dayPlanActualEstimate: "Learned from measured work", dayPlanLearnedEstimate: "Learned planning estimate", dayPlanDefaultEstimate: "Default estimate",
     dayPlanPreferredTime: "Preferred time from previous planning", dayPlanApproved: "Approved block", dayPlanProposed: "Proposed block",
 
-
     workNow: "Now", workNotRunning: "No task is running.", workStart: "Start", workPause: "Pause", workResume: "Resume", workFinish: "Finish",
     workElapsed: "Elapsed", workOverrun: "The estimate has been exceeded. Refresh the remaining-day preview before changing the schedule.", workReplan: "Refresh remaining-day preview",
     workFinishFinal: "Finishing records measured time and completes the task. This action has no one-click Undo.", workConflict: "Work state changed on another device. The latest state was loaded.",
     acceptBlock: "Accept", anotherTime: "Another time", moveTomorrow: "Tomorrow", skipPlanning: "Do not schedule",
     confirmDayPlanAction: "Confirm for task:",
     dayPlanReasonOverdue: "Overdue", dayPlanReasonToday: "Due today", dayPlanReasonDeadline: "Deadline soon", dayPlanReasonPriority: "High priority", dayPlanReasonContext: "Relevant context",
-
     todayCapacity: "Today’s capacity",
     calendarDisconnected: "Calendar not connected", freeHours: "h free", capacityUnknown: "Capacity unverified",
     calendarStale: "Calendar availability is unknown or stale. Do not use free-time planning now.", noBlockingEvent: "No blocking event during working hours today.",
@@ -94,7 +92,6 @@ export const copy: Record<Language, Record<string, string>> = {
     calendarReadonly: "Calendar · read only", calendarInfo: "Connect a private HTTPS link in ICS format. The address is encrypted on the server, is never returned to the browser after saving, and Lumi cannot change the calendar.",
     readOnly: "Read only", notConnected: "Not connected", sourceName: "Source name", privateIcs: "Private ICS link", connectLoad: "Connect and load",
     events: "events", syncFailed: "Synchronization failed", lastSync: "last", refresh: "Refresh", disconnect: "Disconnect",
-
 
 
     backupInfo: "Daily safety copies are created automatically before changes.", items: "items",
@@ -194,14 +191,12 @@ export const copy: Record<Language, Record<string, string>> = {
     dayPlanExplicitEstimate: "Váš odhad", dayPlanActualEstimate: "Odhad ze změřené práce", dayPlanLearnedEstimate: "Odhad z předchozího plánování", dayPlanDefaultEstimate: "Výchozí odhad",
     dayPlanPreferredTime: "Preferovaný čas z předchozího plánování", dayPlanApproved: "Schválený blok", dayPlanProposed: "Navržený blok",
 
-
     workNow: "Právě teď", workNotRunning: "Žádný úkol právě neběží.", workStart: "Spustit", workPause: "Pozastavit", workResume: "Pokračovat", workFinish: "Dokončit",
     workElapsed: "Uplynulo", workOverrun: "Odhad byl překročen. Před změnou rozvrhu obnovte náhled zbývajícího dne.", workReplan: "Obnovit náhled zbývajícího dne",
     workFinishFinal: "Dokončení uloží změřený čas a dokončí úkol. Tato akce nemá rychlé Zpět.", workConflict: "Pracovní stav se změnil na jiném zařízení. Načetl jsem aktuální stav.",
     acceptBlock: "Přijmout", anotherTime: "Jiný čas", moveTomorrow: "Zítra", skipPlanning: "Neplánovat",
     confirmDayPlanAction: "Potvrdit pro úkol:",
     dayPlanReasonOverdue: "Po termínu", dayPlanReasonToday: "Na dnes", dayPlanReasonDeadline: "Blízký termín", dayPlanReasonPriority: "Vysoká priorita", dayPlanReasonContext: "Relevantní kontext",
-
     todayCapacity: "Dnešní kapacita",
     calendarDisconnected: "Kalendář není připojen", freeHours: "h volno", capacityUnknown: "Kapacita neověřena",
     calendarStale: "Dostupnost kalendáře je neznámá nebo zastaralá. Plán podle volných bloků nyní nepoužívejte.", noBlockingEvent: "V pracovní době dnes nemáte žádnou blokující událost.",
@@ -209,7 +204,6 @@ export const copy: Record<Language, Record<string, string>> = {
     calendarReadonly: "Kalendář · pouze pro čtení", calendarInfo: "Připojte soukromý HTTPS odkaz ve formátu ICS. Adresa se na serveru šifruje, po uložení se už do prohlížeče nevrací a Lumi nemůže kalendář měnit.",
     readOnly: "Pouze pro čtení", notConnected: "Nepřipojeno", sourceName: "Název zdroje", privateIcs: "Soukromý ICS odkaz", connectLoad: "Připojit a načíst",
     events: "událostí", syncFailed: "Synchronizace selhala", lastSync: "naposledy", refresh: "Obnovit", disconnect: "Odpojit",
-
 
 
     backupInfo: "Denní bezpečnostní kopie se vytvářejí automaticky před změnami.", items: "položek",
