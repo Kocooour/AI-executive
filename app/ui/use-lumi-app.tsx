@@ -1884,10 +1884,7 @@ export function useLumiApp() {
       .filter((r) => r.targetEntityId === targetId && r.relationType === type)
       .map((r) => r.sourceEntityId);
   const homeTodayTasks = tasks
-    .filter((task) => task.status === "open" && (
-      task.properties.today === true || task.properties.when === today ||
-      (typeof task.properties.when === "string" && task.properties.when < today)
-    ))
+    .filter((task) => taskMatchesView(task, "Today", today))
     .sort(byManualOrder("task:Today"))
     .slice(0, 5);
   const homeProjects = projects.filter((project) => project.status === "active").sort(byManualOrder("project:all")).slice(0, 4);
@@ -2544,11 +2541,7 @@ export function useLumiApp() {
     if (section === "Today") properties.when = today;
     const peers = tasks.filter((candidate) => {
       if (candidate.id === task.id || candidate.status !== "open" || candidate.workspaceId !== task.workspaceId) return false;
-      if (section === "Inbox") return candidate.properties.inbox === true;
-      if (section === "Today") return candidate.properties.today === true || candidate.properties.when === today ||
-        (typeof candidate.properties.when === "string" && candidate.properties.when < today);
-      if (section === "Someday") return candidate.properties.someday === true;
-      return !candidate.properties.when && !candidate.properties.someday && candidate.properties.inbox !== true;
+      return taskMatchesView(candidate, section === "Inbox" || section === "Today" || section === "Someday" ? section : "Anytime", today);
     });
     const scope = `task:${section}`;
     const storedOrders = task.properties.manualOrders;

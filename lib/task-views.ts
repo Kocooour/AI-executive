@@ -30,16 +30,17 @@ export const taskMatchesView = (task: Entity, targetView: string, todayValue: st
   if (targetView === "Completed") return task.status === "completed";
   if (task.status !== "open") return false;
   const properties = task.properties;
+  // An emptied date field is stored as "", which must not compare as "earlier than today".
+  const when = typeof properties.when === "string" ? properties.when : "";
   if (targetView === "Inbox") return properties.inbox === true;
   if (targetView === "Today") {
-    return properties.today === true || properties.when === todayValue ||
-      (typeof properties.when === "string" && properties.when < todayValue);
+    return properties.today === true || (when !== "" && when <= todayValue);
   }
   if (targetView === "Overdue") {
-    return typeof properties.when === "string" && properties.when < todayValue;
+    return when !== "" && when < todayValue;
   }
   if (targetView === "Upcoming") {
-    return typeof properties.when === "string" && properties.when > todayValue;
+    return when > todayValue;
   }
   if (targetView === "Anytime") {
     // A task flagged for today belongs to Today only, including older tasks that carry the flag without a date.

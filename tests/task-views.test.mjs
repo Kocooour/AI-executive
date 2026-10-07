@@ -107,3 +107,12 @@ test("new task placement follows a typed date, then explicit values, then the vi
   assert.deepEqual(newTaskPlacement("", { today: false, inbox: false }, { view: "Today", today: TODAY, hasProject: false }), { inbox: false, today: false });
   assert.deepEqual(newTaskPlacement("", { today: true, when: TODAY }, { view: "Home", today: TODAY, hasProject: false }), { inbox: false, today: true });
 });
+
+test("a cleared date is no date: the task is neither Today nor Overdue", () => {
+  const views = ["Inbox", "Today", "Overdue", "Upcoming", "Anytime", "Someday"];
+  const membership = (properties) => views.filter((view) => taskMatchesView(task({ properties }), view, TODAY));
+  assert.deepEqual(membership({ when: "", today: false, inbox: false, someday: false }), ["Anytime"]);
+  assert.deepEqual(membership({ when: "", today: false, inbox: true, someday: false }), ["Inbox"]);
+  assert.deepEqual(membership({ when: "", today: false, inbox: false, someday: true }), ["Someday"]);
+  assert.deepEqual(membership({ when: "", today: true }), ["Today"]);
+});
