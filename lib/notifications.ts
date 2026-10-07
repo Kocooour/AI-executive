@@ -4,6 +4,7 @@ import { getDatabase, readSnapshot } from "./server-store";
 
 export interface NotificationPreferences {
   enabled: boolean;
+  attentionPush: boolean;
   timezone: string;
   workdayStart: string;
   workdayEnd: string;
@@ -12,6 +13,7 @@ export interface NotificationPreferences {
 
 const defaultPreferences: NotificationPreferences = {
   enabled: true,
+  attentionPush: true,
   timezone: "Europe/Prague",
   workdayStart: "08:00",
   workdayEnd: "18:00",
@@ -126,6 +128,7 @@ export function saveNotificationPreferences(input: Partial<NotificationPreferenc
   }
   const next: NotificationPreferences = {
     enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+    attentionPush: typeof input.attentionPush === "boolean" ? input.attentionPush : current.attentionPush,
     timezone:
       typeof input.timezone === "string" && input.timezone.trim() && input.timezone.length <= 100
         ? input.timezone.trim()
@@ -220,7 +223,7 @@ export function currentAttentionTaskCount(now = Date.now()) {
   }).length;
 }
 
-async function sendToAll(payload: Record<string, unknown>) {
+export async function sendPushToAll(payload: Record<string, unknown>) {
   configureWebPush();
   let sent = 0;
   let failed = 0;
@@ -251,7 +254,7 @@ function sendTarget(subscription: PushSubscription, payload: Record<string, unkn
 }
 
 export async function sendTestNotification() {
-  return sendToAll({
+  return sendPushToAll({
     title: "Lumi",
     body: "Notifications are ready on this device.",
     url: "/?view=Today",
@@ -264,7 +267,7 @@ export async function sendSecurityNotification(
   body: string,
   severity: "warning" | "critical",
 ) {
-  return sendToAll({
+  return sendPushToAll({
     title,
     body,
     url: "/?view=Settings",

@@ -1,19 +1,22 @@
-// Background schedulers of the single always-on Node.js process: reminders, security alerts
-// and calendar refreshes. Node-only; loaded from instrumentation.ts.
+// Background schedulers of the single always-on Node.js process: reminders, security alerts,
+// attention notifications and calendar refreshes. Node-only; loaded from instrumentation.ts.
 export async function startSchedulers() {
   const scheduler = globalThis as typeof globalThis & {
     __aiExecutiveReminderScheduler?: ReturnType<typeof setInterval>;
     __aiExecutiveSecurityScheduler?: ReturnType<typeof setInterval>;
     __aiExecutiveCalendarScheduler?: ReturnType<typeof setInterval>;
+    __aiExecutiveAttentionScheduler?: ReturnType<typeof setInterval>;
   };
   if (
     scheduler.__aiExecutiveReminderScheduler &&
     scheduler.__aiExecutiveSecurityScheduler &&
-    scheduler.__aiExecutiveCalendarScheduler
+    scheduler.__aiExecutiveCalendarScheduler &&
+    scheduler.__aiExecutiveAttentionScheduler
   ) return;
   const { processDueReminders } = await import("./notifications");
   const { processSecurityAlerts } = await import("./security-monitor");
   const { processCalendarRefreshes } = await import("./calendar");
+  const { processAttentionNotifications } = await import("./attention-notifications");
   if (!scheduler.__aiExecutiveReminderScheduler) {
     const reminderTick = () => processDueReminders().catch((error) => console.error("Reminder scheduler failed", error));
     setTimeout(reminderTick, 5_000);
@@ -28,5 +31,10 @@ export async function startSchedulers() {
     const calendarTick = () => processCalendarRefreshes().catch(() => undefined);
     setTimeout(calendarTick, 15_000);
     scheduler.__aiExecutiveCalendarScheduler = setInterval(calendarTick, 5 * 60_000);
+  }
+  if (!scheduler.__aiExecutiveAttentionScheduler) {
+    const attentionTick = () => processAttentionNotifications().catch((error) => console.error("Attention notification scheduler failed", error instanceof Error ? error.name : "unknown"));
+    setTimeout(attentionTick, 20_000);
+    scheduler.__aiExecutiveAttentionScheduler = setInterval(attentionTick, 5 * 60_000);
   }
 }

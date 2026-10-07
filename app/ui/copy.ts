@@ -112,6 +112,7 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionLastSource: "Last source update", attentionUnknown: "unknown", attentionDetailMissing: "Detail is not in local data; refresh synchronization.",
     homeMoreToday: "and {n} more today", homeFixedEvents: "Fixed events today", homePlanOpen: "Open day plan",
     homePlanProposed: "Proposed time blocks waiting for your approval: {n}.", homePlanUnscheduled: "Tasks without a time block: {n}.",
+    attentionPush: "Notify me about urgent deadlines", attentionPushInfo: "One notification when a task deadline is within 48 hours or has passed. Quiet from 22:00 to 08:00, at most three a day; snoozed and dismissed items stay silent.",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
@@ -224,5 +225,6 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionLastSource: "Poslední změna dat", attentionUnknown: "neznámá", attentionDetailMissing: "Detail není v místních datech; obnovte synchronizaci.",
     homeMoreToday: "a dalších {n} na dnešek", homeFixedEvents: "Pevné události dnes", homePlanOpen: "Otevřít plán dne",
     homePlanProposed: "Navržené časové bloky čekající na schválení: {n}.", homePlanUnscheduled: "Úkoly bez časového bloku: {n}.",
+    attentionPush: "Upozornit na urgentní termíny", attentionPushInfo: "Jedno upozornění, když je termín úkolu do 48 hodin nebo uplynul. Klid od 22:00 do 8:00, nejvýš tři denně; odložené a skryté položky mlčí.",
   },
 };
