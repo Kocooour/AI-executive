@@ -21,20 +21,12 @@ export function AgentsView({ app }: { app: LumiApp }) {
               <div className="agentGrid">
                 {pactAgents.map((agent) => {
                   const latest = agentRuns.find((run) => run.agentId === agent.id);
-                  const description = agent.id === "morning-planner"
-                    ? (language === "cs" ? "Sestaví priority dne, rizika a kapacitní doporučení." : "Builds daily priorities, risks and capacity guidance.")
-                    : agent.id === "evening-reviewer"
-                      ? (language === "cs" ? "Zhodnotí dokončenou práci a neuzavřené závazky." : "Reviews completed work and unfinished commitments.")
-                      : agent.id === "project-manager"
-                        ? (language === "cs" ? "Najde rizikové projekty a projekty bez dalšího kroku." : "Finds at-risk projects and projects without a next action.")
-                        : (language === "cs" ? "Připraví podklady k nejbližší události z kalendáře." : "Prepares guidance for the next calendar event.");
-                  const displayName = agent.id === "morning-planner"
-                    ? tr("morningBrief")
-                    : agent.id === "evening-reviewer"
-                      ? tr("eveningReview")
-                      : agent.id === "project-manager"
-                        ? (language === "cs" ? "Projektový manažer" : "Project Manager")
-                        : (language === "cs" ? "Příprava na schůzku" : "Meeting Prep");
+                  const description = agent.id === "project-manager"
+                    ? (language === "cs" ? "Najde rizikové projekty a projekty bez dalšího kroku." : "Finds at-risk projects and projects without a next action.")
+                    : (language === "cs" ? "Připraví podklady k nejbližší události z kalendáře." : "Prepares guidance for the next calendar event.");
+                  const displayName = agent.id === "project-manager"
+                    ? (language === "cs" ? "Projektový manažer" : "Project Manager")
+                    : (language === "cs" ? "Příprava na schůzku" : "Meeting Prep");
                   return (
                     <article className="agentCard" key={agent.id}>
                       <header>

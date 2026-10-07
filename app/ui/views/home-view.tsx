@@ -5,7 +5,7 @@ import type { LumiApp } from "../use-lumi-app";
 import { TodayAgenda } from "./today-agenda";
 import { WorkNowCard } from "./work-now-card";
 
-// Home is the daily brief: a status line, at most five attention items, and today.
+// Home is the brief of the current state: a status line, at most five attention items, and today.
 // Working lists (projects, upcoming, recent) live in their own views.
 export function HomeView({ app }: { app: LumiApp }) {
   const {
@@ -14,8 +14,6 @@ export function HomeView({ app }: { app: LumiApp }) {
     activeWorkspaceId,
     attentionBusyKey,
     attentionError,
-    briefingBusy,
-    briefings,
     calendarFresh,
     calendarSources,
     currentDayPlanBlock,
@@ -32,7 +30,6 @@ export function HomeView({ app }: { app: LumiApp }) {
     loadAttention,
     nextDayPlanBlock,
     openCapture,
-    runBriefing,
     setActiveDragTarget,
     setAttentionError,
     setShowAllAttention,
@@ -72,7 +69,6 @@ export function HomeView({ app }: { app: LumiApp }) {
   const unscheduledTasks = visibleDayPlan ? visibleDayPlan.unscheduled.length : 0;
   // Calendar and day plan belong to one workspace; name it when Home shows the read-only aggregate.
   const scopeNote = activeWorkspaceId === "all" && writeWorkspace ? ` (${writeWorkspace.title})` : "";
-  const latestBrief = briefings[0];
 
   return (
     <>
@@ -166,44 +162,6 @@ export function HomeView({ app }: { app: LumiApp }) {
           <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("homePlanOpen")} →</button>
         </div> : dayPlanStatus ? <p className="attentionEmpty" role="status">{dayPlanStatus}</p> : null}
       </section>
-
-      <details className="homeSection homeBrief">
-        <summary>
-          <span><span className="sectionDot recentDot" />{tr("dailyBrief")}</span>{" "}
-          <small>{latestBrief ? `${latestBrief.title} · ${shortTime(latestBrief.createdAt)}` : tr("homeBriefNone")}</small>
-        </summary>
-        <div className="notificationActions">
-          <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>{tr("morningBrief")}</button>
-          <button onClick={() => runBriefing("evening")} disabled={briefingBusy}>{tr("eveningReview")}</button>
-        </div>
-        {latestBrief ? (
-          <div>
-            {latestBrief.kind === "evening" && latestBrief.planReview ? <p>
-              <strong>{tr("dayPlanReviewCounts")}:</strong> {latestBrief.planReview.planned} {tr("dayPlanReviewPlanned")},
-              {" "}{latestBrief.planReview.completed} {tr("dayPlanReviewCompleted")},
-              {" "}{latestBrief.planReview.open} {tr("dayPlanReviewOpen")},
-              {" "}{latestBrief.planReview.moved} {tr("dayPlanReviewMoved")},
-              {" "}{latestBrief.planReview.dismissed} {tr("dayPlanReviewDismissed")}.
-              {latestBrief.planReview.measuredSessions > 0 && <> {language === "cs" ? "Změřeno" : "Measured"}: {latestBrief.planReview.measuredMinutes} min{latestBrief.planReview.estimatedMinutes > 0 ? ` / ${latestBrief.planReview.estimatedMinutes} min` : ""}.</>}
-              {latestBrief.planReview.nextWorkday && <> {tr("dayPlanReviewNextWorkday")}: {latestBrief.planReview.nextWorkday}.</>}
-            </p> : <p>{latestBrief.summary}</p>}
-            {latestBrief.overloaded && <p role="status"><strong>{tr("capacityExceeded")}</strong> {tr("capacityEstimate")}</p>}
-            <ol className="briefingTasks">
-              {latestBrief.topTasks.map((task) => (
-                <li key={task.id}>
-                  <button onClick={() => {
-                    const entity = items.find((item) => item.id === task.id);
-                    if (entity) inspect(entity);
-                  }}>{task.title}</button>
-                  <small>{task.reason}</small>
-                </li>
-              ))}
-            </ol>
-            <ul>{latestBrief.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
-            <small>{new Date(latestBrief.createdAt).toLocaleString()} · {latestBrief.workspaceName}</small>
-          </div>
-        ) : <p>{tr("firstBrief")}</p>}
-      </details>
     </>
   );
 }

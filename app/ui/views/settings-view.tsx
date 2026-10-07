@@ -11,7 +11,6 @@ export function SettingsView({ app }: { app: LumiApp }) {
     backupStatus,
     backups,
     badgeStatus,
-    briefingBusy,
     calendarAction,
     calendarBusy,
     calendarLabel,
@@ -47,7 +46,6 @@ export function SettingsView({ app }: { app: LumiApp }) {
     removePasskey,
     restoreAppBadge,
     restoreServerBackup,
-    runBriefing,
     saveLanguage,
     saveNotificationSettings,
     saveTheme,
@@ -488,68 +486,6 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   ))}
                 </div>
                 {calendarStatus && <p role="status">{calendarStatus}</p>}
-              </section>
-              <section>
-                <div className="sectionHeading">
-                  <div>
-                    <h2>Proactive executive</h2>
-                    <p>{tr("proactiveInfo")}</p>
-                  </div>
-                  <button onClick={() => runBriefing("morning")} disabled={briefingBusy}>
-                    {tr("createNow")}
-                  </button>
-                </div>
-                {notificationState && (
-                  <div className="preferenceGrid">
-                    <label className="preferenceToggle">
-                      <input type="checkbox" checked={notificationState.preferences.briefingEnabled}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingEnabled: event.target.checked })} />
-                      {tr("automaticBriefs")}
-                    </label>
-                    <label>
-                      {tr("workspace")}
-                      <select value={notificationState.preferences.briefingWorkspaceId}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingWorkspaceId: event.target.value })}>
-                        {workspaces.map((workspace) => <option key={workspace.id} value={workspace.workspaceId}>{workspace.title}</option>)}
-                      </select>
-                    </label>
-                    <label className="preferenceToggle">
-                      <input type="checkbox" checked={notificationState.preferences.morningBriefEnabled}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefEnabled: event.target.checked })} />
-                      {tr("morningBrief")}
-                    </label>
-                    <label>
-                      {tr("morningTime")}
-                      <input type="time" value={notificationState.preferences.morningBriefTime}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, morningBriefTime: event.target.value })} />
-                    </label>
-                    <label className="preferenceToggle">
-                      <input type="checkbox" checked={notificationState.preferences.eveningReviewEnabled}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewEnabled: event.target.checked })} />
-                      {tr("eveningReview")}
-                    </label>
-                    <label>
-                      {tr("eveningTime")}
-                      <input type="time" value={notificationState.preferences.eveningReviewTime}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, eveningReviewTime: event.target.value })} />
-                    </label>
-                    <label>
-                      {tr("dailyCapacity")}
-                      <input type="number" min="1" max="50" value={notificationState.preferences.dailyTaskCapacity}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, dailyTaskCapacity: Number(event.target.value) })} />
-                    </label>
-                    <label className="preferenceToggle">
-                      <input type="checkbox" checked={notificationState.preferences.briefingPush}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingPush: event.target.checked })} />
-                      {tr("briefPush")}
-                    </label>
-                    <label className="preferenceToggle">
-                      <input type="checkbox" checked={notificationState.preferences.briefingTelegram}
-                        onChange={(event) => saveNotificationSettings({ ...notificationState.preferences, briefingTelegram: event.target.checked })} />
-                      {tr("briefTelegram")}
-                    </label>
-                  </div>
-                )}
               </section>
               <section>
                 <div className="sectionHeading">

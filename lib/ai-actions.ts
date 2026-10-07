@@ -4,7 +4,7 @@ import { HttpInputError } from "./http-security";
 import { getNotificationPreferences } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { completeServerAI } from "./server-ai-provider";
-import { buildExecutiveBriefing } from "./executive-briefings";
+import { buildCurrentPriorities } from "./current-priorities";
 import { buildDayPlan, currentDayPlanDate } from "./day-plan";
 import { matchesDayPlanCandidate, type DayPlanDecision } from "./day-plan-decision";
 import { resolvePACTContext } from "./pact";
@@ -457,14 +457,13 @@ export function proposeDayPlanBlock(input: {
   ]);
 }
 
-function morningBrief(workspaceId: string, entities: Entity[]) {
-  void entities;
-  if (workspaceId === "all") return "Pro denní přehled vyber konkrétní workspace; souhrn All my work zůstává jen čtecí agregace.";
-  const briefing = buildExecutiveBriefing("morning", workspaceId);
-  const tasks = briefing.topTasks.length
-    ? briefing.topTasks.map((task, index) => `${index + 1}. ${task.title} — ${task.reason}`).join("\n")
+function currentPrioritiesAnswer(workspaceId: string) {
+  if (workspaceId === "all") return "Pro přehled priorit vyber konkrétní workspace; souhrn All my work zůstává jen čtecí agregace.";
+  const priorities = buildCurrentPriorities(workspaceId);
+  const tasks = priorities.topTasks.length
+    ? priorities.topTasks.map((task, index) => `${index + 1}. ${task.title} — ${task.reason}`).join("\n")
     : "Žádné prioritní otevřené úkoly.";
-  return `${briefing.title} (${briefing.localDate}, ${getNotificationPreferences().timezone})\n${briefing.summary}\n${tasks}\nDoporučení: ${briefing.suggestions.join(" ")}`;
+  return `Co je teď důležité (${priorities.localDate}, ${priorities.timezone})\n${priorities.summary}\n${tasks}\nDoporučení: ${priorities.suggestions.join(" ")}`;
 }
 
 function providerContext(workspaceId: string, entities: Entity[], focusEntityId?: string) {
@@ -541,7 +540,7 @@ export async function planAIRequest(input: {
   )?.title || input.writeWorkspaceId;
   const normalized = normalize(input.message);
   if (/\b(co dnes hori|ranni prehled|dnes dulezite|morning brief|today brief)\b/.test(normalized)) {
-    return { message: morningBrief(input.readWorkspaceId, entities), provider: "local" };
+    return { message: currentPrioritiesAnswer(input.readWorkspaceId), provider: "local" };
   }
 
   const reference = referencedEntity(
