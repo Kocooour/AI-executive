@@ -65,6 +65,7 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [attentionReload, setAttentionReload] = useState(0),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
@@ -1852,8 +1853,12 @@ export function useLumiApp() {
   }, [syncStatus]);
   useEffect(() => {
     const lost = () => setAttentionOutdated(true);
+    // The sync state may never have left "synced" during a short drop, so coming back online
+    // has to ask for a fresh evaluation itself instead of waiting for the next periodic one.
+    const back = () => setAttentionReload((count) => count + 1);
     window.addEventListener("offline", lost);
-    return () => window.removeEventListener("offline", lost);
+    window.addEventListener("online", back);
+    return () => { window.removeEventListener("offline", lost); window.removeEventListener("online", back); };
   }, []);
   useEffect(() => {
     if (authState !== "ready" || syncStatus !== "synced") return;
@@ -1863,7 +1868,7 @@ export function useLumiApp() {
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 60_000);
     return () => { cancelled = true; attentionLoadVersion.current += 1; window.clearInterval(timer); };
-  }, [authState, activeWorkspaceId, syncStatus]);
+  }, [authState, activeWorkspaceId, syncStatus, attentionReload]);
   useEffect(() => {
     if (authState !== "ready") return;
     const refresh = () => {

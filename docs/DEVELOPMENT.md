@@ -91,11 +91,20 @@ Run the automated checks and the production build from the affected worktree:
 
 ```bash
 pnpm test        # unit tests in tests/*.test.mjs (Node test runner, no extra dependencies)
-pnpm typecheck   # tsc --noEmit
+pnpm typecheck   # tsc --noEmit for the app, then for e2e/
 pnpm build
+pnpm test:e2e    # browser scenarios in e2e/ (Playwright, Chromium)
 ```
 
 `pnpm test` covers deterministic `lib/` behavior only; it does not exercise the UI. Passing it is not evidence that a UI change was tested.
+
+`pnpm test:e2e` builds this checkout, starts it on port 3100 with a temporary data directory and throwaway credentials, signs in once, seeds synthetic data and runs the scenarios in `e2e/` one after another against that instance: the Home brief, capture, the view in the address, a task link, the confirmation dialog, Settings sections, a lost connection and signing out. It never reads `.env.local` or an existing data directory.
+
+- First use on a machine: `pnpm exec playwright install chromium`.
+- `E2E_PORT=3105` picks another port when 3100 is taken by a parallel instance; `E2E_SKIP_BUILD=1` reuses the existing `.next` build of the same checkout.
+- The scenarios share one instance and one session because sign-in is rate limited; add a scenario before the two sign-out scenarios, which must stay last.
+- The suite covers the main paths only. It does not replace checking a UI change on the branch instance, and it does not cover a connected calendar, passkeys, push delivery, drag and drop or an installed app.
+- `e2e/` and `playwright.config.ts` are excluded from the app's `tsconfig.json`, so a production build does not need the test dependency.
 
 Add and run focused automated checks when a feature introduces them. For UI-sensitive work, test desktop and narrow/mobile layouts on the branch instance; for persistence work, include a restart, migration/rollback (when relevant), and data-isolation check.
 
