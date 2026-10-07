@@ -1,6 +1,7 @@
 "use client";
-import { mobileViews, moreViews, viewIcons } from "../navigation";
+import { mobileViews, moreViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
+import { ViewIcon } from "./project-icon";
 
 export function MobileNav({ app }: { app: LumiApp }) {
   const {
@@ -35,7 +36,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setView(x);
             }}
           >
-            <span className="mobileNavIcon" aria-hidden="true">{viewIcons[x]}</span><span>{tr(x)}</span>
+            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={x} /></span><span>{tr(x)}</span>
           </button>
         ))}
       </nav>

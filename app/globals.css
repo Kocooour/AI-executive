@@ -3410,3 +3410,5 @@ h3 {
     gap: 8px;
   }
 }
+.projectGlyph { display: inline-block; flex: none; vertical-align: -0.14em; }
+.entityIcon .projectGlyph { vertical-align: middle; }

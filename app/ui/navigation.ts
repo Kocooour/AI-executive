@@ -40,7 +40,6 @@ export const viewIcons: Record<string, string> = {
   Anytime: "•",
   Someday: "☾",
   Completed: "✓",
-  Projects: "◇",
   Areas: "◎",
   Notes: "▤",
   Calendar: "▦",

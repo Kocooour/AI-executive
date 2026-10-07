@@ -1,6 +1,7 @@
 "use client";
-import { primaryViews, secondaryViews, viewIcons } from "../navigation";
+import { primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
+import { ViewIcon } from "./project-icon";
 
 export function Sidebar({ app }: { app: LumiApp }) {
   const {
@@ -90,7 +91,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
               }}
               key={x}
             >
-              <span className="navLabel"><span aria-hidden="true">{viewIcons[x]}</span>{tr(x)}</span>
+              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
               {sidebarCounts[x] !== undefined ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}
