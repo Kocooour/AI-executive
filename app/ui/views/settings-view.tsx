@@ -169,33 +169,6 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 <span className={`installStatus ${standalone ? "installed" : ""}`}>
                   {standalone ? tr("installed") : tr("browserMode")}
                 </span>
-                <div className="badgeDiagnostics">
-                  <h3>{tr("appBadge")}</h3>
-                  <dl>
-                    <div>
-                      <dt>{tr("installApp")}</dt>
-                      <dd>{standalone ? tr("installed") : tr("browserMode")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("notificationPermission")}</dt>
-                      <dd>{typeof Notification !== "undefined" && Notification.permission === "granted" ? tr("allowed") : tr("notAllowed")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("badgeApi")}</dt>
-                      <dd>{typeof navigator !== "undefined" && typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function" ? tr("supported") : tr("unsupported")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("currentBadgeCount")}</dt>
-                      <dd>{attentionTaskCount}</dd>
-                    </div>
-                  </dl>
-                  <div className="notificationActions">
-                    <button className="primaryAction" onClick={testAppBadge}>{tr("testBadge")}</button>
-                    <button onClick={restoreAppBadge}>{tr("restoreBadge")}</button>
-                  </div>
-                  {badgeStatus && <p role="status">{badgeStatus}</p>}
-                  <p className="settingsHint">{tr("badgeSystemHint")}</p>
-                </div>
               </section>
               <section hidden={settingsSection !== "workspace"}>
                 <h2>{tr("workspace")}</h2>
@@ -441,6 +414,33 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   </div>
                 )}
                 {notificationStatus && <p role="status">{notificationStatus}</p>}
+                <div className="badgeDiagnostics">
+                  <h3>{tr("appBadge")}</h3>
+                  <dl>
+                    <div>
+                      <dt>{tr("installApp")}</dt>
+                      <dd>{standalone ? tr("installed") : tr("browserMode")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("notificationPermission")}</dt>
+                      <dd>{typeof Notification !== "undefined" && Notification.permission === "granted" ? tr("allowed") : tr("notAllowed")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("badgeApi")}</dt>
+                      <dd>{typeof navigator !== "undefined" && typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function" ? tr("supported") : tr("unsupported")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("currentBadgeCount")}</dt>
+                      <dd>{attentionTaskCount}</dd>
+                    </div>
+                  </dl>
+                  <div className="notificationActions">
+                    <button className="primaryAction" onClick={testAppBadge}>{tr("testBadge")}</button>
+                    <button onClick={restoreAppBadge}>{tr("restoreBadge")}</button>
+                  </div>
+                  {badgeStatus && <p role="status">{badgeStatus}</p>}
+                  <p className="settingsHint">{tr("badgeSystemHint")}</p>
+                </div>
               </section>
               <section hidden={settingsSection !== "calendar"}>
                 <div className="sectionHeading">
