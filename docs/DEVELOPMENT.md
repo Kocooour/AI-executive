@@ -98,7 +98,7 @@ pnpm test:e2e    # browser scenarios in e2e/ (Playwright, Chromium)
 
 `pnpm test` covers deterministic `lib/` behavior only; it does not exercise the UI. Passing it is not evidence that a UI change was tested.
 
-`pnpm test:e2e` builds this checkout, starts it on port 3100 with a temporary data directory and throwaway credentials, signs in once, seeds synthetic data and runs the scenarios in `e2e/` one after another against that instance: the Home brief, capture, the view in the address, a task link, the confirmation dialog, Settings sections, a lost connection and signing out. It never reads `.env.local` or an existing data directory.
+`pnpm test:e2e` builds this checkout, starts it on port 3100 with a temporary data directory and throwaway credentials, signs in once, seeds synthetic data and runs the scenarios in `e2e/` one after another against that instance: the Home brief, capture, the view in the address, a task link, the confirmation dialog, Settings sections, a lost connection and signing out. Its sign-in settings and data directory always come from the test run, never from an existing instance. Next.js still loads the checkout's ignored `.env.local`, so other variables set there (for example a model provider key) stay in effect.
 
 - First use on a machine: `pnpm exec playwright install chromium`.
 - `E2E_PORT=3105` picks another port when 3100 is taken by a parallel instance; `E2E_SKIP_BUILD=1` reuses the existing `.next` build of the same checkout.
