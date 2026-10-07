@@ -8,7 +8,7 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
+import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { urlBase64ToUint8Array } from "./format";
@@ -61,6 +61,7 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [attentionOutdated, setAttentionOutdated] = useState(false),
     [attentionBusyKey, setAttentionBusyKey] = useState(""),
     [showAllAttention, setShowAllAttention] = useState(false),
@@ -212,6 +213,26 @@ export function useLumiApp() {
   const workSessionLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // One confirmation at a time: asking again answers the previous question with "no".
+  const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  function askConfirm(request: ConfirmRequest) {
+    confirmResolver.current?.(false);
+    return new Promise<boolean>((resolve) => {
+      confirmResolver.current = resolve;
+      setConfirmRequest(request);
+    });
+  }
+  function answerConfirm(confirmed: boolean) {
+    const resolve = confirmResolver.current;
+    if (!resolve) return;
+    confirmResolver.current = null;
+    setConfirmRequest(null);
+    resolve(confirmed);
+  }
+  // A question must not outlive the screen it was asked on.
+  useEffect(() => {
+    if (authState !== "ready") answerConfirm(false);
+  }, [authState]);
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
@@ -575,7 +596,7 @@ export function useLumiApp() {
       selectWorkspace(task.workspaceId);
     }
     workSessionLoadVersion.current += 1;
-    if (action === "finish" && !window.confirm(tr("workFinishFinal"))) return;
+    if (action === "finish" && !(await askConfirm({ title: tr("workFinishTitle"), message: tr("workFinishFinal"), confirmLabel: tr("workFinish") }))) return;
     setWorkSessionBusy(true); setWorkSessionStatus("");
     try {
       const current = workSession;
@@ -1180,7 +1201,7 @@ export function useLumiApp() {
   }
 
   async function removePasskey(id: string) {
-    if (!window.confirm("Remove this passkey? Password sign-in will remain available.")) return;
+    if (!(await askConfirm({ title: tr("passkeyRemoveTitle"), message: tr("passkeyRemoveConfirm"), confirmLabel: tr("remove"), danger: true }))) return;
     const response = await fetch("/api/auth/passkeys", {
       method: "DELETE",
       headers: { "content-type": "application/json" },
@@ -1260,6 +1281,7 @@ export function useLumiApp() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
+      if (confirmResolver.current) return;
       if (event.key.toLowerCase() === "k") {
         event.preventDefault();
         setView("Search");
@@ -1605,12 +1627,8 @@ export function useLumiApp() {
     }
   }
   async function restoreServerBackup(backup: BackupSummary) {
-    if (
-      !window.confirm(
-        `Restore ${new Date(backup.createdAt).toLocaleString()}? A safety backup will be created first.`,
-      )
-    )
-      return;
+    if (!(await askConfirm({ title: tr("backupRestoreTitle"), confirmLabel: tr("restore"), danger: true,
+      message: tr("backupRestoreConfirm").replace("{date}", () => new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")) }))) return;
     setBackupStatus("Restoring backup…");
     try {
       const response = await fetch("/api/backups", {
@@ -2295,6 +2313,7 @@ export function useLumiApp() {
   }
   async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
     if (dayPlanBusy || !dayPlan) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
     const task = items.find((candidate) => candidate.id === item.taskId && candidate.type === "task" && candidate.status === "open" && candidate.workspaceId === dayPlan.workspaceId);
     if (!task) { setDayPlanStatus(tr("dayPlanChanged")); return; }
@@ -2314,7 +2333,11 @@ export function useLumiApp() {
       const proposed = await proposeResponse.json().catch(() => ({}));
       if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
       const proposal = proposed.proposal as AIProposal;
-      if (!window.confirm(`${tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning")} — ${tr("confirmDayPlanAction")} ${task.title.replace(/\s+/g, " ").slice(0, 160)}${decision === "accepted" ? `\n${item.start} – ${item.end}` : ""}`)) {
+      const actionLabel = tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
+      const planTitle = task.title.replace(/\s+/g, " ").slice(0, 160);
+      const planKey = decision === "accepted" ? "dayPlanAccept" : decision === "tomorrow" ? "dayPlanTomorrow" : "dayPlanSkip";
+      if (!(await askConfirm({ title: tr(`${planKey}Title`), confirmLabel: actionLabel, returnFocus: trigger,
+        message: tr(`${planKey}Confirm`).replace("{title}", () => planTitle).replace("{time}", () => `${item.start} – ${item.end}`) }))) {
         await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", proposalId: proposal.id }) });
         return;
       }
@@ -2705,6 +2728,9 @@ export function useLumiApp() {
     attentionOutdated,
     attentionStale,
     attentionTaskCount,
+    answerConfirm,
+    askConfirm,
+    confirmRequest,
     authEnabled,
     authError,
     authPassword,

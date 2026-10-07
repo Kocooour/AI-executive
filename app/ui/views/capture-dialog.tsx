@@ -1,4 +1,5 @@
 "use client";
+import { handleOverlayKeys } from "../focus";
 import { type CaptureSuggestion } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 
@@ -41,24 +42,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             aria-modal="true"
             aria-labelledby="capture-title"
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setCapture(false);
-              if (e.key === "Tab") {
-                const focusable = [...(captureModalRef.current?.querySelectorAll<HTMLElement>(
-                  'input, button:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])',
-                ) || [])];
-                if (!focusable.length) return;
-                const first = focusable[0];
-                const last = focusable[focusable.length - 1];
-                if (e.shiftKey && document.activeElement === first) {
-                  e.preventDefault();
-                  last.focus();
-                } else if (!e.shiftKey && document.activeElement === last) {
-                  e.preventDefault();
-                  first.focus();
-                }
-              }
-            }}
+            onKeyDown={(e) => handleOverlayKeys(e, () => setCapture(false))}
             onSubmit={(e) => {
               e.preventDefault();
               submitCapture();

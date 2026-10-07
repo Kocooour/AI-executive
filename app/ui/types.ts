@@ -1,6 +1,15 @@
 import { type AttentionItem } from "../../lib/attention";
 import { type AIMessage } from "../../lib/ai-provider";
 
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  // The control to return focus to when it is not the focused element at the time of asking.
+  returnFocus?: HTMLElement | null;
+}
+
 export interface AttentionResponse {
   items: Array<AttentionItem & { sourceFingerprint: string; lifecycleState: "active" }>;
   hidden: { snoozed: number; dismissed: number };

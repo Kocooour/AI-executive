@@ -6,6 +6,7 @@ import { ProjectIcon } from "./project-icon";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
+    askConfirm,
     acceptNativeDrop,
     areas,
     calendarToday,
@@ -151,8 +152,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               <div className="projectDetail">
                 <div className="projectActions">
                   <button type="button" onClick={() => void setProjectStatus(selected, selected.status === "completed" ? "active" : "completed")}>{tr(selected.status === "completed" ? "reopen" : "complete")}</button>
-                  <button type="button" className="danger" onClick={() => {
-                    if (window.confirm(tr("projectDeleteConfirm").replace("{title}", selected.title))) void remove(selected);
+                  <button type="button" className="danger" onClick={async () => {
+                    const project = selected;
+                    if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", () => project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
                   }}>{tr("delete")}</button>
                 </div>
                 <label>
