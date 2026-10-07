@@ -60,7 +60,9 @@ export const db = new ExecutiveDB();
 
 export async function ensureDefaultWorkspace() {
   if (!(await db.entities.get("workspace:personal"))) {
-    await db.entities.add(defaultWorkspaceEntity());
+    // A local placeholder until the server copy arrives. Timestamp 0 means it can never win a
+    // merge against the real workspace, which the server always has.
+    await db.entities.add(defaultWorkspaceEntity(0));
     return true;
   }
   return false;

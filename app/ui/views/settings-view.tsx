@@ -356,9 +356,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       </p>
                     </>
                   )}
-                  <button className="secondaryAction" onClick={logout} disabled={logoutBusy}>{tr(logoutBusy ? "signingOut" : "signOut")}</button>
+                  <button className="secondaryAction" onClick={logout} aria-disabled={logoutBusy}>{tr(logoutBusy ? "signingOut" : "signOut")}</button>
                   <p>{tr("signOutInfo")}</p>
-                  {logoutError && <p role="alert" className="attentionError">{logoutError}</p>}
+                  {logoutError && <p role="alert" className="formError">{logoutError}</p>}
                 </section>
               )}
               <section>
