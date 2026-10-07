@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { byManualOrder, manualOrder, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
+const { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDueTone, taskMatchesView } = await import("../lib/task-views.ts");
 
 // Local-time constructor: these helpers work on the device's local calendar day.
 const NOW = new Date(2026, 9, 7, 10, 0, 0);
@@ -24,7 +24,7 @@ test("view membership follows the documented working views", () => {
     .filter((view) => taskMatchesView(entity, view, TODAY));
 
   assert.deepEqual(membership(inbox), ["Inbox"]);
-  assert.deepEqual(membership(flaggedToday), ["Today", "Anytime"]);
+  assert.deepEqual(membership(flaggedToday), ["Today"]);
   assert.deepEqual(membership(dueToday), ["Today"]);
   assert.deepEqual(membership(overdue), ["Today", "Overdue"]);
   assert.deepEqual(membership(upcoming), ["Upcoming"]);
@@ -88,4 +88,22 @@ test("quick capture parses a trailing Czech date and rolls a past day into next 
 
 test("quick capture keeps an impossible date as literal text", () => {
   assert.deepEqual(parseCaptureText("Report 31.2.", TODAY, NOW), { title: "Report 31.2.", when: "", priority: "none" });
+});
+
+test("a task added in Today gets today's date as well as the flag", () => {
+  const options = { view: "Today", today: TODAY, hasProject: false };
+  assert.deepEqual(newTaskPlacement("", {}, options), { inbox: false, today: true, when: TODAY });
+  const created = task({ properties: newTaskPlacement("", {}, options) });
+  assert.deepEqual(["Today", "Anytime", "Overdue"].filter((view) => taskMatchesView(created, view, TODAY)), ["Today"]);
+  assert.deepEqual(["Today", "Anytime", "Overdue"].filter((view) => taskMatchesView(created, view, "2026-10-08")), ["Today", "Overdue"]);
+});
+
+test("new task placement follows a typed date, then explicit values, then the view", () => {
+  assert.deepEqual(newTaskPlacement("2026-10-20", { today: true, inbox: true }, { view: "Today", today: TODAY, hasProject: false }), { inbox: false, today: false, when: "2026-10-20" });
+  assert.deepEqual(newTaskPlacement(TODAY, {}, { view: "Inbox", today: TODAY, hasProject: false }), { inbox: false, today: true, when: TODAY });
+  assert.deepEqual(newTaskPlacement("", {}, { view: "Inbox", today: TODAY, hasProject: false }), { inbox: true, today: false });
+  assert.deepEqual(newTaskPlacement("", {}, { view: "Inbox", today: TODAY, hasProject: true }), { inbox: false, today: false });
+  assert.deepEqual(newTaskPlacement("", {}, { view: "Anytime", today: TODAY, hasProject: false }), { inbox: false, today: false });
+  assert.deepEqual(newTaskPlacement("", { today: false, inbox: false }, { view: "Today", today: TODAY, hasProject: false }), { inbox: false, today: false });
+  assert.deepEqual(newTaskPlacement("", { today: true, when: TODAY }, { view: "Home", today: TODAY, hasProject: false }), { inbox: false, today: true });
 });

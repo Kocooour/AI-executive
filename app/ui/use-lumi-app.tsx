@@ -6,7 +6,7 @@ import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { browserSupportsWebAuthn, startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
-import { byManualOrder, manualOrder, parseCaptureText, taskMatchesView } from "../../lib/task-views";
+import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type ExecutiveBriefing, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
 import { copy } from "./copy";
@@ -2006,13 +2006,7 @@ export function useLumiApp() {
           type === "task"
             ? {
                 ...properties,
-                inbox: parsed.when
-                  ? false
-                  : Boolean(properties.inbox ?? (!projectId && !newProjectTitle && view === "Inbox")),
-                today: parsed.when
-                  ? parsed.when === today
-                  : Boolean(properties.today ?? (view === "Today")),
-                ...(parsed.when ? { when: parsed.when } : {}),
+                ...newTaskPlacement(parsed.when, properties, { view, today, hasProject: Boolean(projectId || newProjectTitle) }),
                 ...(parsed.priority !== "none" ? { priority: parsed.priority } : {}),
                 activity: [{ at: now, action: "created" }],
               }
