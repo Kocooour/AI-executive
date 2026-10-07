@@ -100,8 +100,9 @@ pnpm test:e2e    # browser scenarios in e2e/ (Playwright, Chromium)
 
 `pnpm test:e2e` builds this checkout, starts it on port 3100 with a temporary data directory and throwaway credentials, signs in once, seeds synthetic data and runs the scenarios in `e2e/` one after another against that instance: the Home brief, capture, the view in the address, a task link, the confirmation dialog, Settings sections, a lost connection and signing out. Its sign-in settings and data directory always come from the test run, never from an existing instance. Next.js still loads the checkout's ignored `.env.local`, so other variables set there (for example a model provider key) stay in effect.
 
-- First use on a machine: `pnpm exec playwright install chromium`.
-- `E2E_PORT=3105` picks another port when 3100 is taken by a parallel instance; `E2E_SKIP_BUILD=1` reuses the existing `.next` build of the same checkout.
+- First use on a machine: `pnpm install`, then `pnpm exec playwright install chromium` (`E2E_CHROMIUM=/path/to/chromium` uses an existing browser instead).
+- One scenario: `pnpm test:e2e -g "part of its name"`. A failure prints the path of a trace; open it with `pnpm exec playwright show-trace <path>`. Traces and the instance's data live in the system temp directory under `lumi-e2e-<port>` and are replaced by the next run on that port.
+- `E2E_PORT=3105` picks another port when 3100 is taken by a parallel instance; `E2E_SKIP_BUILD=1` reuses the existing `.next` build of the same checkout; it does not notice source changes made since that build, so use it only right after a build.
 - The scenarios share one instance and one session because sign-in is rate limited; add a scenario before the two sign-out scenarios, which must stay last.
 - The suite covers the main paths only. It does not replace checking a UI change on the branch instance, and it does not cover a connected calendar, passkeys, push delivery, drag and drop or an installed app.
 - `e2e/` and `playwright.config.ts` are excluded from the app's `tsconfig.json`, so a production build does not need the test dependency.

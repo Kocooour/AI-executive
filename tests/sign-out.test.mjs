@@ -46,10 +46,11 @@ test("a write that finishes within the wait is synchronized, then sign-out proce
 test("a write that starts during synchronization is waited for and checked again", async () => {
   let started = false;
   const run = scenario({ state: { unsent: true },
-    onSync: (state) => { if (!started) { started = true; state.version = 1; } else state.unsent = false; },
+    onSync: (state) => { if (!started) { started = true; state.version = 1; } else if (state.version % 2 === 0) state.unsent = false; },
     onTick: (state) => { if (state.version === 1) state.version = 2; } });
   assert.equal(await runSignOut(run.steps), "signed-out");
-  assert.deepEqual(run.calls, ["drain", "sync", "drain", "sync", "block", "end", "wipe"]);
+  // Round one: two attempts while the write is still running. Round two: the write has finished and is sent.
+  assert.deepEqual(run.calls, ["drain", "sync", "sync", "drain", "sync", "block", "end", "wipe"]);
 });
 
 test("a write that never finishes is never wiped, whatever round it starts in", async () => {
@@ -61,7 +62,7 @@ test("a write that never finishes is never wiped, whatever round it starts in", 
 test("unsent changes with an unreachable server keep the session and the data", async () => {
   const run = scenario({ state: { unsent: true }, reachable: false });
   assert.equal(await runSignOut(run.steps), "offline");
-  assert.deepEqual(run.calls, ["drain", "sync", "reachable"]);
+  assert.deepEqual(run.calls, ["drain", "sync", "sync", "reachable"]);
 });
 
 test("declining to discard keeps the session and the data", async () => {
@@ -73,7 +74,7 @@ test("declining to discard keeps the session and the data", async () => {
 test("agreeing to discard signs out and wipes", async () => {
   const run = scenario({ state: { unsent: true }, discard: true });
   assert.equal(await runSignOut(run.steps), "signed-out");
-  assert.deepEqual(run.calls, ["drain", "sync", "reachable", "confirm", "block", "end", "wipe"]);
+  assert.deepEqual(run.calls, ["drain", "sync", "sync", "reachable", "confirm", "block", "end", "wipe"]);
 });
 
 test("a change made while the discard question is open is checked before the wipe", async () => {
@@ -90,4 +91,11 @@ test("a failed or unreachable sign-out request removes nothing and releases the 
     assert.equal(await runSignOut(run.steps), end);
     assert.deepEqual(run.calls, ["drain", "block", "end", "unblock"]);
   }
+});
+
+test("a synchronization that settles only on the second attempt does not raise the discard question", async () => {
+  let attempts = 0;
+  const run = scenario({ state: { unsent: true }, onSync: (state) => { attempts += 1; if (attempts === 2) state.unsent = false; } });
+  assert.equal(await runSignOut(run.steps), "signed-out");
+  assert.deepEqual(run.calls, ["drain", "sync", "sync", "block", "end", "wipe"]);
 });

@@ -28,7 +28,9 @@ export async function runSignOut(steps: SignOutSteps, options: { writeTimeoutMs?
     for (let waited = 0; writing() && waited < writeTimeoutMs; waited += stepMs) await steps.sleep(stepMs);
     if (writing()) return "writing";
     await steps.drainSync();
-    if (await steps.hasUnsent()) await steps.sync();
+    // A synchronization can end without settling (it noticed a newer local state); a second
+    // attempt then succeeds, and the user is not asked to discard changes that are in fact safe.
+    for (let attempt = 0; attempt < 2 && (await steps.hasUnsent()); attempt += 1) await steps.sync();
     const checked = steps.version();
     if (checked % 2 === 1) continue;
     if (await steps.hasUnsent()) {

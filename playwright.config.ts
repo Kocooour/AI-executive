@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
@@ -11,7 +11,11 @@ const port = Number(process.env.E2E_PORT || 3100);
 export const e2ePassword = "browser-tests-only";
 // The runner loads this file again in every worker; only the first load prepares the instance.
 if (!process.env.E2E_DATA_DIR) {
-  process.env.E2E_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "lumi-e2e-"));
+  // One directory per port, emptied at the start of a run: the last run's traces stay readable
+  // and runs do not pile up.
+  process.env.E2E_DATA_DIR = path.join(os.tmpdir(), `lumi-e2e-${port}`);
+  rmSync(process.env.E2E_DATA_DIR, { recursive: true, force: true });
+  mkdirSync(process.env.E2E_DATA_DIR, { recursive: true });
   process.env.E2E_PASSWORD_HASH = execFileSync("node", ["scripts/hash-password.mjs"], { input: `${e2ePassword}\n`, stdio: ["pipe", "pipe", "ignore"] })
     .toString().trim().split("\n").pop();
   process.env.E2E_SESSION_SECRET = randomBytes(48).toString("base64");
