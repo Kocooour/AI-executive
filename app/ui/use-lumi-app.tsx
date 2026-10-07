@@ -1,6 +1,8 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
+import { runSignOut } from "../../lib/sign-out";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -62,6 +64,8 @@ export function useLumiApp() {
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
+    [logoutBusy, setLogoutBusy] = useState(false),
+    [logoutError, setLogoutError] = useState(""),
     [attentionOutdated, setAttentionOutdated] = useState(false),
     [attentionBusyKey, setAttentionBusyKey] = useState(""),
     [showAllAttention, setShowAllAttention] = useState(false),
@@ -233,6 +237,8 @@ export function useLumiApp() {
   useEffect(() => {
     if (authState !== "ready") answerConfirm(false);
   }, [authState]);
+  const sessionChannel = "ai-executive-session";
+  const signedOut = useRef(false);
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
@@ -255,8 +261,10 @@ export function useLumiApp() {
     setRelations(await db.relations.toArray());
   }
   async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number) {
+    if (signedOut.current) return false;
     if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
     await db.transaction("rw", db.entities, db.relations, async () => {
+      if (signedOut.current) throw new Error("LOCAL_DATA_CHANGED");
       if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
         throw new Error("LOCAL_DATA_CHANGED");
       }
@@ -1012,6 +1020,7 @@ export function useLumiApp() {
     );
     async function initialize() {
       const initializationVersion = localDataVersion.current;
+      await finishInterruptedWipe();
       try {
         const response = await fetch("/api/store", { cache: "no-store" });
         if (!response.ok) throw new Error("Server synchronization failed");
@@ -1216,10 +1225,52 @@ export function useLumiApp() {
     setPasskeyStatus("Passkey removed.");
   }
 
+  // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
+  // possible the user decides whether to drop them. Without the server nothing is removed, because
+  // the session cookie cannot be cleared from here.
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setAuthState("required");
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    setLogoutError("");
+    let leaving = false;
+    try {
+      const result = await runSignOut({
+        version: () => localDataVersion.current,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        drainSync: () => syncQueue.current,
+        hasUnsent: hasUnsentChanges,
+        sync: syncToServer,
+        serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
+        confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
+        // From here nothing may be edited and no pull or sync still in flight may write data back.
+        block: () => { signedOut.current = true; document.body.inert = true; },
+        unblock: () => { signedOut.current = false; document.body.inert = false; },
+        endSession: () => fetch("/api/auth/logout", { method: "POST" }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
+        // If the wipe cannot finish now it stays marked and is completed when the page starts again.
+        wipe: () => clearLocalData().catch(() => undefined),
+      });
+      if (result !== "signed-out") {
+        setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
+        return;
+      }
+      leaving = true;
+      try { const channel = new BroadcastChannel(sessionChannel); channel.postMessage("signed-out"); channel.close(); } catch { /* not supported */ }
+      // A full reload drops everything still held in memory.
+      window.location.replace("/");
+    } finally {
+      if (!leaving) setLogoutBusy(false);
+    }
   }
+  // The message is about a moment in time: drop it when the user moves on or the data is in sync again.
+  useEffect(() => { setLogoutError(""); }, [view]);
+  useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
+  // Another tab signed out: its data must not stay on screen here or be written back locally.
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(sessionChannel);
+    channel.onmessage = (event) => { if (event.data === "signed-out") { signedOut.current = true; window.location.replace("/"); } };
+    return () => channel.close();
+  }, []);
 
   useEffect(() => {
     fetch("/api/notifications", { cache: "no-store" })
@@ -2831,6 +2882,8 @@ export function useLumiApp() {
     loadDayPlan,
     login,
     logout,
+    logoutBusy,
+    logoutError,
     messages,
     moreDialogRef,
     moreOpen,

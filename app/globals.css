@@ -3427,3 +3427,5 @@ h3 {
 .confirmDialogActions button:focus-visible { outline: 2px solid var(--accent, #5b5bd6); outline-offset: 2px; }
 html:has(dialog.confirmDialog[open]) { overflow: hidden; }
 .confirmDialog { max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain; }
+.settingsPanel p.formError { color: var(--danger); }
+.settingsPanel button[aria-disabled="true"] { opacity: .55; cursor: progress; }
