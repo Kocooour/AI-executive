@@ -3,8 +3,15 @@ import { type DurableContextItem, type Language, type ThemeMode } from "../types
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 
+const settingsTabLabels: Record<string, string> = {
+  general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
+  calendar: "settingsCalendar", data: "settingsData", context: "settingsContext",
+};
+
 export function SettingsView({ app }: { app: LumiApp }) {
   const {
+    setSettingsSection,
+    settingsSection,
     askConfirm,
     activeWorkspaceId,
     attentionTaskCount,
@@ -89,26 +96,15 @@ export function SettingsView({ app }: { app: LumiApp }) {
     <>
           {view === "Settings" && (
             <div className="settingsPanel">
-              <section className="durableContextSection">
-                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext Lumi" : "Lumi context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má Lumi používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for Lumi. Sensitive context is not sent to external AI services."}</p></div></div>
-                <div className="contextForm">
-                  <div className="preferenceGrid">
-                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}><option value="me">Me</option><option value="work">Work</option><option value="family">Family</option><option value="rules">Rules</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
-                    <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžný" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivý" : "Sensitive"}</option></select></label>
-                  </div>
-                  {contextScope === "project" && <label>{tr("project")}<select value={contextProjectId} onChange={(e) => setContextProjectId(e.target.value)}><option value="">—</option>{items.filter((item) => item.type === "project" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>}
-                  <label>{language === "cs" ? "Název" : "Title"}<input maxLength={200} value={contextTitle} onChange={(e) => setContextTitle(e.target.value)} placeholder={language === "cs" ? "Např. Jak plánuji pracovní den" : "e.g. How I plan my workday"} /></label>
-                  <label>{language === "cs" ? "Obsah" : "Content"}<textarea maxLength={10000} value={contextContent} onChange={(e) => setContextContent(e.target.value)} placeholder={language === "cs" ? "Informace, preference nebo pravidlo…" : "Fact, preference or rule…"} /></label>
-                  <div className="notificationActions"><button onClick={() => contextAction("create")} disabled={contextBusy || !contextTitle.trim() || !contextContent.trim() || (contextScope === "project" && !contextProjectId)}>{contextBusy ? tr("working") : tr("save")}</button></div>
-                  {contextStatus && <p className="saveConfirmation" role="status">{contextStatus}</p>}
-                </div>
-                <div className="contextItems">
-                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{item.scope} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
-                  {!durableContext.length && <p>{language === "cs" ? "Zatím není uložen žádný trvalý kontext." : "No durable context saved yet."}</p>}
-                </div>
-              </section>
-              <section>
-                <h2>{tr("workspace")}</h2>
+              <div className="settingsTabs" role="navigation" aria-label={tr("settingsSections")}>
+                {(["general", "workspace", ...(authEnabled ? ["access"] : []), "notifications", "calendar", "data", "context"] as const).map((name) => (
+                  <button key={name} type="button" className={settingsSection === name ? "active" : ""} aria-current={settingsSection === name ? "page" : undefined} onClick={() => setSettingsSection(name)}>
+                    {tr(settingsTabLabels[name])}
+                  </button>
+                ))}
+              </div>
+              <section hidden={settingsSection !== "general"}>
+                <h2>{tr("settingsGeneral")}</h2>
                 <label>
                   {tr("language")}
                   <select
@@ -130,6 +126,66 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     <option value="dark">{tr("darkTheme")}</option>
                   </select>
                 </label>
+                <label>
+                  {tr("openStartup")}
+                  <select
+                    value={startupView}
+                    onChange={(e) => {
+                      setStartupView(e.target.value);
+                      localStorage.setItem(
+                        "ai-executive-startup-view",
+                        e.target.value,
+                      );
+                    }}
+                  >
+                    {views
+                      .filter((item) => item !== "Home")
+                      .map((item) => (
+                        <option key={item} value={item}>{tr(item)}</option>
+                      ))}
+                  </select>
+                </label>
+              </section>
+              <section hidden={settingsSection !== "general"}>
+                <h2>{tr("installApp")}</h2>
+                <p>
+                  {standalone
+                    ? tr("installedApp")
+                    : tr("installHelp")}
+                </p>
+                <span className={`installStatus ${standalone ? "installed" : ""}`}>
+                  {standalone ? tr("installed") : tr("browserMode")}
+                </span>
+                <div className="badgeDiagnostics">
+                  <h3>{tr("appBadge")}</h3>
+                  <dl>
+                    <div>
+                      <dt>{tr("installApp")}</dt>
+                      <dd>{standalone ? tr("installed") : tr("browserMode")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("notificationPermission")}</dt>
+                      <dd>{typeof Notification !== "undefined" && Notification.permission === "granted" ? tr("allowed") : tr("notAllowed")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("badgeApi")}</dt>
+                      <dd>{typeof navigator !== "undefined" && typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function" ? tr("supported") : tr("unsupported")}</dd>
+                    </div>
+                    <div>
+                      <dt>{tr("currentBadgeCount")}</dt>
+                      <dd>{attentionTaskCount}</dd>
+                    </div>
+                  </dl>
+                  <div className="notificationActions">
+                    <button className="primaryAction" onClick={testAppBadge}>{tr("testBadge")}</button>
+                    <button onClick={restoreAppBadge}>{tr("restoreBadge")}</button>
+                  </div>
+                  {badgeStatus && <p role="status">{badgeStatus}</p>}
+                  <p className="settingsHint">{tr("badgeSystemHint")}</p>
+                </div>
+              </section>
+              <section hidden={settingsSection !== "workspace"}>
+                <h2>{tr("workspace")}</h2>
                 <label>
                   {tr("currentView")}
                   <select
@@ -217,94 +273,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   Shared workspaces are ready for separate data and roles. Inviting
                   another account will be enabled after multi-user identity is added.
                 </p>
-                <label>
-                  {tr("openStartup")}
-                  <select
-                    value={startupView}
-                    onChange={(e) => {
-                      setStartupView(e.target.value);
-                      localStorage.setItem(
-                        "ai-executive-startup-view",
-                        e.target.value,
-                      );
-                    }}
-                  >
-                    {views
-                      .filter((item) => item !== "Home")
-                      .map((item) => (
-                        <option key={item} value={item}>{tr(item)}</option>
-                      ))}
-                  </select>
-                </label>
-              </section>
-              <section>
-                <h2>{tr("dataAi")}</h2>
-                <p>
-                  {tr("workspaceDataInfo")}
-                </p>
-                <dl>
-                  <div>
-                    <dt>{tr("storedItems")}</dt>
-                    <dd>{scopedItems.length}</dd>
-                  </div>
-                  <div>
-                    <dt>{tr("relations")}</dt>
-                    <dd>{scopedRelations.length}</dd>
-                  </div>
-                  <div>
-                    <dt>{tr("serverSync")}</dt>
-                    <dd className={`syncStatus ${syncStatus}`}>
-                      {syncStatus === "synced"
-                        ? tr("synced")
-                        : syncStatus === "syncing"
-                          ? tr("syncing")
-                          : syncStatus === "offline"
-                            ? tr("offline")
-                            : tr("connecting")}
-                    </dd>
-                  </div>
-                </dl>
-              </section>
-              <section>
-                <h2>{tr("installApp")}</h2>
-                <p>
-                  {standalone
-                    ? tr("installedApp")
-                    : tr("installHelp")}
-                </p>
-                <span className={`installStatus ${standalone ? "installed" : ""}`}>
-                  {standalone ? tr("installed") : tr("browserMode")}
-                </span>
-                <div className="badgeDiagnostics">
-                  <h3>{tr("appBadge")}</h3>
-                  <dl>
-                    <div>
-                      <dt>{tr("installApp")}</dt>
-                      <dd>{standalone ? tr("installed") : tr("browserMode")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("notificationPermission")}</dt>
-                      <dd>{typeof Notification !== "undefined" && Notification.permission === "granted" ? tr("allowed") : tr("notAllowed")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("badgeApi")}</dt>
-                      <dd>{typeof navigator !== "undefined" && typeof (navigator as Navigator & { setAppBadge?: unknown }).setAppBadge === "function" ? tr("supported") : tr("unsupported")}</dd>
-                    </div>
-                    <div>
-                      <dt>{tr("currentBadgeCount")}</dt>
-                      <dd>{attentionTaskCount}</dd>
-                    </div>
-                  </dl>
-                  <div className="notificationActions">
-                    <button className="primaryAction" onClick={testAppBadge}>{tr("testBadge")}</button>
-                    <button onClick={restoreAppBadge}>{tr("restoreBadge")}</button>
-                  </div>
-                  {badgeStatus && <p role="status">{badgeStatus}</p>}
-                  <p className="settingsHint">{tr("badgeSystemHint")}</p>
-                </div>
               </section>
               {authEnabled && (
-                <section>
+                <section hidden={settingsSection !== "access"}>
                   <h2>{tr("access")}</h2>
                   <p>{tr("ownerSession")}</p>
                   {passkeySupported && (
@@ -361,7 +332,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   {logoutError && <p role="alert" className="formError">{logoutError}</p>}
                 </section>
               )}
-              <section>
+              <section hidden={settingsSection !== "notifications"}>
                 <div className="sectionHeading">
                   <div>
                     <h2>{tr("reminders")}</h2>
@@ -458,7 +429,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 )}
                 {notificationStatus && <p role="status">{notificationStatus}</p>}
               </section>
-              <section>
+              <section hidden={settingsSection !== "calendar"}>
                 <div className="sectionHeading">
                   <div>
                     <h2>{tr("calendarReadonly")}</h2>
@@ -504,7 +475,35 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 </div>
                 {calendarStatus && <p role="status">{calendarStatus}</p>}
               </section>
-              <section>
+              <section hidden={settingsSection !== "data"}>
+                <h2>{tr("dataAi")}</h2>
+                <p>
+                  {tr("workspaceDataInfo")}
+                </p>
+                <dl>
+                  <div>
+                    <dt>{tr("storedItems")}</dt>
+                    <dd>{scopedItems.length}</dd>
+                  </div>
+                  <div>
+                    <dt>{tr("relations")}</dt>
+                    <dd>{scopedRelations.length}</dd>
+                  </div>
+                  <div>
+                    <dt>{tr("serverSync")}</dt>
+                    <dd className={`syncStatus ${syncStatus}`}>
+                      {syncStatus === "synced"
+                        ? tr("synced")
+                        : syncStatus === "syncing"
+                          ? tr("syncing")
+                          : syncStatus === "offline"
+                            ? tr("offline")
+                            : tr("connecting")}
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+              <section hidden={settingsSection !== "data"}>
                 <div className="sectionHeading">
                   <div>
                     <h2>{tr("backups")}</h2>
@@ -535,6 +534,24 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       </button>
                     </div>
                   ))}
+                </div>
+              </section>
+              <section className="durableContextSection" hidden={settingsSection !== "context"}>
+                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext Lumi" : "Lumi context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má Lumi používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for Lumi. Sensitive context is not sent to external AI services."}</p></div></div>
+                <div className="contextForm">
+                  <div className="preferenceGrid">
+                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}><option value="me">Me</option><option value="work">Work</option><option value="family">Family</option><option value="rules">Rules</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
+                    <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžný" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivý" : "Sensitive"}</option></select></label>
+                  </div>
+                  {contextScope === "project" && <label>{tr("project")}<select value={contextProjectId} onChange={(e) => setContextProjectId(e.target.value)}><option value="">—</option>{items.filter((item) => item.type === "project" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>}
+                  <label>{language === "cs" ? "Název" : "Title"}<input maxLength={200} value={contextTitle} onChange={(e) => setContextTitle(e.target.value)} placeholder={language === "cs" ? "Např. Jak plánuji pracovní den" : "e.g. How I plan my workday"} /></label>
+                  <label>{language === "cs" ? "Obsah" : "Content"}<textarea maxLength={10000} value={contextContent} onChange={(e) => setContextContent(e.target.value)} placeholder={language === "cs" ? "Informace, preference nebo pravidlo…" : "Fact, preference or rule…"} /></label>
+                  <div className="notificationActions"><button onClick={() => contextAction("create")} disabled={contextBusy || !contextTitle.trim() || !contextContent.trim() || (contextScope === "project" && !contextProjectId)}>{contextBusy ? tr("working") : tr("save")}</button></div>
+                  {contextStatus && <p className="saveConfirmation" role="status">{contextStatus}</p>}
+                </div>
+                <div className="contextItems">
+                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{item.scope} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
+                  {!durableContext.length && <p>{language === "cs" ? "Zatím není uložen žádný trvalý kontext." : "No durable context saved yet."}</p>}
                 </div>
               </section>
             </div>

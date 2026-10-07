@@ -5,6 +5,7 @@ import { ViewIcon } from "./project-icon";
 
 export function Sidebar({ app }: { app: LumiApp }) {
   const {
+    setSettingsSection,
     acceptNativeDrop,
     activeWorkspaceId,
     closeDetail,
@@ -61,6 +62,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
               </button>
               <button
                 onClick={() => {
+                  setSettingsSection("workspace");
                   setView("Settings");
                   setWorkspaceMenuOpen(false);
                   closeDetail();
