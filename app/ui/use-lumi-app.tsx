@@ -61,6 +61,7 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [attentionOutdated, setAttentionOutdated] = useState(false),
     [attentionBusyKey, setAttentionBusyKey] = useState(""),
     [showAllAttention, setShowAllAttention] = useState(false),
     [dayPlanStatus, setDayPlanStatus] = useState(""),
@@ -514,17 +515,29 @@ export function useLumiApp() {
 
   async function loadAttention(workspaceId: string) {
     const version = ++attentionLoadVersion.current;
-    const response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const current = () => version === attentionLoadVersion.current;
+    let response: Response;
+    try {
+      response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    } catch {
+      // No connection: the out-of-date label says it, so there is no separate error text.
+      if (current()) setAttentionOutdated(true);
+      throw new Error("");
+    }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Attention is unavailable");
-    if (version === attentionLoadVersion.current) {
+    if (!response.ok) {
+      if (current()) setAttentionOutdated(true);
+      throw new Error(data.error || "Attention is unavailable");
+    }
+    if (current()) {
       setAttention(data as AttentionResponse);
+      setAttentionOutdated(false);
       setAttentionError("");
     }
   }
 
   async function actOnAttention(item: AttentionResponse["items"][number], action: "snooze" | "dismiss") {
-    if (!attention || syncStatus !== "synced") return;
+    if (!attention || attentionActionsBlocked) return;
     setAttentionBusyKey(item.attentionKey);
     setAttentionError("");
     try {
@@ -1671,8 +1684,20 @@ export function useLumiApp() {
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
   const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
-  const visibleAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
-  const attentionStale = Boolean(visibleAttention) && syncStatus === "offline";
+  const shownAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
+  const attentionStale = Boolean(shownAttention) && attentionOutdated;
+  // Snooze and dismiss need the server to hold the same data as this device.
+  const attentionActionsBlocked = attentionOutdated || syncStatus !== "synced";
+  // Until the server evaluates again, hide what was finished or deleted on this device meanwhile.
+  const visibleAttention = (() => {
+    if (!shownAttention || !attentionActionsBlocked) return shownAttention;
+    const deleted = new Set(pendingDeletedIds());
+    return { ...shownAttention, items: shownAttention.items.filter((candidate) => {
+      if (deleted.has(candidate.subjectId)) return false;
+      const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
+      return local?.status !== "completed";
+    }) };
+  })();
   const dayPlanTimeline = visibleDayPlan ? [...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })),
     ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
   const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
@@ -1696,9 +1721,20 @@ export function useLumiApp() {
   useEffect(() => {
     attentionLoadVersion.current += 1;
     setAttention(null);
+    setAttentionOutdated(false);
     setAttentionError("");
     setShowAllAttention(false);
   }, [authState, activeWorkspaceId]);
+  // Out of date from the moment the connection is lost until a load succeeds again, so the label
+  // does not flip while a queued edit retries its sync.
+  useEffect(() => {
+    if (syncStatus === "offline") setAttentionOutdated(true);
+  }, [syncStatus]);
+  useEffect(() => {
+    const lost = () => setAttentionOutdated(true);
+    window.addEventListener("offline", lost);
+    return () => window.removeEventListener("offline", lost);
+  }, []);
   useEffect(() => {
     if (authState !== "ready" || syncStatus !== "synced") return;
     const workspaceId = activeWorkspaceId;
@@ -2664,7 +2700,9 @@ export function useLumiApp() {
     askAI,
     assistantOpen,
     attentionBusyKey,
+    attentionActionsBlocked,
     attentionError,
+    attentionOutdated,
     attentionStale,
     attentionTaskCount,
     authEnabled,

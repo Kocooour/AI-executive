@@ -13,7 +13,9 @@ export function HomeView({ app }: { app: LumiApp }) {
     actOnAttention,
     activeWorkspaceId,
     attentionBusyKey,
+    attentionActionsBlocked,
     attentionError,
+    attentionOutdated,
     attentionStale,
     calendarFresh,
     calendarSources,
@@ -60,6 +62,12 @@ export function HomeView({ app }: { app: LumiApp }) {
   const planBlockState = (block: { existing?: boolean; planningSource?: string }) =>
     tr(block.existing ? block.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed");
 
+  // A row evaluated before the user edited its subject on this device may no longer hold.
+  const changedSince = (candidate: { subjectId: string; workspaceId: string; evaluatedAt: number }) => {
+    if (!attentionActionsBlocked) return false;
+    const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
+    return Boolean(local && Number(local.updatedAt) > candidate.evaluatedAt);
+  };
   const inboxCount = sidebarCounts.Inbox;
   const capacityLabel = calendarSources.length === 0 ? tr("calendarDisconnected")
     : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown");
@@ -94,14 +102,14 @@ export function HomeView({ app }: { app: LumiApp }) {
         </div>
         {visibleAttention ? <>
           {attentionStale
-            ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr("attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
+            ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr(syncStatus === "offline" ? "attentionStaleOffline" : "attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
             : <p className="attentionMeta">{tr("attentionSource")} · {tr("attentionEvaluated")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
             {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
               <div className="attentionBody">
                 <strong>{candidate.title}</strong>
                 <p>{attentionReason(candidate, language)}</p>
-                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : tr("attentionRecorded")} · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</small>
+                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
               </div>
               <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
@@ -111,10 +119,10 @@ export function HomeView({ app }: { app: LumiApp }) {
               <details className="attentionMore">
                 <summary>{tr("attentionMore")}</summary>
                 <div className="attentionActions">
-                  <button type="button" disabled={Boolean(attentionBusyKey) || syncStatus !== "synced"} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
-                  <button type="button" disabled={Boolean(attentionBusyKey) || syncStatus !== "synced"} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
+                  <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
+                  <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
                 </div>
-                {attentionStale && <p className="attentionMeta">{tr("attentionStaleActions")}</p>}
+                {attentionActionsBlocked && <p className="attentionMeta">{tr("attentionStaleActions")}</p>}
                 <p className="attentionMeta">{tr("attentionSources")} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
                 <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
               </details>
@@ -123,7 +131,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           {visibleAttention.items.length > 5 && <button className="textAction" type="button" onClick={() => setShowAllAttention((current) => !current)}>{showAllAttention ? tr("attentionShowFewer") : fill("attentionShowMore", { n: visibleAttention.items.length - 5 })}</button>}
           {(visibleAttention.hidden.snoozed > 0 || visibleAttention.hidden.dismissed > 0) && <p className="attentionMeta">{fill("attentionHidden", visibleAttention.hidden)}</p>}
           <details className="attentionLimits"><summary>{tr("attentionCoverage")}</summary><p>{tr("attentionCoverageText")} {tr("attentionLastSource")}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(locale) : tr("attentionUnknown")}. {tr("attentionRevision")} {visibleAttention.dataRevision} · {visibleAttention.timezone}.</p></details>
-        </> : <p className="attentionEmpty" role="status">{syncStatus === "offline" ? tr("attentionOffline") : syncStatus !== "synced" ? tr("attentionWaitingSync") : tr("attentionEvaluating")}</p>}
+        </> : <p className="attentionEmpty" role="status">{syncStatus === "offline" ? tr("attentionOffline") : syncStatus !== "synced" ? tr("attentionWaitingSync") : attentionOutdated ? tr("attentionUnavailable") : tr("attentionEvaluating")}</p>}
         {attentionError && <p role="alert" className="attentionError">{attentionError}</p>}
       </section>
 

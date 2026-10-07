@@ -1676,7 +1676,7 @@ article {
 .attentionItem p { margin: 4px 0; line-height: 1.4; }
 .attentionItem button { flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 12px; cursor: pointer; }
 .attentionItem button:hover { color: var(--accent); border-color: var(--accent); }
-.attentionItem button:disabled { opacity: .55; cursor: wait; }
+.attentionItem button:disabled { opacity: .55; cursor: not-allowed; }
 .attentionMore { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .attentionMore summary { width: fit-content; padding: 2px 0; cursor: pointer; }
 .attentionMore[open] summary { margin-bottom: 8px; }
