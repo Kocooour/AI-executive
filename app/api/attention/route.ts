@@ -1,38 +1,13 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
-import { getDatabase, readSnapshot, type StoreSnapshot } from "../../../lib/server-store";
+import { readSnapshot } from "../../../lib/server-store";
 import { getNotificationPreferences } from "../../../lib/notifications";
-import { listOwnerClaims } from "../../../lib/context-claims";
-import { evaluateAttention, type AttentionClaimActivity } from "../../../lib/attention";
+import { activeWorkspaces, evaluateWorkspace, withAttentionTransaction } from "../../../lib/attention-service";
 import { reconcileAttention, setAttentionState } from "../../../lib/attention-lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function activeWorkspaces(snapshot: StoreSnapshot): string[] {
-  return [...new Set(snapshot.entities.filter((entity) => entity.type === "workspace" && entity.status === "active").map((entity) => entity.workspaceId))];
-}
-
-function evaluateWorkspace(snapshot: StoreSnapshot, workspaceId: string, timezone: string, evaluatedAt: number) {
-  const claims: AttentionClaimActivity[] = listOwnerClaims(workspaceId).filter((claim) => claim.reviewStatus === "confirmed" && claim.archivedAt === null && claim.subject.canonicalEntityId)
-    .map((claim) => ({ id: claim.id, workspaceId, projectId: claim.subject.canonicalEntityId!, predicate: claim.predicate,
-      revision: claim.revision, updatedAt: claim.updatedAt, confirmed: true, current: claim.freshness === "current" }));
-  return evaluateAttention({ entities: snapshot.entities, relations: snapshot.relations, claims, workspaceId, timezone, evaluatedAt, dataRevision: snapshot.revision });
-}
-
-function withAttentionTransaction<T>(work: () => T): T {
-  const database = getDatabase();
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-}
 
 export async function GET(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });

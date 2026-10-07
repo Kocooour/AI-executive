@@ -29,6 +29,7 @@ export interface PasskeySummary {
 }
 export interface NotificationPreferences {
   enabled: boolean;
+  attentionPush: boolean;
   timezone: string;
   workdayStart: string;
   workdayEnd: string;

@@ -386,6 +386,18 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       />
                       {tr("scheduledReminders")}
                     </label>
+                    <label className="preferenceToggle">
+                      <input
+                        type="checkbox"
+                        checked={notificationState.preferences.attentionPush !== false}
+                        disabled={!notificationState.preferences.enabled}
+                        onChange={(event) => saveNotificationSettings({
+                          ...notificationState.preferences,
+                          attentionPush: event.target.checked,
+                        })}
+                      />
+                      <span>{tr("attentionPush")}<small>{tr("attentionPushInfo")}</small></span>
+                    </label>
                     <label>
                       {tr("timezone")}
                       <input

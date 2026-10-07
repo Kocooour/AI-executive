@@ -4,6 +4,7 @@ import { getDatabase, readSnapshot } from "./server-store";
 
 export interface NotificationPreferences {
   enabled: boolean;
+  attentionPush: boolean;
   timezone: string;
   workdayStart: string;
   workdayEnd: string;
@@ -12,6 +13,7 @@ export interface NotificationPreferences {
 
 const defaultPreferences: NotificationPreferences = {
   enabled: true,
+  attentionPush: true,
   timezone: "Europe/Prague",
   workdayStart: "08:00",
   workdayEnd: "18:00",
@@ -126,6 +128,7 @@ export function saveNotificationPreferences(input: Partial<NotificationPreferenc
   }
   const next: NotificationPreferences = {
     enabled: typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+    attentionPush: typeof input.attentionPush === "boolean" ? input.attentionPush : current.attentionPush,
     timezone:
       typeof input.timezone === "string" && input.timezone.trim() && input.timezone.length <= 100
         ? input.timezone.trim()
@@ -237,6 +240,30 @@ async function sendToAll(payload: Record<string, unknown>) {
     }
   }
   return { sent, failed, total: targets.length };
+}
+
+// Per-device sending for features that track delivery to each subscribed device separately.
+export type PushTargetResult = "sent" | "gone" | "failed";
+const pushTargetKey = (endpoint: string) => createHash("sha256").update(endpoint).digest("hex").slice(0, 20);
+
+export function listPushTargets(): string[] {
+  return subscriptions().map((target) => pushTargetKey(target.endpoint));
+}
+
+export async function sendPushToTarget(targetKey: string, payload: Record<string, unknown>): Promise<PushTargetResult> {
+  const target = subscriptions().find((candidate) => pushTargetKey(candidate.endpoint) === targetKey);
+  if (!target) return "gone";
+  try {
+    await sendTarget(target.subscription, payload);
+    return "sent";
+  } catch (error) {
+    const statusCode = Number((error as { statusCode?: number }).statusCode || 0);
+    if (statusCode === 404 || statusCode === 410) {
+      removeSubscription(target.endpoint);
+      return "gone";
+    }
+    return "failed";
+  }
 }
 
 function sendTarget(subscription: PushSubscription, payload: Record<string, unknown>) {

@@ -749,6 +749,8 @@ article small {
 .preferenceGrid .preferenceToggle input {
   width: auto;
 }
+.preferenceGrid .preferenceToggle small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.4; }
+.preferenceGrid .preferenceToggle:has(input:disabled) { opacity: 0.55; }
 .preferenceGrid fieldset label {
   display: flex;
   align-items: center;

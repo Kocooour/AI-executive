@@ -112,6 +112,7 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionLastSource: "Last source update", attentionUnknown: "unknown", attentionDetailMissing: "Detail is not in local data; refresh synchronization.",
     homeMoreToday: "and {n} more today", homeFixedEvents: "Fixed events today", homePlanOpen: "Open day plan",
     homePlanProposed: "Proposed time blocks waiting for your approval: {n}.", homePlanUnscheduled: "Tasks without a time block: {n}.",
+    attentionPush: "Notify me about urgent deadlines", attentionPushInfo: "Sends a push when a task deadline is within 48 hours and again when it passes. Nothing is sent from 22:00 to 08:00 (held until morning), at most 3 per 24 hours. Snoozed and dismissed tasks stay silent. Needs reminders switched on and a device enabled.",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
@@ -224,5 +225,6 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionLastSource: "Poslední změna dat", attentionUnknown: "neznámá", attentionDetailMissing: "Detail není v místních datech; obnovte synchronizaci.",
     homeMoreToday: "a dalších {n} na dnešek", homeFixedEvents: "Pevné události dnes", homePlanOpen: "Otevřít plán dne",
     homePlanProposed: "Navržené časové bloky čekající na schválení: {n}.", homePlanUnscheduled: "Úkoly bez časového bloku: {n}.",
+    attentionPush: "Upozornit na urgentní termíny", attentionPushInfo: "Pošle upozornění, když je termín úkolu do 48 hodin, a znovu, když uplyne. Mezi 22:00 a 8:00 se nic neposílá (počká se do rána), nejvýš 3 za 24 hodin. Odložené a skryté úkoly se neoznamují. Vyžaduje zapnuté připomínky a povolené zařízení.",
   },
 };
