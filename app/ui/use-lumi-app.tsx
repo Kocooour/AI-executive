@@ -1241,7 +1241,7 @@ export function useLumiApp() {
         hasUnsent: hasUnsentChanges,
         sync: syncToServer,
         serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
-        confirmDiscard: () => window.confirm(tr("signOutDiscard")),
+        confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
         // From here nothing may be edited and no pull or sync still in flight may write data back.
         block: () => { signedOut.current = true; document.body.inert = true; },
         unblock: () => { signedOut.current = false; document.body.inert = false; },
