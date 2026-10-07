@@ -2,6 +2,7 @@
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
+import { runSignOut } from "../../lib/sign-out";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -1233,34 +1234,36 @@ export function useLumiApp() {
     setLogoutError("");
     let leaving = false;
     try {
-      // Let a local write that is under way reach the sync queue (the version is odd meanwhile).
-      for (let waited = 0; localDataVersion.current % 2 === 1 && waited < 2000; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
-      await syncQueue.current;
-      if (await hasUnsentChanges()) await syncToServer();
-      if (await hasUnsentChanges()) {
-        const reachable = await fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false);
-        if (!reachable) { setLogoutError(tr("signOutOffline")); return; }
-        if (!window.confirm(tr("signOutDiscard"))) { setLogoutError(tr("signOutKept")); return; }
-      }
-      // From here no pull or sync that is still in flight may write server data back locally.
-      signedOut.current = true;
-      const response = await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
-      if (!response?.ok) {
-        signedOut.current = false;
-        setLogoutError(tr(response ? "signOutFailed" : "signOutOffline"));
+      const result = await runSignOut({
+        version: () => localDataVersion.current,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        drainSync: () => syncQueue.current,
+        hasUnsent: hasUnsentChanges,
+        sync: syncToServer,
+        serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
+        confirmDiscard: () => window.confirm(tr("signOutDiscard")),
+        // From here nothing may be edited and no pull or sync still in flight may write data back.
+        block: () => { signedOut.current = true; document.body.inert = true; },
+        unblock: () => { signedOut.current = false; document.body.inert = false; },
+        endSession: () => fetch("/api/auth/logout", { method: "POST" }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
+        // If the wipe cannot finish now it stays marked and is completed when the page starts again.
+        wipe: () => clearLocalData().catch(() => undefined),
+      });
+      if (result !== "signed-out") {
+        setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
         return;
       }
       leaving = true;
       try { const channel = new BroadcastChannel(sessionChannel); channel.postMessage("signed-out"); channel.close(); } catch { /* not supported */ }
-      // If the wipe cannot finish now it stays marked and is completed when the page starts again.
-      await clearLocalData().catch(() => undefined);
       // A full reload drops everything still held in memory.
       window.location.replace("/");
     } finally {
       if (!leaving) setLogoutBusy(false);
     }
   }
-  useEffect(() => { setLogoutError(""); }, [view, syncStatus]);
+  // The message is about a moment in time: drop it when the user moves on or the data is in sync again.
+  useEffect(() => { setLogoutError(""); }, [view]);
+  useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
   // Another tab signed out: its data must not stay on screen here or be written back locally.
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
