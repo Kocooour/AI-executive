@@ -309,8 +309,18 @@ export function useLumiApp() {
       }),
     });
   }
+  // Saves that were asked for and have not started yet.
+  const queuedSaves = useRef(0);
+  // After a save that could not settle, one more is needed. A change that is being written or
+  // already has its own save queued brings it anyway; only otherwise is one added here.
+  function settleLater() {
+    if (queuedSaves.current > 0 || localDataVersion.current % 2 === 1 || signedOut.current) return;
+    void syncToServer();
+  }
   async function syncToServer() {
+    queuedSaves.current += 1;
     const operation = syncQueue.current.then(async () => {
+      queuedSaves.current -= 1;
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
@@ -368,16 +378,13 @@ export function useLumiApp() {
         // merge it also holds records this device does not have; claiming its revision would
         // make the next save replace them. Keeping the old revision makes that save merge again.
         if (!mergedWithServer) serverRevision.current = saved.revision;
-        // Settle with one more save, unless the copy was refused because the user is signing out.
-        if (!signedOut.current) void Promise.resolve().then(() => syncToServer());
+        settleLater();
         return;
       }
       // Something was changed while the saved state was being loaded. That change has its own
       // save queued, which still needs the lists of deleted and restored records.
       if (localDataVersion.current !== localVersion) {
-        // Normally that change queues its own save; one more is queued here so that the state
-        // always settles even if it did not.
-        void Promise.resolve().then(() => syncToServer());
+        settleLater();
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
