@@ -1288,27 +1288,31 @@ export function useLumiApp() {
       .catch(() => undefined);
   }, []);
 
+  // A notification link names a task (?task=<id>). It is opened as soon as the task is known
+  // locally. If it is not, the link waits for the first synchronization and is given up only
+  // when the server copy does not contain the task either.
   useEffect(() => {
-    if (!items.length || deepLinkHandled.current) return;
-    const parameters = new URLSearchParams(window.location.search);
-    const taskId = parameters.get("task");
+    if (deepLinkHandled.current || !items.length) return;
+    const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
       if (task && task.type !== "workspace") {
         selectWorkspace(task.workspaceId);
         inspect(task);
+      } else if (authState !== "ready" || syncStatus !== "synced") {
+        return;
       }
     }
     deepLinkHandled.current = true;
     setDeepLinkDone(true);
-  }, [items]);
+  }, [items, authState, syncStatus]);
 
   // The address follows the view: a change of view adds a history step, so Back and Forward move
   // between views and a reload stays where the user was. A record id from a notification link is
-  // dropped from the address once it has been opened.
+  // dropped from the address once the link has been handled. Nothing is recorded while signed out.
   const addressedView = useRef<string | null>(null);
   useEffect(() => {
-    if (!addressReady) return;
+    if (!addressReady || authState !== "ready") return;
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
     if (hasRecordLink && !deepLinkDone) return;
     const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
@@ -1316,14 +1320,23 @@ export function useLumiApp() {
     addressedView.current = view;
     if (!update) return;
     const address = `${window.location.pathname}${update.search}`;
-    if (update.mode === "push") window.history.pushState(null, "", address);
-    else window.history.replaceState(null, "", address);
-  }, [addressReady, deepLinkDone, view, startupView]);
+    try {
+      if (update.mode === "push") window.history.pushState(null, "", address);
+      else window.history.replaceState(null, "", address);
+    } catch { /* browsers limit how often history may change; the view itself is unaffected */ }
+  }, [addressReady, authState, deepLinkDone, view, startupView]);
   useEffect(() => {
     const followAddress = () => {
       const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
+      // Leaving a field commits what was typed in it, as closing the panel by hand would.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       addressedView.current = next;
-      setView(addressableViews.includes(next) ? next : "Home");
+      setView(views.includes(next) || next === "Settings" ? next : "Home");
+      // Nothing that belongs to the view being left may stay open over the next one.
+      answerConfirm(false);
+      setCapture(false);
+      setAssistantOpen(false);
+      setMoreOpen(false);
       closeDetail();
     };
     window.addEventListener("popstate", followAddress);
