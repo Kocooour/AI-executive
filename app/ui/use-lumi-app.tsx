@@ -2774,10 +2774,7 @@ export function useLumiApp() {
       const insertionIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       peers.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, moved);
       if (source.type === "task") setSortBy("manual");
-      const ordered = view === "Home" && scope === "project:all"
-        ? [...peers, ...projects.filter((project) => project.workspaceId === source.workspaceId && project.status === "active" && !peers.some((peer) => peer.id === project.id)).sort(byManualOrder(scope))]
-        : peers;
-      await persistManualOrder(ordered, source.id, scope);
+      await persistManualOrder(peers, source.id, scope);
       return;
     }
     if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {

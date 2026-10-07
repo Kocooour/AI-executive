@@ -151,8 +151,36 @@ test("a task added in Someday or Upcoming stays in the view it was typed into", 
   // A typed date or an explicit choice still wins over the view.
   assert.deepEqual(place("Someday", {}, "2026-10-20"), { inbox: false, today: false, when: "2026-10-20" });
   assert.deepEqual(place("Upcoming", { when: "2026-11-01" }), { inbox: false, today: false });
+  assert.deepEqual(place("Upcoming", { when: "" }), { inbox: false, today: false, when: "2026-10-08" });
   assert.deepEqual(place("Someday", { someday: false }), { inbox: false, today: false });
   assert.deepEqual(place("Upcoming", { today: true }), { inbox: false, today: true, when: TODAY });
+  // The capture dialog states its own placement; the view it was opened from must not add to it.
+  for (const view of ["Someday", "Upcoming"]) {
+    assert.deepEqual(newTaskPlacement("", { inbox: false, today: false }, { view, today: TODAY, hasProject: true }), { inbox: false, today: false });
+    assert.deepEqual(newTaskPlacement("", { inbox: true, today: false }, { view, today: TODAY, hasProject: false }), { inbox: true, today: false });
+  }
   // The last day of a month rolls over correctly.
   assert.deepEqual(newTaskPlacement("", {}, { view: "Upcoming", today: "2026-10-31", hasProject: false }), { inbox: false, today: false, when: "2026-11-01" });
+});
+
+test("three numbers in a row are a list, not a date", () => {
+  const parse = (text) => parseCaptureText(text, TODAY, NOW);
+  for (const text of ["kroky 1. 2. 3.", "x 5. 10. 11.", "10. 11. 12."]) assert.deepEqual(parse(text), { title: text, when: "", priority: "none" });
+  assert.deepEqual(parse("Zaplatit pojistku 25. 10. 2026."), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "none" });
+});
+
+test("text that is only a date or a mark stays a title, so a task is never created without one", () => {
+  const parse = (text) => parseCaptureText(text, TODAY, NOW);
+  for (const text of ["25. 10.", "25.10.", "!", "#high", "dnes", "zítra", "! 25. 10.", "dnes 25. 10."]) {
+    assert.deepEqual(parse(text), { title: text, when: "", priority: "none" });
+  }
+  assert.deepEqual(parse("  25.   10.  "), { title: "25. 10.", when: "", priority: "none" });
+});
+
+test("ordinary punctuation and the edges of the year", () => {
+  assert.deepEqual(parseCaptureText("Pozor!", TODAY, NOW), { title: "Pozor!", when: "", priority: "none" });
+  assert.deepEqual(parseCaptureText("x 25.\u00a010.", TODAY, NOW), { title: "x", when: "2026-10-25", priority: "none" });
+  const newYearsEve = new Date(2026, 11, 31, 23, 59);
+  assert.equal(parseCaptureText("x 1. 1.", "2026-12-31", newYearsEve).when, "2027-01-01");
+  assert.equal(parseCaptureText("x 31. 12.", "2026-12-31", newYearsEve).when, "2026-12-31");
 });

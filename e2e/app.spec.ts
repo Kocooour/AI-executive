@@ -52,6 +52,34 @@ test("a task typed into the row of Someday or Upcoming stays in that view", asyn
   }
 });
 
+test("the capture dialog opened from Upcoming does not date a task that goes to a project", async ({ page }) => {
+  const title = `Do projektu ${Date.now()}`;
+  await page.goto("/?view=Upcoming");
+  await waitUntilSynced(page);
+  await page.evaluate(async (name) => {
+    // A project to choose, added the way another device would add it.
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      entities: [...snapshot.entities, { id: `e2e-capture-project-${now}`, type: "project", title: name, status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+  }, "Projekt pro zachycení");
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  await modal.locator("input, textarea").first().fill(title);
+  await modal.locator("select").filter({ has: page.locator("option", { hasText: "Projekt pro zachycení" }) }).first().selectOption({ label: "Projekt pro zachycení" });
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(async () => (await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json())))
+    .entities.find((entity: { title: string }) => entity.title === title)?.properties, { timeout: 20_000 })
+    .toMatchObject({ inbox: false, today: false });
+  const saved = (await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()))).entities.find((entity: { title: string }) => entity.title === title);
+  expect(saved.properties.when ?? "").toBe("");
+  expect(saved.properties.someday ?? false).toBe(false);
+});
+
 test("a date typed with spaces at the end of the text becomes the task's date", async ({ page }) => {
   const title = `Zaplatit pojistku ${Date.now()}`;
   const nextYear = new Date().getFullYear() + 1;
