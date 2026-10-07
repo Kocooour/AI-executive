@@ -18,6 +18,7 @@ setup("sign in and seed synthetic data", async ({ page }) => {
       entity("e2e-project", "project", names.project),
       entity("e2e-overdue", "task", names.overdueTask, { deadline: day(-2) }),
       entity("e2e-plain", "task", names.plainTask, { inbox: true }),
+      entity("e2e-rename", "task", names.renameTask, { inbox: true }),
     ];
     const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ baseRevision: snapshot.revision, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });

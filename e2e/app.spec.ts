@@ -122,6 +122,75 @@ test.describe("on a phone-sized screen", () => {
   });
 });
 
+test("an expired sign-in asks to sign in again and sends the waiting change afterwards", async ({ page, context }) => {
+  const title = `Po vypršení ${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  // The server stops accepting the session (same effect as the session reaching its time limit).
+  // The suggestion lookup is answered locally so that the first refused request is the save itself.
+  await context.clearCookies();
+  await page.route("**/api/task-suggestions", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  await modal.locator("input, textarea").first().fill(title);
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  const notice = page.locator(".authCard .authNotice");
+  await expect(notice).toContainText("Přihlášení vypršelo");
+  await expect(notice).toContainText("zůstávají v tomto zařízení");
+  await signIn(page);
+  await expectOnServer(page, (entity) => entity.title === title, true);
+  await sidebarView(page, "Doručené").click();
+  await expect(page.getByText(title)).toBeVisible();
+});
+
+test("text being typed when the sign-in expires is still there after signing in again", async ({ page, context }) => {
+  const title = `Rozepsaný úkol ${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await context.clearCookies();
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const field = page.locator(".captureModal").locator("input, textarea").first();
+  await field.fill(title);
+  // Typing asks the server for a suggestion; that request is refused and the sign-in screen appears.
+  await expect(page.locator(".authCard .authNotice")).toContainText("Přihlášení vypršelo");
+  await signIn(page);
+  await expect(page.locator(".authNotice")).toHaveCount(0);
+  await expect(field).toHaveValue(title);
+  await page.locator(".captureModal").getByRole("button", { name: "Přidat úkol" }).click();
+  await expectOnServer(page, (entity) => entity.title === title, true);
+});
+
+test("a title being edited when the sign-in expires is saved and sent after signing in again", async ({ page, context }) => {
+  const title = `Přejmenováno ${Date.now()}`;
+  await page.goto("/?task=e2e-rename");
+  const field = page.locator("input.titleEdit");
+  await expect(field).toHaveValue(seeded.renameTask);
+  await waitUntilSynced(page);
+  await context.clearCookies();
+  await field.fill(title);
+  // The field still has focus; a background request notices the expiry.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.locator(".authCard .authNotice")).toBeVisible();
+  await signIn(page);
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.title === title, true);
+});
+
+test("signing out after the sign-in has expired does not leave a question behind", async ({ page, context }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  // An unsent change exists and the session is gone: the save is refused, then sign-out is pressed.
+  await page.evaluate(() => localStorage.setItem("ai-executive-pending-sync", "1"));
+  await context.clearCookies();
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  await expect(page.locator(".authCard .authNotice")).toBeVisible();
+  await signIn(page);
+  await expect(page.locator(".appShell")).toBeVisible();
+  await waitUntilSynced(page);
+  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Odhlásit se" })).toBeVisible();
+});
+
 test("signing out without a connection is refused and removes nothing", async ({ page, context }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);

@@ -4,6 +4,7 @@ import type { LumiApp } from "../use-lumi-app";
 export function AuthScreen({ app }: { app: LumiApp }) {
   const {
     authError,
+    authNotice,
     authPassword,
     authState,
     checkAccess,
@@ -54,6 +55,7 @@ export function AuthScreen({ app }: { app: LumiApp }) {
               )}
             </>
           )}
+          {authNotice && <p className="authNotice" role="alert">{authNotice}</p>}
           {authError && <p className="authError" role="alert">{authError}</p>}
           {authState === "unavailable" && (
             <>
