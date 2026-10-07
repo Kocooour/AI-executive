@@ -28,6 +28,8 @@ import { mergeSnapshots, type ServerSnapshot } from "../lib/server-sync";
 import { fetchClientAuthStatus } from "../lib/client-auth-status";
 import { findActiveProjectWithTitle } from "../lib/project-title";
 import type { AttentionItem } from "../lib/attention";
+import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../lib/local-dates";
+import { byManualOrder, manualOrder, parseCaptureText, taskDueTone, taskMatchesView } from "../lib/task-views";
 
 interface AttentionResponse {
   items: Array<AttentionItem & { sourceFingerprint: string; lifecycleState: "active" }>;
@@ -569,30 +571,6 @@ const copy: Record<Language, Record<string, string>> = {
     completedRun: "Dokončeno", failedRun: "Selhalo", runningRun: "Probíhá", recommendations: "Doporučení",
   },
 };
-const ymd = (d = new Date()) =>
-  [
-    d.getFullYear(),
-    String(d.getMonth() + 1).padStart(2, "0"),
-    String(d.getDate()).padStart(2, "0"),
-  ].join("-");
-const manualOrder = (entity: Entity, scope = `${entity.type}:all`) => {
-  const stored = entity.properties.manualOrders;
-  const workspaceScope = `${entity.workspaceId}:${scope}`;
-  const value = Number(
-    stored && typeof stored === "object" && !Array.isArray(stored)
-      ? (stored as Record<string, unknown>)[workspaceScope] ??
-        (stored as Record<string, unknown>)[scope]
-      : entity.properties.manualOrder,
-  );
-  return Number.isFinite(value) ? value : entity.createdAt;
-};
-const byManualOrder = (scope?: string) => (a: Entity, b: Entity) =>
-  manualOrder(a, scope) - manualOrder(b, scope) || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
-const addLocalDays = (date: Date, days: number) => {
-  const result = new Date(date);
-  result.setDate(result.getDate() + days);
-  return result;
-};
 const friendlyDate = (value: unknown, language: Language, timezone?: string) => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return typeof value === "string" ? value : "";
@@ -618,15 +596,6 @@ const friendlyDate = (value: unknown, language: Language, timezone?: string) => 
       : "numeric",
   });
 };
-const taskDueTone = (entity: Entity, todayValue: string) => {
-  if (entity.type !== "task" || entity.status !== "open") return "";
-  const dueDates = [entity.properties.when, entity.properties.deadline]
-    .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value));
-  if (dueDates.some((due) => due < todayValue)) return "dueOverdue";
-  const tomorrowValue = ymd(addLocalDays(new Date(), 1));
-  if (dueDates.some((due) => due >= todayValue && due <= tomorrowValue)) return "dueSoon";
-  return "";
-};
 const taskDueSummary = (entity: Entity, todayValue: string, language: Language) => {
   const dueDates = [entity.properties.when, entity.properties.deadline]
     .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value))
@@ -636,65 +605,6 @@ const taskDueSummary = (entity: Entity, todayValue: string, language: Language) 
   const tomorrowValue = ymd(addLocalDays(new Date(), 1));
   const soonDate = dueDates.find((due) => due <= tomorrowValue);
   return soonDate ? `${copy[language].dueSoon} · ${friendlyDate(soonDate, language)}` : "";
-};
-const taskMatchesView = (task: Entity, targetView: string, todayValue: string) => {
-  if (targetView === "Completed") return task.status === "completed";
-  if (task.status !== "open") return false;
-  const properties = task.properties;
-  if (targetView === "Inbox") return properties.inbox === true;
-  if (targetView === "Today") {
-    return properties.today === true || properties.when === todayValue ||
-      (typeof properties.when === "string" && properties.when < todayValue);
-  }
-  if (targetView === "Overdue") {
-    return typeof properties.when === "string" && properties.when < todayValue;
-  }
-  if (targetView === "Upcoming") {
-    return typeof properties.when === "string" && properties.when > todayValue;
-  }
-  if (targetView === "Anytime") {
-    return !properties.when && !properties.someday && properties.inbox !== true;
-  }
-  if (targetView === "Someday") return properties.someday === true;
-  return true;
-};
-const toLocalDateTime = (value: unknown) => {
-  if (typeof value !== "string" || !value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value.length === 16 ? value : "";
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-};
-const fromLocalDateTime = (value: string) =>
-  value ? new Date(value).toISOString() : "";
-const zonedDateTimeToIso = (dateValue: string, timeValue: string, timeZone: string) => {
-  const [year, month, date] = dateValue.split("-").map(Number);
-  const [hour, minute] = timeValue.split(":").map(Number);
-  const desired = Date.UTC(year, month - 1, date, hour, minute);
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  let candidate = desired;
-  for (let iteration = 0; iteration < 2; iteration += 1) {
-    const values = Object.fromEntries(
-      formatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]),
-    );
-    const represented = Date.UTC(
-      Number(values.year),
-      Number(values.month) - 1,
-      Number(values.day),
-      Number(values.hour),
-      Number(values.minute),
-    );
-    candidate += desired - represented;
-  }
-  return new Date(candidate).toISOString();
 };
 const urlBase64ToUint8Array = (base64: string) => {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
@@ -2607,32 +2517,7 @@ export default function App() {
     [tasks, view, today, sortBy, priorityFilter],
   );
   function parseCapture(raw: string) {
-    let title = raw.trim(),
-      when = "",
-      priority = "none";
-    if (/(^|\s)zítra(?=\s|$)/i.test(title)) {
-      when = ymd(addLocalDays(new Date(), 1));
-      title = title.replace(/(^|\s)zítra(?=\s|$)/i, " ");
-    } else if (/(^|\s)dnes(?=\s|$)/i.test(title)) {
-      when = today;
-      title = title.replace(/(^|\s)dnes(?=\s|$)/i, " ");
-    }
-    const m = title.match(/(?:^|\s)(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\.?\s*$/);
-    if (m) {
-      const now = new Date();
-      const year = m[3] ? Number(m[3]) : now.getFullYear();
-      const d = new Date(year, Number(m[2]) - 1, Number(m[1]));
-      if (d.getFullYear() === year && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[1])) {
-        if (!m[3] && d < new Date(now.getFullYear(), now.getMonth(), now.getDate())) d.setFullYear(year + 1);
-        when = ymd(d);
-        title = title.slice(0, m.index).trim();
-      }
-    }
-    if (/(^|\s)(!|#high)(?=\s|$)/i.test(title)) priority = "high";
-    else if (/(^|\s)#medium(?=\s|$)/i.test(title)) priority = "medium";
-    else if (/(^|\s)#low(?=\s|$)/i.test(title)) priority = "low";
-    title = title.replace(/(^|\s)(!|#high|#medium|#low)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
-    return { title, when, priority };
+    return parseCaptureText(raw, today);
   }
   async function create(
     type: EntityType,
