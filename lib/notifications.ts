@@ -223,7 +223,7 @@ export function currentAttentionTaskCount(now = Date.now()) {
   }).length;
 }
 
-export async function sendPushToAll(payload: Record<string, unknown>) {
+async function sendToAll(payload: Record<string, unknown>) {
   configureWebPush();
   let sent = 0;
   let failed = 0;
@@ -242,6 +242,30 @@ export async function sendPushToAll(payload: Record<string, unknown>) {
   return { sent, failed, total: targets.length };
 }
 
+// Per-device sending for features that track delivery to each subscribed device separately.
+export type PushTargetResult = "sent" | "gone" | "failed";
+const pushTargetKey = (endpoint: string) => createHash("sha256").update(endpoint).digest("hex").slice(0, 20);
+
+export function listPushTargets(): string[] {
+  return subscriptions().map((target) => pushTargetKey(target.endpoint));
+}
+
+export async function sendPushToTarget(targetKey: string, payload: Record<string, unknown>): Promise<PushTargetResult> {
+  const target = subscriptions().find((candidate) => pushTargetKey(candidate.endpoint) === targetKey);
+  if (!target) return "gone";
+  try {
+    await sendTarget(target.subscription, payload);
+    return "sent";
+  } catch (error) {
+    const statusCode = Number((error as { statusCode?: number }).statusCode || 0);
+    if (statusCode === 404 || statusCode === 410) {
+      removeSubscription(target.endpoint);
+      return "gone";
+    }
+    return "failed";
+  }
+}
+
 function sendTarget(subscription: PushSubscription, payload: Record<string, unknown>) {
   configureWebPush();
   return webpush.sendNotification(subscription, JSON.stringify({
@@ -254,7 +278,7 @@ function sendTarget(subscription: PushSubscription, payload: Record<string, unkn
 }
 
 export async function sendTestNotification() {
-  return sendPushToAll({
+  return sendToAll({
     title: "Lumi",
     body: "Notifications are ready on this device.",
     url: "/?view=Today",
@@ -267,7 +291,7 @@ export async function sendSecurityNotification(
   body: string,
   severity: "warning" | "critical",
 ) {
-  return sendPushToAll({
+  return sendToAll({
     title,
     body,
     url: "/?view=Settings",

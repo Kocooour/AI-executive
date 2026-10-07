@@ -1,7 +1,7 @@
 import type { AttentionItem } from "./attention";
 import { reconcileAttention } from "./attention-lifecycle";
 import { activeWorkspaces, evaluateWorkspace, withAttentionTransaction } from "./attention-service";
-import { getNotificationPreferences, sendPushToAll } from "./notifications";
+import { getNotificationPreferences, listPushTargets, sendPushToTarget, type PushTargetResult } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 
 // Proactive push for attention items: one message when a task's deadline newly becomes "soon" or
@@ -68,20 +68,27 @@ export function attentionPushPayload(item: AttentionItem) {
   };
 }
 
-type Sender = (payload: Record<string, unknown>) => Promise<{ sent: number; failed: number; total: number }>;
+// Delivery is tracked per subscribed device, so a device that failed is retried without
+// notifying the devices that already received the message.
+export interface AttentionPushSender {
+  targets(): string[];
+  sendTo(target: string, payload: Record<string, unknown>): Promise<PushTargetResult>;
+}
+const defaultSender: AttentionPushSender = { targets: listPushTargets, sendTo: sendPushToTarget };
+const deviceKey = (itemKey: string, target: string) => `attention-device:${itemKey}:${target}`;
 
-export async function processAttentionNotifications(now = Date.now(), send: Sender = sendPushToAll) {
+export async function processAttentionNotifications(now = Date.now(), sender: AttentionPushSender = defaultSender) {
   // One pass at a time: a slow push service must not let the next tick start a second batch.
   if (passRunning) return { state: "busy" as const, sent: 0 };
   passRunning = true;
   try {
-    return await runPass(now, send);
+    return await runPass(now, sender);
   } finally {
     passRunning = false;
   }
 }
 
-async function runPass(now: number, send: Sender) {
+async function runPass(now: number, sender: AttentionPushSender) {
   const preferences = getNotificationPreferences();
   const database = getDatabase();
   if (!preferences.enabled || !preferences.attentionPush) {
@@ -91,7 +98,7 @@ async function runPass(now: number, send: Sender) {
   }
   const record = database.prepare(`INSERT OR IGNORE INTO notification_deliveries
     (delivery_key, entity_id, reminder_at, status, attempts, last_attempt_at) VALUES (?, ?, ?, ?, ?, ?)`);
-  // A new item is claimed with a fresh row; an item whose earlier send failed is claimed again for a retry.
+  // A new item is claimed with a fresh row; an item nobody has received yet is claimed again for a retry.
   const claim = database.prepare(`INSERT INTO notification_deliveries
     (delivery_key, entity_id, reminder_at, status, attempts, last_attempt_at) VALUES (?, ?, ?, 'pending', 1, ?)
     ON CONFLICT(delivery_key) DO UPDATE SET status = 'pending', attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, error = NULL
@@ -108,37 +115,63 @@ async function runPass(now: number, send: Sender) {
       // First run: everything already on Home counts as known. Only later changes are announced.
       for (const item of current) record.run(attentionDeliveryKey(item), item.subjectId, item.relevantDate, "baseline", 0, now);
       record.run(BASELINE_KEY, "attention", "baseline", "baseline", 0, now);
-      return { baseline: true, send: [] as AttentionItem[], held: null };
+      return { baseline: true, send: [] as AttentionItem[], retry: [] as AttentionItem[], held: null };
     }
-    // Handled = announced, baselined, given up on, or currently being sent. A failed send is retried up to MAX_ATTEMPTS.
-    const handledKeys = new Set(database.prepare(
-      "SELECT delivery_key FROM notification_deliveries WHERE delivery_key LIKE 'attention:%' AND NOT (status = 'failed' AND attempts < ?)",
-    ).all(MAX_ATTEMPTS).map((row) => String((row as { delivery_key: string }).delivery_key)));
-    // In-flight sends count toward the limit so overlapping work can never exceed it.
+    const rows = database.prepare("SELECT delivery_key, status, attempts FROM notification_deliveries WHERE delivery_key LIKE 'attention:%'")
+      .all() as Array<{ delivery_key: string; status: string; attempts: number }>;
+    // Handled = announced, baselined, given up on, or being sent. An item nobody received is retried up to MAX_ATTEMPTS.
+    const handledKeys = new Set(rows.filter((row) => !(row.status === "failed" && row.attempts < MAX_ATTEMPTS)).map((row) => row.delivery_key));
+    // "partial": at least one device has it, another failed. Only the failed devices are tried again.
+    const partialKeys = new Set(rows.filter((row) => row.status === "partial").map((row) => row.delivery_key));
+    // Delivered and in-flight items count toward the limit so overlapping work can never exceed it.
     const sentInLast24h = Number((database.prepare(`SELECT COUNT(*) AS count FROM notification_deliveries
-      WHERE delivery_key LIKE 'attention:%' AND ((status = 'sent' AND sent_at > ?) OR (status = 'pending' AND last_attempt_at > ?))`,
+      WHERE delivery_key LIKE 'attention:%' AND ((status IN ('sent', 'partial') AND sent_at > ?) OR (status = 'pending' AND last_attempt_at > ?))`,
     ).get(now - DAY, now - DAY) as { count: number }).count);
     const decision = planAttentionPushes({ items: current, handledKeys, sentInLast24h, now, timezone: preferences.timezone });
     // Claim inside the transaction so a retry or a second tick cannot announce the same item twice.
     for (const item of decision.send) claim.run(attentionDeliveryKey(item), item.subjectId, item.relevantDate, now);
-    return { baseline: false, ...decision };
+    // Finishing a partial delivery is not a new announcement: no daily limit, but still no messages at night.
+    const retry = inQuietHours(now, preferences.timezone) ? [] : current.filter((item) => partialKeys.has(attentionDeliveryKey(item)));
+    return { baseline: false, ...decision, retry };
   });
-  if (plan.baseline || !plan.send.length) return { state: plan.baseline ? "baseline" as const : plan.held || "idle" as const, sent: 0 };
-  const finish = database.prepare("UPDATE notification_deliveries SET status = ?, sent_at = ?, error = ? WHERE delivery_key = ?");
+  if (plan.baseline) return { state: "baseline" as const, sent: 0 };
   let sent = 0;
-  for (const item of plan.send) {
-    const key = attentionDeliveryKey(item);
-    try {
-      const result = await send(attentionPushPayload(item));
-      if (result.sent > 0) { finish.run("sent", now, null, key); sent += 1; }
-      // No subscribed device: recorded as not delivered and not retried, so a device that subscribes
-      // later does not receive a backlog. The item stays visible on Home.
-      else if (result.total === 0) finish.run("undelivered", null, "No subscribed device", key);
-      else finish.run("failed", null, "Push failed on every device", key);
-    } catch (error) {
-      // Only the error type is stored: push errors can carry endpoint URLs.
-      finish.run("failed", null, error instanceof Error ? error.name : "Push failed", key);
-    }
+  for (const item of plan.retry) await deliver(item, now, sender, true);
+  for (const item of plan.send) if (await deliver(item, now, sender, false)) sent += 1;
+  return { state: plan.held || (plan.send.length ? "sent" as const : "idle" as const), sent };
+}
+
+// Sends one item to the devices that still need it and records the outcome per device.
+// Returns true when this call delivered the item to its first device.
+async function deliver(item: AttentionItem, now: number, sender: AttentionPushSender, onlyFailedDevices: boolean) {
+  const database = getDatabase();
+  const itemKey = attentionDeliveryKey(item);
+  const prefix = deviceKey(itemKey, "");
+  const known = new Map((database.prepare("SELECT delivery_key, status, attempts FROM notification_deliveries WHERE substr(delivery_key, 1, ?) = ?")
+    .all(prefix.length, prefix) as Array<{ delivery_key: string; status: string; attempts: number }>)
+    .map((row) => [row.delivery_key.slice(prefix.length), row]));
+  const hadDelivery = [...known.values()].some((row) => row.status === "sent");
+  const saveDevice = database.prepare(`INSERT INTO notification_deliveries
+    (delivery_key, entity_id, reminder_at, status, attempts, last_attempt_at, sent_at) VALUES (?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT(delivery_key) DO UPDATE SET status = excluded.status, attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, sent_at = excluded.sent_at`);
+  const payload = attentionPushPayload(item);
+  for (const target of sender.targets()) {
+    const row = known.get(target);
+    if (row ? row.status !== "failed" || row.attempts >= MAX_ATTEMPTS : onlyFailedDevices) continue;
+    let result: PushTargetResult;
+    try { result = await sender.sendTo(target, payload); } catch { result = "failed"; }
+    saveDevice.run(deviceKey(itemKey, target), item.subjectId, item.relevantDate, result, now, result === "sent" ? now : null);
+    known.set(target, { delivery_key: "", status: result, attempts: (row?.attempts || 0) + 1 });
   }
-  return { state: plan.held || ("sent" as const), sent };
+  const devices = [...known.values()];
+  const delivered = devices.some((row) => row.status === "sent");
+  const retryable = devices.some((row) => row.status === "failed" && row.attempts < MAX_ATTEMPTS);
+  const finish = database.prepare("UPDATE notification_deliveries SET status = ?, sent_at = COALESCE(sent_at, ?), error = ?, attempts = MAX(attempts, ?) WHERE delivery_key = ?");
+  if (delivered) finish.run(retryable ? "partial" : "sent", now, null, 0, itemKey);
+  // No subscribed device at all: recorded as not delivered and not retried, so a device that
+  // subscribes later does not receive a backlog. The item stays visible on Home.
+  else if (!devices.length) finish.run("undelivered", null, "No subscribed device", 0, itemKey);
+  // Nobody received it: try again on a later pass, or give up once every device used its attempts.
+  else finish.run("failed", null, "Push failed on every device", retryable ? 0 : MAX_ATTEMPTS, itemKey);
+  return delivered && !hadDelivery;
 }

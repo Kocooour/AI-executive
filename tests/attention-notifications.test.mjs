@@ -78,9 +78,19 @@ const add = (entity) => store.getDatabase().prepare("INSERT OR REPLACE INTO enti
 const task = (id, deadline, extra = {}) => ({ id, type: "task", title: `Úkol ${id}`, status: "open", workspaceId: "personal", properties: { deadline }, createdAt: 1, updatedAt: 1, ...extra });
 const deliveries = () => store.getDatabase().prepare("SELECT delivery_key, status FROM notification_deliveries WHERE delivery_key LIKE 'attention:%' ORDER BY delivery_key").all()
   .map((row) => `${row.status}:${row.delivery_key === "attention:baseline" ? "(marker)" : row.delivery_key.split(":").at(-2)}`);
-const statusOf = (id) => store.getDatabase().prepare("SELECT status, attempts, error FROM notification_deliveries WHERE entity_id = ? AND delivery_key LIKE 'attention:%'").all(id).map((row) => `${row.status}/${row.attempts}/${row.error ?? ""}`);
-const sender = (result = { sent: 1, failed: 0, total: 1 }) => { const calls = []; const send = async (payload) => { calls.push(payload); return result; }; return { calls, send }; };
+const statusOf = (id) => store.getDatabase().prepare("SELECT status, attempts, error FROM notification_deliveries WHERE entity_id = ? AND delivery_key LIKE 'attention:%' AND delivery_key NOT LIKE 'attention-device:%'").all(id).map((row) => `${row.status}/${row.attempts}/${row.error ?? ""}`);
+// A fake push sender. `devices` maps a device name to a function returning "sent" | "gone" | "failed" (or throwing).
+const sender = (devices = { phone: () => "sent" }) => {
+  const calls = [];
+  const send = { targets: () => Object.keys(devices), sendTo: async (target, payload) => { calls.push({ ...payload, target }); return devices[target](payload); } };
+  return { calls, send };
+};
 const DAY10 = at("2026-10-07T08:00:00Z"); // 10:00 in Prague
+// Forgets every earlier announcement and records the current tasks as known, so a test starts with an empty daily limit.
+const freshBaseline = async (now) => {
+  store.getDatabase().prepare("DELETE FROM notification_deliveries WHERE delivery_key LIKE 'attention%'").run();
+  assert.deepEqual(await push.processAttentionNotifications(now, sender().send), { state: "baseline", sent: 0 });
+};
 
 test("first pass records a baseline and sends nothing; later items are sent once", async () => {
   if (!store.readSnapshot().entities.some((entity) => entity.type === "workspace")) add({ id: "workspace:personal", type: "workspace", title: "Personal", status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1 });
@@ -111,7 +121,7 @@ test("quiet hours defer the message to the morning and completed tasks are never
 
 test("no subscribed device is recorded as undelivered and not retried", async () => {
   add(task("nodevice", "2026-10-06"));
-  const none = sender({ sent: 0, failed: 0, total: 0 });
+  const none = sender({});
   assert.equal((await push.processAttentionNotifications(at("2026-10-08T07:00:00Z"), none.send)).sent, 0);
   assert.equal(deliveries().includes("undelivered:nodevice"), true);
   const again = sender();
@@ -131,19 +141,20 @@ test("turning the preference off stops sending and a later re-enable starts from
   assert.equal(notifications.getNotificationPreferences().attentionPush, true);
 });
 
-test("a failed send is retried on later passes, at most three attempts, and only the error type is stored", async () => {
+test("an item nobody received is retried on later passes, at most three attempts, and no push error text is stored", async () => {
   add(task("flaky", "2026-10-08"));
-  const failing = { calls: 0, send: async () => { failing.calls += 1; throw new Error("boom https://push.example/SECRET"); } };
+  const failing = sender({ phone: () => { throw new Error("boom https://push.example/SECRET"); } });
   for (let pass = 0; pass < 5; pass += 1) await push.processAttentionNotifications(at("2026-10-10T08:00:00Z") + pass * 300_000, failing.send);
-  assert.equal(failing.calls, 3);
-  assert.deepEqual(statusOf("flaky"), ["failed/3/Error"]);
+  assert.equal(failing.calls.length, 3);
+  assert.deepEqual(statusOf("flaky"), ["failed/3/Push failed on every device"]);
+  assert.equal(JSON.stringify(store.getDatabase().prepare("SELECT * FROM notification_deliveries WHERE entity_id = 'flaky'").all()).includes("SECRET"), false);
   add(task("flaky2", "2026-10-08"));
   let attempt = 0;
-  const recovering = async () => (attempt += 1) === 1 ? { sent: 0, failed: 2, total: 2 } : { sent: 1, failed: 1, total: 2 };
-  await push.processAttentionNotifications(at("2026-10-10T09:00:00Z"), recovering);
+  const recovering = sender({ phone: () => (attempt += 1) === 1 ? "failed" : "sent" });
+  await push.processAttentionNotifications(at("2026-10-10T09:00:00Z"), recovering.send);
   assert.deepEqual(statusOf("flaky2"), ["failed/1/Push failed on every device"]);
-  await push.processAttentionNotifications(at("2026-10-10T09:05:00Z"), recovering);
-  assert.equal(statusOf("flaky2")[0].startsWith("sent/2/"), true);
+  assert.equal((await push.processAttentionNotifications(at("2026-10-10T09:05:00Z"), recovering.send)).sent, 1);
+  assert.deepEqual(statusOf("flaky2"), ["sent/2/"]);
 });
 
 test("changing the timezone does not announce known items again", async () => {
@@ -162,7 +173,7 @@ test("overlapping passes do not run twice and in-flight sends count toward the d
   for (const id of ["o1", "o2", "o3", "o4"]) add(task(id, "2026-10-10"));
   let release; const gate = new Promise((resolve) => { release = resolve; });
   const calls = [];
-  const slow = async (payload) => { calls.push(payload.title); await gate; return { sent: 1, failed: 0, total: 1 }; };
+  const slow = { targets: () => ["phone"], sendTo: async (target, payload) => { calls.push(payload.title); await gate; return "sent"; } };
   const first = push.processAttentionNotifications(at("2026-10-13T08:00:00Z"), slow);
   assert.deepEqual(await push.processAttentionNotifications(at("2026-10-13T08:00:01Z"), slow), { state: "busy", sent: 0 });
   release();
@@ -181,4 +192,43 @@ test("a pass interrupted after claiming is closed as not delivered and not resen
   await push.processAttentionNotifications(at("2026-10-15T08:30:00Z"), next.send);
   assert.equal(next.calls.some((call) => call.title === "Úkol crashed"), false);
   assert.deepEqual(statusOf("crashed"), ["undelivered/1/Interrupted before sending"]);
+});
+
+test("when one device receives the message and another fails, only the failed device is retried", async () => {
+  await freshBaseline(at("2026-10-16T07:55:00Z"));
+  add(task("mixed", "2026-10-09"));
+  let tabletAttempts = 0;
+  const devices = sender({ phone: () => "sent", tablet: () => (tabletAttempts += 1) <= 2 ? "failed" : "sent" });
+  const first = await push.processAttentionNotifications(at("2026-10-16T08:00:00Z"), devices.send);
+  assert.deepEqual([first.sent, statusOf("mixed")], [1, ["partial/1/"]]);
+  const second = await push.processAttentionNotifications(at("2026-10-16T08:05:00Z"), devices.send);
+  assert.deepEqual([second.sent, statusOf("mixed")], [0, ["partial/1/"]]);
+  await push.processAttentionNotifications(at("2026-10-16T08:10:00Z"), devices.send);
+  assert.deepEqual(statusOf("mixed"), ["sent/1/"]);
+  assert.deepEqual(devices.calls.filter((call) => call.title === "Úkol mixed").map((call) => call.target), ["phone", "tablet", "tablet", "tablet"]);
+  await push.processAttentionNotifications(at("2026-10-16T08:15:00Z"), devices.send);
+  assert.equal(devices.calls.filter((call) => call.title === "Úkol mixed").length, 4);
+});
+
+test("a device that keeps failing is given up after three attempts and one that is gone is not retried", async () => {
+  await freshBaseline(at("2026-10-17T07:55:00Z"));
+  add(task("stuck", "2026-10-09"));
+  const devices = sender({ phone: () => "sent", tablet: () => "failed", old: () => "gone" });
+  for (let pass = 0; pass < 5; pass += 1) await push.processAttentionNotifications(at("2026-10-17T08:00:00Z") + pass * 300_000, devices.send);
+  assert.deepEqual(statusOf("stuck"), ["sent/1/"]);
+  const targets = devices.calls.filter((call) => call.title === "Úkol stuck").map((call) => call.target);
+  assert.deepEqual([targets.filter((t) => t === "phone").length, targets.filter((t) => t === "tablet").length, targets.filter((t) => t === "old").length], [1, 3, 1]);
+});
+
+test("finishing a partial delivery waits for the morning and does not use the daily limit", async () => {
+  await freshBaseline(at("2026-10-18T19:45:00Z"));
+  add(task("late-retry", "2026-10-09"));
+  let tablet = "failed";
+  const devices = sender({ phone: () => "sent", tablet: () => tablet });
+  await push.processAttentionNotifications(at("2026-10-18T19:50:00Z"), devices.send); // 21:50 in Prague
+  tablet = "sent";
+  await push.processAttentionNotifications(at("2026-10-18T20:30:00Z"), devices.send); // 22:30, quiet
+  assert.deepEqual(statusOf("late-retry"), ["partial/1/"]);
+  await push.processAttentionNotifications(at("2026-10-19T06:05:00Z"), devices.send); // 08:05
+  assert.deepEqual(statusOf("late-retry"), ["sent/1/"]);
 });
