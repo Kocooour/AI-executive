@@ -3,6 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
+import { watchSession } from "../../lib/session-watch";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -504,6 +505,23 @@ export function useLumiApp() {
     }
   }
   const authCheckVersion = useRef(0);
+  // The session lasts a limited time. When the server starts refusing data requests the app
+  // returns to the sign-in screen and says why; nothing local is removed, so changes that were
+  // not sent yet go out after signing in again.
+  const sessionEndHandler = useRef(() => {});
+  sessionEndHandler.current = () => {
+    if (authState !== "ready" || signedOut.current) return;
+    answerConfirm(false);
+    setAuthPassword("");
+    setAuthError(tr(localStorage.getItem(pendingKey) === "1" ? "sessionEndedUnsent" : "sessionEnded"));
+    setAuthState("required");
+  };
+  useEffect(() => {
+    const original = window.fetch;
+    const watched = watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current());
+    window.fetch = watched as typeof window.fetch;
+    return () => { if (window.fetch === watched) window.fetch = original; };
+  }, []);
   async function checkAccess() {
     const version = ++authCheckVersion.current;
     setAuthError("");

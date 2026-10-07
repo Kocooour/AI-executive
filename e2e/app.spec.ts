@@ -122,6 +122,43 @@ test.describe("on a phone-sized screen", () => {
   });
 });
 
+test("an expired sign-in asks to sign in again and sends the waiting change afterwards", async ({ page, context }) => {
+  const title = `Po vypršení ${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  // The server stops accepting the session (same effect as the session reaching its time limit).
+  // The suggestion lookup is answered locally so that the first refused request is the save itself.
+  await context.clearCookies();
+  await page.route("**/api/task-suggestions", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  await modal.locator("input, textarea").first().fill(title);
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  const notice = page.locator(".authCard [role=alert]");
+  await expect(notice).toContainText("Přihlášení vypršelo");
+  await expect(notice).toContainText("zůstaly v tomto zařízení");
+  await signIn(page);
+  await expectOnServer(page, (entity) => entity.title === title, true);
+  await sidebarView(page, "Doručené").click();
+  await expect(page.getByText(title)).toBeVisible();
+});
+
+test("text being typed when the sign-in expires is still there after signing in again", async ({ page, context }) => {
+  const title = `Rozepsaný úkol ${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await context.clearCookies();
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const field = page.locator(".captureModal").locator("input, textarea").first();
+  await field.fill(title);
+  // Typing asks the server for a suggestion; that request is refused and the sign-in screen appears.
+  await expect(page.locator(".authCard [role=alert]")).toContainText("Přihlášení vypršelo");
+  await signIn(page);
+  await expect(field).toHaveValue(title);
+  await page.locator(".captureModal").getByRole("button", { name: "Přidat úkol" }).click();
+  await expectOnServer(page, (entity) => entity.title === title, true);
+});
+
 test("signing out without a connection is refused and removes nothing", async ({ page, context }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
