@@ -114,7 +114,7 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionCoverageText: "We evaluate deadlines and project activity from stored projects, tasks, and confirmed context. Waiting follow-ups, calendar conflicts, and capacity are not evaluated yet. Deleted task history and external activity are not included.",
     attentionLastSource: "Last source update", attentionUnknown: "unknown", attentionDetailMissing: "Detail is not in local data; refresh synchronization.",
     homeMoreToday: "and {n} more today", homeFixedEvents: "Fixed events today", homePlanOpen: "Open day plan",
-    homePlanPending: "{n} proposals in the day plan are waiting for your decision.", homeBriefNone: "not created yet",
+    homePlanProposed: "Proposed time blocks waiting for your approval: {n}.", homePlanUnscheduled: "Tasks without a time block: {n}.", homeBriefNone: "not created yet",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
@@ -229,6 +229,6 @@ export const copy: Record<Language, Record<string, string>> = {
     attentionCoverageText: "Vyhodnocujeme termíny a aktivitu projektů z uložených projektů, úkolů a potvrzeného kontextu. Čekající návaznosti, kalendářní konflikty a kapacitu zatím nevyhodnocujeme. Historie smazaných úkolů a externí aktivita nejsou zahrnuty.",
     attentionLastSource: "Poslední změna dat", attentionUnknown: "neznámá", attentionDetailMissing: "Detail není v místních datech; obnovte synchronizaci.",
     homeMoreToday: "a dalších {n} na dnešek", homeFixedEvents: "Pevné události dnes", homePlanOpen: "Otevřít plán dne",
-    homePlanPending: "Návrhy v plánu dne čekající na rozhodnutí: {n}.", homeBriefNone: "zatím nevytvořen",
+    homePlanProposed: "Navržené časové bloky čekající na schválení: {n}.", homePlanUnscheduled: "Úkoly bez časového bloku: {n}.", homeBriefNone: "zatím nevytvořen",
   },
 };

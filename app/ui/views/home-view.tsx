@@ -19,6 +19,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     calendarFresh,
     calendarSources,
     currentDayPlanBlock,
+    dayPlanStatus,
     done,
     dragHandle,
     dragTarget,
@@ -47,6 +48,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     visibleDayPlan,
     workSession,
     workspaces,
+    writeWorkspace,
   } = app;
   if (view !== "Home") return null;
 
@@ -66,7 +68,10 @@ export function HomeView({ app }: { app: LumiApp }) {
   const syncLabel = syncStatus === "synced" ? tr("synced") : syncStatus === "syncing" ? tr("syncing")
     : syncStatus === "offline" ? tr("offline") : tr("connecting");
   const moreToday = (sidebarCounts.Today ?? homeTodayTasks.length) - homeTodayTasks.length;
-  const pendingPlanItems = visibleDayPlan ? visibleDayPlan.planBlocks.length + visibleDayPlan.unscheduled.length : 0;
+  const proposedBlocks = visibleDayPlan ? visibleDayPlan.planBlocks.length : 0;
+  const unscheduledTasks = visibleDayPlan ? visibleDayPlan.unscheduled.length : 0;
+  // Calendar and day plan belong to one workspace; name it when Home shows the read-only aggregate.
+  const scopeNote = activeWorkspaceId === "all" && writeWorkspace ? ` (${writeWorkspace.title})` : "";
   const latestBrief = briefings[0];
 
   return (
@@ -75,10 +80,10 @@ export function HomeView({ app }: { app: LumiApp }) {
         <li>
           <button type="button" onClick={() => setView("Inbox")}><b>{inboxCount}</b> {tr("homeInboxToSort")}</button>
         </li>
+        <li><span className={`homeSync ${syncStatus}`} role="status">{tr("homeDataState")}: <b>{syncLabel}</b></span></li>
         <li>
-          <button type="button" onClick={() => setView("Calendar")}>{tr("todayCapacity")}: <b>{capacityLabel}</b></button>
+          <button type="button" onClick={() => setView("Calendar")}>{tr("todayCapacity")}{scopeNote}: <b>{capacityLabel}</b></button>
         </li>
-        <li className={`homeSync ${syncStatus}`} role="status">{tr("homeDataState")}: <b>{syncLabel}</b></li>
       </ul>
 
       {workSession && <WorkNowCard app={app} />}
@@ -99,7 +104,7 @@ export function HomeView({ app }: { app: LumiApp }) {
                 <p>{attentionReason(candidate, language)}</p>
                 <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : tr("attentionRecorded")} · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</small>
               </div>
-              <button type="button" className="attentionOpen" onClick={() => {
+              <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
                 if (entity) void inspect(entity);
                 else setAttentionError(tr("attentionDetailMissing"));
@@ -146,21 +151,25 @@ export function HomeView({ app }: { app: LumiApp }) {
         </div>
         {moreToday > 0 && <button type="button" className="textAction" onClick={() => setView("Today")}>{fill("homeMoreToday", { n: moreToday })} →</button>}
         {todayCalendarEvents.length > 0 && <>
-          <h3 className="homeSubhead">{tr("homeFixedEvents")}</h3>
+          <p className="homeSubhead">{tr("homeFixedEvents")}</p>
           <TodayAgenda app={app} />
         </>}
         {calendarSources.length > 0 && !calendarFresh && <p className="attentionEmpty" role="status">{tr("calendarStale")}</p>}
-        {visibleDayPlan && (currentDayPlanBlock || nextDayPlanBlock || pendingPlanItems > 0) && <div className="homePlan">
+        {visibleDayPlan ? <div className="homePlan">
+          {scopeNote && <p className="attentionMeta">{tr("dayPlanTitle")}{scopeNote}</p>}
+          {visibleDayPlan.calendar !== "ready" && <p>{tr(visibleDayPlan.calendar === "missing" ? "dayPlanMissing" : visibleDayPlan.calendar === "stale" ? "dayPlanStale" : "dayPlanNonWorkday")}</p>}
+          {visibleDayPlan.calendar === "ready" && visibleDayPlan.overloaded && <p role="status" className="dayPlanWarning">{tr("dayPlanOverloaded")} ({visibleDayPlan.requiredMinutes} min)</p>}
           {currentDayPlanBlock && <p><strong>{tr("dayPlanCurrent")}:</strong> {currentDayPlanBlock.title} · {planBlockState(currentDayPlanBlock)}</p>}
           {nextDayPlanBlock && <p><strong>{tr("dayPlanNext")}:</strong> {nextDayPlanBlock.title} · {planBlockState(nextDayPlanBlock)}</p>}
-          {pendingPlanItems > 0 && <p>{fill("homePlanPending", { n: pendingPlanItems })}</p>}
+          {proposedBlocks > 0 && <p>{fill("homePlanProposed", { n: proposedBlocks })}</p>}
+          {unscheduledTasks > 0 && <p>{fill("homePlanUnscheduled", { n: unscheduledTasks })}</p>}
           <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("homePlanOpen")} →</button>
-        </div>}
+        </div> : dayPlanStatus ? <p className="attentionEmpty" role="status">{dayPlanStatus}</p> : null}
       </section>
 
       <details className="homeSection homeBrief">
         <summary>
-          <span><span className="sectionDot recentDot" />{tr("dailyBrief")}</span>
+          <span><span className="sectionDot recentDot" />{tr("dailyBrief")}</span>{" "}
           <small>{latestBrief ? `${latestBrief.title} · ${shortTime(latestBrief.createdAt)}` : tr("homeBriefNone")}</small>
         </summary>
         <div className="notificationActions">
