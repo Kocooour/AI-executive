@@ -1890,15 +1890,7 @@ export function useLumiApp() {
     ))
     .sort(byManualOrder("task:Today"))
     .slice(0, 5);
-  const homeUpcomingTasks = tasks
-    .filter((task) => task.status === "open" && typeof task.properties.when === "string" && task.properties.when > today)
-    .sort((a, b) => String(a.properties.when).localeCompare(String(b.properties.when)) || byManualOrder("task:Upcoming")(a, b))
-    .slice(0, 4);
   const homeProjects = projects.filter((project) => project.status === "active").sort(byManualOrder("project:all")).slice(0, 4);
-  const homeRecent = [...scopedItems]
-    .filter((entity) => entity.type !== "task" || entity.status === "open")
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 4);
   const greetingHour = new Date().getHours();
   const homeGreeting = greetingHour < 12 ? tr("goodMorning") : greetingHour < 18 ? tr("goodAfternoon") : tr("goodEvening");
   const visible = useMemo(
@@ -2813,9 +2805,7 @@ export function useLumiApp() {
     freeWindows,
     homeGreeting,
     homeProjects,
-    homeRecent,
     homeTodayTasks,
-    homeUpcomingTasks,
     inspect,
     items,
     language,

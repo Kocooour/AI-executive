@@ -9,7 +9,6 @@ export function WorkNowCard({ app }: { app: LumiApp }) {
     loadDayPlan,
     setDayPlanStatus,
     tr,
-    view,
     workElapsedText,
     workOverrun,
     workSession,
@@ -19,8 +18,6 @@ export function WorkNowCard({ app }: { app: LumiApp }) {
     writeWorkspaceId,
   } = app;
   return (
-    <>
-          {(view === "Home" || view === "Today") && (
             <section className={`workNowCard ${workOverrun ? "overrun" : ""}`} aria-labelledby="work-now-title">
               <div>
                 <p className="eyebrow">LUMI · {tr("workNow").toUpperCase()}</p>
@@ -34,7 +31,5 @@ export function WorkNowCard({ app }: { app: LumiApp }) {
               {workOverrun && <div><p className="dayPlanWarning" role="status">{tr("workOverrun")}</p><button disabled={dayPlanBusy} onClick={() => loadDayPlan(activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId, calendarToday).catch((error) => setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")))}>{tr("workReplan")}</button></div>}
               {workSessionStatus && <p role="status">{workSessionStatus}</p>}
             </section>
-          )}
-    </>
   );
 }

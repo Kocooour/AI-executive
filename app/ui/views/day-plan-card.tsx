@@ -21,15 +21,12 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
     setDayPlanStatus,
     tr,
     undoDayPlanBlock,
-    view,
     visibleDayPlan,
     workSession,
     workSessionAction,
     workSessionBusy,
   } = app;
   return (
-    <>
-          {(view === "Home" || view === "Today") && (
             <section className="dayPlanCard" aria-labelledby="day-plan-title">
               <div className="sectionHeading">
                 <div><p className="eyebrow">LUMI</p><h2 id="day-plan-title">{tr("dayPlanTitle")}</h2></div>
@@ -80,7 +77,5 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
                 </div>
               </> : !dayPlanStatus && <p>{tr("checking")}</p>}
             </section>
-          )}
-    </>
   );
 }

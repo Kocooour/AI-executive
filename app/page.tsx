@@ -54,8 +54,8 @@ export default function App() {
           </div>
           <CalendarView app={app} />
           <HomeView app={app} />
-          <WorkNowCard app={app} />
-          <DayPlanCard app={app} />
+          {view === "Today" && <WorkNowCard app={app} />}
+          {view === "Today" && <DayPlanCard app={app} />}
           <SearchResults app={app} />
           <ContextView app={app} />
           <AgentsView app={app} />

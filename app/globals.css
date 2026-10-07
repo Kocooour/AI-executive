@@ -497,15 +497,6 @@ article small {
   gap: 8px;
 }
 
-.briefingCard {
-  margin-top: 24px;
-  padding: 22px;
-  border: 1px solid #e8e8ef;
-  border-radius: 22px;
-  background: #fff;
-}
-
-.briefingCard h2 { margin: 2px 0 0; }
 .briefingTasks { padding-left: 22px; }
 .briefingTasks li { margin: 10px 0; }
 .briefingTasks button {
@@ -1691,43 +1682,57 @@ article {
 .pageSubtitle {
   margin: 8px 0 0;
 }
-.homeOverview {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 16px;
-}
 .attentionSection { margin-bottom: 16px; }
 .attentionMeta, .attentionEmpty, .attentionLimits, .attentionItem small { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .attentionMeta { margin: 0 0 12px; }
 .attentionList { display: grid; gap: 0; }
-.attentionItem { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.attentionItem { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 0; border-top: 1px solid var(--line); }
 .attentionItem > div { min-width: 0; }
 .attentionItem strong { overflow-wrap: anywhere; }
 .attentionItem p { margin: 4px 0; line-height: 1.4; }
 .attentionItem button { flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 12px; cursor: pointer; }
 .attentionItem button:hover { color: var(--accent); border-color: var(--accent); }
 .attentionItem button:disabled { opacity: .55; cursor: wait; }
-.attentionActions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.attentionSources { margin-top: 6px; color: var(--muted); font-size: 12px; }
-.attentionSources summary { cursor: pointer; }
-.attentionSources ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.attentionMore { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.attentionMore summary { width: fit-content; padding: 2px 0; cursor: pointer; }
+.attentionMore[open] summary { margin-bottom: 8px; }
+.attentionMore .attentionMeta { margin: 0 0 4px; }
+.attentionActions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.attentionSources { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .attentionLimits { margin-top: 10px; }
 .attentionLimits summary { cursor: pointer; }
 .attentionError { color: #b44848; }
-@media (max-width: 700px) { .attentionItem { display: block; } .attentionActions { justify-content: flex-start; margin-top: 10px; } .attentionItem button { min-height: 44px; } }
+@media (max-width: 700px) { .attentionItem button { min-height: 44px; } .attentionMore summary, .attentionLimits summary { padding: 15px 0; } }
+.homeStatus { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
+.homeStatus button, .homeSync { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: inherit; font-size: 12px; }
+.homeStatus button { cursor: pointer; }
+.homeStatus button:hover { color: var(--accent); border-color: var(--accent); }
+.homeStatus b { color: var(--text); font-weight: 650; }
+.homeSync.synced b { color: var(--success); }
+.homeSync.offline b { color: var(--danger); }
+.homeToday { margin-bottom: 16px; }
+.homeToday .calmEmpty { min-height: 120px; }
+.homeSubhead { margin: 16px 0 0; color: var(--muted); font-size: 12px; font-weight: 650; }
+.homePlan { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; }
+.homePlan p { margin: 0 0 6px; line-height: 1.5; }
+.homeBrief > summary { cursor: pointer; }
+.homeBrief > summary > span { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; }
+.homeBrief > summary > small { margin-left: 10px; color: var(--muted); font-size: 12px; }
+.homeBrief[open] > summary { margin-bottom: 14px; }
+.homeBrief .notificationActions { margin-bottom: 12px; }
+@media (max-width: 700px) {
+  .homeStatus { flex-wrap: nowrap; margin-right: -16px; padding-right: 16px; overflow-x: auto; scrollbar-width: none; }
+  .homeStatus li { flex: none; }
+  .homeStatus button, .homeSync { min-height: 44px; white-space: nowrap; }
+  .homeBrief > summary { padding: 13px 0; }
+  .homeSectionHead button, .homeSection .textAction, .homeBrief .notificationActions button, .homeBrief .briefingTasks button { min-height: 44px; }
+}
 .homeSection {
   min-width: 0;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--surface);
-}
-.homePrimary {
-  min-height: 238px;
-}
-.homeSide {
-  display: grid;
-  gap: 16px;
 }
 .homeSectionHead {
   min-height: 24px;
@@ -1767,12 +1772,8 @@ article {
   background: #9b9ca5;
 }
 .todayDot { background: #6557e8; }
-.inboxDot { background: #d79047; }
-.projectDot { background: #4f8c7b; }
-.upcomingDot { background: #4c78ba; }
 .recentDot { background: #999aa4; }
-.homeSection > p,
-.homeCompactList > p {
+.homeSection > p {
   margin: 4px 0 8px;
   color: var(--muted);
   font-size: 13px;
@@ -1791,8 +1792,7 @@ article {
 }
 .homeTaskList strong,
 .list article strong,
-.searchResults article strong,
-.homeCompactList span {
+.searchResults article strong {
   overflow-wrap: anywhere;
 }
 .homeTaskList article:hover {
@@ -1813,58 +1813,6 @@ article {
 }
 .homeTaskList small {
   margin-top: 3px;
-  font-size: 11px;
-  text-transform: capitalize;
-}
-.homeCompactList {
-  display: grid;
-}
-.homeCompactRow {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  border-top: 1px solid var(--line);
-}
-.homeCompactRow:first-child { border-top: 0; }
-.homeCompactRow > button:last-child { flex: 1; }
-.homeCompactList .homeCompactRow > .dragHandle {
-  flex: 0 0 32px;
-  width: 32px;
-  min-width: 32px;
-  padding: 0;
-  border: 0;
-  justify-content: center;
-}
-.homeCompactList button {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border: 0;
-  border-top: 1px solid #eeeeF1;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-}
-.homeCompactList button:first-child {
-  border-top: 0;
-}
-.homeCompactList .homeCompactRow > button {
-  border-top: 0;
-}
-.homeCompactList button span {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 580;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.homeCompactList button small {
-  flex: none;
-  color: var(--muted-light);
   font-size: 11px;
   text-transform: capitalize;
 }
@@ -1895,28 +1843,6 @@ article {
   color: var(--accent);
   cursor: pointer;
   font-weight: 650;
-}
-.homeInsights {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 20px;
-}
-.briefingCard {
-  min-width: 0;
-  margin: 0;
-  padding: 20px;
-  border-color: var(--line);
-  border-radius: 16px;
-  box-shadow: none;
-}
-.briefingCard .sectionHeading h2 {
-  font-size: 18px;
-  letter-spacing: -0.015em;
-}
-.briefingCard .notificationActions button {
-  padding: 7px 9px;
-  font-size: 11px;
 }
 .calendarAgenda > div,
 .calendarSources > div {
@@ -2039,7 +1965,7 @@ article {
 .projectActions { display: flex; gap: 8px; }
 .projectActions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 @media (pointer: coarse) {
-  .dragHandle, .homeCompactList .homeCompactRow > .dragHandle { width: 44px; min-width: 44px; min-height: 44px; flex-basis: 44px; }
+  .dragHandle { width: 44px; min-width: 44px; min-height: 44px; flex-basis: 44px; }
 }
 article:hover > .dragHandle,
 .dragHandle:focus-visible,
@@ -2141,8 +2067,6 @@ article:hover > .dragHandle,
 @media (max-width: 860px) and (min-width: 701px) {
   .appShell { grid-template-columns: 210px minmax(0, 1fr); }
   .content { padding: 0 28px; }
-  .homeOverview { grid-template-columns: 1fr; }
-  .homeInsights { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 700px) {
@@ -2196,14 +2120,6 @@ article:hover > .dragHandle,
   .pageTitleRow time {
     font-size: 11px;
   }
-  .homeOverview,
-  .homeInsights {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .homeSide {
-    gap: 0;
-  }
   .homeSection {
     min-height: 0;
     padding: 18px 0;
@@ -2211,28 +2127,6 @@ article:hover > .dragHandle,
     border-top: 1px solid var(--line);
     border-radius: 0;
     background: transparent;
-  }
-  .homePrimary {
-    padding-top: 0;
-    border-top: 0;
-  }
-  .homeInsights {
-    margin-top: 8px;
-  }
-  .briefingCard {
-    padding: 20px 0;
-    border-width: 1px 0 0;
-    border-radius: 0;
-    background: transparent;
-  }
-  .briefingCard .sectionHeading {
-    gap: 10px;
-  }
-  .briefingCard .notificationActions {
-    width: 100%;
-  }
-  .briefingCard .notificationActions button {
-    flex: 1;
   }
   .list,
   .searchResults {
@@ -2929,8 +2823,7 @@ h3 {
 
 .list article small,
 .searchResults article small,
-.homeTaskList small,
-.homeCompactList button small {
+.homeTaskList small {
   color: var(--muted-light);
 }
 
@@ -2942,13 +2835,7 @@ h3 {
   color: var(--muted-light);
 }
 
-.homeOverview {
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 14px;
-}
-
 .homeSection,
-.briefingCard,
 .settingsPanel section,
 .dashboard div {
   border-color: var(--line);
@@ -2956,11 +2843,6 @@ h3 {
   background: var(--surface);
   color: var(--text);
   box-shadow: none;
-}
-
-.homeCompactList button {
-  border-color: var(--line);
-  color: var(--text);
 }
 
 .calendarAgenda > div,
@@ -3177,7 +3059,6 @@ h3 {
     padding: 0 18px;
   }
   .homeSection,
-  .briefingCard,
   .list,
   .searchResults {
     background: transparent;
@@ -3196,7 +3077,6 @@ h3 {
   .appShell > aside,
   .appPane .topbar,
   .homeSection,
-  .briefingCard,
   .settingsPanel section,
   .captureModal,
   .detail,
@@ -3217,11 +3097,7 @@ h3 {
   .appShell,
   .appPane,
   .content,
-  .homeOverview,
-  .homeSide,
-  .homeInsights,
-  .homeSection,
-  .briefingCard {
+  .homeSection {
     min-width: 0;
     max-width: 100%;
   }
@@ -3288,13 +3164,6 @@ h3 {
     overflow-wrap: anywhere;
   }
 
-  .homeOverview,
-  .homeInsights {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .homeSectionHead,
   .sectionHeading {
     min-width: 0;
@@ -3302,24 +3171,13 @@ h3 {
 
   .homeSectionHead > span,
   .sectionHeading > div,
-  .homeTaskList article > div,
-  .homeCompactList button > span {
+  .homeTaskList article > div {
     min-width: 0;
   }
 
   .homeSectionHead > span,
-  .homeSectionHead > button,
-  .homeCompactList button small {
+  .homeSectionHead > button {
     flex-shrink: 1;
-  }
-
-  .homeCompactList button {
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .homeCompactList button span {
-    white-space: normal;
   }
 
   .homeTaskList article,
