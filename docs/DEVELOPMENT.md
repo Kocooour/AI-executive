@@ -1,0 +1,139 @@
+# Development workflow
+
+This guide defines the local conventions for developing and testing Lumi in parallel. It supplements [AGENTS.md](../AGENTS.md); the product and architecture contract remains [README.md](../README.md).
+
+## Working conventions
+
+- Keep `main` deployable. Every change starts in its own branch and is delivered through a pull request.
+- Give every active implementation stream its own Git worktree or full checkout. Do not share a working tree between agents.
+- Give every running development instance a distinct port and distinct mutable state.
+- Never commit `.env.local`, database files, local storage directories, or credentials.
+- Record the branch, port, local-state prefix, validation, and preview URL (when available) in the pull request.
+
+Suggested names:
+
+| Purpose | Branch | Worktree directory | Port | State prefix |
+| --- | --- | --- | --- | --- |
+| Stable baseline | `main` | `../lumi-main` | 3000 | `lumi_main` |
+| Codex change | `codex/<ticket>-<topic>` | `../lumi-codex-<topic>` | 3001 | `lumi_codex_<topic>` |
+| Claude change | `claude/<ticket>-<topic>` | `../lumi-claude-<topic>` | 3002 | `lumi_claude_<topic>` |
+| PR preview/local check | `pr/<number>` | `../lumi-pr-<number>` | 30xx | `lumi_pr_<number>` |
+| Integration test | `integration/<ticket>-<ticket>` | `../lumi-integration-<topic>` | 3010 | `lumi_integration_<topic>` |
+| A/B option | `experiment/<topic>-a` or `-b` | `../lumi-<topic>-a` or `-b` | adjacent free ports | matching variant suffix |
+
+Choose a meaningful, filesystem-safe `<topic>`. Do not reuse a port or state prefix while its instance is still running.
+
+## Create isolated worktrees
+
+Start from a clean, up-to-date clone:
+
+```bash
+git fetch origin
+git worktree add ../lumi-codex-recurrence -b codex/42-recurrence origin/main
+git worktree add ../lumi-claude-command-palette -b claude/51-command-palette origin/main
+```
+
+Install dependencies inside each worktree so its setup is explicit:
+
+```bash
+cd ../lumi-codex-recurrence
+npm install
+```
+
+List active worktrees before removing one:
+
+```bash
+git worktree list
+git worktree remove ../lumi-codex-recurrence
+git branch -d codex/42-recurrence
+```
+
+Only remove a worktree after its changes are merged or deliberately preserved elsewhere. Never delete a worktree containing uncommitted work.
+
+## Isolate environment and local state
+
+Copy the project’s environment template when one is available, or create an ignored `.env.local` per worktree. Use the same application settings needed by the feature, but change every writable resource.
+
+Example shape (adapt variable names to the current application configuration; do not invent unsupported production variables):
+
+```dotenv
+# ../lumi-codex-recurrence/.env.local
+PORT=3001
+DATABASE_URL=file:./.local/lumi_codex_recurrence.db
+LUMI_STORAGE_DIR=./.local/storage
+LUMI_CACHE_DIR=./.local/cache
+```
+
+For this repository, SQLite is the canonical server-side store and browser IndexedDB is a local cache. Treat both as instance-specific during development. If the active configuration uses a different database, container, object store, upload directory, or service name, give it the same branch-specific suffix. Do not run migrations, cleanup jobs, seed scripts, or destructive tests against another branch’s state or production data.
+
+Use synthetic test accounts and data for previews and local testing. Keep secrets in the local environment or the deployment provider’s secret store, never in a branch.
+
+## Run parallel local instances
+
+The development server accepts a port argument after `--`:
+
+```bash
+# main worktree
+npm run dev -- --port 3000
+
+# Codex worktree
+npm run dev -- --port 3001
+
+# Claude worktree
+npm run dev -- --port 3002
+```
+
+Open the corresponding local addresses, such as `http://localhost:3001`. Stop each process before reusing its port.
+
+There is currently no dedicated `npm test` script. At minimum, run the production build from the affected worktree:
+
+```bash
+npm run build
+```
+
+Add and run focused automated checks when a feature introduces them. For UI-sensitive work, test desktop and narrow/mobile layouts on the branch instance; for persistence work, include a restart, migration/rollback (when relevant), and data-isolation check.
+
+## Review and integration workflow
+
+1. An implementation author develops and validates the change in its own branch/worktree.
+2. Open a pull request with the local reproduction details and, if supported, a dedicated preview deployment.
+3. Request cross-review: Codex reviews Claude-authored work, and Claude reviews Codex-authored work. The reviewer independently checks acceptance criteria, regressions, edge cases, security/data boundaries, and the actual running instance or preview.
+4. When two or more changes interact, create an integration branch from the current target branch:
+
+   ```bash
+   git fetch origin
+   git switch -c integration/42-51 origin/main
+   git merge --no-ff origin/codex/42-recurrence
+   git merge --no-ff origin/claude/51-command-palette
+   npm install
+   npm run build
+   npm run dev -- --port 3010
+   ```
+
+   Resolve integration conflicts and test the combined behavior, including the boundary between the features. Push the integration branch only when it is useful for shared review or CI; it is normally temporary.
+
+5. Merge individual PRs only after their reviews, required checks, and combined validation have passed. Delete temporary integration branches and worktrees only after the work is safely merged.
+
+If infrastructure provides preview deployments, configure one isolated preview per PR. Use preview-specific environment values and test data, and put its URL plus any setup steps in the PR. A preview must not share a writable production database, storage bucket/prefix, scheduled-job identity, or notification credentials.
+
+## A/B feature experiments
+
+When the team is comparing two valid designs, create two separate branches/worktrees instead of mixing alternatives in one branch:
+
+```bash
+git worktree add ../lumi-command-palette-a -b experiment/command-palette-a origin/main
+git worktree add ../lumi-command-palette-b -b experiment/command-palette-b origin/main
+```
+
+Run each variant with a separate port and state prefix, document the hypothesis and evaluation criteria, and compare the two instances or previews. Select one variant explicitly. Do not merge both alternatives unless their scopes are later made complementary.
+
+## Pull request checklist
+
+- [ ] Dedicated branch and isolated worktree/check-out used
+- [ ] Unique port and local database/storage/environment prefix used
+- [ ] Production build and relevant focused checks pass
+- [ ] UI and persistence behavior tested where affected
+- [ ] Independent cross-review completed
+- [ ] Integration branch tested for interacting parallel changes, or not needed with a stated reason
+- [ ] Preview deployment checked when available
+- [ ] No credentials, local state, or generated mutable data committed
