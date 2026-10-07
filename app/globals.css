@@ -1667,6 +1667,8 @@ article {
 .attentionSection { margin-bottom: 16px; }
 .attentionMeta, .attentionEmpty, .attentionLimits, .attentionItem small { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .attentionMeta { margin: 0 0 12px; }
+.attentionStale { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.attentionStale b { color: var(--text); font-weight: 600; }
 .attentionList { display: grid; gap: 0; }
 .attentionItem { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 0; border-top: 1px solid var(--line); }
 .attentionItem > div { min-width: 0; }

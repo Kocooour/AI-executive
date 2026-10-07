@@ -1671,7 +1671,8 @@ export function useLumiApp() {
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
   const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
-  const visibleAttention = syncStatus === "synced" && attention?.workspaceId === activeWorkspaceId ? attention : null;
+  const visibleAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
+  const attentionStale = Boolean(visibleAttention) && syncStatus === "offline";
   const dayPlanTimeline = visibleDayPlan ? [...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })),
     ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
   const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
@@ -1690,10 +1691,15 @@ export function useLumiApp() {
     loadDayPlan(workspaceId, calendarToday)
       .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
   }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
+  // The last evaluation survives a lost connection so Home can show it as stale; it is dropped only
+  // when the workspace or the session changes.
   useEffect(() => {
     attentionLoadVersion.current += 1;
     setAttention(null);
+    setAttentionError("");
     setShowAllAttention(false);
+  }, [authState, activeWorkspaceId]);
+  useEffect(() => {
     if (authState !== "ready" || syncStatus !== "synced") return;
     const workspaceId = activeWorkspaceId;
     let cancelled = false;
@@ -2659,6 +2665,7 @@ export function useLumiApp() {
     assistantOpen,
     attentionBusyKey,
     attentionError,
+    attentionStale,
     attentionTaskCount,
     authEnabled,
     authError,

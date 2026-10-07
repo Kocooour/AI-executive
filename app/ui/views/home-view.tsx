@@ -14,6 +14,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     activeWorkspaceId,
     attentionBusyKey,
     attentionError,
+    attentionStale,
     calendarFresh,
     calendarSources,
     currentDayPlanBlock,
@@ -92,7 +93,9 @@ export function HomeView({ app }: { app: LumiApp }) {
           </button>
         </div>
         {visibleAttention ? <>
-          <p className="attentionMeta">{tr("attentionSource")} · {tr("attentionEvaluated")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
+          {attentionStale
+            ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr("attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
+            : <p className="attentionMeta">{tr("attentionSource")} · {tr("attentionEvaluated")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
             {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
               <div className="attentionBody">
@@ -108,9 +111,10 @@ export function HomeView({ app }: { app: LumiApp }) {
               <details className="attentionMore">
                 <summary>{tr("attentionMore")}</summary>
                 <div className="attentionActions">
-                  <button type="button" disabled={Boolean(attentionBusyKey)} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
-                  <button type="button" disabled={Boolean(attentionBusyKey)} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
+                  <button type="button" disabled={Boolean(attentionBusyKey) || syncStatus !== "synced"} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
+                  <button type="button" disabled={Boolean(attentionBusyKey) || syncStatus !== "synced"} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
                 </div>
+                {attentionStale && <p className="attentionMeta">{tr("attentionStaleActions")}</p>}
                 <p className="attentionMeta">{tr("attentionSources")} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
                 <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
               </details>
