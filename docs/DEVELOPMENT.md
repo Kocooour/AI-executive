@@ -85,13 +85,7 @@ pnpm dev --port 3002
 
 Open the corresponding local addresses, such as `http://localhost:3001`. Stop each process before reusing its port.
 
-> **Known limitation:** `pnpm dev` currently returns HTTP 500 on `main` (`Module not found: Can't resolve 'http'` while compiling `instrumentation.ts`). Until a separate fix lands, run the branch instance from a production build instead:
->
-> ```bash
-> pnpm build && pnpm start --port 3002
-> ```
->
-> A production build always enforces sign-in (`AI_EXECUTIVE_AUTH_ENABLED=false` is ignored), so set a throwaway local `AI_EXECUTIVE_PASSWORD_HASH` (`pnpm --silent hash-password`, password on stdin) and `AI_EXECUTIVE_SESSION_SECRET`, and point `AI_EXECUTIVE_DATA_DIR` at an instance-specific directory.
+`pnpm dev` skips sign-in only when `AI_EXECUTIVE_AUTH_ENABLED=false` is set in the instance's ignored `.env.local`. A production build (`pnpm build && pnpm start --port 3002`) always enforces sign-in, so it needs a throwaway local `AI_EXECUTIVE_PASSWORD_HASH` (`pnpm --silent hash-password`, password on stdin) and `AI_EXECUTIVE_SESSION_SECRET`. In both cases point `AI_EXECUTIVE_DATA_DIR` at an instance-specific directory.
 
 Run the automated checks and the production build from the affected worktree:
 
