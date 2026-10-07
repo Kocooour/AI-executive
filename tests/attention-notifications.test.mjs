@@ -58,6 +58,19 @@ test("the message carries a short title, the reason and a link to the task", () 
   const long = push.attentionPushPayload(item("t3", "deadline_overdue", { title: "x".repeat(200) }));
   assert.equal(long.title.length, 80);
   assert.equal(long.title.endsWith("…"), true);
+  const emoji = push.attentionPushPayload(item("t4", "deadline_overdue", { title: "a".repeat(78) + "😀😀😀" }));
+  assert.equal(emoji.title, "a".repeat(78) + "😀…");
+  assert.equal(push.attentionPushPayload(item("t5", "deadline_overdue", { title: "   " })).title, "");
+});
+
+test("the delivery identity does not depend on the configured timezone", () => {
+  const prague = item("t1", "deadline_overdue", { attentionKey: "personal|deadline_overdue|v1|t1|1791324000000", relevantAt: 1791324000000 });
+  const tokyo = { ...prague, attentionKey: "personal|deadline_overdue|v1|t1|1791298800000", relevantAt: 1791298800000, timezone: "Asia/Tokyo" };
+  assert.equal(push.attentionDeliveryKey(prague), push.attentionDeliveryKey(tokyo));
+  assert.notEqual(push.attentionDeliveryKey(prague), push.attentionDeliveryKey({ ...prague, relevantDate: "2026-10-06" }));
+  assert.notEqual(push.attentionDeliveryKey(prague), push.attentionDeliveryKey({ ...prague, ruleId: "deadline_soon" }));
+  const timed = item("t1", "deadline_soon", { reasonFacts: { deadlineAllDay: false, thresholdHours: 48 }, relevantAt: 5 });
+  assert.notEqual(push.attentionDeliveryKey(timed), push.attentionDeliveryKey({ ...timed, relevantAt: 6 }));
 });
 
 // ---- scheduler pass against a real (temporary) database, with the push sender replaced
@@ -65,6 +78,7 @@ const add = (entity) => store.getDatabase().prepare("INSERT OR REPLACE INTO enti
 const task = (id, deadline, extra = {}) => ({ id, type: "task", title: `Úkol ${id}`, status: "open", workspaceId: "personal", properties: { deadline }, createdAt: 1, updatedAt: 1, ...extra });
 const deliveries = () => store.getDatabase().prepare("SELECT delivery_key, status FROM notification_deliveries WHERE delivery_key LIKE 'attention:%' ORDER BY delivery_key").all()
   .map((row) => `${row.status}:${row.delivery_key === "attention:baseline" ? "(marker)" : row.delivery_key.split(":").at(-2)}`);
+const statusOf = (id) => store.getDatabase().prepare("SELECT status, attempts, error FROM notification_deliveries WHERE entity_id = ? AND delivery_key LIKE 'attention:%'").all(id).map((row) => `${row.status}/${row.attempts}/${row.error ?? ""}`);
 const sender = (result = { sent: 1, failed: 0, total: 1 }) => { const calls = []; const send = async (payload) => { calls.push(payload); return result; }; return { calls, send }; };
 const DAY10 = at("2026-10-07T08:00:00Z"); // 10:00 in Prague
 
@@ -115,4 +129,56 @@ test("turning the preference off stops sending and a later re-enable starts from
   assert.deepEqual(await push.processAttentionNotifications(at("2026-10-09T08:05:00Z"), on.send), { state: "baseline", sent: 0 });
   assert.equal(on.calls.length, 0);
   assert.equal(notifications.getNotificationPreferences().attentionPush, true);
+});
+
+test("a failed send is retried on later passes, at most three attempts, and only the error type is stored", async () => {
+  add(task("flaky", "2026-10-08"));
+  const failing = { calls: 0, send: async () => { failing.calls += 1; throw new Error("boom https://push.example/SECRET"); } };
+  for (let pass = 0; pass < 5; pass += 1) await push.processAttentionNotifications(at("2026-10-10T08:00:00Z") + pass * 300_000, failing.send);
+  assert.equal(failing.calls, 3);
+  assert.deepEqual(statusOf("flaky"), ["failed/3/Error"]);
+  add(task("flaky2", "2026-10-08"));
+  let attempt = 0;
+  const recovering = async () => (attempt += 1) === 1 ? { sent: 0, failed: 2, total: 2 } : { sent: 1, failed: 1, total: 2 };
+  await push.processAttentionNotifications(at("2026-10-10T09:00:00Z"), recovering);
+  assert.deepEqual(statusOf("flaky2"), ["failed/1/Push failed on every device"]);
+  await push.processAttentionNotifications(at("2026-10-10T09:05:00Z"), recovering);
+  assert.equal(statusOf("flaky2")[0].startsWith("sent/2/"), true);
+});
+
+test("changing the timezone does not announce known items again", async () => {
+  add(task("tz", "2026-10-09"));
+  const before = sender();
+  await push.processAttentionNotifications(at("2026-10-11T08:00:00Z"), before.send);
+  assert.deepEqual(before.calls.map((call) => call.title), ["Úkol tz"]);
+  notifications.saveNotificationPreferences({ timezone: "Asia/Tokyo" });
+  const after = sender();
+  await push.processAttentionNotifications(at("2026-10-11T08:05:00Z"), after.send); // 17:05 in Tokyo
+  assert.deepEqual(after.calls, []);
+  notifications.saveNotificationPreferences({ timezone: "Europe/Prague" });
+});
+
+test("overlapping passes do not run twice and in-flight sends count toward the daily limit", async () => {
+  for (const id of ["o1", "o2", "o3", "o4"]) add(task(id, "2026-10-10"));
+  let release; const gate = new Promise((resolve) => { release = resolve; });
+  const calls = [];
+  const slow = async (payload) => { calls.push(payload.title); await gate; return { sent: 1, failed: 0, total: 1 }; };
+  const first = push.processAttentionNotifications(at("2026-10-13T08:00:00Z"), slow);
+  assert.deepEqual(await push.processAttentionNotifications(at("2026-10-13T08:00:01Z"), slow), { state: "busy", sent: 0 });
+  release();
+  assert.deepEqual(await first, { state: "daily_limit", sent: 3 });
+  assert.equal(calls.length, 3);
+  const later = sender();
+  assert.deepEqual(await push.processAttentionNotifications(at("2026-10-13T08:10:00Z"), later.send), { state: "daily_limit", sent: 0 });
+  assert.equal((await push.processAttentionNotifications(at("2026-10-14T08:10:00Z"), later.send)).sent, 1);
+});
+
+test("a pass interrupted after claiming is closed as not delivered and not resent", async () => {
+  add(task("crashed", "2026-10-12"));
+  store.getDatabase().prepare("INSERT INTO notification_deliveries (delivery_key, entity_id, reminder_at, status, attempts, last_attempt_at) VALUES (?, ?, ?, 'pending', 1, ?)")
+    .run("attention:personal:deadline_overdue:crashed:2026-10-12", "crashed", "2026-10-12", at("2026-10-15T08:00:00Z"));
+  const next = sender();
+  await push.processAttentionNotifications(at("2026-10-15T08:30:00Z"), next.send);
+  assert.equal(next.calls.some((call) => call.title === "Úkol crashed"), false);
+  assert.deepEqual(statusOf("crashed"), ["undelivered/1/Interrupted before sending"]);
 });
