@@ -164,6 +164,7 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     windows = subtract(windows, [start, end]);
   }
   return { revision: snapshot.revision, workspaceId, date, timezone, calendar, freeMinutes, requiredMinutes,
-    overloaded: freeMinutes !== null ? requiredMinutes > freeMinutes || unscheduled.length > 0 : ranked.length > preferences.dailyTaskCapacity,
+    // Without a fresh connected calendar the available time is unknown, so no capacity conclusion is drawn.
+    overloaded: freeMinutes !== null && (requiredMinutes > freeMinutes || unscheduled.length > 0),
     existingBlocks, planBlocks, unscheduled };
 }
