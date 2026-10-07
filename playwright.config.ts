@@ -1,25 +1,30 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 // Browser tests run against a production build of this checkout with its own port, data
-// directory and throwaway credentials. Nothing here touches a real instance.
+// directory and throwaway credentials. Nothing here touches the data of a real instance.
 const port = Number(process.env.E2E_PORT || 3100);
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("E2E_PORT must be a port number between 1024 and 65535");
 export const e2ePassword = "browser-tests-only";
-// The runner loads this file again in every worker; only the first load prepares the instance.
-if (!process.env.E2E_DATA_DIR) {
-  // One directory per port, emptied at the start of a run: the last run's traces stay readable
-  // and runs do not pile up.
-  process.env.E2E_DATA_DIR = path.join(os.tmpdir(), `lumi-e2e-${port}`);
-  rmSync(process.env.E2E_DATA_DIR, { recursive: true, force: true });
-  mkdirSync(process.env.E2E_DATA_DIR, { recursive: true });
-  process.env.E2E_PASSWORD_HASH = execFileSync("node", ["scripts/hash-password.mjs"], { input: `${e2ePassword}\n`, stdio: ["pipe", "pipe", "ignore"] })
+
+// The runner loads this file again in every worker. Only the first load prepares the run: a
+// private directory (owner-only, unpredictable name) and credentials that exist for this run only.
+if (!process.env.LUMI_E2E_RUN_DIR) {
+  process.env.LUMI_E2E_RUN_DIR = mkdtempSync(path.join(os.tmpdir(), "lumi-e2e-"));
+  process.env.LUMI_E2E_PASSWORD_HASH = execFileSync(process.execPath, [path.join(__dirname, "scripts", "hash-password.mjs")], { input: `${e2ePassword}\n` })
     .toString().trim().split("\n").pop();
-  process.env.E2E_SESSION_SECRET = randomBytes(48).toString("base64");
+  process.env.LUMI_E2E_SESSION_SECRET = randomBytes(48).toString("base64");
 }
+const runDir = process.env.LUMI_E2E_RUN_DIR;
+const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
+const sessionSecret = process.env.LUMI_E2E_SESSION_SECRET;
+if (!passwordHash?.startsWith("scrypt:") || !sessionSecret) throw new Error("The browser test credentials were not generated; unset LUMI_E2E_RUN_DIR and run again.");
+export const sessionFile = path.join(runDir, "session.json");
+
 // A sandbox may ship its own Chromium; elsewhere `pnpm exec playwright install chromium` provides it.
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
 
@@ -31,7 +36,7 @@ export default defineConfig({
   retries: 0,
   timeout: 60_000,
   reporter: [["list"]],
-  outputDir: path.join(process.env.E2E_DATA_DIR, "results"),
+  globalTeardown: "./e2e/teardown.ts",
   use: {
     baseURL: `http://localhost:${port}`,
     locale: "cs-CZ",
@@ -41,7 +46,7 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /.*\.setup\.ts/ },
-    { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: path.join(process.env.E2E_DATA_DIR, "session.json") }, dependencies: ["setup"] },
+    { name: "desktop", use: { ...devices["Desktop Chrome"], storageState: sessionFile }, dependencies: ["setup"] },
   ],
   webServer: {
     command: `${process.env.E2E_SKIP_BUILD ? "" : "pnpm build && "}pnpm start --port ${port} --hostname 127.0.0.1`,
@@ -52,9 +57,17 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       AI_EXECUTIVE_AUTH_ENABLED: "true",
-      AI_EXECUTIVE_PASSWORD_HASH: process.env.E2E_PASSWORD_HASH!,
-      AI_EXECUTIVE_SESSION_SECRET: process.env.E2E_SESSION_SECRET!,
-      AI_EXECUTIVE_DATA_DIR: path.join(process.env.E2E_DATA_DIR, "data"),
+      AI_EXECUTIVE_PASSWORD_HASH: passwordHash,
+      AI_EXECUTIVE_SESSION_SECRET: sessionSecret,
+      AI_EXECUTIVE_DATA_DIR: path.join(runDir, "data"),
+      // Next still reads the checkout's .env files. Whatever could reach a real service from
+      // there is switched off for the test instance.
+      AI_EXECUTIVE_SECURITY_OUTBOX_DIR: path.join(runDir, "security-outbox"),
+      AI_EXECUTIVE_INTEGRATION_TOKEN: "",
+      AI_EXECUTIVE_ALLOWED_ORIGINS: "",
+      AI_EXECUTIVE_PASSKEY_ORIGINS: "",
+      OPENAI_API_KEY: "",
+      HERMES_AI_ENABLED: "false",
     },
   },
 });

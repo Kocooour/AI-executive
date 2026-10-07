@@ -1,5 +1,5 @@
-import path from "node:path";
 import { expect, test as setup } from "@playwright/test";
+import { sessionFile } from "../playwright.config";
 import { seeded, signIn } from "./helpers";
 
 // Signs in once, fills the instance with synthetic data and keeps the session for the scenarios.
@@ -24,5 +24,5 @@ setup("sign in and seed synthetic data", async ({ page }) => {
     return saved.status;
   }, seeded);
   expect(result).toBe(200);
-  await page.context().storageState({ path: path.join(process.env.E2E_DATA_DIR!, "session.json") });
+  await page.context().storageState({ path: sessionFile });
 });

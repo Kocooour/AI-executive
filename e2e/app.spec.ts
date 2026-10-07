@@ -4,8 +4,14 @@ import { confirmDialog, expectOnServer, heading, seeded, settingsSections, sideb
 // The scenarios share one instance and run in this order, one at a time (see the config).
 // A failing scenario does not stop the ones after it. Signing out comes last.
 
+// The app must never fall back to a system dialog; if one appears it is dismissed and the scenario fails.
+const systemDialogs: string[] = [];
 test.beforeEach(async ({ page }) => {
-  page.on("dialog", (dialog) => { throw new Error(`Unexpected system dialog: ${dialog.message()}`); });
+  systemDialogs.length = 0;
+  page.on("dialog", (dialog) => { systemDialogs.push(dialog.message()); void dialog.dismiss(); });
+});
+test.afterEach(() => {
+  expect(systemDialogs).toEqual([]);
 });
 
 test("Home shows the brief with seeded attention", async ({ page }) => {
