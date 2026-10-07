@@ -2,6 +2,7 @@
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../../lib/local-dates";
 import type { LumiApp } from "../use-lumi-app";
+import { ProjectIcon } from "./project-icon";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
@@ -107,7 +108,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       onClick={() => inspect(p)}
                     >
                       {dragHandle(p, `project:area:${selected.id}`)}
-                      <div className="entityIcon projectIcon">◆</div>
+                      <div className="entityIcon projectIcon"><ProjectIcon /></div>
                       <div>
                         <strong>{p.title}</strong>
                         <small>{tr("project")}</small>

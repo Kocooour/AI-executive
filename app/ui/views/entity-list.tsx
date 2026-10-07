@@ -1,8 +1,8 @@
 "use client";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
-import { viewIcons } from "../navigation";
 import { friendlyDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
+import { ProjectIcon, ViewIcon } from "./project-icon";
 
 export function EntityList({ app }: { app: LumiApp }) {
   const {
@@ -71,7 +71,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
                       onDrop={(event) => acceptNativeDrop(event, `section:${section}`)}
                     >
-                      {viewIcons[section]} {tr(section)}
+                      <ViewIcon name={section} /> {tr(section)}
                     </button>
                   ))}
                   {(draggedEntity.type === "task" || draggedEntity.type === "note") && projects
@@ -86,7 +86,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                         onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
                         onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
                       >
-                        ◇ {project.title}
+                        <ProjectIcon /> {project.title}
                       </button>
                     ))}
                   {draggedEntity.type === "project" && areas
@@ -135,7 +135,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   </button>
                 ) : (
                   <div className={`entityIcon ${x.type}Icon`}>
-                    {x.type === "project" ? "◆" : x.type === "area" ? "●" : "▤"}
+                    {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : "▤"}
                   </div>
                 )}
                 <div>
