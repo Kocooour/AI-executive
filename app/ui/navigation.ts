@@ -1,0 +1,53 @@
+export const views = [
+    "Home",
+    "Inbox",
+    "Today",
+    "Upcoming",
+    "Projects",
+    "Areas",
+    "Notes",
+    "Calendar",
+    "Search",
+    "Overdue",
+    "Anytime",
+    "Someday",
+    "Completed",
+    "Context",
+    "Agents",
+  ];
+export const primaryViews = ["Home", "Inbox", "Today", "Upcoming", "Projects", "Areas", "Notes", "Calendar", "Search"];
+export const secondaryViews = ["Overdue", "Anytime", "Someday", "Completed", "Context", "Agents"];
+export const moreViews = [
+  "Upcoming",
+  "Projects",
+  "Areas",
+  "Notes",
+  "Search",
+  "Overdue",
+  "Anytime",
+  "Someday",
+  "Completed",
+  "Context",
+  "Agents",
+  "Settings",
+];
+export const viewIcons: Record<string, string> = {
+  Home: "⌂",
+  Inbox: "↓",
+  Today: "○",
+  Overdue: "!",
+  Upcoming: "→",
+  Anytime: "•",
+  Someday: "☾",
+  Completed: "✓",
+  Projects: "◇",
+  Areas: "◎",
+  Notes: "▤",
+  Calendar: "▦",
+  Search: "⌕",
+  Context: "◫",
+  Agents: "◇",
+  Settings: "⚙",
+  More: "•••",
+};
+export const mobileViews = ["Home", "Inbox", "Today", "Calendar", "More"];
