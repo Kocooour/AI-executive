@@ -15,6 +15,18 @@ Use the following four-role workflow for every development iteration, including 
 
 Do not treat an implementation as complete before both independent testers have reported, unless agent tooling is unavailable or a higher-priority safety/system constraint prevents delegation. If that happens, state the limitation explicitly in the final response and perform equivalent local checks.
 
+## Parallel development and testing
+
+- Give each agent or implementation stream its own branch. Prefer an isolated Git worktree or checkout per active stream so working files, dependencies, generated artifacts, and local process state do not collide.
+- Run each local branch instance on a distinct port. Record the branch, worktree path, port, and local environment name in the task or PR description so reviewers can reproduce it.
+- Isolate mutable local state for every parallel instance: database, file/storage directory, cache, upload directory, secrets/configuration, and any service/container names. Do not point two development instances at the same writable database or storage path.
+- Keep shared credentials out of committed environment files. Base each instance on an ignored local environment file and use clearly branch-scoped names, for example `lumi_codex`, `lumi_claude`, and `lumi_pr_123`.
+- When Codex and Claude work on related changes, request reciprocal cross-review: the non-author checks the implementation, tests, edge cases, data boundaries, and user-visible behavior independently.
+- Before merging related parallel changes, create a temporary integration branch from the current target branch, merge or rebase the candidate branches into it, and run the relevant combined tests there. Resolve integration conflicts and regressions before merging individual PRs.
+- If the delivery infrastructure supports it, use a separate preview deployment for every PR and include the preview URL plus any required test data/setup in the PR.
+- For competing product or UX ideas, it is acceptable to implement two variants of the same feature on separate branches/worktrees. Label them as an A/B comparison, run them separately, and select one deliberately; do not merge both variants by default.
+- Follow the concrete naming, worktree, port, environment, and test conventions in `docs/DEVELOPMENT.md`.
+
 ## Scope control
 
 - Validate every iteration against the canonical Lumi product specification in README.md and the user's latest requirements.
@@ -25,6 +37,8 @@ Do not treat an implementation as complete before both independent testers have 
 
 ## Delivery policy
 
-- After a development iteration passes the required reviews and final verification, commit it, push `main`, and deploy it to the configured Lumi server without asking for an additional confirmation.
-- Before deployment, preserve unrelated server changes, create and verify a recoverable database backup, use a fast-forward-only update, build the production application, restart it through the configured service manager, and verify the service, database integrity, authentication boundary, and configured HTTPS route.
+- Work in a dedicated branch and open a pull request for every change. Do not commit directly to `main`.
+- A pull request must identify its branch, validation performed, and any required local/preview setup. For related concurrent work, it must also identify the integration branch or explain why integration testing is unnecessary.
+- Merge only after the required reviews, final verification, and any integration testing have passed.
+- After the merged change is ready for deployment, preserve unrelated server changes, create and verify a recoverable database backup, use a fast-forward-only update, build the production application, restart it through the configured service manager, and verify the service, database integrity, authentication boundary, and configured HTTPS route.
 - If credentials, server state, a failed check, or a destructive/conflicting condition prevents safe delivery, stop at that boundary and report the concrete blocker instead of weakening safeguards.
