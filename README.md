@@ -516,8 +516,9 @@ overrides. Only normalized title/time/status data is kept; descriptions,
 attendees and locations are discarded. Private events are stored under the
 generic title “Soukromá událost”.
 
-Calendar events remain read-only. The Home view merges overlapping busy
-intervals and shows actual free blocks inside the configured workday. A failed
+Calendar events remain read-only. The Calendar view merges overlapping busy
+intervals and shows actual free blocks inside the configured workday; Home shows
+today's fixed events and the resulting free capacity. A failed
 or older-than-24-hours source is marked stale, and executive briefings will not
 claim a free slot from stale data. The current horizon is 14 days back and 90
 days forward; sources refresh at most every 30 minutes in the single always-on

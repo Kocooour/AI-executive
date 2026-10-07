@@ -1,5 +1,6 @@
 "use client";
 import type { LumiApp } from "../use-lumi-app";
+import { TodayAgenda } from "./today-agenda";
 
 export function CalendarView({ app }: { app: LumiApp }) {
   const {
@@ -27,7 +28,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
               <p role="status">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
               {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty">{tr("calendarStale")} {language === "cs" ? "Volné časy nezobrazujeme, dokud není zdroj čerstvý (do 30 minut)." : "Free windows are hidden until the source is fresh (within 30 minutes)."}</p>}
               {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
-              <div className="calendarAgenda">{todayCalendarEvents.map((event) => <div key={event.id} className={event.busy ? "busy" : "free"}><span>{event.allDay ? tr("allDay") : new Date(event.start).toLocaleTimeString(language === "cs" ? "cs-CZ" : "en-GB", { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}</small></div>)}</div>
+              <TodayAgenda app={app} />
               {calendarFresh && todayCalendarEvents.length === 0 && <p className="attentionEmpty">{tr("noBlockingEvent")}</p>}
               {calendarFresh && freeWindows.length > 0 && <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
               <h3>{language === "cs" ? "Nadcházející události · 7 dní" : "Upcoming events · 7 days"}</h3>
