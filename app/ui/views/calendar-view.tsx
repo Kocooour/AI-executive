@@ -4,6 +4,7 @@ import { TodayAgenda } from "./today-agenda";
 
 export function CalendarView({ app }: { app: LumiApp }) {
   const {
+    setSettingsSection,
     calendarFresh,
     calendarSources,
     calendarStatus,
@@ -34,7 +35,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
               <h3>{language === "cs" ? "Nadcházející události · 7 dní" : "Upcoming events · 7 days"}</h3>
               {nearbyCalendarEvents.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : language === "cs" ? "Žádné události v příštích 7 dnech." : "No events in the next 7 days."}</p> : <div className="calendarAgenda">{nearbyCalendarEvents.map((event) => <div key={event.id} className={event.busy ? "busy" : "free"}><span>{new Date(event.start).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short", ...(event.allDay ? {} : { hour: "2-digit", minute: "2-digit" }), timeZone: calendarTimezone })}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}</small></div>)}</div>}
               <button type="button" className="textAction" onClick={() => setView("Today")}>{language === "cs" ? "Přejít na dnešní práci" : "Open today's work"} →</button>
-              <button type="button" className="textAction" onClick={() => setView("Settings")}>{language === "cs" ? "Spravovat kalendáře" : "Manage calendars"} →</button>
+              <button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{language === "cs" ? "Spravovat kalendáře" : "Manage calendars"} →</button>
               {calendarStatus && <p role="status">{calendarStatus}</p>}
             </section>
           )}
