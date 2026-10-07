@@ -323,7 +323,9 @@ export function useLumiApp() {
         pendingDeletedIds(),
         pendingRevivedIds(),
       );
+      let mergedWithServer = false;
       if (response.status === 409) {
+        mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
         const deletedIds = new Set(pendingDeletedIds());
         const revivedIds = new Set(pendingRevivedIds());
@@ -359,7 +361,11 @@ export function useLumiApp() {
         if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
       }
       if (!applied) {
-        serverRevision.current = saved.revision;
+        // The local copy changed during the save, so the saved state was not taken over. The
+        // known revision may advance only when the server holds exactly what was sent. After a
+        // merge it also holds records this device does not have; claiming its revision would
+        // make the next save replace them. Keeping the old revision makes that save merge again.
+        if (!mergedWithServer) serverRevision.current = saved.revision;
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
@@ -1148,7 +1154,10 @@ export function useLumiApp() {
           snapshot = (await saveResponse.json()) as ServerSnapshot;
         }
         if (localDataVersion.current !== initializationVersion) {
-          serverRevision.current = snapshot.revision;
+          // Something was changed locally while the app was starting, so the server copy was not
+          // taken over. The known revision must stay as it is: the server replaces its whole
+          // content when the revision matches, and the local copy does not contain that content.
+          // With the old revision the save is answered with a conflict and merged instead.
           await syncToServer();
           return;
         }
