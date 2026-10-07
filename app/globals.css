@@ -3414,3 +3414,14 @@ h3 {
 }
 .projectGlyph { display: inline-block; flex: none; vertical-align: -0.14em; }
 .entityIcon .projectGlyph { vertical-align: middle; }
+
+.confirmDialog { width: min(420px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line, #0002); border-radius: 18px; background: var(--surface, #fff); color: var(--text); box-shadow: 0 20px 70px #0003; }
+.confirmDialog::backdrop { background: #1115; }
+.confirmDialogBody { padding: 24px; }
+.confirmDialog h2 { margin: 0 0 8px; font-size: 18px; line-height: 1.3; }
+.confirmDialog p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.confirmDialogActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.confirmDialogActions button { min-height: 44px; padding: 0 16px; border: 1px solid var(--line, #0002); border-radius: 10px; background: transparent; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.confirmDialogActions .confirmPrimary { border-color: var(--text); background: var(--text); color: var(--surface, #fff); }
+.confirmDialogActions .confirmDanger { border-color: var(--danger); background: var(--danger); color: var(--surface, #fff); }
+.confirmDialogActions button:focus-visible { outline: 2px solid var(--accent, #5b5bd6); outline-offset: 2px; }

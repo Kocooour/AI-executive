@@ -1,6 +1,13 @@
 import { type AttentionItem } from "../../lib/attention";
 import { type AIMessage } from "../../lib/ai-provider";
 
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+}
+
 export interface AttentionResponse {
   items: Array<AttentionItem & { sourceFingerprint: string; lifecycleState: "active" }>;
   hidden: { snoozed: number; dismissed: number };

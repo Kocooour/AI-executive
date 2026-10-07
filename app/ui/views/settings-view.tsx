@@ -5,6 +5,7 @@ import type { LumiApp } from "../use-lumi-app";
 
 export function SettingsView({ app }: { app: LumiApp }) {
   const {
+    askConfirm,
     activeWorkspaceId,
     attentionTaskCount,
     authEnabled,
@@ -490,8 +491,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       </span>
                       <div className="notificationActions">
                         <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>{tr("refresh")}</button>
-                        <button disabled={calendarBusy} onClick={() => {
-                          if (window.confirm(`Odpojit kalendář „${source.label}“ a odstranit jeho lokální události?`)) calendarAction("disconnect", source.id);
+                        <button disabled={calendarBusy} onClick={async () => {
+                          if (await askConfirm({ title: tr("calendarDisconnectTitle"), message: tr("calendarDisconnectConfirm").replace("{label}", source.label), confirmLabel: tr("disconnect"), danger: true })) calendarAction("disconnect", source.id);
                         }}>{tr("disconnect")}</button>
                       </div>
                     </div>

@@ -16,6 +16,7 @@ import { MobileNav } from "./ui/views/mobile-nav";
 import { CaptureDialog } from "./ui/views/capture-dialog";
 import { DetailPanel } from "./ui/views/detail-panel";
 import { AssistantPanel } from "./ui/views/assistant-panel";
+import { ConfirmDialog } from "./ui/views/confirm-dialog";
 
 export default function App() {
   const app = useLumiApp();
@@ -67,6 +68,7 @@ export default function App() {
       <CaptureDialog app={app} />
       <DetailPanel app={app} />
       <AssistantPanel app={app} />
+      <ConfirmDialog app={app} />
       {undo && (
         <div className="undo">
           {tr("itemChanged")} <button onClick={restore}>{tr("undo")}</button>
