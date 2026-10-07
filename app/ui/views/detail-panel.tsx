@@ -282,7 +282,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         : selected.properties.someday === true
                           ? "Someday"
                         : selected.properties.today === true ||
-                            (typeof selected.properties.when === "string" && selected.properties.when <= today)
+                            (typeof selected.properties.when === "string" && selected.properties.when !== "" && selected.properties.when <= today)
                             ? "Today"
                             : "Anytime"
                     }

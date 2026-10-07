@@ -30,19 +30,21 @@ export const taskMatchesView = (task: Entity, targetView: string, todayValue: st
   if (targetView === "Completed") return task.status === "completed";
   if (task.status !== "open") return false;
   const properties = task.properties;
+  // An emptied date field is stored as "", which must not compare as "earlier than today".
+  const when = typeof properties.when === "string" ? properties.when : "";
   if (targetView === "Inbox") return properties.inbox === true;
   if (targetView === "Today") {
-    return properties.today === true || properties.when === todayValue ||
-      (typeof properties.when === "string" && properties.when < todayValue);
+    return properties.today === true || (when !== "" && when <= todayValue);
   }
   if (targetView === "Overdue") {
-    return typeof properties.when === "string" && properties.when < todayValue;
+    return when !== "" && when < todayValue;
   }
   if (targetView === "Upcoming") {
-    return typeof properties.when === "string" && properties.when > todayValue;
+    return when > todayValue;
   }
   if (targetView === "Anytime") {
-    return !properties.when && !properties.someday && properties.inbox !== true;
+    // A task flagged for today belongs to Today only, including older tasks that carry the flag without a date.
+    return !properties.when && !properties.someday && properties.inbox !== true && properties.today !== true;
   }
   if (targetView === "Someday") return properties.someday === true;
   return true;
@@ -73,4 +75,22 @@ export function parseCaptureText(raw: string, today: string, now = new Date()) {
   else if (/(^|\s)#low(?=\s|$)/i.test(title)) priority = "low";
   title = title.replace(/(^|\s)(!|#high|#medium|#low)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
   return { title, when, priority };
+}
+
+// Where a newly created task lands. A date typed into the title wins; otherwise the task follows the
+// view it was added from. A task added to Today gets today's date as well as the flag, the same as
+// dragging it there or choosing Today in the detail panel, so it becomes overdue tomorrow like any dated task.
+export function newTaskPlacement(
+  parsedWhen: string,
+  properties: Record<string, unknown>,
+  options: { view: string; today: string; hasProject: boolean },
+) {
+  if (parsedWhen) return { inbox: false, today: parsedWhen === options.today, when: parsedWhen };
+  const flaggedToday = Boolean(properties.today ?? (options.view === "Today"));
+  const hasDate = typeof properties.when === "string" && properties.when !== "";
+  return {
+    inbox: Boolean(properties.inbox ?? (!options.hasProject && options.view === "Inbox")),
+    today: flaggedToday,
+    ...(flaggedToday && !hasDate ? { when: options.today } : {}),
+  };
 }
