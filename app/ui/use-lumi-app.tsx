@@ -3,6 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
+import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -64,6 +65,8 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [addressReady, setAddressReady] = useState(false),
+    [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
     [logoutError, setLogoutError] = useState(""),
@@ -199,6 +202,7 @@ export function useLumiApp() {
     return [task.title, priority, localDate].filter(Boolean).join(" ");
   };
   const deepLinkHandled = useRef(false);
+  const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
@@ -1007,6 +1011,10 @@ export function useLumiApp() {
       setStartupView(savedView);
       setView(savedView);
     }
+    // A view named in the address wins over the start view.
+    const addressedView = viewFromSearch(window.location.search, addressableViews);
+    if (addressedView) setView(addressedView);
+    setAddressReady(true);
     if (savedWorkspace) {
       setActiveWorkspaceId(savedWorkspace);
       setWriteWorkspaceId(
@@ -1280,21 +1288,60 @@ export function useLumiApp() {
       .catch(() => undefined);
   }, []);
 
+  // A notification link names a task (?task=<id>). It is opened as soon as the task is known
+  // locally. If it is not, the link waits for the first synchronization and is given up only
+  // when the server copy does not contain the task either.
   useEffect(() => {
-    if (!items.length || deepLinkHandled.current) return;
-    const parameters = new URLSearchParams(window.location.search);
-    const requestedView = parameters.get("view");
-    const taskId = parameters.get("task");
-    if (requestedView && views.includes(requestedView)) setView(requestedView);
+    if (deepLinkHandled.current || !items.length) return;
+    const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
       if (task && task.type !== "workspace") {
         selectWorkspace(task.workspaceId);
         inspect(task);
+      } else if (authState !== "ready" || syncStatus !== "synced") {
+        return;
       }
     }
     deepLinkHandled.current = true;
-  }, [items]);
+    setDeepLinkDone(true);
+  }, [items, authState, syncStatus]);
+
+  // The address follows the view: a change of view adds a history step, so Back and Forward move
+  // between views and a reload stays where the user was. A record id from a notification link is
+  // dropped from the address once the link has been handled. Nothing is recorded while signed out.
+  const addressedView = useRef<string | null>(null);
+  useEffect(() => {
+    if (!addressReady || authState !== "ready") return;
+    const hasRecordLink = new URLSearchParams(window.location.search).has("task");
+    if (hasRecordLink && !deepLinkDone) return;
+    const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
+      navigated: addressedView.current !== null && addressedView.current !== view });
+    addressedView.current = view;
+    if (!update) return;
+    const address = `${window.location.pathname}${update.search}`;
+    try {
+      if (update.mode === "push") window.history.pushState(null, "", address);
+      else window.history.replaceState(null, "", address);
+    } catch { /* browsers limit how often history may change; the view itself is unaffected */ }
+  }, [addressReady, authState, deepLinkDone, view, startupView]);
+  useEffect(() => {
+    const followAddress = () => {
+      const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
+      // Leaving a field commits what was typed in it, as closing the panel by hand would.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      addressedView.current = next;
+      setView(views.includes(next) || next === "Settings" ? next : "Home");
+      // Nothing that belongs to the view being left may stay open over the next one.
+      answerConfirm(false);
+      setCapture(false);
+      setAssistantOpen(false);
+      setMoreOpen(false);
+      closeDetail();
+    };
+    window.addEventListener("popstate", followAddress);
+    return () => window.removeEventListener("popstate", followAddress);
+  }, []);
 
   useEffect(() => {
     if (!capture && captureOpener.current) {
@@ -1372,17 +1419,20 @@ export function useLumiApp() {
   }, [themeMode, themeReady]);
 
   useEffect(() => {
-    if (view !== "Settings") return;
+    // Settings can now be the first view (from the address), also before sign-in: load only
+    // with a session, and never store an error body as settings.
+    if (view !== "Settings" || authState !== "ready") return;
+    const json = (response: Response) => response.ok ? response.json() : Promise.reject(new Error("unavailable"));
     Promise.all([
-      fetch("/api/backups", { cache: "no-store" }).then((response) => response.json()),
-      fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json()),
+      fetch("/api/backups", { cache: "no-store" }).then(json),
+      fetch("/api/notifications", { cache: "no-store" }).then(json),
     ])
       .then(([backupData, notificationData]) => {
         setBackups(Array.isArray(backupData.backups) ? backupData.backups : []);
         setNotificationState(notificationData as NotificationState);
       })
       .catch(() => setBackupStatus("Server settings are unavailable while offline."));
-  }, [view]);
+  }, [view, authState]);
 
   useEffect(() => {
     const refresh = () => {

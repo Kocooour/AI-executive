@@ -151,11 +151,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       );
                     }}
                   >
-                    {views
-                      .filter((item) => item !== "Home")
-                      .map((item) => (
-                        <option key={item} value={item}>{tr(item)}</option>
-                      ))}
+                    {views.map((item) => (
+                      <option key={item} value={item}>{tr(item)}</option>
+                    ))}
                   </select>
                 </label>
               </section>
