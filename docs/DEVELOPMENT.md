@@ -37,7 +37,7 @@ Install dependencies inside each worktree so its setup is explicit:
 
 ```bash
 cd ../lumi-codex-recurrence
-npm install
+pnpm install --frozen-lockfile
 ```
 
 List active worktrees before removing one:
@@ -74,22 +74,34 @@ The development server accepts a port argument after `--`:
 
 ```bash
 # main worktree
-npm run dev -- --port 3000
+pnpm dev --port 3000
 
 # Codex worktree
-npm run dev -- --port 3001
+pnpm dev --port 3001
 
 # Claude worktree
-npm run dev -- --port 3002
+pnpm dev --port 3002
 ```
 
 Open the corresponding local addresses, such as `http://localhost:3001`. Stop each process before reusing its port.
 
-There is currently no dedicated `npm test` script. At minimum, run the production build from the affected worktree:
+> **Known limitation:** `pnpm dev` currently returns HTTP 500 on `main` (`Module not found: Can't resolve 'http'` while compiling `instrumentation.ts`). Until a separate fix lands, run the branch instance from a production build instead:
+>
+> ```bash
+> pnpm build && pnpm start --port 3002
+> ```
+>
+> A production build always enforces sign-in (`AI_EXECUTIVE_AUTH_ENABLED=false` is ignored), so set a throwaway local `AI_EXECUTIVE_PASSWORD_HASH` (`pnpm --silent hash-password`, password on stdin) and `AI_EXECUTIVE_SESSION_SECRET`, and point `AI_EXECUTIVE_DATA_DIR` at an instance-specific directory.
+
+Run the automated checks and the production build from the affected worktree:
 
 ```bash
-npm run build
+pnpm test        # unit tests in tests/*.test.mjs (Node test runner, no extra dependencies)
+pnpm typecheck   # tsc --noEmit
+pnpm build
 ```
+
+`pnpm test` covers deterministic `lib/` behavior only; it does not exercise the UI. Passing it is not evidence that a UI change was tested.
 
 Add and run focused automated checks when a feature introduces them. For UI-sensitive work, test desktop and narrow/mobile layouts on the branch instance; for persistence work, include a restart, migration/rollback (when relevant), and data-isolation check.
 
@@ -105,9 +117,9 @@ Add and run focused automated checks when a feature introduces them. For UI-sens
    git switch -c integration/42-51 origin/main
    git merge --no-ff origin/codex/42-recurrence
    git merge --no-ff origin/claude/51-command-palette
-   npm install
-   npm run build
-   npm run dev -- --port 3010
+   pnpm install --frozen-lockfile
+   pnpm build
+   pnpm start --port 3010
    ```
 
    Resolve integration conflicts and test the combined behavior, including the boundary between the features. Push the integration branch only when it is useful for shared review or CI; it is normally temporary.
