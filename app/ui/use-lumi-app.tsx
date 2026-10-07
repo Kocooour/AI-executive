@@ -66,6 +66,7 @@ export function useLumiApp() {
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
+    [authNotice, setAuthNotice] = useState(""),
     [attentionReload, setAttentionReload] = useState(0),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
@@ -226,8 +227,12 @@ export function useLumiApp() {
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // One confirmation at a time: asking again answers the previous question with "no".
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const authStateRef = useRef("checking");
+  authStateRef.current = authState;
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
+    // The dialog lives in the signed-in screen; without it a question could never be answered.
+    if (authStateRef.current !== "ready") return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       confirmResolver.current = resolve;
       setConfirmRequest(request);
@@ -508,13 +513,26 @@ export function useLumiApp() {
   // The session lasts a limited time. When the server starts refusing data requests the app
   // returns to the sign-in screen and says why; nothing local is removed, so changes that were
   // not sent yet go out after signing in again.
+  const contextScopeLoaded = useRef("");
+  const sessionEndCheck = useRef(false);
+  const sessionEndedHere = useRef(false);
   const sessionEndHandler = useRef(() => {});
   sessionEndHandler.current = () => {
-    if (authState !== "ready" || signedOut.current) return;
-    answerConfirm(false);
-    setAuthPassword("");
-    setAuthError(tr(localStorage.getItem(pendingKey) === "1" ? "sessionEndedUnsent" : "sessionEnded"));
-    setAuthState("required");
+    if (authStateRef.current !== "ready" || signedOut.current || sessionEndCheck.current) return;
+    sessionEndCheck.current = true;
+    // One refused request is not proof: it may be an answer to a request sent before a fresh
+    // sign-in. The server is asked directly, and only its "not signed in" ends the session here.
+    fetchClientAuthStatus().then((state) => {
+      if (state.authenticated || authStateRef.current !== "ready" || signedOut.current) return;
+      // Leaving a field commits what was typed in it; the shell is about to be taken off the screen.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      answerConfirm(false);
+      setAuthPassword("");
+      setAuthError("");
+      setAuthNotice(tr("sessionEnded"));
+      sessionEndedHere.current = true;
+      setAuthState("required");
+    }).catch(() => undefined).finally(() => { sessionEndCheck.current = false; });
   };
   useEffect(() => {
     const original = window.fetch;
@@ -522,6 +540,7 @@ export function useLumiApp() {
     window.fetch = watched as typeof window.fetch;
     return () => { if (window.fetch === watched) window.fetch = original; };
   }, []);
+  useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
   async function checkAccess() {
     const version = ++authCheckVersion.current;
     setAuthError("");
@@ -997,12 +1016,17 @@ export function useLumiApp() {
     setClaimHistory({});
     setStandaloneSubjects([]);
     setSubjectHistory({});
-    setContextInboxProposals([]);
-    setContextInboxTasks([]);
-    setContextInboxStatus("");
-    setClaimFilterId("all");
-    setClaimStatus("");
-    resetClaimDraft();
+    // Drafts belong to a workspace. Signing in again in the same one must not discard them.
+    const contextScope = `${activeWorkspaceId}|${workspaceId}`;
+    if (contextScopeLoaded.current !== contextScope) {
+      contextScopeLoaded.current = contextScope;
+      setContextInboxProposals([]);
+      setContextInboxTasks([]);
+      setContextInboxStatus("");
+      setClaimFilterId("all");
+      setClaimStatus("");
+      resetClaimDraft();
+    }
     loadContextClaims(workspaceId).catch(() => setClaimStatus(language === "cs" ? "Strukturovaný kontext nelze načíst." : "Structured context is unavailable."));
     loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(language === "cs" ? "Osoby a organizace nelze načíst." : "People and organizations are unavailable."));
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
@@ -1455,7 +1479,17 @@ export function useLumiApp() {
 
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === "visible") pullFromServer();
+      if (document.visibilityState !== "visible") return;
+      if (authStateRef.current === "ready") { pullFromServer(); return; }
+      // On the sign-in screen no data is requested (the server would count each refusal). If the
+      // session ended here but another tab has signed in since, this one continues without asking.
+      if (authStateRef.current === "required" && sessionEndedHere.current) {
+        fetchClientAuthStatus().then((state) => {
+          if (!state.authenticated || authStateRef.current !== "required") return;
+          setAuthState("ready");
+          void pullFromServer();
+        }).catch(() => undefined);
+      }
     };
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
@@ -2858,6 +2892,7 @@ export function useLumiApp() {
     confirmRequest,
     authEnabled,
     authError,
+    authNotice,
     authPassword,
     authState,
     backupStatus,

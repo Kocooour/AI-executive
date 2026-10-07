@@ -5,6 +5,7 @@ export const seeded = {
   project: "Projekt Alfa",
   overdueTask: "Zaplatit fakturu",
   plainTask: "Zavolat instalatérovi",
+  renameTask: "Objednat revizi kotle",
 };
 
 export async function signIn(page: Page) {
