@@ -1419,17 +1419,20 @@ export function useLumiApp() {
   }, [themeMode, themeReady]);
 
   useEffect(() => {
-    if (view !== "Settings") return;
+    // Settings can now be the first view (from the address), also before sign-in: load only
+    // with a session, and never store an error body as settings.
+    if (view !== "Settings" || authState !== "ready") return;
+    const json = (response: Response) => response.ok ? response.json() : Promise.reject(new Error("unavailable"));
     Promise.all([
-      fetch("/api/backups", { cache: "no-store" }).then((response) => response.json()),
-      fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json()),
+      fetch("/api/backups", { cache: "no-store" }).then(json),
+      fetch("/api/notifications", { cache: "no-store" }).then(json),
     ])
       .then(([backupData, notificationData]) => {
         setBackups(Array.isArray(backupData.backups) ? backupData.backups : []);
         setNotificationState(notificationData as NotificationState);
       })
       .catch(() => setBackupStatus("Server settings are unavailable while offline."));
-  }, [view]);
+  }, [view, authState]);
 
   useEffect(() => {
     const refresh = () => {
