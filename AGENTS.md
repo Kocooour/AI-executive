@@ -1,30 +1,33 @@
 # Lumi development workflow
 
-These instructions apply to every software-development task in this repository.
+These instructions apply to Codex, Claude Code, Hermes, and human contributors.
 
-## Required model roles
+[README.md](README.md) is the canonical Lumi product, security, architecture, and operations specification. [docs/LUMI_PRODUCT_SPEC.md](docs/LUMI_PRODUCT_SPEC.md) is its index. [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) provide implementation and development guidance. When these sources conflict, preserve the README contract and ask for a product decision before proceeding.
 
-Use the following four-role workflow for every development iteration, including bug fixes, refactors, UI work, integrations, security changes, and deployment preparation:
+## Product invariants
 
-1. The primary strong model owns requirements analysis, solution design, architecture, validation against the Lumi product specification in README.md, and the final decision on readiness.
-2. Delegate implementation to one medium model. Prefer `gpt-6-sol` unless the task or environment requires another comparable model.
-3. After an implementation is available, run two independent lightweight test agents in parallel. Prefer `gpt-6-luna`:
-   - Tester A covers functional behavior, UX, responsive/mobile behavior, and acceptance criteria.
-   - Tester B covers regressions, edge cases, security implications, data integrity, and failure recovery.
-4. The primary strong model reviews both test reports, reproduces material findings when possible, coordinates fixes, and performs the final verification.
+- Preserve **Tasks / Projects / Areas / Notes / Relations** as canonical records. Chat, imported text, claims, and model output are not canonical task state.
+- Every mutation selects one explicit writable workspace. **All my work** is a read-only aggregate; do not permit cross-workspace reads, writes, relations, cached data, or search results.
+- Prefer local-first behavior. Make pending sync, conflicts, freshness, and offline limits visible. Do not claim live calendar availability, delivery, or proactive activity when unavailable.
+- AI may read authorized context, summarize, and prepare proposals. It must not bypass **proposal → explicit approval → revision-checked action → audit / guarded Undo**.
+- Keep integrations behind adapters. Never expose provider credentials, raw imports, restricted context, or protected user data through clients, logs, backups, or model bundles.
+- Choose the smallest understandable design that satisfies the task. Avoid unrelated refactors, duplicate state, premature abstractions, and unnecessary services.
 
-Do not treat an implementation as complete before both independent testers have reported, unless agent tooling is unavailable or a higher-priority safety/system constraint prevents delegation. If that happens, state the limitation explicitly in the final response and perform equivalent local checks.
+## Shared-agent workflow
 
-## Scope control
+- Before changing a subsystem, read this file, the relevant README sections, and the affected code or documentation. Identify data ownership, API contracts, acceptance criteria, and migration or synchronization implications.
+- Roles are complementary: Codex is suited to implementation and verification; Claude Code to independent design or review; Hermes to orchestration and scoped repository or integration work. A role never grants additional data access or approval authority.
+- One scoped task belongs on one branch. Do not run multiple agents in the same checkout; use independent clones or Git worktrees. Resolve overlapping changes deliberately.
+- Branch from current `main` using `docs/<topic>`, `feat/<topic>`, `fix/<topic>`, or `chore/<topic>`. Never develop directly on `main`, force-push shared branches, or modify another agent's branch without an explicit request.
+- Open a pull request for every change. Include scope, product-contract implications, validation, risks or migrations, and follow-ups. Request independent review for security, data, integration, or deployment changes.
+- Keep commits focused and reviewable. Preserve unrelated work. Never commit secrets, production data, backups, credentials, or raw user content.
 
-- Validate every iteration against the canonical Lumi product specification in README.md and the user's latest requirements.
-- Preserve existing work and data. Do not remove or overwrite unrelated behavior.
-- If a proposed change materially diverges from the canonical README specification or requires a product decision, ask the user before implementing that divergence.
-- Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
-- The primary model remains accountable for the delivered result and must not accept agent findings without review.
+## Quality gates
 
-## Delivery policy
+- Validate changes against the README product contract and the user's requirements. Inspect the final diff and exercise the changed path, including relevant failure, offline, authorization, and recovery cases.
+- For application or source changes, run `pnpm build` at minimum, plus targeted tests when they exist or are added. Do not claim automated tests ran when the repository has no matching test command. Check responsive and accessible behavior for UI work.
+- Before merging, review workspace isolation, authorization, data integrity, approval boundaries, error recovery, and regressions. Use an independent reviewer when available; otherwise record the tooling limitation in the pull request.
 
-- After a development iteration passes the required reviews and final verification, commit it, push `main`, and deploy it to the configured Lumi server without asking for an additional confirmation.
-- Before deployment, preserve unrelated server changes, create and verify a recoverable database backup, use a fast-forward-only update, build the production application, restart it through the configured service manager, and verify the service, database integrity, authentication boundary, and configured HTTPS route.
-- If credentials, server state, a failed check, or a destructive/conflicting condition prevents safe delivery, stop at that boundary and report the concrete blocker instead of weakening safeguards.
+## Delivery boundary
+
+A merged pull request is not authorization to deploy. Production deployment, credentials, migrations, live integrations, and destructive recovery actions require explicit user approval and the safeguards in the README. Do not weaken a failing check; report the concrete blocker.
