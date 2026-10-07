@@ -35,6 +35,35 @@ test("a captured task appears in Inbox and reaches the server", async ({ page })
   await expectOnServer(page, (entity) => entity.title === title, true);
 });
 
+test("a task typed into the row of Someday or Upcoming stays in that view", async ({ page }) => {
+  for (const [view, label] of [["Someday", "Někdy"], ["Upcoming", "Nadcházející"]]) {
+    const title = `Řádek ${label} ${Date.now()}`;
+    await page.goto(`/?view=${view}`);
+    await expect(heading(page)).toHaveText(label);
+    await waitUntilSynced(page);
+    await page.locator(".capture input").fill(title);
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(title)).toBeVisible();
+    await page.goto("/?view=Anytime");
+    await expect(heading(page)).toHaveText("Kdykoli");
+    await expect(page.getByText(title)).toHaveCount(0);
+    await page.goto(`/?view=${view}`);
+    await expect(page.getByText(title)).toBeVisible();
+  }
+});
+
+test("a date typed with spaces at the end of the text becomes the task's date", async ({ page }) => {
+  const title = `Zaplatit pojistku ${Date.now()}`;
+  const nextYear = new Date().getFullYear() + 1;
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.locator(".capture input").fill(`${title} 24. 12. ${nextYear}`);
+  await page.keyboard.press("Enter");
+  await page.goto("/?view=Upcoming");
+  await expect(page.getByText(title, { exact: true })).toBeVisible();
+  await expectOnServer(page, (entity) => entity.title === title, true);
+});
+
 test("the address follows the view; Back, Forward and reload keep the place", async ({ page }) => {
   await page.goto("/");
   await expect(heading(page)).toBeVisible();

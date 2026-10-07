@@ -116,3 +116,43 @@ test("a cleared date is no date: the task is neither Today nor Overdue", () => {
   assert.deepEqual(membership({ when: "", today: false, inbox: false, someday: true }), ["Someday"]);
   assert.deepEqual(membership({ when: "", today: true }), ["Today"]);
 });
+
+test("a date written the Czech way with spaces is read from the end of the text", () => {
+  const parse = (text) => parseCaptureText(text, TODAY, NOW);
+  assert.deepEqual(parse("Zaplatit pojistku 25. 10."), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "none" });
+  assert.deepEqual(parse("Zaplatit pojistku 25. 10. 2027"), { title: "Zaplatit pojistku", when: "2027-10-25", priority: "none" });
+  assert.deepEqual(parse("Zaplatit pojistku 25. 10.2027"), { title: "Zaplatit pojistku", when: "2027-10-25", priority: "none" });
+  assert.deepEqual(parse("Zaplatit pojistku 5. 1."), { title: "Zaplatit pojistku", when: "2027-01-05", priority: "none" });
+  // The forms without spaces keep working.
+  assert.deepEqual(parse("Zaplatit pojistku 25.10"), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "none" });
+  assert.deepEqual(parse("Zaplatit pojistku 25.10.2026."), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "none" });
+});
+
+test("a priority mark may follow the date", () => {
+  assert.deepEqual(parseCaptureText("Zaplatit pojistku 25. 10. !", TODAY, NOW), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "high" });
+  assert.deepEqual(parseCaptureText("Zaplatit pojistku 25.10. #low", TODAY, NOW), { title: "Zaplatit pojistku", when: "2026-10-25", priority: "low" });
+});
+
+test("numbers that are not a date stay in the title", () => {
+  const parse = (text) => parseCaptureText(text, TODAY, NOW);
+  assert.deepEqual(parse("Přečíst kapitolu 2. 5"), { title: "Přečíst kapitolu 2. 5", when: "", priority: "none" });
+  assert.deepEqual(parse("Objednat 31. 2."), { title: "Objednat 31. 2.", when: "", priority: "none" });
+  assert.deepEqual(parse("Verze 25. 10. je hotová"), { title: "Verze 25. 10. je hotová", when: "", priority: "none" });
+  assert.deepEqual(parse("Zavolat na 3. patro"), { title: "Zavolat na 3. patro", when: "", priority: "none" });
+});
+
+test("a task added in Someday or Upcoming stays in the view it was typed into", () => {
+  const place = (view, properties = {}, parsedWhen = "") => newTaskPlacement(parsedWhen, properties, { view, today: TODAY, hasProject: false });
+  const viewsOf = (properties) => ["Inbox", "Today", "Upcoming", "Anytime", "Someday"].filter((view) => taskMatchesView(task({ properties }), view, TODAY));
+  assert.deepEqual(place("Someday"), { inbox: false, today: false, someday: true });
+  assert.deepEqual(viewsOf(place("Someday")), ["Someday"]);
+  assert.deepEqual(place("Upcoming"), { inbox: false, today: false, when: "2026-10-08" });
+  assert.deepEqual(viewsOf(place("Upcoming")), ["Upcoming"]);
+  // A typed date or an explicit choice still wins over the view.
+  assert.deepEqual(place("Someday", {}, "2026-10-20"), { inbox: false, today: false, when: "2026-10-20" });
+  assert.deepEqual(place("Upcoming", { when: "2026-11-01" }), { inbox: false, today: false });
+  assert.deepEqual(place("Someday", { someday: false }), { inbox: false, today: false });
+  assert.deepEqual(place("Upcoming", { today: true }), { inbox: false, today: true, when: TODAY });
+  // The last day of a month rolls over correctly.
+  assert.deepEqual(newTaskPlacement("", {}, { view: "Upcoming", today: "2026-10-31", hasProject: false }), { inbox: false, today: false, when: "2026-11-01" });
+});
