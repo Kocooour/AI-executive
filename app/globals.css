@@ -1667,6 +1667,8 @@ article {
 .attentionSection { margin-bottom: 16px; }
 .attentionMeta, .attentionEmpty, .attentionLimits, .attentionItem small { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .attentionMeta { margin: 0 0 12px; }
+.attentionStale { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.attentionStale b { color: var(--text); font-weight: 600; }
 .attentionList { display: grid; gap: 0; }
 .attentionItem { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 0; border-top: 1px solid var(--line); }
 .attentionItem > div { min-width: 0; }
@@ -1674,7 +1676,7 @@ article {
 .attentionItem p { margin: 4px 0; line-height: 1.4; }
 .attentionItem button { flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 12px; cursor: pointer; }
 .attentionItem button:hover { color: var(--accent); border-color: var(--accent); }
-.attentionItem button:disabled { opacity: .55; cursor: wait; }
+.attentionItem button:disabled { opacity: .55; cursor: not-allowed; }
 .attentionMore { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .attentionMore summary { width: fit-content; padding: 2px 0; cursor: pointer; }
 .attentionMore[open] summary { margin-bottom: 8px; }
