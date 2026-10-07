@@ -85,11 +85,15 @@ npm run dev -- --port 3002
 
 Open the corresponding local addresses, such as `http://localhost:3001`. Stop each process before reusing its port.
 
-There is currently no dedicated `npm test` script. At minimum, run the production build from the affected worktree:
+Run the automated checks and the production build from the affected worktree:
 
 ```bash
+npm test            # unit tests in tests/*.test.mjs (Node test runner, no extra dependencies)
+npm run typecheck   # tsc --noEmit
 npm run build
 ```
+
+`npm test` covers deterministic `lib/` behavior only; it does not exercise the UI. Passing it is not evidence that a UI change was tested.
 
 Add and run focused automated checks when a feature introduces them. For UI-sensitive work, test desktop and narrow/mobile layouts on the branch instance; for persistence work, include a restart, migration/rollback (when relevant), and data-isolation check.
 
