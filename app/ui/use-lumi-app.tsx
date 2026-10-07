@@ -324,7 +324,9 @@ export function useLumiApp() {
         pendingRevivedIds(),
       );
       let mergedWithServer = false;
-      if (response.status === 409) {
+      // The server may change again between the conflict and the merged save; try a few times
+      // before giving up until the next trigger.
+      for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
         const deletedIds = new Set(pendingDeletedIds());
@@ -366,6 +368,16 @@ export function useLumiApp() {
         // merge it also holds records this device does not have; claiming its revision would
         // make the next save replace them. Keeping the old revision makes that save merge again.
         if (!mergedWithServer) serverRevision.current = saved.revision;
+        // Settle with one more save, unless the copy was refused because the user is signing out.
+        if (!signedOut.current) void Promise.resolve().then(() => syncToServer());
+        return;
+      }
+      // Something was changed while the saved state was being loaded. That change has its own
+      // save queued, which still needs the lists of deleted and restored records.
+      if (localDataVersion.current !== localVersion) {
+        // Normally that change queues its own save; one more is queued here so that the state
+        // always settles even if it did not.
+        void Promise.resolve().then(() => syncToServer());
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
@@ -1162,6 +1174,7 @@ export function useLumiApp() {
           return;
         }
         await applySnapshot(snapshot, initializationVersion);
+        if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
         localStorage.removeItem(pendingKey);
         localStorage.removeItem(deletedKey);
@@ -1196,6 +1209,9 @@ export function useLumiApp() {
       }
       setAuthPassword("");
       setAuthState("ready");
+      // Whatever this page believed about the server before signing in is not to be trusted
+      // (the local copy may have been cleared by a sign-out in another tab).
+      serverRevision.current = 0;
       await pullFromServer();
     } catch {
       setAuthError("The server could not be reached. Check your secure connection and try again.");
@@ -1222,6 +1238,9 @@ export function useLumiApp() {
       const result = await verifyResponse.json();
       if (!verifyResponse.ok) throw new Error(result.error || "Passkey sign-in failed.");
       setAuthState("ready");
+      // Whatever this page believed about the server before signing in is not to be trusted
+      // (the local copy may have been cleared by a sign-out in another tab).
+      serverRevision.current = 0;
       await pullFromServer();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Passkey sign-in failed.");
@@ -2153,6 +2172,7 @@ export function useLumiApp() {
     delete properties.newProjectTitle;
     localDataVersion.current += 1;
     let created = false;
+    try {
     await db.transaction("rw", db.entities, db.relations, async () => {
       if (await db.entities.get(id)) return;
       if (newProjectTitle) {
@@ -2222,7 +2242,10 @@ export function useLumiApp() {
         });
       }
     });
-    localDataVersion.current += 1;
+    } finally {
+      // Also when the write is refused: an odd version means "a write is in progress".
+      localDataVersion.current += 1;
+    }
     if (!created) return id;
     setText("");
     setDraft("");

@@ -73,3 +73,66 @@ test("an early change on a device with an older copy keeps what another device s
     await context.close();
   }
 });
+
+// A save that had to be merged with the server and was overtaken by another local change:
+// the device must not treat the merged state as its own, or its next save would replace it.
+test("a change made while a merged save is in flight keeps what another device saved", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]), { timeout: 20_000 }).toEqual(["1", null]);
+  const stamp = Date.now();
+  const foreign = `Cizí záznam ${stamp}`;
+  expect(await page.evaluate(async (title) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const entity = { id: `foreign-merge-${now}`, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now };
+    const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: snapshot.revision, entities: [...snapshot.entities, entity], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+    return saved.status;
+  }, foreign)).toBe(200);
+
+  // Hold the answer to the first successful save that follows a conflict.
+  let sawConflict = false;
+  let held = false;
+  let release = () => {};
+  const holding = new Promise<void>((resolve) => { release = resolve; });
+  let holdStarted = () => {};
+  const holdActive = new Promise<void>((resolve) => { holdStarted = resolve; });
+  await page.route("**/api/store", async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    const response = await route.fetch();
+    if (response.status() === 409) sawConflict = true;
+    else if (response.status() === 200 && sawConflict && !held) {
+      held = true;
+      holdStarted();
+      await holding;
+    }
+    await route.fulfill({ response });
+  });
+
+  const field = page.locator(".capture input");
+  const first = `První ${stamp}`;
+  const second = `Druhý ${stamp}`;
+  await field.fill(first);
+  await field.press("Enter");
+  await holdActive;
+  await field.fill(second);
+  await field.press("Enter");
+  // The list is redrawn only after the save, so look for the second task in the local database.
+  await expect.poll(() => page.evaluate((title) => new Promise<boolean>((resolve) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const all = request.result.transaction("entities").objectStore("entities").getAll();
+      all.onsuccess = () => { resolve(all.result.some((entity: { title: string }) => entity.title === title)); request.result.close(); };
+    };
+  }), second), { timeout: 10_000 }).toBe(true);
+  release();
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-pending-sync")), { timeout: 20_000 }).toBeNull();
+  const titles = (await serverEntities(page)).map((entity) => entity.title);
+  expect({ foreign: titles.includes(foreign), first: titles.includes(first), second: titles.includes(second), seeded: titles.includes(seeded.overdueTask) })
+    .toEqual({ foreign: true, first: true, second: true, seeded: true });
+  await expect(page.locator("strong", { hasText: foreign })).toBeVisible();
+  await context.close();
+});

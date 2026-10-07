@@ -672,6 +672,17 @@ function replaceUnchecked(database: DatabaseSync, snapshot: StoreSnapshot) {
   setMetadata.run("updatedAt", String(snapshot.updatedAt));
 }
 
+// More than five records and more than a quarter of the store gone without being named as
+// deleted is not something the app does on purpose: every deletion it makes is announced.
+export function dropsTooMuch(current: StoreSnapshot, entities: Entity[], deletedIds: string[]) {
+  const existing = current.entities.filter((entity) => entity.type !== "workspace");
+  if (existing.length === 0) return false;
+  const kept = new Set(entities.map((entity) => entity.id));
+  const announced = new Set(deletedIds);
+  const dropped = existing.filter((entity) => !kept.has(entity.id) && !announced.has(entity.id)).length;
+  return dropped > 5 && dropped > existing.length / 4;
+}
+
 export function replaceSnapshot(
   baseRevision: number,
   entities: Entity[],
@@ -694,6 +705,15 @@ export function replaceSnapshot(
   try {
     const current = readSnapshot();
     if (baseRevision !== current.revision) {
+      database.exec("ROLLBACK");
+      return { conflict: true as const, snapshot: current };
+    }
+    // Safety net. A save at the current revision replaces everything, so a device that lost or
+    // never had its local copy could erase the store with one request. Records may disappear
+    // only when the device names them as deleted. A save that silently drops a large part of
+    // the store is answered like a conflict instead: the client merges with the copy it gets
+    // back and sends again, and nothing is lost.
+    if (dropsTooMuch(current, entities, deletedIds)) {
       database.exec("ROLLBACK");
       return { conflict: true as const, snapshot: current };
     }
