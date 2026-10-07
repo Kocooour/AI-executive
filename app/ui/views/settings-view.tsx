@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import { type DurableContextItem, type Language, type ThemeMode } from "../types";
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
@@ -11,7 +12,7 @@ const settingsTabLabels: Record<string, string> = {
 export function SettingsView({ app }: { app: LumiApp }) {
   const {
     setSettingsSection,
-    settingsSection,
+    settingsSection: requestedSection,
     askConfirm,
     activeWorkspaceId,
     attentionTaskCount,
@@ -92,13 +93,25 @@ export function SettingsView({ app }: { app: LumiApp }) {
     writeWorkspace,
     writeWorkspaceId,
   } = app;
+  // Access exists only with sign-in enabled; never leave the page without a visible section.
+  const settingsSection = requestedSection === "access" && !authEnabled ? "general" : requestedSection;
+  // On narrow screens the row scrolls sideways: keep the current section's button in sight when
+  // Settings opens on a section chosen elsewhere. Only the row moves, never the page.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = tabsRef.current;
+    const current = row?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!row || !current) return;
+    const left = current.offsetLeft - row.offsetLeft;
+    if (left < row.scrollLeft || left + current.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = Math.max(0, left - 16);
+  }, [view, settingsSection]);
   return (
     <>
           {view === "Settings" && (
             <div className="settingsPanel">
-              <div className="settingsTabs" role="navigation" aria-label={tr("settingsSections")}>
+              <div className="settingsTabs" role="navigation" aria-label={tr("settingsSections")} ref={tabsRef}>
                 {(["general", "workspace", ...(authEnabled ? ["access"] : []), "notifications", "calendar", "data", "context"] as const).map((name) => (
-                  <button key={name} type="button" className={settingsSection === name ? "active" : ""} aria-current={settingsSection === name ? "page" : undefined} onClick={() => setSettingsSection(name)}>
+                  <button key={name} type="button" aria-current={settingsSection === name ? "page" : undefined} onClick={() => setSettingsSection(name)}>
                     {tr(settingsTabLabels[name])}
                   </button>
                 ))}
