@@ -504,11 +504,11 @@ article small {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #20212a;
+  color: var(--text);
   font-weight: 700;
   text-align: left;
 }
-.briefingTasks small { display: block; color: #777; margin-top: 2px; }
+.briefingTasks small { display: block; color: var(--muted); margin-top: 2px; }
 .dayPlanCard { margin: 22px 0; padding: 20px; border: 1px solid var(--border, #d9d9d9); border-radius: 18px; background: var(--surface, #fff); }
 .workNowCard { margin: 22px 0; padding: 22px; border: 1px solid rgba(103,86,204,.35); border-radius: 20px; background: linear-gradient(135deg, rgba(103,86,204,.13), var(--surface,#fff)); display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px; }
 .workNowCard h2 { margin: 4px 0; font-size: clamp(1.35rem, 3vw, 2rem); }
@@ -929,14 +929,6 @@ article {
   .mobileNav button.active {
     background: transparent !important;
     color: #5d4ee8 !important;
-  }
-  .mobileNav button:nth-child(3) {
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    background: #6557e8;
-    color: #fff;
-    font-size: 24px;
   }
   .dashboard {
     grid-template-columns: repeat(3, 1fr);
@@ -2160,16 +2152,6 @@ article:hover > .dragHandle,
     font-size: 17px;
     line-height: 19px;
   }
-  .mobileNav button:nth-child(3) {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
-    margin-top: -16px;
-    border-radius: 16px;
-    background: var(--accent);
-    box-shadow: 0 7px 20px rgba(97, 85, 231, 0.28);
-  }
   .mobileAddIcon {
     color: #fff;
     font-size: 26px;
@@ -2478,7 +2460,7 @@ article:hover > .dragHandle,
   --line: #dcdad6;
   --line-strong: #ccc9c4;
   --text: #242426;
-  --muted: #747477;
+  --muted: #69696c;
   --muted-light: #98989c;
   --hover: rgba(25, 25, 28, 0.055);
   --selected: #d9d8d5;
@@ -3406,16 +3388,6 @@ h3 {
 .mobileCaptureButton { display: none; }
 
 @media (max-width: 700px) {
-  .mobileNav button:nth-child(3) {
-    width: auto;
-    height: auto;
-    min-width: 50px;
-    min-height: 50px;
-    margin-top: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
   .mobileCaptureButton {
     position: fixed;
     right: 16px;
