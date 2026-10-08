@@ -1077,7 +1077,9 @@ export function useLumiApp() {
       return;
     }
     const version = ++captureSuggestionVersion.current;
-    const workspaceId = writeWorkspaceId;
+    // A task added to a project goes to the project's workspace; its suggestions (area, calendar
+    // window) have to come from there too.
+    const workspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");

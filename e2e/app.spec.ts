@@ -170,13 +170,19 @@ test("a task added from a project in another workspace offers that workspace's a
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   await page.locator("article", { hasText: "Projekt v druhém prostoru" }).first().click();
-  await page.route("**/api/task-suggestions", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
+  let suggestedFor = "";
+  await page.route("**/api/task-suggestions", (route) => {
+    suggestedFor = JSON.parse(route.request().postData() || "{}").workspaceId;
+    return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' });
+  });
   await page.locator("aside.detail").getByRole("button", { name: /Přidat úkol/ }).click();
   const modal = page.locator(".captureModal");
   const area = modal.getByLabel("Oblast");
   await expect(area.locator(`option[value="${ids.otherAreaId}"]`)).toHaveCount(1);
   await expect(area.locator(`option[value="${ids.personalAreaId}"]`)).toHaveCount(0);
   await modal.getByLabel("Název úkolu").fill(title);
+  // Suggestions (area, calendar window) are asked for in the project's workspace.
+  await expect.poll(() => suggestedFor).toBe(ids.workspaceId);
   await area.selectOption(ids.otherAreaId);
   await modal.getByRole("button", { name: "Přidat úkol" }).click();
   await expect(modal).toHaveCount(0);
