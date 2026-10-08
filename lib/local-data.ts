@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
 // Device preferences (theme, language, start view) are not user data and stay.
@@ -9,7 +10,7 @@ const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
   "ai-executive-pending-revivals",
-  "ai-executive-notes-draft",
+  notesDraftsKey,
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
 ];
@@ -18,6 +19,8 @@ const localDataKeys = [
 // rows from before the first completed synchronization.
 export async function hasUnsentChanges() {
   if (localStorage.getItem(pendingSyncKey) === "1") return true;
+  // Notes still being typed, or left by a page closed before saving them.
+  if (keptNotesDrafts(localStorage).length) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
   return (await db.entities.where("type").notEqual("workspace").count()) > 0;
 }

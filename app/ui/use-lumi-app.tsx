@@ -3,6 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
+import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -222,22 +223,6 @@ export function useLumiApp() {
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
-  const notesDraftKey = "ai-executive-notes-draft";
-  // A draft kept in the device: the task, the text, the notes it started from, when it was last
-  // typed into and which page typed it.
-  type KeptNotesDraft = { id: string; text: string; base: string; at: number; page: string };
-  const storedNotesDraft = (): KeptNotesDraft | null => {
-    try {
-      const draft = JSON.parse(localStorage.getItem(notesDraftKey) || "null");
-      return draft && typeof draft.id === "string" && typeof draft.text === "string" && typeof draft.base === "string"
-        && typeof draft.at === "number" && typeof draft.page === "string" ? draft : null;
-    } catch {
-      return null;
-    }
-  };
-  const forgetNotesDraft = () => {
-    try { localStorage.removeItem(notesDraftKey); } catch { /* nothing kept */ }
-  };
   const pendingDeletedIds = () => {
     try {
       return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
@@ -1041,7 +1026,8 @@ export function useLumiApp() {
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         drainSync: () => syncQueue.current,
         hasUnsent: hasUnsentChanges,
-        sync: syncToServer,
+        // Notes drafts kept in the device go into the local copy first, so they are sent too.
+        sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
         serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
         confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
         // From here nothing may be edited and no pull or sync still in flight may write data back.
@@ -2105,19 +2091,14 @@ export function useLumiApp() {
   }
   // Notes are typed into a draft and saved when the field is left. Saving on every key press put
   // the stored value back into the field while the save was running, so typed characters were
-  // lost. The draft is also kept in localStorage on every key press, because that write is
-  // synchronous and survives the page being closed or killed before the save could run; it is
-  // saved on the next start (see below).
+  // lost. Every key press also keeps the draft in the device (lib/notes-drafts.ts), because that
+  // write is synchronous and survives the page being closed or killed before the save could run.
   // The draft is dropped only if nothing was typed into it since this save started. If the save
   // fails the draft stays, so the text is still in the field and is saved next time.
   const pageId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   function editNotes(id: string, text: string, base: string) {
     setNotesDraft({ id, text });
-    const kept = storedNotesDraft();
-    // The notes the draft started from stay those of the first key press of this draft.
-    const startedFrom = kept && kept.id === id && kept.page === pageId.current ? kept.base : base;
-    const draft: KeptNotesDraft = { id, text, base: startedFrom, at: Date.now(), page: pageId.current };
-    try { localStorage.setItem(notesDraftKey, JSON.stringify(draft)); } catch { /* the draft stays in memory */ }
+    keepNotesDraft(localStorage, pageId.current, id, text, base);
   }
   async function saveNotes(e: Pick<Entity, "id">, notes: string) {
     try {
@@ -2127,12 +2108,7 @@ export function useLumiApp() {
       return;
     }
     setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
-    const kept = storedNotesDraft();
-    if (kept && kept.id === e.id && kept.text === notes) forgetNotesDraft();
-    // Typing went on while this save ran: the kept draft now starts from what was just saved.
-    else if (kept && kept.id === e.id && kept.page === pageId.current) {
-      try { localStorage.setItem(notesDraftKey, JSON.stringify({ ...kept, base: notes })); } catch { /* the draft stays in memory */ }
-    }
+    settleNotesDraft(localStorage, pageId.current, e.id, notes);
   }
   // A phone may close the app in the background without the field ever being left, so a draft is
   // saved as soon as the page is hidden.
@@ -2153,13 +2129,8 @@ export function useLumiApp() {
       window.removeEventListener("pagehide", saveDraft);
     };
   }, []);
-  // A draft left over from a page that was closed before saving it is saved once the start-up
-  // synchronization has finished (or failed for lack of a connection: then it is saved locally and
-  // sent later). It is not saved:
-  // - while the page that typed it is still open (another tab answers on the draft channel that it
-  //   still has the draft); it is looked at again later;
-  // - over notes that were changed since the draft was started (for example on another device):
-  //   the newer notes stay and the draft is dropped.
+  // Drafts left by other pages. A page that is still open answers on the draft channel while it
+  // holds a draft, and its drafts are left to it.
   const draftChannelName = "ai-executive-notes-draft";
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
@@ -2169,38 +2140,60 @@ export function useLumiApp() {
     };
     return () => channel.close();
   }, []);
-  useEffect(() => {
-    if (authState !== "ready" || syncStatus === "connecting") return;
-    let timer: number | undefined;
-    let stopped = false;
-    // Without the channel, a draft typed into in the last 30 seconds is taken as still open.
-    const ownerStillOpen = (kept: KeptNotesDraft) => new Promise<boolean>((resolve) => {
-      if (typeof BroadcastChannel === "undefined") { resolve(Date.now() - kept.at < 30_000); return; }
+  // Without the channel, a draft typed into in the last 30 seconds is taken as still open.
+  function draftOwnerOpen(draft: KeptNotesDraft) {
+    return new Promise<boolean>((resolve) => {
+      if (typeof BroadcastChannel === "undefined") { resolve(Date.now() - draft.at < 30_000); return; }
       const channel = new BroadcastChannel(draftChannelName);
       const done = (open: boolean) => { channel.close(); resolve(open); };
       const wait = window.setTimeout(() => done(false), 400);
       channel.onmessage = (event) => {
-        if (event.data?.alive === kept.page) { window.clearTimeout(wait); done(true); }
+        if (event.data?.alive === draft.page) { window.clearTimeout(wait); done(true); }
       };
-      channel.postMessage({ ask: kept.page });
+      channel.postMessage({ ask: draft.page });
     });
+  }
+  // Saves the drafts that pages left behind into the local copy. On start (`signingOut` false) the
+  // drafts of pages that are still open are left to them, and a draft whose notes were changed
+  // since it was started (for example on another device) is dropped: the newer notes stay. When
+  // signing out every draft is saved, because the other pages are about to lose theirs; one that
+  // conflicts with newer notes stays kept, so sign-out asks before discarding it.
+  // Returns true if a draft was left to a page that is still open.
+  async function saveLeftoverDrafts(signingOut: boolean, stopped = () => false) {
+    let leftToOwner = false;
+    const owners = new Map<string, boolean>();
+    for (const draft of keptNotesDrafts(localStorage)) {
+      if (stopped()) return leftToOwner;
+      if (!signingOut) {
+        if (draft.page === pageId.current) continue;
+        if (!owners.has(draft.page)) owners.set(draft.page, await draftOwnerOpen(draft));
+        if (owners.get(draft.page)) { leftToOwner = true; continue; }
+      }
+      const stored = await db.entities.get(draft.id);
+      if (stopped()) return leftToOwner;
+      const action = leftoverDraftAction(draft, stored ? String(stored.properties.notes || "") : undefined);
+      if (action === "conflict" && signingOut) continue;
+      if (action === "save" && stored) {
+        try {
+          await patch(stored, { notes: draft.text }, "updated", true);
+        } catch {
+          continue;
+        }
+      }
+      dropNotesDraft(localStorage, draft);
+    }
+    return leftToOwner;
+  }
+  // Leftover drafts are saved once the start-up synchronization has succeeded: only then are the
+  // newest notes known, so a draft cannot win over notes changed on another device. Drafts left to
+  // a page that is still open are looked at again later.
+  useEffect(() => {
+    if (authState !== "ready" || syncStatus !== "synced") return;
+    let timer: number | undefined;
+    let stopped = false;
     const recover = async () => {
-      if (stopped || notesDraftRef.current) return;
-      const kept = storedNotesDraft();
-      if (!kept) return;
-      if (kept.page !== pageId.current && await ownerStillOpen(kept)) {
-        if (!stopped) timer = window.setTimeout(() => void recover(), 30_000);
-        return;
-      }
       if (stopped) return;
-      const stored = await db.entities.get(kept.id);
-      if (stopped) return;
-      const current = String(stored?.properties.notes || "");
-      if (!stored || (current !== kept.base && current !== kept.text)) {
-        if (storedNotesDraft()?.at === kept.at) forgetNotesDraft();
-        return;
-      }
-      await saveNotesRef.current({ id: kept.id }, kept.text);
+      if (await saveLeftoverDrafts(false, () => stopped) && !stopped) timer = window.setTimeout(() => void recover(), 30_000);
     };
     void recover();
     return () => { stopped = true; window.clearTimeout(timer); };

@@ -219,24 +219,51 @@ test("a notes draft left by a page that was closed before saving it is saved on 
   await waitUntilSynced(page);
   await field.fill(typed);
   // Every key press is kept in the device at once.
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-draft") || "null")))
-    .toMatchObject({ id: "e2e-rename", text: typed });
+  expect(Object.values(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-drafts") || "{}"))))
+    .toEqual([expect.objectContaining({ id: "e2e-rename", text: typed })]);
   // Leaving the page may cut its own save off; the kept draft is then saved by the next start.
   await page.goto("/?view=Inbox");
   await waitUntilSynced(page);
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === typed, true);
   // What a page killed a minute ago leaves behind: a draft started from the current notes, not saved.
   const left = `Po zavření ${Date.now()}`;
-  const plant = (draft: { text: string; base: string }) => page.evaluate((value) => localStorage.setItem("ai-executive-notes-draft",
-    JSON.stringify({ id: "e2e-rename", ...value, at: Date.now() - 60_000, page: "closed-page" })), draft);
+  const plant = (draft: { text: string; base: string }) => page.evaluate((value) => localStorage.setItem("ai-executive-notes-drafts",
+    JSON.stringify({ "closed-page:e2e-rename": { id: "e2e-rename", ...value, at: Date.now() - 60_000, page: "closed-page" } })), draft);
   await plant({ text: left, base: typed });
   await page.reload();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-draft"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).toBeNull();
   // A draft started from notes that have changed since (on another device) does not overwrite them.
   await plant({ text: `Zastaralé ${Date.now()}`, base: "jiný základ" });
   await page.reload();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-draft"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).toBeNull();
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
+});
+
+test("a leftover notes draft waits until the server's notes are known", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
+  const left = `Čeká na server ${Date.now()}`;
+  await page.evaluate(({ text, base }) => localStorage.setItem("ai-executive-notes-drafts",
+    JSON.stringify({ "closed-page:e2e-rename": { id: "e2e-rename", text, base, at: Date.now() - 60_000, page: "closed-page" } })), { text: left, base });
+  // The start-up synchronization fails: the draft must not be applied to the possibly old copy.
+  await page.route("**/api/store", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".appShell")).toBeVisible();
+  await page.waitForTimeout(1500);
+  const localNotes = () => page.evaluate(() => new Promise<string>((resolve) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const get = request.result.transaction("entities").objectStore("entities").get("e2e-rename");
+      get.onsuccess = () => { resolve(String(get.result?.properties?.notes ?? "")); request.result.close(); };
+    };
+  }));
+  expect(await localNotes()).toBe(base);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).not.toBeNull();
+  // The connection is back: the next synchronization knows the server's notes, then the draft is saved.
+  await page.unroute("**/api/store");
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
 });
 
@@ -253,7 +280,7 @@ test("a draft that another open tab is still typing is left to that tab", async 
   const partial = `Rozepsané v jiné kartě ${Date.now()}`;
   await page.evaluate(({ text, base }) => {
     localStorage.setItem("e2e-draft-owner", "open");
-    localStorage.setItem("ai-executive-notes-draft", JSON.stringify({ id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" }));
+    localStorage.setItem("ai-executive-notes-drafts", JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" } }));
   }, { text: partial, base: before });
   try {
     await page.reload();
@@ -392,6 +419,11 @@ test("signing out without a connection is refused and removes nothing", async ({
 test("signing out clears the local copy; signing in again restores it from the server", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
+  // Notes still being typed in another tab are sent before the local copy is removed.
+  const otherTab = `Z jiné karty před odhlášením ${Date.now()}`;
+  const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
+  await page.evaluate(({ text, base }) => localStorage.setItem("ai-executive-notes-drafts",
+    JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" } })), { text: otherTab, base });
   await settingsSections(page).filter({ hasText: "Přístup" }).click();
   await page.getByRole("button", { name: "Odhlásit se" }).click();
   // Everything was sent, so no question about discarding changes may appear.
@@ -410,4 +442,5 @@ test("signing out clears the local copy; signing in again restores it from the s
   await signIn(page);
   await sidebarView(page, "Doručené").click();
   await expect(page.getByText(seeded.plainTask)).toBeVisible();
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === otherTab, true);
 });
