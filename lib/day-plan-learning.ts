@@ -11,8 +11,11 @@ export interface LearnedPlanning {
 
 type Feedback = { decision?: unknown; at?: unknown; plannedMinutes?: unknown; proposedStart?: unknown; chosenStart?: unknown };
 
+// Samples from measured work and planned blocks: as before 1ef8aa3, shorter ones are ignored and
+// the rest are counted in 5-minute steps. Only the estimate the user typed keeps whole minutes.
 function validMinutes(value: unknown) {
-  return taskMinutes(value);
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 10 && number <= 480 ? Math.ceil(number / 5) * 5 : null;
 }
 
 function median(values: number[]) {
@@ -42,7 +45,7 @@ function minuteInZone(value: unknown, timezone: string) {
 }
 
 export function learnPlanning(task: Entity, peers: Entity[], timezone: string): LearnedPlanning {
-  const explicit = validMinutes(task.properties.estimatedMinutes);
+  const explicit = taskMinutes(task.properties.estimatedMinutes);
   const durationSamples: number[] = [];
   const actualSamples: number[] = [];
   const timeSamples: number[] = [];
@@ -73,9 +76,12 @@ export function learnPlanning(task: Entity, peers: Entity[], timezone: string): 
     if (peerMinutes !== null) durationSamples.push(peerMinutes);
     if (peerTime !== null) timeSamples.push(peerTime);
   }
-  const actualEstimate = actualSamples.length >= 3 ? Math.round(median(actualSamples)) : null;
+  // Learned estimates stay coarse (owner decision, 8. 10. 2026): measured work at least 10 minutes
+  // and planned blocks at least 30, both in 5-minute steps. Only an estimate the user typed keeps
+  // whole minutes below that.
+  const actualEstimate = actualSamples.length >= 3 ? Math.round(Math.max(10, Math.min(480, median(actualSamples))) / 5) * 5 : null;
   const estimateSamples = actualEstimate !== null ? actualSamples.length : durationSamples.length;
-  const learned = durationSamples.length >= 3 ? Math.round(Math.max(1, Math.min(120, median(durationSamples)))) : 60;
+  const learned = durationSamples.length >= 3 ? Math.round(Math.max(30, Math.min(120, median(durationSamples))) / 5) * 5 : 60;
   const estimatedMinutes = explicit ?? actualEstimate ?? learned;
   return {
     estimatedMinutes,
