@@ -309,8 +309,18 @@ export function useLumiApp() {
       }),
     });
   }
+  // Saves that were asked for and have not started yet.
+  const queuedSaves = useRef(0);
+  // After a save that could not settle, one more is needed. A change that is being written or
+  // already has its own save queued brings it anyway; only otherwise is one added here.
+  function settleLater() {
+    if (queuedSaves.current > 0 || localDataVersion.current % 2 === 1 || signedOut.current) return;
+    void syncToServer();
+  }
   async function syncToServer() {
+    queuedSaves.current += 1;
     const operation = syncQueue.current.then(async () => {
+      queuedSaves.current -= 1;
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
@@ -323,7 +333,11 @@ export function useLumiApp() {
         pendingDeletedIds(),
         pendingRevivedIds(),
       );
-      if (response.status === 409) {
+      let mergedWithServer = false;
+      // The server may change again between the conflict and the merged save; try a few times
+      // before giving up until the next trigger.
+      for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
+        mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
         const deletedIds = new Set(pendingDeletedIds());
         const revivedIds = new Set(pendingRevivedIds());
@@ -359,7 +373,18 @@ export function useLumiApp() {
         if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
       }
       if (!applied) {
-        serverRevision.current = saved.revision;
+        // The local copy changed during the save, so the saved state was not taken over. The
+        // known revision may advance only when the server holds exactly what was sent. After a
+        // merge it also holds records this device does not have; claiming its revision would
+        // make the next save replace them. Keeping the old revision makes that save merge again.
+        if (!mergedWithServer) serverRevision.current = saved.revision;
+        settleLater();
+        return;
+      }
+      // Something was changed while the saved state was being loaded. That change has its own
+      // save queued, which still needs the lists of deleted and restored records.
+      if (localDataVersion.current !== localVersion) {
+        settleLater();
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
@@ -1148,11 +1173,15 @@ export function useLumiApp() {
           snapshot = (await saveResponse.json()) as ServerSnapshot;
         }
         if (localDataVersion.current !== initializationVersion) {
-          serverRevision.current = snapshot.revision;
+          // Something was changed locally while the app was starting, so the server copy was not
+          // taken over. The known revision must stay as it is: the server replaces its whole
+          // content when the revision matches, and the local copy does not contain that content.
+          // With the old revision the save is answered with a conflict and merged instead.
           await syncToServer();
           return;
         }
         await applySnapshot(snapshot, initializationVersion);
+        if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
         localStorage.removeItem(pendingKey);
         localStorage.removeItem(deletedKey);
@@ -1187,6 +1216,9 @@ export function useLumiApp() {
       }
       setAuthPassword("");
       setAuthState("ready");
+      // Whatever this page believed about the server before signing in is not to be trusted
+      // (the local copy may have been cleared by a sign-out in another tab).
+      serverRevision.current = 0;
       await pullFromServer();
     } catch {
       setAuthError("The server could not be reached. Check your secure connection and try again.");
@@ -1213,6 +1245,9 @@ export function useLumiApp() {
       const result = await verifyResponse.json();
       if (!verifyResponse.ok) throw new Error(result.error || "Passkey sign-in failed.");
       setAuthState("ready");
+      // Whatever this page believed about the server before signing in is not to be trusted
+      // (the local copy may have been cleared by a sign-out in another tab).
+      serverRevision.current = 0;
       await pullFromServer();
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Passkey sign-in failed.");
@@ -2144,6 +2179,7 @@ export function useLumiApp() {
     delete properties.newProjectTitle;
     localDataVersion.current += 1;
     let created = false;
+    try {
     await db.transaction("rw", db.entities, db.relations, async () => {
       if (await db.entities.get(id)) return;
       if (newProjectTitle) {
@@ -2213,7 +2249,10 @@ export function useLumiApp() {
         });
       }
     });
-    localDataVersion.current += 1;
+    } finally {
+      // Also when the write is refused: an odd version means "a write is in progress".
+      localDataVersion.current += 1;
+    }
     if (!created) return id;
     setText("");
     setDraft("");

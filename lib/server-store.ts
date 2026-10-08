@@ -672,6 +672,28 @@ function replaceUnchecked(database: DatabaseSync, snapshot: StoreSnapshot) {
   setMetadata.run("updatedAt", String(snapshot.updatedAt));
 }
 
+// More than five records and more than a quarter of them gone without being named as deleted is
+// not something the app does on purpose: every deletion it makes is announced. The same holds for
+// links between records (task in a project, project in an area): the app removes them one at a
+// time, or together with an announced record. Links whose two records both stay count here.
+function dropsLarge(existing: number, dropped: number) {
+  return dropped > 5 && dropped > existing / 4;
+}
+
+export function dropsTooMuch(current: StoreSnapshot, entities: Entity[], deletedIds: string[], relations: Relation[] = []) {
+  const kept = new Set(entities.map((entity) => entity.id));
+  const announced = new Set(deletedIds);
+  const existing = current.entities.filter((entity) => entity.type !== "workspace");
+  const droppedEntities = existing.filter((entity) => !kept.has(entity.id) && !announced.has(entity.id)).length;
+  if (existing.length > 0 && dropsLarge(existing.length, droppedEntities)) return true;
+  const keptRelations = new Set(relations.map((relation) => relation.id));
+  const stillLinked = current.relations.filter((relation) =>
+    kept.has(relation.sourceEntityId) && kept.has(relation.targetEntityId)
+    && !announced.has(relation.sourceEntityId) && !announced.has(relation.targetEntityId));
+  const droppedRelations = stillLinked.filter((relation) => !keptRelations.has(relation.id)).length;
+  return current.relations.length > 0 && dropsLarge(current.relations.length, droppedRelations);
+}
+
 export function replaceSnapshot(
   baseRevision: number,
   entities: Entity[],
@@ -694,6 +716,15 @@ export function replaceSnapshot(
   try {
     const current = readSnapshot();
     if (baseRevision !== current.revision) {
+      database.exec("ROLLBACK");
+      return { conflict: true as const, snapshot: current };
+    }
+    // Safety net. A save at the current revision replaces everything, so a device that lost or
+    // never had its local copy could erase the store with one request. Records may disappear
+    // only when the device names them as deleted. A save that silently drops a large part of
+    // the store is answered like a conflict instead: the client merges with the copy it gets
+    // back and sends again, and nothing is lost.
+    if (dropsTooMuch(current, entities, deletedIds, relations)) {
       database.exec("ROLLBACK");
       return { conflict: true as const, snapshot: current };
     }
