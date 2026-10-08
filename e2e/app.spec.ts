@@ -419,12 +419,20 @@ test("signing out without a connection is refused and removes nothing", async ({
 test("signing out clears the local copy; signing in again restores it from the server", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
+  const plantDraft = (text: string, base: string) => page.evaluate((draft) => localStorage.setItem("ai-executive-notes-drafts",
+    JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", ...draft, at: Date.now(), page: "other-tab" } })), { text, base });
+  const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  // A draft from another tab that conflicts with newer notes is not sent; sign-out asks first.
+  await plantDraft(`Zastaralé z jiné karty ${Date.now()}`, "jiný základ");
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  await expect(confirmDialog(page)).toBeVisible();
+  await confirmDialog(page).getByRole("button", { name: "Zrušit" }).click();
+  await expect(page.locator(".appShell")).toBeVisible();
+  await expect(page.locator(".authCard")).toHaveCount(0);
   // Notes still being typed in another tab are sent before the local copy is removed.
   const otherTab = `Z jiné karty před odhlášením ${Date.now()}`;
-  const base = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
-  await page.evaluate(({ text, base }) => localStorage.setItem("ai-executive-notes-drafts",
-    JSON.stringify({ "other-tab:e2e-rename": { id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" } })), { text: otherTab, base });
-  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  await plantDraft(otherTab, base);
   await page.getByRole("button", { name: "Odhlásit se" }).click();
   // Everything was sent, so no question about discarding changes may appear.
   await expect(page.locator(".authCard")).toBeVisible();

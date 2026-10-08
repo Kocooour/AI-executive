@@ -386,14 +386,17 @@ export function useLumiApp() {
         return;
       }
       if (snapshot.revision > serverRevision.current) {
+        // "Synced" means the local copy holds the server's state. If a local change got in the way,
+        // the copy was not taken over; that change's own save sets the status when it is done.
         try {
-          const applied = await applySnapshot(snapshot, pullVersion);
+          if (!(await applySnapshot(snapshot, pullVersion))) return;
           // A browser signing in for the first time could not synchronize when it started. Once it
           // holds exactly the server copy it is synchronized; without the mark every later start
           // would send that copy back to the server as if it were the browser's own data.
-          if (applied && afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+          if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
         } catch (error) {
           if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+          return;
         }
       }
       setSyncStatus("synced");
@@ -2064,7 +2067,8 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     // Reading and writing in one transaction: two saves of the same record started together (for
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
-    await db.transaction("rw", db.entities, async () => {
+    // The write marker is released even if the write fails (sign-out waits for it).
+    try { await db.transaction("rw", db.entities, async () => {
       const current = (await db.entities.get(e.id)) || e;
       const activity = Array.isArray(current.properties.activity)
         ? current.properties.activity
@@ -2077,8 +2081,9 @@ export function useLumiApp() {
         },
         updatedAt: Date.now(),
       });
-    });
-    localDataVersion.current += 1;
+    }); } finally {
+      localDataVersion.current += 1;
+    }
     await syncToServer();
     await load();
     const saved = (await db.entities.get(e.id)) || null;
@@ -2180,7 +2185,9 @@ export function useLumiApp() {
           continue;
         }
       }
-      dropNotesDraft(localStorage, draft);
+      // If that page typed on in the meantime, its draft now starts from what was saved.
+      if (action === "gone") dropNotesDraft(localStorage, draft);
+      else settleNotesDraft(localStorage, draft.page, draft.id, draft.text);
     }
     return leftToOwner;
   }
