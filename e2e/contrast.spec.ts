@@ -96,7 +96,12 @@ async function audit(page: import("@playwright/test").Page) {
 // Screens and states to check: every main view, every Settings section, and the overlays.
 async function collect(page: import("@playwright/test").Page, theme: string) {
   const failures: Failure[] = [];
-  const record = async (where: string) => { for (const failure of await audit(page)) failures.push({ view: where, theme, ...failure }); };
+  // The pointer is moved out of the way first: the audit checks resting colours, and a row left
+  // under the pointer after a click would be measured in its hover colour.
+  const record = async (where: string) => {
+    await page.mouse.move(0, 0);
+    for (const failure of await audit(page)) failures.push({ view: where, theme, ...failure });
+  };
   for (const view of views) {
     await page.goto(`/?view=${view}`);
     await waitUntilSynced(page);
