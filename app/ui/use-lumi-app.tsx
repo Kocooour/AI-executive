@@ -3,12 +3,10 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
-import { watchSession } from "../../lib/session-watch";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
-import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
@@ -20,6 +18,7 @@ import { useAttention } from "./hooks/use-attention";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useBackups } from "./hooks/use-backups";
 import { usePasskeys } from "./hooks/use-passkeys";
+import { useSignIn } from "./hooks/use-sign-in";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -64,7 +63,6 @@ export function useLumiApp() {
     [badgeNow, setBadgeNow] = useState(() => Date.now()),
     [badgeStatus, setBadgeStatus] = useState(""),
     [notificationStatus, setNotificationStatus] = useState(""),
-    [authNotice, setAuthNotice] = useState(""),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
@@ -128,17 +126,23 @@ export function useLumiApp() {
     [draggingId, setDraggingId] = useState(""),
     [dragTarget, setDragTarget] = useState(""),
     [checklistDraft, setChecklistDraft] = useState(""),
-    [authState, setAuthState] = useState<
-      "checking" | "ready" | "required" | "misconfigured" | "unavailable"
-    >("checking"),
-    [authEnabled, setAuthEnabled] = useState(false),
-    [authPassword, setAuthPassword] = useState(""),
-    [authError, setAuthError] = useState(""),
     [aiText, setAiText] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const serverRevision = useRef(0);
   const tr = (key: string) => copy[language][key] || key;
+  const { authState, setAuthState, authStateRef, authEnabled, authPassword, setAuthPassword, authError, authNotice,
+    sessionEndedHere, checkAccess, login, signInWithPasskey, passkeySupported, passkeyBusy, setPasskeyBusy } = useSignIn({
+    tr,
+    answerConfirm,
+    isSignedOut: () => signedOut.current,
+    afterSignIn: () => {
+      // Whatever this page believed about the server before signing in is not to be trusted
+      // (the local copy may have been cleared by a sign-out in another tab).
+      serverRevision.current = 0;
+      return pullFromServer();
+    },
+  });
   const contextPredicateLabel = (predicate: string) => {
     const labels: Record<string, [string, string]> = {
       waiting_for: ["Na výsledek čeká", "Waiting for result"],
@@ -192,8 +196,6 @@ export function useLumiApp() {
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // One confirmation at a time: asking again answers the previous question with "no".
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
-  const authStateRef = useRef("checking");
-  authStateRef.current = authState;
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
     // The dialog lives in the signed-in screen; without it a question could never be answered.
@@ -499,64 +501,7 @@ export function useLumiApp() {
       setAiBusy(false);
     }
   }
-  const authCheckVersion = useRef(0);
-  // The session lasts a limited time. When the server starts refusing data requests the app
-  // returns to the sign-in screen and says why; nothing local is removed, so changes that were
-  // not sent yet go out after signing in again.
   const contextScopeLoaded = useRef("");
-  const sessionEndCheck = useRef(false);
-  const sessionEndedHere = useRef(false);
-  const sessionEndHandler = useRef(() => {});
-  sessionEndHandler.current = () => {
-    if (authStateRef.current !== "ready" || signedOut.current || sessionEndCheck.current) return;
-    sessionEndCheck.current = true;
-    // One refused request is not proof: it may be an answer to a request sent before a fresh
-    // sign-in. The server is asked directly, and only its "not signed in" ends the session here.
-    fetchClientAuthStatus().then((state) => {
-      if (state.authenticated || authStateRef.current !== "ready" || signedOut.current) return;
-      // Leaving a field commits what was typed in it; the shell is about to be taken off the screen.
-      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-      answerConfirm(false);
-      setAuthPassword("");
-      setAuthError("");
-      setAuthNotice(tr("sessionEnded"));
-      sessionEndedHere.current = true;
-      setAuthState("required");
-    }).catch(() => undefined).finally(() => { sessionEndCheck.current = false; });
-  };
-  useEffect(() => {
-    const original = window.fetch;
-    const watched = watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current());
-    window.fetch = watched as typeof window.fetch;
-    return () => { if (window.fetch === watched) window.fetch = original; };
-  }, []);
-  useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
-  async function checkAccess() {
-    const version = ++authCheckVersion.current;
-    setAuthError("");
-    setAuthState("checking");
-    try {
-      const state = await fetchClientAuthStatus();
-      if (version !== authCheckVersion.current) return;
-      setAuthEnabled(state.enabled);
-      if (state.enabled && !state.configured) {
-        setAuthError("Authentication must be configured on the server before this app can be used.");
-        setAuthState("misconfigured");
-        return;
-      }
-      setAuthState(state.authenticated ? "ready" : "required");
-    } catch {
-      if (version !== authCheckVersion.current) return;
-      setAuthState("unavailable");
-    }
-  }
-  useEffect(() => {
-    try { setPasskeySupported(browserSupportsWebAuthn()); } catch { setPasskeySupported(false); }
-    void checkAccess();
-    return () => { authCheckVersion.current += 1; };
-  // The first access check runs once; retries are initiated by the user.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function loadAgents(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/executive?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
@@ -1058,66 +1003,6 @@ export function useLumiApp() {
     }
     initialize();
   }, []);
-
-  async function login(event: React.FormEvent) {
-    event.preventDefault();
-    if (!window.isSecureContext) {
-      setAuthError("Open the HTTPS address before signing in.");
-      return;
-    }
-    setAuthError("");
-    try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password: authPassword }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setAuthError(body.error || "Sign-in failed.");
-        return;
-      }
-      setAuthPassword("");
-      setAuthState("ready");
-      // Whatever this page believed about the server before signing in is not to be trusted
-      // (the local copy may have been cleared by a sign-out in another tab).
-      serverRevision.current = 0;
-      await pullFromServer();
-    } catch {
-      setAuthError("The server could not be reached. Check your secure connection and try again.");
-    }
-  }
-
-  async function signInWithPasskey() {
-    setPasskeyBusy(true);
-    setAuthError("");
-    try {
-      const optionsResponse = await fetch("/api/auth/passkeys/login/options", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || "Passkey sign-in is unavailable.");
-      const credential = await startAuthentication({ optionsJSON: options });
-      const verifyResponse = await fetch("/api/auth/passkeys/login/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ challenge: options.challenge, response: credential }),
-      });
-      const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || "Passkey sign-in failed.");
-      setAuthState("ready");
-      // Whatever this page believed about the server before signing in is not to be trusted
-      // (the local copy may have been cleared by a sign-out in another tab).
-      serverRevision.current = 0;
-      await pullFromServer();
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Passkey sign-in failed.");
-    } finally {
-      setPasskeyBusy(false);
-    }
-  }
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
   // possible the user decides whether to drop them. Without the server nothing is removed, because
@@ -1660,8 +1545,8 @@ export function useLumiApp() {
   const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
-  const { passkeys, passkeySupported, setPasskeySupported, passkeyBusy, setPasskeyBusy, passkeyLabel, setPasskeyLabel,
-    passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey, removePasskey } = usePasskeys({ view, authState, tr, askConfirm });
+  const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
+    removePasskey } = usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });

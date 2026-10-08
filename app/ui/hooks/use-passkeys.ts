@@ -4,17 +4,17 @@ import { startRegistration } from "@simplewebauthn/browser";
 import type { ConfirmRequest, PasskeySummary } from "../types";
 
 // Passkeys in Settings: the list, adding one (confirmed with the password) and removing one.
-// Moved verbatim from use-lumi-app.tsx. Signing in with a passkey is part of the sign-in flow and
-// stays there; it shares `passkeyBusy` and `passkeySupported`, so their setters are returned too.
-export function usePasskeys({ view, authState, tr, askConfirm }: {
+// Moved verbatim from use-lumi-app.tsx. Signing in with a passkey is part of the sign-in flow
+// (use-sign-in.ts), which owns `passkeySupported` and `passkeyBusy`; adding a passkey shares the
+// busy flag, so its setter is passed in.
+export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }: {
   view: string;
   authState: string;
   tr: (key: string) => string;
   askConfirm: (request: ConfirmRequest) => Promise<boolean>;
+  setPasskeyBusy: (busy: boolean) => void;
 }) {
-  const [passkeySupported, setPasskeySupported] = useState(false),
-    [passkeyBusy, setPasskeyBusy] = useState(false),
-    [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
+  const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
     [passkeyLabel, setPasskeyLabel] = useState("My passkey"),
     [passkeyPassword, setPasskeyPassword] = useState(""),
     [passkeyStatus, setPasskeyStatus] = useState("");
@@ -82,10 +82,6 @@ export function usePasskeys({ view, authState, tr, askConfirm }: {
 
   return {
     passkeys,
-    passkeySupported,
-    setPasskeySupported,
-    passkeyBusy,
-    setPasskeyBusy,
     passkeyLabel,
     setPasskeyLabel,
     passkeyPassword,
