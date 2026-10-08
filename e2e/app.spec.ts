@@ -182,6 +182,51 @@ test("notes still being typed are saved when the app goes to the background", as
   await expect(field).toHaveValue(notes);
 });
 
+test("a title typed while the notes are still being saved is kept", async ({ page }) => {
+  const notes = `Při psaní názvu ${Date.now()}`;
+  const title = `${seeded.plainTask} (upraveno)`;
+  await page.goto("/?task=e2e-plain");
+  const field = page.getByLabel("Poznámky k úkolu");
+  await waitUntilSynced(page);
+  // Slow saves, so that the title is typed while the notes are on their way to the server.
+  await page.route("**/api/store", async (route) => {
+    if (route.request().method() === "PUT") await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await field.fill(notes);
+  const titleField = page.locator("input.titleEdit");
+  await titleField.click();
+  await titleField.fill(title);
+  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.properties?.notes === notes, true);
+  await page.waitForTimeout(300);
+  await expect(titleField).toHaveValue(title);
+  await field.focus();
+  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === title, true);
+  await page.unroute("**/api/store");
+  // Back to the seeded title for the scenarios that look for it.
+  await titleField.fill(seeded.plainTask);
+  await field.focus();
+  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === seeded.plainTask, true);
+});
+
+test("a notes draft left by a page that was closed before saving it is saved on the next start", async ({ page }) => {
+  const typed = `Rozepsáno ${Date.now()}`;
+  await page.goto("/?task=e2e-rename");
+  const field = page.getByLabel("Poznámky k úkolu");
+  await waitUntilSynced(page);
+  await field.fill(typed);
+  // Every key press is kept in the device at once.
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-draft") || "null"))).toEqual({ id: "e2e-rename", text: typed });
+  // What a killed page leaves behind: the draft in the device and nothing saved.
+  const left = `Po zavření ${Date.now()}`;
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.evaluate((text) => localStorage.setItem("ai-executive-notes-draft", JSON.stringify({ id: "e2e-rename", text })), left);
+  await page.reload();
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-draft"))).toBeNull();
+});
+
 test("Settings shows one section at a time", async ({ page }) => {
   await page.goto("/?view=Settings");
   const tabs = settingsSections(page);

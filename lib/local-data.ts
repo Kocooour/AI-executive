@@ -9,6 +9,7 @@ const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
   "ai-executive-pending-revivals",
+  "ai-executive-notes-draft",
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
 ];
