@@ -44,6 +44,7 @@ test("a task typed into the row of Someday or Upcoming stays in that view", asyn
     await page.locator(".capture input").fill(title);
     await page.keyboard.press("Enter");
     await expect(page.getByText(title)).toBeVisible();
+    await waitUntilSynced(page);
     await page.goto("/?view=Anytime");
     await expect(heading(page)).toHaveText("Kdykoli");
     await expect(page.getByText(title)).toHaveCount(0);
@@ -87,9 +88,10 @@ test("a date typed with spaces at the end of the text becomes the task's date", 
   await waitUntilSynced(page);
   await page.locator(".capture input").fill(`${title} 24. 12. ${nextYear}`);
   await page.keyboard.press("Enter");
+  // Leave the page only once the task is saved; navigating straight away can cut the save off.
+  await expectOnServer(page, (entity) => entity.title === title, true);
   await page.goto("/?view=Upcoming");
   await expect(page.getByText(title, { exact: true })).toBeVisible();
-  await expectOnServer(page, (entity) => entity.title === title, true);
 });
 
 test("the address follows the view; Back, Forward and reload keep the place", async ({ page }) => {
