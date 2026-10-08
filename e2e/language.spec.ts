@@ -127,3 +127,18 @@ test("a lasting failure is reported again in the new language after a language c
   await page.locator(".settingsTabs button").filter({ hasText: "Data" }).first().click();
   await expect(page.getByText("Server settings are unavailable while offline.")).toBeVisible();
 });
+
+test("a failing day plan and attention list are reported again in the new language", async ({ page }) => {
+  await page.route("**/api/day-plan**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/attention**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{}" }));
+  await page.goto("/?view=Home");
+  await waitUntilSynced(page);
+  await expect(page.getByText("Plán dne se nepodařilo načíst.")).toBeVisible();
+  await expect(page.locator(".attentionError")).toHaveText("Pozornost není dostupná");
+  await page.goto("/?view=Settings");
+  await page.locator("select").filter({ has: page.locator('option[value="en"]') }).selectOption("en");
+  await page.locator("button:has(.navLabel)").first().click();
+  await expect(page.getByText("The day plan is unavailable.")).toBeVisible();
+  await expect(page.locator(".attentionError")).toHaveText("Attention is unavailable");
+  await expect(page.getByText("Plán dne se nepodařilo načíst.")).toHaveCount(0);
+});

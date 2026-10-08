@@ -31,7 +31,7 @@ export function AgentsView({ app }: { app: LumiApp }) {
                     <article className="agentCard" key={agent.id}>
                       <header>
                         <span className="agentGlyph" aria-hidden="true">◇</span>
-                        <div><h2>{displayName}</h2><small>v{agent.version} · {agent.triggerModes.map((mode) => tr(`triggerMode_${mode}`)).join(" / ")}</small></div>
+                        <div><h2>{displayName}</h2><small>v{agent.version} · {agent.triggerModes.map((mode) => { const label = tr(`triggerMode_${mode}`); return label === `triggerMode_${mode}` ? mode : label; }).join(" / ")}</small></div>
                       </header>
                       <p>{description}</p>
                       <div className="agentMeta">

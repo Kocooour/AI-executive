@@ -137,6 +137,7 @@ export function useLumiApp() {
   const { authState, setAuthState, authStateRef, authEnabled, authPassword, setAuthPassword, authError, authNotice,
     sessionEndedHere, checkAccess, login, signInWithPasskey, passkeySupported, passkeyBusy, setPasskeyBusy } = useSignIn({
     tr,
+    language,
     answerConfirm,
     isSignedOut: () => signedOut.current,
     afterSignIn: () => {
@@ -1325,7 +1326,7 @@ export function useLumiApp() {
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
-  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr });
+  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);

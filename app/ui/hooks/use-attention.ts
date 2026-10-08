@@ -6,8 +6,9 @@ import type { AttentionResponse } from "../types";
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
 // from use-lumi-app.tsx; the values it needs from the rest of the app are passed in.
-export function useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr }: {
+export function useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language }: {
   tr: (key: string) => string;
+  language: string;
   authState: string;
   activeWorkspaceId: string;
   syncStatus: string;
@@ -22,10 +23,6 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     [showAllAttention, setShowAllAttention] = useState(false);
   const attentionLoadVersion = useRef(0);
 
-  // Messages shown by requests that run on a timer or after the language was changed use the
-  // current language, not the one of the render that started them.
-  const trRef = useRef(tr);
-  trRef.current = tr;
   async function loadAttention(workspaceId: string) {
     const version = ++attentionLoadVersion.current;
     const current = () => version === attentionLoadVersion.current;
@@ -40,7 +37,7 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (current()) setAttentionOutdated(true);
-      throw new Error(data.error || trRef.current("attentionUnavailable"));
+      throw new Error(data.error || tr("attentionUnavailable"));
     }
     if (current()) {
       setAttention(data as AttentionResponse);
@@ -58,11 +55,11 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
         body: JSON.stringify({ workspaceId: item.workspaceId, attentionKey: item.attentionKey, sourceFingerprint: item.sourceFingerprint,
           expectedDataRevision: attention.dataRevision, action, ...(action === "snooze" ? { snoozeUntil: Date.now() + 24 * 3_600_000 } : {}) }) });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || trRef.current("attentionActionFailed"));
+      if (!response.ok) throw new Error(result.error || tr("attentionActionFailed"));
       await loadAttention(activeWorkspaceId);
     } catch (error) {
       await loadAttention(activeWorkspaceId).catch(() => undefined);
-      setAttentionError(error instanceof Error ? error.message : trRef.current("attentionActionFailed"));
+      setAttentionError(error instanceof Error ? error.message : tr("attentionActionFailed"));
     } finally {
       setAttentionBusyKey("");
     }
@@ -109,11 +106,21 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     if (authState !== "ready" || syncStatus !== "synced") return;
     const workspaceId = activeWorkspaceId;
     let cancelled = false;
-    const refresh = () => loadAttention(workspaceId).catch((error) => { if (!cancelled) setAttentionError(error instanceof Error ? error.message : trRef.current("attentionUnavailable")); });
+    const refresh = () => loadAttention(workspaceId).catch((error) => { if (!cancelled) setAttentionError(error instanceof Error ? error.message : tr("attentionUnavailable")); });
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 60_000);
     return () => { cancelled = true; attentionLoadVersion.current += 1; window.clearInterval(timer); };
   }, [authState, activeWorkspaceId, syncStatus, attentionReload]);
+  // An error shown in one language is not kept after the language changes; evaluating again
+  // reports a failure that still lasts in the new language.
+  const errorLanguage = useRef(language);
+  useEffect(() => {
+    if (errorLanguage.current === language) return;
+    errorLanguage.current = language;
+    if (!attentionError) return;
+    setAttentionError("");
+    setAttentionReload((count) => count + 1);
+  }, [language]);
 
   return {
     actOnAttention,
