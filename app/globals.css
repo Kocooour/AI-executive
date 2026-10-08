@@ -808,7 +808,7 @@ article small {
   font-size: 12px;
 }
 .activityLog time {
-  color: #999;
+  color: var(--muted-light);
   white-space: nowrap;
 }
 .fields button {

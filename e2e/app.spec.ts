@@ -141,6 +141,47 @@ test("deleting a project asks in the app dialog; Escape cancels, confirming dele
   await expectOnServer(page, (entity) => entity.id === "e2e-project", false);
 });
 
+test("fast typing into a task's notes keeps every character and is saved when leaving the field", async ({ page }) => {
+  const notes = `Zavolat ve středu, číslo 777 123 456, ${Date.now()}`;
+  await page.goto("/?task=e2e-plain");
+  const field = page.getByLabel("Poznámky k úkolu");
+  await expect(field).toBeVisible();
+  await waitUntilSynced(page);
+  await field.pressSequentially(notes, { delay: 0 });
+  await expect(field).toHaveValue(notes);
+  await page.locator("input.titleEdit").focus();
+  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.properties?.notes === notes, true);
+});
+
+test("closing the task right after editing its notes saves them and keeps the panel closed", async ({ page }) => {
+  const notes = `Před zavřením ${Date.now()}`;
+  await page.goto("/?task=e2e-plain");
+  const field = page.getByLabel("Poznámky k úkolu");
+  await waitUntilSynced(page);
+  await field.fill(notes);
+  await page.locator("aside.detail button.close").click();
+  await expect(page.locator("aside.detail")).toHaveCount(0);
+  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.properties?.notes === notes, true);
+  await page.waitForTimeout(500);
+  await expect(page.locator("aside.detail")).toHaveCount(0);
+});
+
+test("notes still being typed are saved when the app goes to the background", async ({ page }) => {
+  const notes = `Na pozadí ${Date.now()}`;
+  await page.goto("/?task=e2e-rename");
+  const field = page.getByLabel("Poznámky k úkolu");
+  await waitUntilSynced(page);
+  await field.fill(notes);
+  await expect(field).toBeFocused();
+  // What a phone does when the user switches to another app: the page is hidden, the field keeps focus.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === notes, true);
+  await expect(field).toHaveValue(notes);
+});
+
 test("Settings shows one section at a time", async ({ page }) => {
   await page.goto("/?view=Settings");
   const tabs = settingsSections(page);

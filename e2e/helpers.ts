@@ -61,10 +61,10 @@ export async function waitUntilQuiet(page: Page, quietMs = 500) {
 }
 
 export function serverEntities(page: Page) {
-  return page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()).then((snapshot) => snapshot.entities as Array<{ id: string; type: string; title: string; status: string }>));
+  return page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()).then((snapshot) => snapshot.entities as Array<{ id: string; type: string; title: string; status: string; properties?: Record<string, unknown> }>));
 }
 
 // The server copy is the proof that a change was sent.
-export async function expectOnServer(page: Page, match: (entity: { id: string; title: string }) => boolean, present: boolean) {
+export async function expectOnServer(page: Page, match: (entity: { id: string; title: string; properties?: Record<string, unknown> }) => boolean, present: boolean) {
   await expect.poll(async () => (await serverEntities(page)).some(match), { timeout: 20_000 }).toBe(present);
 }

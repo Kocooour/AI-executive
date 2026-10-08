@@ -28,6 +28,7 @@ export function useLumiApp() {
     [view, setView] = useState("Home"),
     [text, setText] = useState(""),
     [selected, setSelected] = useState<Entity | null>(null),
+    [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     [query, setQuery] = useState(""),
     [capture, setCapture] = useState(false),
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
@@ -2055,25 +2056,65 @@ export function useLumiApp() {
     setUndoRelations([]);
     load();
   }
-  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated") {
-    const current = (await db.entities.get(e.id)) || e;
-    const activity = Array.isArray(current.properties.activity)
-      ? current.properties.activity
-      : [];
+  // `onlyIfOpen`: put the saved record into the detail panel only while that record is still the
+  // one open there (a save that finishes after the panel was closed must not reopen it).
+  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated", onlyIfOpen = false) {
     localDataVersion.current += 1;
-    await db.entities.update(e.id, {
-      properties: {
-        ...current.properties,
-        ...properties,
-        activity: [...activity, { at: Date.now(), action }].slice(-50),
-      },
-      updatedAt: Date.now(),
+    // Reading and writing in one transaction: two saves of the same record started together (for
+    // example leaving the notes field by ticking a checklist item) must not overwrite each other.
+    await db.transaction("rw", db.entities, async () => {
+      const current = (await db.entities.get(e.id)) || e;
+      const activity = Array.isArray(current.properties.activity)
+        ? current.properties.activity
+        : [];
+      await db.entities.update(e.id, {
+        properties: {
+          ...current.properties,
+          ...properties,
+          activity: [...activity, { at: Date.now(), action }].slice(-50),
+        },
+        updatedAt: Date.now(),
+      });
     });
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(e.id)) || null);
+    const saved = (await db.entities.get(e.id)) || null;
+    if (onlyIfOpen) setSelected((open) => (open && open.id === e.id ? saved : open));
+    else setSelected(saved);
   }
+  // Notes are typed into a draft and saved when the field is left. Saving on every key press put
+  // the stored value back into the field while the save was running, so typed characters were
+  // lost. The draft is dropped only if nothing was typed into it since this save started.
+  // If the save fails the draft stays, so the text is still in the field and is saved next time.
+  async function saveNotes(e: Pick<Entity, "id">, notes: string) {
+    try {
+      const stored = await db.entities.get(e.id);
+      if (stored && String(stored.properties.notes || "") !== notes) await patch(stored, { notes }, "updated", true);
+    } catch {
+      return;
+    }
+    setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
+  }
+  // A phone may close the app in the background without the field ever being left, so a draft is
+  // saved as soon as the page is hidden.
+  const notesDraftRef = useRef(notesDraft);
+  notesDraftRef.current = notesDraft;
+  const saveNotesRef = useRef(saveNotes);
+  saveNotesRef.current = saveNotes;
+  useEffect(() => {
+    const saveDraft = (event: Event) => {
+      if (event.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+      const draft = notesDraftRef.current;
+      if (draft) void saveNotesRef.current({ id: draft.id }, draft.text);
+    };
+    document.addEventListener("visibilitychange", saveDraft);
+    window.addEventListener("pagehide", saveDraft);
+    return () => {
+      document.removeEventListener("visibilitychange", saveDraft);
+      window.removeEventListener("pagehide", saveDraft);
+    };
+  }, []);
   function scheduleTask(task: Entity, destination: "today" | "tomorrow" | "someday" | "clear" | string) {
     const when = destination === "today" ? ymd()
       : destination === "tomorrow" ? ymd(addLocalDays(new Date(), 1))
@@ -2557,6 +2598,7 @@ export function useLumiApp() {
     newSubjectTitle,
     newSubjectType,
     newWorkspaceDraft,
+    notesDraft,
     notificationState,
     notificationStatus,
     openCapture,
@@ -2589,6 +2631,7 @@ export function useLumiApp() {
     runPACTAgent,
     saveContextClaim,
     saveLanguage,
+    saveNotes,
     saveNotificationSettings,
     saveTheme,
     saveWorkspaceName,
@@ -2638,6 +2681,7 @@ export function useLumiApp() {
     setNewSubjectTitle,
     setNewSubjectType,
     setNewWorkspaceDraft,
+    setNotesDraft,
     setNotificationState,
     setPasskeyLabel,
     setPasskeyPassword,
