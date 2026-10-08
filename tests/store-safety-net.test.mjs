@@ -60,3 +60,38 @@ test("the rule: more than five records and more than a quarter of the store", ()
   assert.equal(store.dropsTooMuch(snapshot(8), [], Array.from({ length: 8 }, (_, index) => `e${index}`)), false);
   assert.equal(store.dropsTooMuch(snapshot(0), [], []), false);
 });
+
+test("a save that silently drops the links between records that stay is refused too", () => {
+  // Fresh ids: earlier tests left tombstones for some of the t.. ids.
+  const relation = (index) => ({ id: `r${index}`, workspaceId: "personal", sourceEntityId: `link-task-${index}`, targetEntityId: "project-x", relationType: "belongs_to_project", createdAt: 1 });
+  const project = { ...task("project-x"), type: "project", status: "active" };
+  const current = store.readSnapshot();
+  const workspaces = current.entities.filter((entity) => entity.type === "workspace");
+  const tasks = Array.from({ length: 20 }, (_, index) => task(`link-task-${index}`));
+  const links = Array.from({ length: 12 }, (_, index) => relation(index));
+  assert.equal(store.replaceSnapshot(current.revision, [...workspaces, ...tasks, project], links, []).conflict, false);
+  const before = store.readSnapshot();
+  assert.equal(before.relations.length, 12);
+  // All records sent, all links missing, nothing announced.
+  const refused = store.replaceSnapshot(before.revision, before.entities, [], []);
+  assert.equal(refused.conflict, true);
+  assert.equal(store.readSnapshot().relations.length, 12);
+  // Removing one link at a time, as the app does, is accepted.
+  assert.equal(store.replaceSnapshot(before.revision, before.entities, before.relations.slice(1), []).conflict, false);
+  // Links that go with an announced deletion of the project are not counted.
+  const now = store.readSnapshot();
+  const withoutProject = now.entities.filter((entity) => entity.id !== "project-x");
+  assert.equal(store.replaceSnapshot(now.revision, withoutProject, [], ["project-x"]).conflict, false);
+  assert.equal(store.readSnapshot().relations.length, 0);
+});
+
+test("the link rule on its own", () => {
+  const entities = Array.from({ length: 10 }, (_, index) => task(`e${index}`));
+  const links = Array.from({ length: 10 }, (_, index) => ({ id: `l${index}`, workspaceId: "personal", sourceEntityId: `e${index}`, targetEntityId: `e${(index + 1) % 10}`, relationType: "related", createdAt: 1 }));
+  const snapshot = { revision: 1, entities, relations: links, tombstones: [], updatedAt: 1 };
+  assert.equal(store.dropsTooMuch(snapshot, entities, [], links.slice(5)), false);   // 5 links gone
+  assert.equal(store.dropsTooMuch(snapshot, entities, [], links.slice(6)), true);    // 6 links gone
+  assert.equal(store.dropsTooMuch(snapshot, entities, [], []), true);
+  // Every link touches an announced record: not counted.
+  assert.equal(store.dropsTooMuch(snapshot, entities.slice(0, 3), entities.slice(3).map((entity) => entity.id), []), false);
+});
