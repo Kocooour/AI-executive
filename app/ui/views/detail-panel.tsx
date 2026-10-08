@@ -12,9 +12,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     calendarToday,
     checklistDraft,
     closeDetail,
+    editNotes,
     notesDraft,
     saveNotes,
-    setNotesDraft,
     context,
     contextClaims,
     contextPredicateLabel,
@@ -471,7 +471,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("taskNotes")}
                   <textarea
                     value={notesDraft?.id === selected.id ? notesDraft.text : String(selected.properties.notes || "")}
-                    onChange={(e) => setNotesDraft({ id: selected.id, text: e.target.value })}
+                    onChange={(e) => editNotes(selected.id, e.target.value)}
                     onBlur={(e) => saveNotes(selected, e.target.value)}
                     placeholder={tr("notesPlaceholder")}
                   />

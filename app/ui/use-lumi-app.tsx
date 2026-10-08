@@ -222,6 +222,15 @@ export function useLumiApp() {
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
+  const notesDraftKey = "ai-executive-notes-draft";
+  const storedNotesDraft = () => {
+    try {
+      const draft = JSON.parse(localStorage.getItem(notesDraftKey) || "null");
+      return draft && typeof draft.id === "string" && typeof draft.text === "string" ? draft as { id: string; text: string } : null;
+    } catch {
+      return null;
+    }
+  };
   const pendingDeletedIds = () => {
     try {
       return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
@@ -2080,13 +2089,22 @@ export function useLumiApp() {
     await syncToServer();
     await load();
     const saved = (await db.entities.get(e.id)) || null;
-    if (onlyIfOpen) setSelected((open) => (open && open.id === e.id ? saved : open));
+    // The title may be being typed in the same panel (it is saved when its field is left), so the
+    // panel keeps its own title.
+    if (onlyIfOpen) setSelected((open) => (open && saved && open.id === e.id ? { ...saved, title: open.title } : open));
     else setSelected(saved);
   }
   // Notes are typed into a draft and saved when the field is left. Saving on every key press put
   // the stored value back into the field while the save was running, so typed characters were
-  // lost. The draft is dropped only if nothing was typed into it since this save started.
-  // If the save fails the draft stays, so the text is still in the field and is saved next time.
+  // lost. The draft is also kept in localStorage on every key press, because that write is
+  // synchronous and survives the page being closed or killed before the save could run; it is
+  // saved on the next start (see below).
+  // The draft is dropped only if nothing was typed into it since this save started. If the save
+  // fails the draft stays, so the text is still in the field and is saved next time.
+  function editNotes(id: string, text: string) {
+    setNotesDraft({ id, text });
+    try { localStorage.setItem(notesDraftKey, JSON.stringify({ id, text })); } catch { /* the draft stays in memory */ }
+  }
   async function saveNotes(e: Pick<Entity, "id">, notes: string) {
     try {
       const stored = await db.entities.get(e.id);
@@ -2095,6 +2113,8 @@ export function useLumiApp() {
       return;
     }
     setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
+    const kept = storedNotesDraft();
+    if (kept && kept.id === e.id && kept.text === notes) localStorage.removeItem(notesDraftKey);
   }
   // A phone may close the app in the background without the field ever being left, so a draft is
   // saved as soon as the page is hidden.
@@ -2115,6 +2135,14 @@ export function useLumiApp() {
       window.removeEventListener("pagehide", saveDraft);
     };
   }, []);
+  // A draft left over from a page that was closed before saving it is saved once the start-up
+  // synchronization has finished (or failed for lack of a connection: then it is saved locally and
+  // sent later). A draft still being edited in this page is left to this page.
+  useEffect(() => {
+    if (authState !== "ready" || syncStatus === "connecting" || notesDraftRef.current) return;
+    const kept = storedNotesDraft();
+    if (kept) void saveNotesRef.current({ id: kept.id }, kept.text);
+  }, [authState, syncStatus]);
   function scheduleTask(task: Entity, destination: "today" | "tomorrow" | "someday" | "clear" | string) {
     const when = destination === "today" ? ymd()
       : destination === "tomorrow" ? ymd(addLocalDays(new Date(), 1))
@@ -2577,6 +2605,7 @@ export function useLumiApp() {
     durableContext,
     editContextClaim,
     editingClaim,
+    editNotes,
     enableNotifications,
     freeHours,
     freeWindows,
@@ -2681,7 +2710,6 @@ export function useLumiApp() {
     setNewSubjectTitle,
     setNewSubjectType,
     setNewWorkspaceDraft,
-    setNotesDraft,
     setNotificationState,
     setPasskeyLabel,
     setPasskeyPassword,
