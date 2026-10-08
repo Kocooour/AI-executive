@@ -255,12 +255,15 @@ test("a draft that another open tab is still typing is left to that tab", async 
     localStorage.setItem("e2e-draft-owner", "open");
     localStorage.setItem("ai-executive-notes-draft", JSON.stringify({ id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" }));
   }, { text: partial, base: before });
-  await page.reload();
-  await waitUntilSynced(page);
-  await page.waitForTimeout(1000);
-  expect((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "").toBe(before);
-  // The other tab is closed without having saved: the next start saves its draft.
-  await page.evaluate(() => localStorage.removeItem("e2e-draft-owner"));
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.waitForTimeout(1000);
+    expect((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "").toBe(before);
+  } finally {
+    // The other tab is closed without having saved: the next start saves its draft.
+    await page.evaluate(() => localStorage.removeItem("e2e-draft-owner"));
+  }
   await page.reload();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === partial, true);
 });

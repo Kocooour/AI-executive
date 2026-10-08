@@ -2129,6 +2129,10 @@ export function useLumiApp() {
     setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
     const kept = storedNotesDraft();
     if (kept && kept.id === e.id && kept.text === notes) forgetNotesDraft();
+    // Typing went on while this save ran: the kept draft now starts from what was just saved.
+    else if (kept && kept.id === e.id && kept.page === pageId.current) {
+      try { localStorage.setItem(notesDraftKey, JSON.stringify({ ...kept, base: notes })); } catch { /* the draft stays in memory */ }
+    }
   }
   // A phone may close the app in the background without the field ever being left, so a draft is
   // saved as soon as the page is hidden.
@@ -2190,6 +2194,7 @@ export function useLumiApp() {
       }
       if (stopped) return;
       const stored = await db.entities.get(kept.id);
+      if (stopped) return;
       const current = String(stored?.properties.notes || "");
       if (!stored || (current !== kept.base && current !== kept.text)) {
         if (storedNotesDraft()?.at === kept.at) forgetNotesDraft();
