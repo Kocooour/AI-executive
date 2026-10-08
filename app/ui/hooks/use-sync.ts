@@ -1,0 +1,229 @@
+"use client";
+import { useRef, useState } from "react";
+import { db, type Entity } from "../../../lib/db";
+import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
+
+// The local copy of the data and its synchronization with the server: the records on screen,
+// the sync status, the revision of the server copy this device knows, the counter of local writes
+// (odd while a write is in progress), the bookkeeping of changes waiting to be sent, and saving to
+// and loading from the server. Moved verbatim from use-lumi-app.tsx.
+// Invariant (see the data-loss fix in PR #21): `serverRevision` may advance only when the local
+// copy holds that content, or the server holds exactly what was sent.
+// Start-up synchronization, sign-out and the refresh on focus still live in use-lumi-app.tsx and
+// use these.
+export function useSync() {
+  const [items, setItems] = useState<Entity[]>([]),
+    [relations, setRelations] = useState<any[]>([]),
+    [syncStatus, setSyncStatus] = useState<
+      "connecting" | "synced" | "syncing" | "offline"
+    >("connecting");
+  const serverRevision = useRef(0);
+  const syncQueue = useRef<Promise<void>>(Promise.resolve());
+  const localDataVersion = useRef(0);
+  const signedOut = useRef(false);
+  const pendingKey = "ai-executive-pending-sync";
+  const deletedKey = "ai-executive-pending-deletions";
+  const revivedKey = "ai-executive-pending-revivals";
+  const pendingDeletedIds = () => {
+    try {
+      return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  const pendingRevivedIds = () => {
+    try {
+      return JSON.parse(localStorage.getItem(revivedKey) || "[]") as string[];
+    } catch {
+      return [];
+    }
+  };
+  async function load() {
+    setItems(await db.entities.toArray());
+    setRelations(await db.relations.toArray());
+  }
+  async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number) {
+    if (signedOut.current) return false;
+    if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
+    await db.transaction("rw", db.entities, db.relations, async () => {
+      if (signedOut.current) throw new Error("LOCAL_DATA_CHANGED");
+      if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
+        throw new Error("LOCAL_DATA_CHANGED");
+      }
+      await db.entities.clear();
+      await db.relations.clear();
+      if (snapshot.entities.length) await db.entities.bulkAdd(snapshot.entities);
+      if (snapshot.relations.length)
+        await db.relations.bulkAdd(snapshot.relations);
+    });
+    serverRevision.current = snapshot.revision;
+    await load();
+    return true;
+  }
+  async function putSnapshot(
+    entities: Entity[],
+    snapshotRelations: any[],
+    baseRevision: number,
+    deletedIds: string[] = [],
+    revivedIds: string[] = [],
+  ) {
+    return fetch("/api/store", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision,
+        entities,
+        relations: snapshotRelations,
+        deletedIds,
+        revivedIds,
+      }),
+    });
+  }
+  // Saves that were asked for and have not started yet.
+  const queuedSaves = useRef(0);
+  // After a save that could not settle, one more is needed. A change that is being written or
+  // already has its own save queued brings it anyway; only otherwise is one added here.
+  function settleLater() {
+    if (queuedSaves.current > 0 || localDataVersion.current % 2 === 1 || signedOut.current) return;
+    void syncToServer();
+  }
+  async function syncToServer() {
+    queuedSaves.current += 1;
+    const operation = syncQueue.current.then(async () => {
+      queuedSaves.current -= 1;
+      setSyncStatus("syncing");
+      localStorage.setItem(pendingKey, "1");
+      const localVersion = localDataVersion.current;
+      const localEntities = await db.entities.toArray();
+      const localRelations = await db.relations.toArray();
+      let response = await putSnapshot(
+        localEntities,
+        localRelations,
+        serverRevision.current,
+        pendingDeletedIds(),
+        pendingRevivedIds(),
+      );
+      let mergedWithServer = false;
+      // The server may change again between the conflict and the merged save; try a few times
+      // before giving up until the next trigger.
+      for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
+        mergedWithServer = true;
+        const current = (await response.json()) as ServerSnapshot;
+        const deletedIds = new Set(pendingDeletedIds());
+        const revivedIds = new Set(pendingRevivedIds());
+        const filteredCurrent = {
+          ...current,
+          tombstones: (current.tombstones || []).filter((item) => !revivedIds.has(item.id)),
+          entities: current.entities.filter((entity) => !deletedIds.has(entity.id)),
+          relations: current.relations.filter(
+            (relation) =>
+              !deletedIds.has(relation.sourceEntityId) &&
+              !deletedIds.has(relation.targetEntityId),
+          ),
+        };
+        const merged = mergeSnapshots(
+          filteredCurrent,
+          localEntities,
+          localRelations,
+        );
+        response = await putSnapshot(
+          merged.entities,
+          merged.relations,
+          current.revision,
+          pendingDeletedIds(),
+          pendingRevivedIds(),
+        );
+      }
+      if (!response.ok) throw new Error("Server synchronization failed");
+      const saved = (await response.json()) as ServerSnapshot;
+      let applied = false;
+      try {
+        applied = await applySnapshot(saved, localVersion);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+      }
+      if (!applied) {
+        // The local copy changed during the save, so the saved state was not taken over. The
+        // known revision may advance only when the server holds exactly what was sent. After a
+        // merge it also holds records this device does not have; claiming its revision would
+        // make the next save replace them. Keeping the old revision makes that save merge again.
+        if (!mergedWithServer) serverRevision.current = saved.revision;
+        settleLater();
+        return;
+      }
+      // Something was changed while the saved state was being loaded. That change has its own
+      // save queued, which still needs the lists of deleted and restored records.
+      if (localDataVersion.current !== localVersion) {
+        settleLater();
+        return;
+      }
+      localStorage.setItem("ai-executive-server-synced", "1");
+      localStorage.removeItem(pendingKey);
+      localStorage.removeItem(deletedKey);
+      localStorage.removeItem(revivedKey);
+      setSyncStatus("synced");
+    });
+    syncQueue.current = operation.catch(() => {
+      setSyncStatus("offline");
+    });
+    return syncQueue.current;
+  }
+  // `afterSignIn`: the browser has just signed in, so nothing local predates the server copy and,
+  // once that copy is taken over, the local copy counts as synchronized (see below).
+  async function pullFromServer(afterSignIn = false) {
+    await syncQueue.current;
+    if (localStorage.getItem(pendingKey) === "1") {
+      await syncToServer();
+      return;
+    }
+    try {
+      const pullVersion = localDataVersion.current;
+      const response = await fetch("/api/store", { cache: "no-store" });
+      if (!response.ok) throw new Error("Server synchronization failed");
+      const snapshot = (await response.json()) as ServerSnapshot;
+      await syncQueue.current;
+      if (localStorage.getItem(pendingKey) === "1") {
+        await syncToServer();
+        return;
+      }
+      if (snapshot.revision > serverRevision.current) {
+        // "Synced" means the local copy holds the server's state. If a local change got in the way,
+        // the copy was not taken over; that change's own save sets the status when it is done.
+        try {
+          if (!(await applySnapshot(snapshot, pullVersion))) return;
+          // A browser signing in for the first time could not synchronize when it started. Once it
+          // holds exactly the server copy it is synchronized; without the mark every later start
+          // would send that copy back to the server as if it were the browser's own data.
+          if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+          return;
+        }
+      }
+      setSyncStatus("synced");
+    } catch {
+      setSyncStatus("offline");
+    }
+  }
+
+  return {
+    items,
+    relations,
+    syncStatus,
+    setSyncStatus,
+    serverRevision,
+    syncQueue,
+    localDataVersion,
+    signedOut,
+    pendingKey,
+    deletedKey,
+    revivedKey,
+    pendingDeletedIds,
+    pendingRevivedIds,
+    load,
+    applySnapshot,
+    putSnapshot,
+    syncToServer,
+    pullFromServer,
+  };
+}
