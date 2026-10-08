@@ -92,7 +92,7 @@ body {
   line-height: 1.5;
 }
 .authCard .authError {
-  color: #b33;
+  color: var(--danger);
   font-size: 13px;
 }
 .settingsPanel .secondaryAction {
@@ -1048,7 +1048,7 @@ article {
 }
 .captureSuggestionState {
   margin: 12px 0;
-  color: #6b5de7;
+  color: var(--accent);
   font-size: 13px;
 }
 .captureSuggestionState.error {
@@ -1355,7 +1355,7 @@ article {
 .assistantWelcome {
   display: grid;
   gap: 10px;
-  color: #666;
+  color: var(--muted);
 }
 .assistantWelcome p {
   margin: 0;
@@ -1401,7 +1401,7 @@ article {
   padding: 5px 0;
 }
 .aiProposal dt {
-  color: #777;
+  color: var(--muted);
 }
 .aiProposal dd {
   margin: 0;
@@ -1415,17 +1415,18 @@ article {
 .aiProposalActions button,
 .aiUndo {
   padding: 9px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
+  background: var(--surface);
+  color: var(--text);
 }
 .aiUndo {
   margin-top: 7px;
-  color: #5546df;
+  color: var(--accent);
   font-weight: 700;
 }
 .assistantThinking {
-  color: #777;
+  color: var(--muted);
   font-size: 13px;
 }
 .msg.user {
@@ -1691,7 +1692,7 @@ article {
 .attentionSources { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .attentionLimits { margin-top: 10px; }
 .attentionLimits summary { cursor: pointer; }
-.attentionError { color: #b44848; }
+.attentionError, .homeSection p.attentionError { color: var(--danger); }
 @media (max-width: 700px) { .attentionItem button { min-height: 44px; } .attentionMore summary, .attentionLimits summary { padding: 15px 0; } }
 .homeStatus { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
 .homeStatus button, .homeSync { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: inherit; font-size: 12px; }
@@ -2003,7 +2004,8 @@ article:hover > .dragHandle,
 }
 .capture input {
   border-color: var(--line);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--input-bg);
+  color: var(--text);
 }
 .capture input:focus {
   border-color: #c9c5f7;
@@ -2376,11 +2378,11 @@ article:hover > .dragHandle,
 .contextClaimCard header div { display: grid; gap: 2px; }
 .contextClaimCard p { overflow-wrap: anywhere; }
 .claimState { font-size: 12px; font-weight: 700; }
-.claimState.proposed { color: #b56d00; }
-.claimState.confirmed { color: #248155; }
-.claimState.rejected { color: #bd3434; }
-.claimMeta .missingSource { color: #8b5d12; }
-.claimMeta .hasSource { color: #287354; }
+.claimState.proposed { color: var(--warning); }
+.claimState.confirmed { color: var(--success); }
+.claimState.rejected { color: var(--danger); }
+.claimMeta .missingSource { color: var(--warning); }
+.claimMeta .hasSource { color: var(--success); }
 .contextClaimCard blockquote {
   margin: 12px 0;
   padding: 8px 12px;
@@ -2388,7 +2390,7 @@ article:hover > .dragHandle,
   color: var(--muted, #666);
 }
 .contextClaimActions { margin-top: 12px; }
-.contextConflict { color: #b53a31; font-weight: 600; }
+.contextConflict { color: var(--danger); font-weight: 600; }
 .contextInboxInput { display: grid; gap: 6px; }
 .contextInbox textarea { width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--line, #d9d9dd); border-radius: 10px; background: var(--input, transparent); color: inherit; padding: 11px; font: inherit; }
 .contextInboxActions, .contextInboxProposal .contextClaimActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -2451,7 +2453,7 @@ article:hover > .dragHandle,
   --line: #dcdad6;
   --line-strong: #ccc9c4;
   --text: #242426;
-  --muted: #5f5f62;
+  --muted: #535356;
   --muted-light: #69696c;
   --hover: rgba(25, 25, 28, 0.055);
   --selected: #d9d8d5;
@@ -2481,7 +2483,7 @@ article:hover > .dragHandle,
   --line: #3a3a3d;
   --line-strong: #4a4a4e;
   --text: #f1f1f2;
-  --muted: #ababaf;
+  --muted: #c0c0c4;
   --muted-light: #9a9a9f;
   --hover: rgba(255, 255, 255, 0.065);
   --selected: #38383b;
@@ -2511,7 +2513,7 @@ article:hover > .dragHandle,
     --line: #3a3a3d;
     --line-strong: #4a4a4e;
     --text: #f1f1f2;
-    --muted: #ababaf;
+    --muted: #c0c0c4;
     --muted-light: #9a9a9f;
     --hover: rgba(255, 255, 255, 0.065);
     --selected: #38383b;
@@ -3466,3 +3468,8 @@ html:has(dialog.confirmDialog[open]) { overflow: hidden; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .mobileCaptureButton { color: #19191a; }
 }
+
+/* Placeholders follow the theme; the browser default is too faint on the dark input fields. */
+input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 1; }
+/* The generic selected state is a light lilac fill; in the dark theme it uses the dark accent tint. */
+:root[data-theme="dark"] .active { background: var(--accent-soft) !important; color: var(--text) !important; }

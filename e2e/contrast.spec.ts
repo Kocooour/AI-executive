@@ -10,11 +10,19 @@ type Failure = { view: string; theme: string; text: string; ratio: number; requi
 
 async function audit(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
+    // Computed colours come as rgb()/rgba(), or as color(srgb r g b / a) for color-mix() results.
     const parse = (value: string) => {
-      const match = value.match(/rgba?\(([^)]+)\)/);
-      if (!match) return null;
-      const [r, g, b, a = "1"] = match[1].split(/[ ,/]+/).filter(Boolean);
-      return { r: Number(r), g: Number(g), b: Number(b), a: Number(a) };
+      const rgb = value.match(/rgba?\(([^)]+)\)/);
+      if (rgb) {
+        const [r, g, b, a = "1"] = rgb[1].split(/[ ,/]+/).filter(Boolean);
+        return { r: Number(r), g: Number(g), b: Number(b), a: Number(a) };
+      }
+      const srgb = value.match(/color\(srgb ([^)]+)\)/);
+      if (srgb) {
+        const [r, g, b, a = "1"] = srgb[1].split(/[ /]+/).filter(Boolean);
+        return { r: Number(r) * 255, g: Number(g) * 255, b: Number(b) * 255, a: Number(a) };
+      }
+      return null;
     };
     const blend = (top: { r: number; g: number; b: number; a: number }, bottom: { r: number; g: number; b: number }) => ({
       r: top.r * top.a + bottom.r * (1 - top.a), g: top.g * top.a + bottom.g * (1 - top.a), b: top.b * top.a + bottom.b * (1 - top.a), a: 1 });
@@ -65,6 +73,22 @@ async function audit(page: import("@playwright/test").Page) {
       const required = size >= 24 || (bold && size >= 18.66) ? 3 : 4.5;
       if (ratio + 0.005 < required) out.push({ text: node.textContent.trim().slice(0, 40), ratio: Math.round(ratio * 100) / 100, required, color: style.color, background: `rgb(${Math.round(base.r)}, ${Math.round(base.g)}, ${Math.round(base.b)})`, selector: describe(element) });
     }
+    // Typed text and placeholders are not text nodes; check form fields separately.
+    for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input:not([type=checkbox]):not([type=radio]):not([type=hidden]), textarea")) {
+      const rect = field.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || field.disabled || field.closest("[hidden]")) continue;
+      const base = background(field);
+      const style = getComputedStyle(field);
+      for (const [kind, colorValue, text] of [["value", style.color, field.value || "Ab"], ["placeholder", getComputedStyle(field, "::placeholder").color, field.placeholder]] as const) {
+        if (!text) continue;
+        const color = parse(colorValue);
+        if (!color) continue;
+        const shown = blend(color, base);
+        const [light, dark] = [luminance(shown), luminance(base)].sort((a, b) => b - a);
+        const ratio = (light + 0.05) / (dark + 0.05);
+        if (ratio + 0.005 < 4.5) out.push({ text: `${kind}: ${text.slice(0, 30)}`, ratio: Math.round(ratio * 100) / 100, required: 4.5, color: colorValue, background: `rgb(${Math.round(base.r)}, ${Math.round(base.g)}, ${Math.round(base.b)})`, selector: describe(field) });
+      }
+    }
     return out;
   });
 }
@@ -101,7 +125,7 @@ async function collect(page: import("@playwright/test").Page, theme: string) {
     const now = Date.now();
     await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
       entities: [...snapshot.entities, { id: "e2e-contrast-project", type: "project", title: "Projekt pro kontrolu kontrastu", status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
-      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) }).then((response) => { if (!response.ok) throw new Error(`Seeding the project failed: ${response.status}`); });
   });
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
@@ -115,8 +139,12 @@ async function collect(page: import("@playwright/test").Page, theme: string) {
   await waitUntilSynced(page);
   await page.locator("button", { hasText: "＋" }).first().click();
   await page.locator(".captureModal").locator("input, textarea").first().fill("Kontrola kontrastu 25. 10. !");
-  await page.waitForTimeout(800);
+  await expect(page.locator(".captureSuggestion, .capturePreview").first()).toBeVisible();
   await record("Capture dialog");
+  await page.keyboard.press("Escape");
+  await page.locator("button", { hasText: /Zeptat se AI/ }).first().click();
+  await expect(page.locator(".assistantPanel")).toBeVisible();
+  await record("Assistant");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
@@ -133,11 +161,12 @@ for (const theme of ["light", "dark"]) {
     await page.addInitScript((mode) => localStorage.setItem("ai-executive-theme", mode), theme);
     const failures = await collect(page, theme);
     // The sign-in screen, without a session.
-    const signedOut = await browser.newContext({ locale: "cs-CZ" });
+    // No session: the project's saved session would otherwise be inherited.
+    const signedOut = await browser.newContext({ locale: "cs-CZ", storageState: { cookies: [], origins: [] } });
     const signIn = await signedOut.newPage();
     await signIn.addInitScript((mode) => localStorage.setItem("ai-executive-theme", mode), theme);
     await signIn.goto("/");
-    await expect(signIn.locator(".authCard")).toBeVisible();
+    await expect(signIn.locator(".authCard input[type=password]")).toBeVisible();
     for (const failure of await audit(signIn)) failures.push({ view: "Sign-in", theme, ...failure });
     await signedOut.close();
     console.log(JSON.stringify(failures));
