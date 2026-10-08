@@ -140,7 +140,7 @@ export function useLumiApp() {
       // Whatever this page believed about the server before signing in is not to be trusted
       // (the local copy may have been cleared by a sign-out in another tab).
       serverRevision.current = 0;
-      return pullFromServer();
+      return pullFromServer(true);
     },
   });
   const contextPredicateLabel = (predicate: string) => {
@@ -365,7 +365,9 @@ export function useLumiApp() {
     });
     return syncQueue.current;
   }
-  async function pullFromServer() {
+  // `afterSignIn`: the browser has just signed in, so nothing local predates the server copy and,
+  // once that copy is taken over, the local copy counts as synchronized (see below).
+  async function pullFromServer(afterSignIn = false) {
     await syncQueue.current;
     if (localStorage.getItem(pendingKey) === "1") {
       await syncToServer();
@@ -383,7 +385,11 @@ export function useLumiApp() {
       }
       if (snapshot.revision > serverRevision.current) {
         try {
-          await applySnapshot(snapshot, pullVersion);
+          const applied = await applySnapshot(snapshot, pullVersion);
+          // A browser signing in for the first time could not synchronize when it started. Once it
+          // holds exactly the server copy it is synchronized; without the mark every later start
+          // would send that copy back to the server as if it were the browser's own data.
+          if (applied && afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
         } catch (error) {
           if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
         }

@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
 import { e2ePassword } from "../playwright.config";
 
 export const seeded = {
@@ -32,10 +32,32 @@ export function settingsSections(page: Page) {
 }
 
 // Every scenario starts with an empty browser, so the app first takes the server copy.
-// Wait until that has settled and nothing is waiting to be sent.
+// Wait until that has settled, nothing is waiting to be sent and the loads that follow it
+// (attention, day plan) are finished: a scenario that ends the session next would otherwise
+// have one of those refused first.
 export async function waitUntilSynced(page: Page) {
   await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]),
     { timeout: 20_000 }).toEqual(["1", null]);
+  await waitUntilQuiet(page);
+}
+
+// Waits until the page has had no request in flight for `quietMs`. A request that was already
+// running when this starts is not known here; its end still counts as activity.
+export async function waitUntilQuiet(page: Page, quietMs = 500) {
+  const inFlight = new Set<Request>();
+  let lastChange = Date.now();
+  const started = (request: Request) => { inFlight.add(request); lastChange = Date.now(); };
+  const ended = (request: Request) => { inFlight.delete(request); lastChange = Date.now(); };
+  page.on("request", started);
+  page.on("requestfinished", ended);
+  page.on("requestfailed", ended);
+  try {
+    await expect.poll(() => inFlight.size === 0 && Date.now() - lastChange >= quietMs, { timeout: 20_000, intervals: [100] }).toBe(true);
+  } finally {
+    page.off("request", started);
+    page.off("requestfinished", ended);
+    page.off("requestfailed", ended);
+  }
 }
 
 export function serverEntities(page: Page) {
