@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { confirmDialog, expectOnServer, heading, seeded, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
 
 // The scenarios share one instance and run in this order, one at a time (see the config).
 // A failing scenario does not stop the ones after it. Signing out comes last.
@@ -193,20 +193,23 @@ test("a title typed while the notes are still being saved is kept", async ({ pag
     if (route.request().method() === "PUT") await new Promise((resolve) => setTimeout(resolve, 1500));
     await route.continue();
   });
-  await field.fill(notes);
   const titleField = page.locator("input.titleEdit");
-  await titleField.click();
-  await titleField.fill(title);
-  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.properties?.notes === notes, true);
-  await page.waitForTimeout(300);
-  await expect(titleField).toHaveValue(title);
-  await field.focus();
-  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === title, true);
-  await page.unroute("**/api/store");
-  // Back to the seeded title for the scenarios that look for it.
-  await titleField.fill(seeded.plainTask);
-  await field.focus();
-  await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === seeded.plainTask, true);
+  try {
+    await field.fill(notes);
+    await titleField.click();
+    await titleField.fill(title);
+    await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.properties?.notes === notes, true);
+    await page.waitForTimeout(300);
+    await expect(titleField).toHaveValue(title);
+    await field.focus();
+    await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === title, true);
+  } finally {
+    // Back to the seeded title for the scenarios that look for it.
+    await page.unroute("**/api/store");
+    await titleField.fill(seeded.plainTask);
+    await field.focus();
+    await expectOnServer(page, (entity) => entity.id === "e2e-plain" && entity.title === seeded.plainTask, true);
+  }
 });
 
 test("a notes draft left by a page that was closed before saving it is saved on the next start", async ({ page }) => {
@@ -216,15 +219,50 @@ test("a notes draft left by a page that was closed before saving it is saved on 
   await waitUntilSynced(page);
   await field.fill(typed);
   // Every key press is kept in the device at once.
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-draft") || "null"))).toEqual({ id: "e2e-rename", text: typed });
-  // What a killed page leaves behind: the draft in the device and nothing saved.
-  const left = `Po zavření ${Date.now()}`;
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-draft") || "null")))
+    .toMatchObject({ id: "e2e-rename", text: typed });
+  // Leaving the page may cut its own save off; the kept draft is then saved by the next start.
   await page.goto("/?view=Inbox");
   await waitUntilSynced(page);
-  await page.evaluate((text) => localStorage.setItem("ai-executive-notes-draft", JSON.stringify({ id: "e2e-rename", text })), left);
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === typed, true);
+  // What a page killed a minute ago leaves behind: a draft started from the current notes, not saved.
+  const left = `Po zavření ${Date.now()}`;
+  const plant = (draft: { text: string; base: string }) => page.evaluate((value) => localStorage.setItem("ai-executive-notes-draft",
+    JSON.stringify({ id: "e2e-rename", ...value, at: Date.now() - 60_000, page: "closed-page" })), draft);
+  await plant({ text: left, base: typed });
   await page.reload();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
   await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-draft"))).toBeNull();
+  // A draft started from notes that have changed since (on another device) does not overwrite them.
+  await plant({ text: `Zastaralé ${Date.now()}`, base: "jiný základ" });
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-draft"))).toBeNull();
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
+});
+
+test("a draft that another open tab is still typing is left to that tab", async ({ page }) => {
+  // Stands in for another tab that keeps the field focused: it answers on the draft channel.
+  await page.addInitScript(() => {
+    if (localStorage.getItem("e2e-draft-owner") !== "open") return;
+    const channel = new BroadcastChannel("ai-executive-notes-draft");
+    channel.onmessage = (event) => { if (event.data?.ask === "other-tab") channel.postMessage({ alive: "other-tab" }); };
+  });
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const before = String((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "");
+  const partial = `Rozepsané v jiné kartě ${Date.now()}`;
+  await page.evaluate(({ text, base }) => {
+    localStorage.setItem("e2e-draft-owner", "open");
+    localStorage.setItem("ai-executive-notes-draft", JSON.stringify({ id: "e2e-rename", text, base, at: Date.now(), page: "other-tab" }));
+  }, { text: partial, base: before });
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.waitForTimeout(1000);
+  expect((await serverEntities(page)).find((entity) => entity.id === "e2e-rename")?.properties?.notes ?? "").toBe(before);
+  // The other tab is closed without having saved: the next start saves its draft.
+  await page.evaluate(() => localStorage.removeItem("e2e-draft-owner"));
+  await page.reload();
+  await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === partial, true);
 });
 
 test("Settings shows one section at a time", async ({ page }) => {

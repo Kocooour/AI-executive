@@ -471,7 +471,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("taskNotes")}
                   <textarea
                     value={notesDraft?.id === selected.id ? notesDraft.text : String(selected.properties.notes || "")}
-                    onChange={(e) => editNotes(selected.id, e.target.value)}
+                    onChange={(e) => editNotes(selected.id, e.target.value, String(selected.properties.notes || ""))}
                     onBlur={(e) => saveNotes(selected, e.target.value)}
                     placeholder={tr("notesPlaceholder")}
                   />
