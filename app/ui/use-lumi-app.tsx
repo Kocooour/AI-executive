@@ -1063,7 +1063,12 @@ export function useLumiApp() {
       return;
     }
     if (workspace) {
-      setWorkspaceDraft(workspaceTitle(workspace));
+      // A name being edited is kept when only the language changes; it is replaced when another
+      // workspace is shown or when the field still holds the previously shown name.
+      const shown = workspaceTitle(workspace);
+      const previous = shownWorkspaceName.current;
+      setWorkspaceDraft((draft) => previous.id !== workspace.id || draft === previous.title ? shown : draft);
+      shownWorkspaceName.current = { id: workspace.id, title: shown };
     }
   }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
@@ -1238,6 +1243,7 @@ export function useLumiApp() {
   }
   // The personal workspace is created with the name "Personal"; until it is renamed it is shown in
   // the interface language.
+  const shownWorkspaceName = useRef({ id: "", title: "" });
   const workspaceTitle = (workspace: Entity) =>
     workspace.workspaceId === personalWorkspaceId && workspace.title === "Personal" ? tr("personalWorkspace") : workspace.title;
   const workspaces = items

@@ -14,6 +14,11 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
   }
   await page.goto("/");
   await waitUntilSynced(page);
+  await page.locator("aside .workspaceButton").first().click();
+  await expect(page.locator("aside .workspaceMenu")).toBeVisible();
+  await record("Workspace chooser");
+  await page.goto("/");
+  await waitUntilSynced(page);
   await page.locator(".attentionMore summary").first().click();
   await page.locator(".attentionLimits summary").first().click();
   await record("Home, attention details");

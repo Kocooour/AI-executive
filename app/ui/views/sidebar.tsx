@@ -50,7 +50,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                   onClick={() => selectWorkspace(workspace.workspaceId)}
                 >
                   <span>{workspace.title}</span>
-                  <small>{String(workspace.properties.kind || "shared")}</small>
+                  <small>{tr(workspace.properties.kind === "personal" ? "workspaceKindPersonalShort" : "workspaceKindSharedShort")}</small>
                 </button>
               ))}
               <button
@@ -58,7 +58,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 onClick={() => selectWorkspace("all")}
               >
                 <span>{tr("allWork")}</span>
-                <small>aggregate</small>
+                <small>{tr("workspaceAggregate")}</small>
               </button>
               <button
                 onClick={() => {
@@ -69,7 +69,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 }}
               >
                 <span>{tr("manageWorkspaces")}</span>
-                <small>settings</small>
+                <small>{tr("settingsShort")}</small>
               </button>
             </div>
           )}

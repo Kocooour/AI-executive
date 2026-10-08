@@ -190,6 +190,10 @@ export const copy: Record<Language, Record<string, string>> = {
     scopeRules: "Rules",
     scopeWorkspace: "Workspace",
     scopeProject: "Project",
+    workspaceKindPersonalShort: "personal",
+    workspaceKindSharedShort: "shared",
+    workspaceAggregate: "all workspaces together",
+    settingsShort: "settings",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
@@ -380,5 +384,9 @@ export const copy: Record<Language, Record<string, string>> = {
     scopeRules: "Pravidla",
     scopeWorkspace: "Workspace",
     scopeProject: "Projekt",
+    workspaceKindPersonalShort: "osobní",
+    workspaceKindSharedShort: "sdílený",
+    workspaceAggregate: "všechny workspace dohromady",
+    settingsShort: "nastavení",
   },
 };

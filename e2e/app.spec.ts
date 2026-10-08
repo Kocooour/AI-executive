@@ -466,6 +466,18 @@ test("the personal workspace is shown in Czech and saving its shown name does no
   expect((await serverEntities(page)).find((entity) => entity.id === "workspace:personal")?.title).toBe("Personal");
 });
 
+test("a workspace name being edited survives a language change", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Workspace" }).first().click();
+  await page.getByLabel("Název workspace").fill("Moje věci");
+  await settingsSections(page).first().click();
+  await page.locator("select").filter({ has: page.locator('option[value="en"]') }).selectOption("en");
+  await page.locator(".settingsTabs button").filter({ hasText: "Workspace" }).first().click();
+  await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toHaveValue("Moje věci");
+  expect((await serverEntities(page)).find((entity) => entity.id === "workspace:personal")?.title).toBe("Personal");
+});
+
 test("Settings shows one section at a time", async ({ page }) => {
   await page.goto("/?view=Settings");
   const tabs = settingsSections(page);

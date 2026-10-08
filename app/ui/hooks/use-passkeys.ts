@@ -15,7 +15,7 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
   setPasskeyBusy: (busy: boolean) => void;
 }) {
   const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
-    [passkeyLabel, setPasskeyLabel] = useState("My passkey"),
+    [passkeyLabel, setPasskeyLabel] = useState(""),
     [passkeyPassword, setPasskeyPassword] = useState(""),
     [passkeyStatus, setPasskeyStatus] = useState("");
 
@@ -49,7 +49,7 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
         body: JSON.stringify({
           challenge: options.challenge,
           response: credential,
-          label: passkeyLabel.trim() || "Passkey",
+          label: passkeyLabel.trim() || tr("passkeyPlaceholder"),
         }),
       });
       const result = await verifyResponse.json();

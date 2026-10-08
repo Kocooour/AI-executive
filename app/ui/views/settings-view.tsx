@@ -285,7 +285,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       <button
                         className="primaryAction"
                         onClick={registerPasskey}
-                        disabled={passkeyBusy || !passkeyLabel.trim() || !passkeyPassword}
+                        disabled={passkeyBusy || !passkeyPassword}
                       >
                         {passkeyBusy ? tr("waitingDevice") : tr("addPasskey")}
                       </button>
