@@ -12,11 +12,12 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
+import { type AIProposal, type AssistantMessage, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { urlBase64ToUint8Array } from "./format";
 import { useAttention } from "./hooks/use-attention";
+import { useDayPlan } from "./hooks/use-day-plan";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -61,24 +62,14 @@ export function useLumiApp() {
     [standalone, setStandalone] = useState(false),
     [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [badgeNow, setBadgeNow] = useState(() => Date.now()),
-    [dayPlanNow, setDayPlanNow] = useState(() => Date.now()),
     [badgeStatus, setBadgeStatus] = useState(""),
     [notificationStatus, setNotificationStatus] = useState(""),
-    [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
     [authNotice, setAuthNotice] = useState(""),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
     [logoutError, setLogoutError] = useState(""),
-    [dayPlanStatus, setDayPlanStatus] = useState(""),
-    [dayPlanBusy, setDayPlanBusy] = useState(false),
-    [dayPlanUndo, setDayPlanUndo] = useState<{ actionId: string; workspaceId: string; date: string } | null>(null),
-    [workSession, setWorkSession] = useState<WorkSession | null>(null),
-    [workSessionBusy, setWorkSessionBusy] = useState(false),
-    [workSessionStatus, setWorkSessionStatus] = useState(""),
-    [workSessionNow, setWorkSessionNow] = useState(() => Date.now()),
-    [workSessionLoadedAt, setWorkSessionLoadedAt] = useState(() => Date.now()),
     [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
     [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
     [agentResult, setAgentResult] = useState<PACTAgentResult | null>(null),
@@ -173,18 +164,6 @@ export function useLumiApp() {
     if (type === "organization") return language === "cs" ? "Organizace" : "Organization";
     return tr(type);
   };
-  const dayPlanWhy = (reason: string) => {
-    if (reason.startsWith("duration:")) return language === "cs" ? `Odhad trvání je ${reason.slice(9)} minut.` : `Estimated duration is ${reason.slice(9)} minutes.`;
-    const labels: Record<string, [string, string]> = {
-      already_planned: ["Úkol už je v kalendáři.", "The task is already in the calendar."],
-      overdue: ["Úkol je po termínu.", "The task is overdue."], due_today: ["Úkol má termín dnes.", "The task is due today."],
-      deadline_close: ["Termín se blíží.", "The deadline is close."], high_priority: ["Úkol má vysokou prioritu.", "The task has high priority."],
-      context_importance: ["Potvrzený kontext označuje úkol nebo projekt jako důležitý.", "Confirmed context marks the task or project as important."],
-      context_waiting: ["Podle potvrzeného kontextu někdo čeká na výsledek.", "Confirmed context says someone is waiting for the result."],
-      calendar_free: ["V kalendáři je vhodné volné okno.", "A suitable free calendar window is available."],
-    };
-    return labels[reason]?.[language === "cs" ? 0 : 1] || reason;
-  };
   const contextInboxReason = (reason: ContextInboxProposal["reason"] | ContextInboxTaskDraft["reason"]) => ({
     waiting: language === "cs" ? "Text zmiňuje osobu nebo stranu čekající na výsledek." : "The text mentions a person or party waiting for the result.",
     importance: language === "cs" ? "Text výslovně popisuje prioritu nebo důležitost." : "The text explicitly describes priority or importance.",
@@ -215,8 +194,6 @@ export function useLumiApp() {
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
-  const dayPlanLoadVersion = useRef(0);
-  const workSessionLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // One confirmation at a time: asking again answers the previous question with "no".
@@ -593,61 +570,6 @@ export function useLumiApp() {
     const data = await response.json();
     setPactAgents(Array.isArray(data.agents) ? data.agents : []);
     setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
-  }
-
-  async function loadDayPlan(workspaceId: string, date: string) {
-    const version = ++dayPlanLoadVersion.current;
-    const response = await fetch(`/api/day-plan?workspaceId=${encodeURIComponent(workspaceId)}&date=${date}`, { cache: "no-store" });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Day plan unavailable");
-    if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
-    return data as DayPlan;
-  }
-
-  async function loadWorkSession(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
-    const version = ++workSessionLoadVersion.current;
-    const response = await fetch(`/api/work-sessions?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Work session unavailable");
-    if (version !== workSessionLoadVersion.current) return data.active as WorkSession | null;
-    setWorkSession(data.active || null);
-    const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
-    return data.active as WorkSession | null;
-  }
-
-  async function workSessionAction(action: "start" | "pause" | "resume" | "finish", task?: Entity) {
-    if (workSessionBusy) return;
-    const workspaceId = action === "start" && task ? task.workspaceId
-      : workSession?.workspaceId || (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId);
-    if (action === "start" && task && activeWorkspaceId === "all" && task.workspaceId !== writeWorkspaceId) {
-      calendarWorkspaceSelection.current = task.workspaceId;
-      selectWorkspace(task.workspaceId);
-    }
-    workSessionLoadVersion.current += 1;
-    if (action === "finish" && !(await askConfirm({ title: tr("workFinishTitle"), message: tr("workFinishFinal"), confirmLabel: tr("workFinish") }))) return;
-    setWorkSessionBusy(true); setWorkSessionStatus("");
-    try {
-      const current = workSession;
-      const response = await fetch("/api/work-sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-        action, workspaceId, idempotencyKey: crypto.randomUUID(), taskId: task?.id,
-        expectedTaskUpdatedAt: task?.updatedAt, expectedRevision: current?.revision || 0, expectedState: current?.state || "idle",
-      }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
-        throw new Error(data.error || "Work session failed");
-      }
-      workSessionLoadVersion.current += 1;
-      if (calendarWorkspaceSelection.current !== workspaceId) {
-        if (data.taskCompleted) await pullFromServer();
-        await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined);
-        return;
-      }
-      setWorkSession(data.session?.state === "completed" ? null : data.session);
-      const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
-      if (data.taskCompleted) { closeDetail(); await pullFromServer(); await loadDayPlan(workspaceId, calendarToday).catch(() => undefined); }
-    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : "Work session failed"); }
-    finally { setWorkSessionBusy(false); }
   }
 
   async function runPACTAgent(agentId: string) {
@@ -1843,52 +1765,13 @@ export function useLumiApp() {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
-  const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
+  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
+    calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
+  const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });
-  const dayPlanTimeline = visibleDayPlan ? [...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })),
-    ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
-  const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
-  const nextDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") > dayPlanNow);
-  const workElapsedMs = workSession ? workSession.elapsedMs + (workSession.state === "running" ? Math.max(0, workSessionNow - workSessionLoadedAt) : 0) : 0;
-  const workElapsedText = `${String(Math.floor(workElapsedMs / 3_600_000)).padStart(2, "0")}:${String(Math.floor(workElapsedMs / 60_000) % 60).padStart(2, "0")}:${String(Math.floor(workElapsedMs / 1000) % 60).padStart(2, "0")}`;
-  const workOverrun = Boolean(workSession?.estimatedMinutes && workElapsedMs > workSession.estimatedMinutes * 60_000);
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
-  useEffect(() => {
-    if (authState !== "ready") return;
-    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
-    setDayPlan(null);
-    setDayPlanStatus("");
-    loadDayPlan(workspaceId, calendarToday)
-      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
-  }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
-  useEffect(() => {
-    if (authState !== "ready") return;
-    const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      setDayPlanNow(Date.now());
-      loadDayPlan(calendarWorkspaceSelection.current, calendarToday).catch(() => undefined);
-    };
-    const timer = window.setInterval(refresh, 60_000);
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [authState, calendarToday]);
-  useEffect(() => {
-    if (authState !== "ready") return;
-    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
-    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : "Work session unavailable"));
-    const refresh = () => { if (document.visibilityState === "visible") loadWorkSession(workspaceId).catch(() => undefined); };
-    const poll = window.setInterval(refresh, 15_000);
-    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
-    return () => { workSessionLoadVersion.current += 1; window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [authState, activeWorkspaceId, writeWorkspaceId]);
-  useEffect(() => {
-    if (workSession?.state !== "running") return;
-    const timer = window.setInterval(() => setWorkSessionNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [workSession?.id, workSession?.state]);
   const attentionTaskCount = items.filter((task) => {
     if (task.type !== "task" || task.status !== "open") return false;
     return [task.properties.when, task.properties.deadline].some(
@@ -2415,62 +2298,6 @@ export function useLumiApp() {
       inbox: false,
     }, `scheduled ${destination}`);
   }
-  async function applyDayPlanAction(item: DayPlanItem, decision: "accepted" | "tomorrow" | "dismissed") {
-    if (dayPlanBusy || !dayPlan) return;
-    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
-    const task = items.find((candidate) => candidate.id === item.taskId && candidate.type === "task" && candidate.status === "open" && candidate.workspaceId === dayPlan.workspaceId);
-    if (!task) { setDayPlanStatus(tr("dayPlanChanged")); return; }
-    setDayPlanBusy(true);
-    setDayPlanStatus("");
-    try {
-      await syncQueue.current;
-      if (localStorage.getItem(pendingKey) === "1") throw new Error(tr("dayPlanSyncFirst"));
-      const current = await loadDayPlan(dayPlan.workspaceId, dayPlan.date);
-      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
-      const stillProposed = current.planBlocks.find((block) => block.taskId === item.taskId && block.start === item.start && block.end === item.end);
-      const stillUnscheduled = current.unscheduled.some((candidate) => candidate.taskId === item.taskId);
-      if (!stillProposed && !stillUnscheduled) throw new Error(tr("dayPlanChanged"));
-      if (decision === "accepted" && (!stillProposed || !item.start || !item.end)) throw new Error(tr("dayPlanChanged"));
-      const proposeResponse = await fetch("/api/day-plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: current.workspaceId, date: current.date, revision: current.revision,
-        taskId: item.taskId, start: item.start || "", end: item.end || "", decision }) });
-      const proposed = await proposeResponse.json().catch(() => ({}));
-      if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
-      const proposal = proposed.proposal as AIProposal;
-      const actionLabel = tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
-      const planTitle = task.title.replace(/\s+/g, " ").slice(0, 160);
-      const planKey = decision === "accepted" ? "dayPlanAccept" : decision === "tomorrow" ? "dayPlanTomorrow" : "dayPlanSkip";
-      if (!(await askConfirm({ title: tr(`${planKey}Title`), confirmLabel: actionLabel, returnFocus: trigger,
-        message: tr(`${planKey}Confirm`).replace("{title}", () => planTitle).replace("{time}", () => `${item.start} – ${item.end}`) }))) {
-        await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", proposalId: proposal.id }) });
-        return;
-      }
-      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
-      const confirmResponse = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "confirm", proposalId: proposal.id }) });
-      const confirmed = await confirmResponse.json().catch(() => ({}));
-      if (!confirmResponse.ok) throw new Error(confirmed.error || tr("dayPlanChanged"));
-      setDayPlanUndo({ actionId: confirmed.actionId, workspaceId: current.workspaceId, date: current.date });
-      await pullFromServer();
-      await loadDayPlan(current.workspaceId, current.date);
-    } catch (error) {
-      setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged"));
-    } finally {
-      setDayPlanBusy(false);
-    }
-  }
-  async function undoDayPlanBlock() {
-    if (!dayPlanUndo || dayPlanBusy) return;
-    setDayPlanBusy(true);
-    try {
-      const response = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", actionId: dayPlanUndo.actionId }) });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("dayPlanChanged"));
-      setDayPlanUndo(null);
-      await pullFromServer();
-      await loadDayPlan(dayPlanUndo.workspaceId, dayPlanUndo.date);
-    } catch (error) { setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")); }
-    finally { setDayPlanBusy(false); }
-  }
   async function done(id: string) {
     if (workSession?.taskId === id) { await workSessionAction("finish"); return; }
     const t = await db.entities.get(id);
@@ -2805,6 +2632,25 @@ export function useLumiApp() {
   );
   return {
     ...attentionState,
+    setDayPlanNow,
+    dayPlanStatus,
+    setDayPlanStatus,
+    dayPlanBusy,
+    dayPlanUndo,
+    workSession,
+    workSessionBusy,
+    workSessionStatus,
+    dayPlanWhy,
+    loadDayPlan,
+    workSessionAction,
+    visibleDayPlan,
+    dayPlanTimeline,
+    currentDayPlanBlock,
+    nextDayPlanBlock,
+    workElapsedText,
+    workOverrun,
+    applyDayPlanAction,
+    undoDayPlanBlock,
     acceptNativeDrop,
     activeWorkspace,
     activeWorkspaceId,
@@ -2814,7 +2660,6 @@ export function useLumiApp() {
     agentStatus,
     aiBusy,
     aiText,
-    applyDayPlanAction,
     approveContextInbox,
     areas,
     askAI,
@@ -2893,12 +2738,6 @@ export function useLumiApp() {
     createServerBackup,
     createSuggestedTarget,
     createWorkspace,
-    currentDayPlanBlock,
-    dayPlanBusy,
-    dayPlanStatus,
-    dayPlanTimeline,
-    dayPlanUndo,
-    dayPlanWhy,
     disableNotifications,
     done,
     draft,
@@ -2919,7 +2758,6 @@ export function useLumiApp() {
     items,
     language,
     loadCalendar,
-    loadDayPlan,
     login,
     logout,
     logoutBusy,
@@ -2932,7 +2770,6 @@ export function useLumiApp() {
     newSubjectTitle,
     newSubjectType,
     newWorkspaceDraft,
-    nextDayPlanBlock,
     notificationState,
     notificationStatus,
     openCapture,
@@ -3009,8 +2846,6 @@ export function useLumiApp() {
     setContextScope,
     setContextSensitivity,
     setContextTitle,
-    setDayPlanNow,
-    setDayPlanStatus,
     setDraft,
     setMoreOpen,
     setNewSubjectTitle,
@@ -3068,16 +2903,8 @@ export function useLumiApp() {
     type,
     undo,
     undoAIAction,
-    undoDayPlanBlock,
     useCaptureSuggestion,
     view,
-    visibleDayPlan,
-    workElapsedText,
-    workOverrun,
-    workSession,
-    workSessionAction,
-    workSessionBusy,
-    workSessionStatus,
     workspaceDraft,
     workspaceMenuOpen,
     workspaceName,
