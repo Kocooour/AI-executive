@@ -129,7 +129,11 @@ export function useLumiApp() {
   const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
     pullFromServer } = useSync();
-  const tr = (key: string) => copy[language][key] || key;
+  // The translator reads the current language when it is called, so a message set after a request
+  // that was started before a language change is shown in the new language.
+  const languageRef = useRef(language);
+  languageRef.current = language;
+  const tr = (key: string) => copy[languageRef.current][key] || key;
   const { authState, setAuthState, authStateRef, authEnabled, authPassword, setAuthPassword, authError, authNotice,
     sessionEndedHere, checkAccess, login, signInWithPasskey, passkeySupported, passkeyBusy, setPasskeyBusy } = useSignIn({
     tr,
