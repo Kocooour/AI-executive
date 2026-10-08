@@ -1,4 +1,5 @@
 "use client";
+import { entityConflicts } from "../../../lib/field-merge";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { friendlyDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
@@ -142,7 +143,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   </div>
                 )}
                 <div>
-                  <strong>{x.title}</strong>
+                  <strong>{x.title}{entityConflicts(x).length > 0 && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}</strong>
                   <small>
                     {x.type === "task"
                       ? [

@@ -4,6 +4,7 @@ import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToI
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
+import { SyncConflicts } from "./sync-conflicts";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
@@ -69,6 +70,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               }
               onBlur={(e) => rename(selected, e.target.value)}
             />
+            <SyncConflicts app={app} entity={selected} />
             {context && (
               <div className="contextStrip">
                 <b>{tr("context")}</b>

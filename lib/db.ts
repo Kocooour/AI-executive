@@ -45,6 +45,11 @@ export function defaultWorkspaceEntity(now = Date.now()): Entity {
 class ExecutiveDB extends Dexie {
   entities!: Table<Entity, string>;
   relations!: Table<Relation, string>;
+  // The version of each record and relation this device last had in common with the server; the
+  // base of the field-level merge (lib/field-merge.ts). Written whenever the local copy is
+  // replaced by or sent to the server, cleared with the local data.
+  baseEntities!: Table<Entity, string>;
+  baseRelations!: Table<Relation, string>;
 
   constructor() {
     super("ai-executive");
@@ -52,6 +57,12 @@ class ExecutiveDB extends Dexie {
     this.version(2).stores({
       entities: "id,type,status,workspaceId,updatedAt",
       relations: "id,workspaceId,sourceEntityId,targetEntityId,relationType",
+    });
+    this.version(3).stores({
+      entities: "id,type,status,workspaceId,updatedAt",
+      relations: "id,workspaceId,sourceEntityId,targetEntityId,relationType",
+      baseEntities: "id",
+      baseRelations: "id",
     });
   }
 }
@@ -128,5 +139,21 @@ export async function migratePropertyRelations() {
         });
       }
     }
+  });
+}
+
+// The common version with the server, or null when this device has none yet (first start, or
+// data from before the field-level merge); the merge then falls back to the newer record.
+export async function readSyncBase() {
+  const [entities, relations] = await Promise.all([db.baseEntities.toArray(), db.baseRelations.toArray()]);
+  return entities.length ? { entities, relations } : null;
+}
+
+export async function replaceSyncBase(entities: Entity[], relations: Relation[]) {
+  await db.transaction("rw", db.baseEntities, db.baseRelations, async () => {
+    await db.baseEntities.clear();
+    await db.baseRelations.clear();
+    if (entities.length) await db.baseEntities.bulkPut(entities);
+    if (relations.length) await db.baseRelations.bulkPut(relations);
   });
 }

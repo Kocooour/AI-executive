@@ -1,12 +1,13 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
+import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readSyncBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
+import { conflictsKey, entityConflicts } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
@@ -765,10 +766,12 @@ export function useLumiApp() {
                 !deletedIds.has(relation.targetEntityId),
             ),
           };
+          const base = await readSyncBase();
           const merged = mergeSnapshots(
             filteredSnapshot,
             localEntities,
             localRelations,
+            base,
           );
           let saveResponse = await putSnapshot(
             merged.entities,
@@ -785,10 +788,13 @@ export function useLumiApp() {
                 (item) => !revivedIds.has(item.id),
               ),
             };
+            // The first merge was made from the server copy read at start, which is therefore its
+            // common version with the newer one.
             const retry = mergeSnapshots(
               retrySnapshot,
               merged.entities,
               merged.relations,
+              { entities: filteredSnapshot.entities, relations: filteredSnapshot.relations },
             );
             saveResponse = await putSnapshot(
               retry.entities,
@@ -806,6 +812,7 @@ export function useLumiApp() {
           // taken over. The known revision must stay as it is: the server replaces its whole
           // content when the revision matches, and the local copy does not contain that content.
           // With the old revision the save is answered with a conflict and merged instead.
+          if (!alreadySynchronized || hasPendingChanges) await replaceSyncBase(localEntities, localRelations).catch(() => undefined);
           await syncToServer();
           return;
         }
@@ -1644,6 +1651,47 @@ export function useLumiApp() {
       setCapture(true);
     }
   }
+  // A value replaced by a change from another device (lib/field-merge.ts): put it back, or keep
+  // the current value. Either way the notice is removed on every device.
+  async function resolveConflict(e: Entity, conflictId: string, restore: boolean) {
+    const current = (await db.entities.get(e.id)) || e;
+    const conflict = entityConflicts(current).find((item) => item.id === conflictId);
+    if (!conflict) return;
+    if (restore && conflict.field.startsWith("relation.")) {
+      // The project or area it belonged to; if that one no longer exists, there is nothing to return to.
+      await relate(e.id, typeof conflict.lostValue === "string" ? conflict.lostValue : "", conflict.field.slice("relation.".length)).catch(() => undefined);
+    }
+    localDataVersion.current += 1;
+    try {
+      await db.transaction("rw", db.entities, async () => {
+        const latest = (await db.entities.get(e.id)) || current;
+        const properties: Record<string, unknown> = {
+          ...latest.properties,
+          [conflictsKey]: entityConflicts(latest).filter((item) => item.id !== conflictId),
+        };
+        const update: Partial<Entity> = { updatedAt: Date.now() };
+        if (restore && !conflict.field.startsWith("relation.")) {
+          if (conflict.field.startsWith("properties.")) {
+            const key = conflict.field.slice("properties.".length);
+            if (conflict.lostValue === null || conflict.lostValue === undefined) delete properties[key];
+            else properties[key] = conflict.lostValue;
+          } else if (["title", "status", "content"].includes(conflict.field) && typeof conflict.lostValue === "string") {
+            (update as Record<string, unknown>)[conflict.field] = conflict.lostValue;
+          }
+        }
+        const activity = Array.isArray(properties.activity) ? properties.activity : [];
+        properties.activity = [...activity, { at: Date.now(), action: restore ? "change restored" : "change kept" }].slice(-50);
+        update.properties = properties;
+        await db.entities.update(e.id, update);
+      });
+    } finally {
+      localDataVersion.current += 1;
+    }
+    await syncToServer();
+    await load();
+    const saved = (await db.entities.get(e.id)) || null;
+    setSelected((open) => (open && open.id === e.id ? saved : open));
+  }
   // The add row is shared by every list; its message belongs to the list it was shown under.
   useEffect(() => setRowError(false), [view]);
   // The add row under a list: a refused item keeps its text and says so instead of failing silently.
@@ -2381,6 +2429,7 @@ export function useLumiApp() {
     contextTitle,
     create,
     createFromRow,
+    resolveConflict,
     rowError,
     setRowError,
     createServerBackup,

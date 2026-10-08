@@ -34,9 +34,11 @@ export async function clearLocalData(timeoutMs = 4000) {
   localDataKeys.forEach((key) => localStorage.removeItem(key));
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
   localStorage.setItem(serverSyncedKey, "1");
-  const wipe = db.transaction("rw", db.entities, db.relations, async () => {
+  const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
     await db.entities.clear();
     await db.relations.clear();
+    await db.baseEntities.clear();
+    await db.baseRelations.clear();
   });
   await Promise.race([
     wipe,

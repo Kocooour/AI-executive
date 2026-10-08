@@ -1,4 +1,5 @@
 import type { Entity, Relation } from "./db";
+import { mergeEntity, mergeRelations, withConflicts } from "./field-merge";
 
 export interface ServerSnapshot {
   revision: number;
@@ -8,11 +9,19 @@ export interface ServerSnapshot {
   updatedAt: number;
 }
 
+// The version of the data this device last had in common with the server (see field-merge.ts).
+export interface SyncBase {
+  entities: Entity[];
+  relations: Relation[];
+}
+
 export function mergeSnapshots(
   server: ServerSnapshot,
   localEntities: Entity[],
   localRelations: Relation[],
+  base?: SyncBase | null,
 ) {
+  if (base) return mergeWithBase(server, localEntities, localRelations, base);
   const deletedIds = new Set((server.tombstones || []).map((item) => item.id));
   const entities = new Map(
     server.entities
@@ -108,4 +117,52 @@ export function mergeSnapshots(
     entities: [...entities.values()],
     relations: [...relations.values()],
   };
+}
+
+// Field-level merge against the common version. A record without a common version (created on
+// one side, or a device that has never synchronized) falls back to the newer record.
+function mergeWithBase(server: ServerSnapshot, localEntities: Entity[], localRelations: Relation[], base: SyncBase) {
+  const now = Date.now();
+  const deletedIds = new Set((server.tombstones || []).map((item) => item.id));
+  const baseEntities = new Map(base.entities.map((entity) => [entity.id, entity]));
+  const entities = new Map(
+    server.entities.filter((entity) => !deletedIds.has(entity.id)).map((entity) => [entity.id, entity]),
+  );
+  for (const local of localEntities) {
+    if (deletedIds.has(local.id)) continue;
+    const current = entities.get(local.id);
+    const common = baseEntities.get(local.id);
+    if (!current) entities.set(local.id, local);
+    else if (common) entities.set(local.id, mergeEntity(common, local, current, now));
+    else if (local.updatedAt > current.updatedAt) entities.set(local.id, local);
+  }
+  const serverEntities = new Map(server.entities.map((entity) => [entity.id, entity]));
+  const localById = new Map(localEntities.map((entity) => [entity.id, entity]));
+  const relationsVersion = (entity: Entity | undefined) => Number(entity?.properties.relationsUpdatedAt || entity?.updatedAt || 0);
+  // A record this device does not have (deleted here, or never loaded) has not had its relations
+  // changed here either; only the server's changes apply to it.
+  const effectiveLocalRelations = [
+    ...localRelations.filter((relation) => localById.has(relation.sourceEntityId)),
+    ...base.relations.filter((relation) => !localById.has(relation.sourceEntityId)),
+  ];
+  const merged = mergeRelations(
+    base.relations,
+    effectiveLocalRelations,
+    server.relations,
+    (sourceId) => relationsVersion(localById.get(sourceId)) > relationsVersion(serverEntities.get(sourceId)),
+    now,
+  );
+  for (const [sourceId, conflicts] of merged.conflicts) {
+    const entity = entities.get(sourceId);
+    if (entity) entities.set(sourceId, withConflicts(entity, conflicts));
+  }
+  const relations = new Map<string, Relation>();
+  for (const relation of merged.relations) {
+    const source = entities.get(relation.sourceEntityId);
+    const target = entities.get(relation.targetEntityId);
+    if (!source || !target || source.workspaceId !== target.workspaceId || relation.workspaceId !== source.workspaceId) continue;
+    const key = `${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}`;
+    if (!relations.has(key)) relations.set(key, relation);
+  }
+  return { entities: [...entities.values()], relations: [...relations.values()] };
 }
