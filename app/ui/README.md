@@ -5,7 +5,7 @@
 | Path | Contents |
 | --- | --- |
 | `use-lumi-app.tsx` | Client state, effects and handlers not yet moved to a domain hook. Calls the domain hooks and returns everything as one object, typed as `LumiApp`. |
-| `hooks/use-*.ts` | Domain hooks, one per area of the app (so far: `use-attention.ts`, `use-backups.ts`, `use-day-plan.ts`, `use-passkeys.ts`, `use-sign-in.ts`). Each takes the values it needs from the rest of the app as arguments and returns its state and handlers, which `useLumiApp` passes on in its result (spread, or listed key by key where it also uses them itself). |
+| `hooks/use-*.ts` | Domain hooks, one per area of the app (so far: `use-app-badge.ts`, `use-attention.ts`, `use-backups.ts`, `use-day-plan.ts`, `use-notifications.ts`, `use-passkeys.ts`, `use-sign-in.ts`). Each takes the values it needs from the rest of the app as arguments and returns its state and handlers, which `useLumiApp` passes on in its result (spread, or listed key by key where it also uses them itself). |
 | `views/*.tsx` | One component per screen area. Each takes `{ app }: { app: LumiApp }`, destructures what it renders and holds no state of its own. |
 | `types.ts` | Shapes of API responses and view models used by the client. |
 | `copy.ts` | Czech and English UI strings. |
