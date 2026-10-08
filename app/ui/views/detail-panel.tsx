@@ -85,13 +85,13 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               </div>
             )}
             {(selected.type === "task" || selected.type === "project") && (
-              <section className="detailKnowledge" aria-label={language === "cs" ? "Co Lumi ví" : "What Lumi knows"}>
-                <h3>{language === "cs" ? "CO LUMI VÍ" : "WHAT LUMI KNOWS"}</h3>
+              <section className="detailKnowledge" aria-label={tr("whatLumiKnows")}>
+                <h3>{tr("whatLumiKnows2")}</h3>
                 {contextClaims.filter((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt).map((claim) => <article key={claim.id}>
                   <strong>{claim.subject.title} · {contextPredicateLabel(claim.predicate)}: {String(claim.literal?.value ?? claim.target?.title ?? "—")}</strong>
-                  <small>{claim.reviewStatus === "confirmed" ? (language === "cs" ? "potvrzeno" : "confirmed") : claim.reviewStatus === "proposed" ? (language === "cs" ? "ke kontrole" : "to review") : (language === "cs" ? "odmítnuto" : "rejected")} · {claim.freshness === "current" ? (language === "cs" ? "aktuální" : "current") : claim.freshness === "needs_review" ? (language === "cs" ? "prověřit" : "needs review") : (language === "cs" ? "zastaralé" : "stale")}{claim.validTo ? ` · ${language === "cs" ? "platí do" : "valid to"} ${claim.validTo}` : ""}</small>
+                  <small>{claim.reviewStatus === "confirmed" ? (tr("confirmed2")) : claim.reviewStatus === "proposed" ? (tr("toReview2")) : (tr("rejected"))} · {claim.freshness === "current" ? (tr("current2")) : claim.freshness === "needs_review" ? (tr("needsReview2")) : (tr("stale2"))}{claim.validTo ? ` · ${tr("validTo2")} ${claim.validTo}` : ""}</small>
                 </article>)}
-                {!contextClaims.some((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt) && <p>{language === "cs" ? "K této položce zatím nejsou žádná tvrzení." : "No claims for this item yet."}</p>}
+                {!contextClaims.some((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt) && <p>{tr("noClaimsForThis")}</p>}
               </section>
             )}
             {selected.type === "area" && (

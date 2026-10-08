@@ -24,7 +24,8 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
   await record("Home, attention details");
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
-  const sections = page.getByRole("navigation", { name: "Sekce nastavení" }).getByRole("button");
+  // By class, so that the walk works in both interface languages.
+  const sections = page.locator(".settingsTabs button");
   for (let index = 0; index < await sections.count(); index += 1) {
     await sections.nth(index).click();
     await record(`Settings: ${await sections.nth(index).innerText()}`);
@@ -56,7 +57,7 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
   await expect(page.locator(".captureSuggestion, .capturePreview").first()).toBeVisible();
   await record("Capture dialog");
   await page.keyboard.press("Escape");
-  await page.locator("button", { hasText: /Zeptat se AI/ }).first().click();
+  await page.locator("button", { hasText: /Zeptat se AI|Ask AI/ }).first().click();
   await expect(page.locator(".assistantPanel")).toBeVisible();
   await record("Assistant");
   await page.keyboard.press("Escape");

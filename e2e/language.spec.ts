@@ -49,29 +49,53 @@ async function texts(page: import("@playwright/test").Page) {
   });
 }
 
-test("the Czech interface shows no English text", async ({ page }) => {
-  test.setTimeout(120_000);
+// Walks the screens and returns the texts that `foreign` flags. Records the user created (task and
+// project titles, notes) are their content, not the interface; technical identifiers shown in
+// `code` (record ids in the attention details) are skipped too.
+async function audit(page: import("@playwright/test").Page, language: "cs" | "en", foreign: (text: string) => string[] | null) {
   const findings: Finding[] = [];
   const seen = new Set<string>();
-  // Records the user created (task and project titles, notes) are their content, not the interface;
-  // technical identifiers shown in `code` (record ids in the attention details) are skipped too.
-  const userContent = await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.ok ? response.json() : { entities: [] })
-    .then((snapshot) => (snapshot.entities as Array<{ title: string; properties?: { notes?: string } }>).flatMap((entity) => [entity.title, entity.properties?.notes || ""])).catch(() => [] as string[]));
-  const userTexts = new Set(userContent.filter(Boolean));
+  const userTexts = new Set<string>();
+  const addUserContent = async () => {
+    const content = await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json())
+      .then((snapshot) => (snapshot.entities as Array<{ title: string; properties?: { notes?: string } }>)
+        .flatMap((entity) => [entity.title, entity.properties?.notes || ""])).catch(() => [] as string[]));
+    for (const text of content) if (text) userTexts.add(text);
+  };
   await page.goto("/");
-  await expect(page.locator("html")).toHaveAttribute("lang", "cs");
+  await expect(page.locator("html")).toHaveAttribute("lang", language);
   await visitScreens(page, async (where) => {
-    // Titles of records created during the walk are user content too.
-    for (const text of await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json())
-      .then((snapshot) => (snapshot.entities as Array<{ title: string }>).map((entity) => entity.title)).catch(() => [] as string[]))) userTexts.add(text);
+    // Records created during the walk are user content too.
+    await addUserContent();
     for (const text of await texts(page)) {
-      if (seen.has(text) || userTexts.has(text)) continue;
+      if (seen.has(text) || userTexts.has(text) || [...userTexts].some((title) => title.length >= 3 && text.includes(title))) continue;
       seen.add(text);
-      const words = text.replace(allowed, " ").toLowerCase().match(/[a-z]+/g) || [];
-      const hits = [...new Set(words.filter((word) => word.length > 1 && english.has(word)))];
-      // A single short word could be Czech too (e.g. "to", "a"); two English words make it English.
-      if (hits.length >= 2 || hits.some((word) => word.length > 3)) findings.push({ where, text: text.slice(0, 120), words: hits });
+      const words = foreign(text);
+      if (words) findings.push({ where, text: text.slice(0, 120), words });
     }
+  });
+  return findings;
+}
+
+test("the Czech interface shows no English text", async ({ page }) => {
+  test.setTimeout(120_000);
+  const findings = await audit(page, "cs", (text) => {
+    const words = text.replace(allowed, " ").toLowerCase().match(/[a-z]+/g) || [];
+    const hits = [...new Set(words.filter((word) => word.length > 1 && english.has(word)))];
+    // A single short word could be Czech too; two English words, or a longer one, make it English.
+    return hits.length >= 2 || hits.some((word) => word.length > 3) ? hits : null;
+  });
+  console.log(JSON.stringify(findings, null, 1));
+  expect(findings).toEqual([]);
+});
+
+// The English interface must not show Czech: no letters with Czech diacritics outside user content.
+test("the English interface shows no Czech text", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.addInitScript(() => localStorage.setItem("ai-executive-language", "en"));
+  const findings = await audit(page, "en", (text) => {
+    const letters = text.match(/[ěščřžýáíéůúťďňĚŠČŘŽÝÁÍÉŮÚŤĎŇ]/g);
+    return letters ? [...new Set(letters)] : null;
   });
   console.log(JSON.stringify(findings, null, 1));
   expect(findings).toEqual([]);

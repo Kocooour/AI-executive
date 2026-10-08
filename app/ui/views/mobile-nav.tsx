@@ -45,7 +45,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
       {moreOpen && (
         <div className="mobileMoreBackdrop" onClick={() => setMoreOpen(false)}>
           <div id="mobile-more-dialog" className="mobileMore" role="dialog" aria-modal="true" aria-label={tr("More")} ref={moreDialogRef} onClick={(e) => e.stopPropagation()} onKeyDown={(event) => handleOverlayKeys(event, () => setMoreOpen(false))}>
-            <button type="button" className="mobileMoreClose" onClick={() => setMoreOpen(false)}>{language === "cs" ? "Zavřít nabídku" : "Close menu"}</button>
+            <button type="button" className="mobileMoreClose" onClick={() => setMoreOpen(false)}>{tr("closeMenu")}</button>
             {moreViews.map((item) => (
               <button
                 key={item}

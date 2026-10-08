@@ -37,17 +37,13 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   const dayPlanLoadVersion = useRef(0);
   const workSessionLoadVersion = useRef(0);
 
+  // Why a task is in the day plan: `dayPlanReason_<reason>` in the dictionary; an unknown reason is
+  // shown as it is.
   const dayPlanWhy = (reason: string) => {
-    if (reason.startsWith("duration:")) return language === "cs" ? `Odhad trvání je ${reason.slice(9)} minut.` : `Estimated duration is ${reason.slice(9)} minutes.`;
-    const labels: Record<string, [string, string]> = {
-      already_planned: ["Úkol už je v kalendáři.", "The task is already in the calendar."],
-      overdue: ["Úkol je po termínu.", "The task is overdue."], due_today: ["Úkol má termín dnes.", "The task is due today."],
-      deadline_close: ["Termín se blíží.", "The deadline is close."], high_priority: ["Úkol má vysokou prioritu.", "The task has high priority."],
-      context_importance: ["Potvrzený kontext označuje úkol nebo projekt jako důležitý.", "Confirmed context marks the task or project as important."],
-      context_waiting: ["Podle potvrzeného kontextu někdo čeká na výsledek.", "Confirmed context says someone is waiting for the result."],
-      calendar_free: ["V kalendáři je vhodné volné okno.", "A suitable free calendar window is available."],
-    };
-    return labels[reason]?.[language === "cs" ? 0 : 1] || reason;
+    if (reason.startsWith("duration:")) return tr("dayPlanReasonDuration").replace("{minutes}", reason.slice(9));
+    const key = `dayPlanReason_${reason}`;
+    const label = tr(key);
+    return label === key ? reason : label;
   };
 
   async function loadDayPlan(workspaceId: string, date: string) {
@@ -119,7 +115,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     setDayPlan(null);
     setDayPlanStatus("");
     loadDayPlan(workspaceId, calendarToday)
-      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
+      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(tr("theDayPlanIs")); });
   }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
   useEffect(() => {
     if (authState !== "ready") return;
