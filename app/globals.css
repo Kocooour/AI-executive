@@ -1010,7 +1010,10 @@ article {
   color: var(--muted);
   font-size: 12px;
 }
-.captureWorkspace select {
+.captureArea {
+  margin-top: 12px;
+}
+.captureWorkspace select, .captureArea select {
   width: 100%;
   padding: 12px;
   border: 1px solid #ddd;
@@ -2861,7 +2864,7 @@ h3 {
 .contextForm select,
 .contextForm textarea,
 .captureModal input,
-.captureWorkspace select,
+.captureWorkspace select, .captureArea select,
 .captureSuggestionGrid select,
 .captureSuggestionGrid input,
 .listControls select,
