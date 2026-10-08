@@ -11,6 +11,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    captureWorkspaceId,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
@@ -33,8 +34,6 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     workspaces,
     writeWorkspaceId,
   } = app;
-  // A task added to a project goes to the project's workspace, so its area has to come from there.
-  const captureWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
   return (
     <>
       {capture && (

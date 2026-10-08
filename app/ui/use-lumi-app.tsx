@@ -1077,9 +1077,7 @@ export function useLumiApp() {
       return;
     }
     const version = ++captureSuggestionVersion.current;
-    // A task added to a project goes to the project's workspace; its suggestions (area, calendar
-    // window) have to come from there too.
-    const workspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    const workspaceId = captureWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1188,6 +1186,9 @@ export function useLumiApp() {
     localStorage.setItem("ai-executive-write-workspace", workspaceId);
   }
 
+  // The workspace a captured task goes to: a project's own workspace when it is added to a project,
+  // otherwise the chosen one. Its area options and suggestions come from there too.
+  const captureWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
   // A manual area choice in quick capture; a later suggestion no longer replaces it.
   function chooseCaptureArea(areaId: string) {
     captureAreaTouched.current = true;
@@ -1544,9 +1545,9 @@ export function useLumiApp() {
     const suggestedNewProjectTitle = captureProjectAction === "new"
       ? suggestion?.newProjectSuggestion?.title.trim() || ""
       : "";
-    // Only an area from the workspace the task goes to (a project's own workspace, otherwise the
-    // chosen one) is kept; another one would be a cross-workspace link and the task could not be added.
-    const destinationWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    // Only an area from the workspace the task goes to is kept; another one would be a
+    // cross-workspace link and the task could not be added.
+    const destinationWorkspaceId = captureWorkspaceId;
     const suggestedAreaId = items.some((item) => item.id === captureAreaId && item.type === "area" && item.workspaceId === destinationWorkspaceId)
       ? captureAreaId
       : "";
@@ -2277,6 +2278,7 @@ export function useLumiApp() {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    captureWorkspaceId,
     chooseCaptureArea,
     captureSuggestion,
     captureSuggestionBusy,
