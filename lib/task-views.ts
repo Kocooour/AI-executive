@@ -60,7 +60,18 @@ export function parseCaptureText(raw: string, today: string, now = new Date()) {
     when = today;
     title = title.replace(/(^|\s)dnes(?=\s|$)/i, " ");
   }
-  const m = title.match(/(?:^|\s)(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\.?\s*$/);
+  // Priority marks may follow the date ("… 25. 10. !"), so they are taken out first.
+  if (/(^|\s)(!|#high)(?=\s|$)/i.test(title)) priority = "high";
+  else if (/(^|\s)#medium(?=\s|$)/i.test(title)) priority = "medium";
+  else if (/(^|\s)#low(?=\s|$)/i.test(title)) priority = "low";
+  title = title.replace(/(^|\s)(!|#high|#medium|#low)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
+  // A date at the end of the text: "25.10", "25.10.", "25.10.2026", and the Czech way of writing
+  // it with spaces, "25. 10." or "25. 10. 2026". With spaces the dot after the month is required,
+  // so that "kapitola 2. 5" stays a title.
+  // A third number right before it ("kroky 1. 2. 3.") means a list, not a date.
+  const spaced = title.match(/(?:^|\s)(\d{1,2})\. (\d{1,2})\.(?: ?(\d{4})\.?)?$/);
+  const m = title.match(/(?:^|\s)(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\.?$/)
+    || (spaced && !/\d\.\s*$/.test(title.slice(0, spaced.index)) ? spaced : null);
   if (m) {
     const year = m[3] ? Number(m[3]) : now.getFullYear();
     const d = new Date(year, Number(m[2]) - 1, Number(m[1]));
@@ -70,16 +81,19 @@ export function parseCaptureText(raw: string, today: string, now = new Date()) {
       title = title.slice(0, m.index).trim();
     }
   }
-  if (/(^|\s)(!|#high)(?=\s|$)/i.test(title)) priority = "high";
-  else if (/(^|\s)#medium(?=\s|$)/i.test(title)) priority = "medium";
-  else if (/(^|\s)#low(?=\s|$)/i.test(title)) priority = "low";
-  title = title.replace(/(^|\s)(!|#high|#medium|#low)(?=\s|$)/gi, " ").replace(/\s+/g, " ").trim();
+  // Text that consists only of a date or a mark has no title left. A task needs one (the server
+  // refuses a record without it), so such text is kept as the title, as typed.
+  if (!title) return { title: raw.trim().replace(/\s+/g, " "), when: "", priority: "none" };
   return { title, when, priority };
 }
 
 // Where a newly created task lands. A date typed into the title wins; otherwise the task follows the
 // view it was added from. A task added to Today gets today's date as well as the flag, the same as
 // dragging it there or choosing Today in the detail panel, so it becomes overdue tomorrow like any dated task.
+// A task typed into the row of Someday is marked for someday, and one typed into the row of
+// Upcoming gets tomorrow's date: it would otherwise land in Anytime and vanish from the list it
+// was typed into. This applies only when the caller leaves the placement to the view; the capture
+// dialog states its own placement and is not affected.
 export function newTaskPlacement(
   parsedWhen: string,
   properties: Record<string, unknown>,
@@ -88,9 +102,14 @@ export function newTaskPlacement(
   if (parsedWhen) return { inbox: false, today: parsedWhen === options.today, when: parsedWhen };
   const flaggedToday = Boolean(properties.today ?? (options.view === "Today"));
   const hasDate = typeof properties.when === "string" && properties.when !== "";
+  const leftToView = properties.inbox === undefined && properties.today === undefined && properties.someday === undefined;
+  const unplaced = leftToView && !flaggedToday && !hasDate;
+  const [year, month, day] = options.today.split("-").map(Number);
   return {
     inbox: Boolean(properties.inbox ?? (!options.hasProject && options.view === "Inbox")),
     today: flaggedToday,
     ...(flaggedToday && !hasDate ? { when: options.today } : {}),
+    ...(unplaced && options.view === "Someday" ? { someday: true } : {}),
+    ...(unplaced && options.view === "Upcoming" ? { when: ymd(new Date(year, month - 1, day + 1)) } : {}),
   };
 }

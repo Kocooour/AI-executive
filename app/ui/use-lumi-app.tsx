@@ -2102,7 +2102,6 @@ export function useLumiApp() {
     .filter((task) => taskMatchesView(task, "Today", today))
     .sort(byManualOrder("task:Today"))
     .slice(0, 5);
-  const homeProjects = projects.filter((project) => project.status === "active").sort(byManualOrder("project:all")).slice(0, 4);
   const greetingHour = new Date().getHours();
   const homeGreeting = greetingHour < 12 ? tr("goodMorning") : greetingHour < 18 ? tr("goodAfternoon") : tr("goodEvening");
   const visible = useMemo(
@@ -2784,9 +2783,6 @@ export function useLumiApp() {
   }
 
   function peersForScope(scope: string, workspaceId: string) {
-    if (view === "Home" && scope === "project:all") {
-      return homeProjects.filter((project) => project.workspaceId === workspaceId);
-    }
     const [entityType, kind, ...rest] = scope.split(":");
     const id = rest.join(":");
     return scopedItems.filter((entity) => {
@@ -2817,10 +2813,7 @@ export function useLumiApp() {
       const insertionIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       peers.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, moved);
       if (source.type === "task") setSortBy("manual");
-      const ordered = view === "Home" && scope === "project:all"
-        ? [...peers, ...projects.filter((project) => project.workspaceId === source.workspaceId && project.status === "active" && !peers.some((peer) => peer.id === project.id)).sort(byManualOrder(scope))]
-        : peers;
-      await persistManualOrder(ordered, source.id, scope);
+      await persistManualOrder(peers, source.id, scope);
       return;
     }
     if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {
@@ -2867,7 +2860,6 @@ export function useLumiApp() {
 
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
     const peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
-      : view === "Home" && scope === "project:all" ? homeProjects.filter((project) => project.workspaceId === entity.workspaceId)
         : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
           : peersForScope(scope, entity.workspaceId);
     const index = peers.findIndex((candidate) => candidate.id === entity.id);
@@ -3020,7 +3012,6 @@ export function useLumiApp() {
     freeHours,
     freeWindows,
     homeGreeting,
-    homeProjects,
     homeTodayTasks,
     inspect,
     items,
