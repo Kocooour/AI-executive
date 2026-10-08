@@ -1002,14 +1002,18 @@ article {
   border: 1px solid #ddd;
   border-radius: 11px;
 }
-.captureWorkspace {
+.captureWorkspace,
+.captureArea {
   display: grid;
   gap: 6px;
   margin-bottom: 12px;
-  color: #777;
+  color: var(--muted);
   font-size: 12px;
 }
-.captureWorkspace select {
+.captureArea {
+  margin-top: 12px;
+}
+.captureWorkspace select, .captureArea select {
   width: 100%;
   padding: 12px;
   border: 1px solid #ddd;
@@ -1859,7 +1863,7 @@ article {
 }
 .entityIcon.areaIcon {
   background: #e9f7f3;
-  color: #2f826c;
+  color: #28745f;
 }
 .entityIcon.noteIcon {
   background: #fff5df;
@@ -2860,7 +2864,7 @@ h3 {
 .contextForm select,
 .contextForm textarea,
 .captureModal input,
-.captureWorkspace select,
+.captureWorkspace select, .captureArea select,
 .captureSuggestionGrid select,
 .captureSuggestionGrid input,
 .listControls select,

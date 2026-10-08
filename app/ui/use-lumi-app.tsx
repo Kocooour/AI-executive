@@ -1077,7 +1077,9 @@ export function useLumiApp() {
       return;
     }
     const version = ++captureSuggestionVersion.current;
-    const workspaceId = writeWorkspaceId;
+    // A task added to a project goes to the project's workspace; its suggestions (area, calendar
+    // window) have to come from there too.
+    const workspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1186,6 +1188,11 @@ export function useLumiApp() {
     localStorage.setItem("ai-executive-write-workspace", workspaceId);
   }
 
+  // A manual area choice in quick capture; a later suggestion no longer replaces it.
+  function chooseCaptureArea(areaId: string) {
+    captureAreaTouched.current = true;
+    setCaptureAreaId(areaId);
+  }
   function selectCaptureWriteWorkspace(workspaceId: string) {
     // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
     setCaptureAreaId("");
@@ -1537,7 +1544,12 @@ export function useLumiApp() {
     const suggestedNewProjectTitle = captureProjectAction === "new"
       ? suggestion?.newProjectSuggestion?.title.trim() || ""
       : "";
-    const suggestedAreaId = captureAreaId;
+    // Only an area from the workspace the task goes to (a project's own workspace, otherwise the
+    // chosen one) is kept; another one would be a cross-workspace link and the task could not be added.
+    const destinationWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    const suggestedAreaId = items.some((item) => item.id === captureAreaId && item.type === "area" && item.workspaceId === destinationWorkspaceId)
+      ? captureAreaId
+      : "";
     const suggestedDate = parsed.when || suggestion?.scheduledDate || "";
     const globalTask = captureType === "task" && !captureProjectId;
     setCapture(false);
@@ -2265,6 +2277,7 @@ export function useLumiApp() {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    chooseCaptureArea,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
@@ -2399,7 +2412,6 @@ export function useLumiApp() {
     setCalendarUrl,
     setCapture,
     setCaptureProjectAction,
-    setCaptureAreaId: (areaId: string) => { captureAreaTouched.current = true; setCaptureAreaId(areaId); },
     setCaptureSuggestion,
     setCaptureSuggestionError,
     setChecklistDraft,
