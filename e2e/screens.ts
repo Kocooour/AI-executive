@@ -5,11 +5,11 @@ import { waitUntilSynced } from "./helpers";
 // on each with a name for it; the audits (contrast, language) decide what to check there.
 export const views = ["Home", "Inbox", "Today", "Upcoming", "Anytime", "Someday", "Overdue", "Completed", "Projects", "Areas", "Notes", "Calendar", "Search", "Context", "Agents", "Settings"];
 
-export async function visitScreens(page: Page, record: (where: string) => Promise<void>) {
+export async function visitScreens(page: Page, record: (where: string) => Promise<void>, theme?: "light" | "dark") {
   for (const view of views) {
     await page.goto(`/?view=${view}`);
     await waitUntilSynced(page);
-    await expect(page.locator("html")).toHaveAttribute("data-theme", /light|dark/);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme ?? /light|dark/);
     await record(view);
   }
   await page.goto("/");

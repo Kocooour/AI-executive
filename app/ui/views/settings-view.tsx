@@ -295,7 +295,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                             <span>
                               <strong>{passkey.label}</strong>
                               <small>
-                                {passkey.rpId} · {tr("passkeyAdded2").replace("{date}", new Date(passkey.createdAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB"))}
+                                {passkey.rpId} · {tr("passkeyAddedOn").replace("{date}", new Date(passkey.createdAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB"))}
                                 {passkey.backedUp ? ` · ${tr("passkeySynced")}` : ""}
                               </small>
                             </span>

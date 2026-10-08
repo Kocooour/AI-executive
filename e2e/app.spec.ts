@@ -454,6 +454,18 @@ test("a draft that another open tab is still typing is left to that tab", async 
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === partial, true);
 });
 
+test("the personal workspace is shown in Czech and saving its shown name does not rename it", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Workspace" }).first().click();
+  const name = page.getByLabel("Název workspace");
+  await expect(name).toHaveValue("Osobní");
+  await name.press("Enter");
+  await expect(page.getByText("Workspace uložen.")).toBeVisible();
+  await waitUntilSynced(page);
+  expect((await serverEntities(page)).find((entity) => entity.id === "workspace:personal")?.title).toBe("Personal");
+});
+
 test("Settings shows one section at a time", async ({ page }) => {
   await page.goto("/?view=Settings");
   const tabs = settingsSections(page);

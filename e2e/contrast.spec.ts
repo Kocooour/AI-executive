@@ -100,8 +100,7 @@ async function collect(page: import("@playwright/test").Page, theme: string) {
     await page.mouse.move(0, 0);
     for (const failure of await audit(page)) failures.push({ view: where, theme, ...failure });
   };
-  await visitScreens(page, record);
-  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+  await visitScreens(page, record, theme as "light" | "dark");
   return failures;
 }
 

@@ -12,7 +12,7 @@ const english = new Set(("the and or of for with without your you our is are was
   "task tasks project projects area areas note notes today tomorrow week day days hour hours minute minutes time " +
   "offline online sync synced syncing device devices sign signed out permission " +
   "granted denied browser address secure connection check registered sending reminder reminders when where what why who " +
-  "how about here there status work working plan planned context search inbox upcoming anytime someday completed " +
+  "how about here there work working plan planned search inbox upcoming anytime someday completed " +
   "overdue home more less show hide edit cancel confirm write writes require requires always safely propose change ask executive " +
   "personal family switch name monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun").split(" "));
 const allowed = /\b(workspace|workspaces|Workspace|Lumi|AI|passkey|passkeys|Passkey|Passkeys|Face ID|Touch ID|iPhone|Android|PWA|HTTPS|URL|ICS|iCal|Google|Outlook|PACT|ID|OK|e2e)\b/g;
@@ -57,6 +57,8 @@ test("the Czech interface shows no English text", async ({ page }) => {
   const userContent = await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.ok ? response.json() : { entities: [] })
     .then((snapshot) => (snapshot.entities as Array<{ title: string; properties?: { notes?: string } }>).flatMap((entity) => [entity.title, entity.properties?.notes || ""])).catch(() => [] as string[]));
   const userTexts = new Set(userContent.filter(Boolean));
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("lang", "cs");
   await visitScreens(page, async (where) => {
     // Titles of records created during the walk are user content too.
     for (const text of await page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json())

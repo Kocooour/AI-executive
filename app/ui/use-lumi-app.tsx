@@ -1065,7 +1065,7 @@ export function useLumiApp() {
     if (workspace) {
       setWorkspaceDraft(workspaceTitle(workspace));
     }
-  }, [activeWorkspaceId, items, writeWorkspaceId]);
+  }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
   useEffect(() => {
     const parsed = parseCapture(draft);
@@ -1150,6 +1150,13 @@ export function useLumiApp() {
         entity.type === "workspace" && entity.workspaceId === workspaceId,
     );
     if (!workspace) return;
+    // Saving the name as it is shown changes nothing (the personal workspace is shown translated
+    // while it keeps its stored name).
+    if (name === workspaceTitle(workspace)) {
+      setSettingsSaved(true);
+      window.setTimeout(() => setSettingsSaved(false), 1800);
+      return;
+    }
     localDataVersion.current += 1;
     await db.entities.update(workspace.id, {
       title: name,
