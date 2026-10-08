@@ -10,7 +10,9 @@ export function EntityList({ app }: { app: LumiApp }) {
     activeWorkspaceId,
     areas,
     collection,
-    create,
+    createFromRow,
+    rowError,
+    setRowError,
     done,
     dragHandle,
     dragTarget,
@@ -196,11 +198,12 @@ export function EntityList({ app }: { app: LumiApp }) {
                 <div className="capture">
                   <input
                     value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && create(type, text)}
+                    onChange={(e) => { setText(e.target.value); setRowError(false); }}
+                    onKeyDown={(e) => e.key === "Enter" && createFromRow(type, text)}
                     placeholder={`+ ${tr("add")} ${tr(type === "project" ? "Projects" : type === "area" ? "Areas" : type === "note" ? "Notes" : "Today").toLowerCase()}`}
                   />
-                  <button onClick={() => create(type, text)}>{tr("add")}</button>
+                  <button onClick={() => createFromRow(type, text)}>{tr("add")}</button>
+                  {rowError && <small role="alert" className="captureRowError">{tr("addFailed")}</small>}
                 </div>
               )}
             </>

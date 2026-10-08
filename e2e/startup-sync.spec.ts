@@ -155,3 +155,55 @@ test("after a first sign-in on a new browser, reloading sends nothing", async ({
   expect(await revision()).toBe(before);
   await context.close();
 });
+
+// Typing into the Inbox row before the server copy has arrived adds the task on the first try,
+// without an error, and it reaches the server once.
+test("a task typed into Inbox before the server copy arrives is added on the first try", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  let held = false;
+  await page.route("**/api/store", async (route) => {
+    if (!held && route.request().method() === "GET") {
+      held = true;
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
+    await route.continue();
+  });
+  const title = `Před načtením ${Date.now()}`;
+  await page.goto("/?view=Inbox");
+  const field = page.locator(".capture input");
+  await field.fill(title);
+  await field.press("Enter");
+  await expect(page.locator("strong", { hasText: title })).toBeVisible();
+  await expect(field).toHaveValue("");
+  await expect(page.locator(".captureRowError")).toHaveCount(0);
+  await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === title).length, { timeout: 20_000 }).toBe(1);
+  await expect.poll(async () => (await serverEntities(page)).some((entity) => entity.title === seeded.plainTask)).toBe(true);
+  await context.close();
+});
+
+// A workspace that is not on this device yet cannot take a new item: the row says so and keeps
+// the text, and the message goes away when the text changes.
+test("an item the add row cannot save keeps its text and says so", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  await context.addInitScript(() => {
+    localStorage.setItem("ai-executive-active-workspace", "all");
+    localStorage.setItem("ai-executive-write-workspace", "not-on-this-device");
+  });
+  const page = await context.newPage();
+  // The server copy is held back, so the chosen workspace is not on this device yet.
+  await page.route("**/api/store", async (route) => {
+    if (route.request().method() === "GET") await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await route.continue();
+  });
+  await page.goto("/?view=Inbox");
+  const field = page.locator(".capture input");
+  await field.fill("Nelze uložit");
+  await field.press("Enter");
+  const error = page.locator(".captureRowError");
+  await expect(error).toHaveText("Položku se nepodařilo přidat. Zkuste to znovu.");
+  await expect(field).toHaveValue("Nelze uložit");
+  await field.fill("Nelze uložit!");
+  await expect(error).toHaveCount(0);
+  await context.close();
+});

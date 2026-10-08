@@ -28,6 +28,7 @@ import { useSync } from "./hooks/use-sync";
 export function useLumiApp() {
   const [view, setView] = useState("Home"),
     [text, setText] = useState(""),
+    [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
     [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     [query, setQuery] = useState(""),
@@ -1436,9 +1437,14 @@ export function useLumiApp() {
       linkedArea?.workspaceId ||
       explicitWorkspaceId ||
       writeWorkspaceId;
-    const workspace = await db.entities.get(
-      `workspace:${creationWorkspaceId}`,
-    );
+    let workspace = await db.entities.get(`workspace:${creationWorkspaceId}`);
+    // Something typed right after the app opens can come before the local copy exists. The
+    // personal workspace always exists on the server, so its placeholder (which never wins a
+    // merge) is created here instead of refusing the item.
+    if (!workspace && creationWorkspaceId === personalWorkspaceId) {
+      await ensureDefaultWorkspace();
+      workspace = await db.entities.get(`workspace:${creationWorkspaceId}`);
+    }
     if (!workspace || workspace.type !== "workspace") {
       throw new Error("A valid write workspace is required");
     }
@@ -1635,6 +1641,19 @@ export function useLumiApp() {
       }
       setDraft(title);
       setCapture(true);
+    }
+  }
+  // The add row is shared by every list; its message belongs to the list it was shown under.
+  useEffect(() => setRowError(false), [view]);
+  // The add row under a list: a refused item keeps its text and says so instead of failing silently.
+  async function createFromRow(type: EntityType, title: string) {
+    setRowError(false);
+    try {
+      await create(type, title);
+    } catch (error) {
+      // Kept in the console as well; the message alone would hide the cause.
+      console.error(error);
+      setRowError(true);
     }
   }
   async function relate(
@@ -2360,6 +2379,9 @@ export function useLumiApp() {
     contextSubjectTypeLabel,
     contextTitle,
     create,
+    createFromRow,
+    rowError,
+    setRowError,
     createServerBackup,
     createSuggestedTarget,
     createWorkspace,
