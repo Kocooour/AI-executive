@@ -3,6 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
+import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -28,6 +29,7 @@ export function useLumiApp() {
     [view, setView] = useState("Home"),
     [text, setText] = useState(""),
     [selected, setSelected] = useState<Entity | null>(null),
+    [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     [query, setQuery] = useState(""),
     [capture, setCapture] = useState(false),
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
@@ -384,14 +386,17 @@ export function useLumiApp() {
         return;
       }
       if (snapshot.revision > serverRevision.current) {
+        // "Synced" means the local copy holds the server's state. If a local change got in the way,
+        // the copy was not taken over; that change's own save sets the status when it is done.
         try {
-          const applied = await applySnapshot(snapshot, pullVersion);
+          if (!(await applySnapshot(snapshot, pullVersion))) return;
           // A browser signing in for the first time could not synchronize when it started. Once it
           // holds exactly the server copy it is synchronized; without the mark every later start
           // would send that copy back to the server as if it were the browser's own data.
-          if (applied && afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+          if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
         } catch (error) {
           if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+          return;
         }
       }
       setSyncStatus("synced");
@@ -1024,7 +1029,8 @@ export function useLumiApp() {
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         drainSync: () => syncQueue.current,
         hasUnsent: hasUnsentChanges,
-        sync: syncToServer,
+        // Notes drafts kept in the device go into the local copy first, so they are sent too.
+        sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
         serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
         confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
         // From here nothing may be edited and no pull or sync still in flight may write data back.
@@ -2055,25 +2061,150 @@ export function useLumiApp() {
     setUndoRelations([]);
     load();
   }
-  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated") {
-    const current = (await db.entities.get(e.id)) || e;
-    const activity = Array.isArray(current.properties.activity)
-      ? current.properties.activity
-      : [];
+  // `onlyIfOpen`: put the saved record into the detail panel only while that record is still the
+  // one open there (a save that finishes after the panel was closed must not reopen it).
+  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated", onlyIfOpen = false) {
     localDataVersion.current += 1;
-    await db.entities.update(e.id, {
-      properties: {
-        ...current.properties,
-        ...properties,
-        activity: [...activity, { at: Date.now(), action }].slice(-50),
-      },
-      updatedAt: Date.now(),
-    });
-    localDataVersion.current += 1;
+    // Reading and writing in one transaction: two saves of the same record started together (for
+    // example leaving the notes field by ticking a checklist item) must not overwrite each other.
+    // The write marker is released even if the write fails (sign-out waits for it).
+    try { await db.transaction("rw", db.entities, async () => {
+      const current = (await db.entities.get(e.id)) || e;
+      const activity = Array.isArray(current.properties.activity)
+        ? current.properties.activity
+        : [];
+      await db.entities.update(e.id, {
+        properties: {
+          ...current.properties,
+          ...properties,
+          activity: [...activity, { at: Date.now(), action }].slice(-50),
+        },
+        updatedAt: Date.now(),
+      });
+    }); } finally {
+      localDataVersion.current += 1;
+    }
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(e.id)) || null);
+    const saved = (await db.entities.get(e.id)) || null;
+    // The title may be being typed in the same panel (it is saved when its field is left), so the
+    // panel keeps its own title.
+    // A title that differs from the one the save started with is being typed and is kept; otherwise
+    // the saved title is shown (it may have been changed on another device).
+    if (onlyIfOpen) setSelected((open) => (open && saved && open.id === e.id ? { ...saved, title: open.title !== e.title ? open.title : saved.title } : open));
+    else setSelected(saved);
   }
+  // Notes are typed into a draft and saved when the field is left. Saving on every key press put
+  // the stored value back into the field while the save was running, so typed characters were
+  // lost. Every key press also keeps the draft in the device (lib/notes-drafts.ts), because that
+  // write is synchronous and survives the page being closed or killed before the save could run.
+  // The draft is dropped only if nothing was typed into it since this save started. If the save
+  // fails the draft stays, so the text is still in the field and is saved next time.
+  const pageId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  function editNotes(id: string, text: string, base: string) {
+    setNotesDraft({ id, text });
+    keepNotesDraft(localStorage, pageId.current, id, text, base);
+  }
+  async function saveNotes(e: Pick<Entity, "id">, notes: string) {
+    try {
+      const stored = await db.entities.get(e.id);
+      if (stored && String(stored.properties.notes || "") !== notes) await patch(stored, { notes }, "updated", true);
+    } catch {
+      return;
+    }
+    setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
+    settleNotesDraft(localStorage, pageId.current, e.id, notes);
+  }
+  // A phone may close the app in the background without the field ever being left, so a draft is
+  // saved as soon as the page is hidden.
+  const notesDraftRef = useRef(notesDraft);
+  notesDraftRef.current = notesDraft;
+  const saveNotesRef = useRef(saveNotes);
+  saveNotesRef.current = saveNotes;
+  useEffect(() => {
+    const saveDraft = (event: Event) => {
+      if (event.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+      const draft = notesDraftRef.current;
+      if (draft) void saveNotesRef.current({ id: draft.id }, draft.text);
+    };
+    document.addEventListener("visibilitychange", saveDraft);
+    window.addEventListener("pagehide", saveDraft);
+    return () => {
+      document.removeEventListener("visibilitychange", saveDraft);
+      window.removeEventListener("pagehide", saveDraft);
+    };
+  }, []);
+  // Drafts left by other pages. A page that is still open answers on the draft channel while it
+  // holds a draft, and its drafts are left to it.
+  const draftChannelName = "ai-executive-notes-draft";
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(draftChannelName);
+    channel.onmessage = (event) => {
+      if (event.data?.ask === pageId.current && notesDraftRef.current) channel.postMessage({ alive: pageId.current });
+    };
+    return () => channel.close();
+  }, []);
+  // Without the channel, a draft typed into in the last 30 seconds is taken as still open.
+  function draftOwnerOpen(draft: KeptNotesDraft) {
+    return new Promise<boolean>((resolve) => {
+      if (typeof BroadcastChannel === "undefined") { resolve(Date.now() - draft.at < 30_000); return; }
+      const channel = new BroadcastChannel(draftChannelName);
+      const done = (open: boolean) => { channel.close(); resolve(open); };
+      const wait = window.setTimeout(() => done(false), 400);
+      channel.onmessage = (event) => {
+        if (event.data?.alive === draft.page) { window.clearTimeout(wait); done(true); }
+      };
+      channel.postMessage({ ask: draft.page });
+    });
+  }
+  // Saves the drafts that pages left behind into the local copy. On start (`signingOut` false) the
+  // drafts of pages that are still open are left to them, and a draft whose notes were changed
+  // since it was started (for example on another device) is dropped: the newer notes stay. When
+  // signing out every draft is saved, because the other pages are about to lose theirs; one that
+  // conflicts with newer notes stays kept, so sign-out asks before discarding it.
+  // Returns true if a draft was left to a page that is still open.
+  async function saveLeftoverDrafts(signingOut: boolean, stopped = () => false) {
+    let leftToOwner = false;
+    const owners = new Map<string, boolean>();
+    for (const draft of keptNotesDrafts(localStorage)) {
+      if (stopped()) return leftToOwner;
+      if (!signingOut) {
+        if (draft.page === pageId.current) continue;
+        if (!owners.has(draft.page)) owners.set(draft.page, await draftOwnerOpen(draft));
+        if (owners.get(draft.page)) { leftToOwner = true; continue; }
+      }
+      const stored = await db.entities.get(draft.id);
+      if (stopped()) return leftToOwner;
+      const action = leftoverDraftAction(draft, stored ? String(stored.properties.notes || "") : undefined);
+      if (action === "conflict" && signingOut) continue;
+      if (action === "save" && stored) {
+        try {
+          await patch(stored, { notes: draft.text }, "updated", true);
+        } catch {
+          continue;
+        }
+      }
+      // If that page typed on in the meantime, its draft now starts from what was saved.
+      if (action === "gone") dropNotesDraft(localStorage, draft);
+      else settleNotesDraft(localStorage, draft.page, draft.id, draft.text);
+    }
+    return leftToOwner;
+  }
+  // Leftover drafts are saved once the start-up synchronization has succeeded: only then are the
+  // newest notes known, so a draft cannot win over notes changed on another device. Drafts left to
+  // a page that is still open are looked at again later.
+  useEffect(() => {
+    if (authState !== "ready" || syncStatus !== "synced") return;
+    let timer: number | undefined;
+    let stopped = false;
+    const recover = async () => {
+      if (stopped) return;
+      if (await saveLeftoverDrafts(false, () => stopped) && !stopped) timer = window.setTimeout(() => void recover(), 30_000);
+    };
+    void recover();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [authState, syncStatus]);
   function scheduleTask(task: Entity, destination: "today" | "tomorrow" | "someday" | "clear" | string) {
     const when = destination === "today" ? ymd()
       : destination === "tomorrow" ? ymd(addLocalDays(new Date(), 1))
@@ -2536,6 +2667,7 @@ export function useLumiApp() {
     durableContext,
     editContextClaim,
     editingClaim,
+    editNotes,
     enableNotifications,
     freeHours,
     freeWindows,
@@ -2557,6 +2689,7 @@ export function useLumiApp() {
     newSubjectTitle,
     newSubjectType,
     newWorkspaceDraft,
+    notesDraft,
     notificationState,
     notificationStatus,
     openCapture,
@@ -2589,6 +2722,7 @@ export function useLumiApp() {
     runPACTAgent,
     saveContextClaim,
     saveLanguage,
+    saveNotes,
     saveNotificationSettings,
     saveTheme,
     saveWorkspaceName,
