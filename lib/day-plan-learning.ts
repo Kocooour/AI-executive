@@ -11,8 +11,11 @@ export interface LearnedPlanning {
 
 type Feedback = { decision?: unknown; at?: unknown; plannedMinutes?: unknown; proposedStart?: unknown; chosenStart?: unknown };
 
+// Samples from measured work and planned blocks: as before 1ef8aa3, shorter ones are ignored and
+// the rest are counted in 5-minute steps. Only the estimate the user typed keeps whole minutes.
 function validMinutes(value: unknown) {
-  return taskMinutes(value);
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 10 && number <= 480 ? Math.ceil(number / 5) * 5 : null;
 }
 
 function median(values: number[]) {
@@ -42,7 +45,7 @@ function minuteInZone(value: unknown, timezone: string) {
 }
 
 export function learnPlanning(task: Entity, peers: Entity[], timezone: string): LearnedPlanning {
-  const explicit = validMinutes(task.properties.estimatedMinutes);
+  const explicit = taskMinutes(task.properties.estimatedMinutes);
   const durationSamples: number[] = [];
   const actualSamples: number[] = [];
   const timeSamples: number[] = [];
