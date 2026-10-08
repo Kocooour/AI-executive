@@ -73,9 +73,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               <div className="contextStrip">
                 <b>{tr("context")}</b>
                 <span>
-                  {context.summary.tasks} tasks · {context.summary.notes} notes
-                  · {context.summary.projects} projects ·{" "}
-                  {context.summary.areas} areas
+                  {tr("contextSummary").replace("{tasks}", String(context.summary.tasks)).replace("{notes}", String(context.summary.notes))
+                    .replace("{projects}", String(context.summary.projects)).replace("{areas}", String(context.summary.areas))}
                 </span>
                 <small>
                   {context.related

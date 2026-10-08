@@ -189,7 +189,7 @@ aside {
   text-align: left;
 }
 .workspaceMenu small {
-  color: #999;
+  color: var(--muted);
 }
 .mobileWorkspaceButton,
 .mobileWorkspaceMenu {

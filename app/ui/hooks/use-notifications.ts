@@ -7,7 +7,7 @@ import { urlBase64ToUint8Array } from "../format";
 // (loaded on start), enabling, disabling and testing push, and saving the preferences one after
 // another. Moved verbatim from use-lumi-app.tsx. The Settings view also refreshes the state
 // together with the backups; that effect stays in use-lumi-app.tsx, so the setter is returned.
-export function useNotifications() {
+export function useNotifications({ tr }: { tr: (key: string) => string }) {
   const [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [notificationStatus, setNotificationStatus] = useState("");
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
@@ -20,18 +20,18 @@ export function useNotifications() {
   }, []);
 
   async function enableNotifications() {
-    setNotificationStatus("Requesting permission…");
+    setNotificationStatus(tr("notifRequesting"));
     try {
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        throw new Error("Push notifications are not supported in this browser.");
+        throw new Error(tr("notifUnsupported"));
       }
       if (!window.isSecureContext) {
-        throw new Error("Open the HTTPS address to enable notifications.");
+        throw new Error(tr("notifNeedsHttps"));
       }
       const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error("Notification permission was not granted.");
+      if (permission !== "granted") throw new Error(tr("notifPermissionDenied"));
       const stateResponse = await fetch("/api/notifications", { cache: "no-store" });
-      if (!stateResponse.ok) throw new Error("Notification service is unavailable.");
+      if (!stateResponse.ok) throw new Error(tr("notifServiceUnavailable"));
       const state = (await stateResponse.json()) as NotificationState;
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
@@ -46,15 +46,15 @@ export function useNotifications() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "subscribe", subscription: subscription.toJSON() }),
       });
-      if (!response.ok) throw new Error("The device could not be registered.");
+      if (!response.ok) throw new Error(tr("notifRegisterFailed"));
       setNotificationState((await response.json()) as NotificationState);
-      setNotificationStatus("Notifications enabled on this device.");
+      setNotificationStatus(tr("notifEnabled"));
     } catch (error) {
-      setNotificationStatus(error instanceof Error ? error.message : "Notifications could not be enabled.");
+      setNotificationStatus(error instanceof Error ? error.message : tr("notifEnableFailed"));
     }
   }
   async function disableNotifications() {
-    setNotificationStatus("Disabling notifications…");
+    setNotificationStatus(tr("notifDisabling"));
     try {
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
@@ -68,13 +68,13 @@ export function useNotifications() {
       }
       const state = await fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json());
       setNotificationState(state as NotificationState);
-      setNotificationStatus("Notifications disabled on this device.");
+      setNotificationStatus(tr("notifDisabled"));
     } catch {
-      setNotificationStatus("Notifications could not be disabled.");
+      setNotificationStatus(tr("notifDisableFailed"));
     }
   }
   async function testNotification() {
-    setNotificationStatus("Sending test notification…");
+    setNotificationStatus(tr("notifTestSending"));
     try {
       const response = await fetch("/api/notifications", {
         method: "POST",
@@ -82,20 +82,20 @@ export function useNotifications() {
         body: JSON.stringify({ action: "test" }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "The test could not be sent.");
+      if (!response.ok) throw new Error(result.error || tr("notifTestFailed"));
       if (result.sent) {
         setNotificationStatus(
           result.failed
-            ? `Test sent to ${result.sent} device(s); ${result.failed} delivery failed.`
-            : `Test sent to ${result.sent} device(s).`,
+            ? tr("notifTestPartly").replace("{sent}", String(result.sent)).replace("{failed}", String(result.failed))
+            : tr("notifTestSent").replace("{sent}", String(result.sent)),
         );
       } else if (result.total) {
-        setNotificationStatus(`Delivery failed for all ${result.total} registered device(s).`);
+        setNotificationStatus(tr("notifTestAllFailed").replace("{total}", String(result.total)));
       } else {
-        setNotificationStatus("No device is registered for notifications.");
+        setNotificationStatus(tr("notifNoDevice"));
       }
     } catch (error) {
-      setNotificationStatus(error instanceof Error ? error.message : "The test could not be sent.");
+      setNotificationStatus(error instanceof Error ? error.message : tr("notifTestFailed"));
     }
   }
   async function saveNotificationSettings(preferences: NotificationPreferences) {
@@ -109,9 +109,9 @@ export function useNotifications() {
           body: JSON.stringify({ action: "preferences", preferences }),
         });
         if (!response.ok) throw new Error();
-        setNotificationStatus("Reminder settings saved.");
+        setNotificationStatus(tr("reminderSaved"));
       })
-      .catch(() => setNotificationStatus("Reminder settings could not be saved."));
+      .catch(() => setNotificationStatus(tr("reminderSaveFailed")));
     await notificationSettingsQueue.current;
   }
 

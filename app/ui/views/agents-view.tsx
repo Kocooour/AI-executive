@@ -35,9 +35,9 @@ export function AgentsView({ app }: { app: LumiApp }) {
                       </header>
                       <p>{description}</p>
                       <div className="agentMeta">
-                        <span>{agent.tools.filter((tool) => tool.endsWith(".read") || tool.includes("calendar")).length} READ</span>
-                        {agent.tools.some((tool) => tool.endsWith(".propose")) && <span>PROPOSE</span>}
-                        <span>0 WRITE</span>
+                        <span>{tr("agentRead").replace("{count}", String(agent.tools.filter((tool) => tool.endsWith(".read") || tool.includes("calendar")).length))}</span>
+                        {agent.tools.some((tool) => tool.endsWith(".propose")) && <span>{tr("agentPropose")}</span>}
+                        <span>{tr("agentNoWrite")}</span>
                       </div>
                       {latest && <small>{tr("latestResult")}: {latest.status === "completed" ? tr("completedRun") : latest.status === "failed" ? tr("failedRun") : tr("runningRun")} · {new Date(latest.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</small>}
                       <button className="primaryAction" disabled={Boolean(agentBusyId) || !agent.triggerModes.includes("manual")} onClick={() => runPACTAgent(agent.id)}>

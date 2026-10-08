@@ -15,18 +15,18 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
   setPasskeyBusy: (busy: boolean) => void;
 }) {
   const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
-    [passkeyLabel, setPasskeyLabel] = useState("My passkey"),
+    [passkeyLabel, setPasskeyLabel] = useState(""),
     [passkeyPassword, setPasskeyPassword] = useState(""),
     [passkeyStatus, setPasskeyStatus] = useState("");
 
   useEffect(() => {
     if (view !== "Settings" || authState !== "ready") return;
-    loadPasskeys().catch(() => setPasskeyStatus("Passkeys could not be loaded."));
+    loadPasskeys().catch(() => setPasskeyStatus(tr("passkeysLoadFailed")));
   }, [view, authState]);
 
   async function loadPasskeys() {
     const response = await fetch("/api/auth/passkeys", { cache: "no-store" });
-    if (!response.ok) throw new Error("Passkeys could not be loaded.");
+    if (!response.ok) throw new Error(tr("passkeysLoadFailed"));
     const body = await response.json();
     setPasskeys(body.passkeys || []);
   }
@@ -41,7 +41,7 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
         body: JSON.stringify({ password: passkeyPassword }),
       });
       const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || "Passkey registration is unavailable.");
+      if (!optionsResponse.ok) throw new Error(options.error || tr("passkeyRegisterUnavailable"));
       const credential = await startRegistration({ optionsJSON: options });
       const verifyResponse = await fetch("/api/auth/passkeys/register/verify", {
         method: "POST",
@@ -49,16 +49,16 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
         body: JSON.stringify({
           challenge: options.challenge,
           response: credential,
-          label: passkeyLabel.trim() || "Passkey",
+          label: passkeyLabel.trim() || tr("passkeyPlaceholder"),
         }),
       });
       const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || "Passkey registration failed.");
+      if (!verifyResponse.ok) throw new Error(result.error || tr("passkeyRegisterFailed"));
       await loadPasskeys();
       setPasskeyPassword("");
-      setPasskeyStatus("Passkey added. You can now use Face ID or Touch ID to sign in.");
+      setPasskeyStatus(tr("passkeyAdded"));
     } catch (error) {
-      setPasskeyStatus(error instanceof Error ? error.message : "Passkey registration failed.");
+      setPasskeyStatus(error instanceof Error ? error.message : tr("passkeyRegisterFailed"));
     } finally {
       setPasskeyBusy(false);
     }
@@ -73,11 +73,11 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setPasskeyStatus(body.error || "Passkey could not be removed.");
+      setPasskeyStatus(body.error || tr("passkeyRemoveFailed"));
       return;
     }
     await loadPasskeys();
-    setPasskeyStatus("Passkey removed.");
+    setPasskeyStatus(tr("passkeyRemoved"));
   }
 
   return {

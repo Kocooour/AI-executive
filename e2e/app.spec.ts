@@ -109,7 +109,7 @@ test("capture switches destination and area to the selected workspace", async ({
   });
   await page.reload();
   await waitUntilSynced(page);
-  await expect(page.locator(".workspaceButton")).toContainText("Personal");
+  await expect(page.locator(".workspaceButton")).toContainText("Osobní");
   let suggestedFor = "";
   await page.route("**/api/task-suggestions", (route) => {
     suggestedFor = JSON.parse(route.request().postData() || "{}").workspaceId;
@@ -452,6 +452,30 @@ test("a draft that another open tab is still typing is left to that tab", async 
   }
   await page.reload();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === partial, true);
+});
+
+test("the personal workspace is shown in Czech and saving its shown name does not rename it", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Workspace" }).first().click();
+  const name = page.getByLabel("Název workspace");
+  await expect(name).toHaveValue("Osobní");
+  await name.press("Enter");
+  await expect(page.getByText("Workspace uložen.")).toBeVisible();
+  await waitUntilSynced(page);
+  expect((await serverEntities(page)).find((entity) => entity.id === "workspace:personal")?.title).toBe("Personal");
+});
+
+test("a workspace name being edited survives a language change", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Workspace" }).first().click();
+  await page.getByLabel("Název workspace").fill("Moje věci");
+  await settingsSections(page).first().click();
+  await page.locator("select").filter({ has: page.locator('option[value="en"]') }).selectOption("en");
+  await page.locator(".settingsTabs button").filter({ hasText: "Workspace" }).first().click();
+  await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toHaveValue("Moje věci");
+  expect((await serverEntities(page)).find((entity) => entity.id === "workspace:personal")?.title).toBe("Personal");
 });
 
 test("Settings shows one section at a time", async ({ page }) => {

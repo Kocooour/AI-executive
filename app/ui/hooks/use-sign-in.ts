@@ -65,7 +65,7 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
       if (version !== authCheckVersion.current) return;
       setAuthEnabled(state.enabled);
       if (state.enabled && !state.configured) {
-        setAuthError("Authentication must be configured on the server before this app can be used.");
+        setAuthError(tr("authMisconfigured"));
         setAuthState("misconfigured");
         return;
       }
@@ -86,7 +86,7 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
   async function login(event: React.FormEvent) {
     event.preventDefault();
     if (!window.isSecureContext) {
-      setAuthError("Open the HTTPS address before signing in.");
+      setAuthError(tr("authNeedsHttps"));
       return;
     }
     setAuthError("");
@@ -98,14 +98,14 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setAuthError(body.error || "Sign-in failed.");
+        setAuthError(body.error || tr("signInFailed"));
         return;
       }
       setAuthPassword("");
       setAuthState("ready");
       await afterSignIn();
     } catch {
-      setAuthError("The server could not be reached. Check your secure connection and try again.");
+      setAuthError(tr("authUnreachable"));
     }
   }
 
@@ -119,7 +119,7 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
         body: "{}",
       });
       const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || "Passkey sign-in is unavailable.");
+      if (!optionsResponse.ok) throw new Error(options.error || tr("passkeySignInUnavailable"));
       const credential = await startAuthentication({ optionsJSON: options });
       const verifyResponse = await fetch("/api/auth/passkeys/login/verify", {
         method: "POST",
@@ -127,11 +127,11 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
         body: JSON.stringify({ challenge: options.challenge, response: credential }),
       });
       const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || "Passkey sign-in failed.");
+      if (!verifyResponse.ok) throw new Error(result.error || tr("passkeySignInFailed"));
       setAuthState("ready");
       await afterSignIn();
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Passkey sign-in failed.");
+      setAuthError(error instanceof Error ? error.message : tr("passkeySignInFailed"));
     } finally {
       setPasskeyBusy(false);
     }
