@@ -89,13 +89,18 @@ test("the Czech interface shows no English text", async ({ page }) => {
   expect(findings).toEqual([]);
 });
 
-// The English interface must not show Czech: no letters with Czech diacritics outside user content.
+// The English interface must not show Czech: no letters with Czech diacritics, and none of the
+// common Czech interface words that have none, outside user content.
+const czech = new Set(("kontext kontextu projekt projekty projektu osoba osoby organizace typ archivovat zdroj zdroje stav " +
+  "oblast oblasti hledat dnes nebo podle nelze osobni workspacu").split(" "));
 test("the English interface shows no Czech text", async ({ page }) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => localStorage.setItem("ai-executive-language", "en"));
   const findings = await audit(page, "en", (text) => {
-    const letters = text.match(/[ěščřžýáíéůúťďňĚŠČŘŽÝÁÍÉŮÚŤĎŇ]/g);
-    return letters ? [...new Set(letters)] : null;
+    const letters = text.match(/[ěščřžýáíéůúťďňĚŠČŘŽÝÁÍÉŮÚŤĎŇ]/g) || [];
+    const words = (text.toLowerCase().match(/[a-z]+/g) || []).filter((word) => czech.has(word));
+    const hits = [...new Set([...letters, ...words])];
+    return hits.length ? hits : null;
   });
   console.log(JSON.stringify(findings, null, 1));
   expect(findings).toEqual([]);
