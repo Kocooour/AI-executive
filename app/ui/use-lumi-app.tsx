@@ -11,15 +11,16 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
+import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
-import { urlBase64ToUint8Array } from "./format";
 import { useAttention } from "./hooks/use-attention";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useBackups } from "./hooks/use-backups";
 import { usePasskeys } from "./hooks/use-passkeys";
 import { useSignIn } from "./hooks/use-sign-in";
+import { useNotifications } from "./hooks/use-notifications";
+import { useAppBadge } from "./hooks/use-app-badge";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -61,10 +62,7 @@ export function useLumiApp() {
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting"),
     [standalone, setStandalone] = useState(false),
-    [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [badgeNow, setBadgeNow] = useState(() => Date.now()),
-    [badgeStatus, setBadgeStatus] = useState(""),
-    [notificationStatus, setNotificationStatus] = useState(""),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
@@ -188,7 +186,6 @@ export function useLumiApp() {
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
-  const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const calendarLoadVersion = useRef(0);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1063,13 +1060,6 @@ export function useLumiApp() {
     return () => channel.close();
   }, []);
 
-  useEffect(() => {
-    fetch("/api/notifications", { cache: "no-store" })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((state) => setNotificationState(state as NotificationState))
-      .catch(() => undefined);
-  }, []);
-
   // A notification link names a task (?task=<id>). It is opened as soon as the task is known
   // locally. If it is not, the link waits for the first synchronization and is given up only
   // when the server copy does not contain the task either.
@@ -1408,101 +1398,6 @@ export function useLumiApp() {
     setNewWorkspaceDraft("");
     selectWorkspace(workspaceId);
   }
-  async function enableNotifications() {
-    setNotificationStatus("Requesting permission…");
-    try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        throw new Error("Push notifications are not supported in this browser.");
-      }
-      if (!window.isSecureContext) {
-        throw new Error("Open the HTTPS address to enable notifications.");
-      }
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") throw new Error("Notification permission was not granted.");
-      const stateResponse = await fetch("/api/notifications", { cache: "no-store" });
-      if (!stateResponse.ok) throw new Error("Notification service is unavailable.");
-      const state = (await stateResponse.json()) as NotificationState;
-      const registration = await navigator.serviceWorker.ready;
-      let subscription = await registration.pushManager.getSubscription();
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(state.publicKey),
-        });
-      }
-      const response = await fetch("/api/notifications", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "subscribe", subscription: subscription.toJSON() }),
-      });
-      if (!response.ok) throw new Error("The device could not be registered.");
-      setNotificationState((await response.json()) as NotificationState);
-      setNotificationStatus("Notifications enabled on this device.");
-    } catch (error) {
-      setNotificationStatus(error instanceof Error ? error.message : "Notifications could not be enabled.");
-    }
-  }
-  async function disableNotifications() {
-    setNotificationStatus("Disabling notifications…");
-    try {
-      const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription();
-      if (subscription) {
-        await fetch("/api/notifications", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "unsubscribe", endpoint: subscription.endpoint }),
-        });
-        await subscription.unsubscribe();
-      }
-      const state = await fetch("/api/notifications", { cache: "no-store" }).then((response) => response.json());
-      setNotificationState(state as NotificationState);
-      setNotificationStatus("Notifications disabled on this device.");
-    } catch {
-      setNotificationStatus("Notifications could not be disabled.");
-    }
-  }
-  async function testNotification() {
-    setNotificationStatus("Sending test notification…");
-    try {
-      const response = await fetch("/api/notifications", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "test" }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "The test could not be sent.");
-      if (result.sent) {
-        setNotificationStatus(
-          result.failed
-            ? `Test sent to ${result.sent} device(s); ${result.failed} delivery failed.`
-            : `Test sent to ${result.sent} device(s).`,
-        );
-      } else if (result.total) {
-        setNotificationStatus(`Delivery failed for all ${result.total} registered device(s).`);
-      } else {
-        setNotificationStatus("No device is registered for notifications.");
-      }
-    } catch (error) {
-      setNotificationStatus(error instanceof Error ? error.message : "The test could not be sent.");
-    }
-  }
-  async function saveNotificationSettings(preferences: NotificationPreferences) {
-    setNotificationState((current) => current ? { ...current, preferences } : current);
-    notificationSettingsQueue.current = notificationSettingsQueue.current
-      .catch(() => undefined)
-      .then(async () => {
-        const response = await fetch("/api/notifications", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action: "preferences", preferences }),
-        });
-        if (!response.ok) throw new Error();
-        setNotificationStatus("Reminder settings saved.");
-      })
-      .catch(() => setNotificationStatus("Reminder settings could not be saved."));
-    await notificationSettingsQueue.current;
-  }
   const workspaces = items
       .filter((entity) => entity.type === "workspace")
       .sort((a, b) =>
@@ -1549,6 +1444,8 @@ export function useLumiApp() {
     Areas: areas.length,
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
+  const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
+    testNotification, saveNotificationSettings } = useNotifications();
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -1571,79 +1468,8 @@ export function useLumiApp() {
       (due) => typeof due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(due) && due <= calendarTomorrow,
     );
   }).length;
-  useEffect(() => {
-    if (authState !== "ready" || !notificationState) return;
-    const nextMidnight = Date.parse(zonedDateTimeToIso(calendarTomorrow, "00:00", calendarTimezone));
-    const timer = window.setTimeout(() => setBadgeNow(Date.now()), Math.max(1000, nextMidnight - Date.now() + 1000));
-    const refresh = () => {
-      if (document.visibilityState === "visible") setBadgeNow(Date.now());
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, [authState, notificationState, calendarTomorrow, calendarTimezone]);
-  useEffect(() => {
-    const badgeNavigator = navigator as Navigator & {
-      setAppBadge?: (count?: number) => Promise<void>;
-      clearAppBadge?: () => Promise<void>;
-    };
-    if (typeof badgeNavigator.setAppBadge !== "function") return;
-    if (authState === "ready" && !notificationState) return;
-    const update = authState === "ready" && attentionTaskCount > 0
-      ? badgeNavigator.setAppBadge(attentionTaskCount)
-      : typeof badgeNavigator.clearAppBadge === "function"
-        ? badgeNavigator.clearAppBadge()
-        : badgeNavigator.setAppBadge(0);
-    update.catch(() => undefined);
-  }, [attentionTaskCount, authState, notificationState]);
-  async function testAppBadge() {
-    setBadgeStatus(tr("badgeTesting"));
-    const badgeNavigator = navigator as Navigator & {
-      setAppBadge?: (count?: number) => Promise<void>;
-    };
-    if (!standalone) {
-      setBadgeStatus(tr("badgeInstallRequired"));
-      return;
-    }
-    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
-      setBadgeStatus(tr("badgePermissionRequired"));
-      return;
-    }
-    if (typeof badgeNavigator.setAppBadge !== "function") {
-      setBadgeStatus(tr("badgeUnavailable"));
-      return;
-    }
-    try {
-      await badgeNavigator.setAppBadge(1);
-      setBadgeStatus(tr("badgeTestReady"));
-    } catch (error) {
-      console.warn("App badge test failed", error);
-      setBadgeStatus(tr("badgeFailed"));
-    }
-  }
-  async function restoreAppBadge() {
-    const badgeNavigator = navigator as Navigator & {
-      setAppBadge?: (count?: number) => Promise<void>;
-      clearAppBadge?: () => Promise<void>;
-    };
-    if (typeof badgeNavigator.setAppBadge !== "function") {
-      setBadgeStatus(tr("badgeUnavailable"));
-      return;
-    }
-    try {
-      if (attentionTaskCount > 0) await badgeNavigator.setAppBadge(attentionTaskCount);
-      else if (typeof badgeNavigator.clearAppBadge === "function") await badgeNavigator.clearAppBadge();
-      else await badgeNavigator.setAppBadge(0);
-      setBadgeStatus(tr("badgeRestored"));
-    } catch (error) {
-      console.warn("App badge restore failed", error);
-      setBadgeStatus(tr("badgeFailed"));
-    }
-  }
+  const { badgeStatus, testAppBadge, restoreAppBadge } = useAppBadge({ authState, notificationState, attentionTaskCount,
+    calendarTomorrow, calendarTimezone, setBadgeNow, standalone, tr });
   const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
   const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
