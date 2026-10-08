@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { visitScreens } from "./screens";
+import { waitUntilSynced } from "./helpers";
 
 // The Czech interface must not show English. Every visible text, placeholder, accessible name and
 // tooltip on the main screens is checked for common English words. Names that are the same in
@@ -84,4 +85,16 @@ test("a wrong password is reported in Czech", async ({ browser }) => {
   await page.keyboard.press("Enter");
   await expect(page.locator(".authCard")).toContainText("Nesprávné heslo.");
   await context.close();
+});
+
+test("a lasting failure is reported again in the new language after a language change", async ({ page }) => {
+  await page.route("**/api/backups", (route) => route.abort());
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await page.locator(".settingsTabs button").filter({ hasText: "Data" }).first().click();
+  await expect(page.getByText("Nastavení serveru není bez připojení dostupné.")).toBeVisible();
+  await page.locator(".settingsTabs button").first().click();
+  await page.locator("select").filter({ has: page.locator('option[value="en"]') }).selectOption("en");
+  await page.locator(".settingsTabs button").filter({ hasText: "Data" }).first().click();
+  await expect(page.getByText("Server settings are unavailable while offline.")).toBeVisible();
 });

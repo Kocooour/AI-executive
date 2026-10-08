@@ -864,8 +864,13 @@ export function useLumiApp() {
   }
   // The message is about a moment in time: drop it when the user moves on or the data is in sync again.
   useEffect(() => { setLogoutError(""); }, [view]);
-  // Status lines shown in one language are not kept after the language changes.
+  // Status lines shown in one language are not kept after the language changes. The loads whose
+  // failure is reported in a status line run again, so a failure that still lasts is reported in
+  // the new language rather than hidden.
+  const statusLanguage = useRef(language);
   useEffect(() => {
+    if (statusLanguage.current === language) return;
+    statusLanguage.current = language;
     setCalendarStatus("");
     setAgentStatus("");
     setContextStatus("");
@@ -873,6 +878,11 @@ export function useLumiApp() {
     setClaimStatus("");
     setContextInboxStatus("");
     setLogoutError("");
+    if (authState !== "ready") return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
+    loadContextClaims(workspaceId).catch(() => setClaimStatus(language === "cs" ? "Strukturovaný kontext nelze načíst." : "Structured context is unavailable."));
+    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(language === "cs" ? "Osoby a organizace nelze načíst." : "People and organizations are unavailable."));
   }, [language]);
   useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
   // Another tab signed out: its data must not stay on screen here or be written back locally.
@@ -1027,7 +1037,8 @@ export function useLumiApp() {
         setNotificationState(notificationData as NotificationState);
       })
       .catch(() => setBackupStatus(tr("serverSettingsOffline")));
-  }, [view, authState]);
+    // Also after a language change: the status was cleared, and a failure is reported again.
+  }, [view, authState, language]);
 
   useEffect(() => {
     const refresh = () => {
