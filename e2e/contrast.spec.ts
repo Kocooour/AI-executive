@@ -1,11 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { waitUntilSynced } from "./helpers";
+import { visitScreens } from "./screens";
 
 // Text must stay readable in both themes. For every visible piece of text on the main screens the
 // contrast between its colour and the background it actually sits on is measured (WCAG 2.x):
 // at least 4.5:1, or 3:1 for large text (24 px, or 18.66 px bold). Disabled controls are exempt.
-const views = ["Home", "Inbox", "Today", "Upcoming", "Anytime", "Someday", "Overdue", "Completed", "Projects", "Areas", "Notes", "Calendar", "Search", "Context", "Agents", "Settings"];
-
 type Failure = { view: string; theme: string; text: string; ratio: number; required: number; color: string; background: string; selector: string };
 
 async function audit(page: import("@playwright/test").Page) {
@@ -102,61 +100,8 @@ async function collect(page: import("@playwright/test").Page, theme: string) {
     await page.mouse.move(0, 0);
     for (const failure of await audit(page)) failures.push({ view: where, theme, ...failure });
   };
-  for (const view of views) {
-    await page.goto(`/?view=${view}`);
-    await waitUntilSynced(page);
-    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-    await record(view);
-  }
-  await page.goto("/");
-  await waitUntilSynced(page);
-  await page.locator(".attentionMore summary").first().click();
-  await page.locator(".attentionLimits summary").first().click();
-  await record("Home, attention details");
-  await page.goto("/?view=Settings");
-  await waitUntilSynced(page);
-  const sections = page.getByRole("navigation", { name: "Sekce nastavení" }).getByRole("button");
-  for (let index = 0; index < await sections.count(); index += 1) {
-    await sections.nth(index).click();
-    await record(`Settings: ${await sections.nth(index).innerText()}`);
-  }
-  await page.goto("/?task=e2e-plain");
-  await expect(page.locator("input.titleEdit")).toBeVisible();
-  await record("Task detail");
-  // Its own project: other scenarios may have deleted the seeded one.
-  await page.evaluate(async () => {
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    if (snapshot.entities.some((entity: { id: string }) => entity.id === "e2e-contrast-project")) return;
-    const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
-      entities: [...snapshot.entities, { id: "e2e-contrast-project", type: "project", title: "Projekt pro kontrolu kontrastu", status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
-      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) }).then((response) => { if (!response.ok) throw new Error(`Seeding the project failed: ${response.status}`); });
-  });
-  await page.goto("/?view=Projects");
-  await waitUntilSynced(page);
-  await page.getByText("Projekt pro kontrolu kontrastu").first().click();
-  await record("Project detail");
-  await page.locator(".projectActions button.danger").click();
-  await expect(page.locator("dialog.confirmDialog")).toBeVisible();
-  await record("Confirmation dialog");
-  await page.keyboard.press("Escape");
-  await page.goto("/?view=Inbox");
-  await waitUntilSynced(page);
-  await page.locator("button", { hasText: "＋" }).first().click();
-  await page.locator(".captureModal").locator("input, textarea").first().fill("Kontrola kontrastu 25. 10. !");
-  await expect(page.locator(".captureSuggestion, .capturePreview").first()).toBeVisible();
-  await record("Capture dialog");
-  await page.keyboard.press("Escape");
-  await page.locator("button", { hasText: /Zeptat se AI/ }).first().click();
-  await expect(page.locator(".assistantPanel")).toBeVisible();
-  await record("Assistant");
-  await page.keyboard.press("Escape");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
-  await waitUntilSynced(page);
-  await record("Phone: Home");
-  await page.locator(".mobileNav button").last().click();
-  await record("Phone: More");
+  await visitScreens(page, record);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
   return failures;
 }
 

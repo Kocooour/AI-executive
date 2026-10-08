@@ -29,13 +29,13 @@ export function Sidebar({ app }: { app: LumiApp }) {
       <aside>
         <div className="appIdentity" aria-label="Lumi">
           <span className="brandMark" aria-hidden="true">◇</span>
-          <span><strong>Lumi</strong><small>Personal AI Executive</small></span>
+          <span><strong>Lumi</strong><small>{tr("appTagline")}</small></span>
         </div>
         <div className="workspaceSwitcher">
           <button
             className="workspaceButton"
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
-            aria-label="Switch workspace"
+            aria-label={tr("switchWorkspace")}
             aria-expanded={workspaceMenuOpen}
           >
             <b>{workspaceName}</b>

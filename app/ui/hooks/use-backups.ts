@@ -20,7 +20,7 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
     [backupStatus, setBackupStatus] = useState("");
 
   async function createServerBackup() {
-    setBackupStatus("Creating backup…");
+    setBackupStatus(tr("backupCreating"));
     try {
       const response = await fetch("/api/backups", {
         method: "POST",
@@ -31,15 +31,15 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
       const listResponse = await fetch("/api/backups", { cache: "no-store" });
       const data = await listResponse.json();
       setBackups(data.backups || []);
-      setBackupStatus("Backup created.");
+      setBackupStatus(tr("backupCreated"));
     } catch {
-      setBackupStatus("Backup failed. Check the server connection.");
+      setBackupStatus(tr("backupFailed"));
     }
   }
   async function restoreServerBackup(backup: BackupSummary) {
     if (!(await askConfirm({ title: tr("backupRestoreTitle"), confirmLabel: tr("restore"), danger: true,
       message: tr("backupRestoreConfirm").replace("{date}", () => new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")) }))) return;
-    setBackupStatus("Restoring backup…");
+    setBackupStatus(tr("backupRestoring"));
     try {
       const response = await fetch("/api/backups", {
         method: "POST",
@@ -52,12 +52,12 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
       localStorage.removeItem(pendingKey);
       localStorage.removeItem(deletedKey);
       localStorage.removeItem(revivedKey);
-      setBackupStatus("Backup restored.");
+      setBackupStatus(tr("backupRestored"));
       const listResponse = await fetch("/api/backups", { cache: "no-store" });
       const list = await listResponse.json();
       setBackups(list.backups || []);
     } catch {
-      setBackupStatus("Restore failed. Current data was not changed.");
+      setBackupStatus(tr("backupRestoreFailed"));
     }
   }
 

@@ -90,7 +90,7 @@ export function ContextView({ app }: { app: LumiApp }) {
               <section className="contextOverview">
                 <div className="sectionHeading">
                   <div>
-                    <p className="eyebrow">LUMI · CONTEXT V2</p>
+                    <p className="eyebrow">{tr("contextEyebrow")}</p>
                     <h2>{language === "cs" ? "Co Lumi ví" : "What Lumi knows"}</h2>
                     <p>{language === "cs" ? "Vlastníkem řízená tvrzení pro tento workspace. Do AI se dostanou pouze potvrzená, aktuální a běžná tvrzení." : "Owner-controlled claims for this workspace. Only confirmed, current and normal claims may reach AI."}</p>
                   </div>

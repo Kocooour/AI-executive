@@ -212,7 +212,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") saveWorkspaceName();
                       }}
-                      aria-label="Workspace name"
+                      aria-label={tr("workspaceName")}
                     />
                     <button
                       onClick={saveWorkspaceName}
@@ -229,10 +229,10 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 )}
                 <div className="workspaceSummary">
                   <span>
-                    {String(writeWorkspace?.properties.kind || "personal")} workspace
+                    {tr(writeWorkspace?.properties.kind === "shared" ? "workspaceKindShared" : "workspaceKindPersonal")}
                   </span>
                   <span>
-                    {tr("role")}: {String(writeWorkspace?.properties.role || "owner")}
+                    {tr("role")}: {(writeWorkspace?.properties.role || "owner") === "owner" ? tr("roleOwner") : String(writeWorkspace?.properties.role)}
                   </span>
                 </div>
                 <label>
@@ -242,8 +242,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       value={newWorkspaceDraft}
                       maxLength={120}
                       onChange={(event) => setNewWorkspaceDraft(event.target.value)}
-                      placeholder="Family or Work"
-                      aria-label="New workspace name"
+                      placeholder={tr("newWorkspacePlaceholder")}
+                      aria-label={tr("newWorkspaceName")}
                     />
                     <button
                       onClick={createWorkspace}
@@ -254,8 +254,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   </div>
                 </label>
                 <p>
-                  Shared workspaces are ready for separate data and roles. Inviting
-                  another account will be enabled after multi-user identity is added.
+                  {tr("sharedWorkspacesInfo")}
                 </p>
               </section>
               {authEnabled && (
@@ -270,7 +269,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                           value={passkeyLabel}
                           maxLength={80}
                           onChange={(event) => setPasskeyLabel(event.target.value)}
-                          placeholder="Kryštof’s iPhone"
+                          placeholder={tr("passkeyPlaceholder")}
                         />
                       </label>
                       <label>
@@ -296,8 +295,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                             <span>
                               <strong>{passkey.label}</strong>
                               <small>
-                                {passkey.rpId} · added {new Date(passkey.createdAt).toLocaleDateString()}
-                                {passkey.backedUp ? " · synced" : ""}
+                                {passkey.rpId} · {tr("passkeyAdded2").replace("{date}", new Date(passkey.createdAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB"))}
+                                {passkey.backedUp ? ` · ${tr("passkeySynced")}` : ""}
                               </small>
                             </span>
                             <button onClick={() => removePasskey(passkey.id)}>{tr("remove")}</button>
@@ -306,8 +305,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       </div>
                       {passkeyStatus && <p role="status">{passkeyStatus}</p>}
                       <p>
-                        Passkeys are tied to this address. Use the same HTTPS address on
-                        iPhone and Mac for an iCloud-synced passkey.
+                        {tr("passkeyAddressInfo")}
                       </p>
                     </>
                   )}
@@ -551,7 +549,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext Lumi" : "Lumi context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má Lumi používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for Lumi. Sensitive context is not sent to external AI services."}</p></div></div>
                 <div className="contextForm">
                   <div className="preferenceGrid">
-                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}><option value="me">Me</option><option value="work">Work</option><option value="family">Family</option><option value="rules">Rules</option><option value="workspace">Workspace</option><option value="project">Project</option></select></label>
+                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}>{["me", "work", "family", "rules", "workspace", "project"].map((scope) => <option key={scope} value={scope}>{tr(`scope${scope[0].toUpperCase()}${scope.slice(1)}`)}</option>)}</select></label>
                     <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžný" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivý" : "Sensitive"}</option></select></label>
                   </div>
                   {contextScope === "project" && <label>{tr("project")}<select value={contextProjectId} onChange={(e) => setContextProjectId(e.target.value)}><option value="">—</option>{items.filter((item) => item.type === "project" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>}
@@ -561,7 +559,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   {contextStatus && <p className="saveConfirmation" role="status">{contextStatus}</p>}
                 </div>
                 <div className="contextItems">
-                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{item.scope} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
+                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{tr(`scope${item.scope[0].toUpperCase()}${item.scope.slice(1)}`)} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
                   {!durableContext.length && <p>{language === "cs" ? "Zatím není uložen žádný trvalý kontext." : "No durable context saved yet."}</p>}
                 </div>
               </section>

@@ -109,7 +109,7 @@ test("capture switches destination and area to the selected workspace", async ({
   });
   await page.reload();
   await waitUntilSynced(page);
-  await expect(page.locator(".workspaceButton")).toContainText("Personal");
+  await expect(page.locator(".workspaceButton")).toContainText("Osobní");
   let suggestedFor = "";
   await page.route("**/api/task-suggestions", (route) => {
     suggestedFor = JSON.parse(route.request().postData() || "{}").workspaceId;

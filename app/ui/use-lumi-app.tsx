@@ -1016,7 +1016,7 @@ export function useLumiApp() {
         setBackups(Array.isArray(backupData.backups) ? backupData.backups : []);
         setNotificationState(notificationData as NotificationState);
       })
-      .catch(() => setBackupStatus("Server settings are unavailable while offline."));
+      .catch(() => setBackupStatus(tr("serverSettingsOffline")));
   }, [view, authState]);
 
   useEffect(() => {
@@ -1063,7 +1063,7 @@ export function useLumiApp() {
       return;
     }
     if (workspace) {
-      setWorkspaceDraft(workspace.title);
+      setWorkspaceDraft(workspaceTitle(workspace));
     }
   }, [activeWorkspaceId, items, writeWorkspaceId]);
 
@@ -1229,8 +1229,13 @@ export function useLumiApp() {
     setNewWorkspaceDraft("");
     selectWorkspace(workspaceId);
   }
+  // The personal workspace is created with the name "Personal"; until it is renamed it is shown in
+  // the interface language.
+  const workspaceTitle = (workspace: Entity) =>
+    workspace.workspaceId === personalWorkspaceId && workspace.title === "Personal" ? tr("personalWorkspace") : workspace.title;
   const workspaces = items
       .filter((entity) => entity.type === "workspace")
+      .map((workspace) => ({ ...workspace, title: workspaceTitle(workspace) }))
       .sort((a, b) =>
         a.workspaceId === personalWorkspaceId
           ? -1
@@ -1247,7 +1252,7 @@ export function useLumiApp() {
     workspaceName =
       activeWorkspaceId === "all"
         ? tr("allWork")
-        : activeWorkspace?.title || "Personal",
+        : activeWorkspace?.title || tr("personalWorkspace"),
     scopedItems = items.filter(
       (entity) =>
         entity.type !== "workspace" &&
@@ -1276,7 +1281,7 @@ export function useLumiApp() {
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
-    testNotification, saveNotificationSettings } = useNotifications();
+    testNotification, saveNotificationSettings } = useNotifications({ tr });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",

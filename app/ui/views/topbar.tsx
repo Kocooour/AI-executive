@@ -22,7 +22,7 @@ export function Topbar({ app }: { app: LumiApp }) {
           <button
             className="mobileWorkspaceButton"
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
-            aria-label="Switch workspace"
+            aria-label={tr("switchWorkspace")}
           >
             {workspaceName}⌄
           </button>

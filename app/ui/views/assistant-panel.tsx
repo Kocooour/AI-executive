@@ -26,17 +26,17 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
           </div>
           <div className="assistantContext">
             {context
-              ? `${workspaceName} · Context: ${context.focus.title}`
-              : `${workspaceName} · server-verified workspace context`}
+              ? tr("assistantContextFocus").replace("{workspace}", workspaceName).replace("{focus}", context.focus.title)
+              : tr("assistantContextServer").replace("{workspace}", workspaceName)}
           </div>
           <div className="assistantMessages">
             {messages.length === 0 && (
               <div className="assistantWelcome">
-                <p>Ask about your tasks or safely propose a change.</p>
+                <p>{tr("assistantWelcome")}</p>
                 <button onClick={() => askAI("Co dnes hoří?")} disabled={aiBusy}>
                   {tr("todayBrief")}
                 </button>
-                <small>Writes always require confirmation.</small>
+                <small>{tr("assistantWritesConfirm")}</small>
               </div>
             )}
             {messages.map((m, i) => (
