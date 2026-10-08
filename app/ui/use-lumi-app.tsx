@@ -8,16 +8,18 @@ import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
-import { browserSupportsWebAuthn, startAuthentication, startRegistration } from "@simplewebauthn/browser";
+import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
+import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { urlBase64ToUint8Array } from "./format";
 import { useAttention } from "./hooks/use-attention";
 import { useDayPlan } from "./hooks/use-day-plan";
+import { useBackups } from "./hooks/use-backups";
+import { usePasskeys } from "./hooks/use-passkeys";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -57,8 +59,6 @@ export function useLumiApp() {
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting"),
-    [backups, setBackups] = useState<BackupSummary[]>([]),
-    [backupStatus, setBackupStatus] = useState(""),
     [standalone, setStandalone] = useState(false),
     [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [badgeNow, setBadgeNow] = useState(() => Date.now()),
@@ -134,12 +134,6 @@ export function useLumiApp() {
     [authEnabled, setAuthEnabled] = useState(false),
     [authPassword, setAuthPassword] = useState(""),
     [authError, setAuthError] = useState(""),
-    [passkeySupported, setPasskeySupported] = useState(false),
-    [passkeyBusy, setPasskeyBusy] = useState(false),
-    [passkeys, setPasskeys] = useState<PasskeySummary[]>([]),
-    [passkeyLabel, setPasskeyLabel] = useState("My passkey"),
-    [passkeyPassword, setPasskeyPassword] = useState(""),
-    [passkeyStatus, setPasskeyStatus] = useState(""),
     [aiText, setAiText] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -931,11 +925,6 @@ export function useLumiApp() {
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
-    if (view !== "Settings" || authState !== "ready") return;
-    loadPasskeys().catch(() => setPasskeyStatus("Passkeys could not be loaded."));
-  }, [view, authState]);
-
-  useEffect(() => {
     const savedLanguage = localStorage.getItem("ai-executive-language");
     if (savedLanguage === "cs" || savedLanguage === "en") {
       setLanguage(savedLanguage);
@@ -1128,62 +1117,6 @@ export function useLumiApp() {
     } finally {
       setPasskeyBusy(false);
     }
-  }
-
-  async function loadPasskeys() {
-    const response = await fetch("/api/auth/passkeys", { cache: "no-store" });
-    if (!response.ok) throw new Error("Passkeys could not be loaded.");
-    const body = await response.json();
-    setPasskeys(body.passkeys || []);
-  }
-
-  async function registerPasskey() {
-    setPasskeyBusy(true);
-    setPasskeyStatus("");
-    try {
-      const optionsResponse = await fetch("/api/auth/passkeys/register/options", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password: passkeyPassword }),
-      });
-      const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || "Passkey registration is unavailable.");
-      const credential = await startRegistration({ optionsJSON: options });
-      const verifyResponse = await fetch("/api/auth/passkeys/register/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          challenge: options.challenge,
-          response: credential,
-          label: passkeyLabel.trim() || "Passkey",
-        }),
-      });
-      const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || "Passkey registration failed.");
-      await loadPasskeys();
-      setPasskeyPassword("");
-      setPasskeyStatus("Passkey added. You can now use Face ID or Touch ID to sign in.");
-    } catch (error) {
-      setPasskeyStatus(error instanceof Error ? error.message : "Passkey registration failed.");
-    } finally {
-      setPasskeyBusy(false);
-    }
-  }
-
-  async function removePasskey(id: string) {
-    if (!(await askConfirm({ title: tr("passkeyRemoveTitle"), message: tr("passkeyRemoveConfirm"), confirmLabel: tr("remove"), danger: true }))) return;
-    const response = await fetch("/api/auth/passkeys", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setPasskeyStatus(body.error || "Passkey could not be removed.");
-      return;
-    }
-    await loadPasskeys();
-    setPasskeyStatus("Passkey removed.");
   }
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
@@ -1673,47 +1606,6 @@ export function useLumiApp() {
       .catch(() => setNotificationStatus("Reminder settings could not be saved."));
     await notificationSettingsQueue.current;
   }
-  async function createServerBackup() {
-    setBackupStatus("Creating backup…");
-    try {
-      const response = await fetch("/api/backups", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "create" }),
-      });
-      if (!response.ok) throw new Error("Backup failed");
-      const listResponse = await fetch("/api/backups", { cache: "no-store" });
-      const data = await listResponse.json();
-      setBackups(data.backups || []);
-      setBackupStatus("Backup created.");
-    } catch {
-      setBackupStatus("Backup failed. Check the server connection.");
-    }
-  }
-  async function restoreServerBackup(backup: BackupSummary) {
-    if (!(await askConfirm({ title: tr("backupRestoreTitle"), confirmLabel: tr("restore"), danger: true,
-      message: tr("backupRestoreConfirm").replace("{date}", () => new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")) }))) return;
-    setBackupStatus("Restoring backup…");
-    try {
-      const response = await fetch("/api/backups", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "restore", name: backup.name }),
-      });
-      if (!response.ok) throw new Error("Restore failed");
-      const data = await response.json();
-      await applySnapshot(data.snapshot as ServerSnapshot);
-      localStorage.removeItem(pendingKey);
-      localStorage.removeItem(deletedKey);
-      localStorage.removeItem(revivedKey);
-      setBackupStatus("Backup restored.");
-      const listResponse = await fetch("/api/backups", { cache: "no-store" });
-      const list = await listResponse.json();
-      setBackups(list.backups || []);
-    } catch {
-      setBackupStatus("Restore failed. Current data was not changed.");
-    }
-  }
   const workspaces = items
       .filter((entity) => entity.type === "workspace")
       .sort((a, b) =>
@@ -1768,6 +1660,10 @@ export function useLumiApp() {
   const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
+  const { passkeys, passkeySupported, setPasskeySupported, passkeyBusy, setPasskeyBusy, passkeyLabel, setPasskeyLabel,
+    passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey, removePasskey } = usePasskeys({ view, authState, tr, askConfirm });
+  const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
+    language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
