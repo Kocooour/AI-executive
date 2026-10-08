@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { expect, test as setup } from "@playwright/test";
 import { sessionFile } from "../playwright.config";
 import { seeded, signIn } from "./helpers";
@@ -25,5 +26,8 @@ setup("sign in and seed synthetic data", async ({ page }) => {
     return saved.status;
   }, seeded);
   expect(result).toBe(200);
-  await page.context().storageState({ path: sessionFile });
+  // Only the session cookie is kept: every scenario starts with an empty browser (no local copy and
+  // no sync marks), the way a newly opened browser with a valid session would.
+  const { cookies } = await page.context().storageState();
+  writeFileSync(sessionFile, JSON.stringify({ cookies, origins: [] }));
 });

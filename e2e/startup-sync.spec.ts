@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { sessionFile } from "../playwright.config";
-import { seeded, serverEntities } from "./helpers";
+import { seeded, serverEntities, signIn, waitUntilSynced } from "./helpers";
 
 // A change made while the app is still starting must never replace what the server holds.
 // Each round opens a browser that has the session but no local copy yet, and adds a task as
@@ -134,5 +134,24 @@ test("a change made while a merged save is in flight keeps what another device s
   expect({ foreign: titles.includes(foreign), first: titles.includes(first), second: titles.includes(second), seeded: titles.includes(seeded.overdueTask) })
     .toEqual({ foreign: true, first: true, second: true, seeded: true });
   await expect(page.locator("strong", { hasText: foreign })).toBeVisible();
+  await context.close();
+});
+
+// A browser that signs in for the first time takes the server copy as it is. That copy is then
+// in sync: reloading must not send it back as if it held changes of its own.
+test("after a first sign-in on a new browser, reloading sends nothing", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await signIn(page);
+  await expect(page.getByText(seeded.plainTask)).toBeVisible();
+  const revision = () => page.evaluate(() => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()).then((snapshot) => snapshot.revision as number));
+  await waitUntilSynced(page);
+  const before = await revision();
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-server-synced"))).toBe("1");
+  await page.reload();
+  await expect(page.getByText(seeded.plainTask)).toBeVisible();
+  await waitUntilSynced(page);
+  expect(await revision()).toBe(before);
   await context.close();
 });
