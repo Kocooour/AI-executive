@@ -77,13 +77,45 @@ export const serverErrorKeys: Record<string, string> = {
   "Task title is invalid": "serverError_taskTitleIsInvalid",
   "Snooze time is invalid": "serverError_snoozeTimeIsInvalid",
   "Requested date is invalid": "serverError_requestedDateIsInvalid",
+  "Push failed": "serverError_pushFailed",
+  "Invalid backup": "serverError_invalidBackup",
+  "AI action failed": "serverError_aiActionFailed",
+  "AI request failed": "serverError_aiRequestFailed",
+  "Attention item changed": "serverError_attentionItemChanged",
+  "Login failed": "serverError_loginFailed",
+  "Restore failed": "serverError_restoreFailed",
+  "Calendar read failed": "serverError_calendarReadFailed",
+  "Refresh failed": "serverError_refreshFailed",
+  "Calendar request failed": "serverError_calendarRequestFailed",
+  "Context claims are unavailable": "serverError_contextClaimsAreUnavailable",
+  "Context claim request failed": "serverError_contextClaimRequestFailed",
+  "Context inbox failed": "serverError_contextInboxFailed",
+  "Context read failed": "serverError_contextReadFailed",
+  "Context request failed": "serverError_contextRequestFailed",
+  "Context subjects unavailable": "serverError_contextSubjectsUnavailable",
+  "Day plan failed": "serverError_dayPlanFailed",
+  "Day plan request failed": "serverError_dayPlanRequestFailed",
+  "Agent run failed": "serverError_agentRunFailed",
+  "Notification request failed": "serverError_notificationRequestFailed",
+  "Suggestion failed": "serverError_suggestionFailed",
+  "Work session unavailable": "serverError_workSessionUnavailable",
+  "Work session failed": "serverError_workSessionFailed",
+  "A message is invalid": "serverError_aMessageIsInvalid",
+  "Messages are invalid": "serverError_messagesAreInvalid",
+  "Invalid request": "serverError_invalidRequest",
 };
 
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // Security-log reasons and alert text, never sent to the interface.
+  "failed",
+  "internal-error",
+  "invalid-request",
+  // The external integration API, not used by the interface.
+  "Integration request failed",
+  "Tool request failed",
   "A concrete workspace is required",
-  "A message is invalid",
   "A user message is required",
   "A valid explicit workspace is required",
   "A write workspace is required",
@@ -116,14 +148,12 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Invalid day plan request",
   "Invalid deletion or revival IDs",
   "Invalid push subscription",
-  "Invalid request",
   "Invalid snapshot",
   "Invalid workspace",
   "Invalid workspace or date",
   "Local data wipe timed out",
   "Local date and timezone are required",
   "Message is invalid",
-  "Messages are invalid",
   "Origin header is required",
   "PACT agent runs require one explicit workspace",
   "Passkey origins must use HTTPS except for localhost",
@@ -168,8 +198,24 @@ export const developerOnly: ReadonlySet<string> = new Set([
 
 // The text to show for an error message that came from the server: translated when it is one the
 // user can meet, otherwise as it is. Empty when there is none.
+// Messages the server builds around an HTTP status code. `template` is the message as written in
+// the source with the interpolation as ${}; the test checks it against the code.
+export const serverErrorPatterns: Array<{ template: string; pattern: RegExp; key: string }> = [
+  { template: "Calendar server returned ${}", pattern: /^Calendar server returned (\d{3})$/, key: "serverError_calendarServerReturnedStatus" },
+  { template: "Hermes provider returned ${}", pattern: /^Hermes provider returned (\d{3})$/, key: "serverError_hermesProviderReturnedStatus" },
+  { template: "OpenAI provider returned ${}", pattern: /^OpenAI provider returned (\d{3})$/, key: "serverError_openaiProviderReturnedStatus" },
+];
+
+// Templated messages for requests the app itself never makes malformed.
+export const developerOnlyTemplates = new Set(["${} is invalid"]);
+
 export function localizeServerError(message: unknown, tr: (key: string) => string): string {
   if (typeof message !== "string" || !message) return "";
   const key = serverErrorKeys[message];
-  return key ? tr(key) : message;
+  if (key) return tr(key);
+  for (const { pattern, key: patternKey } of serverErrorPatterns) {
+    const match = pattern.exec(message);
+    if (match) return tr(patternKey).replace("{status}", () => match[1]);
+  }
+  return message;
 }

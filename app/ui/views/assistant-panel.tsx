@@ -33,7 +33,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
             {messages.length === 0 && (
               <div className="assistantWelcome">
                 <p>{tr("assistantWelcome")}</p>
-                <button onClick={() => askAI("Co dnes hoří?")} disabled={aiBusy}>
+                <button onClick={() => askAI(tr("todayBriefPrompt"))} disabled={aiBusy}>
                   {tr("todayBrief")}
                 </button>
                 <small>{tr("assistantWritesConfirm")}</small>

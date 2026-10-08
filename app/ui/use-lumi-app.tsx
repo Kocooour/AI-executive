@@ -281,7 +281,7 @@ export function useLumiApp() {
         ),
         {
           role: "assistant",
-          content: action === "confirm" ? result.message : "Návrh jsem zahodil. Nic se nezměnilo.",
+          content: action === "confirm" ? result.message : tr("proposalDiscarded"),
           actionId: result.actionId,
         },
       ]);

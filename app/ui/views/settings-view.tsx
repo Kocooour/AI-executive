@@ -472,7 +472,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                           {source.status === "ready" ? `${source.eventCount} ${tr("events")}` : tr("syncFailed")}
                           {source.lastSuccessAt ? ` · ${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : ""}
                         </small>
-                        {source.lastError && <small role="status">{source.lastError}</small>}
+                        {source.lastError && <small role="status">{localizeServerError(source.lastError, tr)}</small>}
                       </span>
                       <div className="notificationActions">
                         <button disabled={calendarBusy} onClick={() => calendarAction("refresh", source.id)}>{tr("refresh")}</button>
