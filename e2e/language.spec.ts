@@ -142,3 +142,14 @@ test("a failing day plan and attention list are reported again in the new langua
   await expect(page.locator(".attentionError")).toHaveText("Attention is unavailable");
   await expect(page.getByText("Plán dne se nepodařilo načíst.")).toHaveCount(0);
 });
+
+test("a server error the user can meet is shown in Czech", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await page.locator(".settingsTabs button").filter({ hasText: "Kalendář" }).first().click();
+  const form = page.locator(".calendarConnect");
+  await form.locator("input").first().fill("Test kalendář");
+  await form.locator('input[type="password"]').fill("http://example.com/calendar.ics");
+  await form.getByRole("button").click();
+  await expect(page.getByText("Adresa kalendáře musí začínat https://.")).toBeVisible();
+});

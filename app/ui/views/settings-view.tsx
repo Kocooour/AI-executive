@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { type DurableContextItem, type Language, type ThemeMode } from "../types";
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
+import { localizeServerError } from "../../../lib/server-errors";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -528,10 +529,10 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   {backups.slice(0, 8).map((backup) => (
                     <div key={backup.name}>
                       <span>
-                        <strong>{new Date(backup.createdAt).toLocaleString()}</strong>
+                        <strong>{new Date(backup.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</strong>
                         <small>
                           {backup.error
-                            ? `Invalid backup · ${backup.error}`
+                            ? `${tr("invalidBackup")} · ${localizeServerError(backup.error, tr)}`
                             : `${backup.entityCount} ${tr("items")} · ${backup.relationCount} ${tr("relations").toLowerCase()}`}
                         </small>
                       </span>

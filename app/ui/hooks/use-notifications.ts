@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { NotificationPreferences, NotificationState } from "../types";
 import { urlBase64ToUint8Array } from "../format";
+import { localizeServerError } from "../../../lib/server-errors";
 
 // Push notifications on this device and the reminder settings: the server's notification state
 // (loaded on start), enabling, disabling and testing push, and saving the preferences one after
@@ -84,7 +85,7 @@ export function useNotifications({ tr, language }: { tr: (key: string) => string
         body: JSON.stringify({ action: "test" }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || tr("notifTestFailed"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("notifTestFailed"));
       if (result.sent) {
         setNotificationStatus(
           result.failed
