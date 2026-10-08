@@ -73,9 +73,12 @@ export function learnPlanning(task: Entity, peers: Entity[], timezone: string): 
     if (peerMinutes !== null) durationSamples.push(peerMinutes);
     if (peerTime !== null) timeSamples.push(peerTime);
   }
-  const actualEstimate = actualSamples.length >= 3 ? Math.round(median(actualSamples)) : null;
+  // Learned estimates stay coarse (owner decision, 8. 10. 2026): measured work at least 10 minutes
+  // and planned blocks at least 30, both in 5-minute steps. Only an estimate the user typed keeps
+  // whole minutes below that.
+  const actualEstimate = actualSamples.length >= 3 ? Math.round(Math.max(10, Math.min(480, median(actualSamples))) / 5) * 5 : null;
   const estimateSamples = actualEstimate !== null ? actualSamples.length : durationSamples.length;
-  const learned = durationSamples.length >= 3 ? Math.round(Math.max(1, Math.min(120, median(durationSamples)))) : 60;
+  const learned = durationSamples.length >= 3 ? Math.round(Math.max(30, Math.min(120, median(durationSamples))) / 5) * 5 : 60;
   const estimatedMinutes = explicit ?? actualEstimate ?? learned;
   return {
     estimatedMinutes,

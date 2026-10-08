@@ -48,14 +48,23 @@ test("measured work takes precedence after three sessions while an explicit esti
   assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [15, "explicit"]);
 });
 
-test("explicit and learned estimates keep whole minutes below ten", () => {
+test("an explicit estimate keeps whole minutes below ten; learned ones keep their floor", () => {
   const peers = [3, 5, 8].map((minutes, index) => task(String(index), "Write item", {
     planningHistory: [feedback(minutes)],
   }));
   const explicit = learnPlanning(task("explicit", "Write report", { estimatedMinutes: 4 }), peers, "Europe/Prague");
   assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [4, "explicit"]);
   const learned = learnPlanning(task("target", "Write report"), peers, "Europe/Prague");
-  assert.deepEqual([learned.estimatedMinutes, learned.estimateSource], [5, "learned"]);
+  assert.deepEqual([learned.estimatedMinutes, learned.estimateSource], [30, "learned"]);
+});
+
+test("measured work below ten minutes is learned as ten, in 5-minute steps", () => {
+  const sessions = (minutes) => ({ workSessionHistory: [{ actualMinutes: minutes }] });
+  const peers = [3, 4, 7].map((minutes, index) => task(String(index), "Write item", sessions(minutes)));
+  const result = learnPlanning(task("target", "Write report"), peers, "Europe/Prague");
+  assert.deepEqual([result.estimatedMinutes, result.estimateSource], [10, "actual"]);
+  const longer = [12, 13, 14].map((minutes, index) => task(`l${index}`, "Write item", sessions(minutes)));
+  assert.equal(learnPlanning(task("target", "Write report"), longer, "Europe/Prague").estimatedMinutes, 15);
 });
 
 test("day-plan decisions require the exact current proposal or unscheduled task", () => {
