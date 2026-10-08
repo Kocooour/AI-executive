@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ServerSnapshot } from "../../../lib/server-sync";
 import type { BackupSummary, ConfirmRequest, Language } from "../types";
 
@@ -18,6 +18,8 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
 }) {
   const [backups, setBackups] = useState<BackupSummary[]>([]),
     [backupStatus, setBackupStatus] = useState("");
+  // A status shown in one language is not kept after the language changes.
+  useEffect(() => setBackupStatus(""), [language]);
 
   async function createServerBackup() {
     setBackupStatus(tr("backupCreating"));

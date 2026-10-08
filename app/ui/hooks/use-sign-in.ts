@@ -97,8 +97,12 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
         body: JSON.stringify({ password: authPassword }),
       });
       if (!response.ok) {
+        // The server's messages are English; the common answers are shown in the interface language.
         const body = await response.json().catch(() => ({}));
-        setAuthError(body.error || tr("signInFailed"));
+        setAuthError(response.status === 401 ? tr("signInInvalidPassword")
+          : response.status === 429 ? tr("signInTooManyAttempts")
+            : response.status === 503 ? tr("authMisconfigured")
+              : body.error || tr("signInFailed"));
         return;
       }
       setAuthPassword("");

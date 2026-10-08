@@ -13,7 +13,7 @@ const english = new Set(("the and or of for with without your you our is are was
   "offline online sync synced syncing device devices sign signed out permission " +
   "granted denied browser address secure connection check registered sending reminder reminders when where what why who " +
   "how about here there work working plan planned search inbox upcoming anytime someday completed " +
-  "overdue home more less show hide edit cancel confirm write writes require requires always safely propose change ask executive " +
+  "overdue home more less show hide edit cancel confirm write writes require requires always safely propose change ask executive manual scheduled " +
   "personal family switch name monday tuesday wednesday thursday friday saturday sunday mon tue wed thu fri sat sun").split(" "));
 const allowed = /\b(workspace|workspaces|Workspace|Lumi|AI|passkey|passkeys|Passkey|Passkeys|Face ID|Touch ID|iPhone|Android|PWA|HTTPS|URL|ICS|iCal|Google|Outlook|PACT|ID|OK|e2e)\b/g;
 
@@ -74,4 +74,14 @@ test("the Czech interface shows no English text", async ({ page }) => {
   });
   console.log(JSON.stringify(findings, null, 1));
   expect(findings).toEqual([]);
+});
+
+test("a wrong password is reported in Czech", async ({ browser }) => {
+  const context = await browser.newContext({ locale: "cs-CZ", storageState: { cookies: [], origins: [] } });
+  const page = await context.newPage();
+  await page.goto("/");
+  await page.locator('.authCard input[type="password"]').fill("tohle-neni-heslo");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".authCard")).toContainText("Nesprávné heslo.");
+  await context.close();
 });

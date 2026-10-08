@@ -864,6 +864,16 @@ export function useLumiApp() {
   }
   // The message is about a moment in time: drop it when the user moves on or the data is in sync again.
   useEffect(() => { setLogoutError(""); }, [view]);
+  // Status lines shown in one language are not kept after the language changes.
+  useEffect(() => {
+    setCalendarStatus("");
+    setAgentStatus("");
+    setContextStatus("");
+    setSubjectStatus("");
+    setClaimStatus("");
+    setContextInboxStatus("");
+    setLogoutError("");
+  }, [language]);
   useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
   // Another tab signed out: its data must not stay on screen here or be written back locally.
   useEffect(() => {
@@ -1294,7 +1304,7 @@ export function useLumiApp() {
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
-    testNotification, saveNotificationSettings } = useNotifications({ tr });
+    testNotification, saveNotificationSettings } = useNotifications({ tr, language });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -1304,7 +1314,7 @@ export function useLumiApp() {
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
-    removePasskey } = usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy });
+    removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });

@@ -7,7 +7,8 @@ import type { ConfirmRequest, PasskeySummary } from "../types";
 // Moved verbatim from use-lumi-app.tsx. Signing in with a passkey is part of the sign-in flow
 // (use-sign-in.ts), which owns `passkeySupported` and `passkeyBusy`; adding a passkey shares the
 // busy flag, so its setter is passed in.
-export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }: {
+export function usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy }: {
+  language: string;
   view: string;
   authState: string;
   tr: (key: string) => string;
@@ -18,6 +19,8 @@ export function usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy }:
     [passkeyLabel, setPasskeyLabel] = useState(""),
     [passkeyPassword, setPasskeyPassword] = useState(""),
     [passkeyStatus, setPasskeyStatus] = useState("");
+  // A status shown in one language is not kept after the language changes.
+  useEffect(() => setPasskeyStatus(""), [language]);
 
   useEffect(() => {
     if (view !== "Settings" || authState !== "ready") return;
