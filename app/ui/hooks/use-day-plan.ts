@@ -50,7 +50,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const version = ++dayPlanLoadVersion.current;
     const response = await fetch(`/api/day-plan?workspaceId=${encodeURIComponent(workspaceId)}&date=${date}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Day plan unavailable");
+    if (!response.ok) throw new Error(data.error || tr("dayPlanUnavailable"));
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
   }
@@ -59,7 +59,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const version = ++workSessionLoadVersion.current;
     const response = await fetch(`/api/work-sessions?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Work session unavailable");
+    if (!response.ok) throw new Error(data.error || tr("workSessionUnavailable"));
     if (version !== workSessionLoadVersion.current) return data.active as WorkSession | null;
     setWorkSession(data.active || null);
     const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
@@ -86,7 +86,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
-        throw new Error(data.error || "Work session failed");
+        throw new Error(data.error || tr("workSessionFailed"));
       }
       workSessionLoadVersion.current += 1;
       if (calendarWorkspaceSelection.current !== workspaceId) {
@@ -97,7 +97,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       setWorkSession(data.session?.state === "completed" ? null : data.session);
       const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
       if (data.taskCompleted) { closeDetail(); await pullFromServer(); await loadDayPlan(workspaceId, calendarToday).catch(() => undefined); }
-    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : "Work session failed"); }
+    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : tr("workSessionFailed")); }
     finally { setWorkSessionBusy(false); }
   }
 
@@ -132,7 +132,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   useEffect(() => {
     if (authState !== "ready") return;
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
-    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : "Work session unavailable"));
+    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : tr("workSessionUnavailable")));
     const refresh = () => { if (document.visibilityState === "visible") loadWorkSession(workspaceId).catch(() => undefined); };
     const poll = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);

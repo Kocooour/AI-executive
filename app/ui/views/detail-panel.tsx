@@ -80,7 +80,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {context.related
                     .slice(0, 6)
                     .map((x) => x.title)
-                    .join(" · ") || "No related entities"}
+                    .join(" · ") || tr("noRelatedEntities")}
                 </small>
               </div>
             )}

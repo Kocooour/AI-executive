@@ -240,7 +240,7 @@ export function useLumiApp() {
         }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Assistant request failed.");
+      if (!response.ok) throw new Error(result.error || tr("assistantRequestFailed"));
       setMessages([...history, {
         role: "assistant",
         content: result.message,
@@ -249,7 +249,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages([...history, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "Assistant request failed.",
+        content: error instanceof Error ? error.message : tr("assistantRequestFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -266,7 +266,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action, proposalId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "AI action failed.");
+      if (!response.ok) throw new Error(result.error || tr("aiActionFailed"));
       setMessages((current) => [
         ...current.map((message) =>
           message.proposal?.id === proposalId || (action === "confirm" && message.actionId)
@@ -283,7 +283,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages((current) => [...current, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "AI action failed.",
+        content: error instanceof Error ? error.message : tr("aiActionFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -300,7 +300,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action: "undo", actionId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Undo failed.");
+      if (!response.ok) throw new Error(result.error || tr("undoFailed"));
       setMessages((current) => [
         ...current.map((message) => message.actionId === actionId ? { ...message, resolved: true } : message),
         { role: "assistant", content: result.message },
@@ -309,7 +309,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages((current) => [...current, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "Undo failed.",
+        content: error instanceof Error ? error.message : tr("undoFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -319,7 +319,7 @@ export function useLumiApp() {
 
   async function loadAgents(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/executive?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Agents are unavailable");
+    if (!response.ok) throw new Error(tr("agentsUnavailable"));
     const data = await response.json();
     setPactAgents(Array.isArray(data.agents) ? data.agents : []);
     setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
@@ -338,11 +338,11 @@ export function useLumiApp() {
         body: JSON.stringify({ agentId, workspaceId, language }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Agent run failed");
+      if (!response.ok) throw new Error(data.error || tr("agentRunFailed"));
       if (data.agentResult) setAgentResult(data.agentResult as PACTAgentResult);
       await loadAgents(workspaceId);
     } catch (error) {
-      setAgentStatus(error instanceof Error ? error.message : "Agent run failed");
+      setAgentStatus(error instanceof Error ? error.message : tr("agentRunFailed"));
     } finally {
       setAgentBusyId("");
     }
@@ -353,7 +353,7 @@ export function useLumiApp() {
     const from = Date.now() - 24 * 60 * 60_000;
     const to = Date.now() + 14 * 24 * 60 * 60_000;
     const response = await fetch(`/api/calendar?workspaceId=${encodeURIComponent(workspaceId)}&from=${from}&to=${to}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Calendar is unavailable");
+    if (!response.ok) throw new Error(tr("calendarUnavailable"));
     const data = await response.json();
     if (loadVersion !== calendarLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setCalendarSources(Array.isArray(data.sources) ? data.sources : []);
@@ -372,15 +372,15 @@ export function useLumiApp() {
         body: JSON.stringify({ action, sourceId, workspaceId, label: calendarLabel, url: calendarUrl }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Calendar action failed");
+      if (!response.ok) throw new Error(data.error || tr("calendarActionFailed"));
       setCalendarUrl("");
       await loadCalendar(workspaceId);
       await loadDayPlan(workspaceId, calendarToday);
-      setCalendarStatus(action === "connect" ? "Kalendář je připojený pouze pro čtení." : action === "refresh" ? "Kalendář byl obnoven." : "Kalendář byl odpojen a jeho data odstraněna.");
+      setCalendarStatus(tr(action === "connect" ? "calendarConnectedReadOnly" : action === "refresh" ? "calendarRefreshed" : "calendarWasDisconnected"));
     } catch (error) {
       setCalendarUrl("");
       await loadCalendar(workspaceId).catch(() => undefined);
-      setCalendarStatus(error instanceof Error ? error.message : "Calendar action failed");
+      setCalendarStatus(error instanceof Error ? error.message : tr("calendarActionFailed"));
     } finally {
       setCalendarBusy(false);
     }
@@ -389,7 +389,7 @@ export function useLumiApp() {
   async function loadDurableContext(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/context?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Context is unavailable");
+    if (!response.ok) throw new Error(data.error || tr("contextUnavailable"));
     setDurableContext(Array.isArray(data.items) ? data.items : []);
   }
 
@@ -409,14 +409,14 @@ export function useLumiApp() {
         } : { action, workspaceId, id }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context action failed");
+      if (!response.ok) throw new Error(data.error || tr("contextActionFailed"));
       if (action === "create") {
         setContextTitle(""); setContextContent(""); setContextProjectId("");
         setContextStatus(tr("contextSaved"));
       }
       await loadDurableContext(workspaceId);
     } catch (error) {
-      setContextStatus(error instanceof Error ? error.message : "Context action failed");
+      setContextStatus(error instanceof Error ? error.message : tr("contextActionFailed"));
     } finally {
       setContextBusy(false);
     }
@@ -426,7 +426,7 @@ export function useLumiApp() {
     const loadVersion = ++contextClaimLoadVersion.current;
     const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Context claims are unavailable");
+    if (!response.ok) throw new Error(data.error || tr("contextClaimsUnavailable"));
     if (loadVersion !== contextClaimLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setContextClaims(Array.isArray(data.claims) ? data.claims : []);
   }
@@ -434,7 +434,7 @@ export function useLumiApp() {
   async function loadStandaloneSubjects(workspaceId = calendarWorkspaceSelection.current) {
     const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&includeArchived=true`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "People and organizations are unavailable");
+    if (!response.ok) throw new Error(data.error || tr("subjectsUnavailable"));
     if (calendarWorkspaceSelection.current === workspaceId) setStandaloneSubjects(Array.isArray(data.subjects) ? data.subjects : []);
   }
 
@@ -448,12 +448,12 @@ export function useLumiApp() {
           id: subject?.id || crypto.randomUUID(), expectedRevision: subject?.revision || 0,
           type: newSubjectType, title: subject ? subjectEditTitle : newSubjectTitle }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : data.error || "Subject action failed");
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : data.error || tr("subjectActionFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId); await loadContextClaims(workspaceId);
       setNewSubjectTitle(""); setSubjectEditId(""); setSubjectEditTitle("");
       setSubjectStatus(tr("saved"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(error instanceof Error ? error.message : "Subject action failed"); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(error instanceof Error ? error.message : tr("subjectActionFailed")); }
     finally { setSubjectBusy(false); }
   }
 
@@ -462,9 +462,9 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&historyId=${encodeURIComponent(subject.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "History unavailable");
+      if (!response.ok) throw new Error(data.error || tr("historyUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setSubjectHistory((current) => ({ ...current, [subject.id]: Array.isArray(data.history) ? data.history : [] }));
-    } catch (error) { setSubjectStatus(error instanceof Error ? error.message : "History unavailable"); }
+    } catch (error) { setSubjectStatus(error instanceof Error ? error.message : tr("historyUnavailable")); }
   }
 
   async function reloadContextClaims() {
@@ -474,7 +474,7 @@ export function useLumiApp() {
       await loadContextClaims(workspaceId);
       if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(tr("claimsReloadedYourDraft"));
     } catch (error) {
-      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : "Context claims are unavailable");
+      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("contextClaimsUnavailable"));
     }
   }
 
@@ -483,9 +483,9 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}&claimId=${encodeURIComponent(claim.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Claim history unavailable");
+      if (!response.ok) throw new Error(data.error || tr("claimHistoryUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setClaimHistory((current) => ({ ...current, [claim.id]: Array.isArray(data.history) ? data.history : [] }));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : "Claim history unavailable"); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("claimHistoryUnavailable")); }
   }
 
   function resetClaimDraft() {
@@ -553,7 +553,7 @@ export function useLumiApp() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
-        throw new Error(data.error || "Context claim could not be saved");
+        throw new Error(data.error || tr("claimSaveFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
@@ -561,7 +561,7 @@ export function useLumiApp() {
       setClaimStatus(tr("savedANewClaim"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : "Context claim could not be saved");
+        setClaimStatus(error instanceof Error ? error.message : tr("claimSaveFailed"));
       }
     } finally {
       setClaimBusyId("");
@@ -582,14 +582,14 @@ export function useLumiApp() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
-        throw new Error(data.error || "Context claim action failed");
+        throw new Error(data.error || tr("claimActionFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
       setClaimStatus(tr("saved"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : "Context claim action failed");
+        setClaimStatus(error instanceof Error ? error.message : tr("claimActionFailed"));
       }
     } finally {
       setClaimBusyId("");
@@ -604,12 +604,12 @@ export function useLumiApp() {
       const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "preview", workspaceId, text: contextInboxText }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context preview failed");
+      if (!response.ok) throw new Error(data.error || tr("contextPreviewFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals(Array.isArray(data.proposals) ? data.proposals : []);
       setContextInboxTasks(Array.isArray(data.taskDrafts) ? data.taskDrafts : []);
       setContextInboxStatus(tr("previewReadyTheOriginal"));
-    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : "Context preview failed"); }
+    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : tr("contextPreviewFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -627,12 +627,12 @@ export function useLumiApp() {
         validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context proposal could not be saved");
+      if (!response.ok) throw new Error(data.error || tr("contextProposalSaveFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       await loadContextClaims(workspaceId);
       setContextInboxStatus(tr("proposalAddedToThe"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : "Context proposal could not be saved"); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("contextProposalSaveFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -647,12 +647,12 @@ export function useLumiApp() {
         type: proposal.suggestedTarget.type, title: proposal.suggestedTarget.title,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : data.error || "Could not create person");
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : data.error || tr("personCreateFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId);
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
       setContextInboxStatus(tr("personCreatedSaveThe"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : "Could not create person"); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("personCreateFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -1119,7 +1119,7 @@ export function useLumiApp() {
           signal: controller.signal,
         });
         const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || "Suggestion failed");
+        if (!response.ok) throw new Error(body.error || tr("suggestionFailed"));
         if (captureSuggestionVersion.current !== version) return;
         const suggestion = body.suggestion as CaptureSuggestion;
         suggestion.newProjectSuggestion = suggestion.newProjectSuggestion || null;
@@ -1321,7 +1321,7 @@ export function useLumiApp() {
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
-  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });
+  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
