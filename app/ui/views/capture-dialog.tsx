@@ -22,7 +22,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     selectCaptureWriteWorkspace,
     setCapture,
     setCaptureProjectAction,
-    setCaptureAreaId,
+    chooseCaptureArea,
     setCaptureSuggestion,
     setCaptureSuggestionError,
     setDraft,
@@ -33,6 +33,8 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     workspaces,
     writeWorkspaceId,
   } = app;
+  // A task added to a project goes to the project's workspace, so its area has to come from there.
+  const captureWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
   return (
     <>
       {capture && (
@@ -78,9 +80,9 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             {captureType === "task" && (
               <label className="captureArea">
                 {tr("area")}
-                <select value={captureAreaId} onChange={(event) => setCaptureAreaId(event.target.value)}>
+                <select value={captureAreaId} onChange={(event) => chooseCaptureArea(event.target.value)}>
                   <option value="">{tr("none")}</option>
-                  {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                  {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === captureWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                     <option key={item.id} value={item.id}>{item.title}</option>
                   ))}
                 </select>

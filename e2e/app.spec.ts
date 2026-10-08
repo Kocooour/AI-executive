@@ -38,6 +38,8 @@ test("a captured task appears in Inbox and reaches the server", async ({ page })
 test("a task keeps its selected area and can change it after capture", async ({ page }) => {
   const title = `Úkol v oblasti ${Date.now()}`;
   await page.goto("/");
+  // Seeding replaces the store; it must not race the first synchronization of the page.
+  await waitUntilSynced(page);
   const ids = await page.evaluate(async () => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
@@ -87,6 +89,8 @@ test("a task keeps its selected area and can change it after capture", async ({ 
 test("capture switches destination and area to the selected workspace", async ({ page }) => {
   const title = `Úkol pro jiný prostor ${Date.now()}`;
   await page.goto("/");
+  // Seeding replaces the store; it must not race the first synchronization of the page.
+  await waitUntilSynced(page);
   const ids = await page.evaluate(async () => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
@@ -132,6 +136,56 @@ test("capture switches destination and area to the selected workspace", async ({
   }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.targetAreaId });
   await expect(page.locator(".workspaceButton")).toContainText("Rodina sdílená");
   await expect(page.locator("article", { hasText: title }).first()).toContainText("Rodina");
+});
+
+test("a task added from a project in another workspace offers that workspace's areas", async ({ page }) => {
+  const title = `Úkol do projektu jiného prostoru ${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  const ids = await page.evaluate(async () => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const workspaceId = `e2e-project-workspace-${now}`;
+    const entity = (id: string, type: string, title: string, workspace: string, extra: Record<string, unknown> = {}) =>
+      ({ id, type, title, status: "active", workspaceId: workspace, properties: {}, createdAt: now, updatedAt: now, ...extra });
+    const ids = { workspaceId, projectId: `e2e-other-project-${now}`, otherAreaId: `e2e-other-area-${now}`, personalAreaId: `e2e-own-area-${now}` };
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      baseRevision: snapshot.revision,
+      entities: [...snapshot.entities,
+        entity(`workspace:${workspaceId}`, "workspace", "Druhý prostor", workspaceId, { properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } }),
+        entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId),
+        entity(ids.otherAreaId, "area", "Oblast druhého prostoru", workspaceId),
+        entity(ids.personalAreaId, "area", "Vlastní oblast", "personal")],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [],
+    }) });
+    if (!response.ok) throw new Error(`Could not seed: ${response.status}`);
+    return ids;
+  });
+  // "All my work" is open and new tasks go to the personal workspace by default.
+  await page.evaluate(() => {
+    localStorage.setItem("ai-executive-active-workspace", "all");
+    localStorage.setItem("ai-executive-write-workspace", "personal");
+  });
+  // Opened from the project list (a link would switch to the project's workspace).
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  await page.locator("article", { hasText: "Projekt v druhém prostoru" }).first().click();
+  await page.route("**/api/task-suggestions", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
+  await page.locator("aside.detail").getByRole("button", { name: /Přidat úkol/ }).click();
+  const modal = page.locator(".captureModal");
+  const area = modal.getByLabel("Oblast");
+  await expect(area.locator(`option[value="${ids.otherAreaId}"]`)).toHaveCount(1);
+  await expect(area.locator(`option[value="${ids.personalAreaId}"]`)).toHaveCount(0);
+  await modal.getByLabel("Název úkolu").fill(title);
+  await area.selectOption(ids.otherAreaId);
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(async (name) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const task = snapshot.entities.find((entity: { title: string }) => entity.title === name);
+    return { workspaceId: task?.workspaceId, areaId: snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) =>
+      relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId };
+  }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.otherAreaId });
 });
 
 test("a task typed into the row of Someday or Upcoming stays in that view", async ({ page }) => {
