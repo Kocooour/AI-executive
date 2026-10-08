@@ -194,6 +194,11 @@ export const copy: Record<Language, Record<string, string>> = {
     workspaceKindSharedShort: "shared",
     workspaceAggregate: "all workspaces together",
     settingsShort: "settings",
+    signInInvalidPassword: "Incorrect password.",
+    signInTooManyAttempts: "Too many sign-in attempts. Try again later.",
+    triggerMode_manual: "manual",
+    triggerMode_scheduled: "scheduled",
+    triggerMode_event: "on event",
   },
   cs: {
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
@@ -388,5 +393,10 @@ export const copy: Record<Language, Record<string, string>> = {
     workspaceKindSharedShort: "sdílený",
     workspaceAggregate: "všechny workspace dohromady",
     settingsShort: "nastavení",
+    signInInvalidPassword: "Nesprávné heslo.",
+    signInTooManyAttempts: "Příliš mnoho pokusů o přihlášení. Zkuste to později.",
+    triggerMode_manual: "ručně",
+    triggerMode_scheduled: "podle plánu",
+    triggerMode_event: "při události",
   },
 };
