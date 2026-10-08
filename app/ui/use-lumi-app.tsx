@@ -877,9 +877,9 @@ export function useLumiApp() {
     setLogoutError("");
     if (authState !== "ready") return;
     const workspaceId = calendarWorkspaceSelection.current;
-    loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
-    loadContextClaims(workspaceId).catch(() => setClaimStatus(language === "cs" ? "Strukturovaný kontext nelze načíst." : "Structured context is unavailable."));
-    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(language === "cs" ? "Osoby a organizace nelze načíst." : "People and organizations are unavailable."));
+    loadDurableContext(workspaceId).catch(() => setContextStatus(tr("contextIsUnavailable")));
+    loadContextClaims(workspaceId).catch(() => setClaimStatus(tr("structuredContextIsUnavailable")));
+    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(tr("peopleAndOrganizationsAre")));
   }, [language]);
   useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
   // Another tab signed out: its data must not stay on screen here or be written back locally.
