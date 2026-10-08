@@ -12,10 +12,11 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type AttentionResponse, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
+import { type AIProposal, type AssistantMessage, type BackupSummary, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlan, type DayPlanItem, type DurableContextItem, type Language, type NotificationPreferences, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type PasskeySummary, type StandaloneSubjectItem, type ThemeMode, type WorkSession } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { urlBase64ToUint8Array } from "./format";
+import { useAttention } from "./hooks/use-attention";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -64,18 +65,12 @@ export function useLumiApp() {
     [badgeStatus, setBadgeStatus] = useState(""),
     [notificationStatus, setNotificationStatus] = useState(""),
     [dayPlan, setDayPlan] = useState<DayPlan | null>(null),
-    [attention, setAttention] = useState<AttentionResponse | null>(null),
-    [attentionError, setAttentionError] = useState(""),
     [authNotice, setAuthNotice] = useState(""),
-    [attentionReload, setAttentionReload] = useState(0),
     [addressReady, setAddressReady] = useState(false),
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
     [logoutError, setLogoutError] = useState(""),
-    [attentionOutdated, setAttentionOutdated] = useState(false),
-    [attentionBusyKey, setAttentionBusyKey] = useState(""),
-    [showAllAttention, setShowAllAttention] = useState(false),
     [dayPlanStatus, setDayPlanStatus] = useState(""),
     [dayPlanBusy, setDayPlanBusy] = useState(false),
     [dayPlanUndo, setDayPlanUndo] = useState<{ actionId: string; workspaceId: string; date: string } | null>(null),
@@ -221,7 +216,6 @@ export function useLumiApp() {
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
   const dayPlanLoadVersion = useRef(0);
-  const attentionLoadVersion = useRef(0);
   const workSessionLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
@@ -608,48 +602,6 @@ export function useLumiApp() {
     if (!response.ok) throw new Error(data.error || "Day plan unavailable");
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
-  }
-
-  async function loadAttention(workspaceId: string) {
-    const version = ++attentionLoadVersion.current;
-    const current = () => version === attentionLoadVersion.current;
-    let response: Response;
-    try {
-      response = await fetch(`/api/attention?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
-    } catch {
-      // No connection: the out-of-date label says it, so there is no separate error text.
-      if (current()) setAttentionOutdated(true);
-      throw new Error("");
-    }
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      if (current()) setAttentionOutdated(true);
-      throw new Error(data.error || "Attention is unavailable");
-    }
-    if (current()) {
-      setAttention(data as AttentionResponse);
-      setAttentionOutdated(false);
-      setAttentionError("");
-    }
-  }
-
-  async function actOnAttention(item: AttentionResponse["items"][number], action: "snooze" | "dismiss") {
-    if (!attention || attentionActionsBlocked) return;
-    setAttentionBusyKey(item.attentionKey);
-    setAttentionError("");
-    try {
-      const response = await fetch("/api/attention", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspaceId: item.workspaceId, attentionKey: item.attentionKey, sourceFingerprint: item.sourceFingerprint,
-          expectedDataRevision: attention.dataRevision, action, ...(action === "snooze" ? { snoozeUntil: Date.now() + 24 * 3_600_000 } : {}) }) });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Attention action failed");
-      await loadAttention(activeWorkspaceId);
-    } catch (error) {
-      await loadAttention(activeWorkspaceId).catch(() => undefined);
-      setAttentionError(error instanceof Error ? error.message : "Attention action failed");
-    } finally {
-      setAttentionBusyKey("");
-    }
   }
 
   async function loadWorkSession(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
@@ -1892,20 +1844,7 @@ export function useLumiApp() {
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
   const visibleDayPlan = dayPlan?.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) && dayPlan.date === calendarToday ? dayPlan : null;
-  const shownAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
-  const attentionStale = Boolean(shownAttention) && attentionOutdated;
-  // Snooze and dismiss need the server to hold the same data as this device.
-  const attentionActionsBlocked = attentionOutdated || syncStatus !== "synced";
-  // Until the server evaluates again, hide what was finished or deleted on this device meanwhile.
-  const visibleAttention = (() => {
-    if (!shownAttention || !attentionActionsBlocked) return shownAttention;
-    const deleted = new Set(pendingDeletedIds());
-    return { ...shownAttention, items: shownAttention.items.filter((candidate) => {
-      if (deleted.has(candidate.subjectId)) return false;
-      const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
-      return local?.status !== "completed";
-    }) };
-  })();
+  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });
   const dayPlanTimeline = visibleDayPlan ? [...visibleDayPlan.existingBlocks.map((item) => ({ ...item, existing: true })),
     ...visibleDayPlan.planBlocks.map((item) => ({ ...item, existing: false }))].sort((a, b) => String(a.start).localeCompare(String(b.start))) : [];
   const currentDayPlanBlock = dayPlanTimeline.find((item) => Date.parse(item.start || "") <= dayPlanNow && dayPlanNow < Date.parse(item.end || ""));
@@ -1924,38 +1863,6 @@ export function useLumiApp() {
     loadDayPlan(workspaceId, calendarToday)
       .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
   }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
-  // The last evaluation survives a lost connection so Home can show it as stale; it is dropped only
-  // when the workspace or the session changes.
-  useEffect(() => {
-    attentionLoadVersion.current += 1;
-    setAttention(null);
-    setAttentionOutdated(false);
-    setAttentionError("");
-    setShowAllAttention(false);
-  }, [authState, activeWorkspaceId]);
-  // Out of date from the moment the connection is lost until a load succeeds again, so the label
-  // does not flip while a queued edit retries its sync.
-  useEffect(() => {
-    if (syncStatus === "offline") setAttentionOutdated(true);
-  }, [syncStatus]);
-  useEffect(() => {
-    const lost = () => setAttentionOutdated(true);
-    // The sync state may never have left "synced" during a short drop, so coming back online
-    // has to ask for a fresh evaluation itself instead of waiting for the next periodic one.
-    const back = () => setAttentionReload((count) => count + 1);
-    window.addEventListener("offline", lost);
-    window.addEventListener("online", back);
-    return () => { window.removeEventListener("offline", lost); window.removeEventListener("online", back); };
-  }, []);
-  useEffect(() => {
-    if (authState !== "ready" || syncStatus !== "synced") return;
-    const workspaceId = activeWorkspaceId;
-    let cancelled = false;
-    const refresh = () => loadAttention(workspaceId).catch((error) => { if (!cancelled) setAttentionError(error instanceof Error ? error.message : "Attention is unavailable"); });
-    void refresh();
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 60_000);
-    return () => { cancelled = true; attentionLoadVersion.current += 1; window.clearInterval(timer); };
-  }, [authState, activeWorkspaceId, syncStatus, attentionReload]);
   useEffect(() => {
     if (authState !== "ready") return;
     const refresh = () => {
@@ -2897,8 +2804,8 @@ export function useLumiApp() {
     </button>
   );
   return {
+    ...attentionState,
     acceptNativeDrop,
-    actOnAttention,
     activeWorkspace,
     activeWorkspaceId,
     agentBusyId,
@@ -2912,11 +2819,6 @@ export function useLumiApp() {
     areas,
     askAI,
     assistantOpen,
-    attentionBusyKey,
-    attentionActionsBlocked,
-    attentionError,
-    attentionOutdated,
-    attentionStale,
     attentionTaskCount,
     answerConfirm,
     askConfirm,
@@ -3016,7 +2918,6 @@ export function useLumiApp() {
     inspect,
     items,
     language,
-    loadAttention,
     loadCalendar,
     loadDayPlan,
     login,
@@ -3076,7 +2977,6 @@ export function useLumiApp() {
     setActiveDragTarget,
     setAiText,
     setAssistantOpen,
-    setAttentionError,
     setAuthPassword,
     setCalendarLabel,
     setCalendarStatus,
@@ -3124,7 +3024,6 @@ export function useLumiApp() {
     setQuery,
     setSelected,
     setSettingsSaved,
-    setShowAllAttention,
     setSortBy,
     setStartupView,
     setSubjectEditId,
@@ -3138,7 +3037,6 @@ export function useLumiApp() {
     settingsSaved,
     settingsSection,
     setSettingsSection,
-    showAllAttention,
     showClaimHistory,
     showSubjectHistory,
     sidebarCounts,
@@ -3173,7 +3071,6 @@ export function useLumiApp() {
     undoDayPlanBlock,
     useCaptureSuggestion,
     view,
-    visibleAttention,
     visibleDayPlan,
     workElapsedText,
     workOverrun,
