@@ -44,9 +44,9 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   const trRef = useRef(tr);
   trRef.current = tr;
   const dayPlanWhy = (reason: string) => {
-    if (reason.startsWith("duration:")) return tr("dayPlanReasonDuration").replace("{minutes}", reason.slice(9));
+    if (reason.startsWith("duration:")) return trRef.current("dayPlanReasonDuration").replace("{minutes}", reason.slice(9));
     const key = `dayPlanReason_${reason}`;
-    const label = tr(key);
+    const label = trRef.current(key);
     return label === key ? reason : label;
   };
 
@@ -79,7 +79,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       selectWorkspace(task.workspaceId);
     }
     workSessionLoadVersion.current += 1;
-    if (action === "finish" && !(await askConfirm({ title: tr("workFinishTitle"), message: tr("workFinishFinal"), confirmLabel: tr("workFinish") }))) return;
+    if (action === "finish" && !(await askConfirm({ title: trRef.current("workFinishTitle"), message: trRef.current("workFinishFinal"), confirmLabel: trRef.current("workFinish") }))) return;
     setWorkSessionBusy(true); setWorkSessionStatus("");
     try {
       const current = workSession;
@@ -89,7 +89,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
+        if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(trRef.current("workConflict")); }
         throw new Error(data.error || trRef.current("workSessionFailed"));
       }
       workSessionLoadVersion.current += 1;
@@ -119,7 +119,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     setDayPlan(null);
     setDayPlanStatus("");
     loadDayPlan(workspaceId, calendarToday)
-      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(tr("theDayPlanIs")); });
+      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(trRef.current("theDayPlanIs")); });
   }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
   useEffect(() => {
     if (authState !== "ready") return;
@@ -152,40 +152,40 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (dayPlan.workspaceId !== calendarWorkspaceSelection.current || dayPlan.date !== calendarToday) return;
     const task = items.find((candidate) => candidate.id === item.taskId && candidate.type === "task" && candidate.status === "open" && candidate.workspaceId === dayPlan.workspaceId);
-    if (!task) { setDayPlanStatus(tr("dayPlanChanged")); return; }
+    if (!task) { setDayPlanStatus(trRef.current("dayPlanChanged")); return; }
     setDayPlanBusy(true);
     setDayPlanStatus("");
     try {
       await syncQueue.current;
-      if (localStorage.getItem(pendingKey) === "1") throw new Error(tr("dayPlanSyncFirst"));
+      if (localStorage.getItem(pendingKey) === "1") throw new Error(trRef.current("dayPlanSyncFirst"));
       const current = await loadDayPlan(dayPlan.workspaceId, dayPlan.date);
-      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
+      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(trRef.current("dayPlanChanged"));
       const stillProposed = current.planBlocks.find((block) => block.taskId === item.taskId && block.start === item.start && block.end === item.end);
       const stillUnscheduled = current.unscheduled.some((candidate) => candidate.taskId === item.taskId);
-      if (!stillProposed && !stillUnscheduled) throw new Error(tr("dayPlanChanged"));
-      if (decision === "accepted" && (!stillProposed || !item.start || !item.end)) throw new Error(tr("dayPlanChanged"));
+      if (!stillProposed && !stillUnscheduled) throw new Error(trRef.current("dayPlanChanged"));
+      if (decision === "accepted" && (!stillProposed || !item.start || !item.end)) throw new Error(trRef.current("dayPlanChanged"));
       const proposeResponse = await fetch("/api/day-plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: current.workspaceId, date: current.date, revision: current.revision,
         taskId: item.taskId, start: item.start || "", end: item.end || "", decision }) });
       const proposed = await proposeResponse.json().catch(() => ({}));
-      if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
+      if (!proposeResponse.ok) throw new Error(proposed.error || trRef.current("dayPlanChanged"));
       const proposal = proposed.proposal as AIProposal;
-      const actionLabel = tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
+      const actionLabel = trRef.current(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
       const planTitle = task.title.replace(/\s+/g, " ").slice(0, 160);
       const planKey = decision === "accepted" ? "dayPlanAccept" : decision === "tomorrow" ? "dayPlanTomorrow" : "dayPlanSkip";
-      if (!(await askConfirm({ title: tr(`${planKey}Title`), confirmLabel: actionLabel, returnFocus: trigger,
-        message: tr(`${planKey}Confirm`).replace("{title}", () => planTitle).replace("{time}", () => `${item.start} – ${item.end}`) }))) {
+      if (!(await askConfirm({ title: trRef.current(`${planKey}Title`), confirmLabel: actionLabel, returnFocus: trigger,
+        message: trRef.current(`${planKey}Confirm`).replace("{title}", () => planTitle).replace("{time}", () => `${item.start} – ${item.end}`) }))) {
         await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel", proposalId: proposal.id }) });
         return;
       }
-      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
+      if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(trRef.current("dayPlanChanged"));
       const confirmResponse = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "confirm", proposalId: proposal.id }) });
       const confirmed = await confirmResponse.json().catch(() => ({}));
-      if (!confirmResponse.ok) throw new Error(confirmed.error || tr("dayPlanChanged"));
+      if (!confirmResponse.ok) throw new Error(confirmed.error || trRef.current("dayPlanChanged"));
       setDayPlanUndo({ actionId: confirmed.actionId, workspaceId: current.workspaceId, date: current.date });
       await pullFromServer();
       await loadDayPlan(current.workspaceId, current.date);
     } catch (error) {
-      setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged"));
+      setDayPlanStatus(error instanceof Error ? error.message : trRef.current("dayPlanChanged"));
     } finally {
       setDayPlanBusy(false);
     }
@@ -196,11 +196,11 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     try {
       const response = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", actionId: dayPlanUndo.actionId }) });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("dayPlanChanged"));
+      if (!response.ok) throw new Error(result.error || trRef.current("dayPlanChanged"));
       setDayPlanUndo(null);
       await pullFromServer();
       await loadDayPlan(dayPlanUndo.workspaceId, dayPlanUndo.date);
-    } catch (error) { setDayPlanStatus(error instanceof Error ? error.message : tr("dayPlanChanged")); }
+    } catch (error) { setDayPlanStatus(error instanceof Error ? error.message : trRef.current("dayPlanChanged")); }
     finally { setDayPlanBusy(false); }
   }
 
