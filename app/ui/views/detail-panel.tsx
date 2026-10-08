@@ -3,6 +3,7 @@ import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../../lib/local-dates";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
+import { DurationInput } from "./duration-input";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
@@ -397,14 +398,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </label>
                 <label>
                   {tr("duration")}
-                  <input
-                    type="number"
-                    min="10"
-                    max="480"
-                    step="5"
+                  <DurationInput
                     value={String(selected.properties.estimatedMinutes || "")}
-                    onChange={(event) => {
-                      const estimatedMinutes = Math.max(10, Math.min(480, Number(event.target.value) || 10));
+                    onChange={(estimatedMinutes) => {
                       const plannedStart = String(selected.properties.plannedStart || "");
                       patch(selected, {
                         estimatedMinutes,

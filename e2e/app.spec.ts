@@ -35,6 +35,105 @@ test("a captured task appears in Inbox and reaches the server", async ({ page })
   await expectOnServer(page, (entity) => entity.title === title, true);
 });
 
+test("a task keeps its selected area and can change it after capture", async ({ page }) => {
+  const title = `Úkol v oblasti ${Date.now()}`;
+  await page.goto("/");
+  const ids = await page.evaluate(async () => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const first = `e2e-area-family-${now}`;
+    const second = `e2e-area-home-${now}`;
+    const area = (id: string, name: string) => ({ id, type: "area", title: name, status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now });
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      baseRevision: snapshot.revision, entities: [...snapshot.entities, area(first, "Rodina"), area(second, "Dům")], relations: snapshot.relations, deletedIds: [], revivedIds: [],
+    }) });
+    if (!response.ok) throw new Error(`Could not seed areas: ${response.status}`);
+    return { first, second };
+  });
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.route("**/api/task-suggestions", (route) => route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  await modal.getByLabel("Název úkolu").fill(title);
+  await expect(modal.locator(".captureSuggestionState.error")).toBeVisible();
+  await modal.getByLabel("Oblast").selectOption(ids.first);
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(async (name) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const task = snapshot.entities.find((entity: { title: string }) => entity.title === name);
+    return snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) => relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId;
+  }, title)).toBe(ids.first);
+  await page.goto("/?view=Inbox");
+  const row = page.locator("article", { hasText: title }).first();
+  await expect(row).toContainText("Rodina");
+  await row.click();
+  await page.locator("aside.detail").getByLabel("Oblast").selectOption(ids.second);
+  const duration = page.locator("aside.detail").getByLabel("Odhadovaná náročnost");
+  await duration.fill("4");
+  await expectOnServer(page, (entity) => entity.title === title && entity.properties?.estimatedMinutes === 4, true);
+  await expect.poll(async () => page.evaluate(async (name) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const task = snapshot.entities.find((entity: { title: string }) => entity.title === name);
+    return snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) => relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId;
+  }, title)).toBe(ids.second);
+  await page.reload();
+  await expect(page.locator("article", { hasText: title }).first()).toContainText("Dům");
+  await page.locator("article", { hasText: title }).first().click();
+  await expect(page.locator("aside.detail").getByLabel("Odhadovaná náročnost")).toHaveValue("4");
+});
+
+test("capture switches destination and area to the selected workspace", async ({ page }) => {
+  const title = `Úkol pro jiný prostor ${Date.now()}`;
+  await page.goto("/");
+  const ids = await page.evaluate(async () => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const workspaceId = `e2e-family-workspace-${now}`;
+    const personalAreaId = `e2e-personal-area-${now}`;
+    const targetAreaId = `e2e-family-area-${now}`;
+    const area = (id: string, workspaceId: string) => ({ id, type: "area", title: "Rodina", status: "active", workspaceId, properties: {}, createdAt: now, updatedAt: now });
+    const workspace = { id: `workspace:${workspaceId}`, type: "workspace", title: "Rodina sdílená", status: "active", workspaceId,
+      properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: now, updatedAt: now };
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      baseRevision: snapshot.revision, entities: [...snapshot.entities, workspace, area(personalAreaId, "personal"), area(targetAreaId, workspaceId)],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [],
+    }) });
+    if (!response.ok) throw new Error(`Could not seed shared workspace: ${response.status}`);
+    return { workspaceId, personalAreaId, targetAreaId };
+  });
+  await page.reload();
+  await waitUntilSynced(page);
+  await expect(page.locator(".workspaceButton")).toContainText("Personal");
+  let suggestedFor = "";
+  await page.route("**/api/task-suggestions", (route) => {
+    suggestedFor = JSON.parse(route.request().postData() || "{}").workspaceId;
+    return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' });
+  });
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  const area = modal.getByLabel("Oblast");
+  await area.selectOption(ids.personalAreaId);
+  await modal.getByLabel("Workspace").selectOption(ids.workspaceId);
+  await expect(area).toHaveValue("");
+  await expect(area.locator(`option[value="${ids.personalAreaId}"]`)).toHaveCount(0);
+  await expect(area.locator(`option[value="${ids.targetAreaId}"]`)).toHaveCount(1);
+  await modal.getByLabel("Název úkolu").fill(title);
+  await expect.poll(() => suggestedFor).toBe(ids.workspaceId);
+  await area.selectOption(ids.targetAreaId);
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(async (name) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const task = snapshot.entities.find((entity: { title: string }) => entity.title === name);
+    return { workspaceId: task?.workspaceId, areaId: snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) =>
+      relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId };
+  }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.targetAreaId });
+  await expect(page.locator(".workspaceButton")).toContainText("Rodina sdílená");
+  await expect(page.locator("article", { hasText: title }).first()).toContainText("Rodina");
+});
+
 test("a task typed into the row of Someday or Upcoming stays in that view", async ({ page }) => {
   for (const [view, label] of [["Someday", "Někdy"], ["Upcoming", "Nadcházející"]]) {
     const title = `Řádek ${label} ${Date.now()}`;

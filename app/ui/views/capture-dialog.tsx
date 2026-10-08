@@ -2,14 +2,15 @@
 import { handleOverlayKeys } from "../focus";
 import { type CaptureSuggestion } from "../types";
 import type { LumiApp } from "../use-lumi-app";
+import { DurationInput } from "./duration-input";
 
 export function CaptureDialog({ app }: { app: LumiApp }) {
   const {
-    activeWorkspaceId,
     capture,
     captureModalRef,
     captureProjectAction,
     captureProjectId,
+    captureAreaId,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
@@ -18,9 +19,10 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     items,
     language,
     parseCapture,
-    selectWriteWorkspace,
+    selectCaptureWriteWorkspace,
     setCapture,
     setCaptureProjectAction,
+    setCaptureAreaId,
     setCaptureSuggestion,
     setCaptureSuggestionError,
     setDraft,
@@ -49,12 +51,12 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             }}
           >
             <h2 id="capture-title">{captureType === "note" ? tr("addNote") : tr("quickCapture")}</h2>
-            {activeWorkspaceId === "all" && !captureProjectId && (
+            {workspaces.length > 1 && !captureProjectId && (
               <label className="captureWorkspace">
                 {tr("workspace")}
                 <select
                   value={writeWorkspaceId}
-                  onChange={(event) => selectWriteWorkspace(event.target.value)}
+                  onChange={(event) => selectCaptureWriteWorkspace(event.target.value)}
                 >
                   {workspaces.map((workspace) => (
                     <option key={workspace.id} value={workspace.workspaceId}>
@@ -73,6 +75,17 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                 captureType === "note" ? tr("noteTitle") : tr("taskPrompt")
               }
             />
+            {captureType === "task" && (
+              <label className="captureArea">
+                {tr("area")}
+                <select value={captureAreaId} onChange={(event) => setCaptureAreaId(event.target.value)}>
+                  <option value="">{tr("none")}</option>
+                  {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                    <option key={item.id} value={item.id}>{item.title}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             {captureType === "task" && (
               <>
                 <p>{tr("captureExample")}</p>
@@ -152,7 +165,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                             }}
                           >
                             <option value="">—</option>
-                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                               <option key={item.id} value={item.id}>{item.title}</option>
                             ))}
                           </select>
@@ -183,28 +196,12 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                             }}
                           >
                             <option value="">—</option>
-                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                               <option key={item.id} value={item.id}>{item.title}</option>
                             ))}
                           </select>
                         </label>
                       )}
-                      <label>
-                        {tr("area")}
-                        <select
-                          value={captureSuggestion.areaId}
-                          disabled={!useCaptureSuggestion}
-                          onChange={(event) => {
-                            const entity = items.find((item) => item.id === event.target.value);
-                            setCaptureSuggestion({ ...captureSuggestion, areaId: event.target.value, areaTitle: entity?.title || "" });
-                          }}
-                        >
-                          <option value="">—</option>
-                          {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
-                            <option key={item.id} value={item.id}>{item.title}</option>
-                          ))}
-                        </select>
-                      </label>
                       <label>
                         {tr("priority")}
                         <select
@@ -220,16 +217,12 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                       <label>
                         {tr("duration")}
                         <span className="captureDurationInput">
-                          <input
-                            type="number"
-                            min="10"
-                            max="480"
-                            step="5"
+                          <DurationInput
                             value={captureSuggestion.estimatedMinutes}
                             disabled={!useCaptureSuggestion}
-                            onChange={(event) => setCaptureSuggestion({
+                            onChange={(minutes) => setCaptureSuggestion({
                               ...captureSuggestion,
-                              estimatedMinutes: Math.max(10, Math.min(480, Number(event.target.value) || 10)),
+                              estimatedMinutes: minutes,
                               scheduledStart: "",
                               scheduledEnd: "",
                               scheduledDate: parseCapture(draft).when,

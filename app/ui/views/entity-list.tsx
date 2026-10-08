@@ -26,6 +26,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     setSortBy,
     setText,
     sortBy,
+    targets,
     text,
     today,
     tr,
@@ -158,6 +159,11 @@ export function EntityList({ app }: { app: LumiApp }) {
                             : null,
                           x.properties.deadline &&
                             tr("deadline") + " " + friendlyDate(x.properties.deadline, language),
+                          (() => {
+                            const areaId = targets(x.id, "belongs_to_area")[0];
+                            const area = areas.find((candidate) => candidate.id === areaId);
+                            return area ? `${tr("area")}: ${area.title}` : null;
+                          })(),
                         ]
                           .filter(Boolean)
                           .join(" · ") ||

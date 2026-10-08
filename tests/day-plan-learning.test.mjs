@@ -48,6 +48,16 @@ test("measured work takes precedence after three sessions while an explicit esti
   assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [15, "explicit"]);
 });
 
+test("explicit and learned estimates keep whole minutes below ten", () => {
+  const peers = [3, 5, 8].map((minutes, index) => task(String(index), "Write item", {
+    planningHistory: [feedback(minutes)],
+  }));
+  const explicit = learnPlanning(task("explicit", "Write report", { estimatedMinutes: 4 }), peers, "Europe/Prague");
+  assert.deepEqual([explicit.estimatedMinutes, explicit.estimateSource], [4, "explicit"]);
+  const learned = learnPlanning(task("target", "Write report"), peers, "Europe/Prague");
+  assert.deepEqual([learned.estimatedMinutes, learned.estimateSource], [5, "learned"]);
+});
+
 test("day-plan decisions require the exact current proposal or unscheduled task", () => {
   const plan = { calendar: "ready", planBlocks: [{ taskId: "a", start: "2026-10-02T08:00:00Z", end: "2026-10-02T09:00:00Z" }],
     unscheduled: [{ taskId: "b" }] };

@@ -49,6 +49,11 @@ test("ordinary single actions do not propose projects", () => {
   }), null);
 });
 
+test("an explicit short duration is suggested without a ten-minute floor", () => {
+  const result = suggestTask({ title: "Zavolat rodině 4 min", workspaceId: "personal", language: "cs" });
+  assert.equal(result.estimatedMinutes, 4);
+});
+
 test("a relevant active project suppresses duplicate project proposals", () => {
   const now = Date.now();
   add({ id: "workspace:personal", type: "workspace", title: "Personal", status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now });

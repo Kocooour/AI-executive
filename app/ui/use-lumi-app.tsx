@@ -34,6 +34,7 @@ export function useLumiApp() {
     [capture, setCapture] = useState(false),
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
     [captureProjectId, setCaptureProjectId] = useState(""),
+    [captureAreaId, setCaptureAreaId] = useState(""),
     [draft, setDraft] = useState(""),
     [captureSuggestion, setCaptureSuggestion] = useState<CaptureSuggestion | null>(null),
     [captureSuggestionBusy, setCaptureSuggestionBusy] = useState(false),
@@ -183,6 +184,7 @@ export function useLumiApp() {
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
+  const captureAreaTouched = useRef(false);
   const draggingIdRef = useRef("");
   const dragScopeRef = useRef("");
   const dragTargetRef = useRef("");
@@ -1274,7 +1276,7 @@ export function useLumiApp() {
       return;
     }
     const version = ++captureSuggestionVersion.current;
-    const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+    const workspaceId = writeWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1309,6 +1311,7 @@ export function useLumiApp() {
           suggestion.projectId = captureProjectId;
           suggestion.projectTitle = project?.title || suggestion.projectTitle;
         }
+        if (!captureAreaTouched.current) setCaptureAreaId(suggestion.areaId || "");
         setCaptureProjectAction(captureProjectId
           ? "existing"
           : suggestion.newProjectSuggestion
@@ -1380,6 +1383,16 @@ export function useLumiApp() {
   function selectWriteWorkspace(workspaceId: string) {
     setWriteWorkspaceId(workspaceId);
     localStorage.setItem("ai-executive-write-workspace", workspaceId);
+  }
+
+  function selectCaptureWriteWorkspace(workspaceId: string) {
+    // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
+    setCaptureAreaId("");
+    captureAreaTouched.current = false;
+    captureSuggestionVersion.current += 1;
+    setCaptureSuggestion(null);
+    setCaptureProjectAction("none");
+    selectWriteWorkspace(workspaceId);
   }
 
   async function createWorkspace() {
@@ -1860,6 +1873,8 @@ export function useLumiApp() {
     captureOpener.current = document.activeElement as HTMLElement | null;
     setCaptureType(type);
     setCaptureProjectId(projectId);
+    setCaptureAreaId("");
+    captureAreaTouched.current = false;
     setDraft("");
     setCaptureSuggestion(null);
     setCaptureSuggestionError("");
@@ -1885,10 +1900,14 @@ export function useLumiApp() {
     const suggestedNewProjectTitle = captureProjectAction === "new"
       ? suggestion?.newProjectSuggestion?.title.trim() || ""
       : "";
-    const suggestedAreaId = suggestion?.areaId || "";
+    const suggestedAreaId = captureAreaId;
     const suggestedDate = parsed.when || suggestion?.scheduledDate || "";
     const globalTask = captureType === "task" && !captureProjectId;
     setCapture(false);
+    if (!captureProjectId && activeWorkspaceId !== "all" && activeWorkspaceId !== writeWorkspaceId) {
+      setActiveWorkspaceId(writeWorkspaceId);
+      localStorage.setItem("ai-executive-active-workspace", writeWorkspaceId);
+    }
     if (globalTask) {
       closeDetail();
       setMoreOpen(false);
@@ -1916,7 +1935,7 @@ export function useLumiApp() {
       });
     } catch (error) {
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
-        const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+        const workspaceId = writeWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
         setCaptureSuggestion(duplicate ? {
           ...captureSuggestion,
@@ -2608,6 +2627,7 @@ export function useLumiApp() {
     captureModalRef,
     captureProjectAction,
     captureProjectId,
+    captureAreaId,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
@@ -2731,6 +2751,7 @@ export function useLumiApp() {
     scopedRelations,
     selectWorkspace,
     selectWriteWorkspace,
+    selectCaptureWriteWorkspace,
     selected,
     setActiveDragTarget,
     setAiText,
@@ -2741,6 +2762,7 @@ export function useLumiApp() {
     setCalendarUrl,
     setCapture,
     setCaptureProjectAction,
+    setCaptureAreaId: (areaId: string) => { captureAreaTouched.current = true; setCaptureAreaId(areaId); },
     setCaptureSuggestion,
     setCaptureSuggestionError,
     setChecklistDraft,

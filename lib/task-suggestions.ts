@@ -2,6 +2,7 @@ import { calendarAvailability } from "./calendar";
 import { getNotificationPreferences } from "./notifications";
 import { listPACTContext } from "./pact";
 import { readSnapshot } from "./server-store";
+import { clampTaskMinutes } from "./task-duration";
 
 export interface TaskSuggestion {
   projectId: string;
@@ -127,7 +128,7 @@ function estimateMinutes(input: string) {
   const explicit = text.match(/\b(\d{1,3})\s*(min|minut|minutes?)\b/) || text.match(/\b(\d{1,2})\s*(h|hod|hodin|hours?)\b/);
   if (explicit) {
     const value = Number(explicit[1]);
-    return Math.max(10, Math.min(480, /\b(h|hod|hodin|hours?)\b/.test(explicit[0]) ? value * 60 : value));
+    return clampTaskMinutes(/\b(h|hod|hodin|hours?)\b/.test(explicit[0]) ? value * 60 : value) ?? 30;
   }
   if (/\b(zavolat|volat|call|email|mail|odpovedet|reply)\b/.test(text)) return 15;
   if (/\b(objednat|rezervovat|koupit|book|buy|order)\b/.test(text)) return 20;
