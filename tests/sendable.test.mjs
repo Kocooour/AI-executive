@@ -82,3 +82,9 @@ test("a known link of a held record is not sent when the other end has moved to 
   const result = forServer(entities, [], base);
   assert.deepEqual(result.relations, []);
 });
+
+test("a relation to a record that is not there is not sent", () => {
+  const result = forServer([task("a")], [relation("a", "ghost")], null);
+  assert.deepEqual(result.relations, []);
+  assert.deepEqual(result.entities.map((entity) => entity.id), ["a"]);
+});

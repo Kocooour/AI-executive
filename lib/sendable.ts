@@ -71,11 +71,12 @@ export function forServer(entities: Entity[], relations: Relation[], base: { ent
   for (const entity of entities) {
     if (entity.type !== "workspace" && !reasons.has(entity.id) && !workspaces.has(entity.workspaceId)) reasons.set(entity.id, "workspace");
   }
-  // A relation across workspaces makes the server refuse the whole save; it is not sent.
+  // A relation to a record that is not there, or across workspaces, makes the server refuse the
+  // whole save; it is not sent (it disappears here when the server copy is taken over).
   const byId = new Map(entities.map((entity) => [entity.id, entity]));
   const sameWorkspace = (relation: Relation) => {
     const source = byId.get(relation.sourceEntityId), target = byId.get(relation.targetEntityId);
-    return !source || !target || (source.workspaceId === target.workspaceId && relation.workspaceId === source.workspaceId);
+    return Boolean(source && target && source.workspaceId === target.workspaceId && relation.workspaceId === source.workspaceId);
   };
   if (!reasons.size) return { entities, relations: relations.every(sameWorkspace) ? relations : relations.filter(sameWorkspace), heldBack: [] as Entity[], reasons };
   const heldBack: Entity[] = [];
