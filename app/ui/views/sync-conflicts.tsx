@@ -49,7 +49,8 @@ function shown(conflict: SyncConflict, items: Entity[], tr: (key: string) => str
       placement.someday ? tr("conflictField_someday") : "",
       placement.inbox ? tr("conflictField_inbox") : "",
     ].filter(Boolean);
-    return parts.join(", ") || tr("conflictNone");
+    // No date and no list: the task was in Anytime.
+    return parts.join(", ") || tr("Anytime");
   }
   if (conflict.truncated) return `${String(value ?? "")}… ${tr("conflictTruncated")}`;
   if (conflict.field === "properties.checklist" && Array.isArray(value)) {

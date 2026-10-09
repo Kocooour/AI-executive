@@ -225,15 +225,32 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
   }
   const properties: Record<string, unknown> = {};
   // Where the task sits (date, Today, Someday, Inbox) is one choice: its fields are merged together,
-  // or two moves to different lists would leave the task in both.
-  const pick = (entity: Entity) => {
+  // or two moves to different lists would leave the task in both. Sides are compared with `false`,
+  // "" and a missing field meaning the same (code paths write either); the fields themselves are
+  // taken as the chosen side wrote them.
+  const raw = (entity: Entity) => {
     const value: Record<string, unknown> = {};
     for (const key of placementFields) if (entity.properties?.[key] !== undefined) value[key] = entity.properties[key];
     return value;
   };
-  const placement = threeWay(pick(base), pick(local), pick(server), localWins);
-  record("properties.placement", placement);
-  Object.assign(properties, placement.value as Record<string, unknown>);
+  const meaning = (entity: Entity) => {
+    const value: Record<string, unknown> = {};
+    for (const key of placementFields) {
+      const field = entity.properties?.[key];
+      if (field !== undefined && field !== null && field !== false && field !== "") value[key] = field;
+    }
+    return value;
+  };
+  const [pb, pl, ps] = [meaning(base), meaning(local), meaning(server)];
+  let chosen: Entity = server;
+  if (!same(pl, ps) && !same(pl, pb)) {
+    if (same(ps, pb)) chosen = local;
+    else {
+      chosen = localWins ? local : server;
+      record("properties.placement", { value: undefined, lost: raw(localWins ? server : local), conflict: true });
+    }
+  }
+  Object.assign(properties, raw(chosen));
   const keys = new Set([...Object.keys(base.properties || {}), ...Object.keys(local.properties || {}), ...Object.keys(server.properties || {})]);
   for (const key of placementFields) keys.delete(key);
   for (const key of keys) {

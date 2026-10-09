@@ -218,3 +218,12 @@ test("a checklist item removed on one device and changed on the other is removed
     assert.deepEqual(conflicts[0].lostValue, [changed]);
   }
 });
+
+test("two moves to the same place are not a conflict, however the fields are written", () => {
+  const merged = mergeEntity(task({}, { inbox: true, today: false }),
+    task({ updatedAt: 20 }, { today: true, when: "2026-10-09", inbox: false }),
+    task({ updatedAt: 30 }, { today: true, when: "2026-10-09", inbox: false, someday: false }), 100);
+  assert.deepEqual(entityConflicts(merged), []);
+  assert.equal(merged.properties.today, true);
+  assert.equal(merged.properties.when, "2026-10-09");
+});
