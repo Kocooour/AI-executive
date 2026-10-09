@@ -88,7 +88,10 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     return { ...shownAttention, items: shownAttention.items.filter((candidate) => {
       if (deleted.has(candidate.subjectId)) return false;
       const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
-      return local?.status !== "completed";
+      // Gone from the local copy (deleted on another device and already taken over here); while
+      // the local copy is still loading nothing is known yet.
+      if (!local) return items.length === 0;
+      return local.status !== "completed";
     }) };
   })();
   // The last evaluation survives a lost connection so Home can show it as stale, also after the app
