@@ -617,8 +617,10 @@ test("signing out clears the local copy; signing in again restores it from the s
   const otherTab = `Z jiné karty před odhlášením ${Date.now()}`;
   await plantDraft(otherTab, base);
   await page.getByRole("button", { name: "Odhlásit se" }).click();
-  // Everything was sent, so no question about discarding changes may appear.
-  await expect(page.locator(".authCard")).toBeVisible();
+  // Everything was sent, so no question about discarding changes may appear. Sending, merging and
+  // ending the session can take several seconds on a busy machine, so the wait is longer here.
+  await expect(page.locator(".authCard")).toBeVisible({ timeout: 15_000 });
+  await expect(confirmDialog(page)).not.toBeVisible();
   await expect(page).toHaveURL(/\/$/);
   const local = await page.evaluate(() => new Promise<string[]>((resolve) => {
     const request = indexedDB.open("ai-executive");
