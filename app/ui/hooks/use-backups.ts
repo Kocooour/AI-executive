@@ -2,6 +2,8 @@
 import { useEffect, useState } from "react";
 import type { ServerSnapshot } from "../../../lib/server-sync";
 import { clearAllMarkers } from "../../../lib/pending-markers";
+import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { clearOpenTexts } from "../../../lib/open-texts";
 import type { BackupSummary, ConfirmRequest, Language } from "../types";
 
 // Server backups in Settings: the list, creating a backup and restoring one. Restoring replaces
@@ -54,6 +56,10 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
       await applySnapshot(data.snapshot as ServerSnapshot);
       localStorage.removeItem(pendingKey);
       clearAllMarkers(localStorage);
+      // Notes drafts and notes of open texts were typed against the replaced data: kept, they could
+      // write it back over the restored notes.
+      clearNotesDrafts(localStorage);
+      clearOpenTexts(localStorage);
       setBackupStatus(tr("backupRestored"));
       const listResponse = await fetch("/api/backups", { cache: "no-store" });
       const list = await listResponse.json();

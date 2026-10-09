@@ -21,7 +21,18 @@ export type Marker = { id: string; op: string; key: string };
 
 let counter = 0;
 const tab = Math.random().toString(36).slice(2, 10);
-const newOp = () => `${Date.now().toString(36).padStart(10, "0")}-${tab}-${(counter += 1).toString(36).padStart(6, "0")}`;
+// The time in microseconds (as precise as the browser allows), so that operations of two tabs in
+// the same millisecond are still ordered by when they were recorded. `after`: an operation of the
+// same record already seen; the new one is placed after it.
+function now() {
+  const precise = typeof performance !== "undefined" && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now();
+  return Math.floor(precise * 1000);
+}
+const opTime = (op: string) => parseInt(op.slice(0, 13), 36) || 0;
+function newOp(after: string[] = []) {
+  const time = Math.max(now(), ...after.map((op) => opTime(op) + 1));
+  return `${time.toString(36).padStart(13, "0")}-${tab}-${(counter += 1).toString(36).padStart(6, "0")}`;
+}
 
 function keysWithPrefix(storage: Store, prefix: string) {
   const keys: string[] = [];
@@ -46,7 +57,7 @@ function migrateLegacy(storage: Store) {
           const id = typeof item === "string" ? item : item && typeof item.id === "string" ? item.id : "";
           // A key of its own (an old tab may still write the shared list after it was moved), ordered
           // before every new entry.
-          if (id) storage.setItem(`${listKey}:${"0".repeat(10)}-${newOp()}`, id);
+          if (id) storage.setItem(`${listKey}:${"0".repeat(13)}-legacy-${tab}-${(counter += 1).toString(36).padStart(6, "0")}`, id);
         });
       }
     } catch {
@@ -64,7 +75,10 @@ function entries(storage: Store, listKey: string): Marker[] {
 }
 
 // When two tabs delete and restore the same record at the same moment, both entries can remain:
-// the later operation decides. The other one counts as handled when that is sent.
+// the later operation decides (ordered by its time in microseconds, and always after an operation
+// of the record that its tab had seen). Operations that neither tab saw before writing its own are
+// simultaneous; one of them is chosen the same way in every tab, so all tabs and the server end
+// with the same state. The other one counts as handled when that is sent.
 function current(storage: Store) {
   migrateLegacy(storage);
   const deletedEntries = entries(storage, deletedKey), revivedEntries = entries(storage, revivedKey);
@@ -90,15 +104,21 @@ function drop(storage: Store, listKey: string, id: string) {
 // A record deleted here: a restoration of it not sent yet is replaced by the deletion.
 export function recordDeleted(storage: Store, id: string) {
   migrateLegacy(storage);
+  const seen = sameRecord(storage, id);
   drop(storage, revivedKey, id);
-  storage.setItem(`${deletedKey}:${newOp()}`, id);
+  storage.setItem(`${deletedKey}:${newOp(seen)}`, id);
 }
+
+// Operations of a record already recorded (by any tab).
+const sameRecord = (storage: Store, id: string) => [...entries(storage, deletedKey), ...entries(storage, revivedKey)]
+  .filter((marker) => marker.id === id).map((marker) => marker.op);
 
 // A deleted record restored here: a deletion of it not sent yet is replaced by the restoration.
 export function recordRevived(storage: Store, id: string) {
   migrateLegacy(storage);
+  const seen = sameRecord(storage, id);
   drop(storage, deletedKey, id);
-  storage.setItem(`${revivedKey}:${newOp()}`, id);
+  storage.setItem(`${revivedKey}:${newOp(seen)}`, id);
 }
 
 // A change waits to be sent. Every call sets a new token, so a save can tell whether one came

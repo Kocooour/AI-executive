@@ -137,3 +137,16 @@ test("a shared list written again by an old tab after it was moved loses nothing
   clearSentMarkers(storage, sent);
   assert.deepEqual(pendingDeletedIds(storage), ["e"]);
 });
+
+test("an operation is placed after an operation of the same record it has seen, even with a clock behind", () => {
+  const storage = memoryStorage();
+  // Another tab (its clock a little ahead) deleted the record.
+  storage.setItem(`${deletedKey}:zzzzzzzzzzzz0-othertab-000001`, "x");
+  recordRevived(storage, "x");
+  assert.deepEqual(pendingRevivedIds(storage), ["x"]);
+  assert.deepEqual(pendingDeletedIds(storage), []);
+  // And the other way round.
+  storage.setItem(`${revivedKey}:zzzzzzzzzzzz1-othertab-000002`, "y");
+  recordDeleted(storage, "y");
+  assert.deepEqual(pendingDeletedIds(storage), ["y"]);
+});

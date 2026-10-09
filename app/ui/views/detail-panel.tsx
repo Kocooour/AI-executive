@@ -9,6 +9,7 @@ import { SyncConflicts } from "./sync-conflicts";
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
+    titleEditSeq,
     noteOpenTexts,
     askConfirm,
     acceptNativeDrop,
@@ -69,14 +70,20 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               value={selected.title}
               onChange={(e) => {
                 titleEdited.current = true;
+                titleEditSeq.current += 1;
                 setSelected({ ...selected, title: e.target.value });
               }}
               onBlur={(e) => {
                 // Only a title the user changed is saved; an untouched field cannot put back an old one.
-                const edited = titleEdited.current;
-                titleEdited.current = false;
-                noteOpenTexts();
-                if (edited) rename(selected, e.target.value);
+                if (!titleEdited.current) { noteOpenTexts(); return; }
+                // The title stays marked as edited (also for other tabs signing out) until it is
+                // saved; a failed save keeps it marked, and typing on during the save keeps it too.
+                const seq = titleEditSeq.current;
+                rename(selected, e.target.value).then(() => {
+                  if (titleEditSeq.current !== seq) return;
+                  titleEdited.current = false;
+                  noteOpenTexts();
+                }, () => undefined);
               }}
             />
             <SyncConflicts app={app} entity={selected} />

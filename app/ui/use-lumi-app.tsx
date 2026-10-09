@@ -186,6 +186,8 @@ export function useLumiApp() {
   // Whether the open record's title was changed and not saved yet; that draft lives only in
   // `selected` until blur. Merely focusing the field is not a change.
   const titleEdited = useRef(false);
+  // Counts key presses in the title, so that a save finishing later knows whether more was typed.
+  const titleEditSeq = useRef(0);
   const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -2616,6 +2618,7 @@ export function useLumiApp() {
     createFromRow,
     resolveConflict,
     titleEdited,
+    titleEditSeq,
     noteOpenTexts,
     rowError,
     setRowError,
