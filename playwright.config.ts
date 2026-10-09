@@ -65,7 +65,8 @@ export default defineConfig({
       AI_EXECUTIVE_SECURITY_OUTBOX_DIR: path.join(runDir, "security-outbox"),
       AI_EXECUTIVE_INTEGRATION_TOKEN: "",
       AI_EXECUTIVE_ALLOWED_ORIGINS: "",
-      AI_EXECUTIVE_PASSKEY_ORIGINS: "",
+      // Passkeys are tested with a virtual authenticator on the test address only.
+      AI_EXECUTIVE_PASSKEY_ORIGINS: `http://localhost:${port}`,
       OPENAI_API_KEY: "",
       HERMES_AI_ENABLED: "false",
     },

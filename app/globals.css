@@ -328,6 +328,13 @@ article small {
   flex: none;
   min-width: 64px;
 }
+.capture {
+  flex-wrap: wrap;
+}
+.capture .captureRowError {
+  flex-basis: 100%;
+  color: var(--danger);
+}
 .empty {
   background: var(--surface);
   border: 1px solid var(--line);

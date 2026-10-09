@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { visitScreens } from "./screens";
 import { waitUntilSynced } from "./helpers";
 

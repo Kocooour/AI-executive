@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { visitScreens } from "./screens";
 
 // Text must stay readable in both themes. For every visible piece of text on the main screens the

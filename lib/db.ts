@@ -59,13 +59,14 @@ class ExecutiveDB extends Dexie {
 export const db = new ExecutiveDB();
 
 export async function ensureDefaultWorkspace() {
-  if (!(await db.entities.get("workspace:personal"))) {
-    // A local placeholder until the server copy arrives. Timestamp 0 means it can never win a
-    // merge against the real workspace, which the server always has.
+  // A local placeholder until the server copy arrives. Timestamp 0 means it can never win a
+  // merge against the real workspace, which the server always has. Startup and an item typed
+  // right after it can both ask at once, so the check and the write are one transaction.
+  return db.transaction("rw", db.entities, async () => {
+    if (await db.entities.get("workspace:personal")) return false;
     await db.entities.add(defaultWorkspaceEntity(0));
     return true;
-  }
-  return false;
+  });
 }
 
 export async function seed() {
