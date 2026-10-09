@@ -1,7 +1,8 @@
 "use client";
-import { useRef, useState } from "react";
-import { db, readLocalWithBase, replaceSyncBase, type Entity } from "../../../lib/db";
+import { useEffect, useRef, useState } from "react";
+import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
+import { hasChangesBeyond, postToTabs, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -21,6 +22,8 @@ export function useSync() {
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
+  // This tab, for messages to the other tabs of the browser (lib/tab-coordination.ts).
+  const tabId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
@@ -42,12 +45,21 @@ export function useSync() {
     setItems(await db.entities.toArray());
     setRelations(await db.relations.toArray());
   }
-  async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number) {
+  // Replaces the local copy with the server's. `known` is what this device knows the server
+  // already has: what it has just sent, or ("base") the common version kept for merging. If the
+  // local copy holds anything beyond it, a change has not been sent yet, possibly written by
+  // another tab, and the copy is not replaced. This is checked inside the same database
+  // transaction, so a write from any tab is either seen here or comes after the replacement.
+  async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number, known?: "base" | { entities: Entity[]; relations: Relation[] }) {
     if (signedOut.current) return false;
     if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
     await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
       if (signedOut.current) throw new Error("LOCAL_DATA_CHANGED");
       if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
+        throw new Error("LOCAL_DATA_CHANGED");
+      }
+      const reference = known === "base" ? await readSyncBase() : known;
+      if (reference && hasChangesBeyond(await db.entities.toArray(), await db.relations.toArray(), reference)) {
         throw new Error("LOCAL_DATA_CHANGED");
       }
       await db.entities.clear();
@@ -63,8 +75,18 @@ export function useSync() {
     });
     serverRevision.current = snapshot.revision;
     await load();
+    postToTabs({ type: "changed", from: tabId.current });
     return true;
   }
+  // Another tab changed the shared local copy: show it here too.
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(tabChannelName);
+    channel.onmessage = (event: MessageEvent<TabMessage>) => {
+      if (event.data?.type === "changed" && event.data.from !== tabId.current && !signedOut.current) void load().catch(() => undefined);
+    };
+    return () => channel.close();
+  }, []);
   async function putSnapshot(
     entities: Entity[],
     snapshotRelations: any[],
@@ -93,8 +115,11 @@ export function useSync() {
     void syncToServer();
   }
   async function syncToServer() {
+    // Marked at once, before waiting for an earlier save or another tab's synchronization, so
+    // that no tab takes the server copy over this change in the meantime.
+    localStorage.setItem(pendingKey, "1");
     queuedSaves.current += 1;
-    const operation = syncQueue.current.then(async () => {
+    const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
@@ -145,7 +170,7 @@ export function useSync() {
       const saved = (await response.json()) as ServerSnapshot;
       let applied = false;
       try {
-        applied = await applySnapshot(saved, localVersion);
+        applied = await applySnapshot(saved, localVersion, { entities: localEntities, relations: localRelations });
       } catch (error) {
         if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
       }
@@ -172,7 +197,7 @@ export function useSync() {
       localStorage.removeItem(deletedKey);
       localStorage.removeItem(revivedKey);
       setSyncStatus("synced");
-    });
+    }));
     syncQueue.current = operation.catch(() => {
       setSyncStatus("offline");
     });
@@ -192,25 +217,27 @@ export function useSync() {
       if (!response.ok) throw new Error("Server synchronization failed");
       const snapshot = (await response.json()) as ServerSnapshot;
       await syncQueue.current;
-      if (localStorage.getItem(pendingKey) === "1") {
-        await syncToServer();
-        return;
-      }
-      if (snapshot.revision > serverRevision.current) {
-        // "Synced" means the local copy holds the server's state. If a local change got in the way,
-        // the copy was not taken over; that change's own save sets the status when it is done.
+      // Taking the copy over waits for a save of another tab; a change waiting to be sent (from
+      // any tab) is saved instead, outside the lock.
+      const outcome = await withSyncLock(async () => {
+        if (localStorage.getItem(pendingKey) === "1") return "save" as const;
+        if (snapshot.revision <= serverRevision.current) return "synced" as const;
+        // "Synced" means the local copy holds the server's state. If a local change got in the
+        // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
-          if (!(await applySnapshot(snapshot, pullVersion))) return;
-          // A browser signing in for the first time could not synchronize when it started. Once it
-          // holds exactly the server copy it is synchronized; without the mark every later start
-          // would send that copy back to the server as if it were the browser's own data.
-          if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+          if (!(await applySnapshot(snapshot, pullVersion, "base"))) return "changed" as const;
         } catch (error) {
           if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
-          return;
+          return "changed" as const;
         }
-      }
-      setSyncStatus("synced");
+        // A browser signing in for the first time could not synchronize when it started. Once it
+        // holds exactly the server copy it is synchronized; without the mark every later start
+        // would send that copy back to the server as if it were the browser's own data.
+        if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+        return "synced" as const;
+      });
+      if (outcome === "save") { await syncToServer(); return; }
+      if (outcome === "synced") setSyncStatus("synced");
     } catch {
       setSyncStatus("offline");
     }
@@ -235,5 +262,6 @@ export function useSync() {
     putSnapshot,
     syncToServer,
     pullFromServer,
+    tabId,
   };
 }

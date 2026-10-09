@@ -7,6 +7,7 @@ import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, s
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
+import { askOtherTabsToSave, postToTabs, tabChannelName, type TabMessage } from "../../lib/tab-coordination";
 import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
@@ -131,7 +132,7 @@ export function useLumiApp() {
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
-    pullFromServer } = useSync();
+    pullFromServer, tabId } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -822,7 +823,15 @@ export function useLumiApp() {
           await syncToServer();
           return;
         }
-        await applySnapshot(snapshot, initializationVersion);
+        // Another tab may have written meanwhile: then the copy is not replaced and the change is
+        // sent instead (lib/tab-coordination.ts).
+        try {
+          if (!(await applySnapshot(snapshot, initializationVersion, { entities: localEntities, relations: localRelations }))) return;
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+          await syncToServer();
+          return;
+        }
         if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
         localStorage.removeItem(pendingKey);
@@ -846,7 +855,11 @@ export function useLumiApp() {
     setLogoutBusy(true);
     setLogoutError("");
     let leaving = false;
+    let askedOthers = false;
     try {
+      // Other open tabs save what is being typed there first, so it is sent below too.
+      askedOthers = true;
+      await askOtherTabsToSave(tabId.current);
       const result = await runSignOut({
         version: () => localDataVersion.current,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -864,6 +877,7 @@ export function useLumiApp() {
         wipe: () => clearLocalData().catch(() => undefined),
       });
       if (result !== "signed-out") {
+        postToTabs({ type: "sign-out-cancelled", from: tabId.current });
         setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
         return;
       }
@@ -871,6 +885,9 @@ export function useLumiApp() {
       try { const channel = new BroadcastChannel(sessionChannel); channel.postMessage("signed-out"); channel.close(); } catch { /* not supported */ }
       // A full reload drops everything still held in memory.
       window.location.replace("/");
+    } catch (error) {
+      if (askedOthers) postToTabs({ type: "sign-out-cancelled", from: tabId.current });
+      throw error;
     } finally {
       if (!leaving) setLogoutBusy(false);
     }
@@ -1954,6 +1971,38 @@ export function useLumiApp() {
       document.removeEventListener("visibilitychange", saveDraft);
       window.removeEventListener("pagehide", saveDraft);
     };
+  }, []);
+  // Another tab is signing out: what is being typed here is saved first (an edited title and the
+  // notes draft), and editing stops until that tab has finished or given up (lib/tab-coordination.ts).
+  const forSignOut = useRef({ selected, rename, saveNotes });
+  forSignOut.current = { selected, rename, saveNotes };
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(tabChannelName);
+    let unblock = 0;
+    channel.onmessage = async (event: MessageEvent<TabMessage>) => {
+      const message = event.data;
+      if (!message || message.from === tabId.current) return;
+      if (message.type === "sign-out-cancelled") { window.clearTimeout(unblock); document.body.inert = false; return; }
+      if (message.type !== "save-for-sign-out") return;
+      channel.postMessage({ type: "saving", from: tabId.current, request: message.request } satisfies TabMessage);
+      document.body.inert = true;
+      // If the other tab is closed before it finishes, editing comes back here on its own.
+      window.clearTimeout(unblock);
+      unblock = window.setTimeout(() => { if (!signedOut.current) document.body.inert = false; }, 20_000);
+      const { selected: open, rename: saveTitle, saveNotes: saveDraft } = forSignOut.current;
+      try {
+        if (open && titleEdited.current) {
+          titleEdited.current = false;
+          await saveTitle(open, open.title);
+        }
+        const draft = notesDraftRef.current;
+        if (draft) await saveDraft({ id: draft.id }, draft.text);
+      } finally {
+        channel.postMessage({ type: "saved", from: tabId.current, request: message.request } satisfies TabMessage);
+      }
+    };
+    return () => { window.clearTimeout(unblock); channel.close(); };
   }, []);
   // Drafts left by other pages. A page that is still open answers on the draft channel while it
   // holds a draft, and its drafts are left to it.
