@@ -1,4 +1,5 @@
-import { expect, test, type CDPSession } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import type { CDPSession } from "@playwright/test";
 import { e2ePassword } from "../playwright.config";
 import { confirmDialog, settingsSections, waitUntilSynced } from "./helpers";
 

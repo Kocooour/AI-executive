@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
 import { seeded, serverEntities, signIn, waitUntilSynced } from "./helpers";
 
@@ -187,6 +187,8 @@ test("a task typed into Inbox before the server copy arrives is added on the fir
 test("an item the add row cannot save keeps its text and says so", async ({ browser }) => {
   const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
   await context.addInitScript(() => {
+    // The script also runs in the blank page a new tab starts with, which has no storage.
+    if (location.protocol !== "http:") return;
     localStorage.setItem("ai-executive-active-workspace", "all");
     localStorage.setItem("ai-executive-write-workspace", "not-on-this-device");
   });

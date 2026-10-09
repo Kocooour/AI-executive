@@ -3,8 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 // Errors the app reported from the browser during the run (unhandled rejections, runtime errors).
-// The server keeps them as `client.runtime` security events; a run that produced one fails even
-// when every scenario passed, because the user would have met an error nobody saw.
+// Each scenario already fails on errors its pages report (e2e/fixtures.ts). This is a second net
+// for what the app itself sends to the server as `client.runtime` security events, e.g. from a
+// page that was closed before the scenario's check. A report still on its way when the run ends
+// can be missed here; the scenario check does not depend on it.
 function clientErrors(runDir: string) {
   const file = path.join(runDir, "data", "store.sqlite");
   if (!existsSync(file)) return [];
