@@ -1407,7 +1407,15 @@ export function useLumiApp() {
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); postToTabs({ type: "restored", from: tabId.current }); } });
-  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
+  // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
+  // browser has synchronized with the server before and still holds its data (signing out removes
+  // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
+  // checked again in the background; if the server then says the session has ended, the sign-in
+  // screen replaces the app, and nothing typed meanwhile is lost (it waits to be sent).
+  const offlineView = authState === "unavailable" && items.some((entity) => entity.type !== "workspace") && (() => {
+    try { return localStorage.getItem("ai-executive-server-synced") === "1" && localStorage.getItem("ai-executive-wipe-pending") !== "1"; } catch { return false; }
+  })();
+  const attentionState = useAttention({ authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
@@ -2597,6 +2605,7 @@ export function useLumiApp() {
     authNotice,
     authPassword,
     authState,
+    offlineView,
     backupStatus,
     backups,
     badgeStatus,

@@ -33,7 +33,7 @@ export default function App() {
     view,
     workspaceName,
   } = app;
-  if (authState !== "ready") {
+  if (authState !== "ready" && !app.offlineView) {
     return (
       <AuthScreen app={app} />
     );
@@ -42,6 +42,12 @@ export default function App() {
     <main className={`appShell view-${view.toLowerCase()}`}>
       <Sidebar app={app} />
       <section className="appPane">
+        {app.offlineView && (
+          <div className="offlineStart" role="status">
+            <p><b>{tr("offlineStartTitle")}</b> {tr("offlineStartDetail")}</p>
+            <button type="button" onClick={() => void app.checkAccess(true)}>{tr("retry")}</button>
+          </div>
+        )}
         <Topbar app={app} />
         <div className="content">
           <div className="pageIntro">

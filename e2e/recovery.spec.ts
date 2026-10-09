@@ -2,8 +2,9 @@ import { expect, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
 import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
 
-// Opened without a connection to the server, the app could not check access. When the connection
-// is back it continues on its own.
+// Opened without a connection to the server, the app could not check access. This browser has
+// synchronized before, so it shows the data it holds, marked as offline (owner decision
+// 2026-10-09). When the connection is back it continues on its own.
 // A task captured before stays waiting and is sent once, without the window being focused again.
 test("the app continues by itself when the connection comes back after a start without it", async ({ page, context }) => {
   await page.goto("/?view=Inbox");
@@ -17,10 +18,19 @@ test("the app continues by itself when the connection comes back after a start w
   // The app starts again while the server cannot be reached.
   await page.route("**/api/**", (route) => route.abort());
   await page.reload();
-  await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
+  await expect(page.locator(".offlineStart")).toContainText("Bez spojení.");
+  await expect(page.locator(".authCard")).toHaveCount(0);
+  await expect(page.locator("article", { hasText: title })).toBeVisible();
+  // Captured while offline, it waits to be sent as well.
+  const offlineTitle = `Zachyceno po startu bez spojení ${Date.now()}`;
+  await page.locator(".capture input").fill(offlineTitle);
+  await page.locator(".capture input").press("Enter");
+  await expect(page.locator("article", { hasText: offlineTitle }).locator(".unsentMark")).toBeVisible();
   await page.unroute("**/api/**");
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
-  await expect(page.locator(".appShell")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".offlineStart")).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator(".appShell")).toBeVisible();
+  await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === offlineTitle).length, { timeout: 20_000 }).toBe(1);
   await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === title).length, { timeout: 20_000 }).toBe(1);
   await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toHaveCount(0);
 });
@@ -237,4 +247,33 @@ test("a held workspace is not offered for deletion and its records are not shown
       get.onsuccess = () => { store.put({ ...get.result, title: "Osobní", updatedAt: Date.now() }).onsuccess = () => { request.result.close(); resolve(); }; };
     };
   }));
+});
+
+// A browser that has never synchronized (or was signed out) has nothing to show: without a
+// connection it stays on the access screen.
+test("without data of an earlier sign-in, a start without connection shows only the access screen", async ({ browser }) => {
+  const context = await browser.newContext({ locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.route("**/api/**", (route) => route.abort());
+  await page.goto("/");
+  await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
+  await expect(page.locator(".offlineStart")).toHaveCount(0);
+  await context.close();
+});
+
+// The session has ended on the server meanwhile: when the connection comes back the sign-in screen
+// replaces the offline view.
+test("an offline start whose session has ended returns to the sign-in screen when the connection is back", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await context.clearCookies();
+  await page.unroute("**/api/**");
+  await page.locator(".offlineStart button").click();
+  await expect(page.locator(".authCard")).toContainText("Přihlásit");
+  await context.close();
 });

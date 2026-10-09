@@ -68,3 +68,19 @@ test("the last attention evaluation is shown out of date when the server cannot 
   await page.getByRole("button", { name: "Obnovit" }).first().click();
   await expect(page.locator(".attentionStale")).toHaveCount(0);
 });
+
+// Started without any connection, the app shows this browser's data (owner decision 2026-10-09)
+// and the last attention evaluation, marked as offline.
+test("a start without connection shows the last attention evaluation marked as offline", async ({ page }) => {
+  await page.goto("/");
+  await waitUntilSynced(page);
+  const first = page.locator(".attentionItem").first();
+  await expect(first).toBeVisible();
+  const title = (await first.locator("strong").textContent()) || "";
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await expect(page.locator(".attentionStale")).toContainText("Jste offline");
+  await expect(page.locator(".attentionItem", { hasText: title }).first()).toBeVisible();
+  await page.unroute("**/api/**");
+});
