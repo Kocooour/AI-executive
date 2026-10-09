@@ -21,6 +21,7 @@ const fieldKeys: Record<string, string> = {
   "properties.plannedStart": "conflictField_planned",
   "properties.plannedEnd": "conflictField_planned",
   "properties.checklist": "conflictField_checklist",
+  "properties.placement": "conflictField_placement",
   "properties.waiting": "conflictField_waiting",
   "properties.blocked": "conflictField_blocked",
   "relation.belongs_to_project": "conflictField_project",
@@ -40,6 +41,16 @@ function shown(conflict: SyncConflict, items: Entity[], tr: (key: string) => str
     return label.startsWith("conflictStatus_") ? String(value) : label;
   }
   if (conflict.field === "properties.priority") return tr(String(value));
+  if (conflict.field === "properties.placement" && value && typeof value === "object") {
+    const placement = value as { when?: unknown; today?: unknown; someday?: unknown; inbox?: unknown };
+    const parts = [
+      typeof placement.when === "string" && placement.when ? new Date(`${placement.when}T12:00:00`).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB") : "",
+      placement.today ? tr("conflictField_today") : "",
+      placement.someday ? tr("conflictField_someday") : "",
+      placement.inbox ? tr("conflictField_inbox") : "",
+    ].filter(Boolean);
+    return parts.join(", ") || tr("conflictNone");
+  }
   if (conflict.truncated) return `${String(value ?? "")}… ${tr("conflictTruncated")}`;
   if (conflict.field === "properties.checklist" && Array.isArray(value)) {
     return value.map((item) => {

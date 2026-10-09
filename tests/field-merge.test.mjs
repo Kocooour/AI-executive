@@ -180,3 +180,41 @@ test("a merged record keeps the change it carries when it is merged again", () =
   assert.equal(retry.properties.priority, "high");
   assert.equal(retry.title, "later");
 });
+
+test("moves to two different lists keep one placement, the newer, and offer the other", () => {
+  const base = task({}, { inbox: true });
+  const local = task({ updatedAt: 20 }, { inbox: false, today: true, when: "2026-10-09" });
+  const server = task({ updatedAt: 30 }, { inbox: false, someday: true, when: "" });
+  const merged = mergeEntity(base, local, server, 100);
+  assert.deepEqual(
+    { inbox: merged.properties.inbox, today: merged.properties.today, someday: merged.properties.someday, when: merged.properties.when },
+    { inbox: false, today: undefined, someday: true, when: "" },
+  );
+  const [conflict] = entityConflicts(merged);
+  assert.equal(conflict.field, "properties.placement");
+  assert.deepEqual(conflict.lostValue, { inbox: false, today: true, when: "2026-10-09" });
+});
+
+test("a placement changed on one side only is taken whole", () => {
+  const merged = mergeEntity(task({}, { inbox: true }), task({ updatedAt: 20 }, { inbox: false, today: true, when: "2026-10-09" }), task({ updatedAt: 30 }, { inbox: true, priority: "high" }), 100);
+  assert.equal(merged.properties.today, true);
+  assert.equal(merged.properties.inbox, false);
+  assert.equal(merged.properties.priority, "high");
+  assert.deepEqual(entityConflicts(merged), []);
+});
+
+test("a checklist item removed on one device and changed on the other is removed, and the change can be restored", () => {
+  const item = { id: "a", title: "A", done: false };
+  const changed = { id: "a", title: "A upraveno", done: true };
+  for (const [local, server] of [
+    [task({ updatedAt: 20 }, { checklist: [] }), task({ updatedAt: 30 }, { checklist: [changed] })],
+    [task({ updatedAt: 20 }, { checklist: [changed] }), task({ updatedAt: 30 }, { checklist: [] })],
+  ]) {
+    const merged = mergeEntity(task({}, { checklist: [item] }), local, server, 100);
+    assert.deepEqual(merged.properties.checklist, []);
+    const conflicts = entityConflicts(merged);
+    assert.equal(conflicts.length, 1);
+    assert.equal(conflicts[0].field, "properties.checklist");
+    assert.deepEqual(conflicts[0].lostValue, [changed]);
+  }
+});

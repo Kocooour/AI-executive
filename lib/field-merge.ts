@@ -51,6 +51,8 @@ const unreported = new Set([
   "properties.role",
   `properties.${conflictsKey}`,
 ]);
+// Fields that together say where a task sits; see mergeEntity.
+export const placementFields = ["when", "today", "someday", "inbox"] as const;
 // Logs that only grow: entries from both sides are kept.
 const logFields = new Set(["activity", "planningHistory"]);
 const topLevelFields = ["title", "content", "status", "workspaceId", "type"] as const;
@@ -114,9 +116,13 @@ function mergeItems(base: unknown, local: unknown, server: unknown, localWins: b
   for (const id of order) {
     const inBase = b.has(id), inLocal = l.has(id), inServer = s.has(id);
     if (inBase && (!inLocal || !inServer)) {
-      // Removed on one side: removed, unless the other side changed it meanwhile.
+      // Removed on one side: removed. If the other side changed it meanwhile, the removal still
+      // wins and the changed item is kept as the replaced value, so it can be restored.
       const kept = inLocal ? l.get(id) : s.get(id);
-      if (!same(kept, b.get(id))) result.push(kept as Identified);
+      if (!same(kept, b.get(id))) {
+        conflict = true;
+        lost.push(kept as Identified);
+      }
       continue;
     }
     if (inLocal && inServer) {
@@ -218,7 +224,18 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
     else merged[field] = outcome.value;
   }
   const properties: Record<string, unknown> = {};
+  // Where the task sits (date, Today, Someday, Inbox) is one choice: its fields are merged together,
+  // or two moves to different lists would leave the task in both.
+  const pick = (entity: Entity) => {
+    const value: Record<string, unknown> = {};
+    for (const key of placementFields) if (entity.properties?.[key] !== undefined) value[key] = entity.properties[key];
+    return value;
+  };
+  const placement = threeWay(pick(base), pick(local), pick(server), localWins);
+  record("properties.placement", placement);
+  Object.assign(properties, placement.value as Record<string, unknown>);
   const keys = new Set([...Object.keys(base.properties || {}), ...Object.keys(local.properties || {}), ...Object.keys(server.properties || {})]);
+  for (const key of placementFields) keys.delete(key);
   for (const key of keys) {
     const b = base.properties?.[key], l = local.properties?.[key], s = server.properties?.[key];
     let value: unknown;

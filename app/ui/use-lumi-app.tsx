@@ -7,7 +7,7 @@ import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, s
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
-import { conflictsKey, entityConflicts } from "../../lib/field-merge";
+import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
@@ -177,8 +177,9 @@ export function useLumiApp() {
     return [task.title, priority, localDate].filter(Boolean).join(" ");
   };
   const deepLinkHandled = useRef(false);
-  // Whether the open record's title is being typed; its draft lives only in `selected` until blur.
-  const titleEditing = useRef(false);
+  // Whether the open record's title was changed and not saved yet; that draft lives only in
+  // `selected` until blur. Merely focusing the field is not a change.
+  const titleEdited = useRef(false);
   const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -1692,6 +1693,12 @@ export function useLumiApp() {
               ...currentItems.map((item) => (item && typeof item.id === "string" && byId.has(item.id) ? byId.get(item.id) : item)),
               ...lostItems.filter((item) => item && typeof item.id === "string" && !currentItems.some((current) => current?.id === item.id)),
             ];
+          } else if (conflict.field === "properties.placement") {
+            const lost = conflict.lostValue && typeof conflict.lostValue === "object" ? conflict.lostValue as Record<string, unknown> : {};
+            for (const key of placementFields) {
+              if (lost[key] === undefined) delete properties[key];
+              else properties[key] = lost[key];
+            }
           } else if (conflict.field.startsWith("properties.")) {
             const key = conflict.field.slice("properties.".length);
             if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key === conflictsKey) return;
@@ -1725,8 +1732,11 @@ export function useLumiApp() {
   useEffect(() => {
     if (!selected) return;
     const fresh = items.find((item) => item.id === selected.id);
-    if (!fresh || fresh.updatedAt === selected.updatedAt) return;
-    setSelected((open) => (open && open.id === fresh.id ? { ...fresh, title: titleEditing.current ? open.title : fresh.title } : open));
+    if (!fresh) return;
+    // Compared by content: a merged record can keep the timestamp it had.
+    const shown = { ...fresh, title: titleEdited.current ? selected.title : fresh.title };
+    if (JSON.stringify(shown) === JSON.stringify(selected)) return;
+    setSelected((open) => (open && open.id === fresh.id ? { ...fresh, title: titleEdited.current ? open.title : fresh.title } : open));
   }, [items]);
   // The add row is shared by every list; its message belongs to the list it was shown under.
   useEffect(() => setRowError(false), [view]);
@@ -2468,7 +2478,7 @@ export function useLumiApp() {
     create,
     createFromRow,
     resolveConflict,
-    titleEditing,
+    titleEdited,
     rowError,
     setRowError,
     createServerBackup,

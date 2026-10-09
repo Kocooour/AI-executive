@@ -112,3 +112,53 @@ test("an open task follows the merge, and leaving its title does not undo it", a
   await laptop.context.close();
   await phone.context.close();
 });
+
+// The device whose change was the newer one keeps the task open. The merged record keeps that
+// device's timestamp, but the other device's older change of another field still shows up.
+test("an open task shows a change merged in from another device even when its timestamp stays", async ({ browser }) => {
+  const laptop = await device(browser), phone = await device(browser);
+  const title = `Stejná značka ${Date.now()}`;
+  const id = await newTask(laptop.page, title);
+  await phone.page.goto(`/?task=${id}`);
+  await waitUntilSynced(phone.page);
+  await phone.context.setOffline(true);
+  await editNotes(phone.page, "Starší poznámka z telefonu");
+  await laptop.page.goto(`/?task=${id}`);
+  await waitUntilSynced(laptop.page);
+  await laptop.page.locator("input.titleEdit").fill(`${title} novější`);
+  await laptop.page.getByLabel("Poznámky k úkolu").focus();
+  await expectOnServer(laptop.page, (entity) => entity.id === id && entity.title === `${title} novější`, true);
+  await phone.context.setOffline(false);
+  await expectOnServer(laptop.page, (entity) => entity.id === id && entity.properties?.notes === "Starší poznámka z telefonu", true);
+  // Coming back to the window takes the server copy.
+  await laptop.page.locator("input.titleEdit").focus();
+  await laptop.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(laptop.page.getByLabel("Poznámky k úkolu")).toHaveValue("Starší poznámka z telefonu", { timeout: 20_000 });
+  await laptop.context.close();
+  await phone.context.close();
+});
+
+// Only clicking into the title is not a change: a rename from another device that arrives
+// meanwhile is shown, and leaving the field keeps it.
+test("a title field that was only focused does not undo a rename from another device", async ({ browser }) => {
+  const laptop = await device(browser), phone = await device(browser);
+  const title = `Jen kurzor ${Date.now()}`;
+  const id = await newTask(laptop.page, title);
+  await laptop.page.goto(`/?task=${id}`);
+  await waitUntilSynced(laptop.page);
+  const laptopTitle = laptop.page.locator("input.titleEdit");
+  await laptopTitle.focus();
+  await phone.page.goto(`/?task=${id}`);
+  await waitUntilSynced(phone.page);
+  await phone.page.locator("input.titleEdit").fill(`${title} z telefonu`);
+  await phone.page.getByLabel("Poznámky k úkolu").focus();
+  await expectOnServer(phone.page, (entity) => entity.id === id && entity.title === `${title} z telefonu`, true);
+  await laptop.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(laptopTitle).toHaveValue(`${title} z telefonu`, { timeout: 20_000 });
+  await laptop.page.getByLabel("Poznámky k úkolu").focus();
+  await waitUntilSynced(laptop.page);
+  const saved = (await serverEntities(laptop.page)).find((entity) => entity.id === id);
+  expect(saved?.title).toBe(`${title} z telefonu`);
+  await laptop.context.close();
+  await phone.context.close();
+});

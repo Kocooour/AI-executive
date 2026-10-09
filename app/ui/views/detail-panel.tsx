@@ -8,7 +8,7 @@ import { SyncConflicts } from "./sync-conflicts";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
-    titleEditing,
+    titleEdited,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -66,11 +66,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             <input
               className="titleEdit"
               value={selected.title}
-              onChange={(e) =>
-                setSelected({ ...selected, title: e.target.value })
-              }
-              onFocus={() => { titleEditing.current = true; }}
-              onBlur={(e) => { titleEditing.current = false; rename(selected, e.target.value); }}
+              onChange={(e) => {
+                titleEdited.current = true;
+                setSelected({ ...selected, title: e.target.value });
+              }}
+              onBlur={(e) => {
+                // Only a title the user changed is saved; an untouched field cannot put back an old one.
+                const edited = titleEdited.current;
+                titleEdited.current = false;
+                if (edited) rename(selected, e.target.value);
+              }}
             />
             <SyncConflicts app={app} entity={selected} />
             {context && (
