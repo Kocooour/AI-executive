@@ -42,9 +42,11 @@ function migrateLegacy(storage: Store) {
     try {
       const value = JSON.parse(raw);
       if (Array.isArray(value)) {
-        value.forEach((item, index) => {
+        value.forEach((item) => {
           const id = typeof item === "string" ? item : item && typeof item.id === "string" ? item.id : "";
-          if (id) storage.setItem(`${listKey}:${"0".repeat(10)}-legacy-${String(index).padStart(6, "0")}`, id);
+          // A key of its own (an old tab may still write the shared list after it was moved), ordered
+          // before every new entry.
+          if (id) storage.setItem(`${listKey}:${"0".repeat(10)}-${newOp()}`, id);
         });
       }
     } catch {
@@ -115,14 +117,26 @@ export function captureMarkers(storage: Store): SentMarkers {
 
 export function clearSentMarkers(storage: Store, sent: SentMarkers) {
   for (const marker of [...sent.deletedEntries, ...sent.revivedEntries]) storage.removeItem(marker.key);
-  if ((storage.getItem(pendingSeqKey) || "") === sent.seq) storage.removeItem(pendingKey);
+  if ((storage.getItem(pendingSeqKey) || "") === sent.seq) {
+    storage.removeItem(pendingKey);
+    storage.removeItem(pendingSeqKey);
+  }
 }
 
 // All of this bookkeeping (a restored backup replaces the data; signing out removes it).
 export function clearAllMarkers(storage: Store) {
   for (const listKey of [deletedKey, revivedKey]) {
-    keysWithPrefix(storage, `${listKey}:`).forEach((key) => storage.removeItem(key));
+    removeAllWithPrefix(storage, `${listKey}:`);
     storage.removeItem(listKey);
   }
   storage.removeItem(pendingSeqKey);
+}
+
+// Collects the keys first and repeats, so a key moved by another tab's removal is not skipped.
+export function removeAllWithPrefix(storage: Store, prefix: string) {
+  for (let pass = 0; pass < 5; pass += 1) {
+    const keys = keysWithPrefix(storage, prefix);
+    if (!keys.length) return;
+    keys.forEach((key) => storage.removeItem(key));
+  }
 }

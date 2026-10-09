@@ -1,3 +1,5 @@
+import { removeAllWithPrefix } from "./pending-markers";
+
 // Texts being typed in a tab that are not saved anywhere yet (an edited title, a new task in the
 // capture dialog, a checklist item not added yet, text pasted for processing). Each tab keeps a
 // note of what it has open in localStorage as it is typed, so that a tab signing out also knows
@@ -64,6 +66,6 @@ export function renewOpenTexts(storage: Store, page: string, now = Date.now()) {
 
 // All notes of this browser (signing out removes them).
 export function clearOpenTexts(storage: Store) {
-  for (const [owner] of all(storage)) storage.removeItem(pageKey(owner));
+  removeAllWithPrefix(storage, `${openTextsKey}:`);
   storage.removeItem(openTextsKey);
 }

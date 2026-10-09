@@ -1,3 +1,5 @@
+import { removeAllWithPrefix } from "./pending-markers";
+
 // Notes being typed are kept in the device on every key press (localStorage is written
 // synchronously, so the text survives the page being closed or killed before it was saved).
 // Each page keeps its own drafts, one per task and key, so two tabs never overwrite each other's draft.
@@ -80,7 +82,7 @@ export function keptNotesDrafts(storage: DraftStorage): KeptNotesDraft[] {
 
 // All drafts of this browser (signing out removes them).
 export function clearNotesDrafts(storage: DraftStorage) {
-  keysOfDrafts(storage).forEach((key) => storage.removeItem(key));
+  removeAllWithPrefix(storage, `${notesDraftsKey}:`);
   storage.removeItem(notesDraftsKey);
 }
 

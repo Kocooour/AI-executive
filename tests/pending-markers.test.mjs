@@ -123,3 +123,17 @@ test("clearing all bookkeeping removes every entry", () => {
   clearAllMarkers(storage);
   assert.deepEqual([...storage.values.keys()].filter((key) => key !== pendingKey), []);
 });
+
+test("a shared list written again by an old tab after it was moved loses nothing", () => {
+  const storage = memoryStorage();
+  storage.setItem(deletedKey, JSON.stringify(["a", "b"]));
+  assert.deepEqual(pendingDeletedIds(storage).sort(), ["a", "b"]);
+  storage.setItem(deletedKey, JSON.stringify(["c"]));
+  assert.deepEqual(pendingDeletedIds(storage).sort(), ["a", "b", "c"]);
+  // Entries moved from the shared list are older than any new one.
+  recordDeleted(storage, "d");
+  const sent = captureMarkers(storage);
+  storage.setItem(deletedKey, JSON.stringify(["e"]));
+  clearSentMarkers(storage, sent);
+  assert.deepEqual(pendingDeletedIds(storage), ["e"]);
+});

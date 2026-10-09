@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { clearAllMarkers } from "./pending-markers";
+import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearOpenTexts } from "./open-texts";
 
@@ -23,6 +23,8 @@ const localDataKeys = [
 // rows from before the first completed synchronization.
 export async function hasUnsentChanges() {
   if (localStorage.getItem(pendingSyncKey) === "1") return true;
+  // A deletion or restoration recorded just before its save was asked for (a tab closed between).
+  if (pendingDeletedIds(localStorage).length || pendingRevivedIds(localStorage).length) return true;
   // Notes still being typed, or left by a page closed before saving them.
   if (keptNotesDrafts(localStorage).length) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
