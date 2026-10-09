@@ -198,9 +198,11 @@ export function limitConflicts(entities: Entity[], limit = maxConflictsTotal): E
 }
 
 export function mergeEntity(base: Entity, local: Entity, server: Entity, now = Date.now()): Entity {
-  // Every change sets updatedAt, so an unchanged side is recognised without comparing fields.
-  if (local.updatedAt === base.updatedAt) return server;
-  if (server.updatedAt === base.updatedAt) return local;
+  // A side that did not change the record takes the other as it is. This compares content: a
+  // merged record keeps the larger of the two timestamps, so an equal updatedAt does not prove
+  // that nothing changed.
+  if (same(local, base)) return server;
+  if (same(server, base)) return local;
   const localWins = local.updatedAt > server.updatedAt;
   const merged: Record<string, unknown> = { ...server };
   const conflicts: SyncConflict[] = [];

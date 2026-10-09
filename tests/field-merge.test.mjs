@@ -161,3 +161,22 @@ test("all records together keep a bounded amount of notices, the oldest go first
   assert.deepEqual(limited.flatMap((entity) => entityConflicts(entity).map((conflict) => conflict.id)), ["new", "middle"]);
   assert.equal(limitConflicts(entities, 10_000), entities);
 });
+
+test("a merged record keeps the change it carries when it is merged again", () => {
+  // Device A's common version is S; the server then holds M, the merge of S with B's offline notes
+  // (M keeps S's timestamp). A edits again before it has seen M: B's notes must survive.
+  const S = task({ title: "renamed by A", updatedAt: 30 });
+  const M = mergeEntity(task(), task({ updatedAt: 20 }, { notes: "from B offline" }), S, 100);
+  assert.equal(M.updatedAt, 30);
+  const again = mergeEntity(S, task({ title: "renamed by A", updatedAt: 50 }, { priority: "high" }), M, 200);
+  assert.equal(again.properties.notes, "from B offline");
+  assert.equal(again.properties.priority, "high");
+  // The startup retry: the first merge M0 has the first server copy's timestamp; a later server
+  // copy must not replace the offline edit it carries.
+  const S0 = task({ updatedAt: 30 }, { notes: "server" });
+  const M0 = mergeEntity(task({}, { notes: "server" }), task({ updatedAt: 20 }, { priority: "high", notes: "server" }), S0, 100);
+  const S1 = task({ updatedAt: 40, title: "later" }, { notes: "server" });
+  const retry = mergeEntity(S0, M0, S1, 200);
+  assert.equal(retry.properties.priority, "high");
+  assert.equal(retry.title, "later");
+});

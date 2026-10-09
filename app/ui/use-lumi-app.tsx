@@ -1701,8 +1701,9 @@ export function useLumiApp() {
             update.content = typeof conflict.lostValue === "string" ? conflict.lostValue : "";
           } else if ((conflict.field === "title" || conflict.field === "status") && typeof conflict.lostValue === "string" && conflict.lostValue) {
             (update as Record<string, unknown>)[conflict.field] = conflict.lostValue;
-            // A task opened again is no longer completed.
-            if (conflict.field === "status" && conflict.lostValue === "open") delete properties.completedAt;
+            // The completion time follows the restored state.
+            if (conflict.field === "status" && conflict.lostValue === "completed") properties.completedAt = properties.completedAt || Date.now();
+            else if (conflict.field === "status") delete properties.completedAt;
           }
         }
         const activity = Array.isArray(properties.activity) ? properties.activity : [];
