@@ -3484,3 +3484,12 @@ html:has(dialog.confirmDialog[open]) { overflow: hidden; }
 input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 1; }
 /* The generic selected state is a light lilac fill; in the dark theme it uses the dark accent tint. */
 :root[data-theme="dark"] .active { background: var(--accent-soft) !important; color: var(--text) !important; }
+
+/* Values replaced by a change from another device (lib/field-merge.ts). */
+.syncConflicts { margin: 14px 0; padding: 12px; border-radius: 12px; background: var(--warning-soft); color: var(--text); }
+.syncConflicts h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; letter-spacing: normal; text-transform: none; color: var(--text); }
+.syncConflicts p { margin: 0 0 8px; font-size: 13px; color: var(--text); }
+.syncConflict { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); }
+.syncConflict > span { display: grid; gap: 2px; min-width: 0; }
+.syncConflictValue { overflow-wrap: anywhere; }
+.conflictMark { color: var(--warning); }

@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { db, type Entity } from "../../../lib/db";
+import { db, readLocalWithBase, replaceSyncBase, type Entity } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -45,7 +45,7 @@ export function useSync() {
   async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number) {
     if (signedOut.current) return false;
     if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
-    await db.transaction("rw", db.entities, db.relations, async () => {
+    await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
       if (signedOut.current) throw new Error("LOCAL_DATA_CHANGED");
       if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
         throw new Error("LOCAL_DATA_CHANGED");
@@ -55,6 +55,11 @@ export function useSync() {
       if (snapshot.entities.length) await db.entities.bulkAdd(snapshot.entities);
       if (snapshot.relations.length)
         await db.relations.bulkAdd(snapshot.relations);
+      // The local copy is now exactly the server's: it is the common version from here on.
+      await db.baseEntities.clear();
+      await db.baseRelations.clear();
+      if (snapshot.entities.length) await db.baseEntities.bulkAdd(snapshot.entities);
+      if (snapshot.relations.length) await db.baseRelations.bulkAdd(snapshot.relations);
     });
     serverRevision.current = snapshot.revision;
     await load();
@@ -94,8 +99,9 @@ export function useSync() {
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
-      const localEntities = await db.entities.toArray();
-      const localRelations = await db.relations.toArray();
+      // The local copy and its common version with the server are read together: another tab
+      // replacing both in between would otherwise pair this copy with a newer common version.
+      const [localEntities, localRelations, base] = await readLocalWithBase();
       let response = await putSnapshot(
         localEntities,
         localRelations,
@@ -125,6 +131,7 @@ export function useSync() {
           filteredCurrent,
           localEntities,
           localRelations,
+          base,
         );
         response = await putSnapshot(
           merged.entities,
@@ -148,6 +155,9 @@ export function useSync() {
         // merge it also holds records this device does not have; claiming its revision would
         // make the next save replace them. Keeping the old revision makes that save merge again.
         if (!mergedWithServer) serverRevision.current = saved.revision;
+        // What this device sent is now part of the server copy (merged or not), so it is the
+        // common version of what the device had then; later local edits are changes against it.
+        if (!signedOut.current) await replaceSyncBase(localEntities, localRelations).catch(() => undefined);
         settleLater();
         return;
       }

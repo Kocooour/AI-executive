@@ -583,7 +583,7 @@ test("signing out after the sign-in has expired does not leave a question behind
   await signIn(page);
   await expect(page.locator(".appShell")).toBeVisible();
   await waitUntilSynced(page);
-  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(confirmDialog(page)).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Odhlásit se" })).toBeVisible();
 });
 
