@@ -1,43 +1,20 @@
-import { existsSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-// Errors the app reported from the browser during the run (unhandled rejections, runtime errors).
-// Each scenario already fails on errors its pages report (e2e/fixtures.ts). This is a second net
-// for what the app itself sends to the server as `client.runtime` security events, e.g. from a
-// page that was closed before the scenario's check. A report still on its way when the run ends
-// can be missed here; the scenario check does not depend on it.
-function clientErrors(runDir: string) {
-  const file = path.join(runDir, "data", "store.sqlite");
-  if (!existsSync(file)) return [];
-  const database = new DatabaseSync(file, { readOnly: true });
-  try {
-    return (database.prepare("SELECT details FROM security_events WHERE action = 'client.runtime' ORDER BY id").all() as Array<{ details: string }>)
-      .map((row) => {
-        try {
-          const details = JSON.parse(row.details) as { kind?: string; message?: string; source?: string };
-          return `${details.kind || "error"}: ${details.message || "?"}${details.source ? ` (${details.source})` : ""}`;
-        } catch {
-          return row.details;
-        }
-      });
-  } finally {
-    database.close();
-  }
-}
+import { reportedClientErrors } from "./client-errors";
 
 // Removes the run's private directory: its data, session and security outbox. Traces of failed
 // scenarios are not in it; the runner keeps them in the checkout's ignored test-results/.
-export default async function teardown() {
+// Before that, a best-effort second check (see e2e/client-errors.ts): if the app reported an error
+// from a browser to the server, the run fails. It can miss a report still on its way; every
+// scenario already fails on its pages' errors without depending on these reports.
+export default function teardown() {
   const runDir = process.env.LUMI_E2E_RUN_DIR;
   if (!runDir || !path.basename(runDir).startsWith("lumi-e2e-")) return;
-  // A report sent in the last moments of the final scenario may still be on its way.
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
   let errors: string[] = [];
   try {
-    errors = clientErrors(runDir);
+    errors = reportedClientErrors(runDir);
   } finally {
     rmSync(runDir, { recursive: true, force: true });
   }
-  if (errors.length) throw new Error(`The app reported ${errors.length} error(s) from the browser during the run:\n${errors.join("\n")}`);
+  if (errors.length) throw new Error(`The app reported ${errors.length} error(s) from the browser to the server during the run (best-effort check):\n${errors.join("\n")}`);
 }
