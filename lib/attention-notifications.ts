@@ -1,6 +1,5 @@
 import type { AttentionItem } from "./attention";
-import { reconcileAttention } from "./attention-lifecycle";
-import { activeWorkspaces, evaluateWorkspace, withAttentionTransaction } from "./attention-service";
+import { activeWorkspaces, reconcileWorkspace, withAttentionTransaction } from "./attention-service";
 import { getNotificationPreferences, listPushTargets, sendPushToTarget, type PushTargetResult } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 
@@ -109,7 +108,7 @@ async function runPass(now: number, sender: AttentionPushSender) {
       WHERE delivery_key LIKE 'attention:%' AND status = 'pending' AND last_attempt_at < ?`).run(now - STALE_PENDING_MS);
     const snapshot = readSnapshot();
     const items = activeWorkspaces(snapshot).flatMap((workspaceId) =>
-      reconcileAttention(workspaceId, evaluateWorkspace(snapshot, workspaceId, preferences.timezone, now), now).items);
+      reconcileWorkspace(snapshot, workspaceId, preferences.timezone, now).items);
     const current = items.filter(announceable);
     if (!database.prepare("SELECT 1 FROM notification_deliveries WHERE delivery_key = ?").get(BASELINE_KEY)) {
       // First run: everything already on Home counts as known. Only later changes are announced.

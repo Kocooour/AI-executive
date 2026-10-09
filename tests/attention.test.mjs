@@ -92,7 +92,7 @@ test("workspace scope, deterministic order, stable keys, and source revisions", 
 });
 
 test("a waiting task comes back on its follow-up date in the local timezone", () => {
-  const task = entity("wait-date", "task", { properties: { waiting: true, waitingFor: "Petr", waitingSince: NOW - DAY, followUpDate: "2026-10-05" } });
+  const task = entity("wait-date", "task", { updatedAt: NOW - DAY, properties: { waiting: true, waitingFor: "Petr", waitingSince: NOW - DAY, followUpDate: "2026-10-05" } });
   // 2026-10-05 starts at 2026-10-04T22:00Z in Prague (summer time).
   assert.deepEqual(evaluate([task], [], { evaluatedAt: Date.parse("2026-10-04T21:59:59.999Z") }), []);
   const [item] = evaluate([task], [], { evaluatedAt: Date.parse("2026-10-04T22:00:00Z") });
@@ -103,7 +103,7 @@ test("a waiting task comes back on its follow-up date in the local timezone", ()
 });
 
 test("a waiting task without a date comes back after 7 days", () => {
-  const task = (since) => entity("wait-week", "task", { properties: { waiting: true, waitingSince: since } });
+  const task = (since) => entity("wait-week", "task", { updatedAt: since, properties: { waiting: true, waitingSince: since } });
   assert.deepEqual(evaluate([task(NOW - 7 * DAY + 1)]), []);
   const [item] = evaluate([task(NOW - 7 * DAY)]);
   assert.equal(item.ruleId, "waiting_follow_up");
@@ -127,6 +127,14 @@ test("waiting items rank after deadlines and before project hygiene; a new date 
   const moved = evaluate([entity("c-waiting", "task", { properties: { waiting: true, followUpDate: "2026-10-04" } })]);
   assert.notEqual(moved[0].attentionKey, result[2].attentionKey);
   assert.equal(evaluate([waiting])[0].attentionKey, result[2].attentionKey);
+});
+
+test("a waiting time later than the task's own time stays on the fallback as the clock moves", () => {
+  const created = NOW - 20 * DAY;
+  const task = entity("wait-ahead", "task", { createdAt: created, updatedAt: NOW - 10 * DAY, properties: { waiting: true, waitingSince: NOW - 5 * DAY } });
+  const keys = [NOW, NOW + 6 * DAY].map((evaluatedAt) => evaluate([task], [], { evaluatedAt })[0]);
+  assert.equal(keys[0].reasonFacts.waitingSince, created);
+  assert.equal(keys[1].attentionKey, keys[0].attentionKey);
 });
 
 test("a waiting time that is not a past time falls back to when the task was created", () => {

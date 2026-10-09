@@ -427,7 +427,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       type="checkbox"
                       checked={selected.properties.waiting === true}
                       onChange={(event) => patch(selected, event.target.checked
-                        ? { waiting: true, waitingSince: Date.now() }
+                        // A waiting task is sorted: it leaves the Inbox (owner decision 2026-10-09).
+                        ? { waiting: true, waitingSince: Date.now(), inbox: false }
                         : { waiting: false, waitingFor: "", waitingSince: null, followUpDate: "" }, event.target.checked ? "waiting started" : "waiting ended")}
                     />
                     {tr("waitingToggle")}
@@ -443,7 +444,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                           placeholder={tr("waitingForPlaceholder")}
                           onBlur={(event) => {
                             const value = event.target.value.trim();
-                            if (value !== String(selected.properties.waitingFor || "")) void patch(selected, { waitingFor: value }, "waiting for changed");
+                            if (value !== String(selected.properties.waitingFor || "")) void patch(selected, { waitingFor: value }, "waiting for changed", true);
                           }}
                         />
                       </label>

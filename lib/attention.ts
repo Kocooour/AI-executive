@@ -105,6 +105,12 @@ function priority(item: AttentionItem, entityById: Map<string, Entity>): number 
   return ({ high: 0, medium: 1, low: 2, none: 3 } as Record<string, number>)[String(value || "none")] ?? 3;
 }
 
+// Waiting tasks whose follow-up is not due (yet): an item of an earlier follow-up date of such a
+// task was replaced by the new date, not ended (lib/attention-lifecycle.ts).
+export function waitingSubjects(entities: Entity[], workspaceId: string): Set<string> {
+  return new Set(entities.filter((entity) => entity.workspaceId === workspaceId && entity.type === "task" && entity.status === "open" && entity.properties.waiting === true).map((entity) => entity.id));
+}
+
 export function evaluateAttention(input: {
   entities: Entity[];
   relations: Relation[];
@@ -150,10 +156,12 @@ export function evaluateAttention(input: {
     if (task.type !== "task" || task.status !== "open" || task.properties.waiting !== true) continue;
     const waitingFor = typeof task.properties.waitingFor === "string" ? task.properties.waitingFor.slice(0, 120) : "";
     const followUp = typeof task.properties.followUpDate === "string" && validDate(task.properties.followUpDate) ? task.properties.followUpDate : "";
-    // When the task was marked as waiting; a value that is not a time up to now (edited data,
-    // another device's clock far ahead) falls back to when the task was created.
+    // When the task was marked as waiting. It is written together with the task, so it cannot be
+    // later than the task's own time; a value that is (edited data) falls back to when the task
+    // was created. The bound is the record's time, not the clock, so the answer does not change
+    // while the task stays as it is.
     const marked = Number(task.properties.waitingSince);
-    const since = (Number.isSafeInteger(marked) && marked > 0 && marked <= evaluatedAt ? marked : null) ?? stamp(task.createdAt) ?? stamp(task.updatedAt);
+    const since = (Number.isSafeInteger(marked) && marked > 0 && marked <= task.updatedAt ? marked : null) ?? stamp(task.createdAt) ?? stamp(task.updatedAt);
     let relevantAt: number | null = null;
     let relevantDate = "";
     if (followUp) {

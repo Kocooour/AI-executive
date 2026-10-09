@@ -7,7 +7,7 @@ import test, { after } from "node:test";
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "lumi-attention-lifecycle-"));
 process.env.AI_EXECUTIVE_DATA_DIR = dataDir;
 after(() => rmSync(dataDir, { recursive: true, force: true }));
-const { evaluateAttention } = await import("../lib/attention.ts");
+const { evaluateAttention, waitingSubjects } = await import("../lib/attention.ts");
 const { attentionFingerprint, reconcileAttention, setAttentionState } = await import("../lib/attention-lifecycle.ts");
 const { getDatabase } = await import("../lib/server-store.ts");
 const now = Date.parse("2026-10-04T12:00:00Z");
@@ -50,8 +50,9 @@ test("resolved conditions and replaced deadlines retire the old state", () => {
   assert.equal(superseded.state, "superseded");
 });
 
-const waitingTask = (followUpDate = "2026-10-04", status = "open", updatedAt = 1) => ({ id: "waiting-task", type: "task", title: "Waiting task", status,
-  workspaceId: "personal", properties: { waiting: true, waitingFor: "Petr", waitingSince: now - 86_400_000, followUpDate }, createdAt: 1, updatedAt });
+// `revision` stands for later writes of the task (its time grows with it).
+const waitingTask = (followUpDate = "2026-10-04", status = "open", revision = 1) => ({ id: "waiting-task", type: "task", title: "Waiting task", status,
+  workspaceId: "personal", properties: { waiting: true, waitingFor: "Petr", waitingSince: now - 86_400_000, followUpDate }, createdAt: 1, updatedAt: now - 1000 + revision });
 
 test("waiting follow-up: stable keys, snooze until the chosen instant, completion resolves", () => {
   const item = candidates(waitingTask())[0];
@@ -80,4 +81,19 @@ test("waiting follow-up: a changed date supersedes the item of the old date", ()
   reconcileAttention("personal", [moved], now + 1);
   const state = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(old.attentionKey);
   assert.equal(state.state, "superseded");
+});
+
+test("waiting follow-up: a date moved into the future or cleared supersedes, ending the waiting resolves", () => {
+  for (const [label, followUpDate, waiting, expected] of [["future", "2026-10-20", true, "superseded"], ["cleared", "", true, "superseded"], ["ended", "", false, "resolved"]]) {
+    const id = `waiting-${label}`;
+    const due = { ...waitingTask("2026-10-02", "open", 10), id };
+    const [item] = candidates(due);
+    reconcileAttention("personal", [item], now);
+    const moved = { ...due, updatedAt: due.updatedAt + 1, properties: { ...due.properties, waiting, followUpDate } };
+    const next = evaluateAttention({ entities: [moved], relations: [], workspaceId: "personal", timezone: "Europe/Prague", evaluatedAt: now + 1, dataRevision: 2 });
+    assert.equal(next.length, 0, label);
+    reconcileAttention("personal", next, now + 1, waitingSubjects([moved], "personal"));
+    const state = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(item.attentionKey);
+    assert.equal(state.state, expected, label);
+  }
 });

@@ -110,7 +110,7 @@ export function HomeView({ app }: { app: LumiApp }) {
               <div className="attentionBody">
                 <strong>{candidate.title}</strong>
                 <p>{attentionReason(candidate, language)}</p>
-                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
+                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
               </div>
               <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);

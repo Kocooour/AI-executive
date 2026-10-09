@@ -110,7 +110,7 @@ function nextRecurringTask(task: Entity, now: number) {
     ? task.properties.recurrenceSeriesId : task.id;
   const properties = { ...task.properties, recurrenceSeriesId: seriesId, when, today: false, inbox: false,
     activity: [{ at: now, action: "created-recurring-occurrence" }] } as Record<string, unknown>;
-  for (const key of ["completedAt", "actualMinutes", "workSessionHistory", "planningFeedback", "planningHistory", "plannedStart", "plannedEnd", "planningSource"]) delete properties[key];
+  for (const key of ["completedAt", "actualMinutes", "workSessionHistory", "planningFeedback", "planningHistory", "plannedStart", "plannedEnd", "planningSource", "waiting", "waitingFor", "waitingSince", "followUpDate"]) delete properties[key];
   const reminder = Date.parse(String(task.properties.reminderAt || ""));
   if (Number.isFinite(reminder)) {
     const dayDelta = Math.round((Date.parse(`${when}T12:00:00Z`) - Date.parse(`${base}T12:00:00Z`)) / 86_400_000);

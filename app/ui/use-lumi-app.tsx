@@ -2267,6 +2267,11 @@ export function useLumiApp() {
         reminderAt: nextReminder,
         today: false,
         inbox: false,
+        // Waiting belongs to the completed occurrence, not to the next one.
+        waiting: false,
+        waitingFor: "",
+        waitingSince: null,
+        followUpDate: "",
       });
     }
     if (t) { setUndo(t); setUndoRelations([]); }

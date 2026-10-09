@@ -21,14 +21,27 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   await waiting.getByLabel("Připomenout").focus();
   const today = await page.evaluate(() => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Prague" }).format(new Date()));
   await waiting.getByLabel("Připomenout").fill(today);
-  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waiting === true && entity.properties?.waitingFor === "Petr" && entity.properties?.followUpDate === today, true);
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waiting === true && entity.properties?.inbox === false && entity.properties?.waitingFor === "Petr" && entity.properties?.followUpDate === today, true);
+  // A waiting task is sorted: it leaves the Inbox.
   await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await expect(page.locator("article", { hasText: title })).toHaveCount(0);
+  await page.goto("/?view=Anytime");
   await expect(page.locator("article", { hasText: title })).toContainText("Čeká: Petr");
+  // Changing who it waits for and closing the detail at once does not open the task again when
+  // the change is saved.
+  await page.locator("article", { hasText: title }).click();
+  await page.locator(".waitingField").getByLabel("Čeká na", { exact: true }).fill("Petra Nová");
+  await page.locator(".detail button.close").click();
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waitingFor === "Petra Nová", true);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".detail")).toHaveCount(0);
   await page.goto("/");
   await waitUntilSynced(page);
   const item = page.locator(".attentionItem", { hasText: title });
   await expect(item).toContainText("Nastal den připomenutí");
-  await expect(item).toContainText("čeká na: Petr");
+  await expect(item).toContainText("čeká na: Petra Nová");
+  await expect(item).toContainText("označeno jako čekající");
   // Ending the waiting ends the item.
   await page.goto(`/?task=${id}`);
   await waitUntilSynced(page);
