@@ -77,7 +77,8 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
   }
 
   const shownAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
-  const attentionStale = Boolean(shownAttention) && attentionOutdated;
+  // A copy from this browser is marked too, until the server has evaluated again.
+  const attentionStale = Boolean(shownAttention) && (attentionOutdated || attentionFromCache);
   // Snooze and dismiss need the server to hold the same data as this device.
   const attentionActionsBlocked = attentionOutdated || attentionFromCache || syncStatus !== "synced";
   // Until the server evaluates again, hide what was finished or deleted on this device meanwhile.

@@ -48,6 +48,15 @@ test("the last attention evaluation is shown out of date when the server cannot 
   const first = page.locator(".attentionItem").first();
   await expect(first).toBeVisible();
   const title = (await first.locator("strong").textContent()) || "";
+  // While the server is still evaluating, the copy from this browser is shown as such.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/attention**", async (route) => { await held; await route.continue(); });
+  await page.reload();
+  await expect(page.locator(".attentionStale")).toContainText("Uloženo v zařízení, ověřuji změny");
+  release();
+  await expect(page.locator(".attentionStale")).toHaveCount(0);
+  await page.unroute("**/api/attention**");
   await page.route("**/api/attention**", (route) => route.abort());
   await page.reload();
   await waitUntilSynced(page);

@@ -4,8 +4,10 @@
 // (lib/local-data.ts), and only the evaluation of the open workspace is ever shown.
 
 export const attentionCacheKey = "ai-executive-attention";
-// Workspaces kept; the oldest saved is dropped first.
+// Workspaces kept; the oldest saved is dropped first. Items kept per workspace: enough to show
+// and page through, without taking the storage other bookkeeping needs.
 const maxWorkspaces = 8;
+const maxItems = 50;
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 type Cached<T> = { workspaceId: string; savedAt: number; evaluation: T };
@@ -25,8 +27,9 @@ export function cachedAttention<T extends { workspaceId: string }>(storage: Stor
   return entry && entry.evaluation.workspaceId === workspaceId ? entry.evaluation : null;
 }
 
-export function saveAttention<T extends { workspaceId: string }>(storage: Store, evaluation: T, now = Date.now()) {
-  const entries = [{ workspaceId: evaluation.workspaceId, savedAt: now, evaluation },
+export function saveAttention<T extends { workspaceId: string; items?: unknown[] }>(storage: Store, evaluation: T, now = Date.now()) {
+  const kept = Array.isArray(evaluation.items) && evaluation.items.length > maxItems ? { ...evaluation, items: evaluation.items.slice(0, maxItems) } : evaluation;
+  const entries = [{ workspaceId: evaluation.workspaceId, savedAt: now, evaluation: kept },
     ...read<T>(storage).filter((entry) => entry.workspaceId !== evaluation.workspaceId)]
     .sort((a, b) => b.savedAt - a.savedAt)
     .slice(0, maxWorkspaces);

@@ -160,7 +160,7 @@ test("a task whose planned day has passed needs attention from the next local da
   assert.deepEqual(evaluate([task("2026-10-04")]), []);
   const [item] = evaluate([task("2026-10-03")]);
   assert.equal(item.ruleId, "planned_date_passed");
-  assert.equal(item.severity, 4);
+  assert.equal(item.severity, 5);
   assert.equal(item.relevantAt, Date.parse("2026-10-03T22:00:00Z"));
   assert.equal(item.reasonFacts.plannedDate, "2026-10-03");
   assert.ok(item.attentionKey.endsWith(":date-2026-10-03"));
@@ -170,6 +170,7 @@ test("a task whose planned day has passed needs attention from the next local da
 test("a passed planned day is not shown for waiting, someday, completed or already deadline-flagged tasks", () => {
   assert.deepEqual(evaluate([entity("w", "task", { properties: { when: "2026-10-01", waiting: true, waitingSince: NOW - DAY } , updatedAt: NOW - DAY })]).map((item) => item.ruleId), []);
   assert.deepEqual(evaluate([entity("s", "task", { properties: { when: "2026-10-01", someday: true } })]), []);
+  assert.deepEqual(evaluate([entity("b", "task", { properties: { when: "2026-10-01", blocked: true } })]), []);
   assert.deepEqual(evaluate([entity("c", "task", { status: "completed", properties: { when: "2026-10-01" } })]), []);
   assert.deepEqual(evaluate([entity("bad", "task", { properties: { when: "2026-02-30" } })]), []);
   assert.deepEqual(evaluate([entity("d", "task", { properties: { when: "2026-10-01", deadline: "2026-10-02" } })]).map((item) => item.ruleId), ["deadline_overdue"]);
@@ -177,10 +178,16 @@ test("a passed planned day is not shown for waiting, someday, completed or alrea
   assert.deepEqual(evaluate([entity("f", "task", { properties: { when: "2026-10-01", deadline: "2026-12-01" } })]).map((item) => item.ruleId), ["planned_date_passed"]);
 });
 
-test("planned-day items rank after waiting items", () => {
+test("planned-day items rank last, so many of them do not push out project items", () => {
+  const planned = Array.from({ length: 40 }, (_, index) => entity(`p-${index}`, "task", { properties: { when: `2026-09-${String(index % 28 + 1).padStart(2, "0")}` } }));
   const ids = evaluate([
-    entity("p-planned", "task", { properties: { when: "2026-09-01" } }),
+    ...planned,
     entity("w-waiting", "task", { updatedAt: NOW - 8 * DAY, properties: { waiting: true, waitingSince: NOW - 8 * DAY } }),
-  ]).map((item) => item.ruleId);
-  assert.deepEqual(ids, ["waiting_follow_up", "planned_date_passed"]);
+    entity("idle-project", "project", { createdAt: NOW - 20 * DAY, updatedAt: NOW - 20 * DAY }),
+    entity("idle-task", "task", { status: "completed", createdAt: NOW - 20 * DAY, updatedAt: NOW - 20 * DAY }),
+  ], [{ id: "idle-link", workspaceId: "personal", sourceEntityId: "idle-task", targetEntityId: "idle-project", relationType: "belongs_to_project", createdAt: NOW - 20 * DAY }]).map((item) => item.ruleId);
+  assert.equal(ids[0], "waiting_follow_up");
+  const firstPlanned = ids.indexOf("planned_date_passed");
+  assert.ok(ids.slice(1, firstPlanned).includes("project_idle"));
+  assert.equal(ids.length - firstPlanned, 40);
 });

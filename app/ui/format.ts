@@ -8,7 +8,7 @@ export function attentionReason(item: AttentionItem, language: Language): string
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const last = item.reasonFacts.lastActivityAt
     ? new Date(item.reasonFacts.lastActivityAt).toLocaleString(locale, { timeZone: item.timezone }) : "";
-  const date = item.reasonFacts.deadlineAllDay ? friendlyDate(item.relevantDate, language, item.timezone)
+  const date = item.reasonFacts.deadlineAllDay ? inSentenceDate(item.relevantDate, language, item.timezone)
     : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone });
   const zone = item.reasonFacts.deadlineAllDay ? "" : ` (${item.timezone})`;
   if (language === "cs") {

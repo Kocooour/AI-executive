@@ -46,3 +46,11 @@ test("a full storage keeps at least the newest evaluation", () => {
   assert.equal(cachedAttention(storage, "a"), null);
   assert.ok(calls >= 3);
 });
+
+test("at most 50 items of a workspace are kept", () => {
+  const storage = memoryStorage();
+  saveAttention(storage, { workspaceId: "personal", items: Array.from({ length: 300 }, (_, index) => ({ title: `t${index}` })) }, 1);
+  const kept = cachedAttention(storage, "personal");
+  assert.equal(kept.items.length, 50);
+  assert.equal(kept.items[0].title, "t0");
+});

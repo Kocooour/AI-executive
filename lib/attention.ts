@@ -19,9 +19,9 @@ export interface AttentionItem {
   title: string;
   ruleId: AttentionRule;
   ruleVersion: 1;
-  // 1 overdue, 2 due soon, 3 waiting, 4 planned date passed and project hygiene (README, Attention
+  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene, 5 planned day passed (README, Attention
   // contract).
-  severity: 1 | 2 | 3 | 4;
+  severity: 1 | 2 | 3 | 4 | 5;
   reasonCode: AttentionRule;
   reason: string;
   reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string; plannedDate?: string };
@@ -129,7 +129,7 @@ export function evaluateAttention(input: {
   const relations = input.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project" && entityById.has(relation.sourceEntityId) && entityById.has(relation.targetEntityId));
   const claims = (input.claims || []).filter((claim) => claim.workspaceId === workspaceId && claim.confirmed && entityById.get(claim.projectId)?.type === "project");
   const output: AttentionItem[] = [];
-  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"], occurrenceKey?: string) {
+  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4 | 5, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"], occurrenceKey?: string) {
     const occurrence = occurrenceKey ?? (ruleId.startsWith("deadline_") ? relevantAt.toString() : "current");
     output.push({
       attentionKey: key(workspaceId, ruleId, "v1", subject.id, occurrence), workspaceId,
@@ -183,16 +183,17 @@ export function evaluateAttention(input: {
       followUp ? `date-${followUp}` : `since-${since}`);
   }
   // The day a task was planned for ("when") has passed and the task is still open (owner decision
-  // 2026-10-09). Not for a task that already has a deadline item, waits for someone, or is set
-  // aside for someday. A new date is a new occurrence.
+  // 2026-10-09). Ranked last, so that many tasks left from past days do not push out anything
+  // else. Not for a task that already has a deadline item, waits for someone or for something
+  // else (blocked), or is set aside for someday. A new date is a new occurrence.
   const withDeadlineItem = new Set(output.filter((item) => item.ruleId.startsWith("deadline_")).map((item) => item.subjectId));
   for (const task of entities) {
     if (task.type !== "task" || task.status !== "open" || withDeadlineItem.has(task.id)) continue;
-    if (task.properties.waiting === true || task.properties.someday === true) continue;
+    if (task.properties.waiting === true || task.properties.blocked === true || task.properties.someday === true) continue;
     const planned = typeof task.properties.when === "string" && validDate(task.properties.when) ? task.properties.when : "";
     const passedAt = planned ? endOfLocalDate(planned, timezone) : null;
     if (passedAt === null || evaluatedAt < passedAt) continue;
-    add(task, "planned_date_passed", 4, passedAt, planned,
+    add(task, "planned_date_passed", 5, passedAt, planned,
       `Planned date ${planned} (${timezone}) has passed and the task is still open.`,
       [{ id: task.id, revision: task.updatedAt }], "confirmed", { thresholdHours: 0, plannedDate: planned }, `date-${planned}`);
   }
