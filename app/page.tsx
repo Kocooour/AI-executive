@@ -44,8 +44,8 @@ export default function App() {
       <section className="appPane">
         {app.offlineView && (
           <div className="offlineStart" role="status">
-            <p><b>{tr("offlineStartTitle")}</b> {tr("offlineStartDetail")}</p>
-            <button type="button" onClick={() => void app.checkAccess(true)}>{tr("retry")}</button>
+            <p><b>{tr("offlineStartTitle")}</b> {tr("offlineStartDetail")}{app.offlineRetry === "failed" && <> <b>{tr("offlineStillNoConnection")}</b></>}</p>
+            <button type="button" disabled={app.offlineRetry === "checking"} onClick={() => void app.retryAccess()}>{tr(app.offlineRetry === "checking" ? "checking" : "retry")}</button>
           </div>
         )}
         <Topbar app={app} />

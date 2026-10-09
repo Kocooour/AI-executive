@@ -269,7 +269,9 @@ export function useLumiApp() {
     } catch (error) {
       setMessages([...history, {
         role: "assistant",
-        content: error instanceof Error ? error.message : tr("assistantRequestFailed"),
+        // A request that did not reach the server (no connection) is said in the interface
+        // language, not with the browser's own message.
+        content: error instanceof TypeError ? tr("assistantOffline") : error instanceof Error ? error.message : tr("assistantRequestFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -1228,10 +1230,12 @@ export function useLumiApp() {
               ? "existing"
               : "none");
         setCaptureSuggestion(suggestion);
-      } catch {
+      } catch (error) {
         if (captureSuggestionVersion.current === version) {
           setCaptureSuggestion(null);
-          setCaptureSuggestionError(tr("suggestionUnavailable"));
+          // Without a connection there is simply no suggestion; the task can still be added, so
+          // this is not shown as an error.
+          setCaptureSuggestionError(error instanceof TypeError ? "" : tr("suggestionUnavailable"));
         }
       } finally {
         window.clearTimeout(abortTimer);
@@ -1415,6 +1419,14 @@ export function useLumiApp() {
   const offlineView = authState === "unavailable" && items.some((entity) => entity.type !== "workspace") && (() => {
     try { return localStorage.getItem("ai-executive-server-synced") === "1" && localStorage.getItem("ai-executive-wipe-pending") !== "1"; } catch { return false; }
   })();
+  // "Try again" in the offline banner: a check that still finds no connection says so for a moment.
+  const [offlineRetry, setOfflineRetry] = useState<"" | "checking" | "failed">("");
+  async function retryAccess() {
+    setOfflineRetry("checking");
+    await checkAccess(true);
+    setOfflineRetry(authStateRef.current === "unavailable" ? "failed" : "");
+    window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
+  }
   const attentionState = useAttention({ authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
@@ -2606,6 +2618,8 @@ export function useLumiApp() {
     authPassword,
     authState,
     offlineView,
+    offlineRetry,
+    retryAccess,
     backupStatus,
     backups,
     badgeStatus,

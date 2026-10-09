@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
-import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
+import { expectOnServer, serverEntities, settingsSections, waitUntilSynced } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. This browser has
 // synchronized before, so it shows the data it holds, marked as offline (owner decision
@@ -275,5 +275,25 @@ test("an offline start whose session has ended returns to the sign-in screen whe
   await page.unroute("**/api/**");
   await page.locator(".offlineStart button").click();
   await expect(page.locator(".authCard")).toContainText("Přihlásit");
+  await context.close();
+});
+
+// Started offline, signing out is offered and refused with an explanation; nothing is removed.
+test("signing out after an offline start is refused and removes nothing", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.goto("/?view=Settings");
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  await expect(page.locator("p.formError")).toContainText("Server není dostupný");
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  expect(await page.evaluate(() => indexedDB.databases().then((list) => list.some((database) => database.name === "ai-executive")))).toBe(true);
+  // "Try again" still without a connection says so.
+  await page.locator(".offlineStart button").click();
+  await expect(page.locator(".offlineStart")).toContainText("Stále bez spojení.");
   await context.close();
 });

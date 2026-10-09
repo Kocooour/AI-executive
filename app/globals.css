@@ -3520,3 +3520,5 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 
 .offlineStart { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }
 .offlineStart p { margin: 0; }
+.offlineStart button { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font: inherit; cursor: pointer; }
+.offlineStart button:disabled { opacity: .6; cursor: default; }
