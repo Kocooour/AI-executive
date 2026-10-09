@@ -741,7 +741,10 @@ export function useLumiApp() {
         await ensureDefaultWorkspace();
         let localEntities = await db.entities.toArray();
         let localRelations = await db.relations.toArray();
+        // Example data is only for a browser that has never synchronized: an account whose
+        // server copy is empty (everything deleted) must stay empty.
         if (
+          localStorage.getItem("ai-executive-server-synced") !== "1" &&
           !localEntities.some((entity) => entity.type !== "workspace") &&
           !snapshot.entities.some((entity) => entity.type !== "workspace")
         ) {
