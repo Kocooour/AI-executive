@@ -76,6 +76,9 @@ export function askOtherTabsToSave(from: string, options: { answerMs?: number; s
     const finish = () => {
       if (finished) return;
       finished = true;
+      // A tab that started saving and did not finish in time may still hold what was typed:
+      // it counts as unsaved, so the user is asked before it could be lost.
+      unsaved += [...saving].filter((tab) => !saved.has(tab)).length;
       window.clearTimeout(answerTimer);
       window.clearTimeout(saveTimer);
       channel.close();

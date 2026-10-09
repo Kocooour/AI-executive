@@ -149,10 +149,50 @@ test("signing out asks about a new task being typed in another tab", async ({ br
   const question = leaver.locator("dialog.confirmDialog");
   await expect(question).toContainText("Neuložený text v jiné kartě");
   await expect(writer.locator(".tabNotice")).toHaveText("Odhlašuji v jiné kartě…");
+  // A tab opened while the question is open stops editing too, at the next sign of life.
+  const late = await context.newPage();
+  await late.goto("/?view=Inbox");
+  await expect(late.locator(".tabNotice")).toHaveText("Odhlašuji v jiné kartě…", { timeout: 10_000 });
+  expect(await late.evaluate(() => document.body.inert)).toBe(true);
   await question.getByRole("button", { name: "Zrušit" }).click();
   await expect(writer.locator(".tabNotice")).toHaveCount(0);
+  await expect(late.locator(".tabNotice")).toHaveCount(0);
   await expect(writer.locator(".captureModal").locator("input, textarea").first()).toHaveValue("Nový úkol v jiné kartě");
   expect(await writer.evaluate(() => document.body.inert)).toBe(false);
   await expect(leaver.locator(".authCard")).toHaveCount(0);
+  await context.close();
+});
+
+// One tab deletes a task while another tab's save is still on the way. That save must not take
+// the deletion's bookkeeping with it: the task is deleted on the server too.
+test("a task deleted in one tab while another tab is saving is deleted on the server", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const saver = await context.newPage(), deleter = await context.newPage();
+  await saver.goto("/?view=Inbox");
+  await waitUntilSynced(saver);
+  const doomed = `Smazat v druhé kartě ${Date.now()}`;
+  await saver.locator(".capture input").fill(doomed);
+  await saver.locator(".capture input").press("Enter");
+  let id = "";
+  await expect.poll(async () => (id = (await serverEntities(saver)).find((entity) => entity.title === doomed)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await deleter.goto(`/?task=${id}`);
+  await waitUntilSynced(deleter);
+  // The saver's next save waits at the server.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let saving = false;
+  await saver.route("**/api/store", async (route) => {
+    if (route.request().method() === "PUT") { saving = true; await held; }
+    await route.continue();
+  });
+  const kept = `Uloženo mezitím ${Date.now()}`;
+  await saver.locator(".capture input").fill(kept);
+  await saver.locator(".capture input").press("Enter");
+  await expect.poll(() => saving).toBe(true);
+  await deleter.locator(".detail button.danger, button.danger", { hasText: "Smazat" }).last().click();
+  await expect.poll(() => deleter.evaluate(() => localStorage.getItem("ai-executive-pending-deletions") || "")).toContain(id);
+  release();
+  await expectOnServer(saver, (entity) => entity.title === kept, true);
+  await expectOnServer(saver, (entity) => entity.id === id, false);
   await context.close();
 });

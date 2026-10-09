@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
+import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, type SentMarkers } from "../../../lib/pending-markers";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -41,6 +42,10 @@ export function useSync() {
       return [];
     }
   };
+  // The bookkeeping of what waits to be sent is shared by all tabs (lib/pending-markers.ts).
+  const markPending = () => markPendingIn(localStorage);
+  const captureMarkers = () => captureMarkersIn(localStorage);
+  const clearSentMarkers = (sent: SentMarkers) => clearSentMarkersIn(localStorage, sent);
   async function load() {
     setItems(await db.entities.toArray());
     setRelations(await db.relations.toArray());
@@ -118,7 +123,7 @@ export function useSync() {
   async function syncToServer() {
     // Marked at once, before waiting for an earlier save or another tab's synchronization, so
     // that no tab takes the server copy over this change in the meantime.
-    localStorage.setItem(pendingKey, "1");
+    markPending();
     // Every local write is followed by a save; the other tabs show the change at once, so that
     // nothing there is edited on top of an older copy.
     postToTabs({ type: "changed", from: tabId.current });
@@ -131,12 +136,14 @@ export function useSync() {
       // The local copy and its common version with the server are read together: another tab
       // replacing both in between would otherwise pair this copy with a newer common version.
       const [localEntities, localRelations, base] = await readLocalWithBase();
+      // What this save sends of the shared bookkeeping; only that is removed when it succeeds.
+      const sentMarkers = captureMarkers();
       let response = await putSnapshot(
         localEntities,
         localRelations,
         serverRevision.current,
-        pendingDeletedIds(),
-        pendingRevivedIds(),
+        sentMarkers.deleted,
+        sentMarkers.revived,
       );
       let mergedWithServer = false;
       // The server may change again between the conflict and the merged save; try a few times
@@ -144,8 +151,8 @@ export function useSync() {
       for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
-        const deletedIds = new Set(pendingDeletedIds());
-        const revivedIds = new Set(pendingRevivedIds());
+        const deletedIds = new Set(sentMarkers.deleted);
+        const revivedIds = new Set(sentMarkers.revived);
         const filteredCurrent = {
           ...current,
           tombstones: (current.tombstones || []).filter((item) => !revivedIds.has(item.id)),
@@ -166,8 +173,8 @@ export function useSync() {
           merged.entities,
           merged.relations,
           current.revision,
-          pendingDeletedIds(),
-          pendingRevivedIds(),
+          sentMarkers.deleted,
+          sentMarkers.revived,
         );
       }
       if (!response.ok) throw new Error("Server synchronization failed");
@@ -197,9 +204,7 @@ export function useSync() {
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
-      localStorage.removeItem(pendingKey);
-      localStorage.removeItem(deletedKey);
-      localStorage.removeItem(revivedKey);
+      clearSentMarkers(sentMarkers);
       setSyncStatus("synced");
     }));
     syncQueue.current = operation.catch(() => {
@@ -265,6 +270,8 @@ export function useSync() {
     revivedKey,
     pendingDeletedIds,
     pendingRevivedIds,
+    captureMarkers,
+    clearSentMarkers,
     load,
     applySnapshot,
     putSnapshot,

@@ -134,7 +134,7 @@ export function useLumiApp() {
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
-    pullFromServer, tabId } = useSync();
+    pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -767,9 +767,11 @@ export function useLumiApp() {
           await pullFromServer();
           return;
         }
+        // What this start sends of the bookkeeping shared by all tabs; only that is removed.
+        const sentMarkers = captureMarkers();
         if (!alreadySynchronized || hasPendingChanges) {
-          const deletedIds = new Set(pendingDeletedIds());
-          const revivedIds = new Set(pendingRevivedIds());
+          const deletedIds = new Set(sentMarkers.deleted);
+          const revivedIds = new Set(sentMarkers.revived);
           const filteredSnapshot = {
             ...snapshot,
             tombstones: (snapshot.tombstones || []).filter((item) => !revivedIds.has(item.id)),
@@ -796,8 +798,8 @@ export function useLumiApp() {
             merged.entities,
             merged.relations,
             snapshot.revision,
-            pendingDeletedIds(),
-            pendingRevivedIds(),
+            sentMarkers.deleted,
+            sentMarkers.revived,
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
@@ -819,8 +821,8 @@ export function useLumiApp() {
               retry.entities,
               retry.relations,
               snapshot.revision,
-              pendingDeletedIds(),
-              pendingRevivedIds(),
+              sentMarkers.deleted,
+              sentMarkers.revived,
             );
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
@@ -846,9 +848,7 @@ export function useLumiApp() {
         }
         if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
-        localStorage.removeItem(pendingKey);
-        localStorage.removeItem(deletedKey);
-        localStorage.removeItem(revivedKey);
+        clearSentMarkers(sentMarkers);
         setSyncStatus("synced");
       } catch {
         await ensureDefaultWorkspace();
@@ -2027,26 +2027,39 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
-      if (message.type === "signing-out") { if (document.body.inert) block(); return; }
+      // A tab opened (or woken) after the request still stops editing and saves what it can.
+      if (message.type === "signing-out") {
+        const wasBlocked = document.body.inert;
+        block();
+        if (!wasBlocked) void saveForSignOut().catch(() => undefined);
+        return;
+      }
       if (message.type !== "save-for-sign-out") return;
       channel.postMessage({ type: "saving", from: tabId.current, request: message.request } satisfies TabMessage);
       block();
+      const unsaved = await saveForSignOut();
+      channel.postMessage({ type: "saved", from: tabId.current, request: message.request, unsaved } satisfies TabMessage);
+    };
+    // Saves an edited title and the notes draft; returns the number of texts that could not be
+    // saved (texts that are not records, and a title whose save failed).
+    async function saveForSignOut() {
       const { selected: open, rename: saveTitle, saveNotes: saveDraft, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText } = forSignOut.current;
       // Texts that are not records cannot be saved; the signing-out tab asks the user about them.
-      const unsaved = [captureOpen && captureText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
-      try {
-        if (open && titleEdited.current) {
-          titleEdited.current = false;
+      let unsaved = [captureOpen && captureText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
+      if (open && titleEdited.current) {
+        try {
           await saveTitle(open, open.title);
+          // Only a title that was really written counts as saved.
+          titleEdited.current = false;
+        } catch {
+          unsaved += 1;
         }
-        const notes = notesDraftRef.current;
-        if (notes) await saveDraft({ id: notes.id }, notes.text);
-      } catch {
-        // Not saved: it stays waiting to be sent, and the signing-out tab asks before dropping it.
-      } finally {
-        channel.postMessage({ type: "saved", from: tabId.current, request: message.request, unsaved } satisfies TabMessage);
       }
-    };
+      // A notes draft that cannot be saved stays kept in the device and is counted as unsent.
+      const notes = notesDraftRef.current;
+      if (notes) await saveDraft({ id: notes.id }, notes.text).catch(() => undefined);
+      return unsaved;
+    }
     return () => { window.clearTimeout(unblock); channel.close(); };
   }, []);
   // Drafts left by other pages. A page that is still open answers on the draft channel while it
