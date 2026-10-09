@@ -22,6 +22,7 @@ import { useSignIn } from "./hooks/use-sign-in";
 import { useNotifications } from "./hooks/use-notifications";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
+import { localizeServerError } from "../../lib/server-errors";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -245,7 +246,7 @@ export function useLumiApp() {
         }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("assistantRequestFailed"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("assistantRequestFailed"));
       setMessages([...history, {
         role: "assistant",
         content: result.message,
@@ -271,7 +272,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action, proposalId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("aiActionFailed"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("aiActionFailed"));
       setMessages((current) => [
         ...current.map((message) =>
           message.proposal?.id === proposalId || (action === "confirm" && message.actionId)
@@ -280,7 +281,7 @@ export function useLumiApp() {
         ),
         {
           role: "assistant",
-          content: action === "confirm" ? result.message : "Návrh jsem zahodil. Nic se nezměnilo.",
+          content: action === "confirm" ? result.message : tr("proposalDiscarded"),
           actionId: result.actionId,
         },
       ]);
@@ -305,7 +306,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action: "undo", actionId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("undoFailed"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("undoFailed"));
       setMessages((current) => [
         ...current.map((message) => message.actionId === actionId ? { ...message, resolved: true } : message),
         { role: "assistant", content: result.message },
@@ -343,7 +344,7 @@ export function useLumiApp() {
         body: JSON.stringify({ agentId, workspaceId, language }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("agentRunFailed"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("agentRunFailed"));
       if (data.agentResult) setAgentResult(data.agentResult as PACTAgentResult);
       await loadAgents(workspaceId);
     } catch (error) {
@@ -377,7 +378,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action, sourceId, workspaceId, label: calendarLabel, url: calendarUrl }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("calendarActionFailed"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("calendarActionFailed"));
       setCalendarUrl("");
       await loadCalendar(workspaceId);
       await loadDayPlan(workspaceId, calendarToday);
@@ -394,7 +395,7 @@ export function useLumiApp() {
   async function loadDurableContext(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/context?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || tr("contextUnavailable"));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextUnavailable"));
     setDurableContext(Array.isArray(data.items) ? data.items : []);
   }
 
@@ -414,7 +415,7 @@ export function useLumiApp() {
         } : { action, workspaceId, id }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("contextActionFailed"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextActionFailed"));
       if (action === "create") {
         setContextTitle(""); setContextContent(""); setContextProjectId("");
         setContextStatus(tr("contextSaved"));
@@ -431,7 +432,7 @@ export function useLumiApp() {
     const loadVersion = ++contextClaimLoadVersion.current;
     const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || tr("contextClaimsUnavailable"));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextClaimsUnavailable"));
     if (loadVersion !== contextClaimLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setContextClaims(Array.isArray(data.claims) ? data.claims : []);
   }
@@ -439,7 +440,7 @@ export function useLumiApp() {
   async function loadStandaloneSubjects(workspaceId = calendarWorkspaceSelection.current) {
     const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&includeArchived=true`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || tr("subjectsUnavailable"));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("subjectsUnavailable"));
     if (calendarWorkspaceSelection.current === workspaceId) setStandaloneSubjects(Array.isArray(data.subjects) ? data.subjects : []);
   }
 
@@ -453,7 +454,7 @@ export function useLumiApp() {
           id: subject?.id || crypto.randomUUID(), expectedRevision: subject?.revision || 0,
           type: newSubjectType, title: subject ? subjectEditTitle : newSubjectTitle }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : data.error || tr("subjectActionFailed"));
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : localizeServerError(data.error, tr) || tr("subjectActionFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId); await loadContextClaims(workspaceId);
       setNewSubjectTitle(""); setSubjectEditId(""); setSubjectEditTitle("");
@@ -467,7 +468,7 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&historyId=${encodeURIComponent(subject.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("historyUnavailable"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("historyUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setSubjectHistory((current) => ({ ...current, [subject.id]: Array.isArray(data.history) ? data.history : [] }));
     } catch (error) { setSubjectStatus(error instanceof Error ? error.message : tr("historyUnavailable")); }
   }
@@ -488,7 +489,7 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}&claimId=${encodeURIComponent(claim.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("claimHistoryUnavailable"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("claimHistoryUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setClaimHistory((current) => ({ ...current, [claim.id]: Array.isArray(data.history) ? data.history : [] }));
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("claimHistoryUnavailable")); }
   }
@@ -558,7 +559,7 @@ export function useLumiApp() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
-        throw new Error(data.error || tr("claimSaveFailed"));
+        throw new Error(localizeServerError(data.error, tr) || tr("claimSaveFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
@@ -587,7 +588,7 @@ export function useLumiApp() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
-        throw new Error(data.error || tr("claimActionFailed"));
+        throw new Error(localizeServerError(data.error, tr) || tr("claimActionFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
@@ -609,7 +610,7 @@ export function useLumiApp() {
       const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "preview", workspaceId, text: contextInboxText }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("contextPreviewFailed"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextPreviewFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals(Array.isArray(data.proposals) ? data.proposals : []);
       setContextInboxTasks(Array.isArray(data.taskDrafts) ? data.taskDrafts : []);
@@ -632,7 +633,7 @@ export function useLumiApp() {
         validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || tr("contextProposalSaveFailed"));
+      if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextProposalSaveFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       await loadContextClaims(workspaceId);
@@ -652,7 +653,7 @@ export function useLumiApp() {
         type: proposal.suggestedTarget.type, title: proposal.suggestedTarget.title,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : data.error || tr("personCreateFailed"));
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : localizeServerError(data.error, tr) || tr("personCreateFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId);
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
@@ -1124,7 +1125,7 @@ export function useLumiApp() {
           signal: controller.signal,
         });
         const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || tr("suggestionFailed"));
+        if (!response.ok) throw new Error(localizeServerError(body.error, tr) || tr("suggestionFailed"));
         if (captureSuggestionVersion.current !== version) return;
         const suggestion = body.suggestion as CaptureSuggestion;
         suggestion.newProjectSuggestion = suggestion.newProjectSuggestion || null;

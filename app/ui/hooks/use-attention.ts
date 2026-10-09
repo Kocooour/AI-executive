@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import type { AttentionResponse } from "../types";
+import { localizeServerError } from "../../../lib/server-errors";
 
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
@@ -37,7 +38,7 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (current()) setAttentionOutdated(true);
-      throw new Error(data.error || tr("attentionUnavailable"));
+      throw new Error(localizeServerError(data.error, tr) || tr("attentionUnavailable"));
     }
     if (current()) {
       setAttention(data as AttentionResponse);
@@ -55,7 +56,7 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
         body: JSON.stringify({ workspaceId: item.workspaceId, attentionKey: item.attentionKey, sourceFingerprint: item.sourceFingerprint,
           expectedDataRevision: attention.dataRevision, action, ...(action === "snooze" ? { snoozeUntil: Date.now() + 24 * 3_600_000 } : {}) }) });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("attentionActionFailed"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("attentionActionFailed"));
       await loadAttention(activeWorkspaceId);
     } catch (error) {
       await loadAttention(activeWorkspaceId).catch(() => undefined);

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { startRegistration } from "@simplewebauthn/browser";
 import type { ConfirmRequest, PasskeySummary } from "../types";
+import { localizeServerError } from "../../../lib/server-errors";
 
 // Passkeys in Settings: the list, adding one (confirmed with the password) and removing one.
 // Moved verbatim from use-lumi-app.tsx. Signing in with a passkey is part of the sign-in flow
@@ -44,7 +45,7 @@ export function usePasskeys({ view, authState, tr, language, askConfirm, setPass
         body: JSON.stringify({ password: passkeyPassword }),
       });
       const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || tr("passkeyRegisterUnavailable"));
+      if (!optionsResponse.ok) throw new Error(localizeServerError(options.error, tr) || tr("passkeyRegisterUnavailable"));
       const credential = await startRegistration({ optionsJSON: options });
       const verifyResponse = await fetch("/api/auth/passkeys/register/verify", {
         method: "POST",
@@ -56,7 +57,7 @@ export function usePasskeys({ view, authState, tr, language, askConfirm, setPass
         }),
       });
       const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || tr("passkeyRegisterFailed"));
+      if (!verifyResponse.ok) throw new Error(localizeServerError(result.error, tr) || tr("passkeyRegisterFailed"));
       await loadPasskeys();
       setPasskeyPassword("");
       setPasskeyStatus(tr("passkeyAdded"));
@@ -76,7 +77,7 @@ export function usePasskeys({ view, authState, tr, language, askConfirm, setPass
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setPasskeyStatus(body.error || tr("passkeyRemoveFailed"));
+      setPasskeyStatus(localizeServerError(body.error, tr) || tr("passkeyRemoveFailed"));
       return;
     }
     await loadPasskeys();

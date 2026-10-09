@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
 import { watchSession } from "../../../lib/session-watch";
+import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
 // the sign-in screen when the session ends. Moved verbatim from use-lumi-app.tsx. What happens
@@ -105,7 +106,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         setAuthError(response.status === 401 ? tr("signInInvalidPassword")
           : response.status === 429 ? tr("signInTooManyAttempts")
             : response.status === 503 ? tr("authMisconfigured")
-              : body.error || tr("signInFailed"));
+              : localizeServerError(body.error, tr) || tr("signInFailed"));
         return;
       }
       setAuthPassword("");
@@ -126,7 +127,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         body: "{}",
       });
       const options = await optionsResponse.json();
-      if (!optionsResponse.ok) throw new Error(options.error || tr("passkeySignInUnavailable"));
+      if (!optionsResponse.ok) throw new Error(localizeServerError(options.error, tr) || tr("passkeySignInUnavailable"));
       const credential = await startAuthentication({ optionsJSON: options });
       const verifyResponse = await fetch("/api/auth/passkeys/login/verify", {
         method: "POST",
@@ -134,7 +135,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         body: JSON.stringify({ challenge: options.challenge, response: credential }),
       });
       const result = await verifyResponse.json();
-      if (!verifyResponse.ok) throw new Error(result.error || tr("passkeySignInFailed"));
+      if (!verifyResponse.ok) throw new Error(localizeServerError(result.error, tr) || tr("passkeySignInFailed"));
       setAuthState("ready");
       await afterSignIn();
     } catch (error) {

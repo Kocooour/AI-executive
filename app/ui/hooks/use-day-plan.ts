@@ -2,6 +2,7 @@
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import type { AIProposal, ConfirmRequest, DayPlan, DayPlanItem, WorkSession } from "../types";
+import { localizeServerError } from "../../../lib/server-errors";
 
 // Today's plan and the running work session: loading and refreshing the day plan, accepting or
 // moving its blocks (approval-bound actions with Undo), and starting, pausing and finishing work on
@@ -50,7 +51,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const version = ++dayPlanLoadVersion.current;
     const response = await fetch(`/api/day-plan?workspaceId=${encodeURIComponent(workspaceId)}&date=${date}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || tr("dayPlanUnavailable"));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("dayPlanUnavailable"));
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
   }
@@ -59,7 +60,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const version = ++workSessionLoadVersion.current;
     const response = await fetch(`/api/work-sessions?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || tr("workSessionUnavailable"));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("workSessionUnavailable"));
     if (version !== workSessionLoadVersion.current) return data.active as WorkSession | null;
     setWorkSession(data.active || null);
     const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
@@ -86,7 +87,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
-        throw new Error(data.error || tr("workSessionFailed"));
+        throw new Error(localizeServerError(data.error, tr) || tr("workSessionFailed"));
       }
       workSessionLoadVersion.current += 1;
       if (calendarWorkspaceSelection.current !== workspaceId) {
@@ -165,7 +166,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       const proposeResponse = await fetch("/api/day-plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: current.workspaceId, date: current.date, revision: current.revision,
         taskId: item.taskId, start: item.start || "", end: item.end || "", decision }) });
       const proposed = await proposeResponse.json().catch(() => ({}));
-      if (!proposeResponse.ok) throw new Error(proposed.error || tr("dayPlanChanged"));
+      if (!proposeResponse.ok) throw new Error(localizeServerError(proposed.error, tr) || tr("dayPlanChanged"));
       const proposal = proposed.proposal as AIProposal;
       const actionLabel = tr(decision === "accepted" ? "acceptBlock" : decision === "tomorrow" ? "moveTomorrow" : "skipPlanning");
       const planTitle = task.title.replace(/\s+/g, " ").slice(0, 160);
@@ -178,7 +179,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       if (calendarWorkspaceSelection.current !== dayPlan.workspaceId || calendarToday !== dayPlan.date) throw new Error(tr("dayPlanChanged"));
       const confirmResponse = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "confirm", proposalId: proposal.id }) });
       const confirmed = await confirmResponse.json().catch(() => ({}));
-      if (!confirmResponse.ok) throw new Error(confirmed.error || tr("dayPlanChanged"));
+      if (!confirmResponse.ok) throw new Error(localizeServerError(confirmed.error, tr) || tr("dayPlanChanged"));
       setDayPlanUndo({ actionId: confirmed.actionId, workspaceId: current.workspaceId, date: current.date });
       await pullFromServer();
       await loadDayPlan(current.workspaceId, current.date);
@@ -194,7 +195,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     try {
       const response = await fetch("/api/ai/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", actionId: dayPlanUndo.actionId }) });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || tr("dayPlanChanged"));
+      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("dayPlanChanged"));
       setDayPlanUndo(null);
       await pullFromServer();
       await loadDayPlan(dayPlanUndo.workspaceId, dayPlanUndo.date);
