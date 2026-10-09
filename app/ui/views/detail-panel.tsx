@@ -420,6 +420,45 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <option value="high">{tr("high")}</option>
                   </select>
                 </label>
+                <fieldset className="waitingField">
+                  <legend>{tr("waitingTitle")}</legend>
+                  <label className="inlineCheck">
+                    <input
+                      type="checkbox"
+                      checked={selected.properties.waiting === true}
+                      onChange={(event) => patch(selected, event.target.checked
+                        ? { waiting: true, waitingSince: Date.now() }
+                        : { waiting: false, waitingFor: "", waitingSince: null, followUpDate: "" }, event.target.checked ? "waiting started" : "waiting ended")}
+                    />
+                    {tr("waitingToggle")}
+                  </label>
+                  {selected.properties.waiting === true && (
+                    <>
+                      <label>
+                        {tr("waitingFor")}
+                        <input
+                          key={`${selected.id}:${String(selected.properties.waitingFor || "")}`}
+                          defaultValue={String(selected.properties.waitingFor || "")}
+                          maxLength={120}
+                          placeholder={tr("waitingForPlaceholder")}
+                          onBlur={(event) => {
+                            const value = event.target.value.trim();
+                            if (value !== String(selected.properties.waitingFor || "")) void patch(selected, { waitingFor: value }, "waiting for changed");
+                          }}
+                        />
+                      </label>
+                      <label>
+                        {tr("followUpDate")}
+                        <input
+                          type="date"
+                          value={String(selected.properties.followUpDate || "")}
+                          onChange={(event) => void patch(selected, { followUpDate: event.target.value }, "follow-up date changed")}
+                        />
+                      </label>
+                      <small>{tr("waitingHelp")}</small>
+                    </>
+                  )}
+                </fieldset>
                 <label>
                   {tr("duration")}
                   <DurationInput

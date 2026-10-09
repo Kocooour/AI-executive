@@ -69,7 +69,9 @@ export function reconcileAttention(workspaceId: string, candidates: AttentionIte
   }
   for (const previous of rows) {
     if (currentKeys.has(previous.attention_key) || previous.state === "resolved" || previous.state === "superseded") continue;
-    const replacement = candidates.some((candidate) => candidate.subjectId === previous.subject_id && candidate.ruleId.startsWith("deadline_") && previous.rule_id.startsWith("deadline_"));
+    // A changed deadline or follow-up date replaces the item of the old date.
+    const family = (rule: string) => (rule.startsWith("deadline_") ? "deadline" : rule);
+    const replacement = candidates.some((candidate) => candidate.subjectId === previous.subject_id && (family(candidate.ruleId) === "deadline" || candidate.ruleId === "waiting_follow_up") && family(candidate.ruleId) === family(previous.rule_id));
     transitionMissing(previous, replacement ? "superseded" : "resolved", now);
   }
   return { items: visible, hidden };

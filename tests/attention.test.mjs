@@ -90,3 +90,41 @@ test("workspace scope, deterministic order, stable keys, and source revisions", 
   const renamed = evaluate([{ ...overdue, title: "Changed", updatedAt: NOW }, soonLow, soonHigh]);
   assert.equal(original[0].attentionKey, renamed[0].attentionKey);
 });
+
+test("a waiting task comes back on its follow-up date in the local timezone", () => {
+  const task = entity("wait-date", "task", { properties: { waiting: true, waitingFor: "Petr", waitingSince: NOW - DAY, followUpDate: "2026-10-05" } });
+  // 2026-10-05 starts at 2026-10-04T22:00Z in Prague (summer time).
+  assert.deepEqual(evaluate([task], [], { evaluatedAt: Date.parse("2026-10-04T21:59:59.999Z") }), []);
+  const [item] = evaluate([task], [], { evaluatedAt: Date.parse("2026-10-04T22:00:00Z") });
+  assert.equal(item.ruleId, "waiting_follow_up");
+  assert.equal(item.severity, 3);
+  assert.equal(item.relevantDate, "2026-10-05");
+  assert.equal(item.reasonFacts.waitingFor, "Petr");
+});
+
+test("a waiting task without a date comes back after 7 days", () => {
+  const task = (since) => entity("wait-week", "task", { properties: { waiting: true, waitingSince: since } });
+  assert.deepEqual(evaluate([task(NOW - 7 * DAY + 1)]), []);
+  const [item] = evaluate([task(NOW - 7 * DAY)]);
+  assert.equal(item.ruleId, "waiting_follow_up");
+  assert.equal(item.relevantAt, NOW);
+});
+
+test("a completed task or one no longer waiting is not a waiting item", () => {
+  assert.deepEqual(evaluate([entity("done", "task", { status: "completed", properties: { waiting: true, waitingSince: NOW - 30 * DAY } })]), []);
+  assert.deepEqual(evaluate([entity("stopped", "task", { properties: { waiting: false, waitingSince: NOW - 30 * DAY } })]), []);
+});
+
+test("waiting items rank after deadlines and before project hygiene; a new date is a new occurrence", () => {
+  const overdue = entity("a-overdue", "task", { properties: { deadline: "2026-10-01" } });
+  const soon = entity("b-soon", "task", { properties: { deadline: "2026-10-05" } });
+  const waiting = entity("c-waiting", "task", { properties: { waiting: true, followUpDate: "2026-10-03" } });
+  const project = entity("d-project", "project");
+  const projectTask = entity("d-task", "task", { status: "completed" });
+  const relation = { id: "r", workspaceId: "personal", sourceEntityId: "d-task", targetEntityId: "d-project", relationType: "belongs_to_project", createdAt: NOW - 30 * DAY };
+  const result = evaluate([project, projectTask, waiting, soon, overdue], [relation]);
+  assert.deepEqual(result.map((item) => item.ruleId), ["deadline_overdue", "deadline_soon", "waiting_follow_up", "project_no_next_action", "project_idle"]);
+  const moved = evaluate([entity("c-waiting", "task", { properties: { waiting: true, followUpDate: "2026-10-04" } })]);
+  assert.notEqual(moved[0].attentionKey, result[2].attentionKey);
+  assert.equal(evaluate([waiting])[0].attentionKey, result[2].attentionKey);
+});

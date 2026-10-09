@@ -123,6 +123,8 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   existingBlocks.sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const ranked = tasks.flatMap((task) => {
     if (interval(task)) return [];
+    // A task that waits for someone or something is not offered as work.
+    if (task.properties.waiting === true) return [];
     const when = typeof task.properties.when === "string" ? task.properties.when.slice(0, 10) : "";
     const deadline = typeof task.properties.deadline === "string" ? task.properties.deadline.slice(0, 10) : "";
     const feedback = task.properties.planningFeedback as { date?: string; decision?: string } | undefined;

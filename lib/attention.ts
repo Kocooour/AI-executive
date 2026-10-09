@@ -1,6 +1,6 @@
 import type { Entity, Relation } from "./db";
 
-export type AttentionRule = "deadline_overdue" | "deadline_soon" | "project_no_next_action" | "project_idle";
+export type AttentionRule = "deadline_overdue" | "deadline_soon" | "waiting_follow_up" | "project_no_next_action" | "project_idle";
 export interface AttentionClaimActivity {
   id: string;
   workspaceId: string;
@@ -19,10 +19,11 @@ export interface AttentionItem {
   title: string;
   ruleId: AttentionRule;
   ruleVersion: 1;
-  severity: 1 | 2 | 3;
+  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene (README, Attention contract).
+  severity: 1 | 2 | 3 | 4;
   reasonCode: AttentionRule;
   reason: string;
-  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number };
+  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string };
   relevantAt: number;
   relevantDate: string;
   timezone: string;
@@ -63,6 +64,13 @@ function endOfLocalDate(date: string, timezone: string): number | null {
     else lo = mid + 1;
   }
   return localDate(lo - 1, timezone) === date ? lo : null;
+}
+
+// The first millisecond of a local date.
+function startOfLocalDate(date: string, timezone: string): number | null {
+  if (!validDate(date)) return null;
+  const previous = new Date(Date.parse(`${date}T00:00:00Z`) - DAY).toISOString().slice(0, 10);
+  return endOfLocalDate(previous, timezone);
 }
 
 function deadline(value: unknown, timezone: string): { at: number; date: string; allDay: boolean } | null {
@@ -108,8 +116,8 @@ export function evaluateAttention(input: {
   const relations = input.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project" && entityById.has(relation.sourceEntityId) && entityById.has(relation.targetEntityId));
   const claims = (input.claims || []).filter((claim) => claim.workspaceId === workspaceId && claim.confirmed && entityById.get(claim.projectId)?.type === "project");
   const output: AttentionItem[] = [];
-  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"]) {
-    const occurrence = ruleId.startsWith("deadline_") ? relevantAt.toString() : "current";
+  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"]) {
+    const occurrence = ruleId.startsWith("deadline_") || ruleId === "waiting_follow_up" ? relevantAt.toString() : "current";
     output.push({
       attentionKey: key(workspaceId, ruleId, "v1", subject.id, occurrence), workspaceId,
       subjectType: subject.type as "task" | "project", subjectId: subject.id, title: subject.title,
@@ -130,6 +138,29 @@ export function evaluateAttention(input: {
     else if (delta >= 0 && delta <= 48 * HOUR) add(task, "deadline_soon", 2, due.at, due.date,
       `Deadline ${due.date} (${timezone}) is within 48 hours.`, [{ id: task.id, revision: task.updatedAt }], "confirmed", { deadlineAllDay: due.allDay, thresholdHours: 48 });
   }
+  // Waiting for someone or something: the follow-up date has come, or without a date a week has
+  // passed since the task was marked as waiting. A change of the date is a new occurrence.
+  for (const task of entities) {
+    if (task.type !== "task" || task.status !== "open" || task.properties.waiting !== true) continue;
+    const waitingFor = typeof task.properties.waitingFor === "string" ? task.properties.waitingFor.slice(0, 120) : "";
+    const followUp = typeof task.properties.followUpDate === "string" && validDate(task.properties.followUpDate) ? task.properties.followUpDate : "";
+    const since = stamp(Number(task.properties.waitingSince)) ?? stamp(task.updatedAt);
+    let relevantAt: number | null = null;
+    let relevantDate = "";
+    if (followUp) {
+      const start = startOfLocalDate(followUp, timezone);
+      if (start !== null && evaluatedAt >= start) { relevantAt = start; relevantDate = followUp; }
+    } else if (since !== null && evaluatedAt - since >= 7 * DAY) {
+      relevantAt = since + 7 * DAY;
+      relevantDate = localDate(relevantAt, timezone);
+    }
+    if (relevantAt === null) continue;
+    add(task, "waiting_follow_up", 3, relevantAt, relevantDate,
+      followUp ? `Follow-up date ${followUp} (${timezone}) has come${waitingFor ? ` (waiting for: ${waitingFor})` : ""}.`
+        : `Waiting for at least 7 days${waitingFor ? ` (waiting for: ${waitingFor})` : ""} without a follow-up date.`,
+      [{ id: task.id, revision: task.updatedAt }], "confirmed",
+      { thresholdHours: followUp ? 0 : 7 * 24, ...(waitingFor ? { waitingFor } : {}), ...(since !== null ? { waitingSince: since } : {}), ...(followUp ? { followUpDate: followUp } : {}) });
+  }
   for (const project of entities) {
     if (project.type !== "project" || project.status !== "active") continue;
     const linked = relations.filter((relation) => relation.targetEntityId === project.id);
@@ -149,11 +180,11 @@ export function evaluateAttention(input: {
     const hasAction = projectTasks.some((task) => task.status === "open" && task.properties.someday !== true && task.properties.waiting !== true && task.properties.blocked !== true);
     const explicitWaiting = project.properties.waiting === true || projectClaims.some((claim) => claim.current && claim.predicate === "waiting_for");
     if (!hasAction && !explicitWaiting && evaluatedAt - lastActivity >= DAY) {
-      add(project, "project_no_next_action", 3, lastActivity + DAY, localDate(lastActivity + DAY, timezone),
+      add(project, "project_no_next_action", 4, lastActivity + DAY, localDate(lastActivity + DAY, timezone),
         `No open actionable task linked to this project for at least 24 hours (last recorded change ${new Date(lastActivity).toISOString()}).`, sources, "limited", { lastActivityAt: lastActivity, thresholdHours: 24 });
     }
     if (evaluatedAt - lastActivity >= 14 * DAY) {
-      add(project, "project_idle", 3, lastActivity + 14 * DAY, localDate(lastActivity + 14 * DAY, timezone),
+      add(project, "project_idle", 4, lastActivity + 14 * DAY, localDate(lastActivity + 14 * DAY, timezone),
         `No recorded project, linked task, or confirmed context activity for at least 14 days (last recorded change ${new Date(lastActivity).toISOString()}).`, sources, "limited", { lastActivityAt: lastActivity, thresholdHours: 14 * 24 });
     }
   }

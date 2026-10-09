@@ -50,3 +50,10 @@ test("context-only selection never claims a high task priority", () => {
   assert.equal(item.whyNow.includes("high_priority"), false);
   assert.equal(item.whyNow.includes("context_importance"), true);
 });
+
+test("a task waiting for someone is not offered in the day plan", () => {
+  add({ id: "task:waiting", type: "task", title: "Waiting task", status: "open", workspaceId: "personal",
+    properties: { when: today, estimatedMinutes: 20, waiting: true, waitingFor: "Jana" }, createdAt: now, updatedAt: now });
+  const result = plan.buildDayPlan("personal", today, now);
+  assert.equal([...result.planBlocks, ...result.unscheduled].some((candidate) => candidate.taskId === "task:waiting"), false);
+});

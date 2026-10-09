@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       items.sort((a, b) => a.severity - b.severity || a.relevantAt - b.relevantAt || priority(a.subjectId) - priority(b.subjectId) || (a.attentionKey < b.attentionKey ? -1 : a.attentionKey > b.attentionKey ? 1 : 0));
       return { items, hidden: { snoozed: evaluated.reduce((sum, result) => sum + result.hidden.snoozed, 0), dismissed: evaluated.reduce((sum, result) => sum + result.hidden.dismissed, 0) },
         workspaceId: requested, timezone, evaluatedAt, dataRevision: snapshot.revision, source: "server canonical snapshot", sourceUpdatedAt: snapshot.updatedAt,
-        coverage: { rules: ["deadline_overdue", "deadline_soon", "project_no_next_action", "project_idle"],
+        coverage: { rules: ["deadline_overdue", "deadline_soon", "waiting_follow_up", "project_no_next_action", "project_idle"],
           excluded: ["waiting_follow_up", "calendar_conflict", "capacity_risk"],
           projectActivity: "stored_project_task_confirmed_context", deletedTaskHistory: false, externalActivity: false } };
     });
