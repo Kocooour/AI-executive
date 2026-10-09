@@ -613,6 +613,8 @@ test("signing out clears the local copy; signing in again restores it from the s
   await confirmDialog(page).getByRole("button", { name: "Zrušit" }).click();
   await expect(page.locator(".appShell")).toBeVisible();
   await expect(page.locator(".authCard")).toHaveCount(0);
+  // The last attention evaluation is kept in this browser; signing out removes it with the rest.
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-attention") !== null)).toBe(true);
   // Notes still being typed in another tab are sent before the local copy is removed.
   const otherTab = `Z jiné karty před odhlášením ${Date.now()}`;
   await plantDraft(otherTab, base);
@@ -631,6 +633,7 @@ test("signing out clears the local copy; signing in again restores it from the s
   }));
   // Only the empty placeholder workspace may be there (it is created when the sign-in screen loads).
   expect(local.filter((title) => title !== "Personal")).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-attention"))).toBeNull();
   expect(await page.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
   await signIn(page);
   await sidebarView(page, "Doručené").click();

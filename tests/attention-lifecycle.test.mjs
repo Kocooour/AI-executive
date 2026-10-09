@@ -97,3 +97,15 @@ test("waiting follow-up: a date moved into the future or cleared supersedes, end
     assert.equal(state.state, expected, label);
   }
 });
+
+test("planned day: a new date supersedes the item of the old one", () => {
+  const plannedTask = (when, updatedAt) => ({ id: "planned-task", type: "task", title: "Planned", status: "open", workspaceId: "personal",
+    properties: { when }, createdAt: 1, updatedAt });
+  const [old] = candidates(plannedTask("2026-10-01", 1));
+  assert.equal(old.ruleId, "planned_date_passed");
+  reconcileAttention("personal", [old], now);
+  const [moved] = candidates(plannedTask("2026-10-02", 2));
+  assert.notEqual(moved.attentionKey, old.attentionKey);
+  reconcileAttention("personal", [moved], now + 1);
+  assert.equal(getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(old.attentionKey).state, "superseded");
+});

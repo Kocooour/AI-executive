@@ -1,6 +1,6 @@
 import type { Entity, Relation } from "./db";
 
-export type AttentionRule = "deadline_overdue" | "deadline_soon" | "waiting_follow_up" | "project_no_next_action" | "project_idle";
+export type AttentionRule = "deadline_overdue" | "deadline_soon" | "waiting_follow_up" | "planned_date_passed" | "project_no_next_action" | "project_idle";
 export interface AttentionClaimActivity {
   id: string;
   workspaceId: string;
@@ -19,11 +19,12 @@ export interface AttentionItem {
   title: string;
   ruleId: AttentionRule;
   ruleVersion: 1;
-  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene (README, Attention contract).
+  // 1 overdue, 2 due soon, 3 waiting, 4 planned date passed and project hygiene (README, Attention
+  // contract).
   severity: 1 | 2 | 3 | 4;
   reasonCode: AttentionRule;
   reason: string;
-  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string };
+  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string; plannedDate?: string };
   relevantAt: number;
   relevantDate: string;
   timezone: string;
@@ -180,6 +181,20 @@ export function evaluateAttention(input: {
       // Keyed by the date itself (not its instant), so a change of time zone does not bring a
       // dismissed item back.
       followUp ? `date-${followUp}` : `since-${since}`);
+  }
+  // The day a task was planned for ("when") has passed and the task is still open (owner decision
+  // 2026-10-09). Not for a task that already has a deadline item, waits for someone, or is set
+  // aside for someday. A new date is a new occurrence.
+  const withDeadlineItem = new Set(output.filter((item) => item.ruleId.startsWith("deadline_")).map((item) => item.subjectId));
+  for (const task of entities) {
+    if (task.type !== "task" || task.status !== "open" || withDeadlineItem.has(task.id)) continue;
+    if (task.properties.waiting === true || task.properties.someday === true) continue;
+    const planned = typeof task.properties.when === "string" && validDate(task.properties.when) ? task.properties.when : "";
+    const passedAt = planned ? endOfLocalDate(planned, timezone) : null;
+    if (passedAt === null || evaluatedAt < passedAt) continue;
+    add(task, "planned_date_passed", 4, passedAt, planned,
+      `Planned date ${planned} (${timezone}) has passed and the task is still open.`,
+      [{ id: task.id, revision: task.updatedAt }], "confirmed", { thresholdHours: 0, plannedDate: planned }, `date-${planned}`);
   }
   for (const project of entities) {
     if (project.type !== "project" || project.status !== "active") continue;

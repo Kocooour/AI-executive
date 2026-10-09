@@ -153,3 +153,34 @@ test("the key of a dated waiting item does not depend on the time zone", () => {
   assert.equal(prague.attentionKey, newYork.attentionKey);
   assert.notEqual(prague.relevantAt, newYork.relevantAt);
 });
+
+test("a task whose planned day has passed needs attention from the next local day", () => {
+  const task = (when, overrides = {}) => entity(`planned-${when}`, "task", { properties: { when, ...overrides } });
+  // NOW is 2026-10-04 14:00 in Prague.
+  assert.deepEqual(evaluate([task("2026-10-04")]), []);
+  const [item] = evaluate([task("2026-10-03")]);
+  assert.equal(item.ruleId, "planned_date_passed");
+  assert.equal(item.severity, 4);
+  assert.equal(item.relevantAt, Date.parse("2026-10-03T22:00:00Z"));
+  assert.equal(item.reasonFacts.plannedDate, "2026-10-03");
+  assert.ok(item.attentionKey.endsWith(":date-2026-10-03"));
+  assert.equal(evaluate([task("2026-10-03")], [], { evaluatedAt: Date.parse("2026-10-03T21:59:59.999Z") }).length, 0);
+});
+
+test("a passed planned day is not shown for waiting, someday, completed or already deadline-flagged tasks", () => {
+  assert.deepEqual(evaluate([entity("w", "task", { properties: { when: "2026-10-01", waiting: true, waitingSince: NOW - DAY } , updatedAt: NOW - DAY })]).map((item) => item.ruleId), []);
+  assert.deepEqual(evaluate([entity("s", "task", { properties: { when: "2026-10-01", someday: true } })]), []);
+  assert.deepEqual(evaluate([entity("c", "task", { status: "completed", properties: { when: "2026-10-01" } })]), []);
+  assert.deepEqual(evaluate([entity("bad", "task", { properties: { when: "2026-02-30" } })]), []);
+  assert.deepEqual(evaluate([entity("d", "task", { properties: { when: "2026-10-01", deadline: "2026-10-02" } })]).map((item) => item.ruleId), ["deadline_overdue"]);
+  // A deadline far away does not hide the passed planned day.
+  assert.deepEqual(evaluate([entity("f", "task", { properties: { when: "2026-10-01", deadline: "2026-12-01" } })]).map((item) => item.ruleId), ["planned_date_passed"]);
+});
+
+test("planned-day items rank after waiting items", () => {
+  const ids = evaluate([
+    entity("p-planned", "task", { properties: { when: "2026-09-01" } }),
+    entity("w-waiting", "task", { updatedAt: NOW - 8 * DAY, properties: { waiting: true, waitingSince: NOW - 8 * DAY } }),
+  ]).map((item) => item.ruleId);
+  assert.deepEqual(ids, ["waiting_follow_up", "planned_date_passed"]);
+});

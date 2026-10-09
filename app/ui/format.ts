@@ -18,6 +18,7 @@ export function attentionReason(item: AttentionItem, language: Language): string
       case "waiting_follow_up": return item.reasonFacts.followUpDate
         ? `Nastal den připomenutí ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)}${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`
         : `Čeká alespoň 7 dní bez data připomenutí${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`;
+      case "planned_date_passed": return `Naplánovaný den ${inSentenceDate(item.reasonFacts.plannedDate || item.relevantDate, language, item.timezone)} uplynul a úkol není hotový.`;
       case "project_no_next_action": return `Projekt nemá otevřený proveditelný úkol alespoň 24 hodin. Poslední zaznamenaná změna: ${last}.`;
       case "project_idle": return `Bez zaznamenané aktivity projektu, propojených úkolů nebo potvrzeného kontextu alespoň 14 dní. Poslední změna: ${last}.`;
     }
@@ -28,6 +29,7 @@ export function attentionReason(item: AttentionItem, language: Language): string
     case "waiting_follow_up": return item.reasonFacts.followUpDate
       ? `The follow-up date ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)} has come${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`
       : `Waiting for at least 7 days without a follow-up date${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`;
+    case "planned_date_passed": return `The planned day ${inSentenceDate(item.reasonFacts.plannedDate || item.relevantDate, language, item.timezone)} has passed and the task is not done.`;
     case "project_no_next_action": return `No open actionable task for at least 24 hours. Last recorded change: ${last}.`;
     case "project_idle": return `No recorded project, linked task, or confirmed context activity for at least 14 days. Last change: ${last}.`;
   }
@@ -73,8 +75,8 @@ export const urlBase64ToUint8Array = (base64: string) => {
   return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
 };
 
-// A date inside a sentence: "today" is not capitalised there.
+// A date inside a sentence: "today", "yesterday" and "tomorrow" are not capitalised there.
 function inSentenceDate(value: string, language: Language, timezone?: string) {
   const text = friendlyDate(value, language, timezone);
-  return text === copy[language].Today ? text.toLocaleLowerCase(language) : text;
+  return [copy[language].Today, copy[language].yesterday, copy[language].tomorrow].includes(text) ? text.toLocaleLowerCase(language) : text;
 }

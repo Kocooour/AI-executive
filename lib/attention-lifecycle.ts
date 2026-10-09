@@ -41,6 +41,8 @@ function transitionMissing(previous: StateRow, state: "resolved" | "superseded",
       state === "superseded" ? "occurrence_replaced" : "condition_ended", previous.source_fingerprint, now);
 }
 
+const datedRules = new Set(["deadline", "waiting_follow_up", "planned_date_passed"]);
+
 export function reconcileAttention(workspaceId: string, candidates: AttentionItem[], now: number, stillWaiting: Set<string> = new Set()) {
   const database = getDatabase();
   const rows = database.prepare("SELECT * FROM attention_states WHERE workspace_id=?").all(workspaceId) as unknown as StateRow[];
@@ -69,9 +71,9 @@ export function reconcileAttention(workspaceId: string, candidates: AttentionIte
   }
   for (const previous of rows) {
     if (currentKeys.has(previous.attention_key) || previous.state === "resolved" || previous.state === "superseded") continue;
-    // A changed deadline or follow-up date replaces the item of the old date.
+    // A changed deadline, follow-up date or planned date replaces the item of the old date.
     const family = (rule: string) => (rule.startsWith("deadline_") ? "deadline" : rule);
-    const replacement = candidates.some((candidate) => candidate.subjectId === previous.subject_id && (family(candidate.ruleId) === "deadline" || candidate.ruleId === "waiting_follow_up") && family(candidate.ruleId) === family(previous.rule_id))
+    const replacement = candidates.some((candidate) => candidate.subjectId === previous.subject_id && datedRules.has(family(candidate.ruleId)) && family(candidate.ruleId) === family(previous.rule_id))
       // A follow-up moved to a later date (or cleared) of a task that still waits replaces the old
       // one too, even though the new one is not due yet.
       || (previous.rule_id === "waiting_follow_up" && stillWaiting.has(previous.subject_id));
