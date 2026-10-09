@@ -75,3 +75,10 @@ test("a relation across workspaces is not sent", () => {
   const result = forServer(entities, [relation("a", "b", "cross")], null);
   assert.deepEqual(result.relations, []);
 });
+
+test("a known link of a held record is not sent when the other end has moved to another workspace", () => {
+  const entities = [workspace("w"), task("t", { title: "" }), task("p", { workspaceId: "w" })];
+  const base = { entities: [workspace("w"), task("t"), task("p")], relations: [relation("t", "p", "known-link")] };
+  const result = forServer(entities, [], base);
+  assert.deepEqual(result.relations, []);
+});

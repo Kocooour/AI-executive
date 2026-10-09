@@ -90,12 +90,18 @@ export function forServer(entities: Entity[], relations: Relation[], base: { ent
       sentAsKnown.add(previous.id);
     }
   }
-  const ids = new Set(sent.map((entity) => entity.id));
   const touchesKnown = (relation: Relation) => sentAsKnown.has(relation.sourceEntityId) || sentAsKnown.has(relation.targetEntityId);
+  // Every link is checked against the records as they are sent (a known version may sit in
+  // another workspace than the local one).
+  const sentById = new Map(sent.map((entity) => [entity.id, entity]));
+  const fitsSent = (relation: Relation) => {
+    const source = sentById.get(relation.sourceEntityId), target = sentById.get(relation.targetEntityId);
+    return Boolean(source && target && source.workspaceId === target.workspaceId && relation.workspaceId === source.workspaceId);
+  };
   const outgoingRelations = [
-    ...relations.filter((relation) => !touchesKnown(relation) && sameWorkspace(relation)),
+    ...relations.filter((relation) => !touchesKnown(relation)),
     ...(base?.relations || []).filter(touchesKnown),
-  ].filter((relation) => ids.has(relation.sourceEntityId) && ids.has(relation.targetEntityId));
+  ].filter(fitsSent);
   return { entities: sent, relations: outgoingRelations, heldBack, reasons };
 }
 
