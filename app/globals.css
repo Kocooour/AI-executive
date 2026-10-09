@@ -50,9 +50,7 @@ body {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: #6557e8;
-  color: #fff;
-  font-size: 24px;
+  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
 }
 .authCard h1,
 .authCard p {
@@ -124,8 +122,10 @@ body {
   text-decoration: none;
 }
 .offlineIcon {
-  color: #6557e8;
-  font-size: 54px;
+  display: block;
+  width: 54px;
+  height: 54px;
+  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
 }
 main {
   display: grid;
@@ -936,14 +936,12 @@ article {
     font-size: 23px;
   }
   section header .aiButton {
-    font-size: 0;
     width: 42px;
     height: 42px;
     padding: 0;
   }
-  section header .aiButton:after {
-    content: "◇";
-    font-size: 18px;
+  section header .aiButtonLabel {
+    display: none;
   }
 }
 .mobileMoreBackdrop {
@@ -1501,10 +1499,7 @@ article {
   flex: 0 0 32px;
   place-items: center;
   border-radius: 10px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 16px;
-  box-shadow: 0 6px 18px rgba(97, 85, 231, 0.24);
+  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
 }
 .workspaceButton {
   min-height: 42px;
@@ -2578,7 +2573,6 @@ textarea {
 
 .brandMark {
   border-radius: 8px;
-  background: #4a83d8;
   box-shadow: none;
 }
 
@@ -2706,7 +2700,10 @@ textarea {
 .aiButton {
   min-width: 34px;
   min-height: 34px;
-  display: inline-grid;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2735,6 +2732,13 @@ textarea {
 .aiButton {
   min-width: auto;
   color: var(--accent);
+}
+
+.aiButtonIcon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 5px;
 }
 
 .content {
@@ -3034,11 +3038,10 @@ h3 {
     min-height: 44px;
   }
   .appPane .topbar .aiButton {
-    font-size: 0;
+    font-size: inherit;
   }
-  .appPane .topbar .aiButton::after {
-    content: "◇";
-    font-size: 17px;
+  .appPane .topbar .aiButtonLabel {
+    display: none;
   }
   .content {
     margin-top: 22px;

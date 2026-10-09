@@ -65,7 +65,8 @@ export function Topbar({ app }: { app: LumiApp }) {
             aria-label={tr("askAi")}
             title={`${tr("askAi")} · ⌘⇧L`}
           >
-            ◇ {tr("askAi")}
+            <img className="aiButtonIcon" src="/icons/lumi-icon-v2-192.png" width="20" height="20" alt="" />
+            <span className="aiButtonLabel">{tr("askAi")}</span>
           </button>
         </header>
     </>

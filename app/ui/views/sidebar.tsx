@@ -28,7 +28,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
     <>
       <aside>
         <div className="appIdentity" aria-label="Lumi">
-          <span className="brandMark" aria-hidden="true">◇</span>
+          <span className="brandMark" aria-hidden="true" />
           <span><strong>Lumi</strong><small>{tr("appTagline")}</small></span>
         </div>
         <div className="workspaceSwitcher">
