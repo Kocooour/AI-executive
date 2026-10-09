@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import type { Browser, Page } from "@playwright/test";
 import { sessionFile } from "../playwright.config";
 import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
 
