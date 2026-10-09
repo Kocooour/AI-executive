@@ -1143,6 +1143,12 @@ export function useLumiApp() {
     }
   }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
+  // The suggestion for Quick Capture depends on the text and where the task goes, not on every
+  // reload of the local copy: a reload (a save, another tab, another device) must not restart it,
+  // which would disable the add button for a moment and could swallow a click on it.
+  const captureItemsRef = useRef(items);
+  captureItemsRef.current = items;
+  const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
   useEffect(() => {
     const parsed = parseCapture(draft);
     if (!capture || captureType !== "task" || parsed.title.length < 3) {
@@ -1155,7 +1161,7 @@ export function useLumiApp() {
     const version = ++captureSuggestionVersion.current;
     // A task added to a project goes to the project's workspace; its suggestions (area, calendar
     // window) have to come from there too.
-    const workspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    const workspaceId = captureProjectWorkspaceId || writeWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1186,7 +1192,7 @@ export function useLumiApp() {
             ? [{ start: suggestion.scheduledStart, end: suggestion.scheduledEnd, date: suggestion.scheduledDate }]
             : [];
         if (captureProjectId) {
-          const project = items.find((item) => item.id === captureProjectId && item.type === "project");
+          const project = captureItemsRef.current.find((item) => item.id === captureProjectId && item.type === "project");
           suggestion.projectId = captureProjectId;
           suggestion.projectTitle = project?.title || suggestion.projectTitle;
         }
@@ -1214,7 +1220,7 @@ export function useLumiApp() {
       window.clearTimeout(abortTimer);
       controller.abort();
     };
-  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, items, language]);
+  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language]);
 
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
@@ -1677,6 +1683,7 @@ export function useLumiApp() {
           : {}),
       });
     } catch (error) {
+      console.error(error);
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
         const workspaceId = writeWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
