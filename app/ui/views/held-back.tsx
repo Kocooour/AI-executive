@@ -33,15 +33,22 @@ export function RecordMarks({ app, entity }: { app: LumiApp; entity: Entity }) {
   );
 }
 
+// Reasons the app has an editor for (title, notes); the others can only be deleted here.
+const fixable = new Set<HeldBackReason>(["noTitle", "longTitle", "longNotes"]);
+
 // Records held back on this device because the server would refuse them; everything else is
-// still sent. Each can be opened to fix it, or deleted.
+// still sent. Each can be opened to fix it, or deleted. Only those of the open workspace are
+// listed (as everywhere else); of the others only their number is shown.
 export function HeldBack({ app }: { app: LumiApp }) {
-  const { heldBack, inspect, remove, tr } = app;
-  if (!heldBack.length) return null;
+  const { heldBack: all, activeWorkspaceId, inspect, remove, tr } = app;
+  const heldBack = all.filter((entity) => activeWorkspaceId === "all" || entity.workspaceId === activeWorkspaceId);
+  const elsewhere = all.length - heldBack.length;
+  if (!all.length) return null;
   return (
     <section className="heldBack" aria-label={tr("heldBackTitle")}>
       <h2>{tr("heldBackTitle")}</h2>
       <p>{tr("heldBackExplanation")}</p>
+      {elsewhere > 0 && <p className="heldBackElsewhere">{tr("heldBackElsewhere").replace("{count}", String(elsewhere))}</p>}
       {heldBack.map((entity) => (
         <div className="heldBackItem" key={entity.id}>
           <span>
@@ -49,8 +56,9 @@ export function HeldBack({ app }: { app: LumiApp }) {
             <small>{heldBackReason(app, entity)}</small>
           </span>
           <div className="notificationActions">
-            {/* Data that is not valid cannot be fixed in the app, only deleted. */}
-            {!["invalid", "workspace"].includes(app.heldReasons.get(entity.id) || "") && <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>}
+            {fixable.has(app.heldReasons.get(entity.id) || "invalid")
+              ? <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>
+              : <small className="heldBackNoFix">{tr("heldBackOnlyDelete")}</small>}
             <button onClick={() => remove(entity)}>{tr("delete")}</button>
           </div>
         </div>

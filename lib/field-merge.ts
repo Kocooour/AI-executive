@@ -57,6 +57,11 @@ export const placementFields = ["when", "today", "someday", "inbox"] as const;
 const logFields = new Set(["activity", "planningHistory"]);
 const topLevelFields = ["title", "content", "status", "workspaceId", "type"] as const;
 
+// Equal content (objects compared by their keys and values, not by identity).
+export function sameValue(a: unknown, b: unknown) {
+  return same(a, b);
+}
+
 function same(a: unknown, b: unknown) {
   if (a === b) return true;
   if (a === undefined || b === undefined || a === null || b === null) return false;

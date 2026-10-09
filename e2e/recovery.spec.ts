@@ -81,3 +81,53 @@ test("a task the server would refuse is held back, the rest is sent, and it can 
   await expect(notice).toHaveCount(0);
   await context.close();
 });
+
+// A record held on this device can become valid through another device's change (here the title
+// fixed there). This device's other change kept by the merge (the notes) is then sent too, not
+// left on this device as if it were saved.
+test("a held task fixed on another device still sends this device's other change", async ({ browser }) => {
+  const laptop = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const phone = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const laptopPage = await laptop.newPage(), phonePage = await phone.newPage();
+  await laptopPage.goto("/?view=Inbox");
+  await waitUntilSynced(laptopPage);
+  const title = `Opraví jiné zařízení ${Date.now()}`;
+  await laptopPage.locator(".capture input").fill(title);
+  await laptopPage.locator(".capture input").press("Enter");
+  let id = "";
+  await expect.poll(async () => (id = (await serverEntities(laptopPage)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await phonePage.goto("/?view=Inbox");
+  await waitUntilSynced(phonePage);
+  await expect(phonePage.locator("article", { hasText: title })).toBeVisible();
+  // On the phone the task gets a title the server refuses and new notes (as an older version
+  // could leave them).
+  await phonePage.evaluate((taskId) => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const store = request.result.transaction("entities", "readwrite").objectStore("entities");
+      const get = store.get(taskId);
+      get.onsuccess = () => {
+        const task = get.result;
+        const put = store.put({ ...task, title: "x".repeat(1001), properties: { ...task.properties, notes: "Poznámka z telefonu" }, updatedAt: Date.now() });
+        put.onsuccess = () => { request.result.close(); resolve(); };
+        put.onerror = () => reject(put.error);
+      };
+      get.onerror = () => reject(get.error);
+    };
+  }), id);
+  // Later the laptop renames it.
+  await laptopPage.waitForTimeout(20);
+  await laptopPage.goto(`/?task=${id}`);
+  await waitUntilSynced(laptopPage);
+  await laptopPage.locator("input.titleEdit").fill("Opraveno na notebooku");
+  await laptopPage.getByLabel("Poznámky k úkolu").focus();
+  await expectOnServer(laptopPage, (entity) => entity.id === id && entity.title === "Opraveno na notebooku", true);
+  // The phone takes the server copy over: its title loses to the newer one, its notes stay and
+  // are sent.
+  await phonePage.reload();
+  await waitUntilSynced(phonePage);
+  await expectOnServer(phonePage, (entity) => entity.id === id && entity.title === "Opraveno na notebooku" && entity.properties?.notes === "Poznámka z telefonu", true);
+  await expect(phonePage.locator(".heldBack")).toHaveCount(0);
+  await laptop.close();
+  await phone.close();
+});

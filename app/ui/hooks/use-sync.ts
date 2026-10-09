@@ -3,8 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
-import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
-import { mergeEntity } from "../../../lib/field-merge";
+import { forServer, isSendable, unsentIds, type HeldBackReason } from "../../../lib/sendable";
+import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
+import { writeTime } from "../../../lib/clock";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -60,6 +61,9 @@ export function useSync() {
   async function applySnapshot(snapshot: ServerSnapshot, expectedVersion?: number, known?: "base" | { entities: Entity[]; relations: Relation[] }) {
     if (signedOut.current) return false;
     if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) return false;
+    // A held record that became sendable through the merge below still holds changes of this
+    // device; it is sent by one more save.
+    let requeue = false;
     await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
       if (signedOut.current) throw new Error("LOCAL_DATA_CHANGED");
       if (expectedVersion !== undefined && localDataVersion.current !== expectedVersion) {
@@ -73,6 +77,7 @@ export function useSync() {
       const held = forServer(currentEntities, [], null).heldBack;
       const heldIds = new Set(held.map((entity) => entity.id));
       const oldBase = new Map((await db.baseEntities.toArray()).map((entity) => [entity.id, entity]));
+      const oldBaseRelations = await db.baseRelations.toArray();
       const withoutHeld = <T extends { id: string }>(list: T[]) => list.filter((entity) => !heldIds.has(entity.id));
       const relationsWithoutHeld = (list: Relation[]) => list.filter((relation) => !heldIds.has(relation.sourceEntityId) && !heldIds.has(relation.targetEntityId));
       if (reference && hasChangesBeyond(withoutHeld(currentEntities), relationsWithoutHeld(currentRelations), { entities: withoutHeld(reference.entities), relations: relationsWithoutHeld(reference.relations) })) {
@@ -94,20 +99,54 @@ export function useSync() {
         // server has deleted stays deleted.
         const deleted = new Set((snapshot.tombstones || []).map((item) => item.id));
         const fromServer = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
-        const kept = held.filter((entity) => !deleted.has(entity.id)).map((entity) => {
+        const merged = held.filter((entity) => !deleted.has(entity.id)).map((entity) => {
           const server = fromServer.get(entity.id);
           const common = oldBase.get(entity.id);
           return server && common ? mergeEntity(common, entity, server) : entity;
         });
+        // The links of held records are merged the same way (per record and kind of link, like a
+        // field), so a link another device removed is not brought back when the record is fixed.
+        const touchesHeld = (relation: Relation) => heldIds.has(relation.sourceEntityId) || heldIds.has(relation.targetEntityId);
+        const group = (relation: Relation) => `${relation.sourceEntityId}|${relation.relationType}`;
+        const groups = new Set([...oldBaseRelations, ...currentRelations, ...snapshot.relations].filter(touchesHeld).map(group));
+        const inGroups = (relation: Relation) => groups.has(group(relation));
+        const localById = new Map(currentEntities.map((entity) => [entity.id, entity]));
+        const serverInGroups = snapshot.relations.filter(inGroups);
+        const linkMerge = mergeRelations(oldBaseRelations.filter(inGroups), currentRelations.filter(inGroups), serverInGroups, (sourceId) => {
+          const local = localById.get(sourceId), server = fromServer.get(sourceId);
+          return !server || Boolean(local && local.updatedAt > server.updatedAt);
+        });
+        const kept = merged.map((entity) => {
+          let result = entity;
+          const linkConflicts = linkMerge.conflicts.get(entity.id);
+          if (linkConflicts?.length) result = withConflicts(result, linkConflicts);
+          // Changes of this device kept by the merge get a new time: with the server's time they
+          // would look sent, and the save below would not send them.
+          const server = fromServer.get(result.id);
+          if (server && isSendable(result) && !sameValue(result, server)) {
+            result = { ...result, updatedAt: Math.max(writeTime(), server.updatedAt + 1) };
+            requeue = true;
+          }
+          return result;
+        });
         if (kept.length) await db.entities.bulkPut(kept);
-        const present = new Set((await db.entities.toArray()).map((entity) => entity.id));
-        const heldRelations = currentRelations.filter((relation) => (heldIds.has(relation.sourceEntityId) || heldIds.has(relation.targetEntityId)) && present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        const present = new Map((await db.entities.toArray()).map((entity) => [entity.id, entity]));
+        const heldRelations = linkMerge.relations.filter((relation) => present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        if (serverInGroups.length) await db.relations.bulkDelete(serverInGroups.map((relation) => relation.id));
         if (heldRelations.length) await db.relations.bulkPut(heldRelations);
+        // Links that differ from the server's and can now be sent need that save too.
+        const key = (relation: Relation) => `${relation.id}|${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}|${relation.workspaceId}`;
+        const serverKeys = new Set(serverInGroups.map(key));
+        const sendableEnds = (relation: Relation) => [relation.sourceEntityId, relation.targetEntityId].every((id) => isSendable(present.get(id) as Entity));
+        if (heldRelations.length !== serverInGroups.length || heldRelations.some((relation) => !serverKeys.has(key(relation)))) {
+          if (heldRelations.every(sendableEnds) && serverInGroups.every((relation) => !present.has(relation.sourceEntityId) || !present.has(relation.targetEntityId) || sendableEnds(relation))) requeue = true;
+        }
       }
     });
     serverRevision.current = snapshot.revision;
     await load();
     postToTabs({ type: "changed", from: tabId.current });
+    if (requeue && !signedOut.current) void syncToServer();
     return true;
   }
   // Another tab changed the shared local copy: show it here too.
