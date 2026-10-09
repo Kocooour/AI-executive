@@ -136,7 +136,7 @@ export function useLumiApp() {
     [aiText, setAiText] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const { items, relations, unsent, heldBack, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
+  const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
@@ -1101,6 +1101,18 @@ export function useLumiApp() {
     // Also after a language change: the status was cleared, and a failure is reported again.
   }, [view, authState, language]);
 
+  // Access became known only now (the app was opened without a connection, or the check was
+  // repeated): what waits on this device is sent and the server copy taken, without waiting for
+  // the window to be focused again. (A fresh sign-in does this itself.)
+  const accessWasUnavailable = useRef(false);
+  useEffect(() => {
+    if (authState === "unavailable") accessWasUnavailable.current = true;
+    if (authState === "ready" && accessWasUnavailable.current) {
+      accessWasUnavailable.current = false;
+      void pullFromServer();
+    }
+    if (authState === "required") accessWasUnavailable.current = false;
+  }, [authState]);
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState !== "visible") return;
@@ -2675,6 +2687,7 @@ export function useLumiApp() {
     items,
     unsent,
     heldBack,
+    heldReasons,
     language,
     loadCalendar,
     login,

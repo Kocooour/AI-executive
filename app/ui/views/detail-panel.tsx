@@ -70,6 +70,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
               className="titleEdit"
+              maxLength={1000}
               value={selected.title}
               onChange={(e) => {
                 titleEdited.current = true;
@@ -90,7 +91,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               }}
             />
             {heldBack.some((entity) => entity.id === selected.id)
-              ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(heldBack.find((entity) => entity.id === selected.id)!, tr))}</p>
+              ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, selected))}</p>
               : unsent.has(selected.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
             <SyncConflicts app={app} entity={selected} />
             {context && (

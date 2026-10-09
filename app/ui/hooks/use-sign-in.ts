@@ -93,7 +93,12 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
   // not stay there after the connection has returned.
   useEffect(() => {
     if (authState !== "unavailable") return;
-    const retry = () => { if (document.visibilityState === "visible") void checkAccess(true); };
+    let checking = false;
+    const retry = () => {
+      if (checking || document.visibilityState !== "visible") return;
+      checking = true;
+      void checkAccess(true).finally(() => { checking = false; });
+    };
     window.addEventListener("online", retry);
     window.addEventListener("focus", retry);
     document.addEventListener("visibilitychange", retry);

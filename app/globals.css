@@ -3506,5 +3506,6 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .heldBack h2 { margin: 0 0 4px; font-size: 15px; }
 .heldBack p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .heldBackItem { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); }
-.heldBackItem > span { display: grid; gap: 2px; min-width: 0; }
+.heldBackItem > span { display: grid; gap: 2px; min-width: 0; flex: 1 1 200px; }
+.heldBackItem b { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .heldBackItem small { color: var(--danger); }

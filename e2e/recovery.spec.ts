@@ -4,13 +4,25 @@ import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. When the connection
 // is back it continues on its own.
-test("the app continues by itself when the connection comes back after a start without it", async ({ page }) => {
-  await page.route("**/api/auth/status", (route) => route.abort());
-  await page.goto("/");
+// A task captured before stays waiting and is sent once, without the window being focused again.
+test("the app continues by itself when the connection comes back after a start without it", async ({ page, context }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await context.setOffline(true);
+  const title = `Zachyceno bez spojení ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toBeVisible();
+  await context.setOffline(false);
+  // The app starts again while the server cannot be reached.
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
   await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
-  await page.unroute("**/api/auth/status");
+  await page.unroute("**/api/**");
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await expect(page.locator(".appShell")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === title).length, { timeout: 20_000 }).toBe(1);
+  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toHaveCount(0);
 });
 
 // A new task shows at once, marked as waiting, while its save is still on the way.

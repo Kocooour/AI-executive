@@ -4,6 +4,7 @@ import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
 import { forServer, isSendable, unsentIds } from "../../../lib/sendable";
+import { mergeEntity } from "../../../lib/field-merge";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -20,6 +21,7 @@ export function useSync() {
     // back on this device until they are fixed; lib/sendable.ts).
     [unsent, setUnsent] = useState<Set<string>>(() => new Set()),
     [heldBack, setHeldBack] = useState<Entity[]>([]),
+    [heldReasons, setHeldReasons] = useState<Map<string, HeldBackReason>>(() => new Map()),
     [relations, setRelations] = useState<any[]>([]),
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
@@ -43,8 +45,12 @@ export function useSync() {
     const [entities, localRelations, base] = await readLocalWithBase();
     setItems([...entities]);
     setRelations([...localRelations]);
-    setUnsent(unsentIds([...entities], base));
-    setHeldBack(entities.filter((entity) => !isSendable(entity)));
+    const nextUnsent = unsentIds([...entities], base);
+    const { heldBack: nextHeld, reasons } = forServer([...entities], [], null);
+    // Only a real change of these sets updates the screen (load() runs after every save).
+    setUnsent((previous) => (previous.size === nextUnsent.size && [...nextUnsent].every((id) => previous.has(id)) ? previous : nextUnsent));
+    setHeldBack((previous) => (previous.length === nextHeld.length && nextHeld.every((entity, index) => previous[index] === entity || (previous[index]?.id === entity.id && previous[index]?.updatedAt === entity.updatedAt)) ? previous : nextHeld));
+    setHeldReasons(reasons);
   }
   // Replaces the local copy with the server's. `known` is what this device knows the server
   // already has: what it has just sent, or ("base") the common version kept for merging. If the
@@ -64,8 +70,9 @@ export function useSync() {
       const currentRelations = await db.relations.toArray();
       // Records the server would refuse stay on this device as they are (lib/sendable.ts); they
       // are neither compared nor replaced.
-      const held = currentEntities.filter((entity) => !isSendable(entity));
+      const held = forServer(currentEntities, [], null).heldBack;
       const heldIds = new Set(held.map((entity) => entity.id));
+      const oldBase = new Map((await db.baseEntities.toArray()).map((entity) => [entity.id, entity]));
       const withoutHeld = <T extends { id: string }>(list: T[]) => list.filter((entity) => !heldIds.has(entity.id));
       const relationsWithoutHeld = (list: Relation[]) => list.filter((relation) => !heldIds.has(relation.sourceEntityId) && !heldIds.has(relation.targetEntityId));
       if (reference && hasChangesBeyond(withoutHeld(currentEntities), relationsWithoutHeld(currentRelations), { entities: withoutHeld(reference.entities), relations: relationsWithoutHeld(reference.relations) })) {
@@ -82,7 +89,17 @@ export function useSync() {
       if (snapshot.entities.length) await db.baseEntities.bulkAdd(snapshot.entities);
       if (snapshot.relations.length) await db.baseRelations.bulkAdd(snapshot.relations);
       if (held.length) {
-        await db.entities.bulkPut(held);
+        // A held record keeps this device's change, merged with what the server has meanwhile
+        // (lib/field-merge.ts), so fixing it later does not undo another device's change. One the
+        // server has deleted stays deleted.
+        const deleted = new Set((snapshot.tombstones || []).map((item) => item.id));
+        const fromServer = new Map(snapshot.entities.map((entity) => [entity.id, entity]));
+        const kept = held.filter((entity) => !deleted.has(entity.id)).map((entity) => {
+          const server = fromServer.get(entity.id);
+          const common = oldBase.get(entity.id);
+          return server && common ? mergeEntity(common, entity, server) : entity;
+        });
+        if (kept.length) await db.entities.bulkPut(kept);
         const present = new Set((await db.entities.toArray()).map((entity) => entity.id));
         const heldRelations = currentRelations.filter((relation) => (heldIds.has(relation.sourceEntityId) || heldIds.has(relation.targetEntityId)) && present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
         if (heldRelations.length) await db.relations.bulkPut(heldRelations);
@@ -278,6 +295,7 @@ export function useSync() {
     relations,
     unsent,
     heldBack,
+    heldReasons,
     syncStatus,
     setSyncStatus,
     serverRevision,
