@@ -7,6 +7,8 @@ import { ProjectIcon, ViewIcon } from "./project-icon";
 
 export function EntityList({ app }: { app: LumiApp }) {
   const {
+    unsent,
+    heldBack,
     acceptNativeDrop,
     activeWorkspaceId,
     areas,
@@ -37,6 +39,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
+  const heldBackIds = new Set(heldBack.map((entity) => entity.id));
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
@@ -143,7 +146,13 @@ export function EntityList({ app }: { app: LumiApp }) {
                   </div>
                 )}
                 <div>
-                  <strong>{x.title}{entityConflicts(x).length > 0 && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}</strong>
+                  <strong>
+                    {x.title || tr("untitledItem")}
+                    {entityConflicts(x).length > 0 && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}
+                    {heldBackIds.has(x.id)
+                      ? <span className="heldBackMark" role="img" aria-label={tr("heldBackBadge")} title={tr("heldBackBadge")}> ⚠</span>
+                      : unsent.has(x.id) && <span className="unsentMark" role="img" aria-label={tr("unsentBadge")} title={tr("unsentBadge")}> ↑</span>}
+                  </strong>
                   <small>
                     {x.type === "task"
                       ? [

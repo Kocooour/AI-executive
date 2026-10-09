@@ -5,12 +5,15 @@ import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
+import { heldBackReason } from "./held-back";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
     titleEditSeq,
     noteOpenTexts,
+    unsent,
+    heldBack,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -86,6 +89,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 }, () => undefined);
               }}
             />
+            {heldBack.some((entity) => entity.id === selected.id)
+              ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(heldBack.find((entity) => entity.id === selected.id)!, tr))}</p>
+              : unsent.has(selected.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
             <SyncConflicts app={app} entity={selected} />
             {context && (
               <div className="contextStrip">

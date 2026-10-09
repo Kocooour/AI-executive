@@ -1,3 +1,4 @@
+import { isSendable } from "./sendable";
 import { db } from "./db";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
@@ -27,6 +28,8 @@ export async function hasUnsentChanges() {
   if (pendingDeletedIds(localStorage).length || pendingRevivedIds(localStorage).length) return true;
   // Notes still being typed, or left by a page closed before saving them.
   if (keptNotesDrafts(localStorage).length) return true;
+  // A record the server would refuse is held back here until it is fixed (lib/sendable.ts).
+  if (await db.entities.filter((entity) => !isSendable(entity)).count()) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
   return (await db.entities.where("type").notEqual("workspace").count()) > 0;
 }

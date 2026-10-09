@@ -10,6 +10,7 @@ import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
 import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
+import { forServer, isSendable } from "../../lib/sendable";
 import { askOtherTabsToSave, postToTabs, tabChannelName, type TabMessage } from "../../lib/tab-coordination";
 import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -135,7 +136,7 @@ export function useLumiApp() {
     [aiText, setAiText] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
+  const { items, relations, unsent, heldBack, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
@@ -774,6 +775,7 @@ export function useLumiApp() {
         }
         // What this start sends of the bookkeeping shared by all tabs; only that is removed.
         const sentMarkers = captureMarkers();
+        let outgoing = forServer(localEntities, localRelations, null);
         if (!alreadySynchronized || hasPendingChanges) {
           const deletedIds = new Set(sentMarkers.deleted);
           const revivedIds = new Set(sentMarkers.revived);
@@ -793,10 +795,12 @@ export function useLumiApp() {
           const [entitiesNow, relationsNow, base] = await readLocalWithBase();
           localEntities = [...entitiesNow];
           localRelations = [...relationsNow];
+          // A record the server would refuse is held back (lib/sendable.ts).
+          outgoing = forServer(localEntities, localRelations, base);
           const merged = mergeSnapshots(
             filteredSnapshot,
-            localEntities,
-            localRelations,
+            outgoing.entities,
+            outgoing.relations,
             base,
           );
           let saveResponse = await putSnapshot(
@@ -838,7 +842,7 @@ export function useLumiApp() {
           // taken over. The known revision must stay as it is: the server replaces its whole
           // content when the revision matches, and the local copy does not contain that content.
           // With the old revision the save is answered with a conflict and merged instead.
-          if (!alreadySynchronized || hasPendingChanges) await replaceSyncBase(localEntities, localRelations).catch(() => undefined);
+          if (!alreadySynchronized || hasPendingChanges) await replaceSyncBase(outgoing.entities, outgoing.relations).catch(() => undefined);
           await syncToServer();
           return;
         }
@@ -2669,6 +2673,8 @@ export function useLumiApp() {
     homeTodayTasks,
     inspect,
     items,
+    unsent,
+    heldBack,
     language,
     loadCalendar,
     login,

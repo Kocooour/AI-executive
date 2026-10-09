@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
+import { forServer, isSendable, unsentIds } from "../../../lib/sendable";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -15,6 +16,10 @@ import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncL
 // use these.
 export function useSync() {
   const [items, setItems] = useState<Entity[]>([]),
+    // Records changed here and not yet on the server, and records the server would refuse (held
+    // back on this device until they are fixed; lib/sendable.ts).
+    [unsent, setUnsent] = useState<Set<string>>(() => new Set()),
+    [heldBack, setHeldBack] = useState<Entity[]>([]),
     [relations, setRelations] = useState<any[]>([]),
     [syncStatus, setSyncStatus] = useState<
       "connecting" | "synced" | "syncing" | "offline"
@@ -35,8 +40,11 @@ export function useSync() {
   const captureMarkers = () => captureMarkersIn(localStorage);
   const clearSentMarkers = (sent: SentMarkers) => clearSentMarkersIn(localStorage, sent);
   async function load() {
-    setItems(await db.entities.toArray());
-    setRelations(await db.relations.toArray());
+    const [entities, localRelations, base] = await readLocalWithBase();
+    setItems([...entities]);
+    setRelations([...localRelations]);
+    setUnsent(unsentIds([...entities], base));
+    setHeldBack(entities.filter((entity) => !isSendable(entity)));
   }
   // Replaces the local copy with the server's. `known` is what this device knows the server
   // already has: what it has just sent, or ("base") the common version kept for merging. If the
@@ -52,7 +60,15 @@ export function useSync() {
         throw new Error("LOCAL_DATA_CHANGED");
       }
       const reference = known === "base" ? await readSyncBase() : known;
-      if (reference && hasChangesBeyond(await db.entities.toArray(), await db.relations.toArray(), reference)) {
+      const currentEntities = await db.entities.toArray();
+      const currentRelations = await db.relations.toArray();
+      // Records the server would refuse stay on this device as they are (lib/sendable.ts); they
+      // are neither compared nor replaced.
+      const held = currentEntities.filter((entity) => !isSendable(entity));
+      const heldIds = new Set(held.map((entity) => entity.id));
+      const withoutHeld = <T extends { id: string }>(list: T[]) => list.filter((entity) => !heldIds.has(entity.id));
+      const relationsWithoutHeld = (list: Relation[]) => list.filter((relation) => !heldIds.has(relation.sourceEntityId) && !heldIds.has(relation.targetEntityId));
+      if (reference && hasChangesBeyond(withoutHeld(currentEntities), relationsWithoutHeld(currentRelations), { entities: withoutHeld(reference.entities), relations: relationsWithoutHeld(reference.relations) })) {
         throw new Error("LOCAL_DATA_CHANGED");
       }
       await db.entities.clear();
@@ -65,6 +81,12 @@ export function useSync() {
       await db.baseRelations.clear();
       if (snapshot.entities.length) await db.baseEntities.bulkAdd(snapshot.entities);
       if (snapshot.relations.length) await db.baseRelations.bulkAdd(snapshot.relations);
+      if (held.length) {
+        await db.entities.bulkPut(held);
+        const present = new Set((await db.entities.toArray()).map((entity) => entity.id));
+        const heldRelations = currentRelations.filter((relation) => (heldIds.has(relation.sourceEntityId) || heldIds.has(relation.targetEntityId)) && present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        if (heldRelations.length) await db.relations.bulkPut(heldRelations);
+      }
     });
     serverRevision.current = snapshot.revision;
     await load();
@@ -115,6 +137,8 @@ export function useSync() {
     // Every local write is followed by a save; the other tabs show the change at once, so that
     // nothing there is edited on top of an older copy.
     postToTabs({ type: "changed", from: tabId.current });
+    // The change is shown at once, marked as waiting, not only after the server has answered.
+    void load().catch(() => undefined);
     queuedSaves.current += 1;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
@@ -126,9 +150,11 @@ export function useSync() {
       const [localEntities, localRelations, base] = await readLocalWithBase();
       // What this save sends of the shared bookkeeping; only that is removed when it succeeds.
       const sentMarkers = captureMarkers();
+      // A record the server would refuse is held back, so that it does not stop everything else.
+      const outgoing = forServer([...localEntities], [...localRelations], base);
       let response = await putSnapshot(
-        localEntities,
-        localRelations,
+        outgoing.entities,
+        outgoing.relations,
         serverRevision.current,
         sentMarkers.deleted,
         sentMarkers.revived,
@@ -153,8 +179,8 @@ export function useSync() {
         };
         const merged = mergeSnapshots(
           filteredCurrent,
-          localEntities,
-          localRelations,
+          outgoing.entities,
+          outgoing.relations,
           base,
         );
         response = await putSnapshot(
@@ -181,7 +207,10 @@ export function useSync() {
         if (!mergedWithServer) serverRevision.current = saved.revision;
         // What this device sent is now part of the server copy (merged or not), so it is the
         // common version of what the device had then; later local edits are changes against it.
-        if (!signedOut.current) await replaceSyncBase(localEntities, localRelations).catch(() => undefined);
+        if (!signedOut.current) {
+          await replaceSyncBase(outgoing.entities, outgoing.relations).catch(() => undefined);
+          await load().catch(() => undefined);
+        }
         settleLater();
         return;
       }
@@ -247,6 +276,8 @@ export function useSync() {
   return {
     items,
     relations,
+    unsent,
+    heldBack,
     syncStatus,
     setSyncStatus,
     serverRevision,

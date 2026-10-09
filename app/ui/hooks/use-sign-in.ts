@@ -60,10 +60,11 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
     return () => { if (window.fetch === watched) window.fetch = original; };
   }, []);
   useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
-  async function checkAccess() {
+  // `quiet`: a check in the background keeps the screen as it is until there is an answer.
+  async function checkAccess(quiet = false) {
     const version = ++authCheckVersion.current;
     setAuthError("");
-    setAuthState("checking");
+    if (!quiet) setAuthState("checking");
     try {
       const state = await fetchClientAuthStatus();
       if (version !== authCheckVersion.current) return;
@@ -86,6 +87,26 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
   // The first access check runs once; retries are initiated by the user.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Access could not be checked (no connection when the page loaded). It is checked again as soon
+  // as the connection or the window comes back, and every 15 seconds meanwhile, so the screen does
+  // not stay there after the connection has returned.
+  useEffect(() => {
+    if (authState !== "unavailable") return;
+    const retry = () => { if (document.visibilityState === "visible") void checkAccess(true); };
+    window.addEventListener("online", retry);
+    window.addEventListener("focus", retry);
+    document.addEventListener("visibilitychange", retry);
+    const timer = window.setInterval(retry, 15_000);
+    return () => {
+      window.removeEventListener("online", retry);
+      window.removeEventListener("focus", retry);
+      document.removeEventListener("visibilitychange", retry);
+      window.clearInterval(timer);
+    };
+  // checkAccess only reads refs and setters.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authState]);
 
   async function login(event: React.FormEvent) {
     event.preventDefault();
