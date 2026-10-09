@@ -68,6 +68,8 @@ export function useLumiApp() {
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
+    // Another tab of this browser is signing out; editing here waits.
+    [signingOutElsewhere, setSigningOutElsewhere] = useState(false),
     [logoutError, setLogoutError] = useState(""),
     [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
     [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
@@ -755,6 +757,13 @@ export function useLumiApp() {
         const alreadySynchronized =
           localStorage.getItem("ai-executive-server-synced") === "1";
         const hasPendingChanges = localStorage.getItem(pendingKey) === "1";
+        // Nothing of this browser's own to send: the server copy is taken over the same way as on
+        // every later refresh, fetched again while no other tab synchronizes. The copy fetched
+        // above may already be older than a save another open tab has just made.
+        if (alreadySynchronized && !hasPendingChanges) {
+          await pullFromServer();
+          return;
+        }
         if (!alreadySynchronized || hasPendingChanges) {
           const deletedIds = new Set(pendingDeletedIds());
           const revivedIds = new Set(pendingRevivedIds());
@@ -856,10 +865,17 @@ export function useLumiApp() {
     setLogoutError("");
     let leaving = false;
     let askedOthers = false;
+    let heartbeat = 0;
     try {
-      // Other open tabs save what is being typed there first, so it is sent below too.
+      // Other open tabs save what is being typed there first, so it is sent below too. Until this
+      // tab has finished, it tells them every few seconds that it is still signing out.
       askedOthers = true;
-      await askOtherTabsToSave(tabId.current);
+      heartbeat = window.setInterval(() => postToTabs({ type: "signing-out", from: tabId.current }), 5_000);
+      const others = await askOtherTabsToSave(tabId.current);
+      if (others.unsaved > 0 && !(await askConfirm({ title: tr("signOutOtherTabTitle"), message: tr("signOutOtherTab"), confirmLabel: tr("signOutDiscardAction"), danger: true }))) {
+        postToTabs({ type: "sign-out-cancelled", from: tabId.current });
+        return;
+      }
       const result = await runSignOut({
         version: () => localDataVersion.current,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -889,6 +905,7 @@ export function useLumiApp() {
       if (askedOthers) postToTabs({ type: "sign-out-cancelled", from: tabId.current });
       throw error;
     } finally {
+      window.clearInterval(heartbeat);
       if (!leaving) setLogoutBusy(false);
     }
   }
@@ -1901,7 +1918,9 @@ export function useLumiApp() {
   }
   // `onlyIfOpen`: put the saved record into the detail panel only while that record is still the
   // one open there (a save that finishes after the panel was closed must not reopen it).
-  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated", onlyIfOpen = false) {
+  // `properties` may be a function of the stored properties, for a change that depends on them
+  // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
+  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false) {
     localDataVersion.current += 1;
     // Reading and writing in one transaction: two saves of the same record started together (for
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
@@ -1914,7 +1933,7 @@ export function useLumiApp() {
       await db.entities.update(e.id, {
         properties: {
           ...current.properties,
-          ...properties,
+          ...(typeof properties === "function" ? properties(current.properties) : properties),
           activity: [...activity, { at: Date.now(), action }].slice(-50),
         },
         updatedAt: Date.now(),
@@ -1974,32 +1993,48 @@ export function useLumiApp() {
   }, []);
   // Another tab is signing out: what is being typed here is saved first (an edited title and the
   // notes draft), and editing stops until that tab has finished or given up (lib/tab-coordination.ts).
-  const forSignOut = useRef({ selected, rename, saveNotes });
-  forSignOut.current = { selected, rename, saveNotes };
+  const forSignOut = useRef({ selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText });
+  forSignOut.current = { selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText };
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(tabChannelName);
     let unblock = 0;
+    const block = () => {
+      document.body.inert = true;
+      setSigningOutElsewhere(true);
+      // If the other tab is closed before it finishes, editing comes back here on its own. While
+      // it is still signing out (for example asking the user), it says so every few seconds.
+      window.clearTimeout(unblock);
+      unblock = window.setTimeout(release, 15_000);
+    };
+    const release = () => {
+      window.clearTimeout(unblock);
+      if (signedOut.current) return;
+      document.body.inert = false;
+      setSigningOutElsewhere(false);
+    };
     channel.onmessage = async (event: MessageEvent<TabMessage>) => {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
-      if (message.type === "sign-out-cancelled") { window.clearTimeout(unblock); document.body.inert = false; return; }
+      if (message.type === "sign-out-cancelled") { release(); return; }
+      if (message.type === "signing-out") { if (document.body.inert) block(); return; }
       if (message.type !== "save-for-sign-out") return;
       channel.postMessage({ type: "saving", from: tabId.current, request: message.request } satisfies TabMessage);
-      document.body.inert = true;
-      // If the other tab is closed before it finishes, editing comes back here on its own.
-      window.clearTimeout(unblock);
-      unblock = window.setTimeout(() => { if (!signedOut.current) document.body.inert = false; }, 20_000);
-      const { selected: open, rename: saveTitle, saveNotes: saveDraft } = forSignOut.current;
+      block();
+      const { selected: open, rename: saveTitle, saveNotes: saveDraft, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText } = forSignOut.current;
+      // Texts that are not records cannot be saved; the signing-out tab asks the user about them.
+      const unsaved = [captureOpen && captureText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
       try {
         if (open && titleEdited.current) {
           titleEdited.current = false;
           await saveTitle(open, open.title);
         }
-        const draft = notesDraftRef.current;
-        if (draft) await saveDraft({ id: draft.id }, draft.text);
+        const notes = notesDraftRef.current;
+        if (notes) await saveDraft({ id: notes.id }, notes.text);
+      } catch {
+        // Not saved: it stays waiting to be sent, and the signing-out tab asks before dropping it.
       } finally {
-        channel.postMessage({ type: "saved", from: tabId.current, request: message.request } satisfies TabMessage);
+        channel.postMessage({ type: "saved", from: tabId.current, request: message.request, unsaved } satisfies TabMessage);
       }
     };
     return () => { window.clearTimeout(unblock); channel.close(); };
@@ -2557,6 +2592,7 @@ export function useLumiApp() {
     login,
     logout,
     logoutBusy,
+    signingOutElsewhere,
     logoutError,
     messages,
     moreDialogRef,

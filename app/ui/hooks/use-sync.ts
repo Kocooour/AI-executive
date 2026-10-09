@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
-import { hasChangesBeyond, postToTabs, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
+import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -95,6 +95,7 @@ export function useSync() {
     revivedIds: string[] = [],
   ) {
     return fetch("/api/store", {
+      signal: requestTimeout(),
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -118,6 +119,9 @@ export function useSync() {
     // Marked at once, before waiting for an earlier save or another tab's synchronization, so
     // that no tab takes the server copy over this change in the meantime.
     localStorage.setItem(pendingKey, "1");
+    // Every local write is followed by a save; the other tabs show the change at once, so that
+    // nothing there is edited on top of an older copy.
+    postToTabs({ type: "changed", from: tabId.current });
     queuedSaves.current += 1;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
@@ -212,14 +216,15 @@ export function useSync() {
       return;
     }
     try {
-      const pullVersion = localDataVersion.current;
-      const response = await fetch("/api/store", { cache: "no-store" });
-      if (!response.ok) throw new Error("Server synchronization failed");
-      const snapshot = (await response.json()) as ServerSnapshot;
-      await syncQueue.current;
-      // Taking the copy over waits for a save of another tab; a change waiting to be sent (from
-      // any tab) is saved instead, outside the lock.
+      // The server copy is fetched and taken over while no other tab synchronizes: a copy fetched
+      // earlier could be older than a save another tab made meanwhile, and would undo it.
       const outcome = await withSyncLock(async () => {
+        if (localStorage.getItem(pendingKey) === "1") return "save" as const;
+        const pullVersion = localDataVersion.current;
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (!response.ok) throw new Error("Server synchronization failed");
+        const snapshot = (await response.json()) as ServerSnapshot;
+        // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
         if (snapshot.revision <= serverRevision.current) return "synced" as const;
         // "Synced" means the local copy holds the server's state. If a local change got in the
@@ -238,6 +243,9 @@ export function useSync() {
       });
       if (outcome === "save") { await syncToServer(); return; }
       if (outcome === "synced") setSyncStatus("synced");
+      // The local copy holds something the server does not have yet: send it. (Usually the change
+      // that got in the way brings its own save; one more is harmless.)
+      if (outcome === "changed" && !signedOut.current) void syncToServer();
     } catch {
       setSyncStatus("offline");
     }

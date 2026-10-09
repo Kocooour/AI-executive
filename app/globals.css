@@ -3493,3 +3493,6 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .syncConflict > span { display: grid; gap: 2px; min-width: 0; }
 .syncConflictValue { overflow-wrap: anywhere; }
 .conflictMark { color: var(--warning); }
+
+/* Another tab is signing out; this one waits (lib/tab-coordination.ts). */
+.tabNotice { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); z-index: 1000; padding: 10px 16px; border-radius: 12px; background: var(--text); color: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); font-size: 14px; max-width: calc(100vw - 32px); }

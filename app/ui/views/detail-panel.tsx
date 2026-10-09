@@ -494,16 +494,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         <input
                           type="checkbox"
                           checked={Boolean(item.done)}
-                          onChange={() => patch(selected, {
-                            checklist: all.map((entry, entryIndex) => {
+                          onChange={() => patch(selected, (stored) => ({
+                            // From the stored list: another tab or device may have changed it.
+                            checklist: (Array.isArray(stored.checklist) ? stored.checklist : all).map((entry, entryIndex) => {
                               const normalized = typeof entry === "string"
                                 ? { id: `${entryIndex}`, title: entry, done: false }
                                 : entry as { id?: string; title?: string; done?: boolean };
-                              return entryIndex === index
-                                ? { ...normalized, done: !normalized.done }
-                                : normalized;
+                              const target = item.id ? normalized.id === item.id : entryIndex === index;
+                              return target ? { ...normalized, done: !item.done } : normalized;
                             }),
-                          }, "checklist updated")}
+                          }), "checklist updated")}
                         />
                         <span className={item.done ? "checked" : ""}>{item.title}</span>
                       </label>
@@ -516,12 +516,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       onKeyDown={(event) => {
                         if (event.key !== "Enter" || !checklistDraft.trim()) return;
                         event.preventDefault();
-                        const existing = Array.isArray(selected.properties.checklist)
-                          ? selected.properties.checklist
-                          : [];
-                        patch(selected, {
-                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
-                        }, "checklist item added");
+                        const added = { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false };
+                        patch(selected, (stored) => ({
+                          checklist: [...(Array.isArray(stored.checklist) ? stored.checklist : []), added],
+                        }), "checklist item added");
                         setChecklistDraft("");
                       }}
                       placeholder={tr("addChecklistItem")}
@@ -530,12 +528,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       type="button"
                       disabled={!checklistDraft.trim()}
                       onClick={() => {
-                        const existing = Array.isArray(selected.properties.checklist)
-                          ? selected.properties.checklist
-                          : [];
-                        patch(selected, {
-                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
-                        }, "checklist item added");
+                        const added = { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false };
+                        patch(selected, (stored) => ({
+                          checklist: [...(Array.isArray(stored.checklist) ? stored.checklist : []), added],
+                        }), "checklist item added");
                         setChecklistDraft("");
                       }}
                     >{tr("add")}</button>
