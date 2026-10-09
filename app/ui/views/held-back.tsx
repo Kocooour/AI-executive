@@ -44,6 +44,8 @@ export function HeldBack({ app }: { app: LumiApp }) {
   const heldBack = all.filter((entity) => activeWorkspaceId === "all" || entity.workspaceId === activeWorkspaceId);
   const elsewhere = all.length - heldBack.length;
   if (!all.length) return null;
+  // Nothing of the open workspace: only a short note that other workspaces have some.
+  if (!heldBack.length) return <p className="heldBackElsewhere heldBackNote" role="status">{tr("heldBackElsewhere").replace("{count}", String(elsewhere))}</p>;
   return (
     <section className="heldBack" aria-label={tr("heldBackTitle")}>
       <h2>{tr("heldBackTitle")}</h2>

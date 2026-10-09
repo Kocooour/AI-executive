@@ -131,3 +131,38 @@ test("a held task fixed on another device still sends this device's other change
   await laptop.close();
   await phone.close();
 });
+
+// A valid record in a workspace the server does not know stays held: taking the server copy over
+// does not start one save after another.
+test("a task held because of its workspace does not make the app save again and again", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Neznámý prostor ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  let id = "";
+  await expect.poll(async () => (id = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await waitUntilSynced(page);
+  await page.evaluate((taskId) => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const store = request.result.transaction("entities", "readwrite").objectStore("entities");
+      const get = store.get(taskId);
+      get.onsuccess = () => {
+        const task = get.result;
+        const put = store.put({ ...task, workspaceId: "e2e-ghost-workspace", properties: { ...task.properties, notes: "Jen tady" }, updatedAt: Date.now() });
+        put.onsuccess = () => { request.result.close(); resolve(); };
+        put.onerror = () => reject(put.error);
+      };
+      get.onerror = () => reject(get.error);
+    };
+  }), id);
+  let saves = 0;
+  page.on("request", (request) => { if (request.method() === "PUT" && request.url().endsWith("/api/store")) saves += 1; });
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.waitForTimeout(4_000);
+  expect(saves).toBeLessThanOrEqual(3);
+  const onServer = (await serverEntities(page)).find((entity) => entity.id === id);
+  expect((onServer as { workspaceId?: string } | undefined)?.workspaceId).toBe("personal");
+});

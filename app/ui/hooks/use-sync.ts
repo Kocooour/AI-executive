@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
-import { forServer, isSendable, unsentIds, type HeldBackReason } from "../../../lib/sendable";
+import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
 import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
 import { writeTime } from "../../../lib/clock";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
@@ -31,6 +31,8 @@ export function useSync() {
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
+  // Saves asked for in a row by applySnapshot for held records that became sendable.
+  const requeueStreak = useRef(0);
   // This tab, for messages to the other tabs of the browser (lib/tab-coordination.ts).
   const tabId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const pendingKey = "ai-executive-pending-sync";
@@ -116,37 +118,46 @@ export function useSync() {
           const local = localById.get(sourceId), server = fromServer.get(sourceId);
           return !server || Boolean(local && local.updatedAt > server.updatedAt);
         });
-        const kept = merged.map((entity) => {
-          let result = entity;
+        const withLinkConflicts = merged.map((entity) => {
           const linkConflicts = linkMerge.conflicts.get(entity.id);
-          if (linkConflicts?.length) result = withConflicts(result, linkConflicts);
-          // Changes of this device kept by the merge get a new time: with the server's time they
-          // would look sent, and the save below would not send them.
-          const server = fromServer.get(result.id);
-          if (server && isSendable(result) && !sameValue(result, server)) {
-            result = { ...result, updatedAt: Math.max(writeTime(), server.updatedAt + 1) };
-            requeue = true;
-          }
-          return result;
+          return linkConflicts?.length ? withConflicts(entity, linkConflicts) : entity;
         });
-        if (kept.length) await db.entities.bulkPut(kept);
+        if (withLinkConflicts.length) await db.entities.bulkPut(withLinkConflicts);
         const present = new Map((await db.entities.toArray()).map((entity) => [entity.id, entity]));
+        // Whether a record is still held is decided as for saving (lib/sendable.ts), with all
+        // records as they are now: a valid record in a workspace that cannot be saved stays held.
+        const stillHeld = forServer([...present.values()], [], null).reasons;
+        // Changes of this device kept by the merge, in a record that is no longer held, get a new
+        // time: with the server's time they would look sent, and nothing would send them.
+        const released = withLinkConflicts.flatMap((entity) => {
+          const server = fromServer.get(entity.id);
+          if (!server || stillHeld.has(entity.id) || sameValue(entity, server)) return [];
+          return [{ ...entity, updatedAt: Math.max(writeTime(), server.updatedAt + 1) }];
+        });
+        if (released.length) {
+          await db.entities.bulkPut(released);
+          requeue = true;
+        }
         const heldRelations = linkMerge.relations.filter((relation) => present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
         if (serverInGroups.length) await db.relations.bulkDelete(serverInGroups.map((relation) => relation.id));
         if (heldRelations.length) await db.relations.bulkPut(heldRelations);
-        // Links that differ from the server's and can now be sent need that save too.
-        const key = (relation: Relation) => `${relation.id}|${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}|${relation.workspaceId}`;
-        const serverKeys = new Set(serverInGroups.map(key));
-        const sendableEnds = (relation: Relation) => [relation.sourceEntityId, relation.targetEntityId].every((id) => isSendable(present.get(id) as Entity));
-        if (heldRelations.length !== serverInGroups.length || heldRelations.some((relation) => !serverKeys.has(key(relation)))) {
-          if (heldRelations.every(sendableEnds) && serverInGroups.every((relation) => !present.has(relation.sourceEntityId) || !present.has(relation.targetEntityId) || sendableEnds(relation))) requeue = true;
-        }
+        // Links that differ from the server's and can be sent now need that save too (only then:
+        // a link of a record still held would otherwise ask for a save after every save).
+        const linkKey = (relation: Relation) => `${relation.id}|${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}|${relation.workspaceId}`;
+        const serverKeys = new Set(serverInGroups.map(linkKey));
+        const sendableEnds = (relation: Relation) => [relation.sourceEntityId, relation.targetEntityId].every((id) => present.has(id) && !stillHeld.has(id));
+        const linksDiffer = heldRelations.length !== serverInGroups.length || heldRelations.some((relation) => !serverKeys.has(linkKey(relation)));
+        const serverLinksPresent = serverInGroups.filter((relation) => present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        if (linksDiffer && heldRelations.every(sendableEnds) && serverLinksPresent.every(sendableEnds)) requeue = true;
       }
     });
     serverRevision.current = snapshot.revision;
     await load();
     postToTabs({ type: "changed", from: tabId.current });
-    if (requeue && !signedOut.current) void syncToServer();
+    // At most two such saves in a row: if the server keeps answering with something else than was
+    // sent (it normalised a value), asking again would not end.
+    requeueStreak.current = requeue ? requeueStreak.current + 1 : 0;
+    if (requeue && requeueStreak.current <= 2 && !signedOut.current) void syncToServer();
     return true;
   }
   // Another tab changed the shared local copy: show it here too.
