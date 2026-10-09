@@ -74,7 +74,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             </div>
           )}
         </div>
-        <nav aria-label={language === "cs" ? "Hlavní navigace" : "Main navigation"}>
+        <nav aria-label={tr("mainNavigation")}>
           {primaryViews.map((x) => (
             <button
               className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
@@ -105,7 +105,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             ＋ {tr("new")}
           </button>
           <details className="secondaryNav">
-            <summary>{language === "cs" ? "Další pohledy" : "More views"}</summary>
+            <summary>{tr("moreViews")}</summary>
             {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
           </details>
           <button

@@ -8,8 +8,9 @@ import { watchSession } from "../../../lib/session-watch";
 // the sign-in screen when the session ends. Moved verbatim from use-lumi-app.tsx. What happens
 // with the data after signing in, and whether the user has just signed out, belong to the sync
 // part of the app and are passed in as `afterSignIn` and `isSignedOut`.
-export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
+export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignIn }: {
   tr: (key: string) => string;
+  language: string;
   answerConfirm: (confirmed: boolean) => void;
   isSignedOut: () => boolean;
   afterSignIn: () => Promise<unknown>;
@@ -49,6 +50,8 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
       setAuthState("required");
     }).catch(() => undefined).finally(() => { sessionEndCheck.current = false; });
   };
+  // A sign-in error shown in one language is not kept after the language changes.
+  useEffect(() => setAuthError(""), [language]);
   useEffect(() => {
     const original = window.fetch;
     const watched = watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current());
@@ -97,8 +100,12 @@ export function useSignIn({ tr, answerConfirm, isSignedOut, afterSignIn }: {
         body: JSON.stringify({ password: authPassword }),
       });
       if (!response.ok) {
+        // The server's messages are English; the common answers are shown in the interface language.
         const body = await response.json().catch(() => ({}));
-        setAuthError(body.error || tr("signInFailed"));
+        setAuthError(response.status === 401 ? tr("signInInvalidPassword")
+          : response.status === 429 ? tr("signInTooManyAttempts")
+            : response.status === 503 ? tr("authMisconfigured")
+              : body.error || tr("signInFailed"));
         return;
       }
       setAuthPassword("");

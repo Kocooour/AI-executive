@@ -22,16 +22,16 @@ export function AgentsView({ app }: { app: LumiApp }) {
                 {pactAgents.map((agent) => {
                   const latest = agentRuns.find((run) => run.agentId === agent.id);
                   const description = agent.id === "project-manager"
-                    ? (language === "cs" ? "Najde rizikové projekty a projekty bez dalšího kroku." : "Finds at-risk projects and projects without a next action.")
-                    : (language === "cs" ? "Připraví podklady k nejbližší události z kalendáře." : "Prepares guidance for the next calendar event.");
+                    ? (tr("findsAtRiskProjects"))
+                    : (tr("preparesGuidanceForThe"));
                   const displayName = agent.id === "project-manager"
-                    ? (language === "cs" ? "Projektový manažer" : "Project Manager")
-                    : (language === "cs" ? "Příprava na schůzku" : "Meeting Prep");
+                    ? (tr("projectManager"))
+                    : (tr("meetingPrep"));
                   return (
                     <article className="agentCard" key={agent.id}>
                       <header>
                         <span className="agentGlyph" aria-hidden="true">◇</span>
-                        <div><h2>{displayName}</h2><small>v{agent.version} · {agent.triggerModes.join(" / ")}</small></div>
+                        <div><h2>{displayName}</h2><small>v{agent.version} · {agent.triggerModes.map((mode) => { const label = tr(`triggerMode_${mode}`); return label === `triggerMode_${mode}` ? mode : label; }).join(" / ")}</small></div>
                       </header>
                       <p>{description}</p>
                       <div className="agentMeta">
@@ -53,12 +53,12 @@ export function AgentsView({ app }: { app: LumiApp }) {
                   <p>{agentResult.summary}</p>
                   <h3>{tr("recommendations")}</h3>
                   <ol>{agentResult.recommendations.map((recommendation) => <li key={recommendation}>{recommendation}</li>)}</ol>
-                  <p className="agentSafetyNote">{language === "cs" ? "Agent nic nezměnil. Případné změny se nejprve zobrazí jako návrh k potvrzení." : "The agent changed nothing. Any mutation is shown as a proposal for confirmation first."}</p>
+                  <p className="agentSafetyNote">{tr("theAgentChangedNothing")}</p>
                 </section>
               )}
               {agentStatus && <p className="saveConfirmation" role="status">{agentStatus}</p>}
               <section className="agentHistory">
-                <div className="sectionHeading"><div><h2>{tr("runHistory")}</h2><p>{language === "cs" ? "Sanitizovaný provozní záznam bez názvů úkolů a obsahu kontextu." : "Sanitized operational history without task titles or context contents."}</p></div></div>
+                <div className="sectionHeading"><div><h2>{tr("runHistory")}</h2><p>{tr("sanitizedOperationalHistoryWithout")}</p></div></div>
                 <div className="agentRunList">
                   {agentRuns.map((run) => {
                     const agent = pactAgents.find((candidate) => candidate.id === run.agentId);

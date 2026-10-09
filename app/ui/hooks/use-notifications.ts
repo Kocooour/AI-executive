@@ -7,9 +7,11 @@ import { urlBase64ToUint8Array } from "../format";
 // (loaded on start), enabling, disabling and testing push, and saving the preferences one after
 // another. Moved verbatim from use-lumi-app.tsx. The Settings view also refreshes the state
 // together with the backups; that effect stays in use-lumi-app.tsx, so the setter is returned.
-export function useNotifications({ tr }: { tr: (key: string) => string }) {
+export function useNotifications({ tr, language }: { tr: (key: string) => string; language: string }) {
   const [notificationState, setNotificationState] = useState<NotificationState | null>(null),
     [notificationStatus, setNotificationStatus] = useState("");
+  // A status shown in one language is not kept after the language changes.
+  useEffect(() => setNotificationStatus(""), [language]);
   const notificationSettingsQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {

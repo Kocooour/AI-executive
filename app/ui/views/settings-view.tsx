@@ -546,21 +546,21 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 </div>
               </section>
               <section className="durableContextSection" hidden={settingsSection !== "context"}>
-                <div className="sectionHeading"><div><h2>{language === "cs" ? "Kontext Lumi" : "Lumi context"}</h2><p>{language === "cs" ? "Trvalé informace a pravidla, která má Lumi používat. Citlivý kontext se neposílá externím AI službám." : "Durable facts and rules for Lumi. Sensitive context is not sent to external AI services."}</p></div></div>
+                <div className="sectionHeading"><div><h2>{tr("lumiContext")}</h2><p>{tr("durableFactsAndRules")}</p></div></div>
                 <div className="contextForm">
                   <div className="preferenceGrid">
-                    <label>{language === "cs" ? "Rozsah" : "Scope"}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}>{["me", "work", "family", "rules", "workspace", "project"].map((scope) => <option key={scope} value={scope}>{tr(`scope${scope[0].toUpperCase()}${scope.slice(1)}`)}</option>)}</select></label>
-                    <label>{language === "cs" ? "Citlivost" : "Sensitivity"}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{language === "cs" ? "Běžný" : "Normal"}</option><option value="sensitive">{language === "cs" ? "Citlivý" : "Sensitive"}</option></select></label>
+                    <label>{tr("scope")}<select value={contextScope} onChange={(e) => setContextScope(e.target.value as DurableContextItem["scope"])}>{["me", "work", "family", "rules", "workspace", "project"].map((scope) => <option key={scope} value={scope}>{tr(`scope${scope[0].toUpperCase()}${scope.slice(1)}`)}</option>)}</select></label>
+                    <label>{tr("sensitivity")}<select value={contextSensitivity} onChange={(e) => setContextSensitivity(e.target.value as DurableContextItem["sensitivity"])}><option value="normal">{tr("normal3")}</option><option value="sensitive">{tr("sensitive3")}</option></select></label>
                   </div>
                   {contextScope === "project" && <label>{tr("project")}<select value={contextProjectId} onChange={(e) => setContextProjectId(e.target.value)}><option value="">—</option>{items.filter((item) => item.type === "project" && item.workspaceId === (activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId)).map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>}
-                  <label>{language === "cs" ? "Název" : "Title"}<input maxLength={200} value={contextTitle} onChange={(e) => setContextTitle(e.target.value)} placeholder={language === "cs" ? "Např. Jak plánuji pracovní den" : "e.g. How I plan my workday"} /></label>
-                  <label>{language === "cs" ? "Obsah" : "Content"}<textarea maxLength={10000} value={contextContent} onChange={(e) => setContextContent(e.target.value)} placeholder={language === "cs" ? "Informace, preference nebo pravidlo…" : "Fact, preference or rule…"} /></label>
+                  <label>{tr("title")}<input maxLength={200} value={contextTitle} onChange={(e) => setContextTitle(e.target.value)} placeholder={tr("eGHowI")} /></label>
+                  <label>{tr("content")}<textarea maxLength={10000} value={contextContent} onChange={(e) => setContextContent(e.target.value)} placeholder={tr("factPreferenceOrRule")} /></label>
                   <div className="notificationActions"><button onClick={() => contextAction("create")} disabled={contextBusy || !contextTitle.trim() || !contextContent.trim() || (contextScope === "project" && !contextProjectId)}>{contextBusy ? tr("working") : tr("save")}</button></div>
                   {contextStatus && <p className="saveConfirmation" role="status">{contextStatus}</p>}
                 </div>
                 <div className="contextItems">
-                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{tr(`scope${item.scope[0].toUpperCase()}${item.scope.slice(1)}`)} · {item.sensitivity === "sensitive" ? (language === "cs" ? "citlivý" : "sensitive") : (language === "cs" ? "běžný" : "normal")}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{language === "cs" ? "Archivovat" : "Archive"}</button></article>)}
-                  {!durableContext.length && <p>{language === "cs" ? "Zatím není uložen žádný trvalý kontext." : "No durable context saved yet."}</p>}
+                  {durableContext.map((item) => <article key={item.id}><div><strong>{item.title}</strong><small>{tr(`scope${item.scope[0].toUpperCase()}${item.scope.slice(1)}`)} · {item.sensitivity === "sensitive" ? (tr("sensitive4")) : (tr("normal4"))}</small><p>{item.content}</p></div><button className="textAction danger" onClick={() => contextAction("archive", item.id)} disabled={contextBusy}>{tr("archive")}</button></article>)}
+                  {!durableContext.length && <p>{tr("noDurableContextSaved")}</p>}
                 </div>
               </section>
             </div>

@@ -37,24 +37,20 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   const dayPlanLoadVersion = useRef(0);
   const workSessionLoadVersion = useRef(0);
 
+  // Why a task is in the day plan: `dayPlanReason_<reason>` in the dictionary; an unknown reason is
+  // shown as it is.
   const dayPlanWhy = (reason: string) => {
-    if (reason.startsWith("duration:")) return language === "cs" ? `Odhad trvání je ${reason.slice(9)} minut.` : `Estimated duration is ${reason.slice(9)} minutes.`;
-    const labels: Record<string, [string, string]> = {
-      already_planned: ["Úkol už je v kalendáři.", "The task is already in the calendar."],
-      overdue: ["Úkol je po termínu.", "The task is overdue."], due_today: ["Úkol má termín dnes.", "The task is due today."],
-      deadline_close: ["Termín se blíží.", "The deadline is close."], high_priority: ["Úkol má vysokou prioritu.", "The task has high priority."],
-      context_importance: ["Potvrzený kontext označuje úkol nebo projekt jako důležitý.", "Confirmed context marks the task or project as important."],
-      context_waiting: ["Podle potvrzeného kontextu někdo čeká na výsledek.", "Confirmed context says someone is waiting for the result."],
-      calendar_free: ["V kalendáři je vhodné volné okno.", "A suitable free calendar window is available."],
-    };
-    return labels[reason]?.[language === "cs" ? 0 : 1] || reason;
+    if (reason.startsWith("duration:")) return tr("dayPlanReasonDuration").replace("{minutes}", () => reason.slice(9));
+    const key = `dayPlanReason_${reason}`;
+    const label = tr(key);
+    return label === key ? reason : label;
   };
 
   async function loadDayPlan(workspaceId: string, date: string) {
     const version = ++dayPlanLoadVersion.current;
     const response = await fetch(`/api/day-plan?workspaceId=${encodeURIComponent(workspaceId)}&date=${date}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Day plan unavailable");
+    if (!response.ok) throw new Error(data.error || tr("dayPlanUnavailable"));
     if (version === dayPlanLoadVersion.current && calendarWorkspaceSelection.current === workspaceId) setDayPlan(data as DayPlan);
     return data as DayPlan;
   }
@@ -63,7 +59,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     const version = ++workSessionLoadVersion.current;
     const response = await fetch(`/api/work-sessions?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Work session unavailable");
+    if (!response.ok) throw new Error(data.error || tr("workSessionUnavailable"));
     if (version !== workSessionLoadVersion.current) return data.active as WorkSession | null;
     setWorkSession(data.active || null);
     const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
@@ -90,7 +86,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 409) { await loadWorkSession(calendarWorkspaceSelection.current).catch(() => undefined); throw new Error(tr("workConflict")); }
-        throw new Error(data.error || "Work session failed");
+        throw new Error(data.error || tr("workSessionFailed"));
       }
       workSessionLoadVersion.current += 1;
       if (calendarWorkspaceSelection.current !== workspaceId) {
@@ -101,7 +97,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
       setWorkSession(data.session?.state === "completed" ? null : data.session);
       const loadedAt = Date.now(); setWorkSessionLoadedAt(loadedAt); setWorkSessionNow(loadedAt);
       if (data.taskCompleted) { closeDetail(); await pullFromServer(); await loadDayPlan(workspaceId, calendarToday).catch(() => undefined); }
-    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : "Work session failed"); }
+    } catch (error) { setWorkSessionStatus(error instanceof Error ? error.message : tr("workSessionFailed")); }
     finally { setWorkSessionBusy(false); }
   }
 
@@ -119,8 +115,9 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
     setDayPlan(null);
     setDayPlanStatus("");
     loadDayPlan(workspaceId, calendarToday)
-      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(language === "cs" ? "Plán dne se nepodařilo načíst." : "The day plan is unavailable."); });
-  }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items]);
+      .catch(() => { if (calendarWorkspaceSelection.current === workspaceId) setDayPlanStatus(tr("theDayPlanIs")); });
+    // A language change loads again, so a failure that still lasts is reported in the new language.
+  }, [authState, activeWorkspaceId, writeWorkspaceId, calendarToday, items, language]);
   useEffect(() => {
     if (authState !== "ready") return;
     const refresh = () => {
@@ -136,12 +133,13 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, ite
   useEffect(() => {
     if (authState !== "ready") return;
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
-    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : "Work session unavailable"));
+    setWorkSessionStatus("");
+    loadWorkSession(workspaceId).catch((error) => setWorkSessionStatus(error instanceof Error ? error.message : tr("workSessionUnavailable")));
     const refresh = () => { if (document.visibilityState === "visible") loadWorkSession(workspaceId).catch(() => undefined); };
     const poll = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
     return () => { workSessionLoadVersion.current += 1; window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [authState, activeWorkspaceId, writeWorkspaceId]);
+  }, [authState, activeWorkspaceId, writeWorkspaceId, language]);
   useEffect(() => {
     if (workSession?.state !== "running") return;
     const timer = window.setInterval(() => setWorkSessionNow(Date.now()), 1000);

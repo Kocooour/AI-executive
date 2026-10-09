@@ -129,10 +129,15 @@ export function useLumiApp() {
   const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
     pullFromServer } = useSync();
-  const tr = (key: string) => copy[language][key] || key;
+  // The translator reads the current language when it is called, so a message set after a request
+  // that was started before a language change is shown in the new language.
+  const languageRef = useRef(language);
+  languageRef.current = language;
+  const tr = (key: string) => copy[languageRef.current][key] || key;
   const { authState, setAuthState, authStateRef, authEnabled, authPassword, setAuthPassword, authError, authNotice,
     sessionEndedHere, checkAccess, login, signInWithPasskey, passkeySupported, passkeyBusy, setPasskeyBusy } = useSignIn({
     tr,
+    language,
     answerConfirm,
     isSignedOut: () => signedOut.current,
     afterSignIn: () => {
@@ -142,31 +147,24 @@ export function useLumiApp() {
       return pullFromServer(true);
     },
   });
+  // Relation and change labels in Context: `predicate_<name>` in the dictionary; an unknown one is
+  // shown as it is.
   const contextPredicateLabel = (predicate: string) => {
-    const labels: Record<string, [string, string]> = {
-      waiting_for: ["Na výsledek čeká", "Waiting for result"],
-      responsible_for: ["Odpovídá za", "Responsible for"],
-      works_for: ["Pracuje pro", "Works for"],
-      participates_in: ["Účastní se", "Participates in"],
-      assigned_to: ["Přiřazeno", "Assigned to"],
-      blocked_by: ["Blokuje", "Blocked by"],
-      related_to: ["Souvisí s", "Related to"],
-      create: ["Vytvořeno", "Created"], rename: ["Přejmenováno", "Renamed"], archive: ["Archivováno", "Archived"],
-      update: ["Upraveno", "Updated"], review: ["Zkontrolováno", "Reviewed"],
-    };
-    return labels[predicate]?.[language === "cs" ? 0 : 1] || predicate;
+    const key = `predicate_${predicate}`;
+    const label = tr(key);
+    return label === key ? predicate : label;
   };
   const contextSubjectTypeLabel = (type: string) => {
-    if (type === "person") return language === "cs" ? "Osoba" : "Person";
-    if (type === "organization") return language === "cs" ? "Organizace" : "Organization";
+    if (type === "person") return tr("person");
+    if (type === "organization") return tr("organization");
     return tr(type);
   };
   const contextInboxReason = (reason: ContextInboxProposal["reason"] | ContextInboxTaskDraft["reason"]) => ({
-    waiting: language === "cs" ? "Text zmiňuje osobu nebo stranu čekající na výsledek." : "The text mentions a person or party waiting for the result.",
-    importance: language === "cs" ? "Text výslovně popisuje prioritu nebo důležitost." : "The text explicitly describes priority or importance.",
-    deadline: language === "cs" ? "Text obsahuje výslovný termín." : "The text contains an explicit deadline.",
-    preference: language === "cs" ? "Text obsahuje preferenci nebo omezení." : "The text contains a preference or constraint.",
-    action_item: language === "cs" ? "Řádek vypadá jako akční položka. Před vytvořením jej zkontrolujte v rychlém zadání." : "This line looks like an action item. Review it in Quick Capture before creating it.",
+    waiting: tr("theTextMentionsA"),
+    importance: tr("theTextExplicitlyDescribes"),
+    deadline: tr("theTextContainsAn"),
+    preference: tr("theTextContainsA"),
+    action_item: tr("thisLineLooksLike"),
   })[reason];
   const taskDraftCaptureText = (task: ContextInboxTaskDraft) => {
     const localDate = task.suggestedDate
@@ -247,7 +245,7 @@ export function useLumiApp() {
         }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Assistant request failed.");
+      if (!response.ok) throw new Error(result.error || tr("assistantRequestFailed"));
       setMessages([...history, {
         role: "assistant",
         content: result.message,
@@ -256,7 +254,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages([...history, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "Assistant request failed.",
+        content: error instanceof Error ? error.message : tr("assistantRequestFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -273,7 +271,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action, proposalId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "AI action failed.");
+      if (!response.ok) throw new Error(result.error || tr("aiActionFailed"));
       setMessages((current) => [
         ...current.map((message) =>
           message.proposal?.id === proposalId || (action === "confirm" && message.actionId)
@@ -290,7 +288,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages((current) => [...current, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "AI action failed.",
+        content: error instanceof Error ? error.message : tr("aiActionFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -307,7 +305,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action: "undo", actionId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Undo failed.");
+      if (!response.ok) throw new Error(result.error || tr("undoFailed"));
       setMessages((current) => [
         ...current.map((message) => message.actionId === actionId ? { ...message, resolved: true } : message),
         { role: "assistant", content: result.message },
@@ -316,7 +314,7 @@ export function useLumiApp() {
     } catch (error) {
       setMessages((current) => [...current, {
         role: "assistant",
-        content: error instanceof Error ? error.message : "Undo failed.",
+        content: error instanceof Error ? error.message : tr("undoFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -326,7 +324,7 @@ export function useLumiApp() {
 
   async function loadAgents(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/executive?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Agents are unavailable");
+    if (!response.ok) throw new Error(tr("agentsUnavailable"));
     const data = await response.json();
     setPactAgents(Array.isArray(data.agents) ? data.agents : []);
     setAgentRuns(Array.isArray(data.agentRuns) ? data.agentRuns : []);
@@ -345,11 +343,11 @@ export function useLumiApp() {
         body: JSON.stringify({ agentId, workspaceId, language }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Agent run failed");
+      if (!response.ok) throw new Error(data.error || tr("agentRunFailed"));
       if (data.agentResult) setAgentResult(data.agentResult as PACTAgentResult);
       await loadAgents(workspaceId);
     } catch (error) {
-      setAgentStatus(error instanceof Error ? error.message : "Agent run failed");
+      setAgentStatus(error instanceof Error ? error.message : tr("agentRunFailed"));
     } finally {
       setAgentBusyId("");
     }
@@ -360,7 +358,7 @@ export function useLumiApp() {
     const from = Date.now() - 24 * 60 * 60_000;
     const to = Date.now() + 14 * 24 * 60 * 60_000;
     const response = await fetch(`/api/calendar?workspaceId=${encodeURIComponent(workspaceId)}&from=${from}&to=${to}`, { cache: "no-store" });
-    if (!response.ok) throw new Error("Calendar is unavailable");
+    if (!response.ok) throw new Error(tr("calendarUnavailable"));
     const data = await response.json();
     if (loadVersion !== calendarLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setCalendarSources(Array.isArray(data.sources) ? data.sources : []);
@@ -379,15 +377,15 @@ export function useLumiApp() {
         body: JSON.stringify({ action, sourceId, workspaceId, label: calendarLabel, url: calendarUrl }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Calendar action failed");
+      if (!response.ok) throw new Error(data.error || tr("calendarActionFailed"));
       setCalendarUrl("");
       await loadCalendar(workspaceId);
       await loadDayPlan(workspaceId, calendarToday);
-      setCalendarStatus(action === "connect" ? "Kalendář je připojený pouze pro čtení." : action === "refresh" ? "Kalendář byl obnoven." : "Kalendář byl odpojen a jeho data odstraněna.");
+      setCalendarStatus(tr(action === "connect" ? "calendarConnectedReadOnly" : action === "refresh" ? "calendarRefreshed" : "calendarWasDisconnected"));
     } catch (error) {
       setCalendarUrl("");
       await loadCalendar(workspaceId).catch(() => undefined);
-      setCalendarStatus(error instanceof Error ? error.message : "Calendar action failed");
+      setCalendarStatus(error instanceof Error ? error.message : tr("calendarActionFailed"));
     } finally {
       setCalendarBusy(false);
     }
@@ -396,7 +394,7 @@ export function useLumiApp() {
   async function loadDurableContext(workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId) {
     const response = await fetch(`/api/context?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Context is unavailable");
+    if (!response.ok) throw new Error(data.error || tr("contextUnavailable"));
     setDurableContext(Array.isArray(data.items) ? data.items : []);
   }
 
@@ -416,14 +414,14 @@ export function useLumiApp() {
         } : { action, workspaceId, id }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context action failed");
+      if (!response.ok) throw new Error(data.error || tr("contextActionFailed"));
       if (action === "create") {
         setContextTitle(""); setContextContent(""); setContextProjectId("");
-        setContextStatus(language === "cs" ? "Kontext byl uložen." : "Context saved.");
+        setContextStatus(tr("contextSaved"));
       }
       await loadDurableContext(workspaceId);
     } catch (error) {
-      setContextStatus(error instanceof Error ? error.message : "Context action failed");
+      setContextStatus(error instanceof Error ? error.message : tr("contextActionFailed"));
     } finally {
       setContextBusy(false);
     }
@@ -433,7 +431,7 @@ export function useLumiApp() {
     const loadVersion = ++contextClaimLoadVersion.current;
     const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "Context claims are unavailable");
+    if (!response.ok) throw new Error(data.error || tr("contextClaimsUnavailable"));
     if (loadVersion !== contextClaimLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     setContextClaims(Array.isArray(data.claims) ? data.claims : []);
   }
@@ -441,7 +439,7 @@ export function useLumiApp() {
   async function loadStandaloneSubjects(workspaceId = calendarWorkspaceSelection.current) {
     const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&includeArchived=true`, { cache: "no-store" });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "People and organizations are unavailable");
+    if (!response.ok) throw new Error(data.error || tr("subjectsUnavailable"));
     if (calendarWorkspaceSelection.current === workspaceId) setStandaloneSubjects(Array.isArray(data.subjects) ? data.subjects : []);
   }
 
@@ -455,12 +453,12 @@ export function useLumiApp() {
           id: subject?.id || crypto.randomUUID(), expectedRevision: subject?.revision || 0,
           type: newSubjectType, title: subject ? subjectEditTitle : newSubjectTitle }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (language === "cs" ? "Tato osoba nebo organizace už existuje. Vyberte ji ze seznamu." : "This person or organization already exists. Choose it from the list.") : data.error || "Subject action failed");
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : data.error || tr("subjectActionFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId); await loadContextClaims(workspaceId);
       setNewSubjectTitle(""); setSubjectEditId(""); setSubjectEditTitle("");
-      setSubjectStatus(language === "cs" ? "Uloženo." : "Saved.");
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(error instanceof Error ? error.message : "Subject action failed"); }
+      setSubjectStatus(tr("saved"));
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(error instanceof Error ? error.message : tr("subjectActionFailed")); }
     finally { setSubjectBusy(false); }
   }
 
@@ -469,19 +467,19 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/subjects?workspaceId=${encodeURIComponent(workspaceId)}&historyId=${encodeURIComponent(subject.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "History unavailable");
+      if (!response.ok) throw new Error(data.error || tr("historyUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setSubjectHistory((current) => ({ ...current, [subject.id]: Array.isArray(data.history) ? data.history : [] }));
-    } catch (error) { setSubjectStatus(error instanceof Error ? error.message : "History unavailable"); }
+    } catch (error) { setSubjectStatus(error instanceof Error ? error.message : tr("historyUnavailable")); }
   }
 
   async function reloadContextClaims() {
     const workspaceId = calendarWorkspaceSelection.current;
-    setClaimStatus(language === "cs" ? "Načítám…" : "Reloading…");
+    setClaimStatus(tr("reloading"));
     try {
       await loadContextClaims(workspaceId);
-      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(language === "cs" ? "Tvrzení byla obnovena; rozepsaný návrh zůstal zachován." : "Claims reloaded; your draft was preserved.");
+      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(tr("claimsReloadedYourDraft"));
     } catch (error) {
-      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : "Context claims are unavailable");
+      if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("contextClaimsUnavailable"));
     }
   }
 
@@ -490,9 +488,9 @@ export function useLumiApp() {
     try {
       const response = await fetch(`/api/context/claims?workspaceId=${encodeURIComponent(workspaceId)}&claimId=${encodeURIComponent(claim.id)}`, { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Claim history unavailable");
+      if (!response.ok) throw new Error(data.error || tr("claimHistoryUnavailable"));
       if (calendarWorkspaceSelection.current === workspaceId) setClaimHistory((current) => ({ ...current, [claim.id]: Array.isArray(data.history) ? data.history : [] }));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : "Claim history unavailable"); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("claimHistoryUnavailable")); }
   }
 
   function resetClaimDraft() {
@@ -536,7 +534,7 @@ export function useLumiApp() {
     const workspaceId = calendarWorkspaceSelection.current;
     const claimId = editingClaim?.id || crypto.randomUUID();
     setClaimBusyId(claimId);
-    setClaimStatus(language === "cs" ? "Ukládám…" : "Saving…");
+    setClaimStatus(tr("saving"));
     try {
       const parsedValue = claimValueType === "number" ? Number(claimValue)
         : claimValueType === "boolean" ? claimValue === "true" : claimValue;
@@ -559,16 +557,16 @@ export function useLumiApp() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 409) throw new Error(language === "cs" ? "Konflikt: tvrzení se změnilo na jiném zařízení. Návrh zůstal zachován; použijte Obnovit tvrzení a potom otevřete aktuální verzi." : "Conflict: the claim changed on another device. Your draft was kept; use Reload claims, then open the current version.");
-        throw new Error(data.error || "Context claim could not be saved");
+        if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
+        throw new Error(data.error || tr("claimSaveFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
       resetClaimDraft();
-      setClaimStatus(language === "cs" ? "Uloženo. Nové tvrzení čeká na kontrolu." : "Saved. A new claim awaits review.");
+      setClaimStatus(tr("savedANewClaim"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : "Context claim could not be saved");
+        setClaimStatus(error instanceof Error ? error.message : tr("claimSaveFailed"));
       }
     } finally {
       setClaimBusyId("");
@@ -579,7 +577,7 @@ export function useLumiApp() {
     if (claimBusyId) return;
     const workspaceId = calendarWorkspaceSelection.current;
     setClaimBusyId(claim.id);
-    setClaimStatus(language === "cs" ? "Ukládám…" : "Saving…");
+    setClaimStatus(tr("saving"));
     try {
       const response = await fetch("/api/context/claims", {
         method: "POST", headers: { "content-type": "application/json" },
@@ -588,15 +586,15 @@ export function useLumiApp() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 409) throw new Error(language === "cs" ? "Konflikt: načtěte aktuální verzi tvrzení." : "Conflict: reload the current claim version.");
-        throw new Error(data.error || "Context claim action failed");
+        if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
+        throw new Error(data.error || tr("claimActionFailed"));
       }
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
-      setClaimStatus(language === "cs" ? "Uloženo." : "Saved.");
+      setClaimStatus(tr("saved"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : "Context claim action failed");
+        setClaimStatus(error instanceof Error ? error.message : tr("claimActionFailed"));
       }
     } finally {
       setClaimBusyId("");
@@ -611,12 +609,12 @@ export function useLumiApp() {
       const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "preview", workspaceId, text: contextInboxText }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context preview failed");
+      if (!response.ok) throw new Error(data.error || tr("contextPreviewFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals(Array.isArray(data.proposals) ? data.proposals : []);
       setContextInboxTasks(Array.isArray(data.taskDrafts) ? data.taskDrafts : []);
-      setContextInboxStatus(language === "cs" ? "Náhled je připravený. Původní text nebyl uložen." : "Preview ready. The original text was not stored.");
-    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : "Context preview failed"); }
+      setContextInboxStatus(tr("previewReadyTheOriginal"));
+    } catch (error) { setContextInboxStatus(error instanceof Error ? error.message : tr("contextPreviewFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -634,12 +632,12 @@ export function useLumiApp() {
         validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Context proposal could not be saved");
+      if (!response.ok) throw new Error(data.error || tr("contextProposalSaveFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       await loadContextClaims(workspaceId);
-      setContextInboxStatus(language === "cs" ? "Návrh byl přidán do fronty ke kontrole." : "Proposal added to the review queue.");
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : "Context proposal could not be saved"); }
+      setContextInboxStatus(tr("proposalAddedToThe"));
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("contextProposalSaveFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -654,12 +652,12 @@ export function useLumiApp() {
         type: proposal.suggestedTarget.type, title: proposal.suggestedTarget.title,
       }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (language === "cs" ? "Osoba už existuje; vyberte ji ze seznamu." : "Person exists; select them from the list.") : data.error || "Could not create person");
+      if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : data.error || tr("personCreateFailed"));
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId);
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
-      setContextInboxStatus(language === "cs" ? "Osoba vytvořena. Vztah uložte samostatně ke kontrole." : "Person created. Save the relationship separately for review.");
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : "Could not create person"); }
+      setContextInboxStatus(tr("personCreatedSaveThe"));
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("personCreateFailed")); }
     finally { setContextInboxBusy(""); }
   }
 
@@ -670,7 +668,7 @@ export function useLumiApp() {
     setCalendarSources([]);
     setCalendarEvents([]);
     loadCalendar(workspaceId).catch(() => undefined);
-    loadDurableContext(workspaceId).catch(() => setContextStatus(language === "cs" ? "Kontext nelze načíst." : "Context is unavailable."));
+    loadDurableContext(workspaceId).catch(() => setContextStatus(tr("contextIsUnavailable")));
     setContextClaims([]);
     setClaimHistory({});
     setStandaloneSubjects([]);
@@ -686,8 +684,8 @@ export function useLumiApp() {
       setClaimStatus("");
       resetClaimDraft();
     }
-    loadContextClaims(workspaceId).catch(() => setClaimStatus(language === "cs" ? "Strukturovaný kontext nelze načíst." : "Structured context is unavailable."));
-    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(language === "cs" ? "Osoby a organizace nelze načíst." : "People and organizations are unavailable."));
+    loadContextClaims(workspaceId).catch(() => setClaimStatus(tr("structuredContextIsUnavailable")));
+    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(tr("peopleAndOrganizationsAre")));
   }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
@@ -864,6 +862,26 @@ export function useLumiApp() {
   }
   // The message is about a moment in time: drop it when the user moves on or the data is in sync again.
   useEffect(() => { setLogoutError(""); }, [view]);
+  // Status lines shown in one language are not kept after the language changes. The loads whose
+  // failure is reported in a status line run again, so a failure that still lasts is reported in
+  // the new language rather than hidden.
+  const statusLanguage = useRef(language);
+  useEffect(() => {
+    if (statusLanguage.current === language) return;
+    statusLanguage.current = language;
+    setCalendarStatus("");
+    setAgentStatus("");
+    setContextStatus("");
+    setSubjectStatus("");
+    setClaimStatus("");
+    setContextInboxStatus("");
+    setLogoutError("");
+    if (authState !== "ready") return;
+    const workspaceId = calendarWorkspaceSelection.current;
+    loadDurableContext(workspaceId).catch(() => setContextStatus(tr("contextIsUnavailable")));
+    loadContextClaims(workspaceId).catch(() => setClaimStatus(tr("structuredContextIsUnavailable")));
+    loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(tr("peopleAndOrganizationsAre")));
+  }, [language]);
   useEffect(() => { if (syncStatus === "synced") setLogoutError(""); }, [syncStatus]);
   // Another tab signed out: its data must not stay on screen here or be written back locally.
   useEffect(() => {
@@ -1017,7 +1035,8 @@ export function useLumiApp() {
         setNotificationState(notificationData as NotificationState);
       })
       .catch(() => setBackupStatus(tr("serverSettingsOffline")));
-  }, [view, authState]);
+    // Also after a language change: the status was cleared, and a failure is reported again.
+  }, [view, authState, language]);
 
   useEffect(() => {
     const refresh = () => {
@@ -1105,7 +1124,7 @@ export function useLumiApp() {
           signal: controller.signal,
         });
         const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || "Suggestion failed");
+        if (!response.ok) throw new Error(body.error || tr("suggestionFailed"));
         if (captureSuggestionVersion.current !== version) return;
         const suggestion = body.suggestion as CaptureSuggestion;
         suggestion.newProjectSuggestion = suggestion.newProjectSuggestion || null;
@@ -1294,7 +1313,7 @@ export function useLumiApp() {
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
-    testNotification, saveNotificationSettings } = useNotifications({ tr });
+    testNotification, saveNotificationSettings } = useNotifications({ tr, language });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
   const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -1304,10 +1323,10 @@ export function useLumiApp() {
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
-    removePasskey } = usePasskeys({ view, authState, tr, askConfirm, setPasskeyBusy });
+    removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
-  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds });
+  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
