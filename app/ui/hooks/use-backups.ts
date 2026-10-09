@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ServerSnapshot } from "../../../lib/server-sync";
+import { clearAllMarkers } from "../../../lib/pending-markers";
 import type { BackupSummary, ConfirmRequest, Language } from "../types";
 
 // Server backups in Settings: the list, creating a backup and restoring one. Restoring replaces
@@ -52,8 +53,7 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, pendingKey
       const data = await response.json();
       await applySnapshot(data.snapshot as ServerSnapshot);
       localStorage.removeItem(pendingKey);
-      localStorage.removeItem(deletedKey);
-      localStorage.removeItem(revivedKey);
+      clearAllMarkers(localStorage);
       setBackupStatus(tr("backupRestored"));
       const listResponse = await fetch("/api/backups", { cache: "no-store" });
       const list = await listResponse.json();

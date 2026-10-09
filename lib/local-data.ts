@@ -1,5 +1,7 @@
 import { db } from "./db";
-import { keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
+import { clearAllMarkers } from "./pending-markers";
+import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
+import { clearOpenTexts } from "./open-texts";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
 // Device preferences (theme, language, start view) are not user data and stay.
@@ -34,6 +36,11 @@ export async function hasUnsentChanges() {
 export async function clearLocalData(timeoutMs = 4000) {
   localStorage.setItem(wipePendingKey, "1");
   localDataKeys.forEach((key) => localStorage.removeItem(key));
+  // Deletions and restorations waiting to be sent are one key each (lib/pending-markers.ts).
+  clearAllMarkers(localStorage);
+  // So are notes drafts and the notes of open texts, one per tab.
+  clearNotesDrafts(localStorage);
+  clearOpenTexts(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
   localStorage.setItem(serverSyncedKey, "1");
   const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {

@@ -1,72 +1,128 @@
 // The bookkeeping of changes waiting to be sent is shared by all tabs of the browser
-// (localStorage): the "waiting" mark, and the records deleted or restored here. Each deletion and
-// restoration is kept as its own entry (record id + operation id). A save removes exactly the
-// entries it has sent, so what another tab recorded meanwhile stays for that tab's own save, even
-// for the same record (deleted, restored and deleted again while the first save was on its way).
+// (localStorage): the "waiting" mark, and the records deleted or restored here.
+//
+// Tabs write to localStorage independently, so nothing here reads a shared value, changes it and
+// writes it back: another tab's write in between would be lost (a lost deletion mark brings the
+// record back from the server). Instead every deletion and restoration is its own key, written
+// once (`ai-executive-pending-deletions:<operation>` holding the record id), and only ever removed
+// as a whole. A save removes exactly the keys it has sent, so what another tab recorded meanwhile
+// stays for that tab's own save, even for the same record (deleted, restored and deleted again
+// while the first save was on its way). The "waiting" mark comes with a token that every request
+// for a save replaces; a save removes the mark only if the token is still the one it saw.
 
 export const pendingKey = "ai-executive-pending-sync";
 export const deletedKey = "ai-executive-pending-deletions";
 export const revivedKey = "ai-executive-pending-revivals";
 export const pendingSeqKey = "ai-executive-pending-seq";
 
-type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-export type Marker = { id: string; op: string };
+type Store = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
+// `key`: the storage key holding this entry. `op` orders operations: it starts with the time.
+export type Marker = { id: string; op: string; key: string };
 
-function entries(storage: Store, key: string): Marker[] {
-  try {
-    const value = JSON.parse(storage.getItem(key) || "[]");
-    if (!Array.isArray(value)) return [];
-    // Older versions kept plain ids.
-    return value.flatMap((item) => typeof item === "string" ? [{ id: item, op: `legacy:${item}` }]
-      : item && typeof item.id === "string" && typeof item.op === "string" ? [{ id: item.id, op: item.op }] : []);
-  } catch {
-    return [];
+let counter = 0;
+const tab = Math.random().toString(36).slice(2, 10);
+const newOp = () => `${Date.now().toString(36).padStart(10, "0")}-${tab}-${(counter += 1).toString(36).padStart(6, "0")}`;
+
+function keysWithPrefix(storage: Store, prefix: string) {
+  const keys: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key && key.startsWith(prefix)) keys.push(key);
+  }
+  return keys;
+}
+
+// Older versions kept one shared list per kind (of plain ids, then of {id, op}). Its entries are
+// moved to keys of their own; if two tabs do this at once an entry is there twice, which is
+// harmless (only the record ids are sent).
+function migrateLegacy(storage: Store) {
+  for (const listKey of [deletedKey, revivedKey]) {
+    const raw = storage.getItem(listKey);
+    if (raw === null) continue;
+    try {
+      const value = JSON.parse(raw);
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+          const id = typeof item === "string" ? item : item && typeof item.id === "string" ? item.id : "";
+          if (id) storage.setItem(`${listKey}:${"0".repeat(10)}-legacy-${String(index).padStart(6, "0")}`, id);
+        });
+      }
+    } catch {
+      // Not readable: nothing to keep.
+    }
+    storage.removeItem(listKey);
   }
 }
 
-function store(storage: Store, key: string, list: Marker[]) {
-  if (list.length) storage.setItem(key, JSON.stringify(list));
-  else storage.removeItem(key);
+function entries(storage: Store, listKey: string): Marker[] {
+  return keysWithPrefix(storage, `${listKey}:`).flatMap((key) => {
+    const id = storage.getItem(key);
+    return id ? [{ id, op: key.slice(listKey.length + 1), key }] : [];
+  });
 }
 
-const unique = (list: Marker[]) => [...new Set(list.map((marker) => marker.id))];
-let counter = 0;
-const newOp = () => `${Date.now().toString(36)}-${(counter += 1).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+// When two tabs delete and restore the same record at the same moment, both entries can remain:
+// the later operation decides. The other one counts as handled when that is sent.
+function current(storage: Store) {
+  migrateLegacy(storage);
+  const deletedEntries = entries(storage, deletedKey), revivedEntries = entries(storage, revivedKey);
+  const latest = new Map<string, { op: string; kind: "deleted" | "revived" }>();
+  for (const [kind, list] of [["deleted", deletedEntries], ["revived", revivedEntries]] as const) {
+    for (const marker of list) {
+      const known = latest.get(marker.id);
+      if (!known || marker.op > known.op) latest.set(marker.id, { op: marker.op, kind });
+    }
+  }
+  const of = (kind: "deleted" | "revived") => [...latest].filter(([, value]) => value.kind === kind).map(([id]) => id);
+  return { deletedEntries, revivedEntries, deleted: of("deleted"), revived: of("revived") };
+}
 
-export const pendingDeletedIds = (storage: Store) => unique(entries(storage, deletedKey));
-export const pendingRevivedIds = (storage: Store) => unique(entries(storage, revivedKey));
+export const pendingDeletedIds = (storage: Store) => current(storage).deleted;
+export const pendingRevivedIds = (storage: Store) => current(storage).revived;
+
+// Removes the entries of one record of one kind (each key as a whole).
+function drop(storage: Store, listKey: string, id: string) {
+  for (const marker of entries(storage, listKey)) if (marker.id === id) storage.removeItem(marker.key);
+}
 
 // A record deleted here: a restoration of it not sent yet is replaced by the deletion.
 export function recordDeleted(storage: Store, id: string) {
-  store(storage, revivedKey, entries(storage, revivedKey).filter((marker) => marker.id !== id));
-  store(storage, deletedKey, [...entries(storage, deletedKey).filter((marker) => marker.id !== id), { id, op: newOp() }]);
+  migrateLegacy(storage);
+  drop(storage, revivedKey, id);
+  storage.setItem(`${deletedKey}:${newOp()}`, id);
 }
 
 // A deleted record restored here: a deletion of it not sent yet is replaced by the restoration.
 export function recordRevived(storage: Store, id: string) {
-  store(storage, deletedKey, entries(storage, deletedKey).filter((marker) => marker.id !== id));
-  store(storage, revivedKey, [...entries(storage, revivedKey).filter((marker) => marker.id !== id), { id, op: newOp() }]);
+  migrateLegacy(storage);
+  drop(storage, deletedKey, id);
+  storage.setItem(`${revivedKey}:${newOp()}`, id);
 }
 
-const pendingSeq = (storage: Store) => Number(storage.getItem(pendingSeqKey)) || 0;
-
-// A change waits to be sent; every call counts, so a save can tell whether one came after it.
+// A change waits to be sent. Every call sets a new token, so a save can tell whether one came
+// after it.
 export function markPending(storage: Store) {
   storage.setItem(pendingKey, "1");
-  storage.setItem(pendingSeqKey, String(pendingSeq(storage) + 1));
+  storage.setItem(pendingSeqKey, newOp());
 }
 
-export type SentMarkers = { seq: number; deletedEntries: Marker[]; revivedEntries: Marker[]; deleted: string[]; revived: string[] };
+export type SentMarkers = { seq: string; deletedEntries: Marker[]; revivedEntries: Marker[]; deleted: string[]; revived: string[] };
 
 export function captureMarkers(storage: Store): SentMarkers {
-  const deletedEntries = entries(storage, deletedKey), revivedEntries = entries(storage, revivedKey);
-  return { seq: pendingSeq(storage), deletedEntries, revivedEntries, deleted: unique(deletedEntries), revived: unique(revivedEntries) };
+  const { deletedEntries, revivedEntries, deleted, revived } = current(storage);
+  return { seq: storage.getItem(pendingSeqKey) || "", deletedEntries, revivedEntries, deleted, revived };
 }
 
 export function clearSentMarkers(storage: Store, sent: SentMarkers) {
-  const sentOps = (list: Marker[]) => new Set(list.map((marker) => `${marker.id}\u0000${marker.op}`));
-  const deletedOps = sentOps(sent.deletedEntries), revivedOps = sentOps(sent.revivedEntries);
-  store(storage, deletedKey, entries(storage, deletedKey).filter((marker) => !deletedOps.has(`${marker.id}\u0000${marker.op}`)));
-  store(storage, revivedKey, entries(storage, revivedKey).filter((marker) => !revivedOps.has(`${marker.id}\u0000${marker.op}`)));
-  if (pendingSeq(storage) === sent.seq) storage.removeItem(pendingKey);
+  for (const marker of [...sent.deletedEntries, ...sent.revivedEntries]) storage.removeItem(marker.key);
+  if ((storage.getItem(pendingSeqKey) || "") === sent.seq) storage.removeItem(pendingKey);
+}
+
+// All of this bookkeeping (a restored backup replaces the data; signing out removes it).
+export function clearAllMarkers(storage: Store) {
+  for (const listKey of [deletedKey, revivedKey]) {
+    keysWithPrefix(storage, `${listKey}:`).forEach((key) => storage.removeItem(key));
+    storage.removeItem(listKey);
+  }
+  storage.removeItem(pendingSeqKey);
 }

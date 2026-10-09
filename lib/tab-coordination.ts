@@ -21,22 +21,32 @@ export function withSyncLock<T>(work: () => Promise<T>): Promise<T> {
 }
 
 // True when the local copy holds something that `known` (what this device knows the server has)
-// does not: a record or relation added, changed or removed here. Records are compared by
-// updatedAt: every local write sets a new one (all write paths in use-lumi-app.tsx, lib/tools.ts);
-// a write that did not would not be seen here. Relations are compared by their identity.
+// does not: a record or relation added, changed or removed here. Records are compared by their
+// whole content, not only by updatedAt: two tabs can write the same record within the same
+// millisecond (each tab's clock is strictly increasing, lib/clock.ts, but not across tabs), and a
+// change of any field, properties included, must count. Relations are compared by their identity.
 export function hasChangesBeyond(entities: Entity[], relations: Relation[], known: { entities: Entity[]; relations: Relation[] }) {
   if (entities.length !== known.entities.length || relations.length !== known.relations.length) return true;
   const knownEntities = new Map(known.entities.map((entity) => [entity.id, entity]));
   for (const entity of entities) {
     const previous = knownEntities.get(entity.id);
     if (!previous || previous.updatedAt !== entity.updatedAt) return true;
-    // Local writes get strictly increasing times (lib/clock.ts); as a cheap second check, the
-    // plain fields of a record with the same time must match too.
-    if (previous.title !== entity.title || previous.status !== entity.status || previous.content !== entity.content || previous.workspaceId !== entity.workspaceId) return true;
+    if (previous !== entity && stableJson(previous) !== stableJson(entity)) return true;
   }
   const relationKey = (relation: Relation) => `${relation.id}|${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}|${relation.workspaceId}`;
   const knownRelations = new Set(known.relations.map(relationKey));
   return relations.some((relation) => !knownRelations.has(relationKey(relation)));
+}
+
+// JSON with object keys in a fixed order, so that equal content gives equal text.
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 export type TabMessage =

@@ -190,7 +190,7 @@ test("a task deleted in one tab while another tab is saving is deleted on the se
   await saver.locator(".capture input").press("Enter");
   await expect.poll(() => saving).toBe(true);
   await deleter.locator(".detail button.danger, button.danger", { hasText: "Smazat" }).last().click();
-  await expect.poll(() => deleter.evaluate(() => localStorage.getItem("ai-executive-pending-deletions") || "")).toContain(id);
+  await expect.poll(() => deleter.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("ai-executive-pending-deletions:")).map((key) => localStorage.getItem(key)))).toContain(id);
   release();
   await expectOnServer(saver, (entity) => entity.title === kept, true);
   await expectOnServer(saver, (entity) => entity.id === id, false);
@@ -202,12 +202,12 @@ test("a task deleted in one tab while another tab is saving is deleted on the se
 test("signing out asks about text noted by a tab that does not answer", async ({ page }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
-  await page.evaluate(() => localStorage.setItem("ai-executive-open-texts", JSON.stringify({ "sleeping-tab": { kinds: ["title"], at: Date.now() } })));
+  await page.evaluate(() => localStorage.setItem("ai-executive-open-texts:sleeping-tab", JSON.stringify({ kinds: ["title"], at: Date.now() })));
   await settingsSections(page).filter({ hasText: "Přístup" }).click();
   await page.getByRole("button", { name: "Odhlásit se" }).click();
   const question = page.locator("dialog.confirmDialog");
   await expect(question).toContainText("Neuložený text v jiné kartě");
   await question.getByRole("button", { name: "Zrušit" }).click();
   await expect(page.locator(".authCard")).toHaveCount(0);
-  await page.evaluate(() => localStorage.removeItem("ai-executive-open-texts"));
+  await page.evaluate(() => localStorage.removeItem("ai-executive-open-texts:sleeping-tab"));
 });

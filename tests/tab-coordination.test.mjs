@@ -36,3 +36,12 @@ test("local write times are strictly increasing", async () => {
   assert.ok(times.every((time, index) => index === 0 || time > times[index - 1]));
   assert.ok(times.every((time) => Number.isSafeInteger(time)));
 });
+
+test("a change of a property written by another tab in the same millisecond counts", () => {
+  const base = { id: "t", type: "task", title: "T", status: "open", workspaceId: "personal", properties: { priority: "low" }, createdAt: 1, updatedAt: 1000 };
+  const otherTab = { ...base, properties: { priority: "high" } };
+  assert.equal(hasChangesBeyond([otherTab], [], { entities: [base], relations: [] }), true);
+  // Same content with keys in another order (or an undefined value) is not a change.
+  const reordered = { updatedAt: 1000, createdAt: 1, properties: { priority: "low", gone: undefined }, workspaceId: "personal", status: "open", title: "T", type: "task", id: "t" };
+  assert.equal(hasChangesBeyond([reordered], [], { entities: [base], relations: [] }), false);
+});

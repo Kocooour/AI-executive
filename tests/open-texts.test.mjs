@@ -5,7 +5,8 @@ const { otherOpenTexts, renewOpenTexts, setOpenTexts, openTextsMaxAgeMs } = awai
 
 function memoryStorage() {
   const values = new Map();
-  return { getItem: (key) => (values.has(key) ? values.get(key) : null), setItem: (key, value) => values.set(key, String(value)), removeItem: (key) => values.delete(key) };
+  return { getItem: (key) => (values.has(key) ? values.get(key) : null), setItem: (key, value) => values.set(key, String(value)), removeItem: (key) => values.delete(key),
+    key: (index) => [...values.keys()][index] ?? null, get length() { return values.size; }, values };
 }
 
 test("open texts of other tabs are counted, the own and cleared ones are not", () => {
@@ -23,5 +24,13 @@ test("a note of a tab long gone is ignored and removed when a tab is shown", () 
   const later = Date.now() + openTextsMaxAgeMs + 1;
   assert.deepEqual(otherOpenTexts(storage, "me", later), []);
   renewOpenTexts(storage, "me", later);
-  assert.equal(storage.getItem("ai-executive-open-texts"), null);
+  assert.equal(storage.values.size, 0);
+});
+
+test("each tab's note is a key of its own, written only by that tab", () => {
+  const storage = memoryStorage();
+  setOpenTexts(storage, "a", ["title"]);
+  setOpenTexts(storage, "b", ["capture"]);
+  assert.deepEqual([...storage.values.keys()].sort(), ["ai-executive-open-texts:a", "ai-executive-open-texts:b"]);
+  assert.deepEqual(otherOpenTexts(storage, "a").map(([owner]) => owner), ["b"]);
 });
