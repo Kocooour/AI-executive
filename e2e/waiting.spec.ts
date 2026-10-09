@@ -52,4 +52,12 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   await page.goto("/");
   await waitUntilSynced(page);
   await expect(page.locator(".attentionItem", { hasText: title })).toHaveCount(0);
+  // Marking it as waiting and closing the detail at once does not open the task again either.
+  await page.goto(`/?task=${id}`);
+  await waitUntilSynced(page);
+  await page.locator(".waitingField").getByLabel("Čeká na odpověď nebo na někoho jiného").click();
+  await page.locator(".detail button.close").click();
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waiting === true, true);
+  await page.waitForTimeout(300);
+  await expect(page.locator(".detail")).toHaveCount(0);
 });

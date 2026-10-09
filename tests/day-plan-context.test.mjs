@@ -57,3 +57,14 @@ test("a task waiting for someone is not offered in the day plan", () => {
   const result = plan.buildDayPlan("personal", today, now);
   assert.equal([...result.planBlocks, ...result.unscheduled].some((candidate) => candidate.taskId === "task:waiting"), false);
 });
+
+test("a task planned before it started waiting is left out of the day plan and takes no time", () => {
+  const start = new Date(now + 60 * 60_000);
+  start.setMinutes(0, 0, 0);
+  const end = new Date(start.getTime() + 30 * 60_000);
+  add({ id: "task:planned-waiting", type: "task", title: "Planned then waiting", status: "open", workspaceId: "personal",
+    properties: { when: today, plannedStart: start.toISOString(), plannedEnd: end.toISOString(), waiting: true }, createdAt: now, updatedAt: now });
+  const result = plan.buildDayPlan("personal", today, now);
+  const mentioned = JSON.stringify(result).includes("task:planned-waiting");
+  assert.equal(mentioned, false);
+});

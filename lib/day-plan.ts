@@ -112,6 +112,9 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   const existingBlocks: DayPlanItem[] = [];
   const occupied: Array<[number, number]> = [];
   for (const task of tasks) {
+    // A task that waits for someone or something is left out of the day plan, also when it was
+    // planned before it started waiting (it neither shows as a block nor takes the time).
+    if (task.properties.waiting === true) continue;
     const slot = interval(task);
     if (!slot || dateInZone(timezone, slot[0]) > date || dateInZone(timezone, slot[1] - 1) < date) continue;
     const learning = estimate(task, allTasks, timezone);

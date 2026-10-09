@@ -450,7 +450,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         // Starts clean: a date or name left by an earlier waiting (or merged in from
                         // another device) would otherwise come back with it.
                         ? { waiting: true, waitingSince: Date.now(), inbox: false, waitingFor: "", followUpDate: "" }
-                        : { waiting: false, waitingFor: "", waitingSince: null, followUpDate: "" }, event.target.checked ? "waiting started" : "waiting ended")}
+                        : { waiting: false, waitingFor: "", waitingSince: null, followUpDate: "" }, event.target.checked ? "waiting started" : "waiting ended", true)}
                     />
                     {tr("waitingToggle")}
                   </label>
@@ -473,7 +473,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         {tr("followUpDate")}
                         <FollowUpDateInput
                           value={String(selected.properties.followUpDate || "")}
-                          onSave={(value) => void patch(selected, { followUpDate: value }, "follow-up date changed")}
+                          onSave={(value) => void patch(selected, { followUpDate: value }, "follow-up date changed", true)}
                         />
                       </label>
                       <small>{tr("waitingHelp")}</small>
