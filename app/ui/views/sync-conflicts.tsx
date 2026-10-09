@@ -23,6 +23,8 @@ const fieldKeys: Record<string, string> = {
   "properties.checklist": "conflictField_checklist",
   "properties.placement": "conflictField_placement",
   "properties.waiting": "conflictField_waiting",
+  "properties.waitingFor": "conflictField_waitingFor",
+  "properties.followUpDate": "conflictField_followUp",
   "properties.blocked": "conflictField_blocked",
   "relation.belongs_to_project": "conflictField_project",
   "relation.belongs_to_area": "conflictField_area",

@@ -128,3 +128,20 @@ test("waiting items rank after deadlines and before project hygiene; a new date 
   assert.notEqual(moved[0].attentionKey, result[2].attentionKey);
   assert.equal(evaluate([waiting])[0].attentionKey, result[2].attentionKey);
 });
+
+test("a waiting time that is not a past time falls back to when the task was created", () => {
+  const created = NOW - 8 * DAY;
+  for (const waitingSince of [NOW + DAY, -5, 1.5, "soon", null]) {
+    const [item] = evaluate([entity("wait-bad", "task", { createdAt: created, updatedAt: NOW, properties: { waiting: true, waitingSince } })]);
+    assert.equal(item?.ruleId, "waiting_follow_up", String(waitingSince));
+    assert.equal(item.reasonFacts.waitingSince, created);
+  }
+});
+
+test("the key of a dated waiting item does not depend on the time zone", () => {
+  const task = entity("wait-zone", "task", { properties: { waiting: true, waitingSince: NOW - DAY, followUpDate: "2026-10-03" } });
+  const prague = evaluate([task])[0];
+  const newYork = evaluate([task], [], { timezone: "America/New_York" })[0];
+  assert.equal(prague.attentionKey, newYork.attentionKey);
+  assert.notEqual(prague.relevantAt, newYork.relevantAt);
+});

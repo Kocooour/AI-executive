@@ -31,7 +31,7 @@ export async function GET(request: Request) {
       return { items, hidden: { snoozed: evaluated.reduce((sum, result) => sum + result.hidden.snoozed, 0), dismissed: evaluated.reduce((sum, result) => sum + result.hidden.dismissed, 0) },
         workspaceId: requested, timezone, evaluatedAt, dataRevision: snapshot.revision, source: "server canonical snapshot", sourceUpdatedAt: snapshot.updatedAt,
         coverage: { rules: ["deadline_overdue", "deadline_soon", "waiting_follow_up", "project_no_next_action", "project_idle"],
-          excluded: ["waiting_follow_up", "calendar_conflict", "capacity_risk"],
+          excluded: ["calendar_conflict", "capacity_risk"],
           projectActivity: "stored_project_task_confirmed_context", deletedTaskHistory: false, externalActivity: false } };
     });
     if (!result) return NextResponse.json({ error: "Workspace unavailable" }, { status: 404 });

@@ -49,3 +49,35 @@ test("resolved conditions and replaced deadlines retire the old state", () => {
   const superseded = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(old.attentionKey);
   assert.equal(superseded.state, "superseded");
 });
+
+const waitingTask = (followUpDate = "2026-10-04", status = "open", updatedAt = 1) => ({ id: "waiting-task", type: "task", title: "Waiting task", status,
+  workspaceId: "personal", properties: { waiting: true, waitingFor: "Petr", waitingSince: now - 86_400_000, followUpDate }, createdAt: 1, updatedAt });
+
+test("waiting follow-up: stable keys, snooze until the chosen instant, completion resolves", () => {
+  const item = candidates(waitingTask())[0];
+  assert.equal(item.ruleId, "waiting_follow_up");
+  assert.equal(candidates(waitingTask(), now + 1)[0].attentionKey, item.attentionKey);
+  assert.equal(reconcileAttention("personal", [item], now).items.length, 1);
+  assert.equal(reconcileAttention("personal", candidates(waitingTask(), now + 1), now + 1).items.length, 1);
+  setAttentionState(item, "snooze", attentionFingerprint(item), now + 3_600_000, now + 2);
+  assert.deepEqual(reconcileAttention("personal", candidates(waitingTask(), now + 3), now + 3).hidden, { snoozed: 1, dismissed: 0 });
+  assert.equal(reconcileAttention("personal", candidates(waitingTask(), now + 3_600_000), now + 3_600_000).items.length, 1);
+  setAttentionState(item, "snooze", attentionFingerprint(item), now + 7_200_000, now + 3_600_001);
+  // Completed before the snooze ends: no candidate any more, the item is resolved.
+  assert.equal(candidates(waitingTask("2026-10-04", "completed", 2), now + 3_600_002).length, 0);
+  reconcileAttention("personal", [], now + 3_600_002);
+  const state = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(item.attentionKey);
+  assert.equal(state.state, "resolved");
+  const history = getDatabase().prepare("SELECT to_state FROM attention_history WHERE attention_key=? ORDER BY id").all(item.attentionKey);
+  assert.equal(history.filter((row) => row.to_state === "active").length, 2, "detected once and active again only after the snooze");
+});
+
+test("waiting follow-up: a changed date supersedes the item of the old date", () => {
+  const old = candidates(waitingTask("2026-10-03", "open", 5))[0];
+  reconcileAttention("personal", [old], now);
+  const moved = candidates(waitingTask("2026-10-04", "open", 6))[0];
+  assert.notEqual(moved.attentionKey, old.attentionKey);
+  reconcileAttention("personal", [moved], now + 1);
+  const state = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(old.attentionKey);
+  assert.equal(state.state, "superseded");
+});

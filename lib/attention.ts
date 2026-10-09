@@ -46,8 +46,14 @@ function validDate(date: string): boolean {
   return Number.isFinite(utc) && new Date(utc).toISOString().slice(0, 10) === date;
 }
 
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
 function localDate(at: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(at);
+  let format = dateFormats.get(timezone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" });
+    dateFormats.set(timezone, format);
+  }
+  const parts = format.formatToParts(at);
   const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
@@ -116,8 +122,8 @@ export function evaluateAttention(input: {
   const relations = input.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project" && entityById.has(relation.sourceEntityId) && entityById.has(relation.targetEntityId));
   const claims = (input.claims || []).filter((claim) => claim.workspaceId === workspaceId && claim.confirmed && entityById.get(claim.projectId)?.type === "project");
   const output: AttentionItem[] = [];
-  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"]) {
-    const occurrence = ruleId.startsWith("deadline_") || ruleId === "waiting_follow_up" ? relevantAt.toString() : "current";
+  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"], occurrenceKey?: string) {
+    const occurrence = occurrenceKey ?? (ruleId.startsWith("deadline_") ? relevantAt.toString() : "current");
     output.push({
       attentionKey: key(workspaceId, ruleId, "v1", subject.id, occurrence), workspaceId,
       subjectType: subject.type as "task" | "project", subjectId: subject.id, title: subject.title,
@@ -144,7 +150,10 @@ export function evaluateAttention(input: {
     if (task.type !== "task" || task.status !== "open" || task.properties.waiting !== true) continue;
     const waitingFor = typeof task.properties.waitingFor === "string" ? task.properties.waitingFor.slice(0, 120) : "";
     const followUp = typeof task.properties.followUpDate === "string" && validDate(task.properties.followUpDate) ? task.properties.followUpDate : "";
-    const since = stamp(Number(task.properties.waitingSince)) ?? stamp(task.updatedAt);
+    // When the task was marked as waiting; a value that is not a time up to now (edited data,
+    // another device's clock far ahead) falls back to when the task was created.
+    const marked = Number(task.properties.waitingSince);
+    const since = (Number.isSafeInteger(marked) && marked > 0 && marked <= evaluatedAt ? marked : null) ?? stamp(task.createdAt) ?? stamp(task.updatedAt);
     let relevantAt: number | null = null;
     let relevantDate = "";
     if (followUp) {
@@ -159,7 +168,10 @@ export function evaluateAttention(input: {
       followUp ? `Follow-up date ${followUp} (${timezone}) has come${waitingFor ? ` (waiting for: ${waitingFor})` : ""}.`
         : `Waiting for at least 7 days${waitingFor ? ` (waiting for: ${waitingFor})` : ""} without a follow-up date.`,
       [{ id: task.id, revision: task.updatedAt }], "confirmed",
-      { thresholdHours: followUp ? 0 : 7 * 24, ...(waitingFor ? { waitingFor } : {}), ...(since !== null ? { waitingSince: since } : {}), ...(followUp ? { followUpDate: followUp } : {}) });
+      { thresholdHours: followUp ? 0 : 7 * 24, ...(waitingFor ? { waitingFor } : {}), ...(since !== null ? { waitingSince: since } : {}), ...(followUp ? { followUpDate: followUp } : {}) },
+      // Keyed by the date itself (not its instant), so a change of time zone does not bring a
+      // dismissed item back.
+      followUp ? `date-${followUp}` : `since-${since}`);
   }
   for (const project of entities) {
     if (project.type !== "project" || project.status !== "active") continue;
