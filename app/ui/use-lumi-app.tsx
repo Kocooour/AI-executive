@@ -2075,6 +2075,15 @@ export function useLumiApp() {
     try { setOpenTexts(localStorage, pageId.current, kinds); } catch { /* storage unavailable */ }
   }
   useEffect(noteOpenTexts, [selected?.title, capture, draft, checklistDraft, contextInboxText, text]);
+  // The edited-title mark belongs to the record that was open: another record (or none) starts
+  // clean, so its title follows changes merged in and is not overwritten by a later blur. A save
+  // still on its way finishes on its own.
+  useEffect(() => {
+    titleEdited.current = false;
+    titleEditSeq.current += 1;
+    noteOpenTexts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
   useEffect(() => {
     const leave = () => { try { setOpenTexts(localStorage, pageId.current, []); } catch { /* storage unavailable */ } };
     // Shown again (also restored from the back/forward cache): the note is written again and
