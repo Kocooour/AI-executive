@@ -28,7 +28,24 @@ export function setOpenTexts(storage: Store, page: string, kinds: OpenTextKind[]
   else storage.removeItem(openTextsKey);
 }
 
+// A note not renewed for this long is taken as left by a tab that is gone (closed by a crash, or
+// killed by the system without notice). A tab renews its note whenever it is shown again.
+export const openTextsMaxAgeMs = 24 * 60 * 60_000;
+
 // Open texts of the other tabs of this browser.
-export function otherOpenTexts(storage: Store, page: string) {
-  return Object.entries(read(storage)).filter(([owner, entry]) => owner !== page && Array.isArray(entry?.kinds) && entry.kinds.length > 0);
+export function otherOpenTexts(storage: Store, page: string, now = Date.now()) {
+  return Object.entries(read(storage)).filter(([owner, entry]) => owner !== page && Array.isArray(entry?.kinds) && entry.kinds.length > 0 && now - Number(entry.at || 0) < openTextsMaxAgeMs);
+}
+
+// Renews this tab's note (it is still open) and removes notes that are too old.
+export function renewOpenTexts(storage: Store, page: string, now = Date.now()) {
+  const registry = read(storage);
+  let changed = false;
+  for (const [owner, entry] of Object.entries(registry)) {
+    if (owner === page) { registry[owner] = { ...entry, at: now }; changed = true; }
+    else if (!(now - Number(entry?.at || 0) < openTextsMaxAgeMs)) { delete registry[owner]; changed = true; }
+  }
+  if (!changed) return;
+  if (Object.keys(registry).length) storage.setItem(openTextsKey, JSON.stringify(registry));
+  else storage.removeItem(openTextsKey);
 }

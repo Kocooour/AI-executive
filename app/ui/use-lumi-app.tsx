@@ -9,7 +9,7 @@ import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
-import { otherOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
+import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
 import { askOtherTabsToSave, postToTabs, tabChannelName, type TabMessage } from "../../lib/tab-coordination";
 import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -2000,8 +2000,8 @@ export function useLumiApp() {
   }, []);
   // Another tab is signing out: what is being typed here is saved first (an edited title and the
   // notes draft), and editing stops until that tab has finished or given up (lib/tab-coordination.ts).
-  const forSignOut = useRef({ selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText });
-  forSignOut.current = { selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText };
+  const forSignOut = useRef({ selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText, text });
+  forSignOut.current = { selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText, text };
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(tabChannelName);
@@ -2040,9 +2040,9 @@ export function useLumiApp() {
     // Saves an edited title and the notes draft; returns the number of texts that could not be
     // saved (texts that are not records, and a title whose save failed).
     async function saveForSignOut() {
-      const { selected: open, rename: saveTitle, saveNotes: saveDraft, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText } = forSignOut.current;
+      const { selected: open, rename: saveTitle, saveNotes: saveDraft, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText, text: rowText } = forSignOut.current;
       // Texts that are not records cannot be saved; the signing-out tab asks the user about them.
-      let unsaved = [captureOpen && captureText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
+      let unsaved = [captureOpen && captureText.trim(), rowText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
       if (open && titleEdited.current) {
         try {
           await saveTitle(open, open.title);
@@ -2063,19 +2063,34 @@ export function useLumiApp() {
   // What is being typed here and not saved anywhere yet is noted in the device as it is typed
   // (lib/open-texts.ts), so a tab signing out asks about it even if this tab is asleep.
   function noteOpenTexts() {
-    const { selected: open, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText } = forSignOut.current;
+    const { selected: open, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText, text: rowText } = forSignOut.current;
     const kinds: OpenTextKind[] = [];
     if (open && titleEdited.current) kinds.push("title");
-    if (captureOpen && captureText.trim()) kinds.push("capture");
+    // The capture dialog, or the add row under a list.
+    if ((captureOpen && captureText.trim()) || rowText.trim()) kinds.push("capture");
     if (checklistText.trim()) kinds.push("checklist");
     if (inboxText.trim()) kinds.push("contextInbox");
     try { setOpenTexts(localStorage, pageId.current, kinds); } catch { /* storage unavailable */ }
   }
-  useEffect(noteOpenTexts, [selected?.title, capture, draft, checklistDraft, contextInboxText]);
+  useEffect(noteOpenTexts, [selected?.title, capture, draft, checklistDraft, contextInboxText, text]);
   useEffect(() => {
     const leave = () => { try { setOpenTexts(localStorage, pageId.current, []); } catch { /* storage unavailable */ } };
+    // Shown again (also restored from the back/forward cache): the note is written again and
+    // renewed, and notes of tabs long gone are removed.
+    const back = () => {
+      if (document.visibilityState !== "visible") return;
+      noteOpenTexts();
+      try { renewOpenTexts(localStorage, pageId.current); } catch { /* storage unavailable */ }
+    };
+    back();
     window.addEventListener("pagehide", leave);
-    return () => window.removeEventListener("pagehide", leave);
+    window.addEventListener("pageshow", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", back);
+      document.removeEventListener("visibilitychange", back);
+    };
   }, []);
   // Drafts left by other pages. A page that is still open answers on the draft channel while it
   // holds a draft, and its drafts are left to it.

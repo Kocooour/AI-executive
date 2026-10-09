@@ -7,7 +7,7 @@
 export const pendingKey = "ai-executive-pending-sync";
 export const deletedKey = "ai-executive-pending-deletions";
 export const revivedKey = "ai-executive-pending-revivals";
-const pendingSeqKey = "ai-executive-pending-seq";
+export const pendingSeqKey = "ai-executive-pending-seq";
 
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export type Marker = { id: string; op: string };
@@ -48,7 +48,7 @@ export function recordRevived(storage: Store, id: string) {
   store(storage, revivedKey, [...entries(storage, revivedKey).filter((marker) => marker.id !== id), { id, op: newOp() }]);
 }
 
-const pendingSeq = (storage: Store) => Number(storage.getItem(pendingSeqKey) || 0);
+const pendingSeq = (storage: Store) => Number(storage.getItem(pendingSeqKey)) || 0;
 
 // A change waits to be sent; every call counts, so a save can tell whether one came after it.
 export function markPending(storage: Store) {
