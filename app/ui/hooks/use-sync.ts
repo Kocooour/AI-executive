@@ -131,9 +131,23 @@ export function useSync() {
         // time: with the server's time they would look sent, and nothing would send them.
         const released = withLinkConflicts.flatMap((entity) => {
           const server = fromServer.get(entity.id);
-          if (!server || stillHeld.has(entity.id) || sameValue(entity, server)) return [];
+          if (stillHeld.has(entity.id)) return [];
+          // A record the server does not have yet (held because its workspace was unknown until
+          // another device created it) is sent as it is.
+          if (!server) { requeue = true; return []; }
+          if (sameValue(entity, server)) return [];
           return [{ ...entity, updatedAt: Math.max(writeTime(), server.updatedAt + 1) }];
         });
+        // A conflict of a link whose source is not held (the held record is its target) is kept
+        // on that source, so the replaced link can be seen and restored; the source is sent again
+        // with it.
+        const heldMergedIds = new Set(merged.map((entity) => entity.id));
+        for (const [sourceId, conflicts] of linkMerge.conflicts) {
+          const source = present.get(sourceId);
+          if (heldMergedIds.has(sourceId) || !source || !conflicts.length || stillHeld.has(sourceId)) continue;
+          const server = fromServer.get(sourceId);
+          released.push({ ...withConflicts(source, conflicts), updatedAt: Math.max(writeTime(), (server?.updatedAt ?? 0) + 1) });
+        }
         if (released.length) {
           await db.entities.bulkPut(released);
           requeue = true;

@@ -166,3 +166,39 @@ test("a task held because of its workspace does not make the app save again and 
   const onServer = (await serverEntities(page)).find((entity) => entity.id === id);
   expect((onServer as { workspaceId?: string } | undefined)?.workspaceId).toBe("personal");
 });
+
+// A task created here in a workspace the server did not know is held back. Once another device
+// has created that workspace, the task is sent without anything else being changed here.
+test("a task held for its unknown workspace is sent once the workspace exists", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const stamp = Date.now();
+  const workspaceId = `e2e-later-${stamp}`;
+  const id = `e2e-held-ws-${stamp}`;
+  await page.evaluate(({ taskId, workspace }) => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const now = Date.now();
+      const put = request.result.transaction("entities", "readwrite").objectStore("entities").put({
+        id: taskId, type: "task", title: "Čeká na prostor", status: "open", workspaceId: workspace, properties: { inbox: true }, createdAt: now, updatedAt: now,
+      });
+      put.onsuccess = () => { request.result.close(); resolve(); };
+      put.onerror = () => reject(put.error);
+    };
+  }), { taskId: id, workspace: workspaceId });
+  await page.reload();
+  await waitUntilSynced(page);
+  expect((await serverEntities(page)).some((entity) => entity.id === id)).toBe(false);
+  // Another device creates the workspace.
+  await page.evaluate(async (workspace) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const created = { id: `workspace:${workspace}`, type: "workspace", title: "Později", status: "active", workspaceId: workspace,
+      properties: { kind: "shared", role: "owner", members: [] }, createdAt: now, updatedAt: now };
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ baseRevision: snapshot.revision, entities: [...snapshot.entities, created], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+    if (!response.ok) throw new Error(`workspace not created: ${response.status}`);
+  }, workspaceId);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expectOnServer(page, (entity) => entity.id === id, true);
+});
