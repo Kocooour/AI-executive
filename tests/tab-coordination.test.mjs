@@ -23,3 +23,16 @@ test("a relation added, moved or removed locally is an unsent change", () => {
   assert.equal(hasChangesBeyond([task("t1")], [relation("r1", "p2")], known), true);
   assert.equal(hasChangesBeyond([task("t1")], [], known), true);
 });
+
+test("a record changed within the same millisecond is still seen as changed", () => {
+  const known = { entities: [task("t1", 5)], relations: [] };
+  assert.equal(hasChangesBeyond([{ ...task("t1", 5), title: "jiný název" }], [], known), true);
+  assert.equal(hasChangesBeyond([{ ...task("t1", 5), status: "completed" }], [], known), true);
+});
+
+test("local write times are strictly increasing", async () => {
+  const { writeTime } = await import("../lib/clock.ts");
+  const times = Array.from({ length: 50 }, () => writeTime());
+  assert.ok(times.every((time, index) => index === 0 || time > times[index - 1]));
+  assert.ok(times.every((time) => Number.isSafeInteger(time)));
+});

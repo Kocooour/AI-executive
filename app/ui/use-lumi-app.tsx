@@ -7,6 +7,9 @@ import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, s
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
+import { recordDeleted, recordRevived } from "../../lib/pending-markers";
+import { writeTime } from "../../lib/clock";
+import { otherOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
 import { askOtherTabsToSave, postToTabs, tabChannelName, type TabMessage } from "../../lib/tab-coordination";
 import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
@@ -875,7 +878,9 @@ export function useLumiApp() {
       askedOthers = true;
       heartbeat = window.setInterval(() => postToTabs({ type: "signing-out", from: tabId.current }), 5_000);
       const others = await askOtherTabsToSave(tabId.current);
-      if (others.unsaved > 0 && !(await askConfirm({ title: tr("signOutOtherTabTitle"), message: tr("signOutOtherTab"), confirmLabel: tr("signOutDiscardAction"), danger: true }))) {
+      // Tabs that did not answer (asleep) may still hold typed text; their note in the device counts.
+      const unsavedElsewhere = others.unsaved + otherOpenTexts(localStorage, pageId.current).length;
+      if (unsavedElsewhere > 0 && !(await askConfirm({ title: tr("signOutOtherTabTitle"), message: tr("signOutOtherTab"), confirmLabel: tr("signOutDiscardAction"), danger: true }))) {
         postToTabs({ type: "sign-out-cancelled", from: tabId.current });
         return;
       }
@@ -1242,7 +1247,7 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await db.entities.update(workspace.id, {
       title: name,
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -1296,7 +1301,7 @@ export function useLumiApp() {
     const name = newWorkspaceDraft.trim();
     if (!name || name.length > 120) return;
     const workspaceId = crypto.randomUUID();
-    const now = Date.now();
+    const now = writeTime();
     localDataVersion.current += 1;
     await db.entities.add({
       id: `workspace:${workspaceId}`,
@@ -1466,7 +1471,7 @@ export function useLumiApp() {
     extra: Record<string, unknown> = {},
   ) {
     if (!title.trim()) return;
-    const now = Date.now(),
+    const now = writeTime(),
       id = typeof extra.entityId === "string" ? extra.entityId : crypto.randomUUID(),
       projectId = typeof extra.projectId === "string" ? extra.projectId : "",
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
@@ -1726,7 +1731,7 @@ export function useLumiApp() {
           ...latest.properties,
           [conflictsKey]: entityConflicts(latest).filter((item) => item.id !== conflictId),
         };
-        const update: Partial<Entity> = { updatedAt: Date.now() };
+        const update: Partial<Entity> = { updatedAt: writeTime() };
         if (restore && !conflict.field.startsWith("relation.")) {
           if (conflict.field === "properties.checklist") {
             // Only the items whose other version was replaced go back; items added since stay.
@@ -1813,7 +1818,7 @@ export function useLumiApp() {
       .filter((r) => r.relationType === relationType)
       .toArray();
     localDataVersion.current += 1;
-    const relationTimestamp = Date.now();
+    const relationTimestamp = writeTime();
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.relations.bulkDelete(existing.map((r) => r.id));
       if (targetId)
@@ -1856,7 +1861,7 @@ export function useLumiApp() {
         ...current.properties,
         activity: [...activity, { at: Date.now(), action: "renamed" }].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -1873,9 +1878,7 @@ export function useLumiApp() {
       await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
     });
     localDataVersion.current += 1;
-    const deletedIds = new Set(pendingDeletedIds());
-    deletedIds.add(e.id);
-    localStorage.setItem(deletedKey, JSON.stringify([...deletedIds]));
+    recordDeleted(localStorage, e.id);
     setUndo(e);
     setUndoRelations(linkedRelations);
     await syncToServer();
@@ -1885,7 +1888,7 @@ export function useLumiApp() {
   async function setProjectStatus(project: Entity, status: "active" | "completed") {
     if (project.type !== "project") return;
     const current = (await db.entities.get(project.id)) || project;
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
     localDataVersion.current += 1;
     await db.entities.update(project.id, {
@@ -1909,18 +1912,12 @@ export function useLumiApp() {
       await db.entities.put({
         ...undo,
         status: undo.type === "task" && undo.status === "completed" ? "open" : undo.status,
-        updatedAt: Date.now(),
+        updatedAt: writeTime(),
       });
       if (undoRelations.length) await db.relations.bulkPut(undoRelations);
     });
     localDataVersion.current += 1;
-    const deletedIds = pendingDeletedIds().filter((id) => id !== undo.id);
-    if (deletedIds.length)
-      localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
-    else localStorage.removeItem(deletedKey);
-    const revivedIds = new Set(pendingRevivedIds());
-    revivedIds.add(undo.id);
-    localStorage.setItem(revivedKey, JSON.stringify([...revivedIds]));
+    recordRevived(localStorage, undo.id);
     await syncToServer();
     setUndo(null);
     setUndoRelations([]);
@@ -1946,7 +1943,7 @@ export function useLumiApp() {
           ...(typeof properties === "function" ? properties(current.properties) : properties),
           activity: [...activity, { at: Date.now(), action }].slice(-50),
         },
-        updatedAt: Date.now(),
+        updatedAt: writeTime(),
       });
     }); } finally {
       localDataVersion.current += 1;
@@ -2058,9 +2055,27 @@ export function useLumiApp() {
       // A notes draft that cannot be saved stays kept in the device and is counted as unsent.
       const notes = notesDraftRef.current;
       if (notes) await saveDraft({ id: notes.id }, notes.text).catch(() => undefined);
+      noteOpenTexts();
       return unsaved;
     }
     return () => { window.clearTimeout(unblock); channel.close(); };
+  }, []);
+  // What is being typed here and not saved anywhere yet is noted in the device as it is typed
+  // (lib/open-texts.ts), so a tab signing out asks about it even if this tab is asleep.
+  function noteOpenTexts() {
+    const { selected: open, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText } = forSignOut.current;
+    const kinds: OpenTextKind[] = [];
+    if (open && titleEdited.current) kinds.push("title");
+    if (captureOpen && captureText.trim()) kinds.push("capture");
+    if (checklistText.trim()) kinds.push("checklist");
+    if (inboxText.trim()) kinds.push("contextInbox");
+    try { setOpenTexts(localStorage, pageId.current, kinds); } catch { /* storage unavailable */ }
+  }
+  useEffect(noteOpenTexts, [selected?.title, capture, draft, checklistDraft, contextInboxText]);
+  useEffect(() => {
+    const leave = () => { try { setOpenTexts(localStorage, pageId.current, []); } catch { /* storage unavailable */ } };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
   }, []);
   // Drafts left by other pages. A page that is still open answers on the draft channel while it
   // holds a draft, and its drafts are left to it.
@@ -2208,7 +2223,7 @@ export function useLumiApp() {
           { at: Date.now(), action: "completed" },
         ].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -2225,7 +2240,7 @@ export function useLumiApp() {
         completedAt: null,
         activity: [...activity, { at: Date.now(), action: "reopened" }].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -2296,7 +2311,7 @@ export function useLumiApp() {
   }
 
   async function persistManualOrder(ordered: Entity[], movedId: string, scope: string) {
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const movedIndex = ordered.findIndex((entity) => entity.id === movedId);
     const moved = ordered[movedIndex];
     if (!moved) return;
@@ -2335,7 +2350,7 @@ export function useLumiApp() {
       await done(task.id);
       return;
     }
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const properties = { ...task.properties };
     delete properties.when;
     properties.inbox = section === "Inbox";
@@ -2586,6 +2601,7 @@ export function useLumiApp() {
     createFromRow,
     resolveConflict,
     titleEdited,
+    noteOpenTexts,
     rowError,
     setRowError,
     createServerBackup,

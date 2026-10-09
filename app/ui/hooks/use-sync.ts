@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
-import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, type SentMarkers } from "../../../lib/pending-markers";
+import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -28,20 +28,8 @@ export function useSync() {
   const pendingKey = "ai-executive-pending-sync";
   const deletedKey = "ai-executive-pending-deletions";
   const revivedKey = "ai-executive-pending-revivals";
-  const pendingDeletedIds = () => {
-    try {
-      return JSON.parse(localStorage.getItem(deletedKey) || "[]") as string[];
-    } catch {
-      return [];
-    }
-  };
-  const pendingRevivedIds = () => {
-    try {
-      return JSON.parse(localStorage.getItem(revivedKey) || "[]") as string[];
-    } catch {
-      return [];
-    }
-  };
+  const pendingDeletedIds = () => pendingDeletedIdsIn(localStorage);
+  const pendingRevivedIds = () => pendingRevivedIdsIn(localStorage);
   // The bookkeeping of what waits to be sent is shared by all tabs (lib/pending-markers.ts).
   const markPending = () => markPendingIn(localStorage);
   const captureMarkers = () => captureMarkersIn(localStorage);

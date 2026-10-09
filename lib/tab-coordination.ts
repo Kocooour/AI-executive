@@ -26,8 +26,14 @@ export function withSyncLock<T>(work: () => Promise<T>): Promise<T> {
 // a write that did not would not be seen here. Relations are compared by their identity.
 export function hasChangesBeyond(entities: Entity[], relations: Relation[], known: { entities: Entity[]; relations: Relation[] }) {
   if (entities.length !== known.entities.length || relations.length !== known.relations.length) return true;
-  const knownEntities = new Map(known.entities.map((entity) => [entity.id, entity.updatedAt]));
-  for (const entity of entities) if (knownEntities.get(entity.id) !== entity.updatedAt) return true;
+  const knownEntities = new Map(known.entities.map((entity) => [entity.id, entity]));
+  for (const entity of entities) {
+    const previous = knownEntities.get(entity.id);
+    if (!previous || previous.updatedAt !== entity.updatedAt) return true;
+    // Local writes get strictly increasing times (lib/clock.ts); as a cheap second check, the
+    // plain fields of a record with the same time must match too.
+    if (previous.title !== entity.title || previous.status !== entity.status || previous.content !== entity.content || previous.workspaceId !== entity.workspaceId) return true;
+  }
   const relationKey = (relation: Relation) => `${relation.id}|${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}|${relation.workspaceId}`;
   const knownRelations = new Set(known.relations.map(relationKey));
   return relations.some((relation) => !knownRelations.has(relationKey(relation)));

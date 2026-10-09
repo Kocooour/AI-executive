@@ -9,6 +9,7 @@ import { SyncConflicts } from "./sync-conflicts";
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
+    noteOpenTexts,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -74,6 +75,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 // Only a title the user changed is saved; an untouched field cannot put back an old one.
                 const edited = titleEdited.current;
                 titleEdited.current = false;
+                noteOpenTexts();
                 if (edited) rename(selected, e.target.value);
               }}
             />

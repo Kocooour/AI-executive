@@ -196,3 +196,18 @@ test("a task deleted in one tab while another tab is saving is deleted on the se
   await expectOnServer(saver, (entity) => entity.id === id, false);
   await context.close();
 });
+
+// A tab that is asleep (for example suspended by Safari) cannot answer, but what it was typing
+// is noted in the device; signing out asks before it could be lost.
+test("signing out asks about text noted by a tab that does not answer", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await page.evaluate(() => localStorage.setItem("ai-executive-open-texts", JSON.stringify({ "sleeping-tab": { kinds: ["title"], at: Date.now() } })));
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  const question = page.locator("dialog.confirmDialog");
+  await expect(question).toContainText("Neuložený text v jiné kartě");
+  await question.getByRole("button", { name: "Zrušit" }).click();
+  await expect(page.locator(".authCard")).toHaveCount(0);
+  await page.evaluate(() => localStorage.removeItem("ai-executive-open-texts"));
+});
