@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { db, readSyncBase, replaceSyncBase, type Entity } from "../../../lib/db";
+import { db, readLocalWithBase, replaceSyncBase, type Entity } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -99,9 +99,9 @@ export function useSync() {
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
-      const localEntities = await db.entities.toArray();
-      const localRelations = await db.relations.toArray();
-      const base = await readSyncBase();
+      // The local copy and its common version with the server are read together: another tab
+      // replacing both in between would otherwise pair this copy with a newer common version.
+      const [localEntities, localRelations, base] = await readLocalWithBase();
       let response = await putSnapshot(
         localEntities,
         localRelations,

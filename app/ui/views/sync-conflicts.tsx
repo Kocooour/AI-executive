@@ -40,8 +40,13 @@ function shown(conflict: SyncConflict, items: Entity[], tr: (key: string) => str
     return label.startsWith("conflictStatus_") ? String(value) : label;
   }
   if (conflict.field === "properties.priority") return tr(String(value));
+  if (conflict.truncated) return `${String(value ?? "")}… ${tr("conflictTruncated")}`;
   if (conflict.field === "properties.checklist" && Array.isArray(value)) {
-    return value.map((item) => (item && typeof item === "object" ? String((item as { title?: unknown }).title ?? "") : String(item))).filter(Boolean).join(", ") || tr("conflictNone");
+    return value.map((item) => {
+      if (!item || typeof item !== "object") return String(item);
+      const entry = item as { title?: unknown; done?: unknown };
+      return `${entry.done ? "☑" : "☐"} ${String(entry.title ?? "")}`;
+    }).join(", ") || tr("conflictNone");
   }
   if ((conflict.field === "properties.plannedStart" || conflict.field === "properties.plannedEnd" || conflict.field === "properties.reminderAt") && typeof value === "string" && !Number.isNaN(Date.parse(value))) {
     return new Date(value).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB");
@@ -69,7 +74,7 @@ export function SyncConflicts({ app, entity }: { app: LumiApp; entity: Entity })
               <span className="syncConflictValue">{shown(conflict, items, tr, language)}</span>
             </span>
             <div className="notificationActions">
-              <button onClick={() => resolveConflict(entity, conflict.id, true)}>{tr("conflictRestore")}</button>
+              {!conflict.truncated && <button onClick={() => resolveConflict(entity, conflict.id, true)}>{tr("conflictRestore")}</button>}
               <button onClick={() => resolveConflict(entity, conflict.id, false)}>{tr("conflictKeep")}</button>
             </div>
           </div>

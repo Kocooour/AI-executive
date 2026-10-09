@@ -83,3 +83,32 @@ test("the same field changed on two devices keeps the newer value and offers to 
   await laptop.context.close();
   await phone.context.close();
 });
+
+// The device that was offline keeps the task open: after the merge it shows the newer title and the
+// notice at once, and leaving the title field does not put its own replaced title back.
+test("an open task follows the merge, and leaving its title does not undo it", async ({ browser }) => {
+  const laptop = await device(browser), phone = await device(browser);
+  const title = `Otevřený úkol ${Date.now()}`;
+  const id = await newTask(laptop.page, title);
+  await phone.page.goto(`/?task=${id}`);
+  await waitUntilSynced(phone.page);
+  await phone.context.setOffline(true);
+  const phoneTitle = phone.page.locator("input.titleEdit");
+  await phoneTitle.fill(`${title} telefon`);
+  await phone.page.getByLabel("Poznámky k úkolu").focus();
+  await laptop.page.goto(`/?task=${id}`);
+  await waitUntilSynced(laptop.page);
+  await laptop.page.locator("input.titleEdit").fill(`${title} počítač`);
+  await laptop.page.getByLabel("Poznámky k úkolu").focus();
+  await expectOnServer(laptop.page, (entity) => entity.id === id && entity.title === `${title} počítač`, true);
+  await phone.context.setOffline(false);
+  await expect(phoneTitle).toHaveValue(`${title} počítač`, { timeout: 20_000 });
+  await expect(phone.page.locator(".syncConflicts")).toContainText(`${title} telefon`);
+  await phoneTitle.focus();
+  await phone.page.getByLabel("Poznámky k úkolu").focus();
+  await waitUntilSynced(phone.page);
+  const saved = (await serverEntities(phone.page)).find((entity) => entity.id === id);
+  expect(saved?.title).toBe(`${title} počítač`);
+  await laptop.context.close();
+  await phone.context.close();
+});

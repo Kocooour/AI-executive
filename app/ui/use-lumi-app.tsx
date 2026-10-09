@@ -1,6 +1,6 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readSyncBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
+import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
@@ -177,6 +177,8 @@ export function useLumiApp() {
     return [task.title, priority, localDate].filter(Boolean).join(" ");
   };
   const deepLinkHandled = useRef(false);
+  // Whether the open record's title is being typed; its draft lives only in `selected` until blur.
+  const titleEditing = useRef(false);
   const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -766,7 +768,10 @@ export function useLumiApp() {
                 !deletedIds.has(relation.targetEntityId),
             ),
           };
-          const base = await readSyncBase();
+          // Read again together with the common version, so that the two belong together.
+          const [entitiesNow, relationsNow, base] = await readLocalWithBase();
+          localEntities = [...entitiesNow];
+          localRelations = [...relationsNow];
           const merged = mergeSnapshots(
             filteredSnapshot,
             localEntities,
@@ -1657,9 +1662,16 @@ export function useLumiApp() {
     const current = (await db.entities.get(e.id)) || e;
     const conflict = entityConflicts(current).find((item) => item.id === conflictId);
     if (!conflict) return;
+    // A shortened value is only for reading; it cannot be put back.
+    if (restore && conflict.truncated) return;
     if (restore && conflict.field.startsWith("relation.")) {
-      // The project or area it belonged to; if that one no longer exists, there is nothing to return to.
-      await relate(e.id, typeof conflict.lostValue === "string" ? conflict.lostValue : "", conflict.field.slice("relation.".length)).catch(() => undefined);
+      // The project or area it belonged to. If that one no longer exists (or is elsewhere), the
+      // notice stays, so the replaced value is not silently forgotten.
+      try {
+        await relate(e.id, typeof conflict.lostValue === "string" ? conflict.lostValue : "", conflict.field.slice("relation.".length));
+      } catch {
+        return;
+      }
     }
     localDataVersion.current += 1;
     try {
@@ -1671,12 +1683,26 @@ export function useLumiApp() {
         };
         const update: Partial<Entity> = { updatedAt: Date.now() };
         if (restore && !conflict.field.startsWith("relation.")) {
-          if (conflict.field.startsWith("properties.")) {
+          if (conflict.field === "properties.checklist") {
+            // Only the items whose other version was replaced go back; items added since stay.
+            const lostItems = Array.isArray(conflict.lostValue) ? conflict.lostValue as Array<{ id?: string }> : [];
+            const currentItems = Array.isArray(properties.checklist) ? properties.checklist as Array<{ id?: string }> : [];
+            const byId = new Map(lostItems.filter((item) => item && typeof item.id === "string").map((item) => [item.id, item]));
+            properties.checklist = [
+              ...currentItems.map((item) => (item && typeof item.id === "string" && byId.has(item.id) ? byId.get(item.id) : item)),
+              ...lostItems.filter((item) => item && typeof item.id === "string" && !currentItems.some((current) => current?.id === item.id)),
+            ];
+          } else if (conflict.field.startsWith("properties.")) {
             const key = conflict.field.slice("properties.".length);
+            if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key === conflictsKey) return;
             if (conflict.lostValue === null || conflict.lostValue === undefined) delete properties[key];
             else properties[key] = conflict.lostValue;
-          } else if (["title", "status", "content"].includes(conflict.field) && typeof conflict.lostValue === "string") {
+          } else if (conflict.field === "content") {
+            update.content = typeof conflict.lostValue === "string" ? conflict.lostValue : "";
+          } else if ((conflict.field === "title" || conflict.field === "status") && typeof conflict.lostValue === "string" && conflict.lostValue) {
             (update as Record<string, unknown>)[conflict.field] = conflict.lostValue;
+            // A task opened again is no longer completed.
+            if (conflict.field === "status" && conflict.lostValue === "open") delete properties.completedAt;
           }
         }
         const activity = Array.isArray(properties.activity) ? properties.activity : [];
@@ -1692,6 +1718,15 @@ export function useLumiApp() {
     const saved = (await db.entities.get(e.id)) || null;
     setSelected((open) => (open && open.id === e.id ? saved : open));
   }
+  // The open record follows the local copy: a merge with another device's changes (or any other
+  // write) must show up in the detail, or a later blur would write the replaced values back. A
+  // title being typed is kept.
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = items.find((item) => item.id === selected.id);
+    if (!fresh || fresh.updatedAt === selected.updatedAt) return;
+    setSelected((open) => (open && open.id === fresh.id ? { ...fresh, title: titleEditing.current ? open.title : fresh.title } : open));
+  }, [items]);
   // The add row is shared by every list; its message belongs to the list it was shown under.
   useEffect(() => setRowError(false), [view]);
   // The add row under a list: a refused item keeps its text and says so instead of failing silently.
@@ -1754,6 +1789,8 @@ export function useLumiApp() {
   async function rename(e: Entity, title: string) {
     if (!title.trim()) return;
     const current = (await db.entities.get(e.id)) || e;
+    // Leaving the field without a change writes nothing (and cannot put back a replaced title).
+    if (current.title === title.trim()) return;
     const activity = Array.isArray(current.properties.activity)
       ? current.properties.activity
       : [];
@@ -2430,6 +2467,7 @@ export function useLumiApp() {
     create,
     createFromRow,
     resolveConflict,
+    titleEditing,
     rowError,
     setRowError,
     createServerBackup,

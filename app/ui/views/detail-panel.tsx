@@ -8,6 +8,7 @@ import { SyncConflicts } from "./sync-conflicts";
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
+    titleEditing,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -68,7 +69,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               onChange={(e) =>
                 setSelected({ ...selected, title: e.target.value })
               }
-              onBlur={(e) => rename(selected, e.target.value)}
+              onFocus={() => { titleEditing.current = true; }}
+              onBlur={(e) => { titleEditing.current = false; rename(selected, e.target.value); }}
             />
             <SyncConflicts app={app} entity={selected} />
             {context && (

@@ -121,3 +121,43 @@ test("a record deleted on the server stays deleted; a record deleted here does n
   const kept = mergeSnapshots({ revision: 5, updatedAt: 0, entities: [task(), project("p1")], relations: [relation("p1")] }, [project("p1")], [], base);
   assert.deepEqual(kept.relations.map((item) => item.targetEntityId), ["p1"]);
 });
+
+const { limitConflicts } = await import("../lib/field-merge.ts");
+
+test("a conflict on a very long field keeps the record within the server's size limit", () => {
+  const merged = mergeEntity(task({}, { notes: "" }), task({ updatedAt: 20 }, { notes: "a".repeat(130_000) }), task({ updatedAt: 30 }, { notes: "b".repeat(130_000) }), 100);
+  assert.equal(merged.properties.notes, "b".repeat(130_000));
+  assert.ok(JSON.stringify(merged.properties).length <= 250_000);
+  const [conflict] = entityConflicts(merged);
+  assert.equal(conflict.field, "properties.notes");
+  assert.equal(conflict.truncated, true);
+  assert.ok(String(conflict.lostValue).startsWith("aaa"));
+});
+
+test("a checklist conflict keeps only the items whose other version was replaced", () => {
+  const base = task({}, { checklist: [{ id: "a", title: "A", done: false }, { id: "b", title: "B", done: false }] });
+  const local = task({ updatedAt: 20 }, { checklist: [{ id: "a", title: "A z telefonu", done: false }, { id: "b", title: "B", done: false }] });
+  const server = task({ updatedAt: 30 }, { checklist: [{ id: "a", title: "A z počítače", done: false }, { id: "b", title: "B", done: true }, { id: "c", title: "C", done: false }] });
+  const merged = mergeEntity(base, local, server, 100);
+  assert.deepEqual(merged.properties.checklist.map((item) => item.title), ["A z počítače", "B", "C"]);
+  assert.deepEqual(entityConflicts(merged).map((conflict) => conflict.lostValue), [[{ id: "a", title: "A z telefonu", done: false }]]);
+});
+
+test("a side that did not change the record takes the other side as it is", () => {
+  const base = task({}, { notes: "x" });
+  const server = task({ title: "Nový", updatedAt: 30 }, { notes: "y" });
+  assert.equal(mergeEntity(base, task({}, { notes: "x" }), server, 100), server);
+  const local = task({ title: "Místní", updatedAt: 20 });
+  assert.equal(mergeEntity(base, local, task({}, { notes: "x" }), 100), local);
+});
+
+test("all records together keep a bounded amount of notices, the oldest go first", () => {
+  const notice = (id, at) => ({ id, field: "properties.notes", lostValue: "z".repeat(1_000), at });
+  const entities = [
+    task({ id: "t1" }, { syncConflicts: [notice("old", 1), notice("new", 3)] }),
+    task({ id: "t2" }, { syncConflicts: [notice("middle", 2)] }),
+  ];
+  const limited = limitConflicts(entities, 2_200);
+  assert.deepEqual(limited.flatMap((entity) => entityConflicts(entity).map((conflict) => conflict.id)), ["new", "middle"]);
+  assert.equal(limitConflicts(entities, 10_000), entities);
+});

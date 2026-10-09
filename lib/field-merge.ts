@@ -11,16 +11,25 @@ export interface SyncConflict {
   id: string;
   // "title", "status", "content", "properties.<key>" or "relation.<relationType>".
   field: string;
-  // The value that was replaced; for a relation, the target record id ("" for none).
+  // The value that was replaced; for a relation, the target record id ("" for none); for a
+  // checklist, the items whose other version was replaced.
   lostValue: unknown;
   at: number;
+  // The value was too long to travel with the record: only its beginning is kept, for reading.
+  truncated?: boolean;
 }
 
 export const conflictsKey = "syncConflicts";
 const maxConflicts = 20;
-// The replaced values travel with the record, which the server limits in size; the oldest are
-// dropped first when long notes would take too much room.
+// The replaced values travel with the record, which the server limits in size (250 000 characters
+// of properties per record, lib/server-store.ts; 5 MB per save). The oldest are dropped first, a
+// value that does not fit is kept only as a short beginning, and all records together keep at most
+// `maxConflictsTotal`.
 const maxConflictsSize = 60_000;
+const serverPropertiesLimit = 250_000;
+const propertiesMargin = 10_000;
+const truncatedLength = 300;
+export const maxConflictsTotal = 1_000_000;
 
 // Fields that are merged but never reported as a conflict: bookkeeping the user does not edit.
 const unreported = new Set([
@@ -100,6 +109,7 @@ function mergeItems(base: unknown, local: unknown, server: unknown, localWins: b
   const b = byId(baseList), l = byId((local ?? []) as Identified[]), s = byId((server ?? []) as Identified[]);
   const order = [...s.keys(), ...[...l.keys()].filter((id) => !s.has(id))];
   const result: Identified[] = [];
+  const lost: Identified[] = [];
   let conflict = false;
   for (const id of order) {
     const inBase = b.has(id), inLocal = l.has(id), inServer = s.has(id);
@@ -112,12 +122,13 @@ function mergeItems(base: unknown, local: unknown, server: unknown, localWins: b
     if (inLocal && inServer) {
       const outcome = threeWay(b.get(id), l.get(id), s.get(id), localWins);
       conflict ||= outcome.conflict;
+      if (outcome.conflict) lost.push(outcome.lost as Identified);
       result.push(outcome.value as Identified);
     } else {
       result.push((inServer ? s.get(id) : l.get(id)) as Identified);
     }
   }
-  return { value: result, conflict };
+  return { value: result, conflict, lost };
 }
 
 function mergeObject(base: unknown, local: unknown, server: unknown, localWins: boolean) {
@@ -142,14 +153,54 @@ export function entityConflicts(entity: Entity | undefined): SyncConflict[] {
   return Array.isArray(value) ? value.filter((item): item is SyncConflict => Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.field === "string")) : [];
 }
 
+function shortened(conflict: SyncConflict): SyncConflict {
+  const value = conflict.lostValue;
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  return { ...conflict, lostValue: text.slice(0, truncatedLength), truncated: true };
+}
+
 export function withConflicts(entity: Entity, added: SyncConflict[]): Entity {
   if (!added.length) return entity;
-  const conflicts = [...entityConflicts(entity), ...added].slice(-maxConflicts);
-  while (conflicts.length > 1 && JSON.stringify(conflicts).length > maxConflictsSize) conflicts.shift();
-  return { ...entity, properties: { ...entity.properties, [conflictsKey]: conflicts } };
+  const { [conflictsKey]: _previous, ...rest } = entity.properties || {};
+  const room = Math.min(maxConflictsSize, serverPropertiesLimit - propertiesMargin - JSON.stringify(rest).length);
+  let conflicts = [...entityConflicts(entity), ...added].slice(-maxConflicts);
+  const size = () => JSON.stringify(conflicts).length;
+  // Long values are shortened first (newest last, so the newest keeps its full value longest),
+  // then the oldest notices go.
+  for (let index = 0; index < conflicts.length && size() > room; index += 1) {
+    if (!conflicts[index].truncated && JSON.stringify(conflicts[index].lostValue ?? null).length > truncatedLength) conflicts[index] = shortened(conflicts[index]);
+  }
+  while (conflicts.length && size() > room) conflicts = conflicts.slice(1);
+  const properties: Record<string, unknown> = { ...rest };
+  if (conflicts.length) properties[conflictsKey] = conflicts;
+  return { ...entity, properties };
+}
+
+// All records together keep at most `limit` characters of notices, so that many unresolved ones
+// cannot make the whole save too large for the server; the oldest notices go first.
+export function limitConflicts(entities: Entity[], limit = maxConflictsTotal): Entity[] {
+  const all = entities.flatMap((entity) => entityConflicts(entity).map((conflict) => ({ entityId: entity.id, conflict, size: JSON.stringify(conflict).length })));
+  let total = all.reduce((sum, item) => sum + item.size, 0);
+  if (total <= limit) return entities;
+  const dropped = new Set<string>();
+  for (const item of [...all].sort((a, b) => a.conflict.at - b.conflict.at)) {
+    if (total <= limit) break;
+    dropped.add(item.conflict.id);
+    total -= item.size;
+  }
+  return entities.map((entity) => {
+    const conflicts = entityConflicts(entity);
+    if (!conflicts.some((conflict) => dropped.has(conflict.id))) return entity;
+    const kept = conflicts.filter((conflict) => !dropped.has(conflict.id));
+    const { [conflictsKey]: _previous, ...rest } = entity.properties;
+    return { ...entity, properties: kept.length ? { ...rest, [conflictsKey]: kept } : rest };
+  });
 }
 
 export function mergeEntity(base: Entity, local: Entity, server: Entity, now = Date.now()): Entity {
+  // Every change sets updatedAt, so an unchanged side is recognised without comparing fields.
+  if (local.updatedAt === base.updatedAt) return server;
+  if (server.updatedAt === base.updatedAt) return local;
   const localWins = local.updatedAt > server.updatedAt;
   const merged: Record<string, unknown> = { ...server };
   const conflicts: SyncConflict[] = [];
@@ -177,7 +228,7 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
       if (items) {
         value = items.value;
         if (items.conflict && key === "checklist") {
-          conflicts.push({ id: conflictId(now), field: "properties.checklist", lostValue: localWins ? s : l, at: now });
+          conflicts.push({ id: conflictId(now), field: "properties.checklist", lostValue: items.lost, at: now });
         }
       } else {
         const outcome = threeWay(b, l, s, localWins);

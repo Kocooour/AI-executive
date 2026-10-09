@@ -1,5 +1,5 @@
 import type { Entity, Relation } from "./db";
-import { mergeEntity, mergeRelations, withConflicts } from "./field-merge";
+import { limitConflicts, mergeEntity, mergeRelations, withConflicts } from "./field-merge";
 
 export interface ServerSnapshot {
   revision: number;
@@ -164,5 +164,5 @@ function mergeWithBase(server: ServerSnapshot, localEntities: Entity[], localRel
     const key = `${relation.sourceEntityId}|${relation.targetEntityId}|${relation.relationType}`;
     if (!relations.has(key)) relations.set(key, relation);
   }
-  return { entities: [...entities.values()], relations: [...relations.values()] };
+  return { entities: limitConflicts([...entities.values()]), relations: [...relations.values()] };
 }

@@ -157,3 +157,11 @@ export async function replaceSyncBase(entities: Entity[], relations: Relation[])
     if (relations.length) await db.baseRelations.bulkPut(relations);
   });
 }
+
+// The local copy and its common version, read in one transaction so they belong together.
+export async function readLocalWithBase() {
+  return db.transaction("r", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+    const [entities, relations, base] = await Promise.all([db.entities.toArray(), db.relations.toArray(), readSyncBase()]);
+    return [entities, relations, base] as const;
+  });
+}
