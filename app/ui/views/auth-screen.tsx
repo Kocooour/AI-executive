@@ -19,7 +19,7 @@ export function AuthScreen({ app }: { app: LumiApp }) {
     <>
       <main className="authShell">
         <form className="authCard" onSubmit={login}>
-          <div className="authMark">◇</div>
+          <div className="authMark" aria-hidden="true" />
           <p className="eyebrow">LUMI</p>
           <h1>
             {authState === "checking"

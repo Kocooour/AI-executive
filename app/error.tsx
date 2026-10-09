@@ -28,7 +28,7 @@ export default function ErrorPage({
   return (
     <main className="offlinePage">
       <div className="offlineCard">
-        <div className="authMark">◇</div>
+        <div className="authMark" aria-hidden="true" />
         <p className="eyebrow">LUMI</p>
         <h1>Aplikaci se nepodařilo načíst</h1>
         <p>Chyba byla bezpečně odeslána k diagnostice.</p>

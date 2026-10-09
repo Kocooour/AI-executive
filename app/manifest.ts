@@ -13,15 +13,15 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#6557e8",
     orientation: "any",
     icons: [
-      { src: "/icons/lumi-icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "/icons/lumi-icon-v2-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
       {
-        src: "/icons/lumi-icon-512.png",
+        src: "/icons/lumi-icon-v2-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/lumi-icon-maskable-512.png",
+        src: "/icons/lumi-icon-v2-maskable-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",
