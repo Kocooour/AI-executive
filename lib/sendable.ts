@@ -59,12 +59,25 @@ export function forServer(entities: Entity[], relations: Relation[], base: { ent
     const problem = problemOf(entity);
     if (problem) reasons.set(entity.id, problem);
   }
-  const workspaces = new Set(["personal", ...entities.filter((entity) => entity.type === "workspace" && !reasons.has(entity.id)).map((entity) => entity.workspaceId)]);
+  const known = new Map((base?.entities || []).map((entity) => [entity.id, entity]));
+  // Workspaces the server will have after this save: those sent as they are, and held ones it
+  // already knows (sent in that known form).
+  const workspaces = new Set(["personal"]);
+  for (const entity of entities) {
+    if (entity.type !== "workspace") continue;
+    const previous = known.get(entity.id);
+    if (!reasons.has(entity.id) || (previous && problemOf(previous) === null)) workspaces.add(entity.workspaceId);
+  }
   for (const entity of entities) {
     if (entity.type !== "workspace" && !reasons.has(entity.id) && !workspaces.has(entity.workspaceId)) reasons.set(entity.id, "workspace");
   }
-  if (!reasons.size) return { entities, relations, heldBack: [] as Entity[], reasons };
-  const known = new Map((base?.entities || []).map((entity) => [entity.id, entity]));
+  // A relation across workspaces makes the server refuse the whole save; it is not sent.
+  const byId = new Map(entities.map((entity) => [entity.id, entity]));
+  const sameWorkspace = (relation: Relation) => {
+    const source = byId.get(relation.sourceEntityId), target = byId.get(relation.targetEntityId);
+    return !source || !target || (source.workspaceId === target.workspaceId && relation.workspaceId === source.workspaceId);
+  };
+  if (!reasons.size) return { entities, relations: relations.every(sameWorkspace) ? relations : relations.filter(sameWorkspace), heldBack: [] as Entity[], reasons };
   const heldBack: Entity[] = [];
   const sent: Entity[] = [];
   const sentAsKnown = new Set<string>();
@@ -80,7 +93,7 @@ export function forServer(entities: Entity[], relations: Relation[], base: { ent
   const ids = new Set(sent.map((entity) => entity.id));
   const touchesKnown = (relation: Relation) => sentAsKnown.has(relation.sourceEntityId) || sentAsKnown.has(relation.targetEntityId);
   const outgoingRelations = [
-    ...relations.filter((relation) => !touchesKnown(relation)),
+    ...relations.filter((relation) => !touchesKnown(relation) && sameWorkspace(relation)),
     ...(base?.relations || []).filter(touchesKnown),
   ].filter((relation) => ids.has(relation.sourceEntityId) && ids.has(relation.targetEntityId));
   return { entities: sent, relations: outgoingRelations, heldBack, reasons };

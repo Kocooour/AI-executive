@@ -59,3 +59,19 @@ test("notes that are too long are named as the reason", () => {
   const result = forServer([task("n", { properties: { notes: "x".repeat(250_001) } })], [], null);
   assert.equal(result.reasons.get("n"), "longNotes");
 });
+
+test("records of a held workspace the server knows are still sent", () => {
+  const entities = [workspace("team", { title: "x".repeat(130) }), task("t1", { workspaceId: "team" }), task("t2", { workspaceId: "team" })];
+  const relations = [{ ...relation("t1", "t2", "team-link"), workspaceId: "team" }];
+  const base = { entities: [workspace("team"), task("t1", { workspaceId: "team" }), task("t2", { workspaceId: "team" })], relations };
+  const result = forServer(entities, relations, base);
+  assert.deepEqual(result.heldBack.map((entity) => entity.id), ["workspace:team"]);
+  assert.deepEqual(result.entities.map((entity) => [entity.id, entity.title]), [["workspace:team", "team"], ["t1", "t1"], ["t2", "t2"]]);
+  assert.deepEqual(result.relations.map((item) => item.id), ["team-link"]);
+});
+
+test("a relation across workspaces is not sent", () => {
+  const entities = [workspace("w"), task("a"), task("b", { workspaceId: "w" })];
+  const result = forServer(entities, [relation("a", "b", "cross")], null);
+  assert.deepEqual(result.relations, []);
+});

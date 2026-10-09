@@ -49,7 +49,8 @@ export function HeldBack({ app }: { app: LumiApp }) {
             <small>{heldBackReason(app, entity)}</small>
           </span>
           <div className="notificationActions">
-            <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>
+            {/* Data that is not valid cannot be fixed in the app, only deleted. */}
+            {!["invalid", "workspace"].includes(app.heldReasons.get(entity.id) || "") && <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>}
             <button onClick={() => remove(entity)}>{tr("delete")}</button>
           </div>
         </div>
