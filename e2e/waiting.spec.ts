@@ -61,3 +61,37 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   await page.waitForTimeout(300);
   await expect(page.locator(".detail")).toHaveCount(0);
 });
+
+// Changes made quickly one after another, while the first is still being saved: the last one wins,
+// also when it goes back to the value stored before.
+test("the last of quick changes to the waiting fields is kept", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Rychlé změny ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  let id = "";
+  await expect.poll(async () => (id = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await page.goto(`/?task=${id}`);
+  await waitUntilSynced(page);
+  const waiting = page.locator(".waitingField");
+  await waiting.getByLabel("Čeká na odpověď nebo na někoho jiného").click();
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waiting === true, true);
+  await waitUntilSynced(page);
+  // Saves wait at the server meanwhile.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/store", async (route) => { if (route.request().method() === "PUT") await held; await route.continue(); });
+  const field = waiting.getByLabel("Čeká na", { exact: true });
+  await field.fill("Petr");
+  await waiting.getByLabel("Připomenout").focus();
+  await field.fill("");
+  await waiting.getByLabel("Připomenout").fill("2030-01-15");
+  await waiting.getByLabel("Připomenout").fill("");
+  await page.locator(".detail input.titleEdit").focus();
+  release();
+  await waitUntilSynced(page);
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waitingFor === "" && entity.properties?.followUpDate === "", true);
+  await expect(field).toHaveValue("");
+  await expect(waiting.getByLabel("Připomenout")).toHaveValue("");
+});
