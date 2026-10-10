@@ -108,8 +108,19 @@ function priority(item: AttentionItem, entityById: Map<string, Entity>): number 
 
 // Waiting tasks whose follow-up is not due (yet): an item of an earlier follow-up date of such a
 // task was replaced by the new date, not ended (lib/attention-lifecycle.ts).
-export function waitingSubjects(entities: Entity[], workspaceId: string): Set<string> {
-  return new Set(entities.filter((entity) => entity.workspaceId === workspaceId && entity.type === "task" && entity.status === "open" && entity.properties.waiting === true).map((entity) => entity.id));
+// Conditions that go on with another occurrence (a later date) while no item is due yet: a task
+// still waiting (its follow-up date moved or cleared), and an open task still planned for a day
+// (its planned day moved forward). An item of an earlier date of such a task was replaced by the
+// new date, not ended (lib/attention-lifecycle.ts). Keys are `<rule>:<task id>`.
+export function ongoingConditions(entities: Entity[], workspaceId: string): Set<string> {
+  const keys = new Set<string>();
+  for (const entity of entities) {
+    if (entity.workspaceId !== workspaceId || entity.type !== "task" || entity.status !== "open") continue;
+    if (entity.properties.waiting === true) { keys.add(`waiting_follow_up:${entity.id}`); continue; }
+    if (entity.properties.blocked === true || entity.properties.someday === true) continue;
+    if (typeof entity.properties.when === "string" && validDate(entity.properties.when)) keys.add(`planned_date_passed:${entity.id}`);
+  }
+  return keys;
 }
 
 export function evaluateAttention(input: {

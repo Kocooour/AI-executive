@@ -43,7 +43,7 @@ function transitionMissing(previous: StateRow, state: "resolved" | "superseded",
 
 const datedRules = new Set(["deadline", "waiting_follow_up", "planned_date_passed"]);
 
-export function reconcileAttention(workspaceId: string, candidates: AttentionItem[], now: number, stillWaiting: Set<string> = new Set()) {
+export function reconcileAttention(workspaceId: string, candidates: AttentionItem[], now: number, ongoing: Set<string> = new Set()) {
   const database = getDatabase();
   const rows = database.prepare("SELECT * FROM attention_states WHERE workspace_id=?").all(workspaceId) as unknown as StateRow[];
   const byKey = new Map(rows.map((row) => [row.attention_key, row]));
@@ -76,7 +76,7 @@ export function reconcileAttention(workspaceId: string, candidates: AttentionIte
     const replacement = candidates.some((candidate) => candidate.subjectId === previous.subject_id && datedRules.has(family(candidate.ruleId)) && family(candidate.ruleId) === family(previous.rule_id))
       // A follow-up moved to a later date (or cleared) of a task that still waits replaces the old
       // one too, even though the new one is not due yet.
-      || (previous.rule_id === "waiting_follow_up" && stillWaiting.has(previous.subject_id));
+      || ((previous.rule_id === "waiting_follow_up" || previous.rule_id === "planned_date_passed") && ongoing.has(`${previous.rule_id}:${previous.subject_id}`));
     transitionMissing(previous, replacement ? "superseded" : "resolved", now);
   }
   return { items: visible, hidden };

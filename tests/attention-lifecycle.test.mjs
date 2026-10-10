@@ -7,7 +7,7 @@ import test, { after } from "node:test";
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "lumi-attention-lifecycle-"));
 process.env.AI_EXECUTIVE_DATA_DIR = dataDir;
 after(() => rmSync(dataDir, { recursive: true, force: true }));
-const { evaluateAttention, waitingSubjects } = await import("../lib/attention.ts");
+const { evaluateAttention, ongoingConditions } = await import("../lib/attention.ts");
 const { attentionFingerprint, reconcileAttention, setAttentionState } = await import("../lib/attention-lifecycle.ts");
 const { getDatabase } = await import("../lib/server-store.ts");
 const now = Date.parse("2026-10-04T12:00:00Z");
@@ -92,7 +92,7 @@ test("waiting follow-up: a date moved into the future or cleared supersedes, end
     const moved = { ...due, updatedAt: due.updatedAt + 1, properties: { ...due.properties, waiting, followUpDate } };
     const next = evaluateAttention({ entities: [moved], relations: [], workspaceId: "personal", timezone: "Europe/Prague", evaluatedAt: now + 1, dataRevision: 2 });
     assert.equal(next.length, 0, label);
-    reconcileAttention("personal", next, now + 1, waitingSubjects([moved], "personal"));
+    reconcileAttention("personal", next, now + 1, ongoingConditions([moved], "personal"));
     const state = getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(item.attentionKey);
     assert.equal(state.state, expected, label);
   }
@@ -108,4 +108,19 @@ test("planned day: a new date supersedes the item of the old one", () => {
   assert.notEqual(moved.attentionKey, old.attentionKey);
   reconcileAttention("personal", [moved], now + 1);
   assert.equal(getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(old.attentionKey).state, "superseded");
+});
+
+test("planned day: moved forward supersedes, cleared or done resolves", () => {
+  const plannedTask = (id, when, status = "open", updatedAt = 1) => ({ id, type: "task", title: "Planned", status, workspaceId: "personal",
+    properties: { when }, createdAt: 1, updatedAt });
+  for (const [label, when, status, expected] of [["future", "2026-10-20", "open", "superseded"], ["cleared", "", "open", "resolved"], ["done", "2026-10-01", "completed", "resolved"]]) {
+    const id = `planned-${label}`;
+    const [item] = candidates(plannedTask(id, "2026-10-01"));
+    reconcileAttention("personal", [item], now);
+    const moved = plannedTask(id, when, status, 2);
+    const next = evaluateAttention({ entities: [moved], relations: [], workspaceId: "personal", timezone: "Europe/Prague", evaluatedAt: now + 1, dataRevision: 2 });
+    assert.equal(next.length, 0, label);
+    reconcileAttention("personal", next, now + 1, ongoingConditions([moved], "personal"));
+    assert.equal(getDatabase().prepare("SELECT state FROM attention_states WHERE attention_key=?").get(item.attentionKey).state, expected, label);
+  }
 });
