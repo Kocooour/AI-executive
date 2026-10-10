@@ -10,6 +10,9 @@ import { attentionCacheKey } from "./attention-cache";
 const pendingSyncKey = "ai-executive-pending-sync";
 const serverSyncedKey = "ai-executive-server-synced";
 const wipePendingKey = "ai-executive-wipe-pending";
+// Set once access has been confirmed in this browser and removed by signing out: a start without a
+// connection then shows the data kept here (owner decision 2026-10-09), also when there is none yet.
+export const signedInKey = "ai-executive-signed-in";
 const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
@@ -20,6 +23,7 @@ const localDataKeys = [
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
   attentionCacheKey,
+  signedInKey,
 ];
 
 // True when this browser may hold something the server does not: a change waiting to be sent, or

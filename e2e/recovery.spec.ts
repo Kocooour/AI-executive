@@ -297,3 +297,32 @@ test("signing out after an offline start is refused and removes nothing", async 
   await expect(page.locator(".offlineStart")).toContainText("Stále bez spojení.");
   await context.close();
 });
+
+// Signed in before but holding no records (everything deleted): an offline start still shows the
+// app, so a new task can be captured; the retry button is a full touch target on a phone.
+test("an offline start works without any records and has a full-size retry button on a phone", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ", viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  await page.goto("/");
+  await waitUntilSynced(page);
+  // Only this browser's copy is emptied (the server keeps its data).
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const store = request.result.transaction("entities", "readwrite").objectStore("entities");
+      const all = store.getAll();
+      all.onsuccess = () => {
+        for (const entity of all.result as Array<{ id: string; type: string }>) if (entity.type !== "workspace") store.delete(entity.id);
+        store.transaction.oncomplete = () => { request.result.close(); resolve(); };
+      };
+      all.onerror = () => reject(all.error);
+    };
+  }));
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  const banner = page.locator(".offlineStart");
+  await expect(banner).toBeVisible();
+  const box = await banner.locator("button").boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await context.close();
+});

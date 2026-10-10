@@ -1,7 +1,7 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
-import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, signedInKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
@@ -1235,7 +1235,10 @@ export function useLumiApp() {
           setCaptureSuggestion(null);
           // Without a connection there is simply no suggestion; the task can still be added, so
           // this is not shown as an error.
-          setCaptureSuggestionError(error instanceof TypeError ? "" : tr("suggestionUnavailable"));
+          // A request that did not reach the server, or stalled until it was given up (the server is
+          // unreachable), means no connection, not a failed suggestion.
+          const unreachable = error instanceof TypeError || (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"));
+          setCaptureSuggestionError(unreachable ? "" : tr("suggestionUnavailable"));
         }
       } finally {
         window.clearTimeout(abortTimer);
@@ -1416,9 +1419,20 @@ export function useLumiApp() {
   // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
   // checked again in the background; if the server then says the session has ended, the sign-in
   // screen replaces the app, and nothing typed meanwhile is lost (it waits to be sent).
-  const offlineView = authState === "unavailable" && items.some((entity) => entity.type !== "workspace") && (() => {
-    try { return localStorage.getItem("ai-executive-server-synced") === "1" && localStorage.getItem("ai-executive-wipe-pending") !== "1"; } catch { return false; }
+  // Whether this browser is signed in is kept as its own mark, not guessed from the records: an
+  // account may have none (everything deleted). A browser signed in before this mark existed
+  // counts if it has synchronized and holds records.
+  const offlineView = authState === "unavailable" && (() => {
+    try {
+      if (localStorage.getItem("ai-executive-wipe-pending") === "1") return false;
+      if (localStorage.getItem(signedInKey) === "1") return true;
+      return localStorage.getItem("ai-executive-server-synced") === "1" && items.some((entity) => entity.type !== "workspace");
+    } catch { return false; }
   })();
+  useEffect(() => {
+    if (authState !== "ready") return;
+    try { localStorage.setItem(signedInKey, "1"); } catch { /* storage unavailable */ }
+  }, [authState]);
   // "Try again" in the offline banner: a check that still finds no connection says so for a moment.
   const [offlineRetry, setOfflineRetry] = useState<"" | "checking" | "failed">("");
   async function retryAccess() {
