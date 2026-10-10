@@ -49,7 +49,9 @@ export function useSync() {
     setItems([...entities]);
     setRelations([...localRelations]);
     const nextUnsent = unsentIds([...entities], base);
-    const { heldBack: nextHeld, reasons } = forServer([...entities], [], null);
+    // Computed as for saving, with the common version: a record the server knows in a valid form
+    // (and the records of a workspace it knows) is still sent, so it is not shown as held.
+    const { heldBack: nextHeld, reasons } = forServer([...entities], [], base);
     // Only a real change of these sets updates the screen (load() runs after every save).
     setUnsent((previous) => (previous.size === nextUnsent.size && [...nextUnsent].every((id) => previous.has(id)) ? previous : nextUnsent));
     setHeldBack((previous) => (previous.length === nextHeld.length && nextHeld.every((entity, index) => previous[index] === entity || (previous[index]?.id === entity.id && previous[index]?.updatedAt === entity.updatedAt)) ? previous : nextHeld));
@@ -76,9 +78,9 @@ export function useSync() {
       const currentRelations = await db.relations.toArray();
       // Records the server would refuse stay on this device as they are (lib/sendable.ts); they
       // are neither compared nor replaced.
-      const held = forServer(currentEntities, [], null).heldBack;
-      const heldIds = new Set(held.map((entity) => entity.id));
       const oldBase = new Map((await db.baseEntities.toArray()).map((entity) => [entity.id, entity]));
+      const held = forServer(currentEntities, [], { entities: [...oldBase.values()] }).heldBack;
+      const heldIds = new Set(held.map((entity) => entity.id));
       const oldBaseRelations = await db.baseRelations.toArray();
       const withoutHeld = <T extends { id: string }>(list: T[]) => list.filter((entity) => !heldIds.has(entity.id));
       const relationsWithoutHeld = (list: Relation[]) => list.filter((relation) => !heldIds.has(relation.sourceEntityId) && !heldIds.has(relation.targetEntityId));
@@ -126,7 +128,7 @@ export function useSync() {
         const present = new Map((await db.entities.toArray()).map((entity) => [entity.id, entity]));
         // Whether a record is still held is decided as for saving (lib/sendable.ts), with all
         // records as they are now: a valid record in a workspace that cannot be saved stays held.
-        const stillHeld = forServer([...present.values()], [], null).reasons;
+        const stillHeld = forServer([...present.values()], [], { entities: snapshot.entities }).reasons;
         // Changes of this device kept by the merge, in a record that is no longer held, get a new
         // time: with the server's time they would look sent, and nothing would send them.
         const released = withLinkConflicts.flatMap((entity) => {

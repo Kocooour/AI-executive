@@ -58,10 +58,16 @@ export function HeldBack({ app }: { app: LumiApp }) {
             <small>{heldBackReason(app, entity)}</small>
           </span>
           <div className="notificationActions">
-            {fixable.has(app.heldReasons.get(entity.id) || "invalid")
-              ? <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>
-              : <small className="heldBackNoFix">{tr("heldBackOnlyDelete")}</small>}
-            <button onClick={() => remove(entity)}>{tr("delete")}</button>
+            {/* A workspace is not deleted from here: that would leave its records behind without it
+                (and drop them from the server). Its name is fixed in Settings. */}
+            {entity.type === "workspace"
+              ? <small className="heldBackNoFix">{tr(app.heldReasons.get(entity.id) === "longTitle" ? "heldBackWorkspaceFix" : "heldBackWorkspaceNoFix")}</small>
+              : <>
+                {fixable.has(app.heldReasons.get(entity.id) || "invalid")
+                  ? <button onClick={() => inspect(entity)}>{tr("heldBackFix")}</button>
+                  : <small className="heldBackNoFix">{tr("heldBackOnlyDelete")}</small>}
+                <button onClick={() => remove(entity)}>{tr("delete")}</button>
+              </>}
           </div>
         </div>
       ))}

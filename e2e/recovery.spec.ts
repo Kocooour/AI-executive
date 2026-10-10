@@ -202,3 +202,39 @@ test("a task held for its unknown workspace is sent once the workspace exists", 
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expectOnServer(page, (entity) => entity.id === id, true);
 });
+
+// A workspace the server knows, with a name it would refuse (left by an older version): it is
+// not offered for deletion (that would drop its records), and its records are not shown as held
+// because they are still sent.
+test("a held workspace is not offered for deletion and its records are not shown as held", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const workspaceTitle = "W".repeat(130);
+  await page.evaluate((title) => new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const store = request.result.transaction("entities", "readwrite").objectStore("entities");
+      const get = store.get("workspace:personal");
+      get.onsuccess = () => {
+        const put = store.put({ ...get.result, title, updatedAt: Date.now() });
+        put.onsuccess = () => { request.result.close(); resolve(); };
+        put.onerror = () => reject(put.error);
+      };
+    };
+  }), workspaceTitle);
+  await page.reload();
+  await waitUntilSynced(page);
+  const notice = page.locator(".heldBack");
+  await expect(notice.locator(".heldBackItem")).toHaveCount(1);
+  await expect(notice).toContainText("Zkraťte název workspace v Nastavení → Workspace.");
+  await expect(notice.getByRole("button", { name: "Smazat" })).toHaveCount(0);
+  // Put back so that the following scenarios start with a valid workspace.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const store = request.result.transaction("entities", "readwrite").objectStore("entities");
+      const get = store.get("workspace:personal");
+      get.onsuccess = () => { store.put({ ...get.result, title: "Osobní", updatedAt: Date.now() }).onsuccess = () => { request.result.close(); resolve(); }; };
+    };
+  }));
+});
