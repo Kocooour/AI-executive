@@ -79,7 +79,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 // The title stays marked as edited (also for other tabs signing out) until it is
                 // saved; a failed save keeps it marked, and typing on during the save keeps it too.
                 const seq = titleEditSeq.current;
-                rename(selected, e.target.value).then(() => {
+                rename(selected, e.target.value, seq).then(() => {
                   if (titleEditSeq.current !== seq) return;
                   titleEdited.current = false;
                   noteOpenTexts();
@@ -485,7 +485,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <textarea
                     value={notesDraft?.id === selected.id ? notesDraft.text : String(selected.properties.notes || "")}
                     onChange={(e) => editNotes(selected.id, e.target.value, String(selected.properties.notes || ""))}
-                    onBlur={(e) => saveNotes(selected, e.target.value)}
+                    // Only notes typed here are saved: leaving the field unchanged must not write the
+                    // value it showed back over a change made meanwhile in another tab or device.
+                    onBlur={(e) => { if (notesDraft?.id === selected.id) void saveNotes(selected, e.target.value); }}
                     placeholder={tr("notesPlaceholder")}
                   />
                 </label>

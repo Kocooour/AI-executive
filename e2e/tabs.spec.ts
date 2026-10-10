@@ -211,3 +211,42 @@ test("signing out asks about text noted by a tab that does not answer", async ({
   await expect(page.locator(".authCard")).toHaveCount(0);
   await page.evaluate(() => localStorage.removeItem("ai-executive-open-texts:sleeping-tab"));
 });
+
+// Two tabs have the same task open. Notes saved in one are not overwritten when the notes field
+// of the other, never typed into, is left.
+test("leaving an untouched notes field does not write old notes over another tab's", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const first = await context.newPage(), second = await context.newPage();
+  await first.goto("/?view=Inbox");
+  await waitUntilSynced(first);
+  const title = `Poznámky ve dvou kartách ${Date.now()}`;
+  await first.locator(".capture input").fill(title);
+  await first.locator(".capture input").press("Enter");
+  let id = "";
+  await expect.poll(async () => (id = (await serverEntities(first)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await first.goto(`/?task=${id}`);
+  await waitUntilSynced(first);
+  // The second tab has not taken the first tab's change over yet when its field is left: its
+  // messages that the local copy changed are held back.
+  await second.addInitScript(() => {
+    const Original = window.BroadcastChannel;
+    window.BroadcastChannel = class extends Original {
+      set onmessage(handler: ((event: MessageEvent) => void) | null) {
+        super.onmessage = (event: MessageEvent) => { if (event.data?.type !== "changed") handler?.call(this, event); };
+      }
+      get onmessage() { return super.onmessage; }
+    } as typeof BroadcastChannel;
+  });
+  await second.goto(`/?task=${id}`);
+  await waitUntilSynced(second);
+  // The second tab's notes field has focus, nothing is typed into it.
+  await second.getByLabel("Poznámky k úkolu").focus();
+  const notes = `Z první karty ${Date.now()}`;
+  await first.getByLabel("Poznámky k úkolu").fill(notes);
+  await first.locator("input.titleEdit").focus();
+  await expectOnServer(first, (entity) => entity.id === id && entity.properties?.notes === notes, true);
+  await second.locator("input.titleEdit").focus();
+  await second.waitForTimeout(1_500);
+  await expectOnServer(second, (entity) => entity.id === id && entity.properties?.notes === notes, true);
+  await context.close();
+});

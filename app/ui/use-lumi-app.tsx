@@ -3,7 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
-import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
+import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -1390,7 +1390,7 @@ export function useLumiApp() {
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
-    language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
+    language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); postToTabs({ type: "restored", from: tabId.current }); } });
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
@@ -1848,7 +1848,9 @@ export function useLumiApp() {
       setContext(await buildContext(selected.id, 2));
     }
   }
-  async function rename(e: Entity, title: string) {
+  // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
+  // was typed meanwhile, the open detail keeps what is being typed.
+  async function rename(e: Entity, title: string, seq?: number) {
     if (!title.trim()) return;
     const current = (await db.entities.get(e.id)) || e;
     // Leaving the field without a change writes nothing (and cannot put back a replaced title).
@@ -1868,7 +1870,12 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(e.id)) || null);
+    const saved = (await db.entities.get(e.id)) || null;
+    setSelected((open) => {
+      if (!saved) return null;
+      const typedSince = seq !== undefined && titleEditSeq.current !== seq;
+      return open && open.id === saved.id && typedSince ? { ...saved, title: open.title } : saved;
+    });
   }
   async function remove(e: Entity) {
     const linkedRelations = (await db.relations.toArray()).filter(
@@ -1967,6 +1974,14 @@ export function useLumiApp() {
   // The draft is dropped only if nothing was typed into it since this save started. If the save
   // fails the draft stays, so the text is still in the field and is saved next time.
   const pageId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  // A restored backup replaced the data the notes were typed against: the draft is dropped here
+  // and in the device, so it is neither shown nor saved over the restored notes.
+  function dropNotesBeingTyped() {
+    setNotesDraft(null);
+    try { clearPageNotesDrafts(localStorage, pageId.current); } catch { /* storage unavailable */ }
+  }
+  const dropNotesBeingTypedRef = useRef(dropNotesBeingTyped);
+  dropNotesBeingTypedRef.current = dropNotesBeingTyped;
   function editNotes(id: string, text: string, base: string) {
     setNotesDraft({ id, text });
     keepNotesDraft(localStorage, pageId.current, id, text, base);
@@ -2026,6 +2041,7 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
+      if (message.type === "restored") { dropNotesBeingTypedRef.current(); return; }
       // A tab opened (or woken) after the request still stops editing and saves what it can.
       if (message.type === "signing-out") {
         const wasBlocked = document.body.inert;

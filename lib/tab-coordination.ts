@@ -62,7 +62,9 @@ export type TabMessage =
   // keep waiting.
   | { type: "signing-out"; from: string }
   // The sign-out did not happen; the others may edit again.
-  | { type: "sign-out-cancelled"; from: string };
+  | { type: "sign-out-cancelled"; from: string }
+  // A backup was restored: notes being typed were typed against the replaced data and are dropped.
+  | { type: "restored"; from: string };
 
 export function postToTabs(message: TabMessage) {
   if (typeof BroadcastChannel === "undefined") return;

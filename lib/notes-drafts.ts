@@ -80,6 +80,11 @@ export function keptNotesDrafts(storage: DraftStorage): KeptNotesDraft[] {
   return keysOfDrafts(storage).map((key) => parse(storage.getItem(key))).filter(isDraft);
 }
 
+// The drafts of one page (its notes were typed against data a restored backup replaced).
+export function clearPageNotesDrafts(storage: DraftStorage, page: string) {
+  removeAllWithPrefix(storage, `${notesDraftsKey}:${page}:`);
+}
+
 // All drafts of this browser (signing out removes them).
 export function clearNotesDrafts(storage: DraftStorage) {
   removeAllWithPrefix(storage, `${notesDraftsKey}:`);
