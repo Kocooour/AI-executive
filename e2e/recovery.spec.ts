@@ -404,3 +404,62 @@ test("an offline start over a stalled connection shows the data and never waits 
   await expect(page.locator("p.formError")).toContainText("Server není dostupný", { timeout: 20_000 });
   await context.close();
 });
+
+// Over a stalled connection, an action that needs the server (starting work on a task) ends with
+// its usual message instead of staying busy.
+test("an offline start over a stalled connection: starting work on a task does not hang", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Práce bez spojení ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  await expectOnServer(page, (entity) => entity.title === title, true);
+  await page.route("**/api/**", () => undefined);
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible({ timeout: 20_000 });
+  await page.locator("article", { hasText: title }).first().click();
+  const start = page.locator("aside.detail").getByRole("button", { name: "Spustit" });
+  await start.click();
+  await expect(start).toBeEnabled({ timeout: 3_000 });
+  await context.close();
+});
+
+// Started offline, a title is being edited when the server comes back and says the session has
+// ended: the edit is kept in this browser (sent after signing in), not lost with the app screen.
+test("an offline start whose session has ended keeps a title being edited", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const original = `Před úpravou offline ${Date.now()}`;
+  await page.locator(".capture input").fill(original);
+  await page.locator(".capture input").press("Enter");
+  await expectOnServer(page, (entity) => entity.title === original, true);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await page.locator("article", { hasText: original }).first().click();
+  const field = page.locator("input.titleEdit");
+  await expect(field).toHaveValue(original);
+  const edited = `${original} upraveno`;
+  await field.fill(edited);
+  // The field still has focus when the server answers that the session has ended.
+  await context.clearCookies();
+  await page.unroute("**/api/**");
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.locator(".authCard")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => page.evaluate((title) => new Promise<boolean>((resolve) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const all = request.result.transaction("entities").objectStore("entities").getAll();
+      all.onsuccess = () => { resolve((all.result as Array<{ title: string }>).some((entity) => entity.title === title)); request.result.close(); };
+      all.onerror = () => resolve(false);
+    };
+    request.onerror = () => resolve(false);
+  }), edited)).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-pending-sync"))).toBe("1");
+  await context.close();
+});

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
-import { watchSession } from "../../../lib/session-watch";
+import { failWhileOffline, watchSession } from "../../../lib/session-watch";
 import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
@@ -53,9 +53,13 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
   };
   // A sign-in error shown in one language is not kept after the language changes.
   useEffect(() => setAuthError(""), [language]);
+  const offlineMessage = useRef("");
+  offlineMessage.current = tr("offlineStartTitle");
   useEffect(() => {
     const original = window.fetch;
-    const watched = watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current());
+    const watched = failWhileOffline(
+      watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current()),
+      window.location.origin, () => authStateRef.current === "unavailable", () => offlineMessage.current);
     window.fetch = watched as typeof window.fetch;
     return () => { if (window.fetch === watched) window.fetch = original; };
   }, []);
@@ -76,6 +80,9 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         return "misconfigured";
       }
       const next = state.authenticated ? "ready" : "required";
+      // From the offline view straight to the sign-in screen (the session ended meanwhile): leaving
+      // a field commits what was typed in it before the app is taken off the screen.
+      if (next === "required" && authStateRef.current === "unavailable" && document.activeElement instanceof HTMLElement) document.activeElement.blur();
       setAuthState(next);
       return next;
     } catch {
