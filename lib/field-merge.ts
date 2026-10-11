@@ -41,6 +41,7 @@ const unreported = new Set([
   "properties.planningHistory",
   "properties.planningFeedback",
   "properties.workSessionHistory",
+  "properties.waitingSince",
   "properties.manualOrders",
   "properties.manualOrder",
   "properties.relationsUpdatedAt",

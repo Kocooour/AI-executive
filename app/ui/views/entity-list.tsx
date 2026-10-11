@@ -165,6 +165,9 @@ export function EntityList({ app }: { app: LumiApp }) {
                             : null,
                           x.properties.deadline &&
                             tr("deadline") + " " + friendlyDate(x.properties.deadline, language),
+                          x.properties.waiting === true
+                            ? [tr("waitingShort"), typeof x.properties.waitingFor === "string" && x.properties.waitingFor ? x.properties.waitingFor : ""].filter(Boolean).join(": ")
+                            : null,
                           (() => {
                             const areaId = targets(x.id, "belongs_to_area")[0];
                             const area = areas.find((candidate) => candidate.id === areaId);
