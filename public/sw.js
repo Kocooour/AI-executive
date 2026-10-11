@@ -1,5 +1,5 @@
 const CACHE = "ai-executive-shell-v11";
-const SHELL = ["/offline", "/manifest.webmanifest", "/icons/lumi-icon-v3-192.png", "/icons/lumi-icon-v3-512.png"];
+const SHELL = ["/offline", "/manifest.webmanifest", "/icons/lumi-icon-v3-192.png", "/icons/lumi-icon-v3-512.png", "/icons/lumi-icon-v3-maskable-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

@@ -168,6 +168,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 <span className={`installStatus ${standalone ? "installed" : ""}`}>
                   {standalone ? tr("installed") : tr("browserMode")}
                 </span>
+                <p>{tr("refreshInstalledIcon")}</p>
               </section>
               <section hidden={settingsSection !== "workspace"}>
                 <h2>{tr("workspace")}</h2>
