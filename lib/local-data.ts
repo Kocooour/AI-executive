@@ -3,6 +3,7 @@ import { db, readSyncBase } from "./db";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearOpenTexts } from "./open-texts";
+import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
 // Device preferences (theme, language, start view) are not user data and stay.
@@ -18,6 +19,7 @@ const localDataKeys = [
   notesDraftsKey,
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
+  attentionCacheKey,
 ];
 
 // True when this browser may hold something the server does not: a change waiting to be sent, or

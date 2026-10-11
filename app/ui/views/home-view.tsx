@@ -17,6 +17,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     attentionActionsBlocked,
     attentionError,
     attentionOutdated,
+    attentionFromCache,
     attentionStale,
     calendarFresh,
     calendarSources,
@@ -103,14 +104,14 @@ export function HomeView({ app }: { app: LumiApp }) {
         </div>
         {visibleAttention ? <>
           {attentionStale
-            ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr(syncStatus === "offline" ? "attentionStaleOffline" : "attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
+            ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr(syncStatus === "offline" ? "attentionStaleOffline" : attentionFromCache && !attentionOutdated ? "attentionStaleChecking" : "attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
             : <p className="attentionMeta">{tr("attentionSource")} · {tr("attentionEvaluated")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
             {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
               <div className="attentionBody">
                 <strong>{candidate.title}</strong>
                 <p>{attentionReason(candidate, language)}</p>
-                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
+                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
               </div>
               <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);

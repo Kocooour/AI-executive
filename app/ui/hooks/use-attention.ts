@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import type { AttentionResponse } from "../types";
 import { localizeServerError } from "../../../lib/server-errors";
+import { cachedAttention, saveAttention } from "../../../lib/attention-cache";
 
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
 // from use-lumi-app.tsx; the values it needs from the rest of the app are passed in.
-export function useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language }: {
+export function useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
   tr: (key: string) => string;
   language: string;
   authState: string;
@@ -15,11 +16,16 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
   syncStatus: string;
   items: Entity[];
   pendingDeletedIds: () => string[];
+  // True from the moment sign-out removes the local copy: an answer arriving later is not kept.
+  signingOut: () => boolean;
 }) {
   const [attention, setAttention] = useState<AttentionResponse | null>(null),
     [attentionError, setAttentionError] = useState(""),
     [attentionReload, setAttentionReload] = useState(0),
     [attentionOutdated, setAttentionOutdated] = useState(false),
+    // Shown from this browser's copy until the server has evaluated again (not yet known to be
+    // out of date, but snooze and dismiss wait for a fresh evaluation).
+    [attentionFromCache, setAttentionFromCache] = useState(false),
     [attentionBusyKey, setAttentionBusyKey] = useState(""),
     [showAllAttention, setShowAllAttention] = useState(false);
   const attentionLoadVersion = useRef(0);
@@ -42,6 +48,10 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     }
     if (current()) {
       setAttention(data as AttentionResponse);
+      setAttentionFromCache(false);
+      if (!signingOut()) {
+        try { saveAttention(localStorage, data as AttentionResponse); } catch { /* storage unavailable */ }
+      }
       setAttentionOutdated(false);
       setAttentionError("");
     }
@@ -67,9 +77,10 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
   }
 
   const shownAttention = attention?.workspaceId === activeWorkspaceId ? attention : null;
-  const attentionStale = Boolean(shownAttention) && attentionOutdated;
+  // A copy from this browser is marked too, until the server has evaluated again.
+  const attentionStale = Boolean(shownAttention) && (attentionOutdated || attentionFromCache);
   // Snooze and dismiss need the server to hold the same data as this device.
-  const attentionActionsBlocked = attentionOutdated || syncStatus !== "synced";
+  const attentionActionsBlocked = attentionOutdated || attentionFromCache || syncStatus !== "synced";
   // Until the server evaluates again, hide what was finished or deleted on this device meanwhile.
   const visibleAttention = (() => {
     if (!shownAttention || !attentionActionsBlocked) return shownAttention;
@@ -77,14 +88,21 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     return { ...shownAttention, items: shownAttention.items.filter((candidate) => {
       if (deleted.has(candidate.subjectId)) return false;
       const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
-      return local?.status !== "completed";
+      // Gone from the local copy (deleted on another device and already taken over here); while
+      // the local copy is still loading nothing is known yet.
+      if (!local) return items.length === 0;
+      return local.status !== "completed";
     }) };
   })();
-  // The last evaluation survives a lost connection so Home can show it as stale; it is dropped only
-  // when the workspace or the session changes.
+  // The last evaluation survives a lost connection so Home can show it as stale, also after the app
+  // was closed: it is kept in this browser per workspace (lib/attention-cache.ts) and shown as out
+  // of date until the server evaluates again. Signing out removes it.
   useEffect(() => {
     attentionLoadVersion.current += 1;
-    setAttention(null);
+    let kept: AttentionResponse | null = null;
+    try { kept = authState === "ready" ? cachedAttention<AttentionResponse>(localStorage, activeWorkspaceId) : null; } catch { kept = null; }
+    setAttention(kept);
+    setAttentionFromCache(Boolean(kept));
     setAttentionOutdated(false);
     setAttentionError("");
     setShowAllAttention(false);
@@ -128,6 +146,7 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
     attentionActionsBlocked,
     attentionBusyKey,
     attentionError,
+    attentionFromCache,
     attentionOutdated,
     attentionStale,
     loadAttention,

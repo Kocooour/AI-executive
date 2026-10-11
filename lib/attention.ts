@@ -1,6 +1,6 @@
 import type { Entity, Relation } from "./db";
 
-export type AttentionRule = "deadline_overdue" | "deadline_soon" | "waiting_follow_up" | "project_no_next_action" | "project_idle";
+export type AttentionRule = "deadline_overdue" | "deadline_soon" | "waiting_follow_up" | "planned_date_passed" | "project_no_next_action" | "project_idle";
 export interface AttentionClaimActivity {
   id: string;
   workspaceId: string;
@@ -19,11 +19,12 @@ export interface AttentionItem {
   title: string;
   ruleId: AttentionRule;
   ruleVersion: 1;
-  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene (README, Attention contract).
-  severity: 1 | 2 | 3 | 4;
+  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene, 5 planned day passed (README, Attention
+  // contract).
+  severity: 1 | 2 | 3 | 4 | 5;
   reasonCode: AttentionRule;
   reason: string;
-  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string };
+  reasonFacts: { deadlineAllDay?: boolean; lastActivityAt?: number; thresholdHours: number; waitingFor?: string; waitingSince?: number; followUpDate?: string; plannedDate?: string };
   relevantAt: number;
   relevantDate: string;
   timezone: string;
@@ -107,8 +108,19 @@ function priority(item: AttentionItem, entityById: Map<string, Entity>): number 
 
 // Waiting tasks whose follow-up is not due (yet): an item of an earlier follow-up date of such a
 // task was replaced by the new date, not ended (lib/attention-lifecycle.ts).
-export function waitingSubjects(entities: Entity[], workspaceId: string): Set<string> {
-  return new Set(entities.filter((entity) => entity.workspaceId === workspaceId && entity.type === "task" && entity.status === "open" && entity.properties.waiting === true).map((entity) => entity.id));
+// Conditions that go on with another occurrence (a later date) while no item is due yet: a task
+// still waiting (its follow-up date moved or cleared), and an open task still planned for a day
+// (its planned day moved forward). An item of an earlier date of such a task was replaced by the
+// new date, not ended (lib/attention-lifecycle.ts). Keys are `<rule>:<task id>`.
+export function ongoingConditions(entities: Entity[], workspaceId: string): Set<string> {
+  const keys = new Set<string>();
+  for (const entity of entities) {
+    if (entity.workspaceId !== workspaceId || entity.type !== "task" || entity.status !== "open") continue;
+    if (entity.properties.waiting === true) { keys.add(`waiting_follow_up:${entity.id}`); continue; }
+    if (entity.properties.blocked === true || entity.properties.someday === true) continue;
+    if (typeof entity.properties.when === "string" && validDate(entity.properties.when)) keys.add(`planned_date_passed:${entity.id}`);
+  }
+  return keys;
 }
 
 export function evaluateAttention(input: {
@@ -128,7 +140,7 @@ export function evaluateAttention(input: {
   const relations = input.relations.filter((relation) => relation.workspaceId === workspaceId && relation.relationType === "belongs_to_project" && entityById.has(relation.sourceEntityId) && entityById.has(relation.targetEntityId));
   const claims = (input.claims || []).filter((claim) => claim.workspaceId === workspaceId && claim.confirmed && entityById.get(claim.projectId)?.type === "project");
   const output: AttentionItem[] = [];
-  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"], occurrenceKey?: string) {
+  function add(subject: Entity, ruleId: AttentionRule, severity: 1 | 2 | 3 | 4 | 5, relevantAt: number, relevantDate: string, reason: string, sources: Array<{ id: string; revision: number }>, confidence: AttentionItem["confidence"], reasonFacts: AttentionItem["reasonFacts"], occurrenceKey?: string) {
     const occurrence = occurrenceKey ?? (ruleId.startsWith("deadline_") ? relevantAt.toString() : "current");
     output.push({
       attentionKey: key(workspaceId, ruleId, "v1", subject.id, occurrence), workspaceId,
@@ -180,6 +192,21 @@ export function evaluateAttention(input: {
       // Keyed by the date itself (not its instant), so a change of time zone does not bring a
       // dismissed item back.
       followUp ? `date-${followUp}` : `since-${since}`);
+  }
+  // The day a task was planned for ("when") has passed and the task is still open (owner decision
+  // 2026-10-09). Ranked last, so that many tasks left from past days do not push out anything
+  // else. Not for a task that already has a deadline item, waits for someone or for something
+  // else (blocked), or is set aside for someday. A new date is a new occurrence.
+  const withDeadlineItem = new Set(output.filter((item) => item.ruleId.startsWith("deadline_")).map((item) => item.subjectId));
+  for (const task of entities) {
+    if (task.type !== "task" || task.status !== "open" || withDeadlineItem.has(task.id)) continue;
+    if (task.properties.waiting === true || task.properties.blocked === true || task.properties.someday === true) continue;
+    const planned = typeof task.properties.when === "string" && validDate(task.properties.when) ? task.properties.when : "";
+    const passedAt = planned ? endOfLocalDate(planned, timezone) : null;
+    if (passedAt === null || evaluatedAt < passedAt) continue;
+    add(task, "planned_date_passed", 5, passedAt, planned,
+      `Planned date ${planned} (${timezone}) has passed and the task is still open.`,
+      [{ id: task.id, revision: task.updatedAt }], "confirmed", { thresholdHours: 0, plannedDate: planned }, `date-${planned}`);
   }
   for (const project of entities) {
     if (project.type !== "project" || project.status !== "active") continue;
