@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
-import { confirmDialog, expectOnServer, serverEntities, settingsSections, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, serverEntities, settingsSections, sidebarView, waitUntilSynced } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. This browser has
 // synchronized before, so it shows the data it holds, marked as offline (owner decision
@@ -370,5 +370,37 @@ test("after an offline start, quick capture adds a task without waiting for a su
   await modal.getByRole("button", { name: "Přidat úkol" }).click();
   await expect(modal).toHaveCount(0);
   await expect(page.locator("article", { hasText: title })).toBeVisible();
+  await context.close();
+});
+
+// A connection that swallows requests instead of refusing them: nothing in the offline view may
+// wait for it forever. The data kept here is shown, the address follows the view, the assistant
+// says it needs a connection and signing out is refused with the usual explanation.
+test("an offline start over a stalled connection shows the data and never waits forever", async ({ browser }) => {
+  test.setTimeout(120_000);
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Uloženo před zaseknutým spojením ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  await expectOnServer(page, (entity) => entity.title === title, true);
+  await page.route("**/api/**", () => undefined);
+  await page.reload();
+  // The access check gives up after 8 s; the stalled request for the server copy is given up then.
+  await expect(page.locator(".offlineStart")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("article", { hasText: title })).toBeVisible({ timeout: 5_000 });
+  await sidebarView(page, "Dnes").click();
+  await expect(page).toHaveURL(/view=Today/);
+  await page.locator("button", { hasText: "Zeptat se AI" }).first().click();
+  await page.locator(".assistantComposer input").fill("Co mám dnes dělat?");
+  await page.locator(".assistantComposer input").press("Enter");
+  await expect(page.locator(".msg.assistant").last()).toContainText("potřebuje spojení", { timeout: 5_000 });
+  await page.keyboard.press("Escape");
+  await page.locator("button", { hasText: "Nastavení" }).first().click();
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  await expect(page.locator("p.formError")).toContainText("Server není dostupný", { timeout: 20_000 });
   await context.close();
 });

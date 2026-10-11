@@ -208,6 +208,8 @@ export function useLumiApp() {
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
   // Set below where the offline view is decided; the app screen (and its dialog) is shown then too.
   const offlineViewRef = useRef(false);
+  // The first request for the server copy, while it is still waiting for an answer.
+  const startupStoreRequest = useRef<AbortController | null>(null);
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
     // The dialog lives in the app screen; without it a question could never be answered.
@@ -247,6 +249,12 @@ export function useLumiApp() {
     const history = [...messages, user];
     setMessages(history);
     setAiText("");
+    // Access could not be checked (an offline start): the assistant cannot be reached, and asking
+    // would wait on a stalled connection instead of saying so.
+    if (authStateRef.current === "unavailable") {
+      setMessages([...history, { role: "assistant", content: tr("assistantOffline") }]);
+      return;
+    }
     setAiBusy(true);
     try {
       await syncQueue.current;
@@ -744,8 +752,13 @@ export function useLumiApp() {
     async function initialize() {
       const initializationVersion = localDataVersion.current;
       await finishInterruptedWipe();
+      // Given up once the access check finds no connection, so a stalled request does not keep the
+      // offline view empty: the data kept in this browser is shown instead (catch below).
+      const storeRequest = new AbortController();
+      startupStoreRequest.current = storeRequest;
+      if (authStateRef.current === "unavailable") storeRequest.abort();
       try {
-        const response = await fetch("/api/store", { cache: "no-store" });
+        const response = await fetch("/api/store", { cache: "no-store", signal: storeRequest.signal });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
         await ensureDefaultWorkspace();
@@ -867,10 +880,15 @@ export function useLumiApp() {
         await ensureDefaultWorkspace();
         await load();
         setSyncStatus("offline");
+      } finally {
+        if (startupStoreRequest.current === storeRequest) startupStoreRequest.current = null;
       }
     }
     initialize();
   }, []);
+  useEffect(() => {
+    if (authState === "unavailable") startupStoreRequest.current?.abort();
+  }, [authState]);
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
   // possible the user decides whether to drop them. Without the server nothing is removed, because
@@ -901,12 +919,14 @@ export function useLumiApp() {
         hasUnsent: hasUnsentChanges,
         // Notes drafts kept in the device go into the local copy first, so they are sent too.
         sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
-        serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
+        // Both requests are bounded: a stalled connection ends in "no connection", not a sign-out
+        // that never finishes.
+        serverReachable: () => fetch("/api/auth/status", { cache: "no-store", signal: AbortSignal.timeout(8_000) }).then((response) => response.ok).catch(() => false),
         confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
         // From here nothing may be edited and no pull or sync still in flight may write data back.
         block: () => { signedOut.current = true; document.body.inert = true; },
         unblock: () => { signedOut.current = false; document.body.inert = false; },
-        endSession: () => fetch("/api/auth/logout", { method: "POST" }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
+        endSession: () => fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
         wipe: () => clearLocalData().catch(() => undefined),
       });
@@ -979,10 +999,11 @@ export function useLumiApp() {
 
   // The address follows the view: a change of view adds a history step, so Back and Forward move
   // between views and a reload stays where the user was. A record id from a notification link is
-  // dropped from the address once the link has been handled. Nothing is recorded while signed out.
+  // dropped from the address once the link has been handled. Nothing is recorded while signed out;
+  // the offline view (started without a connection) shows the app, so it is recorded there too.
   const addressedView = useRef<string | null>(null);
   useEffect(() => {
-    if (!addressReady || authState !== "ready") return;
+    if (!addressReady || (authState !== "ready" && !offlineViewRef.current)) return;
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
     if (hasRecordLink && !deepLinkDone) return;
     const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
