@@ -6,7 +6,7 @@
 # one prefix directory. Real paths (/opt, /var/lib, /etc, /home) are never touched.
 #
 #   sudo deployment/rehearsal/rehearse.sh            # prefix is a fresh temp directory
-#   REHEARSAL_PREFIX=/srv/rehearsal sudo -E deployment/rehearsal/rehearse.sh
+#   REHEARSAL_PREFIX=/srv/lumi-rehearsal-new sudo -E deployment/rehearsal/rehearse.sh   # must not exist yet
 #
 # The checkout must be built (pnpm build). Ports: 3160 old instance, 3162 new instance (override with
 # OLD_PORT / NEW_PORT). Only the file-system and account separation is exercised. systemd-only
@@ -31,8 +31,17 @@ for port in "$OLD_PORT" "$NEW_PORT"; do
   if (: </dev/tcp/127.0.0.1/"$port") 2>/dev/null; then echo "Port $port is in use." >&2; exit 2; fi
 done
 
-PREFIX=${REHEARSAL_PREFIX:-$(mktemp -d /tmp/lumi-rehearsal.XXXXXX)}
-mkdir -p "$PREFIX" && chmod 0755 "$PREFIX"
+# The prefix is removed at the end, so it must be a directory this run creates: a given
+# REHEARSAL_PREFIX must not exist yet (its parent must).
+if [ -n "${REHEARSAL_PREFIX:-}" ]; then
+  case "$REHEARSAL_PREFIX" in /*) ;; *) echo "REHEARSAL_PREFIX must be an absolute path." >&2; exit 2;; esac
+  [ ! -e "$REHEARSAL_PREFIX" ] || { echo "REHEARSAL_PREFIX $REHEARSAL_PREFIX already exists; give a new path (it is deleted at the end)." >&2; exit 2; }
+  mkdir -- "$REHEARSAL_PREFIX" || exit 2
+  PREFIX=$REHEARSAL_PREFIX
+else
+  PREFIX=$(mktemp -d /tmp/lumi-rehearsal.XXXXXX)
+fi
+chmod 0755 "$PREFIX"
 OLD_HOME=$PREFIX/home/$OLD_USER
 OLD_DIR=$OLD_HOME/app
 OPT=$PREFIX/opt/ai-executive
@@ -49,7 +58,7 @@ CREATED_USERS=()
 PASS=0
 FAIL=0
 cleanup() {
-  local pid
+  local status=$? pid
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -- "-$pid" 2>/dev/null; done
   sleep 1
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -9 -- "-$pid" 2>/dev/null; done
@@ -60,7 +69,10 @@ cleanup() {
   if [ -z "${KEEP:-}" ]; then rm -rf -- "$PREFIX"; else echo "Prefix kept: $PREFIX"; fi
   echo
   echo "SUMMARY: $PASS passed, $FAIL failed"
-  if [ "$FAIL" -eq 0 ] && [ "$PASS" -gt 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+  if [ "$FAIL" -eq 0 ] && [ "$PASS" -gt 0 ] && [ "$status" -eq 0 ]; then echo "RESULT: PASS"; exit 0; fi
+  echo "RESULT: FAIL"
+  # The exit status says the same as the summary (also for an early exit or an interruption).
+  [ "$status" -ne 0 ] && exit "$status"; exit 1
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM

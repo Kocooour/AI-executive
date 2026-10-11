@@ -27,7 +27,7 @@ Okno: vlastník potvrdil, že přechod lze provést kdykoli (systém se ještě 
 
 ## Zkouška nanečisto
 
-Privilegovaný systemd kontejner v tomto prostředí nebyl povolen, proto vznikla nejbližší bezpečná aproximace: [`deployment/rehearsal/rehearse.sh`](../deployment/rehearsal/rehearse.sh). Spouští se jako root v **jednorázovém** stroji nebo kontejneru (`pnpm install --frozen-lockfile && pnpm build`, pak `sudo deployment/rehearsal/rehearse.sh`). Skript vytvoří uživatele `lumi-old` (náhrada za `hermesadmin`, domov `0750`) a `ai-executive`, vše ostatní drží pod jedním prefixem (výchozí dočasný adresář), na konci uklidí procesy, účty i prefix a vypíše `RESULT: PASS|FAIL`. Porty: `3160` (starý), `3162` (nový).
+Privilegovaný systemd kontejner v tomto prostředí nebyl povolen, proto vznikla nejbližší bezpečná aproximace: [`deployment/rehearsal/rehearse.sh`](../deployment/rehearsal/rehearse.sh). Spouští se jako root v **jednorázovém** stroji nebo kontejneru (`pnpm install --frozen-lockfile && pnpm build`, pak `sudo deployment/rehearsal/rehearse.sh`; kód návratu je `0` jen při `RESULT: PASS`, zadaný `REHEARSAL_PREFIX` nesmí existovat, protože se na konci maže). Skript vytvoří uživatele `lumi-old` (náhrada za `hermesadmin`, domov `0750`) a `ai-executive`, vše ostatní drží pod jedním prefixem (výchozí dočasný adresář), na konci uklidí procesy, účty i prefix a vypíše `RESULT: PASS|FAIL`. Porty: `3160` (starý), `3162` (nový).
 
 Nacvičeno (kroky 2–5, 8 a 9 upravené na prefix, bez systemd):
 
@@ -612,7 +612,9 @@ on_error() {
   if [ "$(git -C /opt/ai-executive rev-parse HEAD)" = "$PREV" ]; then
     echo "Kod se nezmenil -> spoustim sluzbu zpet."; systemctl start ai-executive
   else
-    echo "Kod se zmenil, sluzba ZUSTAVA ZASTAVENA. Navrat:"
+    # Nova verze nesmi bezet, kdyz build, start nebo kontrola dat po startu selhaly.
+    systemctl stop ai-executive
+    echo "Kod se zmenil, sluzba je ZASTAVENA. Navrat:"
     echo "  cd /opt/ai-executive && git reset --hard $PREV && pnpm install --frozen-lockfile && pnpm build"
     echo "  find /var/lib/ai-executive -mindepth 1 -delete && cp -a $B/data/. /var/lib/ai-executive/   # jen pokud nova verze zmenila data"
     echo "  chown -R ai-executive:ai-executive /var/lib/ai-executive; systemctl start ai-executive"
@@ -646,9 +648,10 @@ fi
 systemctl start ai-executive
 for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
 curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest || { echo "NEPRIPRAVENO: nova verze neodpovida"; false; }   # spusti trap
-trap - ERR INT TERM HUP
+# Trap zustava aktivni i pro kontrolu dat po startu: poskozena data nebo chybejici zaznamy novou verzi zastavi.
 runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$B/fakta-po.json"
 cmp_tables "$B/fakta-pred.json" "$B/fakta-po.json" "$VOLATILE" "$IGNORED"
+trap - ERR INT TERM HUP
 echo "Nasazeno: $PREV -> $(git rev-parse HEAD); zaloha $B"
 ```
 
