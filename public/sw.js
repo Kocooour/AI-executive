@@ -1,5 +1,5 @@
-const CACHE = "ai-executive-shell-v10";
-const SHELL = ["/offline", "/manifest.webmanifest", "/icons/lumi-icon-v2-192.png", "/icons/lumi-icon-v2-512.png"];
+const CACHE = "ai-executive-shell-v11";
+const SHELL = ["/offline", "/manifest.webmanifest", "/icons/lumi-icon-v3-192.png", "/icons/lumi-icon-v3-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
@@ -71,8 +71,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     Promise.all([badgePromise, self.registration.showNotification(payload.title || "Lumi", {
       body: payload.body || "A task needs your attention.",
-      icon: "/icons/lumi-icon-v2-192.png",
-      badge: "/icons/lumi-icon-v2-192.png",
+      icon: "/icons/lumi-icon-v3-192.png",
+      badge: "/icons/lumi-icon-v3-192.png",
       tag: payload.tag || "ai-executive-reminder",
       requireInteraction: Boolean(payload.requireInteraction),
       data: { url: payload.url || "/?view=Today" },
