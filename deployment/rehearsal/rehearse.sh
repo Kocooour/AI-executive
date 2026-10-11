@@ -84,7 +84,9 @@ equal "the new account is not in the old account's group" "$(id -nG "$NEW_USER" 
 step "Old installation (stand-in for hermesadmin)"
 mkdir -p "$OLD_HOME"
 cp -a "$REPO" "$OLD_DIR"
-rm -rf "$OLD_DIR/.git" "$OLD_DIR/.data" "$OLD_DIR/test-results" "$OLD_DIR"/.env*
+# Like a real checkout: the tracked .env.example stays, any other .env* and .data do not.
+rm -rf "$OLD_DIR/.git" "$OLD_DIR/.data" "$OLD_DIR/test-results"
+find "$OLD_DIR" -maxdepth 1 -name '.env*' ! -name .env.example -delete
 chown -R "$OLD_USER:$OLD_USER" "$OLD_HOME" && chmod 0750 "$OLD_HOME"
 HASH=$(printf '%s\n' "$PASSWORD" | (cd "$REPO" && "$NODE" scripts/hash-password.mjs 2>/dev/null) | tail -n 1)
 SECRET=$(head -c 48 /dev/urandom | base64 -w0)
@@ -196,9 +198,22 @@ OLD_SHA=$(sha256sum "$OLD_DIR/.data/store.sqlite" | cut -d' ' -f1)
 # --- procedure step 4: code (root-owned) -------------------------------------------------------
 step "Procedure step 4: code directory"
 cp -a "$REPO" "$OPT"
-rm -rf "$OPT/.git" "$OPT/.data" "$OPT/test-results" "$OPT"/.env*
+rm -rf "$OPT/.git" "$OPT/.data" "$OPT/test-results"
+find "$OPT" -maxdepth 1 -name '.env*' ! -name .env.example -delete
 chown -R root:root "$OPT" && chmod -R go-w "$OPT" && chmod 0755 "$OPT"
-check_not "no .env* or .data in the code directory" bash -c "ls -A '$OPT' | grep -E '^\.(env|data)'"
+# The runbook's own check (step 4): only the tracked .env.example is allowed.
+code_dir_clean() { [ -z "$(ls -A "$1" | grep -E '^\.(env|data)' | grep -vxF '.env.example' || true)" ]; }
+check ".env.example is present and the runbook check for stray .env*/.data passes" bash -c "$(declare -f code_dir_clean); test -f '$OPT/.env.example' && code_dir_clean '$OPT'"
+mkdir -p "$OPT/.data" && check_not "the same check fails when a .data directory is present" bash -c "$(declare -f code_dir_clean); code_dir_clean '$OPT'"; rmdir "$OPT/.data"
+touch "$OPT/.env.local" && check_not "the same check fails when .env.local is present" bash -c "$(declare -f code_dir_clean); code_dir_clean '$OPT'"; rm -f "$OPT/.env.local"
+# Procedure step 4: root clones a checkout owned by another account. Plain `git clone` is refused
+# ("dubious ownership"); the runbook uses a temporary global config with safe.directory = *.
+GITSRC=$OLD_HOME/gitsrc
+runuser -u "$OLD_USER" -- bash -c "mkdir '$GITSRC' && cd '$GITSRC' && git init -q -b main && echo x > f && git add f && git -c user.name=t -c user.email=t@t commit -q -m init"
+check_not "plain git clone as root of a foreign-owned repo is refused" git clone -q --no-hardlinks "$GITSRC" "$PREFIX/clone-plain"
+SAFE=$(mktemp); printf '[safe]\n\tdirectory = *\n' > "$SAFE"
+check "git clone as root of a foreign-owned repo works with the temporary global config" env GIT_CONFIG_GLOBAL="$SAFE" git clone -q --no-hardlinks "$GITSRC" "$PREFIX/clone-ok"
+rm -f "$SAFE"; rm -rf "$PREFIX/clone-plain" "$PREFIX/clone-ok" "$GITSRC"
 check_not "the service user cannot write to the code directory" runuser -u "$NEW_USER" -- touch "$OPT/probe"
 check_not "the service user cannot write to .next" runuser -u "$NEW_USER" -- touch "$OPT/.next/probe"
 

@@ -424,8 +424,8 @@ Acceptance tests must cover integration with existing tasks, workspaces, offline
 - An existing `.data/store.json` is migrated on first access without changing entity IDs or relations and remains as a recovery copy.
 - Logical JSON backups live in `.data/backups`. Settings can create and restore them; restore creates a safety backup first.
 - One automatic daily backup is created before the first data change of the day.
-- `AI_EXECUTIVE_DATA_DIR`, when set, must be an absolute path (a relative value would depend on the working directory and is rejected at start). After the move to a dedicated service account, production uses `/var/lib/ai-executive`.
-- `pnpm check-data <path to store.sqlite>` opens a database (or a copied backup) read-only and prints only integrity results, row counts per table, size and SHA-256; it never prints content.
+- `AI_EXECUTIVE_DATA_DIR`, when set, must be an absolute path (a relative value would depend on the working directory, so it is rejected: the process stays up, but `next build` fails and every request that touches the store answers 500). After the move to a dedicated service account, production uses `/var/lib/ai-executive`.
+- `pnpm check-data <path to store.sqlite>` opens a database (or a copied backup) read-only and prints only integrity results, row counts per table, and size/SHA-256 of the file (plus WAL size); it never prints content, exits 1 when the file has no tables, and should be run as the account that owns the data (opening creates `-wal`/`-shm`).
 
 These describe current backups. Graph v2's complete context export, encrypted recovery and history coverage are target requirements above, not claims about existing logical JSON backups.
 

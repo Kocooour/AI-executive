@@ -1,8 +1,15 @@
 // Read-only verification of a Lumi SQLite file (live data, or a copied backup).
 // Prints only non-content facts: integrity result, row counts, size and checksum.
-// Exit code: 0 integrity ok, 1 not ok / unreadable, 2 usage error.
+// Exit code: 0 integrity ok and at least one table, 1 not ok / unreadable / no tables, 2 usage error.
+//
+// Notes for the migration procedure:
+// - With WAL the recent data may live in `-wal`, so the checksum of the main file alone proves nothing;
+//   the table counts (and the backup manifest) are the real controls. The WAL size and checksum are
+//   reported so a difference is visible.
+// - Even a read-only open creates `-wal`/`-shm` when they are missing, and updates `-shm`. Run it as
+//   the account that owns the data, or on a root-owned copy.
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 const file = process.argv[2];
@@ -12,11 +19,18 @@ if (!file || process.argv.length > 3) {
 }
 
 const quote = (name) => `"${name.replaceAll('"', '""')}"`;
-const result = { file, integrity: "unreadable", foreignKeyViolations: null, tables: {}, sizeBytes: null, sha256: null };
+const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const result = {
+  file, integrity: "unreadable", foreignKeyViolations: null, tables: {},
+  mainFileBytes: null, mainFileSha256: null, walBytes: null, walSha256: null, shmBytes: null,
+};
 let code = 1;
 try {
-  result.sizeBytes = statSync(file).size;
-  result.sha256 = createHash("sha256").update(readFileSync(file)).digest("hex");
+  // Facts about the files are taken before opening: opening may create or touch -wal/-shm.
+  result.mainFileBytes = statSync(file).size;
+  result.mainFileSha256 = sha256(file);
+  if (existsSync(`${file}-wal`)) { result.walBytes = statSync(`${file}-wal`).size; result.walSha256 = sha256(`${file}-wal`); }
+  if (existsSync(`${file}-shm`)) result.shmBytes = statSync(`${file}-shm`).size;
   const database = new DatabaseSync(file, { readOnly: true });
   try {
     const integrity = database.prepare("PRAGMA integrity_check").all();
@@ -26,7 +40,9 @@ try {
     for (const { name } of tables) {
       result.tables[name] = Number(database.prepare(`SELECT COUNT(*) AS count FROM ${quote(name)}`).get().count);
     }
-    if (result.integrity === "ok" && result.foreignKeyViolations === 0) code = 0;
+    // An empty or non-Lumi file passes integrity_check with no tables; that is not a usable database.
+    if (Object.keys(result.tables).length === 0) result.problem = "no-tables";
+    else if (result.integrity === "ok" && result.foreignKeyViolations === 0) code = 0;
   } finally {
     database.close();
   }
