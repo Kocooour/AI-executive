@@ -136,20 +136,25 @@ git -c safe.directory='*' -C "$OLD_DIR" status --porcelain | head -n 20
   printf 'OLD_USER=%q\nOLD_DIR=%q\nOLD_HOME=%q\nOLD_ENV=%q\nOLD_DATA=%q\nALERTS=%q\nTS=%q\nBK=%q\nOLD_HEAD=%q\nOLD_BRANCH=%q\nORIGIN_URL=%q\n' \
     "$OLD_USER" "$OLD_DIR" "$OLD_HOME" "$OLD_ENV" "$OLD_DATA" "$ALERTS" "$TS" "/var/backups/ai-executive/pre-account-$TS" "$OLD_HEAD" "$OLD_BRANCH" "$ORIGIN_URL"
   cat <<'FUNCS'
-# cmp_tables <pred.json> <po.json> [volatile,tables]: stabilni tabulky musi byt stejne, volatilni nesmi ubyt.
+# cmp_tables <pred.json> <po.json> [volatile,tables] [ignored,tables]: stabilni tabulky musi byt stejne,
+# volatilni nesmi ubyt, ignorovane (zaznamy s kratkou platnosti) se jen vypisou.
 cmp_tables() {
   /usr/bin/node -e '
-    const fs = require("fs"); const [a, b, volatile = ""] = process.argv.slice(1);
+    const fs = require("fs"); const [a, b, volatile = "", ignored = ""] = process.argv.slice(1);
     const x = JSON.parse(fs.readFileSync(a, "utf8")).tables, y = JSON.parse(fs.readFileSync(b, "utf8")).tables;
-    const soft = new Set(volatile.split(",").filter(Boolean)); let bad = 0;
+    const soft = new Set(volatile.split(",").filter(Boolean)), skip = new Set(ignored.split(",").filter(Boolean)); let bad = 0;
     for (const name of new Set([...Object.keys(x), ...Object.keys(y)])) {
+      if (skip.has(name)) { console.log("INFO", name, x[name], "->", y[name]); continue; }
       const ok = soft.has(name) ? (y[name] ?? 0) >= (x[name] ?? 0) : x[name] === y[name];
       if (!ok) { bad++; console.log("ROZDIL", name, x[name], "->", y[name]); }
     }
     console.log(bad ? "TABULKY: ROZDIL" : "TABULKY: shodne"); process.exit(bad ? 1 : 0);
   ' "$@"
 }
-VOLATILE=security_events,security_alerts,passkey_challenges,notification_deliveries,metadata,calendar_events
+# Po startu je meni sama sluzba (bezpecnostni log, plan. vyhodnoceni pozornosti kazdych 5 min, push, kalendar).
+VOLATILE=security_events,security_alerts,notification_deliveries,metadata,attention_states,attention_history,pact_agent_runs
+# Zaznamy, ktere se samy nahrazuji nebo vyprsi (5min navrhy AI, vyzvy passkey, udalosti obnovenych kalendaru).
+IGNORED=ai_proposals,passkey_challenges,calendar_events
 FUNCS
 } > /var/backups/ai-executive/migrace.vars
 chmod 0600 /var/backups/ai-executive/migrace.vars
@@ -318,7 +323,7 @@ if [ "$ALERTS" = 1 ]; then
 fi
 ```
 
-Poznámka: `grep ... || true` v podmínce výše je záměrně tolerantní; drop-in, který žádnou z uvedených voleb nenastavuje, se jen nahlásí. Nebylo-li doplněk bezpečnostních upozornění nainstalován (`ALERTS=0`), drop-in `20-security-alerts.conf` v adresáři být nesmí; pokud tam přesto je, přesuňte ho také do zálohy a nahlaste to. Doplněk se při kroku 6 nemusí instalovat znovu, jeho drop-in zůstává; `ops/security-alerts/install.sh` lze spustit později, čte `User` z `systemctl show` a vlastníka fronty nastaví na `ai-executive:hermes`, `2770`, ale také restartuje službu (proto je v tomto kroku nahrazeno přímým `chown`/`chmod`).
+Poznámka: drop-in, který žádnou z uvedených voleb nenastavuje, se jen nahlásí a zůstává. Doplněk se při kroku 6 nemusí instalovat znovu, jeho drop-in zůstává; `ops/security-alerts/install.sh` lze spustit později, čte `User` z `systemctl show` a vlastníka fronty nastaví na `ai-executive:hermes`, `2770`, ale také restartuje službu (proto je v tomto kroku nahrazeno přímým `chown`/`chmod`).
 
 **Kontrola:** `systemd-analyze verify` bez chyb; `systemctl cat` ukazuje `User=ai-executive`, `WorkingDirectory=/opt/ai-executive`, `ExecStart=/usr/bin/node /opt/ai-executive/node_modules/next/dist/bin/next start --hostname 127.0.0.1`, `EnvironmentFile=/etc/ai-executive/ai-executive.env` a (jen s doplňkem) `ReadWritePaths=/var/lib/ai-executive-security/outbox`; zaznamenat skóre `systemd-analyze security` (očekává se výrazně lepší než u staré jednotky, hodnotu jen uvést do hlášení); fronta má `2770 ai-executive:hermes`.
 **Když selže:** vrátit původní jednotku a drop-iny ze zálohy (krok 9) a nahlásit výstup `systemd-analyze verify`.
@@ -363,11 +368,12 @@ want "systemd User" "$(systemctl show ai-executive -p User --value)" ai-executiv
 want "proces bezi pod" "$(ps -o user= -p "$MAINPID" | tr -d ' ')" ai-executive
 
 echo "== izolace"
-chk_not "ai-executive necte /home/$OLD_USER" runuser -u ai-executive -- ls "/home/$OLD_USER"
+chk_not "ai-executive necte domov $OLD_HOME" runuser -u ai-executive -- ls "$OLD_HOME"
 chk_not "ai-executive necte stare .data" runuser -u ai-executive -- test -r "$OLD_DATA/store.sqlite"
 runuser -u ai-executive -- test -r "$OLD_ENV" && echo "INFO  stary .env je cten uctem ai-executive (domov/soubor ma siroka prava); odstrani to krok 10" || echo "OK    ai-executive necte stary .env"
 want "ProtectHome: /home ve jmennem prostoru sluzby je prazdny" "$(nsenter -t "$MAINPID" -m ls -A /home | wc -l | tr -d ' ')" 0
 chk_not "ProtectSystem=strict: zapis do /opt/ai-executive selze (i pro root v namespace)" nsenter -t "$MAINPID" -m sh -c 'touch /opt/ai-executive/.probe'
+rm -f /opt/ai-executive/.probe  # kdyby zapis presto prosel, nesmi zustat v checkoutu (krok 11 vyzaduje cisty stav)
 chk "StateDirectory je v namespace zapisovatelny" nsenter -t "$MAINPID" -m sh -c 'touch /var/lib/ai-executive/.probe && rm /var/lib/ai-executive/.probe'
 echo "== poslech (ocekavano jen 127.0.0.1:3000)"; ss -ltnp | grep -E 'pid='"$MAINPID" || true
 want "pocet poslechu na 3000 mimo 127.0.0.1" "$(ss -ltn | awk '$4 ~ /:3000$/ && $4 != "127.0.0.1:3000"' | wc -l | tr -d ' ')" 0
@@ -386,7 +392,7 @@ tailscale serve status || true
 echo "== integrita a pocty (po startu)"
 runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$BK/fakta-po-startu.json"; echo "check-data exit=$?"
 cat "$BK/fakta-po-startu.json"
-cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-startu.json" "$VOLATILE" || FAILS=$((FAILS+1))
+cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-startu.json" "$VOLATILE" "$IGNORED" || FAILS=$((FAILS+1))
 echo "VAPID/predplatne push: $(/usr/bin/node -e 'const t=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).tables;console.log("push_subscriptions="+t.push_subscriptions+" metadata="+t.metadata+" calendar_sources="+t.calendar_sources)' "$BK/fakta-po-startu.json")"
 echo "pred:                 $(/usr/bin/node -e 'const t=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).tables;console.log("push_subscriptions="+t.push_subscriptions+" metadata="+t.metadata+" calendar_sources="+t.calendar_sources)' "$BK/fakta-original.json")"
 
@@ -396,14 +402,15 @@ if [ "$ALERTS" = 1 ]; then stat -c '%a %U:%G %n' /var/lib/ai-executive-security/
 echo "Celkem selhani: $FAILS"
 ```
 
-**Kontrola (automatická část):** `Celkem selhání: 0`; `ps` a `User` ukazují `ai-executive`; poslech jen na `127.0.0.1:3000`; `/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200` lokálně i přes HTTPS; `check-data` skončí s `integrity: ok`; stabilní tabulky (`entities`, `relations`, `tombstones`, `calendar_sources`, `push_subscriptions`, `passkey_credentials` a další datové) mají stejné počty jako v `fakta-original.json`, provozní (`security_events`, `notification_deliveries`, `calendar_events`, `metadata`, …) neubyly; v žurnálu `0` chyb přístupu; fronta bezpečnostních upozornění (jen s doplňkem) je `2770 ai-executive:hermes`.
+**Kontrola (automatická část):** `Celkem selhání: 0`; `ps` a `User` ukazují `ai-executive`; poslech jen na `127.0.0.1:3000`; `/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200` lokálně i přes HTTPS; `check-data` skončí s `integrity: ok`; stabilní tabulky (`entities`, `relations`, `tombstones`, `calendar_sources`, `push_subscriptions`, `passkey_credentials` a další datové) mají stejné počty jako v `fakta-original.json`, provozní (`security_events`, `notification_deliveries`, `metadata`, `attention_*`, …) neubyly, krátkodobé (`ai_proposals`, `passkey_challenges`, `calendar_events`) se jen vypíšou jako `INFO`; v žurnálu `0` chyb přístupu; fronta bezpečnostních upozornění (jen s doplňkem) je `2770 ai-executive:hermes`.
 
 Kontroly **vyžadující vlastníka** (požádat ho o ně a výsledek zapsat do hlášení; nelze je ověřit ze serveru):
 
 1. **Přihlášení** v prohlížeči/PWA na `https://vm13861.tail412944.ts.net:8443` stávajícím heslem (potvrzuje shodný hash a secret; relace ze starého běhu zůstanou platné, protože secret je stejný).
 2. **Push (vyžaduje vlastníka):** v Nastavení na iPhonu odeslat zkušební oznámení; musí dorazit. Počet `push_subscriptions` a `metadata` (VAPID) se nesmí změnit, jinak by předplatné přestalo platit.
 3. **Kalendář (vyžaduje vlastníka):** v pohledu Kalendář vynutit obnovení; počet `calendar_sources` se nezměnil a žurnál po obnovení neobsahuje chyby stahování (`journalctl -u ai-executive --since "5 min ago" --no-pager`).
-4. **Zálohy (vyžaduje vlastníka):** v Nastavení vytvořit zálohu. Poté ověřit:
+4. **Asistent (vyžaduje vlastníka, jen když `.env` obsahuje `OPENAI_API_KEY` nebo `HERMES_*`, viz klíče z kroku 1):** položit asistentovi krátký dotaz; musí odpovědět bez chyby spojení. Ověřuje, že poskytovatel AI a most Hermes jsou ze sandboxu dosažitelné (`RestrictAddressFamilies` povoluje jen IP a unixové sockety; most běžící na unixovém socketu v domově `hermesadmin` by byl skrytý `ProtectHome`).
+5. **Zálohy (vyžaduje vlastníka):** v Nastavení vytvořit zálohu. Poté ověřit:
 
    ```bash
    ls -l --time-style=full-iso /var/lib/ai-executive/backups | tail -n 3
@@ -412,7 +419,7 @@ Kontroly **vyžadující vlastníka** (požádat ho o ně a výsledek zapsat do 
 
    Nový soubor má `600 ai-executive:ai-executive` a leží v `/var/lib/ai-executive/backups`, ne ve starém `.data`.
 
-**Když selže** jakákoli automatická kontrola nebo vlastník nepotvrdí body 1–4: krok 9.
+**Když selže** jakákoli automatická kontrola nebo vlastník nepotvrdí body 1–5: krok 9.
 
 ### 9. Návrat zpět
 
@@ -444,7 +451,7 @@ curl -sS -o /dev/null -w '/api/store: %{http_code}\n' http://127.0.0.1:3000/api/
 curl -sS -o /dev/null -w '/api/auth/status: %{http_code}\n' http://127.0.0.1:3000/api/auth/status
 curl -sS -o /dev/null -w 'HTTPS /api/store: %{http_code}\n' --max-time 15 https://vm13861.tail412944.ts.net:8443/api/store
 /usr/bin/node "$OLD_DIR/scripts/check-data.mjs" "$OLD_DATA/store.sqlite" | tee "$BK/fakta-po-navratu.json"
-cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-navratu.json" "$VOLATILE"
+cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-navratu.json" "$VOLATILE" "$IGNORED"
 ```
 
 **Kontrola:** `User=` je původní účet, `WorkingDirectory` původní checkout, `/api/store` → `401`, `/api/auth/status` → `200`, HTTPS `401`, integrita `ok`, počty beze změny.
@@ -453,7 +460,7 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-navratu.json" "$VOLATILE"
 
 ### 10. Úklid po úspěchu
 
-Teprve po výslovném potvrzení vlastníka, že kroky 8 včetně bodů „vyžaduje vlastníka“ prošly. Tím sdílený účet přestane mít přístup ke starým kopiím dat a tajných údajů. Po tomto kroku už krok 9 nefunguje v původní podobě (obnova by šla ze `old-home-*`).
+Teprve po výslovném potvrzení vlastníka, že krok 8 včetně bodů „vyžaduje vlastníka“ prošly. Tím sdílený účet přestane mít přístup ke starým kopiím dat a tajných údajů. Po tomto kroku už krok 9 nefunguje v původní podobě (obnova by šla ze `old-home-*`).
 
 ```bash
 set -euo pipefail
@@ -512,7 +519,7 @@ systemctl start ai-executive
 for i in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
 ```
 
-Poté stejné kontroly jako v kroku 8: služba aktivní a pod `ai-executive`; integrita a počty (`check-data` se `cmp_tables "$B/fakta-pred.json" <nove> "$VOLATILE"`); autentizační hranice (`/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200`) lokálně i přes `https://vm13861.tail412944.ts.net:8443`; žurnál bez `EACCES`/`EROFS`/`SQLITE_CANTOPEN`.
+Poté stejné kontroly jako v kroku 8: služba aktivní a pod `ai-executive`; integrita a počty (`check-data` se `cmp_tables "$B/fakta-pred.json" <nove> "$VOLATILE" "$IGNORED"`; proměnné a funkci načte `. /var/backups/ai-executive/migrace.vars`); autentizační hranice (`/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200`) lokálně i přes `https://vm13861.tail412944.ts.net:8443`; žurnál bez `EACCES`/`EROFS`/`SQLITE_CANTOPEN`.
 
 Návrat chybné verze: `systemctl stop ai-executive`, `git reset --hard "$PREV"`, `pnpm install --frozen-lockfile && pnpm build`, a pokud nová verze změnila data, obnovit `"$B/data"` do `/var/lib/ai-executive` (`ai-executive:ai-executive`, `0700`/`0600`) a znovu ověřit `check-data`; pak `systemctl start ai-executive` a kontroly z kroku 8.
 
