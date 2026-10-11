@@ -24,13 +24,27 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 
 const requestUrl = (input: RequestInfo | URL) => (typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
 
-// While access could not be checked (an app started without a connection), data requests fail at
-// once as "no connection" instead of waiting on a connection that may swallow them; every action
-// then ends with its usual offline handling. Sign-in and access checks still go out, so the app
-// notices when the server is back.
+// What still goes out while access could not be checked: the access check, signing in (password or
+// passkey) and signing out. Everything else of this origin's API, passkey management included,
+// needs a confirmed session.
+const withoutAccess = new Set(["/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/passkeys/login/options", "/api/auth/passkeys/login/verify"]);
+export function needsAccess(url: string, origin: string): boolean {
+  let target: URL;
+  try {
+    target = new URL(url, origin);
+  } catch {
+    return false;
+  }
+  return target.origin === origin && target.pathname.startsWith("/api/") && !withoutAccess.has(target.pathname);
+}
+
+// While access could not be checked (an app started without a connection), requests that need a
+// session fail at once as "no connection" instead of waiting on a connection that may swallow them;
+// every action then ends with its usual offline handling. The access check, signing in and signing
+// out still go out, so the app notices when the server is back.
 export function failWhileOffline(fetchImpl: FetchLike, origin: string, offline: () => boolean, message: () => string): FetchLike {
   return (input, init) => {
-    if (offline() && isDataRequest(requestUrl(input), origin)) return Promise.reject(new TypeError(message()));
+    if (offline() && needsAccess(requestUrl(input), origin)) return Promise.reject(new TypeError(message()));
     return fetchImpl(input, init);
   };
 }

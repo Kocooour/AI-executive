@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { failWhileOffline, isDataRequest, isSessionEnd, watchSession } = await import("../lib/session-watch.ts");
+const { failWhileOffline, isDataRequest, isSessionEnd, needsAccess, watchSession } = await import("../lib/session-watch.ts");
 const origin = "https://lumi.example";
 
 test("a refused data request ends the session", () => {
@@ -54,6 +54,8 @@ test("while offline, data requests fail at once; sign-in, access checks and othe
   await assert.rejects(() => guarded("/api/work-sessions", { method: "POST" }), (error) => error instanceof TypeError && error.message === "Offline.");
   await assert.rejects(() => guarded(new Request(`${origin}/api/store`)), TypeError);
   await assert.rejects(() => guarded(new URL("/api/day-plan", origin)), TypeError);
+  await assert.rejects(() => guarded("/api/auth/passkeys/register/options", { method: "POST" }), TypeError);
+  await assert.rejects(() => guarded("/api/auth/passkeys", { method: "DELETE" }), TypeError);
   await guarded("/api/auth/status");
   await guarded("/api/auth/logout", { method: "POST" });
   await guarded("https://elsewhere.example/api/store");
@@ -68,4 +70,10 @@ test("a data request is an API of this origin other than sign-in", () => {
   assert.equal(isDataRequest("/api/auth/status", origin), false);
   assert.equal(isDataRequest("https://elsewhere.example/api/store", origin), false);
   assert.equal(isDataRequest("/offline", origin), false);
+});
+
+test("what goes out without confirmed access: the access check, signing in and signing out", () => {
+  for (const path of ["/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/passkeys/login/options", "/api/auth/passkeys/login/verify"]) assert.equal(needsAccess(path, origin), false, path);
+  for (const path of ["/api/store", "/api/auth/passkeys", "/api/auth/passkeys/register/options", "/api/auth/passkeys/register/verify"]) assert.equal(needsAccess(path, origin), true, path);
+  assert.equal(needsAccess("https://elsewhere.example/api/store", origin), false);
 });

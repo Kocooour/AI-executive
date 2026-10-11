@@ -275,6 +275,8 @@ test("an offline start whose session has ended returns to the sign-in screen whe
   await page.unroute("**/api/**");
   await page.locator(".offlineStart button").click();
   await expect(page.locator(".authCard")).toContainText("Přihlásit");
+  // Said the same way as an expiry noticed while online.
+  await expect(page.locator(".authCard .authNotice")).toContainText("Přihlášení vypršelo");
   await context.close();
 });
 

@@ -80,9 +80,16 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         return "misconfigured";
       }
       const next = state.authenticated ? "ready" : "required";
-      // From the offline view straight to the sign-in screen (the session ended meanwhile): leaving
-      // a field commits what was typed in it before the app is taken off the screen.
-      if (next === "required" && authStateRef.current === "unavailable" && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      // From the offline view straight to the sign-in screen: the session ended meanwhile, handled
+      // like an expiry noticed online (sessionEndHandler): leaving a field commits what was typed
+      // in it, the reason is said, and signing in in another tab brings this one back.
+      if (next === "required" && authStateRef.current === "unavailable") {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        answerConfirm(false);
+        setAuthPassword("");
+        setAuthNotice(tr("sessionEnded"));
+        sessionEndedHere.current = true;
+      }
       setAuthState(next);
       return next;
     } catch {
