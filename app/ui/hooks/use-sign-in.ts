@@ -9,11 +9,13 @@ import { localizeServerError } from "../../../lib/server-errors";
 // the sign-in screen when the session ends. Moved verbatim from use-lumi-app.tsx. What happens
 // with the data after signing in, and whether the user has just signed out, belong to the sync
 // part of the app and are passed in as `afterSignIn` and `isSignedOut`.
-export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignIn }: {
+export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOfflineView, afterSignIn }: {
   tr: (key: string) => string;
   language: string;
   answerConfirm: (confirmed: boolean) => void;
   isSignedOut: () => boolean;
+  // The app is shown from this browser's data without confirmed access (a signed-in browser started offline).
+  showsOfflineView: () => boolean;
   afterSignIn: () => Promise<unknown>;
 }) {
   const [authState, setAuthState] = useState<
@@ -83,7 +85,8 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
       // From the offline view straight to the sign-in screen: the session ended meanwhile, handled
       // like an expiry noticed online (sessionEndHandler): leaving a field commits what was typed
       // in it, the reason is said, and signing in in another tab brings this one back.
-      if (next === "required" && authStateRef.current === "unavailable") {
+      // Only a browser that was signed in (and so showed the offline view) has had a session to end.
+      if (next === "required" && authStateRef.current === "unavailable" && showsOfflineView()) {
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         answerConfirm(false);
         setAuthPassword("");

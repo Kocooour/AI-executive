@@ -1,7 +1,7 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
-import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, signedInKey } from "../../lib/local-data";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
@@ -150,6 +150,7 @@ export function useLumiApp() {
     language,
     answerConfirm,
     isSignedOut: () => signedOut.current,
+    showsOfflineView: () => offlineViewRef.current,
     afterSignIn: () => {
       // Whatever this page believed about the server before signing in is not to be trusted
       // (the local copy may have been cleared by a sign-out in another tab).
@@ -874,6 +875,7 @@ export function useLumiApp() {
         }
         if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
+        markSignedIn();
         clearSentMarkers(sentMarkers);
         setSyncStatus("synced");
       } catch {
@@ -1456,10 +1458,6 @@ export function useLumiApp() {
     } catch { return false; }
   })();
   offlineViewRef.current = offlineView;
-  useEffect(() => {
-    if (authState !== "ready") return;
-    try { localStorage.setItem(signedInKey, "1"); } catch { /* storage unavailable */ }
-  }, [authState]);
   // "Try again" in the offline banner: a check that still finds no connection says so for a moment.
   const [offlineRetry, setOfflineRetry] = useState<"" | "checking" | "failed">("");
   async function retryAccess() {

@@ -465,3 +465,38 @@ test("an offline start whose session has ended keeps a title being edited", asyn
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-pending-sync"))).toBe("1");
   await context.close();
 });
+
+// Signed in, but the first synchronization did not complete: this browser does not hold the
+// account's data yet, so a later start without a connection stays on the access screen.
+test("a browser whose first synchronization did not complete stays on the access screen offline", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.route("**/api/store**", (route) => route.abort());
+  await page.goto("/");
+  await expect(page.locator(".appShell")).toBeVisible();
+  await page.waitForTimeout(1_000);
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-signed-in"))).toBeNull();
+  await page.unroute("**/api/store**");
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
+  await expect(page.locator(".offlineStart")).toHaveCount(0);
+  await context.close();
+});
+
+// A browser that was never signed in, started without a connection: when the server answers, it
+// is asked to sign in without being told that a session ended.
+test("a browser never signed in is not told its sign-in expired when the connection comes back", async ({ browser }) => {
+  // No session and no local data (the project's default session is not used here).
+  const context = await browser.newContext({ locale: "cs-CZ", storageState: { cookies: [], origins: [] } });
+  const page = await context.newPage();
+  await page.route("**/api/**", (route) => route.abort());
+  await page.goto("/");
+  await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
+  await page.unroute("**/api/**");
+  // The background check that runs when the connection comes back.
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.locator('.authCard input[type="password"]')).toBeVisible();
+  await expect(page.locator(".authCard .authNotice")).toHaveCount(0);
+  await context.close();
+});

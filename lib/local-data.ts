@@ -10,9 +10,14 @@ import { attentionCacheKey } from "./attention-cache";
 const pendingSyncKey = "ai-executive-pending-sync";
 const serverSyncedKey = "ai-executive-server-synced";
 const wipePendingKey = "ai-executive-wipe-pending";
-// Set once access has been confirmed in this browser and removed by signing out: a start without a
+// Set once this browser has completed a synchronization with the server, removed by signing out: a start without a
 // connection then shows the data kept here (owner decision 2026-10-09), also when there is none yet.
 export const signedInKey = "ai-executive-signed-in";
+// Called when a synchronization with the server has completed: only then does this browser hold the
+// account's data, so only then may a later start without a connection show it.
+export function markSignedIn() {
+  try { localStorage.setItem(signedInKey, "1"); } catch { /* storage unavailable */ }
+}
 const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
