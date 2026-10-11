@@ -83,7 +83,8 @@ test("finishing measured recurring work creates exactly one next occurrence with
   let now = Date.parse("2026-10-03T10:00:00Z");
   const clock = () => now;
   const task = addTask("weekly-task", now, { when: "2026-10-03", estimatedMinutes: 20,
-    recurrence: { frequency: "weekly", interval: 1, mode: "scheduled" } });
+    recurrence: { frequency: "weekly", interval: 1, mode: "scheduled" },
+    waiting: true, waitingFor: "Petr", waitingSince: now - 1000, followUpDate: "2026-10-04" });
   const project = { id: "project-recurring", type: "project", title: "Project", status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now };
   store.getDatabase().prepare("INSERT INTO entities (id,payload,updated_at) VALUES (?,?,?)").run(project.id, JSON.stringify(project), now);
   const relation = { id: randomUUID(), workspaceId: "personal", sourceEntityId: task.id, targetEntityId: project.id,
@@ -98,5 +99,7 @@ test("finishing measured recurring work creates exactly one next occurrence with
   const nextId = `${task.id}:occurrence:2026-10-10`;
   const next = JSON.parse(store.getDatabase().prepare("SELECT payload FROM entities WHERE id=?").get(nextId).payload);
   assert.deepEqual([next.status, next.properties.when, next.properties.recurrenceSeriesId], ["open", "2026-10-10", task.id]);
+  // Waiting belongs to the completed occurrence.
+  assert.deepEqual(["waiting", "waitingFor", "waitingSince", "followUpDate"].filter((key) => key in next.properties), []);
   assert.equal(Number(store.getDatabase().prepare("SELECT COUNT(*) count FROM relations WHERE payload LIKE ?").get(`%${nextId}%`).count), 1);
 });

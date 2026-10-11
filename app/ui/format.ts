@@ -8,13 +8,17 @@ export function attentionReason(item: AttentionItem, language: Language): string
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const last = item.reasonFacts.lastActivityAt
     ? new Date(item.reasonFacts.lastActivityAt).toLocaleString(locale, { timeZone: item.timezone }) : "";
-  const date = item.reasonFacts.deadlineAllDay ? friendlyDate(item.relevantDate, language, item.timezone)
+  const date = item.reasonFacts.deadlineAllDay ? inSentenceDate(item.relevantDate, language, item.timezone)
     : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone });
   const zone = item.reasonFacts.deadlineAllDay ? "" : ` (${item.timezone})`;
   if (language === "cs") {
     switch (item.reasonCode) {
       case "deadline_overdue": return `Termín ${date}${zone} již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
       case "deadline_soon": return `Termín ${date}${zone} je v příštích 48 hodinách.`;
+      case "waiting_follow_up": return item.reasonFacts.followUpDate
+        ? `Nastal den připomenutí ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)}${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`
+        : `Čeká alespoň 7 dní bez data připomenutí${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`;
+      case "planned_date_passed": return `Naplánovaný den ${inSentenceDate(item.reasonFacts.plannedDate || item.relevantDate, language, item.timezone)} uplynul a úkol není hotový.`;
       case "project_no_next_action": return `Projekt nemá otevřený proveditelný úkol alespoň 24 hodin. Poslední zaznamenaná změna: ${last}.`;
       case "project_idle": return `Bez zaznamenané aktivity projektu, propojených úkolů nebo potvrzeného kontextu alespoň 14 dní. Poslední změna: ${last}.`;
     }
@@ -22,6 +26,10 @@ export function attentionReason(item: AttentionItem, language: Language): string
   switch (item.reasonCode) {
     case "deadline_overdue": return `Deadline ${date}${zone} has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
     case "deadline_soon": return `Deadline ${date}${zone} is within 48 hours.`;
+    case "waiting_follow_up": return item.reasonFacts.followUpDate
+      ? `The follow-up date ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)} has come${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`
+      : `Waiting for at least 7 days without a follow-up date${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`;
+    case "planned_date_passed": return `The planned day ${inSentenceDate(item.reasonFacts.plannedDate || item.relevantDate, language, item.timezone)} has passed and the task is not done.`;
     case "project_no_next_action": return `No open actionable task for at least 24 hours. Last recorded change: ${last}.`;
     case "project_idle": return `No recorded project, linked task, or confirmed context activity for at least 14 days. Last change: ${last}.`;
   }
@@ -66,3 +74,9 @@ export const urlBase64ToUint8Array = (base64: string) => {
   const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
 };
+
+// A date inside a sentence: "today", "yesterday" and "tomorrow" are not capitalised there.
+function inSentenceDate(value: string, language: Language, timezone?: string) {
+  const text = friendlyDate(value, language, timezone);
+  return [copy[language].Today, copy[language].yesterday, copy[language].tomorrow].includes(text) ? text.toLocaleLowerCase(language) : text;
+}

@@ -1,4 +1,5 @@
-import { evaluateAttention, type AttentionClaimActivity } from "./attention";
+import { evaluateAttention, ongoingConditions, type AttentionClaimActivity } from "./attention";
+import { reconcileAttention } from "./attention-lifecycle";
 import { listOwnerClaims } from "./context-claims";
 import { getDatabase, type StoreSnapshot } from "./server-store";
 
@@ -13,6 +14,12 @@ export function evaluateWorkspace(snapshot: StoreSnapshot, workspaceId: string, 
     .map((claim) => ({ id: claim.id, workspaceId, projectId: claim.subject.canonicalEntityId!, predicate: claim.predicate,
       revision: claim.revision, updatedAt: claim.updatedAt, confirmed: true, current: claim.freshness === "current" }));
   return evaluateAttention({ entities: snapshot.entities, relations: snapshot.relations, claims, workspaceId, timezone, evaluatedAt, dataRevision: snapshot.revision });
+}
+
+// Evaluates a workspace and brings the stored states up to date.
+export function reconcileWorkspace(snapshot: StoreSnapshot, workspaceId: string, timezone: string, evaluatedAt: number) {
+  const candidates = evaluateWorkspace(snapshot, workspaceId, timezone, evaluatedAt);
+  return { candidates, ...reconcileAttention(workspaceId, candidates, evaluatedAt, ongoingConditions(snapshot.entities, workspaceId)) };
 }
 
 export function withAttentionTransaction<T>(work: () => T): T {

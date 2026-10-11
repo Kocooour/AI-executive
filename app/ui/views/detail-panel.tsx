@@ -5,12 +5,74 @@ import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
+import { heldBackReason } from "./held-back";
+import { useEffect, useRef, useState } from "react";
+
+// What a field has sent and not yet seen come back as the stored value. Saves finish later than
+// they start: comparing a new value with the stored one would skip a change back to it (A → B →
+// A while B is still being saved), and B would win. A newer value is compared with what was sent
+// last instead, and the stored value is shown again once it has caught up.
+function useSentValue(stored: string, show: (value: string) => void, canShow: () => boolean = () => true) {
+  const sent = useRef<string | null>(null);
+  useEffect(() => {
+    if (sent.current !== null && stored !== sent.current) return; // an older save finishing
+    sent.current = null;
+    if (canShow()) show(stored);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stored]);
+  return (next: string, save: (value: string) => void) => {
+    if (next === (sent.current ?? stored)) return;
+    sent.current = next;
+    save(next);
+  };
+}
+
+// The follow-up date. What is typed is kept here; a year typed digit by digit passes through
+// dates like 0002-10-09, so only a cleared field or a plausible date is saved.
+function FollowUpDateInput({ value, onSave }: { value: string; onSave: (value: string) => void }) {
+  const [shown, setShown] = useState(value);
+  const send = useSentValue(value, setShown);
+  return (
+    <input
+      type="date"
+      value={shown}
+      onChange={(event) => {
+        const next = event.target.value;
+        setShown(next);
+        if (next === "" || Number(next.slice(0, 4)) >= 2000) send(next, onSave);
+      }}
+    />
+  );
+}
+
+// Who or what the task waits for, saved when the field is left.
+function WaitingForInput({ value, placeholder, onSave }: { value: string; placeholder: string; onSave: (value: string) => void }) {
+  const [shown, setShown] = useState(value);
+  const focused = useRef(false);
+  // A change from elsewhere does not replace what is being typed.
+  const send = useSentValue(value, setShown, () => !focused.current);
+  return (
+    <input
+      value={shown}
+      maxLength={120}
+      placeholder={placeholder}
+      onFocus={() => { focused.current = true; }}
+      onChange={(event) => setShown(event.target.value)}
+      onBlur={(event) => {
+        focused.current = false;
+        send(event.target.value.trim(), onSave);
+      }}
+    />
+  );
+}
 
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
     titleEditSeq,
     noteOpenTexts,
+    unsent,
+    heldBack,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -67,6 +129,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
               className="titleEdit"
+              maxLength={1000}
               value={selected.title}
               onChange={(e) => {
                 titleEdited.current = true;
@@ -86,6 +149,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 }, () => undefined);
               }}
             />
+            {heldBack.some((entity) => entity.id === selected.id)
+              ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, selected))}</p>
+              : unsent.has(selected.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
             <SyncConflicts app={app} entity={selected} />
             {context && (
               <div className="contextStrip">
@@ -413,6 +479,44 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <option value="high">{tr("high")}</option>
                   </select>
                 </label>
+                <fieldset className="waitingField">
+                  <legend>{tr("waitingTitle")}</legend>
+                  <label className="inlineCheck">
+                    <input
+                      type="checkbox"
+                      checked={selected.properties.waiting === true}
+                      onChange={(event) => patch(selected, event.target.checked
+                        // A waiting task is sorted: it leaves the Inbox (owner decision 2026-10-09).
+                        // Starts clean: a date or name left by an earlier waiting (or merged in from
+                        // another device) would otherwise come back with it.
+                        ? { waiting: true, waitingSince: Date.now(), inbox: false, waitingFor: "", followUpDate: "" }
+                        : { waiting: false, waitingFor: "", waitingSince: null, followUpDate: "" }, event.target.checked ? "waiting started" : "waiting ended", true)}
+                    />
+                    {tr("waitingToggle")}
+                  </label>
+                  {selected.properties.waiting === true && (
+                    <>
+                      <label>
+                        {tr("waitingFor")}
+                        <WaitingForInput
+                          key={selected.id}
+                          value={String(selected.properties.waitingFor || "")}
+                          placeholder={tr("waitingForPlaceholder")}
+                          onSave={(value) => void patch(selected, { waitingFor: value }, "waiting for changed", true)}
+                        />
+                      </label>
+                      <label>
+                        {tr("followUpDate")}
+                        <FollowUpDateInput
+                          key={selected.id}
+                          value={String(selected.properties.followUpDate || "")}
+                          onSave={(value) => void patch(selected, { followUpDate: value }, "follow-up date changed", true)}
+                        />
+                      </label>
+                      <small>{tr("waitingHelp")}</small>
+                    </>
+                  )}
+                </fieldset>
                 <label>
                   {tr("duration")}
                   <DurationInput

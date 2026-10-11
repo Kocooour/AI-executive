@@ -41,6 +41,7 @@ const unreported = new Set([
   "properties.planningHistory",
   "properties.planningFeedback",
   "properties.workSessionHistory",
+  "properties.waitingSince",
   "properties.manualOrders",
   "properties.manualOrder",
   "properties.relationsUpdatedAt",
@@ -56,6 +57,11 @@ export const placementFields = ["when", "today", "someday", "inbox"] as const;
 // Logs that only grow: entries from both sides are kept.
 const logFields = new Set(["activity", "planningHistory"]);
 const topLevelFields = ["title", "content", "status", "workspaceId", "type"] as const;
+
+// Equal content (objects compared by their keys and values, not by identity).
+export function sameValue(a: unknown, b: unknown) {
+  return same(a, b);
+}
 
 function same(a: unknown, b: unknown) {
   if (a === b) return true;

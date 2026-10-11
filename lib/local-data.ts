@@ -1,7 +1,9 @@
-import { db } from "./db";
+import { forServer } from "./sendable";
+import { db, readSyncBase } from "./db";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearOpenTexts } from "./open-texts";
+import { attentionCacheKey } from "./attention-cache";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
 // Device preferences (theme, language, start view) are not user data and stay.
@@ -17,6 +19,7 @@ const localDataKeys = [
   notesDraftsKey,
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
+  attentionCacheKey,
 ];
 
 // True when this browser may hold something the server does not: a change waiting to be sent, or
@@ -27,6 +30,8 @@ export async function hasUnsentChanges() {
   if (pendingDeletedIds(localStorage).length || pendingRevivedIds(localStorage).length) return true;
   // Notes still being typed, or left by a page closed before saving them.
   if (keptNotesDrafts(localStorage).length) return true;
+  // A record the server would refuse is held back here until it is fixed (lib/sendable.ts).
+  if (forServer(await db.entities.toArray(), [], await readSyncBase()).heldBack.length) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
   return (await db.entities.where("type").notEqual("workspace").count()) > 0;
 }

@@ -1,8 +1,8 @@
 "use client";
-import { entityConflicts } from "../../../lib/field-merge";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { friendlyDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
+import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 
 export function EntityList({ app }: { app: LumiApp }) {
@@ -143,7 +143,10 @@ export function EntityList({ app }: { app: LumiApp }) {
                   </div>
                 )}
                 <div>
-                  <strong>{x.title}{entityConflicts(x).length > 0 && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}</strong>
+                  <strong>
+                    {x.title || tr("untitledItem")}
+                    <RecordMarks app={app} entity={x} />
+                  </strong>
                   <small>
                     {x.type === "task"
                       ? [
@@ -162,6 +165,9 @@ export function EntityList({ app }: { app: LumiApp }) {
                             : null,
                           x.properties.deadline &&
                             tr("deadline") + " " + friendlyDate(x.properties.deadline, language),
+                          x.properties.waiting === true
+                            ? [tr("waitingShort"), typeof x.properties.waitingFor === "string" && x.properties.waitingFor ? x.properties.waitingFor : ""].filter(Boolean).join(": ")
+                            : null,
                           (() => {
                             const areaId = targets(x.id, "belongs_to_area")[0];
                             const area = areas.find((candidate) => candidate.id === areaId);

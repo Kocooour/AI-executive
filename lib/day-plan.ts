@@ -112,6 +112,9 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   const existingBlocks: DayPlanItem[] = [];
   const occupied: Array<[number, number]> = [];
   for (const task of tasks) {
+    // A task that waits for someone or something is left out of the day plan, also when it was
+    // planned before it started waiting (it neither shows as a block nor takes the time).
+    if (task.properties.waiting === true) continue;
     const slot = interval(task);
     if (!slot || dateInZone(timezone, slot[0]) > date || dateInZone(timezone, slot[1] - 1) < date) continue;
     const learning = estimate(task, allTasks, timezone);
@@ -123,6 +126,8 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
   existingBlocks.sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const ranked = tasks.flatMap((task) => {
     if (interval(task)) return [];
+    // A task that waits for someone or something is not offered as work.
+    if (task.properties.waiting === true) return [];
     const when = typeof task.properties.when === "string" ? task.properties.when.slice(0, 10) : "";
     const deadline = typeof task.properties.deadline === "string" ? task.properties.deadline.slice(0, 10) : "";
     const feedback = task.properties.planningFeedback as { date?: string; decision?: string } | undefined;
