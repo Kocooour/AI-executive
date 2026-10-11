@@ -10,6 +10,8 @@ function memoryStorage() {
     getItem: (key) => (data.has(key) ? data.get(key) : null),
     setItem: (key, value) => data.set(key, String(value)),
     removeItem: (key) => data.delete(key),
+    key: (index) => [...data.keys()][index] ?? null,
+    get length() { return data.size; },
   };
 }
 
@@ -74,6 +76,18 @@ test("damaged or foreign content is ignored and storage errors do not throw", ()
   assert.deepEqual(keptNotesDrafts(storage), []);
   storage.setItem(notesDraftsKey, JSON.stringify({ x: { id: 1 }, "t:a": { id: "a", text: "t", base: "", at: 1, page: "t" } }));
   assert.equal(keptNotesDrafts(storage).length, 1);
-  const full = { getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => { throw new Error("denied"); } };
+  const full = { getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => { throw new Error("denied"); }, key: () => null, length: 0 };
   assert.doesNotThrow(() => keepNotesDraft(full, "tab", "task", "a", "", 1));
+});
+
+// Tabs write to the same storage independently: each page writes only its own keys, so a draft
+// typed in one tab cannot be overwritten by another tab writing its own draft at the same moment.
+test("each page's draft is a key of its own; older shared values are moved", () => {
+  const storage = memoryStorage();
+  storage.setItem(notesDraftsKey, JSON.stringify({ "old:a": { id: "a", text: "staré", base: "", at: 1, page: "old" } }));
+  keepNotesDraft(storage, "tab-a", "x", "A", "", 2);
+  keepNotesDraft(storage, "tab-b", "x", "B", "", 3);
+  assert.deepEqual([...storage.data.keys()].sort(), [`${notesDraftsKey}:old:a`, `${notesDraftsKey}:tab-a:x`, `${notesDraftsKey}:tab-b:x`]);
+  assert.deepEqual(keptNotesDrafts(storage).map((draft) => draft.text).sort(), ["A", "B", "staré"]);
+  assert.equal(storage.getItem(notesDraftsKey), null);
 });

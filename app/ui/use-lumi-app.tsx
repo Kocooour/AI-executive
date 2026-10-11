@@ -3,10 +3,14 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
-import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
+import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
+import { recordDeleted, recordRevived } from "../../lib/pending-markers";
+import { writeTime } from "../../lib/clock";
+import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
+import { askOtherTabsToSave, postToTabs, tabChannelName, type TabMessage } from "../../lib/tab-coordination";
 import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-merge";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
@@ -67,6 +71,8 @@ export function useLumiApp() {
     [deepLinkDone, setDeepLinkDone] = useState(false),
     [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null),
     [logoutBusy, setLogoutBusy] = useState(false),
+    // Another tab of this browser is signing out; editing here waits.
+    [signingOutElsewhere, setSigningOutElsewhere] = useState(false),
     [logoutError, setLogoutError] = useState(""),
     [pactAgents, setPactAgents] = useState<PACTAgentSummary[]>([]),
     [agentRuns, setAgentRuns] = useState<PACTAgentRunSummary[]>([]),
@@ -131,7 +137,7 @@ export function useLumiApp() {
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
-    pullFromServer } = useSync();
+    pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -180,6 +186,8 @@ export function useLumiApp() {
   // Whether the open record's title was changed and not saved yet; that draft lives only in
   // `selected` until blur. Merely focusing the field is not a change.
   const titleEdited = useRef(false);
+  // Counts key presses in the title, so that a save finishing later knows whether more was typed.
+  const titleEditSeq = useRef(0);
   const addressableViews = [...views, "Settings"];
   const captureOpener = useRef<HTMLElement | null>(null);
   const captureModalRef = useRef<HTMLFormElement | null>(null);
@@ -738,7 +746,10 @@ export function useLumiApp() {
         await ensureDefaultWorkspace();
         let localEntities = await db.entities.toArray();
         let localRelations = await db.relations.toArray();
+        // Example data is only for a browser that has never synchronized: an account whose
+        // server copy is empty (everything deleted) must stay empty.
         if (
+          localStorage.getItem("ai-executive-server-synced") !== "1" &&
           !localEntities.some((entity) => entity.type !== "workspace") &&
           !snapshot.entities.some((entity) => entity.type !== "workspace")
         ) {
@@ -754,9 +765,18 @@ export function useLumiApp() {
         const alreadySynchronized =
           localStorage.getItem("ai-executive-server-synced") === "1";
         const hasPendingChanges = localStorage.getItem(pendingKey) === "1";
+        // Nothing of this browser's own to send: the server copy is taken over the same way as on
+        // every later refresh, fetched again while no other tab synchronizes. The copy fetched
+        // above may already be older than a save another open tab has just made.
+        if (alreadySynchronized && !hasPendingChanges) {
+          await pullFromServer();
+          return;
+        }
+        // What this start sends of the bookkeeping shared by all tabs; only that is removed.
+        const sentMarkers = captureMarkers();
         if (!alreadySynchronized || hasPendingChanges) {
-          const deletedIds = new Set(pendingDeletedIds());
-          const revivedIds = new Set(pendingRevivedIds());
+          const deletedIds = new Set(sentMarkers.deleted);
+          const revivedIds = new Set(sentMarkers.revived);
           const filteredSnapshot = {
             ...snapshot,
             tombstones: (snapshot.tombstones || []).filter((item) => !revivedIds.has(item.id)),
@@ -783,8 +803,8 @@ export function useLumiApp() {
             merged.entities,
             merged.relations,
             snapshot.revision,
-            pendingDeletedIds(),
-            pendingRevivedIds(),
+            sentMarkers.deleted,
+            sentMarkers.revived,
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
@@ -806,8 +826,8 @@ export function useLumiApp() {
               retry.entities,
               retry.relations,
               snapshot.revision,
-              pendingDeletedIds(),
-              pendingRevivedIds(),
+              sentMarkers.deleted,
+              sentMarkers.revived,
             );
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
@@ -822,12 +842,18 @@ export function useLumiApp() {
           await syncToServer();
           return;
         }
-        await applySnapshot(snapshot, initializationVersion);
+        // Another tab may have written meanwhile: then the copy is not replaced and the change is
+        // sent instead (lib/tab-coordination.ts).
+        try {
+          if (!(await applySnapshot(snapshot, initializationVersion, { entities: localEntities, relations: localRelations }))) return;
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== "LOCAL_DATA_CHANGED") throw error;
+          await syncToServer();
+          return;
+        }
         if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
-        localStorage.removeItem(pendingKey);
-        localStorage.removeItem(deletedKey);
-        localStorage.removeItem(revivedKey);
+        clearSentMarkers(sentMarkers);
         setSyncStatus("synced");
       } catch {
         await ensureDefaultWorkspace();
@@ -846,7 +872,20 @@ export function useLumiApp() {
     setLogoutBusy(true);
     setLogoutError("");
     let leaving = false;
+    let askedOthers = false;
+    let heartbeat = 0;
     try {
+      // Other open tabs save what is being typed there first, so it is sent below too. Until this
+      // tab has finished, it tells them every few seconds that it is still signing out.
+      askedOthers = true;
+      heartbeat = window.setInterval(() => postToTabs({ type: "signing-out", from: tabId.current }), 5_000);
+      const others = await askOtherTabsToSave(tabId.current);
+      // Tabs that did not answer (asleep) may still hold typed text; their note in the device counts.
+      const unsavedElsewhere = others.unsaved + otherOpenTexts(localStorage, pageId.current).length;
+      if (unsavedElsewhere > 0 && !(await askConfirm({ title: tr("signOutOtherTabTitle"), message: tr("signOutOtherTab"), confirmLabel: tr("signOutDiscardAction"), danger: true }))) {
+        postToTabs({ type: "sign-out-cancelled", from: tabId.current });
+        return;
+      }
       const result = await runSignOut({
         version: () => localDataVersion.current,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -864,6 +903,7 @@ export function useLumiApp() {
         wipe: () => clearLocalData().catch(() => undefined),
       });
       if (result !== "signed-out") {
+        postToTabs({ type: "sign-out-cancelled", from: tabId.current });
         setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
         return;
       }
@@ -871,7 +911,11 @@ export function useLumiApp() {
       try { const channel = new BroadcastChannel(sessionChannel); channel.postMessage("signed-out"); channel.close(); } catch { /* not supported */ }
       // A full reload drops everything still held in memory.
       window.location.replace("/");
+    } catch (error) {
+      if (askedOthers) postToTabs({ type: "sign-out-cancelled", from: tabId.current });
+      throw error;
     } finally {
+      window.clearInterval(heartbeat);
       if (!leaving) setLogoutBusy(false);
     }
   }
@@ -1106,6 +1150,12 @@ export function useLumiApp() {
     }
   }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
+  // The suggestion for Quick Capture depends on the text and where the task goes, not on every
+  // reload of the local copy: a reload (a save, another tab, another device) must not restart it,
+  // which would disable the add button for a moment and could swallow a click on it.
+  const captureItemsRef = useRef(items);
+  captureItemsRef.current = items;
+  const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
   useEffect(() => {
     const parsed = parseCapture(draft);
     if (!capture || captureType !== "task" || parsed.title.length < 3) {
@@ -1118,7 +1168,7 @@ export function useLumiApp() {
     const version = ++captureSuggestionVersion.current;
     // A task added to a project goes to the project's workspace; its suggestions (area, calendar
     // window) have to come from there too.
-    const workspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    const workspaceId = captureProjectWorkspaceId || writeWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1149,7 +1199,7 @@ export function useLumiApp() {
             ? [{ start: suggestion.scheduledStart, end: suggestion.scheduledEnd, date: suggestion.scheduledDate }]
             : [];
         if (captureProjectId) {
-          const project = items.find((item) => item.id === captureProjectId && item.type === "project");
+          const project = captureItemsRef.current.find((item) => item.id === captureProjectId && item.type === "project");
           suggestion.projectId = captureProjectId;
           suggestion.projectTitle = project?.title || suggestion.projectTitle;
         }
@@ -1177,7 +1227,7 @@ export function useLumiApp() {
       window.clearTimeout(abortTimer);
       controller.abort();
     };
-  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, items, language]);
+  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language]);
 
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
@@ -1199,7 +1249,7 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await db.entities.update(workspace.id, {
       title: name,
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -1253,7 +1303,7 @@ export function useLumiApp() {
     const name = newWorkspaceDraft.trim();
     if (!name || name.length > 120) return;
     const workspaceId = crypto.randomUUID();
-    const now = Date.now();
+    const now = writeTime();
     localDataVersion.current += 1;
     await db.entities.add({
       id: `workspace:${workspaceId}`,
@@ -1340,7 +1390,7 @@ export function useLumiApp() {
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
-    language, tr, askConfirm, applySnapshot, pendingKey, deletedKey, revivedKey });
+    language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); postToTabs({ type: "restored", from: tabId.current }); } });
   const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
@@ -1423,7 +1473,7 @@ export function useLumiApp() {
     extra: Record<string, unknown> = {},
   ) {
     if (!title.trim()) return;
-    const now = Date.now(),
+    const now = writeTime(),
       id = typeof extra.entityId === "string" ? extra.entityId : crypto.randomUUID(),
       projectId = typeof extra.projectId === "string" ? extra.projectId : "",
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
@@ -1640,6 +1690,7 @@ export function useLumiApp() {
           : {}),
       });
     } catch (error) {
+      console.error(error);
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
         const workspaceId = writeWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
@@ -1682,7 +1733,7 @@ export function useLumiApp() {
           ...latest.properties,
           [conflictsKey]: entityConflicts(latest).filter((item) => item.id !== conflictId),
         };
-        const update: Partial<Entity> = { updatedAt: Date.now() };
+        const update: Partial<Entity> = { updatedAt: writeTime() };
         if (restore && !conflict.field.startsWith("relation.")) {
           if (conflict.field === "properties.checklist") {
             // Only the items whose other version was replaced go back; items added since stay.
@@ -1769,7 +1820,7 @@ export function useLumiApp() {
       .filter((r) => r.relationType === relationType)
       .toArray();
     localDataVersion.current += 1;
-    const relationTimestamp = Date.now();
+    const relationTimestamp = writeTime();
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.relations.bulkDelete(existing.map((r) => r.id));
       if (targetId)
@@ -1797,7 +1848,9 @@ export function useLumiApp() {
       setContext(await buildContext(selected.id, 2));
     }
   }
-  async function rename(e: Entity, title: string) {
+  // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
+  // was typed meanwhile, the open detail keeps what is being typed.
+  async function rename(e: Entity, title: string, seq?: number) {
     if (!title.trim()) return;
     const current = (await db.entities.get(e.id)) || e;
     // Leaving the field without a change writes nothing (and cannot put back a replaced title).
@@ -1812,12 +1865,17 @@ export function useLumiApp() {
         ...current.properties,
         activity: [...activity, { at: Date.now(), action: "renamed" }].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(e.id)) || null);
+    const saved = (await db.entities.get(e.id)) || null;
+    setSelected((open) => {
+      if (!saved) return null;
+      const typedSince = seq !== undefined && titleEditSeq.current !== seq;
+      return open && open.id === saved.id && typedSince ? { ...saved, title: open.title } : saved;
+    });
   }
   async function remove(e: Entity) {
     const linkedRelations = (await db.relations.toArray()).filter(
@@ -1829,9 +1887,7 @@ export function useLumiApp() {
       await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
     });
     localDataVersion.current += 1;
-    const deletedIds = new Set(pendingDeletedIds());
-    deletedIds.add(e.id);
-    localStorage.setItem(deletedKey, JSON.stringify([...deletedIds]));
+    recordDeleted(localStorage, e.id);
     setUndo(e);
     setUndoRelations(linkedRelations);
     await syncToServer();
@@ -1841,7 +1897,7 @@ export function useLumiApp() {
   async function setProjectStatus(project: Entity, status: "active" | "completed") {
     if (project.type !== "project") return;
     const current = (await db.entities.get(project.id)) || project;
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
     localDataVersion.current += 1;
     await db.entities.update(project.id, {
@@ -1865,18 +1921,12 @@ export function useLumiApp() {
       await db.entities.put({
         ...undo,
         status: undo.type === "task" && undo.status === "completed" ? "open" : undo.status,
-        updatedAt: Date.now(),
+        updatedAt: writeTime(),
       });
       if (undoRelations.length) await db.relations.bulkPut(undoRelations);
     });
     localDataVersion.current += 1;
-    const deletedIds = pendingDeletedIds().filter((id) => id !== undo.id);
-    if (deletedIds.length)
-      localStorage.setItem(deletedKey, JSON.stringify(deletedIds));
-    else localStorage.removeItem(deletedKey);
-    const revivedIds = new Set(pendingRevivedIds());
-    revivedIds.add(undo.id);
-    localStorage.setItem(revivedKey, JSON.stringify([...revivedIds]));
+    recordRevived(localStorage, undo.id);
     await syncToServer();
     setUndo(null);
     setUndoRelations([]);
@@ -1884,7 +1934,9 @@ export function useLumiApp() {
   }
   // `onlyIfOpen`: put the saved record into the detail panel only while that record is still the
   // one open there (a save that finishes after the panel was closed must not reopen it).
-  async function patch(e: Entity, properties: Record<string, unknown>, action = "updated", onlyIfOpen = false) {
+  // `properties` may be a function of the stored properties, for a change that depends on them
+  // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
+  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false) {
     localDataVersion.current += 1;
     // Reading and writing in one transaction: two saves of the same record started together (for
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
@@ -1897,10 +1949,10 @@ export function useLumiApp() {
       await db.entities.update(e.id, {
         properties: {
           ...current.properties,
-          ...properties,
+          ...(typeof properties === "function" ? properties(current.properties) : properties),
           activity: [...activity, { at: Date.now(), action }].slice(-50),
         },
-        updatedAt: Date.now(),
+        updatedAt: writeTime(),
       });
     }); } finally {
       localDataVersion.current += 1;
@@ -1922,6 +1974,14 @@ export function useLumiApp() {
   // The draft is dropped only if nothing was typed into it since this save started. If the save
   // fails the draft stays, so the text is still in the field and is saved next time.
   const pageId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  // A restored backup replaced the data the notes were typed against: the draft is dropped here
+  // and in the device, so it is neither shown nor saved over the restored notes.
+  function dropNotesBeingTyped() {
+    setNotesDraft(null);
+    try { clearPageNotesDrafts(localStorage, pageId.current); } catch { /* storage unavailable */ }
+  }
+  const dropNotesBeingTypedRef = useRef(dropNotesBeingTyped);
+  dropNotesBeingTypedRef.current = dropNotesBeingTyped;
   function editNotes(id: string, text: string, base: string) {
     setNotesDraft({ id, text });
     keepNotesDraft(localStorage, pageId.current, id, text, base);
@@ -1953,6 +2013,110 @@ export function useLumiApp() {
     return () => {
       document.removeEventListener("visibilitychange", saveDraft);
       window.removeEventListener("pagehide", saveDraft);
+    };
+  }, []);
+  // Another tab is signing out: what is being typed here is saved first (an edited title and the
+  // notes draft), and editing stops until that tab has finished or given up (lib/tab-coordination.ts).
+  const forSignOut = useRef({ selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText, text });
+  forSignOut.current = { selected, rename, saveNotes, capture, draft, checklistDraft, contextInboxText, text };
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(tabChannelName);
+    let unblock = 0;
+    const block = () => {
+      document.body.inert = true;
+      setSigningOutElsewhere(true);
+      // If the other tab is closed before it finishes, editing comes back here on its own. While
+      // it is still signing out (for example asking the user), it says so every few seconds.
+      window.clearTimeout(unblock);
+      unblock = window.setTimeout(release, 15_000);
+    };
+    const release = () => {
+      window.clearTimeout(unblock);
+      if (signedOut.current) return;
+      document.body.inert = false;
+      setSigningOutElsewhere(false);
+    };
+    channel.onmessage = async (event: MessageEvent<TabMessage>) => {
+      const message = event.data;
+      if (!message || message.from === tabId.current) return;
+      if (message.type === "sign-out-cancelled") { release(); return; }
+      if (message.type === "restored") { dropNotesBeingTypedRef.current(); return; }
+      // A tab opened (or woken) after the request still stops editing and saves what it can.
+      if (message.type === "signing-out") {
+        const wasBlocked = document.body.inert;
+        block();
+        if (!wasBlocked) void saveForSignOut().catch(() => undefined);
+        return;
+      }
+      if (message.type !== "save-for-sign-out") return;
+      channel.postMessage({ type: "saving", from: tabId.current, request: message.request } satisfies TabMessage);
+      block();
+      const unsaved = await saveForSignOut();
+      channel.postMessage({ type: "saved", from: tabId.current, request: message.request, unsaved } satisfies TabMessage);
+    };
+    // Saves an edited title and the notes draft; returns the number of texts that could not be
+    // saved (texts that are not records, and a title whose save failed).
+    async function saveForSignOut() {
+      const { selected: open, rename: saveTitle, saveNotes: saveDraft, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText, text: rowText } = forSignOut.current;
+      // Texts that are not records cannot be saved; the signing-out tab asks the user about them.
+      let unsaved = [captureOpen && captureText.trim(), rowText.trim(), checklistText.trim(), inboxText.trim()].filter(Boolean).length;
+      if (open && titleEdited.current) {
+        try {
+          await saveTitle(open, open.title);
+          // Only a title that was really written counts as saved.
+          titleEdited.current = false;
+        } catch {
+          unsaved += 1;
+        }
+      }
+      // A notes draft that cannot be saved stays kept in the device and is counted as unsent.
+      const notes = notesDraftRef.current;
+      if (notes) await saveDraft({ id: notes.id }, notes.text).catch(() => undefined);
+      noteOpenTexts();
+      return unsaved;
+    }
+    return () => { window.clearTimeout(unblock); channel.close(); };
+  }, []);
+  // What is being typed here and not saved anywhere yet is noted in the device as it is typed
+  // (lib/open-texts.ts), so a tab signing out asks about it even if this tab is asleep.
+  function noteOpenTexts() {
+    const { selected: open, capture: captureOpen, draft: captureText, checklistDraft: checklistText, contextInboxText: inboxText, text: rowText } = forSignOut.current;
+    const kinds: OpenTextKind[] = [];
+    if (open && titleEdited.current) kinds.push("title");
+    // The capture dialog, or the add row under a list.
+    if ((captureOpen && captureText.trim()) || rowText.trim()) kinds.push("capture");
+    if (checklistText.trim()) kinds.push("checklist");
+    if (inboxText.trim()) kinds.push("contextInbox");
+    try { setOpenTexts(localStorage, pageId.current, kinds); } catch { /* storage unavailable */ }
+  }
+  useEffect(noteOpenTexts, [selected?.title, capture, draft, checklistDraft, contextInboxText, text]);
+  // The edited-title mark belongs to the record that was open: another record (or none) starts
+  // clean, so its title follows changes merged in and is not overwritten by a later blur. A save
+  // still on its way finishes on its own.
+  useEffect(() => {
+    titleEdited.current = false;
+    titleEditSeq.current += 1;
+    noteOpenTexts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+  useEffect(() => {
+    const leave = () => { try { setOpenTexts(localStorage, pageId.current, []); } catch { /* storage unavailable */ } };
+    // Shown again (also restored from the back/forward cache): the note is written again and
+    // renewed, and notes of tabs long gone are removed.
+    const back = () => {
+      if (document.visibilityState !== "visible") return;
+      noteOpenTexts();
+      try { renewOpenTexts(localStorage, pageId.current); } catch { /* storage unavailable */ }
+    };
+    back();
+    window.addEventListener("pagehide", leave);
+    window.addEventListener("pageshow", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", back);
+      document.removeEventListener("visibilitychange", back);
     };
   }, []);
   // Drafts left by other pages. A page that is still open answers on the draft channel while it
@@ -2101,7 +2265,7 @@ export function useLumiApp() {
           { at: Date.now(), action: "completed" },
         ].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -2118,7 +2282,7 @@ export function useLumiApp() {
         completedAt: null,
         activity: [...activity, { at: Date.now(), action: "reopened" }].slice(-50),
       },
-      updatedAt: Date.now(),
+      updatedAt: writeTime(),
     });
     localDataVersion.current += 1;
     await syncToServer();
@@ -2189,7 +2353,7 @@ export function useLumiApp() {
   }
 
   async function persistManualOrder(ordered: Entity[], movedId: string, scope: string) {
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const movedIndex = ordered.findIndex((entity) => entity.id === movedId);
     const moved = ordered[movedIndex];
     if (!moved) return;
@@ -2228,7 +2392,7 @@ export function useLumiApp() {
       await done(task.id);
       return;
     }
-    const timestamp = Date.now();
+    const timestamp = writeTime();
     const properties = { ...task.properties };
     delete properties.when;
     properties.inbox = section === "Inbox";
@@ -2479,6 +2643,8 @@ export function useLumiApp() {
     createFromRow,
     resolveConflict,
     titleEdited,
+    titleEditSeq,
+    noteOpenTexts,
     rowError,
     setRowError,
     createServerBackup,
@@ -2508,6 +2674,7 @@ export function useLumiApp() {
     login,
     logout,
     logoutBusy,
+    signingOutElsewhere,
     logoutError,
     messages,
     moreDialogRef,

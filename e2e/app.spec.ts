@@ -378,7 +378,7 @@ test("a notes draft left by a page that was closed before saving it is saved on 
   await waitUntilSynced(page);
   await field.fill(typed);
   // Every key press is kept in the device at once.
-  expect(Object.values(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-executive-notes-drafts") || "{}"))))
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("ai-executive-notes-drafts:")).map((key) => JSON.parse(localStorage.getItem(key) || "null"))))
     .toEqual([expect.objectContaining({ id: "e2e-rename", text: typed })]);
   // Leaving the page may cut its own save off; the kept draft is then saved by the next start.
   await page.goto("/?view=Inbox");
@@ -391,11 +391,11 @@ test("a notes draft left by a page that was closed before saving it is saved on 
   await plant({ text: left, base: typed });
   await page.reload();
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith("ai-executive-notes-drafts")))).toBe(false);
   // A draft started from notes that have changed since (on another device) does not overwrite them.
   await plant({ text: `Zastaralé ${Date.now()}`, base: "jiný základ" });
   await page.reload();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith("ai-executive-notes-drafts")))).toBe(false);
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.properties?.notes === left, true);
 });
 
@@ -419,7 +419,7 @@ test("a leftover notes draft waits until the server's notes are known", async ({
     };
   }));
   expect(await localNotes()).toBe(base);
-  expect(await page.evaluate(() => localStorage.getItem("ai-executive-notes-drafts"))).not.toBeNull();
+  expect(await page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith("ai-executive-notes-drafts")))).toBe(true);
   // The connection is back: the next synchronization knows the server's notes, then the draft is saved.
   await page.unroute("**/api/store");
   await page.evaluate(() => window.dispatchEvent(new Event("online")));

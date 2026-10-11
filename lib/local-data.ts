@@ -1,5 +1,7 @@
 import { db } from "./db";
-import { keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
+import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
+import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
+import { clearOpenTexts } from "./open-texts";
 
 // Browser-side copies of server data and the bookkeeping of unsent changes.
 // Device preferences (theme, language, start view) are not user data and stay.
@@ -10,6 +12,8 @@ const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
   "ai-executive-pending-revivals",
+  "ai-executive-open-texts",
+  "ai-executive-pending-seq",
   notesDraftsKey,
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
@@ -19,6 +23,8 @@ const localDataKeys = [
 // rows from before the first completed synchronization.
 export async function hasUnsentChanges() {
   if (localStorage.getItem(pendingSyncKey) === "1") return true;
+  // A deletion or restoration recorded just before its save was asked for (a tab closed between).
+  if (pendingDeletedIds(localStorage).length || pendingRevivedIds(localStorage).length) return true;
   // Notes still being typed, or left by a page closed before saving them.
   if (keptNotesDrafts(localStorage).length) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
@@ -32,6 +38,11 @@ export async function hasUnsentChanges() {
 export async function clearLocalData(timeoutMs = 4000) {
   localStorage.setItem(wipePendingKey, "1");
   localDataKeys.forEach((key) => localStorage.removeItem(key));
+  // Deletions and restorations waiting to be sent are one key each (lib/pending-markers.ts).
+  clearAllMarkers(localStorage);
+  // So are notes drafts and the notes of open texts, one per tab.
+  clearNotesDrafts(localStorage);
+  clearOpenTexts(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
   localStorage.setItem(serverSyncedKey, "1");
   const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {

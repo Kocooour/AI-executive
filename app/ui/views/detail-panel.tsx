@@ -9,6 +9,8 @@ import { SyncConflicts } from "./sync-conflicts";
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
+    titleEditSeq,
+    noteOpenTexts,
     askConfirm,
     acceptNativeDrop,
     areas,
@@ -68,13 +70,20 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               value={selected.title}
               onChange={(e) => {
                 titleEdited.current = true;
+                titleEditSeq.current += 1;
                 setSelected({ ...selected, title: e.target.value });
               }}
               onBlur={(e) => {
                 // Only a title the user changed is saved; an untouched field cannot put back an old one.
-                const edited = titleEdited.current;
-                titleEdited.current = false;
-                if (edited) rename(selected, e.target.value);
+                if (!titleEdited.current) { noteOpenTexts(); return; }
+                // The title stays marked as edited (also for other tabs signing out) until it is
+                // saved; a failed save keeps it marked, and typing on during the save keeps it too.
+                const seq = titleEditSeq.current;
+                rename(selected, e.target.value, seq).then(() => {
+                  if (titleEditSeq.current !== seq) return;
+                  titleEdited.current = false;
+                  noteOpenTexts();
+                }, () => undefined);
               }}
             />
             <SyncConflicts app={app} entity={selected} />
@@ -476,7 +485,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <textarea
                     value={notesDraft?.id === selected.id ? notesDraft.text : String(selected.properties.notes || "")}
                     onChange={(e) => editNotes(selected.id, e.target.value, String(selected.properties.notes || ""))}
-                    onBlur={(e) => saveNotes(selected, e.target.value)}
+                    // Only notes typed here are saved: leaving the field unchanged must not write the
+                    // value it showed back over a change made meanwhile in another tab or device.
+                    onBlur={(e) => { if (notesDraft?.id === selected.id) void saveNotes(selected, e.target.value); }}
                     placeholder={tr("notesPlaceholder")}
                   />
                 </label>
@@ -494,16 +505,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                         <input
                           type="checkbox"
                           checked={Boolean(item.done)}
-                          onChange={() => patch(selected, {
-                            checklist: all.map((entry, entryIndex) => {
+                          onChange={() => patch(selected, (stored) => ({
+                            // From the stored list: another tab or device may have changed it.
+                            checklist: (Array.isArray(stored.checklist) ? stored.checklist : all).map((entry, entryIndex) => {
                               const normalized = typeof entry === "string"
                                 ? { id: `${entryIndex}`, title: entry, done: false }
                                 : entry as { id?: string; title?: string; done?: boolean };
-                              return entryIndex === index
-                                ? { ...normalized, done: !normalized.done }
-                                : normalized;
+                              const target = item.id ? normalized.id === item.id : entryIndex === index;
+                              return target ? { ...normalized, done: !item.done } : normalized;
                             }),
-                          }, "checklist updated")}
+                          }), "checklist updated")}
                         />
                         <span className={item.done ? "checked" : ""}>{item.title}</span>
                       </label>
@@ -516,12 +527,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       onKeyDown={(event) => {
                         if (event.key !== "Enter" || !checklistDraft.trim()) return;
                         event.preventDefault();
-                        const existing = Array.isArray(selected.properties.checklist)
-                          ? selected.properties.checklist
-                          : [];
-                        patch(selected, {
-                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
-                        }, "checklist item added");
+                        const added = { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false };
+                        patch(selected, (stored) => ({
+                          checklist: [...(Array.isArray(stored.checklist) ? stored.checklist : []), added],
+                        }), "checklist item added");
                         setChecklistDraft("");
                       }}
                       placeholder={tr("addChecklistItem")}
@@ -530,12 +539,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       type="button"
                       disabled={!checklistDraft.trim()}
                       onClick={() => {
-                        const existing = Array.isArray(selected.properties.checklist)
-                          ? selected.properties.checklist
-                          : [];
-                        patch(selected, {
-                          checklist: [...existing, { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false }],
-                        }, "checklist item added");
+                        const added = { id: crypto.randomUUID(), title: checklistDraft.trim(), done: false };
+                        patch(selected, (stored) => ({
+                          checklist: [...(Array.isArray(stored.checklist) ? stored.checklist : []), added],
+                        }), "checklist item added");
                         setChecklistDraft("");
                       }}
                     >{tr("add")}</button>

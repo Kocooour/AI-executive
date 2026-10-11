@@ -69,6 +69,7 @@ export default function App() {
       <DetailPanel app={app} />
       <AssistantPanel app={app} />
       <ConfirmDialog app={app} />
+      {app.signingOutElsewhere && <div className="tabNotice" role="status">{app.tr("signingOutElsewhere")}</div>}
       {undo && (
         <div className="undo">
           {tr("itemChanged")} <button onClick={restore}>{tr("undo")}</button>
