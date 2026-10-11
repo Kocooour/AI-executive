@@ -344,16 +344,18 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
 ```bash
 set -euo pipefail
 . /var/backups/ai-executive/migrace.vars
-# Drop-iny, ktere meni ucet, kod, spusteni nebo data, do zalohy (ne do nove jednotky).
+# Nova jednotka nesmi zdedit nic ze stareho nastaveni: kazdy drop-in krome doplnku bezpecnostnich
+# upozorneni jde do zalohy (i ten, ktery jen vypina hardening, napr. ProtectSystem=false).
+# Doplnek smi obsahovat jen sve dve volby; cokoli dalsiho znamena STOP.
 if [ -d /etc/systemd/system/ai-executive.service.d ]; then
   for f in /etc/systemd/system/ai-executive.service.d/*.conf; do
     [ -e "$f" ] || continue
-    if [ "$(basename "$f")" = 20-security-alerts.conf ] && [ "$ALERTS" = 1 ]; then echo "ponechan: $f"; continue; fi
-    if grep -qE '^[[:space:]]*(User|Group|WorkingDirectory|ExecStart|ExecStartPre|EnvironmentFile|ReadWritePaths|StateDirectory|Environment=.*DATA_DIR)' "$f"; then
-      echo "presunuto do zalohy: $f"; mkdir -p "$BK/removed-dropins"; mv "$f" "$BK/removed-dropins/"
-    else
-      echo "NEOCEKAVANY drop-in (nemeni zadnou citlivou volbu): $f -> nahlasit, ponechan"
+    if [ "$(basename "$f")" = 20-security-alerts.conf ] && [ "$ALERTS" = 1 ]; then
+      EXTRA=$({ grep -vE '^[[:space:]]*(#|$|\[Service\]$|Environment=AI_EXECUTIVE_SECURITY_OUTBOX_DIR=/var/lib/ai-executive-security/outbox$|ReadWritePaths=/var/lib/ai-executive-security/outbox$)' "$f" || true; } | wc -l)
+      [ "$EXTRA" = 0 ] || { echo "STOP: $f obsahuje dalsi volby ($EXTRA radku); nahlasit"; exit 1; }
+      echo "ponechan (jen fronta upozorneni): $f"; continue
     fi
+    echo "presunuto do zalohy: $f"; mkdir -p "$BK/removed-dropins"; mv "$f" "$BK/removed-dropins/"
   done
 fi
 install -o root -g root -m 0644 /opt/ai-executive/deployment/ai-executive.service /etc/systemd/system/ai-executive.service
@@ -368,7 +370,7 @@ if [ "$ALERTS" = 1 ]; then
 fi
 ```
 
-Poznámka: drop-in, který žádnou z uvedených voleb nenastavuje, se jen nahlásí a zůstává. Doplněk se při kroku 6 nemusí instalovat znovu, jeho drop-in zůstává; `ops/security-alerts/install.sh` lze spustit později, čte `User` z `systemctl show` a vlastníka fronty nastaví na `ai-executive:hermes`, `2770`, ale také restartuje službu (proto je v tomto kroku nahrazeno přímým `chown`/`chmod`).
+Poznámka: všechny staré drop-iny kromě `20-security-alerts.conf` (a ten jen s jeho dvěma volbami) jdou do zálohy, aby nová jednotka nezdědila změněný účet, start ani vypnutý hardening. Seznam přesunutých souborů patří do hlášení; návrat (krok 9) je vrací zpět. Doplněk se při kroku 6 nemusí instalovat znovu, jeho drop-in zůstává; `ops/security-alerts/install.sh` lze spustit později, čte `User` z `systemctl show` a vlastníka fronty nastaví na `ai-executive:hermes`, `2770`, ale také restartuje službu (proto je v tomto kroku nahrazeno přímým `chown`/`chmod`).
 
 **Kontrola:** `systemd-analyze verify` bez chyb; `systemctl cat` ukazuje `User=ai-executive`, `WorkingDirectory=/opt/ai-executive`, `ExecStart=/usr/bin/node /opt/ai-executive/node_modules/next/dist/bin/next start --hostname 127.0.0.1`, `EnvironmentFile=/etc/ai-executive/ai-executive.env` a (jen s doplňkem) `ReadWritePaths=/var/lib/ai-executive-security/outbox`; zaznamenat skóre `systemd-analyze security` (očekává se výrazně lepší než u staré jednotky, hodnotu jen uvést do hlášení); fronta má `2770 ai-executive:hermes`.
 **Když selže:** vrátit původní jednotku a drop-iny ze zálohy (krok 9) a nahlásit výstup `systemd-analyze verify`.
@@ -597,7 +599,7 @@ Starý checkout lze ponechat (už nemá tajné údaje ani data, služba ho nepou
 
 ### 11. Nasazování po přechodu
 
-Toto je nová rutina pro další verze, nahrazuje dosavadní. Spouští se jako `root`, **nikdy jako `hermesadmin`** (sdílený účet nesmí smět měnit kód, který běží s daty Lumi). Služba se při sestavování zastaví, protože `pnpm build` přepisuje `.next`, který by běžící proces používal. Pokud cokoli po zastavení selže nebo je blok přerušen (Ctrl-C, ukončení, ztracené SSH spojení), trap službu nenechá potichu zastavenou: když se kód ještě nezměnil, spustí ji zpět, jinak vypíše postup návratu. Totéž platí, když nová verze po startu do 60 s neodpovídá. Blok spouštějte v `tmux`, aby přerušené spojení neukončilo ani výpis postupu návratu.
+Toto je nová rutina pro další verze, nahrazuje dosavadní. Spouští se jako `root`, **nikdy jako `hermesadmin`** (sdílený účet nesmí smět měnit kód, který běží s daty Lumi). Služba se při sestavování zastaví, protože `pnpm build` přepisuje `.next`, který by běžící proces používal. Ještě před zastavením služby blok ověří, že je co nasadit, že jde o fast-forward a že nová verze nemění šablonu jednotky (změnu jednotky je nutné nainstalovat a ověřit zvlášť podle kroků 6 a 8, nikdy ne mimochodem). Pokud cokoli po zastavení selže nebo je blok přerušen (Ctrl-C, ukončení, ztracené SSH spojení), trap službu nenechá potichu zastavenou: dokud se v `/opt/ai-executive` nic nezměnilo, spustí ji zpět; jakmile začal merge, instalace nebo build (i bez změny commitu může být `node_modules` nebo `.next` napůl přepsané), službu zastaví a vypíše postup, který předchozí verzi znovu sestaví. Totéž platí, když nová verze po startu do 60 s neodpovídá. Blok spouštějte v `tmux`, aby přerušené spojení neukončilo ani výpis postupu návratu.
 
 ```bash
 set -Eeuo pipefail
@@ -606,16 +608,32 @@ umask 022
 cd /opt/ai-executive
 PREV=$(git rev-parse HEAD); STAMP=$(date +%Y%m%d-%H%M%S); B=/var/backups/ai-executive/deploy-$STAMP
 echo "predchozi HEAD: $PREV"
+test -z "$(git status --porcelain)" || { echo "STOP: /opt/ai-executive neni cisty"; exit 1; }
+
+# 0. Pred zastavenim sluzby: je co nasadit, jde to fast-forwardem a nemeni se jednotka?
+git fetch origin
+NEXT=$(git rev-parse origin/main)
+[ "$NEXT" != "$PREV" ] || { echo "Nic k nasazeni (origin/main = $PREV)."; exit 0; }
+git merge-base --is-ancestor "$PREV" "$NEXT" || { echo "STOP: origin/main neni fast-forward od $PREV; nahlasit"; exit 1; }
+if ! git diff --quiet "$PREV" "$NEXT" -- deployment/ai-executive.service; then
+  echo "STOP: nova verze meni deployment/ai-executive.service. Jednotku je treba nainstalovat a overit"
+  echo "      (krok 6 a kontroly kroku 8) jako samostatny krok s vlastnikem; sluzba bezi dal beze zmeny."
+  exit 1
+fi
+
+# Od prvni zmeny v /opt/ai-executive (merge, node_modules, .next) uz stara verze bez noveho sestaveni nepobezi.
+CHANGED=0
 on_error() {
   local rc=$?; trap - ERR INT TERM HUP; set +e
   echo "CHYBA (kod $rc) u prikazu: $BASH_COMMAND"
-  if [ "$(git -C /opt/ai-executive rev-parse HEAD)" = "$PREV" ]; then
-    echo "Kod se nezmenil -> spoustim sluzbu zpet."; systemctl start ai-executive
+  if [ "$CHANGED" = 0 ]; then
+    echo "Kod ani sestaveni se nezmenily -> spoustim sluzbu zpet."; systemctl start ai-executive
   else
-    # Nova verze nesmi bezet, kdyz build, start nebo kontrola dat po startu selhaly.
+    # Nova ani napul prepsana verze nesmi bezet, kdyz merge, instalace, build, start nebo kontrola dat selhaly.
     systemctl stop ai-executive
-    echo "Kod se zmenil, sluzba je ZASTAVENA. Navrat:"
+    echo "Kod nebo sestaveni se zmenily, sluzba je ZASTAVENA. Navrat (sestavi znovu predchozi verzi $PREV):"
     echo "  cd /opt/ai-executive && git reset --hard $PREV && pnpm install --frozen-lockfile && pnpm build"
+    echo "  chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive"
     echo "  find /var/lib/ai-executive -mindepth 1 -delete && cp -a $B/data/. /var/lib/ai-executive/   # jen pokud nova verze zmenila data"
     echo "  chown -R ai-executive:ai-executive /var/lib/ai-executive; systemctl start ai-executive"
   fi
@@ -623,7 +641,6 @@ on_error() {
 }
 # Take preruseni (Ctrl-C, ukonceni, ztracene SSH spojeni) nesmi nechat sluzbu potichu zastavenou.
 trap on_error ERR INT TERM HUP
-test -z "$(git status --porcelain)" || { echo "STOP: /opt/ai-executive neni cisty"; exit 1; }
 
 # 1. Zaloha se zastavenim sluzby a kontrolou kopie
 systemctl stop ai-executive
@@ -634,17 +651,14 @@ runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mj
 /usr/bin/node /opt/ai-executive/scripts/check-data.mjs "$B/data/store.sqlite" > "$B/fakta-kopie.json"
 cmp_tables "$B/fakta-pred.json" "$B/fakta-kopie.json"   # nenulovy navrat spusti trap: kopie neprosla
 
-# 2. Nova verze (jen fast-forward), zavislosti a build
-git fetch origin
-git merge --ff-only origin/main
+# 2. Nova verze (jen fast-forward na overeny commit), zavislosti a build
+CHANGED=1
+git merge --ff-only "$NEXT"
 pnpm install --frozen-lockfile
 pnpm build
 chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive
 
-# 3. Jednotka (jen pokud se sablona zmenila) a start
-if ! cmp -s deployment/ai-executive.service /etc/systemd/system/ai-executive.service; then
-  echo "UPOZORNENI: sablona jednotky se lisi od nainstalovane; nahlasit vlastnikovi pred jakoukoli zmenou"
-fi
+# 3. Start a kontrola
 systemctl start ai-executive
 for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
 curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest || { echo "NEPRIPRAVENO: nova verze neodpovida"; false; }   # spusti trap

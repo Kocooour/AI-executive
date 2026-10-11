@@ -9,7 +9,7 @@
 // - Even a read-only open creates `-wal`/`-shm` when they are missing, and updates `-shm`. Run it as
 //   the account that owns the data, or on a root-owned copy.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 const file = process.argv[2];
@@ -19,7 +19,19 @@ if (!file || process.argv.length > 3) {
 }
 
 const quote = (name) => `"${name.replaceAll('"', '""')}"`;
-const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
+// Read in fixed-size pieces: a large database or WAL is never held in memory as a whole (and whole-file
+// reads fail above 2 GiB).
+function sha256(path) {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1 << 20);
+  const fd = openSync(path, "r");
+  try {
+    for (let read; (read = readSync(fd, buffer, 0, buffer.length, null)) > 0;) hash.update(buffer.subarray(0, read));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
 const result = {
   file, integrity: "unreadable", foreignKeyViolations: null, tables: {},
   mainFileBytes: null, mainFileSha256: null, walBytes: null, walSha256: null, shmBytes: null,
