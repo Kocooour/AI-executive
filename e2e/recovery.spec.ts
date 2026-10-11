@@ -348,3 +348,27 @@ test("after an offline start, deleting a project asks in the app dialog", async 
   await expect(page.getByText(project).first()).toBeVisible();
   await context.close();
 });
+
+// Started offline, Quick Capture does not wait for a suggestion the server cannot give: the add
+// button is usable at once even when requests stall instead of failing.
+test("after an offline start, quick capture adds a task without waiting for a suggestion", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  // A suggestion request would hang (a stalled connection) rather than fail at once.
+  await page.route("**/api/task-suggestions", () => undefined);
+  const title = `Offline zachyceno bez čekání ${Date.now()}`;
+  await page.locator("button", { hasText: "＋" }).first().click();
+  const modal = page.locator(".captureModal");
+  await modal.locator("input, textarea").first().fill(title);
+  await page.waitForTimeout(1_000);
+  await expect(modal.getByRole("button", { name: "Přidat úkol" })).toBeEnabled({ timeout: 1_000 });
+  await modal.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.locator("article", { hasText: title })).toBeVisible();
+  await context.close();
+});

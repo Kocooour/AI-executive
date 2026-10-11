@@ -1176,9 +1176,12 @@ export function useLumiApp() {
   const captureItemsRef = useRef(items);
   captureItemsRef.current = items;
   const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
+  // Without access to the server (an offline start) there is no suggestion to wait for: asking would
+  // only keep the add button disabled until the request is given up.
+  const captureServerUnavailable = authState === "unavailable";
   useEffect(() => {
     const parsed = parseCapture(draft);
-    if (!capture || captureType !== "task" || parsed.title.length < 3) {
+    if (!capture || captureType !== "task" || parsed.title.length < 3 || captureServerUnavailable) {
       captureSuggestionVersion.current += 1;
       setCaptureSuggestion(null);
       setCaptureSuggestionBusy(false);
@@ -1252,7 +1255,7 @@ export function useLumiApp() {
       window.clearTimeout(abortTimer);
       controller.abort();
     };
-  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language]);
+  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language, captureServerUnavailable]);
 
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
