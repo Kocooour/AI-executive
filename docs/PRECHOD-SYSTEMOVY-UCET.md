@@ -110,8 +110,9 @@ echo "== klice Environment= v jednotce"; systemctl show ai-executive -p Environm
 echo "== ExecStart"; systemctl show ai-executive -p ExecStart --value | head -c 600; echo
 echo "== porty"; ss -ltnp | grep -E ':(3000|8443)\b' || true
 echo "== tailscale serve"; tailscale serve status || true
-echo "== klice v .env"; keys "$OLD_ENV"
 OTHER=$(other_lines "$OLD_ENV"); echo "ostatni neprazdne radky .env (nejsou KLIC=...): $OTHER"
+# Radek pokracovani viceradkove hodnoty muze vypadat jako KLIC=... (napr. base64 s "=="): nazvy se vypisi jen bez takovych radku.
+if [ "$OTHER" = 0 ]; then echo "== klice v .env"; keys "$OLD_ENV"; else echo "== klice v .env: nevypisuji (soubor ma radky mimo KLIC=hodnota)"; fi
 echo "== .env* v checkoutu (povoleno presne .env a .env.example)"
 STRAY=$(ls -A "$OLD_DIR" | grep -E '^\.env' | grep -vxF -e .env -e .env.example || true); echo "${STRAY:-zadne dalsi}"
 for KEY in AI_EXECUTIVE_DATA_DIR PORT NODE_ENV; do printf '%s: %s radku v .env\n' "$KEY" "$(grep -cE "^[[:space:]]*(export[[:space:]]+)?$KEY[[:space:]]*=" "$OLD_ENV" || true)"; done
@@ -121,12 +122,14 @@ printf 'radky s "$": %s\nradky s prefixem export: %s\nradky s uvozovkami: %s\nra
   "$(grep -cE "=[[:space:]]*[\"']" "$OLD_ENV" || true)" "$(grep -cE '[[:space:]]#' "$OLD_ENV" || true)"
 stat -c '%a %U:%G %n' "$OLD_ENV" "$OLD_DIR" "$OLD_HOME"
 [ "$OTHER" = 0 ] || { echo "STOP: .env obsahuje radky mimo KLIC=hodnota (viceradkove hodnoty); systemd EnvironmentFile je cte jinak nez dotenv"; exit 1; }
+[ "$(grep -c '\$' "$OLD_ENV" || true)" = 0 ] && [ "$(grep -cE '^[[:space:]]*export[[:space:]]' "$OLD_ENV" || true)" = 0 ] \
+  || { echo "STOP: .env obsahuje \$ nebo prefix export; systemd by hodnotu cetl jinak nez dotenv (napr. stary hash hesla s \$ je treba nejdriv vygenerovat znovu ve formatu scrypt:...)"; exit 1; }
 [ -z "$STRAY" ] || { echo "STOP: dalsi .env* soubory v checkoutu"; exit 1; }
 printf 'OLD_USER=%q\nOLD_DIR=%q\nOLD_HOME=%q\nOLD_ENV=%q\nOLD_ENV_MODE=%q\n' "$OLD_USER" "$OLD_DIR" "$OLD_HOME" "$OLD_ENV" "$OLD_ENV_MODE" > "$VARS"
 chmod 0600 "$VARS"
 ```
 
-Určete umístění dat a uložte proměnné. Hodnota `AI_EXECUTIVE_DATA_DIR` je cesta, ne tajný údaj, smí se vypsat. `git` běží jako root nad repozitářem jiného účtu, proto funkce `gitsafe` používá **dočasný globální config** (`safe.directory = *`); přepínač `-c safe.directory=...` u `git clone` nestačí (ověřeno na git 2.43: „dubious ownership“).
+Druhý blok navazuje na soubor proměnných z prvního, spusťte je proto v tomto pořadí. Určete umístění dat a uložte proměnné. Hodnota `AI_EXECUTIVE_DATA_DIR` je cesta, ne tajný údaj, smí se vypsat. `git` běží jako root nad repozitářem jiného účtu, proto funkce `gitsafe` používá **dočasný globální config** (`safe.directory = *`); přepínač `-c safe.directory=...` u `git clone` nestačí (ověřeno na git 2.43: „dubious ownership“).
 
 ```bash
 set -euo pipefail
@@ -458,6 +461,8 @@ echo "Celkem selhani: $FAILS"
 
 **Kontrola (automatická část):** poslední řádek `Celkem selhani: 0` a blok skončí s kódem `0` (při jakémkoli selhání je kód nenulový); `ps` a `User` ukazují `ai-executive`; poslech jen na `127.0.0.1:3000`; Tailscale Serve míří na `127.0.0.1:3000`; `/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200` lokálně i přes HTTPS; `check-data` skončí s `integrity: ok`; stabilní tabulky (`entities`, `relations`, `tombstones`, `calendar_sources`, `push_subscriptions`, `passkey_credentials` a další datové) mají stejné počty jako v `fakta-original.json`, provozní (`security_events`, `notification_deliveries`, `metadata`, `attention_*`, …) neubyly, krátkodobé (`ai_proposals`, `passkey_challenges`, `calendar_events`) a nové tabulky novějšího release se jen vypíšou jako `INFO`; v žurnálu `0` chyb přístupu; fronta bezpečnostních upozornění (jen s doplňkem) je `2770 ai-executive:hermes`.
 
+Automatickou část spusťte **dřív**, než vlastník začne s kontrolami níže: změny, které při nich udělá (přihlášení, záloha, nový úkol), by jinak porovnání počtů ohlásilo jako rozdíl.
+
 Kontroly **vyžadující vlastníka** (požádat ho o ně a výsledek zapsat do hlášení; nelze je ověřit ze serveru):
 
 1. **Přihlášení** v prohlížeči/PWA na `https://vm13861.tail412944.ts.net:8443` stávajícím heslem (potvrzuje shodný hash a secret; relace ze starého běhu zůstanou platné, protože secret je stejný).
@@ -592,7 +597,7 @@ Starý checkout lze ponechat (už nemá tajné údaje ani data, služba ho nepou
 
 ### 11. Nasazování po přechodu
 
-Toto je nová rutina pro další verze, nahrazuje dosavadní. Spouští se jako `root`, **nikdy jako `hermesadmin`** (sdílený účet nesmí smět měnit kód, který běží s daty Lumi). Služba se při sestavování zastaví, protože `pnpm build` přepisuje `.next`, který by běžící proces používal. Pokud cokoli po zastavení selže, `ERR` trap službu nenechá potichu zastavenou: když se kód ještě nezměnil, spustí ji zpět, jinak vypíše postup návratu.
+Toto je nová rutina pro další verze, nahrazuje dosavadní. Spouští se jako `root`, **nikdy jako `hermesadmin`** (sdílený účet nesmí smět měnit kód, který běží s daty Lumi). Služba se při sestavování zastaví, protože `pnpm build` přepisuje `.next`, který by běžící proces používal. Pokud cokoli po zastavení selže nebo je blok přerušen (Ctrl-C, ukončení, ztracené SSH spojení), trap službu nenechá potichu zastavenou: když se kód ještě nezměnil, spustí ji zpět, jinak vypíše postup návratu. Totéž platí, když nová verze po startu do 60 s neodpovídá. Blok spouštějte v `tmux`, aby přerušené spojení neukončilo ani výpis postupu návratu.
 
 ```bash
 set -Eeuo pipefail
@@ -602,7 +607,7 @@ cd /opt/ai-executive
 PREV=$(git rev-parse HEAD); STAMP=$(date +%Y%m%d-%H%M%S); B=/var/backups/ai-executive/deploy-$STAMP
 echo "predchozi HEAD: $PREV"
 on_error() {
-  local rc=$?; trap - ERR; set +e
+  local rc=$?; trap - ERR INT TERM HUP; set +e
   echo "CHYBA (kod $rc) u prikazu: $BASH_COMMAND"
   if [ "$(git -C /opt/ai-executive rev-parse HEAD)" = "$PREV" ]; then
     echo "Kod se nezmenil -> spoustim sluzbu zpet."; systemctl start ai-executive
@@ -614,7 +619,8 @@ on_error() {
   fi
   exit $rc
 }
-trap on_error ERR
+# Take preruseni (Ctrl-C, ukonceni, ztracene SSH spojeni) nesmi nechat sluzbu potichu zastavenou.
+trap on_error ERR INT TERM HUP
 test -z "$(git status --porcelain)" || { echo "STOP: /opt/ai-executive neni cisty"; exit 1; }
 
 # 1. Zaloha se zastavenim sluzby a kontrolou kopie
@@ -639,7 +645,8 @@ if ! cmp -s deployment/ai-executive.service /etc/systemd/system/ai-executive.ser
 fi
 systemctl start ai-executive
 for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
-trap - ERR
+curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest || { echo "NEPRIPRAVENO: nova verze neodpovida"; false; }   # spusti trap
+trap - ERR INT TERM HUP
 runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$B/fakta-po.json"
 cmp_tables "$B/fakta-pred.json" "$B/fakta-po.json" "$VOLATILE" "$IGNORED"
 echo "Nasazeno: $PREV -> $(git rev-parse HEAD); zaloha $B"
