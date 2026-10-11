@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import { sessionFile } from "../playwright.config";
-import { expectOnServer, serverEntities, settingsSections, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, serverEntities, settingsSections, waitUntilSynced } from "./helpers";
 
 // Opened without a connection to the server, the app could not check access. This browser has
 // synchronized before, so it shows the data it holds, marked as offline (owner decision
@@ -324,5 +324,27 @@ test("an offline start works without any records and has a full-size retry butto
   await expect(banner).toBeVisible();
   const box = await banner.locator("button").boundingBox();
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await context.close();
+});
+
+// Started offline, a question is asked in the app dialog instead of being answered "no" unseen.
+test("after an offline start, deleting a project asks in the app dialog", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const project = `Projekt pro offline dotaz ${Date.now()}`;
+  await page.getByRole("textbox", { name: "+ Přidat projekty" }).fill(project);
+  await page.getByRole("textbox", { name: "+ Přidat projekty" }).press("Enter");
+  await expectOnServer(page, (entity) => entity.title === project, true);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await page.getByText(project).first().click();
+  await page.locator(".projectActions button.danger").click();
+  await expect(confirmDialog(page)).toBeVisible();
+  await confirmDialog(page).getByRole("button", { name: "Zrušit" }).click();
+  await expect(confirmDialog(page)).not.toBeVisible();
+  await expect(page.getByText(project).first()).toBeVisible();
   await context.close();
 });

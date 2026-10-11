@@ -206,10 +206,12 @@ export function useLumiApp() {
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // One confirmation at a time: asking again answers the previous question with "no".
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  // Set below where the offline view is decided; the app screen (and its dialog) is shown then too.
+  const offlineViewRef = useRef(false);
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
-    // The dialog lives in the signed-in screen; without it a question could never be answered.
-    if (authStateRef.current !== "ready") return Promise.resolve(false);
+    // The dialog lives in the app screen; without it a question could never be answered.
+    if (authStateRef.current !== "ready" && !offlineViewRef.current) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       confirmResolver.current = resolve;
       setConfirmRequest(request);
@@ -1429,6 +1431,7 @@ export function useLumiApp() {
       return localStorage.getItem("ai-executive-server-synced") === "1" && items.some((entity) => entity.type !== "workspace");
     } catch { return false; }
   })();
+  offlineViewRef.current = offlineView;
   useEffect(() => {
     if (authState !== "ready") return;
     try { localStorage.setItem(signedInKey, "1"); } catch { /* storage unavailable */ }
@@ -1437,8 +1440,9 @@ export function useLumiApp() {
   const [offlineRetry, setOfflineRetry] = useState<"" | "checking" | "failed">("");
   async function retryAccess() {
     setOfflineRetry("checking");
-    await checkAccess(true);
-    setOfflineRetry(authStateRef.current === "unavailable" ? "failed" : "");
+    // The result of this check, not the last rendered state (the screen may not have updated yet).
+    const result = await checkAccess(true);
+    setOfflineRetry(result === "unavailable" ? "failed" : "");
     window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
   }
   const attentionState = useAttention({ authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });

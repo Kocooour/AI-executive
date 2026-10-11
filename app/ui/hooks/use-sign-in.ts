@@ -61,6 +61,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
   }, []);
   useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
   // `quiet`: a check in the background keeps the screen as it is until there is an answer.
+  // Returns the state this check found, or nothing when a newer check replaced it.
   async function checkAccess(quiet = false) {
     const version = ++authCheckVersion.current;
     setAuthError("");
@@ -72,12 +73,15 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
       if (state.enabled && !state.configured) {
         setAuthError(tr("authMisconfigured"));
         setAuthState("misconfigured");
-        return;
+        return "misconfigured";
       }
-      setAuthState(state.authenticated ? "ready" : "required");
+      const next = state.authenticated ? "ready" : "required";
+      setAuthState(next);
+      return next;
     } catch {
       if (version !== authCheckVersion.current) return;
       setAuthState("unavailable");
+      return "unavailable";
     }
   }
   useEffect(() => {
