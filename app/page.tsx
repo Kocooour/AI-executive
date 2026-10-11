@@ -17,6 +17,7 @@ import { CaptureDialog } from "./ui/views/capture-dialog";
 import { DetailPanel } from "./ui/views/detail-panel";
 import { AssistantPanel } from "./ui/views/assistant-panel";
 import { ConfirmDialog } from "./ui/views/confirm-dialog";
+import { HeldBack } from "./ui/views/held-back";
 
 export default function App() {
   const app = useLumiApp();
@@ -53,6 +54,7 @@ export default function App() {
             </div>
             {view === "Home" && <p className="pageSubtitle">{tr("homeSubtitle")}</p>}
           </div>
+          <HeldBack app={app} />
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && <WorkNowCard app={app} />}

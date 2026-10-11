@@ -1,5 +1,6 @@
 "use client";
 import type { LumiApp } from "../use-lumi-app";
+import { RecordMarks } from "./held-back";
 
 export function SearchResults({ app }: { app: LumiApp }) {
   const {
@@ -37,7 +38,7 @@ export function SearchResults({ app }: { app: LumiApp }) {
                 .map((x) => (
                   <article key={x.id} onClick={() => inspect(x)}>
                     <div>
-                      <strong>{x.title}</strong>
+                      <strong>{x.title || tr("untitledItem")}<RecordMarks app={app} entity={x} /></strong>
                       <small>{tr(x.type)}</small>
                     </div>
                   </article>
