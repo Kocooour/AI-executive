@@ -1,3 +1,13 @@
+# AI Executive (Lumi) hardened unit. Installed by the procedure in docs/PRECHOD-SYSTEMOVY-UCET.md.
+#
+# Layout: code in /opt/ai-executive (root-owned, read-only for the service), state in
+# /var/lib/ai-executive (StateDirectory), secrets in /etc/ai-executive/ai-executive.env (root, 0600).
+# Values from EnvironmentFile override Environment= lines, so that file must NOT set
+# AI_EXECUTIVE_DATA_DIR, PORT or NODE_ENV (the migration procedure strips them).
+# `next start` is started directly, not through npm: npm would write logs and cache under $HOME.
+# `next start` writes nothing under /opt/ai-executive for this application (verified by
+# deployment/rehearsal/rehearse.sh), so no ReadWritePaths= is needed.
+
 [Unit]
 Description=AI Executive
 After=network-online.target
@@ -10,9 +20,10 @@ Group=ai-executive
 WorkingDirectory=/opt/ai-executive
 Environment=NODE_ENV=production
 Environment=PORT=3000
+Environment=NEXT_TELEMETRY_DISABLED=1
 Environment=AI_EXECUTIVE_DATA_DIR=/var/lib/ai-executive
 EnvironmentFile=/etc/ai-executive/ai-executive.env
-ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1
+ExecStart=/usr/bin/node /opt/ai-executive/node_modules/next/dist/bin/next start --hostname 127.0.0.1
 Restart=on-failure
 RestartSec=5
 UMask=0077

@@ -11,6 +11,7 @@ import {
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Entity, Relation } from "./db";
+import { resolveDataDirectory } from "./data-dir";
 
 export interface StoreSnapshot {
   revision: number;
@@ -28,8 +29,7 @@ export interface BackupSummary {
   error?: string;
 }
 
-const dataDirectory =
-  process.env.AI_EXECUTIVE_DATA_DIR || path.join(process.cwd(), ".data");
+const dataDirectory = resolveDataDirectory();
 const backupDirectory = path.join(dataDirectory, "backups");
 const databasePath = path.join(dataDirectory, "store.sqlite");
 const legacyStorePath = path.join(dataDirectory, "store.json");

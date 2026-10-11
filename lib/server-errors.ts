@@ -120,6 +120,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "A valid explicit workspace is required",
   "A write workspace is required",
   "AI action not found",
+  "AI_EXECUTIVE_DATA_DIR must be an absolute path.",
   "AI_EXECUTIVE_PASSWORD_HASH is not configured correctly",
   "AI_EXECUTIVE_SESSION_SECRET must contain at least 32 characters",
   "Action identifier is invalid",
