@@ -25,6 +25,8 @@ export function ContextView({ app }: { app: LumiApp }) {
     claimValueType,
     contextClaimAction,
     contextClaims,
+    contextHistory,
+    contextHistoryAction,
     contextInboxBusy,
     contextInboxProposals,
     contextInboxReason,
@@ -32,10 +34,14 @@ export function ContextView({ app }: { app: LumiApp }) {
     contextInboxTasks,
     contextInboxText,
     contextPredicateLabel,
+    contextStepText,
     contextSubjectTypeLabel,
     createSuggestedTarget,
     editContextClaim,
     editingClaim,
+    historyBusy,
+    historyOffer,
+    historyStatus,
     items,
     language,
     newSubjectTitle,
@@ -88,6 +94,13 @@ export function ContextView({ app }: { app: LumiApp }) {
     const label = tr(key);
     return label === key ? provider : label;
   };
+  const stepLabel = (step: NonNullable<typeof contextHistory.undo>) => {
+    const text = contextStepText(step);
+    return <>{text.action} <span data-user-content>{text.target}</span></>;
+  };
+  // Offered right after a saved edit, next to its confirmation: the concrete step and the same Undo as the bar.
+  const undoOffer = (area: "claim" | "subject" | "inbox", status: string) => historyOffer === area && status && contextHistory.undo
+    ? <button type="button" className="textAction contextUndoOffer" disabled={historyBusy} onClick={() => contextHistoryAction("undo")}>{tr("contextUndo")}: {stepLabel(contextHistory.undo)}</button> : null;
   return (
     <>
           {view === "Context" && (
@@ -100,6 +113,15 @@ export function ContextView({ app }: { app: LumiApp }) {
                     <p>{tr("ownerControlledClaimsFor")}</p>
                   </div>
                   <div className="contextHeaderActions"><button onClick={reloadContextClaims}>{tr("reloadClaims")}</button><button className="primaryAction" onClick={resetClaimDraft}>{tr("newClaim")}</button></div>
+                </div>
+                <div className="contextHistoryBar" role="group" aria-label={tr("contextHistoryBar")}>
+                  <button type="button" disabled={!contextHistory.undo || historyBusy} aria-keyshortcuts="Control+Z Meta+Z" onClick={() => contextHistoryAction("undo")}>
+                    <strong>{tr("contextUndo")}</strong>{" "}<span>{contextHistory.undo ? stepLabel(contextHistory.undo) : tr("contextNothingToUndo")}</span>
+                  </button>
+                  <button type="button" disabled={!contextHistory.redo || historyBusy} aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" onClick={() => contextHistoryAction("redo")}>
+                    <strong>{tr("contextRedo")}</strong>{" "}<span>{contextHistory.redo ? stepLabel(contextHistory.redo) : tr("contextNothingToRedo")}</span>
+                  </button>
+                  {historyStatus && <p role="status" className="contextHistoryStatus">{historyStatus}</p>}
                 </div>
                 <div className="contextStats">
                   <span><strong>{contextClaims.length}</strong>{tr("claims")}</span>
@@ -117,6 +139,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                 </div>
                 <label className="contextPeopleSearch">{tr("searchPeopleOrganizationsAnd")}<input value={subjectSearch} onChange={(event) => setSubjectSearch(event.target.value)} /></label>
                 {subjectStatus && <p role="status">{subjectStatus}</p>}
+                {undoOffer("subject", subjectStatus)}
                 <div className="contextPeopleList">{standaloneSubjects.filter((subject) => !subjectSearch.trim() || subject.title.toLocaleLowerCase("cs-CZ").includes(subjectSearch.toLocaleLowerCase("cs-CZ")) || contextClaims.some((claim) => (claim.subject.id === subject.id || claim.target?.id === subject.id) && `${claim.predicate} ${claim.subject.title} ${claim.target?.title || ""} ${String(claim.literal?.value || "")}`.toLocaleLowerCase("cs-CZ").includes(subjectSearch.toLocaleLowerCase("cs-CZ")))).map((subject) => <article key={subject.id}>
                   {subjectEditId === subject.id ? <div className="contextPeopleForm">
                     <input aria-label={tr("editName")} value={subjectEditTitle} maxLength={200} onChange={(event) => setSubjectEditTitle(event.target.value)} />
@@ -131,7 +154,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                       <button onClick={() => showSubjectHistory(subject)}>{tr("history")}</button>
                       {!subject.archivedAt && <button className="textAction danger" disabled={subjectBusy} onClick={() => subjectAction("archive", subject)}>{tr("archive")}</button>}
                     </div>
-                    {subjectHistory[subject.id] && <ol className="contextSubjectHistory">{subjectHistory[subject.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{contextPredicateLabel(event.operation.replace("subject.", ""))}{event.beforeTitle && event.afterTitle && event.beforeTitle !== event.afterTitle ? `: ${event.beforeTitle} → ${event.afterTitle}` : event.afterTitle ? `: ${event.afterTitle}` : ""} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
+                    {subjectHistory[subject.id] && <ol className="contextSubjectHistory">{subjectHistory[subject.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{event.kind && event.kind !== "change" ? `${tr(`historyEvent_${event.kind}`)}: ` : ""}{contextPredicateLabel(event.operation.replace("subject.", ""))}{event.beforeTitle && event.afterTitle && event.beforeTitle !== event.afterTitle ? `: ${event.beforeTitle} → ${event.afterTitle}` : event.afterTitle ? `: ${event.afterTitle}` : ""} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
                     <details className="contextPersonKnowledge"><summary>{tr("whatLumiKnows")}</summary>
                       {contextClaims.filter((claim) => !claim.archivedAt && (claim.subject.id === subject.id || claim.target?.id === subject.id)).map((claim) => <p key={claim.id}>{claim.subject.title} · {contextPredicateLabel(claim.predicate)} → {String(claim.literal?.value ?? claim.target?.title ?? "—")} <small>({claim.reviewStatus === "confirmed" ? (tr("confirmedClaim")) : claim.reviewStatus === "proposed" ? (tr("toReview2")) : (tr("rejected"))})</small></p>)}
                       {!contextClaims.some((claim) => !claim.archivedAt && (claim.subject.id === subject.id || claim.target?.id === subject.id)) && <p>{tr("noClaimsYet")}</p>}
@@ -145,6 +168,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                 <label className="contextInboxInput">{tr("summaryOrNotes")}<textarea value={contextInboxText} maxLength={20000} onChange={(event) => setContextInboxText(event.target.value)} placeholder={tr("eGProjectLumi")} /></label>
                 <div className="contextInboxActions"><button className="primaryAction" disabled={Boolean(contextInboxBusy) || !contextInboxText.trim()} onClick={previewContextInbox}>{contextInboxBusy === "preview" ? (tr("analysing")) : (tr("preparePreview"))}</button><button disabled={Boolean(contextInboxBusy) || (!contextInboxProposals.length && !contextInboxTasks.length)} onClick={() => { setContextInboxProposals([]); setContextInboxTasks([]); setContextInboxStatus(tr("previewDiscarded")); }}>{tr("discardAll")}</button></div>
                 {contextInboxStatus && <p role="status">{contextInboxStatus}</p>}
+                {undoOffer("inbox", contextInboxStatus)}
                 <div className="contextInboxList">
                   {contextInboxProposals.map((proposal) => <article key={proposal.id} className="contextInboxProposal">
                     <header><strong>{proposal.subject.title}</strong><small>{contextInboxReason(proposal.reason)}</small></header>
@@ -183,6 +207,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                   <details><summary>{tr("sourceAndEvidenceOptional")}</summary><div className="preferenceGrid"><label>{tr("sourceProvider")}<input value={claimSourceProvider} maxLength={80} onChange={(event) => setClaimSourceProvider(event.target.value)} /></label><label>{tr("urlLocator")}<input value={claimSourceLocator} maxLength={2000} onChange={(event) => setClaimSourceLocator(event.target.value)} /></label></div><label>{tr("evidenceExcerpt")}<textarea value={claimEvidence} maxLength={2000} onChange={(event) => setClaimEvidence(event.target.value)} /></label></details>
                   <div className="notificationActions"><button className="primaryAction" disabled={claimBusyIds.includes(editingClaim?.id || `new:${calendarWorkspaceSelection.current}`) || !claimSubjectId || !claimPredicate.trim() || (claimValueMode === "target" ? !claimTargetId : claimValue === "" || (claimValueType === "number" && !Number.isFinite(Number(claimValue))))} onClick={saveContextClaim}>{claimBusyIds.includes(editingClaim?.id || `new:${calendarWorkspaceSelection.current}`) ? (tr("saving")) : tr("save")}</button>{editingClaim && <button onClick={resetClaimDraft}>{tr("cancel")}</button>}</div>
                   {claimStatus && <p className={claimStatus.toLowerCase().includes("konflikt") || claimStatus.toLowerCase().includes("conflict") ? "contextConflict" : "saveConfirmation"} role="status">{claimStatus}</p>}
+                  {undoOffer("claim", claimStatus)}
                 </div>
               </section>
 
@@ -194,7 +219,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                     <p><b>{contextPredicateLabel(claim.predicate)}</b> → {String(claim.literal?.value ?? claim.target?.title ?? "—")}{claim.target?.archivedAt ? (tr("archived2")) : ""}</p>
                     <div className="claimMeta"><span>{claim.freshness === "current" ? (tr("current2")) : claim.freshness === "needs_review" ? (tr("needsReview2")) : (tr("stale2"))}</span><span>{claim.sensitivity === "restricted" ? tr("restricted2") : claim.sensitivity === "confidential" ? tr("confidential2") : tr("normal2")}</span><span className={claim.source ? "hasSource" : "missingSource"}>{claim.source ? (claim.source.provider ? providerLabel(claim.source.provider) : claim.source.locator || (tr("sourceAvailable"))) : (tr("missingSourceOwnerStatement"))}</span></div>
                     {claim.evidence?.excerpt && <blockquote>{claim.evidence.excerpt}</blockquote>}
-                    {claimHistory[claim.id] && <ol className="contextSubjectHistory">{claimHistory[claim.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{event.operation === "review" && event.decision ? tr(`claimReview_${event.decision}`) : contextPredicateLabel(event.operation)} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
+                    {claimHistory[claim.id] && <ol className="contextSubjectHistory">{claimHistory[claim.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{event.kind && event.kind !== "change" ? `${tr(`historyEvent_${event.kind}`)}: ` : ""}{event.operation === "review" && event.decision ? tr(`claimReview_${event.decision}`) : contextPredicateLabel(event.operation)} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
                     <div className="contextClaimActions">{claim.reviewStatus !== "confirmed" && <button className="primaryAction" disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "confirmed")}>{tr("confirm")}</button>}{claim.reviewStatus !== "rejected" && <button disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "rejected")}>{tr("reject")}</button>}{claim.reviewStatus !== "proposed" && <button disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "proposed")}>{tr("returnToReview")}</button>}<button onClick={() => editContextClaim(claim)}>{tr("edit")}</button><button onClick={() => showClaimHistory(claim)}>{tr("history")}</button><button className="textAction danger" disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "archive")}>{tr("archive")}</button></div>
                   </article>)}
                   {!contextClaims.some((claim) => claimFilterId === "all" || (claimFilterId === "review" ? claim.reviewStatus === "proposed" : claim.subject.canonicalEntityId === claimFilterId || claim.subject.id === claimFilterId || claim.target?.id === claimFilterId || claim.target?.canonicalEntityId === claimFilterId)) && <p>{tr("noStructuredClaimsIn")}</p>}

@@ -2404,6 +2404,11 @@ article:hover > .dragHandle,
 }
 .contextClaimActions { margin-top: 12px; }
 .contextConflict { color: var(--danger); font-weight: 600; }
+.contextHistoryBar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.contextHistoryBar button { display: block; min-height: 44px; min-width: 0; padding: 8px 12px; text-align: left; overflow-wrap: anywhere; }
+.contextHistoryBar button strong { margin-right: 4px; }
+.contextHistoryStatus { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.contextUndoOffer { display: block; max-width: 100%; min-height: 40px; margin-top: 6px; text-align: left; overflow-wrap: anywhere; }
 .contextInboxInput { display: grid; gap: 6px; }
 .contextInbox textarea { width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--line, #d9d9dd); border-radius: 10px; background: var(--input, transparent); color: inherit; padding: 11px; font: inherit; }
 .contextInboxActions, .contextInboxProposal .contextClaimActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -2440,6 +2445,7 @@ article:hover > .dragHandle,
   .contextWorkspace > section { padding: 15px; border-radius: 12px; }
   .contextClaimForm .preferenceGrid { grid-template-columns: 1fr; }
   .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
+  .contextHistoryBar { grid-template-columns: minmax(0, 1fr); }
   .contextClaimCard header { align-items: flex-start; }
   .contextInboxActions button, .contextInboxProposal .contextClaimActions button { flex: 1 1 calc(50% - 8px); min-height: 42px; }
   .contextPeopleForm { grid-template-columns: 1fr; }

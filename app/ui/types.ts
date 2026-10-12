@@ -197,6 +197,12 @@ export interface ContextInboxProposal {
   suggestedTarget?: { type: "person" | "organization"; title: string; matches: Array<{ id: string; title: string }> };
   selectedTargetId?: string;
 }
+export interface ContextHistoryStep {
+  eventId: string; kind: "change" | "undo" | "redo"; operation: string; objectType: "claim" | "subject"; objectId: string;
+  label: string; subjectTitle: string | null; subjectType: string | null; fromTitle: string | null; toTitle: string | null;
+  reviewStatus: "proposed" | "confirmed" | "rejected" | null; at: number;
+}
+export interface ContextHistoryState { undo: ContextHistoryStep | null; redo: ContextHistoryStep | null; recent: ContextHistoryStep[]; }
 export interface StandaloneSubjectItem { id: string; workspaceId: string; type: "person" | "organization"; title: string; revision: number; archivedAt: number | null; }
 export interface ContextInboxTaskDraft { id: string; title: string; subject: { entityId: string; type: string; title: string }; suggestedDate: string | null; suggestedPriority: "none" | "low" | "medium" | "high"; reason: "action_item"; }
 export interface NotificationState {
