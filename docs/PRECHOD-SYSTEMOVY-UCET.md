@@ -72,9 +72,10 @@ unit_value=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | 
 [ -z "$unit_value" ] || { echo "jednotka/drop-in: $unit_value"; FOUND=1; case "$unit_value" in /*) ;; *) echo "STOP: relativni hodnota v jednotce"; exit 1;; esac; }
 for f in "$OLD_DIR"/.env "$OLD_DIR"/.env.*; do
   [ -f "$f" ] || continue; [ "$(basename "$f")" = .env.example ] && continue
-  v=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$f" | tail -n1 | tr -d "\"'")
+  v=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$f" | tail -n1 | sed -E "s/^\"([^\"]*)\"[[:space:]]*\$/\1/; s/^'([^']*)'[[:space:]]*\$/\1/")
   [ -z "$v" ] || { echo "$f: $v"; FOUND=1; case "$v" in /*) ;; *) echo "STOP: relativni hodnota v $f"; exit 1;; esac; }
   case "$v" in *[[:space:]]*) echo "STOP: hodnota v $f obsahuje mezeru; postup ji nepodporuje, nahlasit"; exit 1;; esac
+  case "$v" in *[\"\']*) echo "STOP: hodnota v $f obsahuje uvozovky uvnitr cesty; postup ji nepodporuje, nahlasit"; exit 1;; esac
 done
 [ "$FOUND" = 1 ] || echo "AI_EXECUTIVE_DATA_DIR neni nastavena (pouzije se <cwd>/.data)"
 ```
@@ -147,6 +148,11 @@ HASHES=$({ grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:s
 # a jakekoli zpetne lomitko (dotenv v uvozovkach rozvine \n, systemd ma pro escapy vlastni pravidla).
 ESCAPES=$({ grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(`|.*\\)' "$OLD_ENV" || true; } | wc -l)
 [ "$ESCAPES" = 0 ] || { echo "STOP: .env ma $ESCAPES radku s hodnotou ve zpetnych apostrofech nebo se zpetnym lomitkem; dotenv a systemd je ctou jinak. Nahlasit."; exit 1; }
+# Uvozovky: dotenv je odstrani jen kolem cele hodnoty, systemd i uprostred (KLIC="abc"def: dotenv cte "abc"def,
+# systemd abcdef). Projde jen hodnota bez uvozovek, nebo cela v jednom paru uvozovek a za nim nic.
+QUOTES=$({ grep -E "^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=.*[\"']" "$OLD_ENV" || true; } \
+  | { grep -vE "^[^=]*=[[:space:]]*(\"[^\"]*\"|'[^']*')[[:space:]]*\$" || true; } | wc -l)
+[ "$QUOTES" = 0 ] || { echo "STOP: .env ma $QUOTES radku s uvozovkami jinde nez kolem cele hodnoty; dotenv a systemd je ctou jinak. Nahlasit."; exit 1; }
 DUP=$(keys "$OLD_ENV" | uniq -d | wc -l)
 [ "$DUP" = 0 ] || { echo "STOP: .env obsahuje $DUP klicu zapsanych vicekrat (dotenv bere posledni zapis); nahlasit"; exit 1; }
 [ "$HASHES" = 0 ] \
@@ -165,9 +171,11 @@ umask 077
 gitsafe() { local f rc; f=$(mktemp); printf '[safe]\n\tdirectory = *\n' > "$f"; GIT_CONFIG_GLOBAL="$f" git "$@"; rc=$?; rm -f "$f"; return $rc; }
 systemctl show ai-executive -p Environment --value | grep -qE "[\"']AI_EXECUTIVE_DATA_DIR=" && { echo "STOP: AI_EXECUTIVE_DATA_DIR v jednotce obsahuje mezeru nebo uvozovky; nahlasit"; exit 1; }
 OLD_DATA=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | tail -n1)
-[ -n "$OLD_DATA" ] || OLD_DATA=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$OLD_ENV" | tail -n1 | tr -d "\"'")
+[ -n "$OLD_DATA" ] || OLD_DATA=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$OLD_ENV" | tail -n1 | sed -E "s/^\"([^\"]*)\"[[:space:]]*\$/\1/; s/^'([^']*)'[[:space:]]*\$/\1/")
 [ -n "$OLD_DATA" ] || OLD_DATA="$OLD_DIR/.data"
 case "$OLD_DATA" in *[[:space:]]*) echo "STOP: cesta k datum obsahuje mezeru; nahlasit"; exit 1;; esac
+# Odstranuje se jen uvozovkovy par kolem cele hodnoty; uvozovka uvnitr cesty by se jinak ztratila (O'Brien -> OBrien).
+case "$OLD_DATA" in *[\"\']*) echo "STOP: cesta k datum obsahuje uvozovky; nahlasit"; exit 1;; esac
 case "$OLD_DATA" in /*) ;; *) OLD_DATA="$OLD_DIR/$OLD_DATA";; esac
 echo "OLD_DATA=$OLD_DATA"; ls -la --time-style=+%F "$OLD_DATA" | awk '{print $1,$3,$4,$5,$6,$7}'
 # Zaloha i uklid pracuji s adresarem samotnym: symlink (i v nadrazene ceste) by zalohoval jen odkaz.
@@ -564,7 +572,9 @@ umask 077
 # Dokud se nezacne vracet jednotka, plati nova konfigurace: selhani nebo preruseni ji spusti zpet.
 # Jen kdyz je nainstalovana jednotka jeste nova (sablona); v opakovanem 9.1 po prerusene vymene se nic nespousti.
 RESTART=0; cmp -s /etc/systemd/system/ai-executive.service /opt/ai-executive/deployment/ai-executive.service && RESTART=1
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky"; if [ "$RESTART" = 1 ]; then echo "-> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; else echo "-> jednotka uz neni nova, nic nespoustim (viz Kdyz selze i navrat)"; fi; exit $rc' ERR INT TERM HUP
+# Signal mezi prikazy nechava $? klidne 0: signaly proto maji vlastni nenulovy kod (130/143/129).
+recover() { local rc=$1; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky"; if [ "$RESTART" = 1 ]; then echo "-> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; else echo "-> jednotka uz neni nova, nic nespoustim (viz Kdyz selze i navrat)"; fi; exit "$rc"; }
+trap 'recover $?' ERR; trap 'recover 130' INT; trap 'recover 143' TERM; trap 'recover 129' HUP
 systemctl stop ai-executive
 systemctl is-active --quiet ai-executive && { echo "STOP: nova sluzba porad bezi; navrat nepokracuje"; exit 1; }
 # Novy stav ulozit pro pripadne dohledani zmen (zustane take v /var/lib/ai-executive).
@@ -719,7 +729,7 @@ fi
 # Od prvni zmeny v /opt/ai-executive (merge, node_modules, .next) uz stara verze bez noveho sestaveni nepobezi.
 CHANGED=0
 on_error() {
-  local rc=$?; trap - ERR INT TERM HUP; set +e
+  local rc=$1; trap - ERR INT TERM HUP; set +e
   echo "CHYBA (kod $rc) u prikazu: $BASH_COMMAND"
   if [ "$CHANGED" = 0 ]; then
     echo "Kod ani sestaveni se nezmenily -> spoustim sluzbu zpet."; systemctl start ai-executive
@@ -736,7 +746,8 @@ on_error() {
   exit $rc
 }
 # Take preruseni (Ctrl-C, ukonceni, ztracene SSH spojeni) nesmi nechat sluzbu potichu zastavenou.
-trap on_error ERR INT TERM HUP
+# Signal mezi prikazy nechava $? klidne 0: signaly maji vlastni nenulovy kod, aby blok neskoncil "uspechem".
+trap 'on_error $?' ERR; trap 'on_error 130' INT; trap 'on_error 143' TERM; trap 'on_error 129' HUP
 
 # 1. Zaloha se zastavenim sluzby a kontrolou kopie
 systemctl stop ai-executive
