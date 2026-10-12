@@ -10,7 +10,7 @@ export function activeWorkspaces(snapshot: StoreSnapshot): string[] {
 }
 
 export function evaluateWorkspace(snapshot: StoreSnapshot, workspaceId: string, timezone: string, evaluatedAt: number) {
-  const claims: AttentionClaimActivity[] = listOwnerClaims(workspaceId).filter((claim) => claim.reviewStatus === "confirmed" && claim.archivedAt === null && claim.subject.canonicalEntityId)
+  const claims: AttentionClaimActivity[] = listOwnerClaims(workspaceId).filter((claim) => claim.reviewStatus === "confirmed" && claim.archivedAt === null && claim.sensitivity === "normal" && claim.subject.canonicalEntityId)
     .map((claim) => ({ id: claim.id, workspaceId, projectId: claim.subject.canonicalEntityId!, predicate: claim.predicate,
       revision: claim.revision, updatedAt: claim.updatedAt, confirmed: true, current: claim.freshness === "current" }));
   return evaluateAttention({ entities: snapshot.entities, relations: snapshot.relations, claims, workspaceId, timezone, evaluatedAt, dataRevision: snapshot.revision });

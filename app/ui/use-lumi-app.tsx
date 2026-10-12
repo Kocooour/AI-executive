@@ -122,7 +122,7 @@ export function useLumiApp() {
     [claimEvidence, setClaimEvidence] = useState(""),
     [editingClaim, setEditingClaim] = useState<ContextClaimItem | null>(null),
     [claimStatus, setClaimStatus] = useState(""),
-    [claimBusyId, setClaimBusyId] = useState(""),
+    [claimBusyIds, setClaimBusyIds] = useState<string[]>([]),
     [contextInboxText, setContextInboxText] = useState(""),
     [contextInboxProposals, setContextInboxProposals] = useState<ContextInboxProposal[]>([]),
     [contextInboxTasks, setContextInboxTasks] = useState<ContextInboxTaskDraft[]>([]),
@@ -205,6 +205,33 @@ export function useLumiApp() {
   const contextClaimLoadVersion = useRef(0);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // Context commands. One user intent keeps one idempotency key (and, for a new object, one id)
+  // until it succeeds or the draft behind it changes, so a retry after a lost response is the same
+  // command and cannot duplicate. The refs below also bind every response to the object it was
+  // requested for, not to whatever the editor shows when it arrives.
+  const contextIntents = useRef(new Map<string, { signature: string; commandKey: string; objectId: string }>());
+  const contextInFlight = useRef(new Set<string>());
+  const claimEditor = useRef({ objectId: "", nonce: 0, signature: "" });
+  const subjectDraft = useRef({ newTitle: "", editId: "", editTitle: "" });
+  const contextIntent = (scope: string, signature: string) => {
+    const current = contextIntents.current.get(scope);
+    if (current && current.signature === signature) return current;
+    const next = { signature, commandKey: crypto.randomUUID(), objectId: crypto.randomUUID() };
+    contextIntents.current.set(scope, next);
+    return next;
+  };
+  const finishContextIntent = (scope: string) => { contextIntents.current.delete(scope); };
+  const claimDraftSignature = JSON.stringify([claimSubjectId, claimPredicate, claimValue, claimValueType, claimValueMode, claimTargetId,
+    claimFreshness, claimSensitivity, claimValidFrom, claimValidTo, claimSourceProvider, claimSourceLocator, claimEvidence]);
+  claimEditor.current.objectId = editingClaim?.id || "";
+  claimEditor.current.signature = claimDraftSignature;
+  subjectDraft.current = { newTitle: newSubjectTitle, editId: subjectEditId, editTitle: subjectEditTitle };
+  const setClaimBusy = (key: string, busy: boolean) => {
+    if (busy) contextInFlight.current.add(`claim:${key}`); else contextInFlight.current.delete(`claim:${key}`);
+    setClaimBusyIds([...contextInFlight.current].filter((item) => item.startsWith("claim:")).map((item) => item.slice(6)));
+  };
+  const commandFailureMessage = (error: unknown, fallback: string) =>
+    error instanceof TypeError ? tr("contextCommandUnconfirmed") : error instanceof Error ? error.message : fallback;
   // One confirmation at a time: asking again answers the previous question with "no".
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
   // Set below where the offline view is decided; the app screen (and its dialog) is shown then too.
@@ -472,22 +499,35 @@ export function useLumiApp() {
   }
 
   async function subjectAction(action: "create" | "rename" | "archive", subject?: StandaloneSubjectItem) {
-    if (subjectBusy) return;
     const workspaceId = calendarWorkspaceSelection.current;
+    const busyKey = `subject:${action}:${subject?.id || workspaceId}`;
+    if (contextInFlight.current.has(busyKey)) return;
+    const title = subject ? subjectEditTitle : newSubjectTitle;
+    const scope = `subject:${action}:${subject?.id || workspaceId}`;
+    const intent = contextIntent(scope, JSON.stringify([workspaceId, subject?.revision || 0, newSubjectType, title]));
+    const subjectId = subject?.id || intent.objectId;
+    contextInFlight.current.add(busyKey);
     setSubjectBusy(true); setSubjectStatus("");
     try {
       const response = await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, idempotencyKey: crypto.randomUUID(), workspaceId,
-          id: subject?.id || crypto.randomUUID(), expectedRevision: subject?.revision || 0,
-          type: newSubjectType, title: subject ? subjectEditTitle : newSubjectTitle }) });
+        body: JSON.stringify({ action, idempotencyKey: intent.commandKey, workspaceId,
+          id: subjectId, expectedRevision: subject?.revision || 0,
+          type: newSubjectType, title }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : localizeServerError(data.error, tr) || tr("subjectActionFailed"));
+      finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId); await loadContextClaims(workspaceId);
-      setNewSubjectTitle(""); setSubjectEditId(""); setSubjectEditTitle("");
+      // Only the draft this response belongs to is closed; anything typed meanwhile stays.
+      const draft = subjectDraft.current;
+      if (action === "create") { if (draft.newTitle === title) setNewSubjectTitle(""); }
+      else if (draft.editId === subject?.id && (action === "archive" || draft.editTitle === title)) { setSubjectEditId(""); setSubjectEditTitle(""); }
       setSubjectStatus(tr("saved"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(error instanceof Error ? error.message : tr("subjectActionFailed")); }
-    finally { setSubjectBusy(false); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(commandFailureMessage(error, tr("subjectActionFailed"))); }
+    finally {
+      contextInFlight.current.delete(busyKey);
+      setSubjectBusy([...contextInFlight.current].some((key) => key.startsWith("subject:")));
+    }
   }
 
   async function showSubjectHistory(subject: StandaloneSubjectItem) {
@@ -522,6 +562,9 @@ export function useLumiApp() {
   }
 
   function resetClaimDraft() {
+    claimEditor.current.nonce += 1;
+    // A draft that is given up does not keep its idempotency key for a later, similar draft.
+    for (const key of [...contextIntents.current.keys()]) if (key.startsWith("claim:save:") && key.includes(":new:")) contextIntents.current.delete(key);
     setEditingClaim(null);
     setClaimSubjectId("");
     setClaimPredicate("preference");
@@ -539,6 +582,7 @@ export function useLumiApp() {
   }
 
   function editContextClaim(claim: ContextClaimItem) {
+    claimEditor.current.nonce += 1;
     setEditingClaim(claim);
     setClaimSubjectId(claim.subject.canonicalEntityId || claim.subject.id);
     setClaimPredicate(claim.predicate);
@@ -558,11 +602,21 @@ export function useLumiApp() {
   }
 
   async function saveContextClaim() {
-    if (claimBusyId) return;
     const workspaceId = calendarWorkspaceSelection.current;
-    const claimId = editingClaim?.id || crypto.randomUUID();
-    setClaimBusyId(claimId);
+    const target = editingClaim;
+    const objectKey = target?.id || `new:${workspaceId}`;
+    if (contextInFlight.current.has(`claim:${objectKey}`)) return;
+    const sentSignature = claimDraftSignature;
+    const sentNonce = claimEditor.current.nonce;
+    const sentPredicate = claimPredicate.trim();
+    const scope = `claim:save:${objectKey}`;
+    const intent = contextIntent(scope, JSON.stringify([workspaceId, target?.revision || 0, sentSignature]));
+    const claimId = target?.id || intent.objectId;
+    setClaimBusy(objectKey, true);
     setClaimStatus(tr("saving"));
+    // True while the editor still shows the draft this request was sent for.
+    const editorStillShows = () => target ? claimEditor.current.objectId === target.id
+      : claimEditor.current.objectId === "" && claimEditor.current.nonce === sentNonce;
     try {
       const parsedValue = claimValueType === "number" ? Number(claimValue)
         : claimValueType === "boolean" ? claimValue === "true" : claimValue;
@@ -570,11 +624,11 @@ export function useLumiApp() {
       const response = await fetch("/api/context/claims", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: editingClaim ? "update" : "create", idempotencyKey: crypto.randomUUID(), workspaceId,
-          id: claimId, expectedRevision: editingClaim?.revision || 0,
-          subject: editingClaim ? undefined : standaloneSubjects.some((subject) => subject.id === claimSubjectId)
+          action: target ? "update" : "create", idempotencyKey: intent.commandKey, workspaceId,
+          id: claimId, expectedRevision: target?.revision || 0,
+          subject: target ? undefined : standaloneSubjects.some((subject) => subject.id === claimSubjectId)
             ? { subjectId: claimSubjectId } : { entityId: claimSubjectId },
-          predicate: claimPredicate.trim(), literal: claimValueMode === "literal" ? { type: claimValueType, value: parsedValue } : undefined,
+          predicate: sentPredicate, literal: claimValueMode === "literal" ? { type: claimValueType, value: parsedValue } : undefined,
           target: claimValueMode === "target" ? (standaloneSubjects.some((subject) => subject.id === claimTargetId)
             ? { subjectId: claimTargetId } : { entityId: claimTargetId }) : undefined,
           freshness: claimFreshness, sensitivity: claimSensitivity,
@@ -588,28 +642,39 @@ export function useLumiApp() {
         if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimSaveFailed"));
       }
+      finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
-      resetClaimDraft();
-      setClaimStatus(tr("savedANewClaim"));
+      if (!editorStillShows()) { setClaimStatus(tr("saved")); return; }
+      if (claimEditor.current.signature === sentSignature) {
+        resetClaimDraft();
+        setClaimStatus(tr("savedANewClaim"));
+      } else {
+        // Typed again while this was saved: the newer draft stays and continues from the saved revision.
+        if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
+        setClaimStatus(tr("saved"));
+      }
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : tr("claimSaveFailed"));
+        const message = commandFailureMessage(error, tr("claimSaveFailed"));
+        setClaimStatus(editorStillShows() ? message : `${contextPredicateLabel(sentPredicate)}: ${message}`);
       }
     } finally {
-      setClaimBusyId("");
+      setClaimBusy(objectKey, false);
     }
   }
 
   async function contextClaimAction(claim: ContextClaimItem, action: "review" | "archive", decision?: ContextClaimItem["reviewStatus"]) {
-    if (claimBusyId) return;
     const workspaceId = calendarWorkspaceSelection.current;
-    setClaimBusyId(claim.id);
+    if (contextInFlight.current.has(`claim:${claim.id}`)) return;
+    const scope = `claim:${action}:${claim.id}`;
+    const intent = contextIntent(scope, JSON.stringify([workspaceId, claim.revision, action, decision || null]));
+    setClaimBusy(claim.id, true);
     setClaimStatus(tr("saving"));
     try {
       const response = await fetch("/api/context/claims", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, idempotencyKey: crypto.randomUUID(), workspaceId, id: claim.id,
+        body: JSON.stringify({ action, idempotencyKey: intent.commandKey, workspaceId, id: claim.id,
           expectedRevision: claim.revision, decision }),
       });
       const data = await response.json().catch(() => ({}));
@@ -617,15 +682,22 @@ export function useLumiApp() {
         if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimActionFailed"));
       }
+      finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadContextClaims(workspaceId);
+      // The editor is touched only when it shows this very claim: an archived claim cannot be edited
+      // any more; a reviewed one keeps the draft and continues from the new revision.
+      if (claimEditor.current.objectId === claim.id) {
+        if (action === "archive") resetClaimDraft();
+        else if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
+      }
       setClaimStatus(tr("saved"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
-        setClaimStatus(error instanceof Error ? error.message : tr("claimActionFailed"));
+        setClaimStatus(commandFailureMessage(error, tr("claimActionFailed")));
       }
     } finally {
-      setClaimBusyId("");
+      setClaimBusy(claim.id, false);
     }
   }
 
@@ -647,46 +719,56 @@ export function useLumiApp() {
   }
 
   async function approveContextInbox(proposal: ContextInboxProposal) {
-    if (contextInboxBusy) return;
     const workspaceId = calendarWorkspaceSelection.current;
+    const busyKey = `inbox:${proposal.id}`;
+    if (contextInboxBusy || contextInFlight.current.has(busyKey)) return;
+    const body = {
+      action: "approve", workspaceId,
+      subjectId: proposal.subject.entityId, predicate: proposal.predicate,
+      literal: proposal.suggestedTarget ? undefined : proposal.literal,
+      targetSubjectId: proposal.suggestedTarget ? proposal.selectedTargetId : undefined,
+      freshness: proposal.freshness, validFrom: proposal.validFrom,
+      validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
+    };
+    const intent = contextIntent(busyKey, JSON.stringify(body));
+    contextInFlight.current.add(busyKey);
     setContextInboxBusy(proposal.id); setContextInboxStatus("");
     try {
-      const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-        action: "approve", workspaceId, idempotencyKey: proposal.id, id: proposal.id,
-        subjectId: proposal.subject.entityId, predicate: proposal.predicate,
-        literal: proposal.suggestedTarget ? undefined : proposal.literal,
-        targetSubjectId: proposal.suggestedTarget ? proposal.selectedTargetId : undefined,
-        freshness: proposal.freshness, validFrom: proposal.validFrom,
-        validTo: proposal.validTo, evidenceExcerpt: proposal.evidenceExcerpt,
-      }) });
+      const response = await fetch("/api/context/inbox", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...body, idempotencyKey: intent.commandKey, id: intent.objectId }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextProposalSaveFailed"));
+      finishContextIntent(busyKey);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       await loadContextClaims(workspaceId);
       setContextInboxStatus(tr("proposalAddedToThe"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("contextProposalSaveFailed")); }
-    finally { setContextInboxBusy(""); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("contextProposalSaveFailed"))); }
+    finally { contextInFlight.current.delete(busyKey); setContextInboxBusy(""); }
   }
 
   async function createSuggestedTarget(proposal: ContextInboxProposal) {
-    if (!proposal.suggestedTarget || contextInboxBusy) return;
     const workspaceId = calendarWorkspaceSelection.current;
+    const busyKey = `inbox-target:${proposal.id}`;
+    if (!proposal.suggestedTarget || contextInboxBusy || contextInFlight.current.has(busyKey)) return;
+    const intent = contextIntent(busyKey, JSON.stringify([workspaceId, proposal.suggestedTarget.type, proposal.suggestedTarget.title]));
+    contextInFlight.current.add(busyKey);
     setContextInboxBusy(proposal.id); setContextInboxStatus("");
     try {
-      const id = crypto.randomUUID();
+      const id = intent.objectId;
       const response = await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-        action: "create", idempotencyKey: crypto.randomUUID(), workspaceId, id, expectedRevision: 0,
+        action: "create", idempotencyKey: intent.commandKey, workspaceId, id, expectedRevision: 0,
         type: proposal.suggestedTarget.type, title: proposal.suggestedTarget.title,
       }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : localizeServerError(data.error, tr) || tr("personCreateFailed"));
+      finishContextIntent(busyKey);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       await loadStandaloneSubjects(workspaceId);
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
       setContextInboxStatus(tr("personCreatedSaveThe"));
-    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(error instanceof Error ? error.message : tr("personCreateFailed")); }
-    finally { setContextInboxBusy(""); }
+    } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("personCreateFailed"))); }
+    finally { contextInFlight.current.delete(busyKey); setContextInboxBusy(""); }
   }
 
   useEffect(() => {
@@ -2698,7 +2780,7 @@ export function useLumiApp() {
     captureType,
     checkAccess,
     checklistDraft,
-    claimBusyId,
+    claimBusyIds,
     claimEvidence,
     claimFilterId,
     claimFreshness,

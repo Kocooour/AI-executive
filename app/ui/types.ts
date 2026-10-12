@@ -151,6 +151,7 @@ export interface CalendarEvent {
   busy: boolean;
   private: boolean;
 }
+export type ClaimSensitivity = "normal" | "confidential" | "restricted";
 export interface DurableContextItem {
   id: string;
   workspaceId: string;
@@ -173,7 +174,7 @@ export interface ContextClaimItem {
   target: { id: string; type: string; canonicalEntityId: string | null; title: string; archivedAt?: number | null } | null;
   reviewStatus: "proposed" | "confirmed" | "rejected";
   freshness: "current" | "needs_review" | "stale";
-  sensitivity: "normal" | "sensitive";
+  sensitivity: ClaimSensitivity;
   provenance: "owner";
   validFrom: string | null;
   validTo: string | null;
@@ -191,7 +192,7 @@ export interface ContextInboxProposal {
   predicate: string;
   literal: { type: "string" | "number" | "boolean" | "date"; value: string | number | boolean };
   freshness: "current" | "needs_review" | "stale";
-  sensitivity: "normal" | "sensitive";
+  sensitivity: ClaimSensitivity;
   validFrom: string | null; validTo: string | null; evidenceExcerpt: string; reason: "waiting" | "importance" | "deadline" | "preference";
   suggestedTarget?: { type: "person" | "organization"; title: string; matches: Array<{ id: string; title: string }> };
   selectedTargetId?: string;
