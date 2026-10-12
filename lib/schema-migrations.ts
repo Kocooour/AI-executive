@@ -19,6 +19,28 @@ export const schemaMigrations: SchemaMigration[] = [
       database.exec("UPDATE context_claims SET sensitivity = 'confidential' WHERE sensitivity = 'sensitive'");
     },
   },
+  {
+    // Context Graph v2: durable Undo/Redo. Change events get a deterministic order (`sequence`), the
+    // type of the changed object, a kind (change, undo or redo) and the event a reversal reverses.
+    // The columns are added; what was recorded (payloads, revisions, times) is never rewritten.
+    id: "2026-10-context-change-events-undo-linkage",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(context_change_events)").all() as Array<{ name?: string }>)
+        .map((row) => String(row.name)));
+      if (!columns.has("sequence")) database.exec("ALTER TABLE context_change_events ADD COLUMN sequence INTEGER");
+      if (!columns.has("object_type")) database.exec("ALTER TABLE context_change_events ADD COLUMN object_type TEXT");
+      if (!columns.has("kind")) database.exec("ALTER TABLE context_change_events ADD COLUMN kind TEXT NOT NULL DEFAULT 'change'");
+      if (!columns.has("reverts_event_id")) database.exec("ALTER TABLE context_change_events ADD COLUMN reverts_event_id TEXT");
+      database.exec(`UPDATE context_change_events SET object_type =
+        CASE WHEN operation LIKE 'subject.%' THEN 'subject' ELSE 'claim' END WHERE object_type IS NULL`);
+      let next = Number((database.prepare("SELECT COALESCE(MAX(sequence), 0) AS value FROM context_change_events").get() as { value: number }).value);
+      const pending = database.prepare("SELECT rowid AS row FROM context_change_events WHERE sequence IS NULL ORDER BY created_at, rowid").all() as Array<{ row: number }>;
+      const assign = database.prepare("UPDATE context_change_events SET sequence = ? WHERE rowid = ?");
+      for (const { row } of pending) assign.run(++next, row);
+      database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_change_events_sequence_idx ON context_change_events(sequence);
+        CREATE INDEX IF NOT EXISTS context_change_events_workspace_sequence_idx ON context_change_events(workspace_id, sequence)`);
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

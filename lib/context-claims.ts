@@ -501,9 +501,67 @@ export function listClaimHistory(workspaceId: string, claimId: string) {
   assertWorkspace(workspaceId);
   if (!idPattern.test(claimId)) throw new ContextClaimError("Claim identifier is invalid");
   return getDatabase().prepare(`SELECT e.operation, e.before_revision AS beforeRevision, e.after_revision AS afterRevision,
-    e.created_at AS createdAt,
+    e.created_at AS createdAt, e.kind,
     (SELECT r.decision FROM context_review_events r WHERE r.workspace_id = e.workspace_id AND r.claim_id = e.object_id
       AND r.claim_revision = e.after_revision ORDER BY r.created_at DESC LIMIT 1) AS decision
     FROM context_change_events e WHERE e.workspace_id = ? AND e.object_id = ?
     ORDER BY e.created_at DESC, e.rowid DESC LIMIT 100`).all(workspaceId, claimId);
+}
+
+/** The part of a claim that Undo/Redo restores and compares; revisions and timestamps are not part of it. */
+export function claimFingerprint(claim: ContextClaim) {
+  return { predicate: claim.predicate, literal: claim.literal, targetId: claim.target?.id ?? null, freshness: claim.freshness,
+    sensitivity: readSensitivity(claim.sensitivity).sensitivity, validFrom: claim.validFrom ?? null, validTo: claim.validTo ?? null,
+    source: claim.source ?? null, evidence: claim.evidence ?? null, reviewStatus: claim.reviewStatus, archived: claim.archivedAt != null };
+}
+
+function undoConflict(message: string) {
+  return new ContextClaimError(message, 409, "undo_conflict");
+}
+
+/**
+ * Undo/Redo of one claim step, as a new revision. `after` is the state the step being reversed left the
+ * claim in; the claim must still be exactly there (and at `expectedRevision`, the revision of the newest
+ * event for it), otherwise something changed it since and nothing is written. The claim then goes to the
+ * state the step started from (`before`); a step that created the claim is reversed by archiving it.
+ * Must run inside a context command (one transaction).
+ */
+export function compensateClaim(input: { workspaceId: string; id: string; mode: "undo" | "redo"; expectedRevision: number;
+  before: ContextClaim | null; after: ContextClaim }) {
+  const row = rowForClaim(input.id, input.workspaceId);
+  if (!row) throw undoConflict("The claim no longer exists");
+  const current = deserialize(row);
+  if (current.revision !== input.expectedRevision || stable(claimFingerprint(current)) !== stable(claimFingerprint(input.after))) {
+    throw undoConflict("The claim was changed after this step");
+  }
+  const target = input.before ? claimFingerprint(input.before) : { ...claimFingerprint(input.after), archived: true };
+  const targetClaim = input.before ?? input.after;
+  if (!target.archived) {
+    // A claim that comes back must still have a valid subject and target (neither archived nor gone).
+    const refOf = (ref: ClaimSubjectRef): CanonicalRefInput => ref.canonicalEntityId ? { entityId: ref.canonicalEntityId } : { subjectId: ref.id };
+    try {
+      canonicalSubject(input.workspaceId, refOf(current.subject));
+      if (targetClaim.target) canonicalSubject(input.workspaceId, refOf(targetClaim.target));
+    } catch (error) {
+      if (error instanceof ContextCommandError && error.status < 409) throw new ContextClaimError(error.message, 409, error.code);
+      throw error;
+    }
+  }
+  const now = Date.now();
+  const archivedAt = target.archived ? (current.archivedAt ?? now) : null;
+  requireChanged(getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
+    freshness=?, sensitivity=?, valid_from=?, valid_to=?, source_metadata=?, evidence_metadata=?, review_status=?, archived_at=?,
+    revision=revision+1, updated_at=? WHERE id=? AND workspace_id=? AND revision=?`)
+    .run(target.predicate, target.literal?.type || null, target.literal ? JSON.stringify(target.literal.value) : null, target.targetId,
+      target.freshness, target.sensitivity, target.validFrom, target.validTo,
+      target.source ? JSON.stringify(target.source) : null, target.evidence ? JSON.stringify(target.evidence) : null,
+      target.reviewStatus, archivedAt, now, input.id, input.workspaceId, input.expectedRevision), "Claim changed on another device");
+  const claim = deserialize(rowForClaim(input.id, input.workspaceId)!);
+  if (target.reviewStatus !== current.reviewStatus) {
+    getDatabase().prepare(`INSERT INTO context_review_events
+      (id, workspace_id, claim_id, claim_revision, actor, decision, reason, created_at)
+      VALUES (?, ?, ?, ?, 'owner', ?, ?, ?)`)
+      .run(randomUUID(), input.workspaceId, input.id, claim.revision, target.reviewStatus, input.mode, now);
+  }
+  return { claim, before: current };
 }
