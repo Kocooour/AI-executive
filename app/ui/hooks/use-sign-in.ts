@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
 import { failWhileOffline, watchSession } from "../../../lib/session-watch";
+import { clearSignedOut } from "../../../lib/local-data";
 import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
@@ -160,6 +161,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
         return;
       }
       setAuthPassword("");
+      clearSignedOut();
       setAuthState("ready");
       await afterSignIn();
     } catch {
@@ -186,6 +188,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
       });
       const result = await verifyResponse.json();
       if (!verifyResponse.ok) throw new Error(localizeServerError(result.error, tr) || tr("passkeySignInFailed"));
+      clearSignedOut();
       setAuthState("ready");
       await afterSignIn();
     } catch (error) {

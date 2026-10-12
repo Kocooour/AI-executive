@@ -1,7 +1,7 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
-import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey } from "../../lib/local-data";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
@@ -889,7 +889,11 @@ export function useLumiApp() {
     initialize();
   }, []);
   useEffect(() => {
-    if (authState === "unavailable") startupStoreRequest.current?.abort();
+    if (authState !== "unavailable") return;
+    startupStoreRequest.current?.abort();
+    // The start may already be waiting on a later request (a second fetch or a save): the data kept
+    // in this browser is shown now rather than when that request gives up.
+    void ensureDefaultWorkspace().then(load).catch(() => undefined);
   }, [authState]);
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
@@ -899,6 +903,14 @@ export function useLumiApp() {
     if (logoutBusy) return;
     setLogoutBusy(true);
     setLogoutError("");
+    // Started offline: access is checked again first, so changes made meanwhile are sent if the
+    // connection is back (without a confirmed session they could not be, and would be offered for
+    // discarding). Still without access, sign-out is refused as before.
+    if (authStateRef.current === "unavailable" && (await checkAccess(true)) !== "ready") {
+      setLogoutError(tr("signOutOffline"));
+      setLogoutBusy(false);
+      return;
+    }
     let leaving = false;
     let askedOthers = false;
     let heartbeat = 0;
@@ -1453,6 +1465,7 @@ export function useLumiApp() {
   const offlineView = authState === "unavailable" && (() => {
     try {
       if (localStorage.getItem("ai-executive-wipe-pending") === "1") return false;
+      if (localStorage.getItem(signedOutKey) === "1") return false;
       if (localStorage.getItem(signedInKey) === "1") return true;
       return localStorage.getItem("ai-executive-server-synced") === "1" && items.some((entity) => entity.type !== "workspace");
     } catch { return false; }

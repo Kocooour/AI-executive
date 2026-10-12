@@ -535,3 +535,63 @@ test("an offline start that finds the server misconfigured keeps a title being e
   }), edited)).toBe(true);
   await context.close();
 });
+
+// The connection is back but the background check has not run yet: signing out checks access
+// first, so a change made offline is sent instead of being offered for discarding.
+test("signing out after an offline start sends offline changes once the connection is back", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  const title = `Před odhlášením offline ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toBeVisible();
+  await page.unroute("**/api/**");
+  await page.locator("button", { hasText: "Nastavení" }).first().click();
+  await settingsSections(page).filter({ hasText: "Přístup" }).click();
+  await page.getByRole("button", { name: "Odhlásit se" }).click();
+  await expect(page.locator(".authCard")).toBeVisible({ timeout: 20_000 });
+  await expect(confirmDialog(page)).not.toBeVisible();
+  // Signed out here; another device with a session sees the change on the server.
+  const other = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const otherPage = await other.newPage();
+  await otherPage.goto("/");
+  await expect.poll(async () => (await serverEntities(otherPage)).some((entity) => entity.title === title)).toBe(true);
+  // A synchronization finishing late (another tab) cannot make this browser eligible again.
+  await page.evaluate(() => localStorage.setItem("ai-executive-signed-in", "1"));
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".authCard")).toContainText("Nelze ověřit přístup");
+  await expect(page.locator(".offlineStart")).toHaveCount(0);
+  await other.close();
+  await context.close();
+});
+
+// The first request for the server copy answers, but the next one (the refresh started by it)
+// stalls together with the access check: the offline view shows this browser's data at once
+// instead of after that request gives up.
+test("an offline start waiting on a later stalled request shows this browser's data at once", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Uloženo před pomalým startem ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  await expectOnServer(page, (entity) => entity.title === title, true);
+  let storeRequests = 0;
+  await page.route("**/api/store**", async (route) => {
+    storeRequests += 1;
+    if (storeRequests === 1) await route.continue();
+  });
+  await page.route("**/api/auth/status", () => undefined);
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("article", { hasText: title })).toBeVisible({ timeout: 3_000 });
+  await context.close();
+});
