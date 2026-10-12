@@ -1,6 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { seeded, waitUntilQuiet } from "./helpers";
+import { waitUntilQuiet } from "./helpers";
 
 // Context claims: a command that is retried after a lost response is one command, a response
 // belongs to the claim it was sent for, and the three sensitivity levels decide what AI may see.
@@ -26,11 +26,26 @@ function seedClaim(page: Page, predicate: string, value: string, sensitivity = "
   return page.evaluate(async (claim) => {
     const response = await fetch("/api/context/claims", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "create", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: crypto.randomUUID(),
-        expectedRevision: 0, subject: { entityId: "e2e-project" }, predicate: claim.predicate, literal: { type: "string", value: claim.value },
+        expectedRevision: 0, subject: { entityId: "workspace:personal" }, predicate: claim.predicate, literal: { type: "string", value: claim.value },
         freshness: "current", sensitivity: claim.sensitivity }) });
     return { status: response.status, claim: (await response.json()).claim as ServerClaim };
   }, { predicate, value, sensitivity });
 }
+
+// The scenarios after this file (contrast, language) read every visible text of the Context view,
+// so the claims made here are archived again and no longer listed.
+test.afterEach(async ({ page }) => {
+  await page.unroute("**/api/context/claims").catch(() => undefined);
+  if (!page.url().startsWith("http")) await page.goto("/");
+  await page.evaluate(async () => {
+    const response = await fetch("/api/context/claims?workspaceId=personal", { cache: "no-store" });
+    const claims = ((await response.json()).claims || []) as Array<{ id: string; predicate: string; revision: number }>;
+    for (const claim of claims.filter((item) => item.predicate.startsWith("e2e."))) {
+      await fetch("/api/context/claims", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "archive", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: claim.id, expectedRevision: claim.revision }) });
+    }
+  });
+});
 
 function editor(page: Page) {
   return page.locator("#context-claim-editor");
@@ -40,7 +55,7 @@ const saveButton = (page: Page) => editor(page).getByRole("button", { name: "Ulo
 const card = (page: Page, predicate: string) => page.locator(".contextClaimCard", { hasText: predicate });
 
 async function fillDraft(page: Page, predicate: string, value: string) {
-  await editor(page).getByLabel("O kom / čem").selectOption({ label: `Projekt: ${seeded.project}` });
+  await editor(page).getByLabel("O kom / čem").selectOption("workspace:personal");
   await editor(page).getByLabel("Vztah nebo vlastnost").fill(predicate);
   await valueInput(page).fill(value);
 }
