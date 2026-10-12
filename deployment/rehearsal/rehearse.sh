@@ -26,6 +26,7 @@ PASSWORD="rehearsal-only-password"
 
 for name in "$OLD_USER" "$NEW_USER"; do
   if id "$name" >/dev/null 2>&1; then echo "User $name already exists; refusing to run on a machine that may be real." >&2; exit 2; fi
+  if getent group "$name" >/dev/null; then echo "Group $name already exists; refusing to run on a machine that may be real." >&2; exit 2; fi
 done
 for port in "$OLD_PORT" "$NEW_PORT"; do
   if (: </dev/tcp/127.0.0.1/"$port") 2>/dev/null; then echo "Port $port is in use." >&2; exit 2; fi
@@ -63,9 +64,12 @@ cleanup() {
   sleep 1
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill -9 -- "-$pid" 2>/dev/null; done
   local name
-  for name in "${CREATED_USERS[@]:-}"; do [ -n "$name" ] && userdel "$name" 2>/dev/null; done
-  getent group "$NEW_USER" >/dev/null && groupdel "$NEW_USER" 2>/dev/null
-  getent group "$OLD_USER" >/dev/null && groupdel "$OLD_USER" 2>/dev/null
+  # Only the accounts (and their own groups) this run created; nothing that existed before is touched.
+  for name in "${CREATED_USERS[@]:-}"; do
+    [ -n "$name" ] || continue
+    userdel "$name" 2>/dev/null
+    getent group "$name" >/dev/null && groupdel "$name" 2>/dev/null
+  done
   if [ -z "${KEEP:-}" ]; then rm -rf -- "$PREFIX"; else echo "Prefix kept: $PREFIX"; fi
   echo
   echo "SUMMARY: $PASS passed, $FAIL failed"

@@ -124,6 +124,8 @@ stat -c '%a %U:%G %n' "$OLD_ENV" "$OLD_DIR" "$OLD_HOME"
 [ "$OTHER" = 0 ] || { echo "STOP: .env obsahuje radky mimo KLIC=hodnota (viceradkove hodnoty); systemd EnvironmentFile je cte jinak nez dotenv"; exit 1; }
 [ "$(grep -c '\$' "$OLD_ENV" || true)" = 0 ] && [ "$(grep -cE '^[[:space:]]*export[[:space:]]' "$OLD_ENV" || true)" = 0 ] \
   || { echo "STOP: .env obsahuje \$ nebo prefix export; systemd by hodnotu cetl jinak nez dotenv (napr. stary hash hesla s \$ je treba nejdriv vygenerovat znovu ve formatu scrypt:...)"; exit 1; }
+[ "$(grep -cE '^[^#]*=.*[[:space:]]#' "$OLD_ENV" || true)" = 0 ] \
+  || { echo "STOP: .env ma za hodnotou komentar (\" #...\"); dotenv ho zahodi, systemd ho vezme jako soucast hodnoty. Vlastnik ho musi nejdriv presunout na samostatny radek."; exit 1; }
 [ -z "$STRAY" ] || { echo "STOP: dalsi .env* soubory v checkoutu"; exit 1; }
 printf 'OLD_USER=%q\nOLD_DIR=%q\nOLD_HOME=%q\nOLD_ENV=%q\nOLD_ENV_MODE=%q\n' "$OLD_USER" "$OLD_DIR" "$OLD_HOME" "$OLD_ENV" "$OLD_ENV_MODE" > "$VARS"
 chmod 0600 "$VARS"
@@ -218,7 +220,9 @@ Zastaví službu (konzistentní kopie včetně případných `-wal`/`-shm`), zko
 Co je skutečná kontrola: **počty záznamů v tabulkách** (`check-data` je čte přes SQLite, tedy včetně obsahu `-wal`) a **manifest záloh** (`sha256` všech souborů). Samotný `sha256` hlavního souboru `store.sqlite` nic nedokazuje, protože při režimu WAL mohou čerstvá data ležet v `-wal`. `-shm` je sdílený index paměti, ne data, a `check-data` ho při otevření mění, proto je z manifestu vyloučen.
 
 ```bash
-set -euo pipefail
+set -Eeuo pipefail
+# Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
 umask 077
 . /var/backups/ai-executive/migrace.vars
 systemctl stop ai-executive
@@ -245,12 +249,14 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-kopie.json"
 ```
 
 **Kontrola:** `kopie dat = original`, `Manifest OK`, kopie má `"integrity":"ok"`, nenulový počet tabulek a `TABULKY: shodne`. `fakta-original.json` je závazný základ pro všechna další porovnání.
-**Když selže:** službu **ihned spustit zpět** (`systemctl start ai-executive`), ověřit `/api/auth/status`, nahlásit. Nic dalšího nedělat, originály jsou nedotčené.
+**Když selže:** trap službu spustí zpět sám (i při přerušení). Ověřit `systemctl is-active ai-executive` a `/api/auth/status`, nahlásit. Nic dalšího nedělat, originály jsou nedotčené.
 
 ### 3. Účet
 
 ```bash
-set -euo pipefail
+set -Eeuo pipefail
+# Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
 if getent passwd ai-executive >/dev/null; then
   echo "Ucet existuje:"; id ai-executive
 else
@@ -268,7 +274,9 @@ getent passwd ai-executive
 Klonuje se lokálně ze stávajícího checkoutu (stejný commit, bez síťových přihlašovacích údajů), pak se nastaví skutečný `origin` pro budoucí nasazování. Klon jako root z repozitáře jiného účtu bez `safe.directory` selže s „dubious ownership“; `gitsafe` (krok 1) to řeší dočasným globálním configem.
 
 ```bash
-set -euo pipefail
+set -Eeuo pipefail
+# Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
 umask 022
 . /var/backups/ai-executive/migrace.vars
 test ! -e /opt/ai-executive || { echo "STOP: /opt/ai-executive uz existuje"; exit 1; }
@@ -302,12 +310,14 @@ if runuser -u ai-executive -- touch /opt/ai-executive/.probe 2>/dev/null; then r
 ```
 
 **Kontrola:** `HEAD` je shodný s `OLD_HEAD`; `pnpm install` skončí bez chyby. pnpm 10 nespouští instalační skripty závislostí, pokud nejsou povolené; výpis může obsahovat řádek `Ignored build scripts: ...` (v době psaní žádná závislost skript nevyžaduje a build prošel). Pokud se objeví seznam balíčků, nahlásit jej, ale **nespouštět `pnpm approve-builds`**. `pnpm build` skončí bez chyby; příkazy `find` nic nevypíšou; `ai-executive` kód čte a nemůže do něj zapsat.
-**Když selže:** `rm -rf /opt/ai-executive` (nic dalšího se nezměnilo), nahlásit důvod. Starou službu zatím nespouštět, nebo ji spustit zpět `systemctl start ai-executive`, pokud výpadek už nemá smysl prodlužovat.
+**Když selže:** trap spustí původní službu zpět. Pak `rm -rf /opt/ai-executive` (nic dalšího se nezměnilo) a nahlásit důvod; další pokus začíná krokem 2.
 
 ### 5. Data a tajné údaje
 
 ```bash
-set -euo pipefail
+set -Eeuo pipefail
+# Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
 umask 077
 . /var/backups/ai-executive/migrace.vars
 test ! -e /var/lib/ai-executive -o -z "$(ls -A /var/lib/ai-executive 2>/dev/null)" || { echo "STOP: /var/lib/ai-executive neni prazdny"; exit 1; }
@@ -337,7 +347,7 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
 ```
 
 **Kontrola:** `diff` klíčů ukáže nanejvýš smazané řádky `AI_EXECUTIVE_DATA_DIR`/`PORT`/`NODE_ENV` (jen názvy); počet těchto klíčů v novém souboru je `0`; vlastníci a režimy `600 root:root` a `700 ai-executive:ai-executive`; `nove misto = zaloha`; `integrity` je `ok` a `TABULKY: shodne` (počty jsou rozhodující kontrola, viz krok 2).
-**Když selže:** `rm -rf /var/lib/ai-executive /etc/ai-executive/ai-executive.env`, zjistit příčinu, zopakovat. Originály jsou nedotčené.
+**Když selže:** trap spustí původní službu zpět. Pak `rm -rf /var/lib/ai-executive /etc/ai-executive/ai-executive.env`, zjistit příčinu a nahlásit; další pokus začíná krokem 2. Originály jsou nedotčené.
 
 ### 6. Instalace šablony
 
@@ -612,9 +622,10 @@ test -z "$(git status --porcelain)" || { echo "STOP: /opt/ai-executive neni cist
 
 # 0. Pred zastavenim sluzby: je co nasadit, jde to fast-forwardem a nemeni se jednotka?
 git fetch origin
-NEXT=$(git rev-parse origin/main)
-[ "$NEXT" != "$PREV" ] || { echo "Nic k nasazeni (origin/main = $PREV)."; exit 0; }
-git merge-base --is-ancestor "$PREV" "$NEXT" || { echo "STOP: origin/main neni fast-forward od $PREV; nahlasit"; exit 1; }
+# Nasazuje se vetev, ze ktere produkce bezi (ulozena v kroku 1), ne natvrdo main.
+NEXT=$(git rev-parse "origin/$OLD_BRANCH")
+[ "$NEXT" != "$PREV" ] || { echo "Nic k nasazeni (origin/$OLD_BRANCH = $PREV)."; exit 0; }
+git merge-base --is-ancestor "$PREV" "$NEXT" || { echo "STOP: origin/$OLD_BRANCH neni fast-forward od $PREV; nahlasit"; exit 1; }
 if ! git diff --quiet "$PREV" "$NEXT" -- deployment/ai-executive.service; then
   echo "STOP: nova verze meni deployment/ai-executive.service. Jednotku je treba nainstalovat a overit"
   echo "      (krok 6 a kontroly kroku 8) jako samostatny krok s vlastnikem; sluzba bezi dal beze zmeny."
