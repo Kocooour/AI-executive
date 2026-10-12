@@ -82,7 +82,7 @@ export function previewContextInbox(workspaceId: string, text: string) {
     seen.add(key);
     const person = reason === "waiting" ? waitingPerson(line) : null;
     proposals.push({ id: randomUUID(), kind: "claim", subject: { entityId: subject.id, type: subject.type, title: subject.title },
-      predicate, literal, freshness: "needs_review", sensitivity: "sensitive", validFrom: null, validTo,
+      predicate, literal, freshness: "needs_review", sensitivity: "confidential", validFrom: null, validTo,
       evidenceExcerpt: line.slice(0, 500), reason,
       ...(person ? { suggestedTarget: { type: "person" as const, title: person,
         matches: matchingStandaloneSubjects(workspaceId, "person", person).map((match) => ({ id: match.id, title: match.title })) } } : {}) });
@@ -132,7 +132,7 @@ export function approveContextInboxClaim(input: {
   return createOwnerClaim({ commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, expectedRevision: 0,
     subject: { entityId: input.subjectId }, predicate: input.predicate, literal: input.literal,
     target: input.targetSubjectId ? { subjectId: input.targetSubjectId } : undefined,
-    freshness: input.freshness, sensitivity: "sensitive", validFrom: input.validFrom, validTo: input.validTo,
+    freshness: input.freshness, sensitivity: "confidential", validFrom: input.validFrom, validTo: input.validTo,
     source: { provider: "manual-context-inbox", ingestedAt: new Date().toISOString(), coverage: "excerpt" },
     evidence: input.evidenceExcerpt ? { excerpt: input.evidenceExcerpt.slice(0, 500), stance: "supports" } : null });
 }

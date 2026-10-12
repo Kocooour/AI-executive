@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runSchemaMigrations } from "./schema-migrations";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 
@@ -394,6 +395,7 @@ export function getDatabase() {
   for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
     if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
   }
+  runSchemaMigrations(database);
   migrateLegacyStore(database);
   ensureDefaultWorkspace(database);
   return database;

@@ -29,7 +29,7 @@ test("preview is deterministic in meaning, matches only live entities and stores
   assert.deepEqual(preview.proposals.map((item) => item.predicate), ["importance", "waiting_for", "target_date", "preference"]);
   assert.deepEqual(preview.proposals.slice(0, 3).map((item) => item.subject.entityId), ["project:apollo", "project:apollo", "project:apollo"]);
   assert.equal(preview.proposals[3].subject.entityId, "workspace:personal");
-  assert.equal(preview.proposals.every((item) => item.sensitivity === "sensitive"), true);
+  assert.equal(preview.proposals.every((item) => item.sensitivity === "confidential"), true);
   assert.equal(Number(store.getDatabase().prepare("SELECT COUNT(*) count FROM context_claims").get().count), beforeClaims);
   const serializedRows = JSON.stringify(store.getDatabase().prepare("SELECT * FROM context_claims").all());
   assert.equal(serializedRows.includes(text), false);
@@ -43,7 +43,7 @@ test("an approved item is created as proposed and remains editable/rejectable th
     validTo: "2026-12-31", evidenceExcerpt: proposal.evidenceExcerpt });
   assert.equal(result.claim.reviewStatus, "proposed");
   assert.equal(result.claim.literal.value, "critical");
-  assert.equal(result.claim.sensitivity, "sensitive");
+  assert.equal(result.claim.sensitivity, "confidential");
   assert.equal(result.claim.source.provider, "manual-context-inbox");
   const rejected = claims.reviewOwnerClaim({ commandId: randomUUID(), workspaceId: "personal", id: result.claim.id,
     expectedRevision: result.claim.revision, decision: "rejected" }).claim;

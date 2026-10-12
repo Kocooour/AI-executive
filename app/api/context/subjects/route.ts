@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../../lib/auth";
-import { archiveStandaloneSubject, ContextSubjectError, createStandaloneSubject,
+import { archiveStandaloneSubject, createStandaloneSubject,
   listStandaloneSubjectHistory, listStandaloneSubjects, matchingStandaloneSubjects,
   renameStandaloneSubject, type StandaloneSubjectType } from "../../../../lib/context-subjects";
+import { ContextCommandError } from "../../../../lib/context-commands";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 
@@ -10,9 +11,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown) {
-  const status = error instanceof ContextSubjectError ? error.status : error instanceof HttpInputError ? error.status : 400;
+  const status = error instanceof ContextCommandError ? error.status : error instanceof HttpInputError ? error.status : 400;
   return NextResponse.json({ error: error instanceof Error ? error.message : "Context subjects unavailable",
-    code: error instanceof ContextSubjectError ? error.code : "invalid_request" }, { status });
+    code: error instanceof ContextCommandError ? error.code : "invalid_request" }, { status });
 }
 
 export async function GET(request: Request) {
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, `context.subject.${action}`, "allowed", { objectId: common.id });
     return NextResponse.json(result, { status: action === "create" ? 201 : 200 });
   } catch (error) {
-    recordSecurityEvent(request, "context.subject.write", "failed", { reason: error instanceof ContextSubjectError ? error.code : "invalid_request" });
+    recordSecurityEvent(request, "context.subject.write", "failed", { reason: error instanceof ContextCommandError ? error.code : "invalid_request" });
     return errorResponse(error);
   }
 }

@@ -1,11 +1,16 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { assertCommandWorkspace, contextIdPattern, ContextCommandError, requireChanged, runContextCommand, stableStringify, type CommandHooks } from "./context-commands";
 import { getNotificationPreferences } from "./notifications";
 import { getDatabase, readSnapshot } from "./server-store";
 import { getStandaloneSubject } from "./context-subjects";
 
 export type ClaimReviewStatus = "proposed" | "confirmed" | "rejected";
 export type ClaimFreshness = "current" | "needs_review" | "stale";
-export type ClaimSensitivity = "normal" | "sensitive";
+// Three levels (README, Context Graph v2). Only "normal" may reach agents, external tools or AI
+// providers; "confidential" and "restricted" never do by default. The two-level "sensitive" of
+// earlier clients is still accepted as input and stored as "confidential".
+export type ClaimSensitivity = "normal" | "confidential" | "restricted";
+export type ClaimSensitivityInput = ClaimSensitivity | "sensitive";
 export type ClaimLiteralType = "string" | "number" | "boolean" | "date";
 
 export interface ClaimSubjectRef {
@@ -43,7 +48,7 @@ export interface ContextClaim {
   target: ClaimSubjectRef | null;
   reviewStatus: ClaimReviewStatus;
   freshness: ClaimFreshness;
-  sensitivity: ClaimSensitivity;
+  sensitivity: ClaimSensitivityInput;
   provenance: "owner";
   validFrom: string | null;
   validTo: string | null;
@@ -55,16 +60,7 @@ export interface ContextClaim {
   updatedAt: number;
 }
 
-export class ContextClaimError extends Error {
-  status: number;
-  code: string;
-
-  constructor(message: string, status = 400, code = "invalid") {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
+export class ContextClaimError extends ContextCommandError {}
 
 type CanonicalRefInput = { entityId?: string; subjectId?: string };
 
@@ -81,7 +77,7 @@ export type CreateClaimInput = ClaimValueInput & {
   subject: CanonicalRefInput;
   predicate: string;
   freshness: ClaimFreshness;
-  sensitivity: ClaimSensitivity;
+  sensitivity: ClaimSensitivityInput;
   validFrom?: string | null;
   validTo?: string | null;
   source?: ClaimSourceMetadata | null;
@@ -95,7 +91,7 @@ export type UpdateClaimInput = ClaimValueInput & {
   expectedRevision: number;
   predicate: string;
   freshness: ClaimFreshness;
-  sensitivity: ClaimSensitivity;
+  sensitivity: ClaimSensitivityInput;
   validFrom?: string | null;
   validTo?: string | null;
   source?: ClaimSourceMetadata | null;
@@ -118,31 +114,27 @@ export interface ArchiveClaimInput {
   expectedRevision: number;
 }
 
-const idPattern = /^[A-Za-z0-9:_-]{1,240}$/;
+const idPattern = contextIdPattern;
 const predicatePattern = /^[a-z][a-z0-9_.-]{0,119}$/;
 const allowedCanonicalTypes = new Set(["workspace", "area", "project", "task", "note"]);
 const reviewStatuses = new Set<ClaimReviewStatus>(["proposed", "confirmed", "rejected"]);
 const freshnessStates = new Set<ClaimFreshness>(["current", "needs_review", "stale"]);
-const sensitivities = new Set<ClaimSensitivity>(["normal", "sensitive"]);
+const sensitivities = new Set<string>(["normal", "confidential", "restricted"]);
 const literalTypes = new Set<ClaimLiteralType>(["string", "number", "boolean", "date"]);
 
-function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
+const stable = stableStringify;
+const assertWorkspace = assertCommandWorkspace;
+
+/** Maps request input to the stored vocabulary; unknown values pass through and fail validation. */
+function normalizeSensitivityInput<T extends { sensitivity: unknown }>(input: T): T {
+  return input.sensitivity === "sensitive" ? { ...input, sensitivity: "confidential" } : input;
 }
 
-function commandHash(operation: string, input: unknown) {
-  return createHash("sha256").update(`${operation}:${stable(input)}`).digest("hex");
-}
-
-function assertWorkspace(workspaceId: string) {
-  if (!workspaceId || workspaceId === "all") throw new ContextClaimError("One explicit workspace is required");
-  const exists = readSnapshot().entities.some((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
-  if (!exists) throw new ContextClaimError("Workspace not found", 404, "workspace_not_found");
+/** Maps a stored value to the vocabulary. Anything unknown fails closed as "restricted". */
+function readSensitivity(stored: string): { sensitivity: ClaimSensitivity; unknown: boolean } {
+  if (sensitivities.has(stored)) return { sensitivity: stored as ClaimSensitivity, unknown: false };
+  if (stored === "sensitive") return { sensitivity: "confidential", unknown: false };
+  return { sensitivity: "restricted", unknown: true };
 }
 
 function canonicalSubject(workspaceId: string, input: CanonicalRefInput): ClaimSubjectRef {
@@ -284,6 +276,7 @@ function readSubject(id: string): ClaimSubjectRef {
 }
 
 function deserialize(row: ClaimRow): ContextClaim {
+  const level = readSensitivity(row.sensitivity);
   const literal = row.literal_type ? {
     type: row.literal_type as ClaimLiteralType,
     value: JSON.parse(String(row.literal_value)),
@@ -291,8 +284,8 @@ function deserialize(row: ClaimRow): ContextClaim {
   return {
     id: row.id, workspaceId: row.workspace_id, subject: readSubject(row.subject_id), predicate: row.predicate,
     literal, target: row.target_subject_id ? readSubject(row.target_subject_id) : null,
-    reviewStatus: row.review_status as ClaimReviewStatus, freshness: row.freshness as ClaimFreshness,
-    sensitivity: row.sensitivity as ClaimSensitivity, provenance: "owner",
+    reviewStatus: row.review_status as ClaimReviewStatus, freshness: level.unknown ? "needs_review" : row.freshness as ClaimFreshness,
+    sensitivity: level.sensitivity, provenance: "owner",
     validFrom: row.valid_from, validTo: row.valid_to,
     source: row.source_metadata ? JSON.parse(row.source_metadata) : null,
     evidence: row.evidence_metadata ? JSON.parse(row.evidence_metadata) : null,
@@ -306,41 +299,19 @@ function rowForClaim(id: string, workspaceId: string) {
     .get(id, workspaceId) as ClaimRow | undefined;
 }
 
-function checkedCommand<T>(operation: string, input: { commandId: string; workspaceId: string }, mutate: () => { result: T; before: ContextClaim | null; after: ContextClaim; changed: boolean }) {
-  if (!idPattern.test(input.commandId)) throw new ContextClaimError("Idempotency key is invalid");
-  assertWorkspace(input.workspaceId);
-  const database = getDatabase();
-  const hash = commandHash(operation, input);
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const prior = database.prepare(`SELECT request_hash, result_payload FROM context_commands
-      WHERE workspace_id = ? AND idempotency_key = ?`).get(input.workspaceId, input.commandId) as
-      { request_hash: string; result_payload: string } | undefined;
-    if (prior) {
-      if (prior.request_hash !== hash) throw new ContextClaimError("Idempotency key was already used for another command", 409, "idempotency_conflict");
-      database.exec("COMMIT");
-      const replay = JSON.parse(prior.result_payload) as T;
-      return replay && typeof replay === "object" ? { ...replay, replayed: true } as T : replay;
-    }
-    const mutation = mutate();
-    if (mutation.changed) {
-      database.prepare(`INSERT INTO context_change_events
-        (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
-         before_payload, after_payload, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?)`)
-        .run(randomUUID(), input.commandId, input.workspaceId, mutation.after.id, operation,
-          mutation.before?.revision ?? null, mutation.after.revision,
-          mutation.before ? JSON.stringify(mutation.before) : null, JSON.stringify(mutation.after), Date.now());
-    }
-    const payload = JSON.stringify(mutation.result);
-    database.prepare(`INSERT INTO context_commands
-      (workspace_id, idempotency_key, request_hash, result_payload, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(input.workspaceId, input.commandId, hash, payload, Date.now());
-    database.exec("COMMIT");
-    return mutation.result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+type ClaimMutation = { claim: ContextClaim; before: ContextClaim | null; changed: boolean };
+
+function claimCommand(operation: string, input: { commandId: string; workspaceId: string }, hooks: CommandHooks | undefined,
+  mutate: () => ClaimMutation) {
+  return runContextCommand({
+    operation, commandId: input.commandId, workspaceId: input.workspaceId, request: input, hooks,
+    mutate: () => {
+      const { claim, before, changed } = mutate();
+      return { result: { claim }, objectId: claim.id, operation, changed,
+        before: before ? { revision: before.revision, payload: before } : null,
+        after: { revision: claim.revision, payload: claim } };
+    },
+  });
 }
 
 function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: ClaimSubjectRef) {
@@ -360,8 +331,9 @@ function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: Cl
   return { subject, literal, target, source, evidence, validFrom, validTo };
 }
 
-export function createOwnerClaim(input: CreateClaimInput) {
-  return checkedCommand("create", input, () => {
+export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks) {
+  const input = normalizeSensitivityInput(raw);
+  return claimCommand("create", input, hooks, () => {
     const subject = canonicalSubject(input.workspaceId, input.subject);
     const clean = validateCommon(input, subject);
     if (Number(input.expectedRevision) !== 0) throw new ContextClaimError("New claims require revision 0", 409, "revision_conflict");
@@ -378,13 +350,13 @@ export function createOwnerClaim(input: CreateClaimInput) {
         clean.literal ? JSON.stringify(clean.literal.value) : null, clean.target?.id || null, input.freshness,
         input.sensitivity, clean.validFrom, clean.validTo, clean.source ? JSON.stringify(clean.source) : null,
         clean.evidence ? JSON.stringify(clean.evidence) : null, now, now);
-    const after = deserialize(rowForClaim(input.id, input.workspaceId)!);
-    return { result: { claim: after, replayed: false }, before: null, after, changed: true };
+    return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before: null, changed: true };
   });
 }
 
-export function updateOwnerClaim(input: UpdateClaimInput) {
-  return checkedCommand("update", input, () => {
+export function updateOwnerClaim(raw: UpdateClaimInput, hooks?: CommandHooks) {
+  const input = normalizeSensitivityInput(raw);
+  return claimCommand("update", input, hooks, () => {
     const clean = validateCommon(input);
     const row = rowForClaim(input.id, input.workspaceId);
     if (!row) throw new ContextClaimError("Claim not found", 404, "not_found");
@@ -400,55 +372,65 @@ export function updateOwnerClaim(input: UpdateClaimInput) {
     const existing = { predicate: before.predicate, literal: before.literal, targetId: before.target?.id || null,
       freshness: before.freshness, sensitivity: before.sensitivity, validFrom: before.validFrom, validTo: before.validTo,
       source: before.source, evidence: before.evidence };
-    if (stable(comparable) === stable(existing)) return { result: { claim: before, replayed: false }, before, after: before, changed: false };
+    if (stable(comparable) === stable(existing)) return { claim: before, before, changed: false };
     const now = Date.now();
-    getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
+    requireChanged(getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
       freshness=?, sensitivity=?, valid_from=?, valid_to=?, source_metadata=?, evidence_metadata=?, revision=revision+1,
       review_status='proposed', updated_at=? WHERE id=? AND workspace_id=? AND revision=?`)
       .run(input.predicate, clean.literal?.type || null, clean.literal ? JSON.stringify(clean.literal.value) : null,
         clean.target?.id || null, input.freshness, input.sensitivity, clean.validFrom, clean.validTo,
         clean.source ? JSON.stringify(clean.source) : null, clean.evidence ? JSON.stringify(clean.evidence) : null,
-        now, input.id, input.workspaceId, input.expectedRevision);
-    const after = deserialize(rowForClaim(input.id, input.workspaceId)!);
-    return { result: { claim: after, replayed: false }, before, after, changed: true };
+        now, input.id, input.workspaceId, input.expectedRevision), "Claim changed on another device");
+    return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before, changed: true };
   });
 }
 
-export function reviewOwnerClaim(input: ReviewClaimInput) {
+// Every transition among proposed, confirmed and rejected is allowed and leaves a review event,
+// including the way back to "proposed". Editing a claim also returns it to "proposed".
+export function reviewOwnerClaim(input: ReviewClaimInput, hooks?: CommandHooks) {
   if (!reviewStatuses.has(input.decision)) throw new ContextClaimError("Review decision is invalid");
   if (input.reason && input.reason.length > 1000) throw new ContextClaimError("Review reason is too long");
-  return checkedCommand("review", input, () => {
+  return claimCommand("review", input, hooks, () => {
     const row = rowForClaim(input.id, input.workspaceId);
     if (!row) throw new ContextClaimError("Claim not found", 404, "not_found");
     const before = deserialize(row);
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be reviewed", 409, "archived");
-    if (before.reviewStatus === input.decision) return { result: { claim: before, replayed: false }, before, after: before, changed: false };
+    if (before.reviewStatus === input.decision) return { claim: before, before, changed: false };
     const now = Date.now();
-    getDatabase().prepare(`UPDATE context_claims SET review_status=?, revision=revision+1, updated_at=?
-      WHERE id=? AND workspace_id=? AND revision=?`).run(input.decision, now, input.id, input.workspaceId, input.expectedRevision);
+    requireChanged(getDatabase().prepare(`UPDATE context_claims SET review_status=?, revision=revision+1, updated_at=?
+      WHERE id=? AND workspace_id=? AND revision=?`).run(input.decision, now, input.id, input.workspaceId, input.expectedRevision),
+      "Claim changed on another device");
     const after = deserialize(rowForClaim(input.id, input.workspaceId)!);
     getDatabase().prepare(`INSERT INTO context_review_events
       (id, workspace_id, claim_id, claim_revision, actor, decision, reason, created_at)
       VALUES (?, ?, ?, ?, 'owner', ?, ?, ?)`)
       .run(randomUUID(), input.workspaceId, input.id, after.revision, input.decision, input.reason?.trim() || null, now);
-    return { result: { claim: after, replayed: false }, before, after, changed: true };
+    return { claim: after, before, changed: true };
   });
 }
 
-export function archiveOwnerClaim(input: ArchiveClaimInput) {
-  return checkedCommand("archive", input, () => {
+export function archiveOwnerClaim(input: ArchiveClaimInput, hooks?: CommandHooks) {
+  return claimCommand("archive", input, hooks, () => {
     const row = rowForClaim(input.id, input.workspaceId);
     if (!row) throw new ContextClaimError("Claim not found", 404, "not_found");
     const before = deserialize(row);
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
-    if (before.archivedAt) return { result: { claim: before, replayed: false }, before, after: before, changed: false };
+    if (before.archivedAt) return { claim: before, before, changed: false };
     const now = Date.now();
-    getDatabase().prepare(`UPDATE context_claims SET archived_at=?, revision=revision+1, updated_at=?
-      WHERE id=? AND workspace_id=? AND revision=?`).run(now, now, input.id, input.workspaceId, input.expectedRevision);
-    const after = deserialize(rowForClaim(input.id, input.workspaceId)!);
-    return { result: { claim: after, replayed: false }, before, after, changed: true };
+    requireChanged(getDatabase().prepare(`UPDATE context_claims SET archived_at=?, revision=revision+1, updated_at=?
+      WHERE id=? AND workspace_id=? AND revision=?`).run(now, now, input.id, input.workspaceId, input.expectedRevision),
+      "Claim changed on another device");
+    return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before, changed: true };
   });
+}
+
+export function listClaimReviewEvents(workspaceId: string, claimId: string) {
+  assertWorkspace(workspaceId);
+  if (!idPattern.test(claimId)) throw new ContextClaimError("Claim identifier is invalid");
+  return getDatabase().prepare(`SELECT claim_revision AS claimRevision, decision, reason, created_at AS createdAt
+    FROM context_review_events WHERE workspace_id = ? AND claim_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 100`)
+    .all(workspaceId, claimId);
 }
 
 export function listOwnerClaims(workspaceId: string, options: { includeArchived?: boolean; projectId?: string } = {}) {
@@ -491,7 +473,8 @@ export function currentContextDate() {
 
 export function isEligibleClaim(claim: ContextClaim, projectId?: string, today = currentContextDate()) {
   return !claim.archivedAt && claim.reviewStatus === "confirmed" && claim.freshness === "current" &&
-    claim.sensitivity === "normal" && (!claim.validFrom || claim.validFrom <= today) &&
+    claim.sensitivity === "normal" && // confidential and restricted never reach agents or AI
+    (!claim.validFrom || claim.validFrom <= today) &&
     (!claim.validTo || claim.validTo >= today) && liveCanonicalReference(claim.workspaceId, claim.subject) &&
     (!claim.target || liveCanonicalReference(claim.workspaceId, claim.target)) &&
     (!projectId || claim.subject.type === "workspace" || claim.subject.canonicalEntityId === projectId || claim.target?.canonicalEntityId === projectId);
