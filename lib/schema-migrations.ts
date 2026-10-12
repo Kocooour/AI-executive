@@ -64,3 +64,26 @@ export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMi
   }
   return applied;
 }
+
+/**
+ * Runs on every database initialisation, not once: a binary from before the undo-linkage migration (a
+ * rollback) writes change events without `sequence` and `object_type`. They get the next sequence numbers
+ * in insertion order, and the type their operation implies, before any new command runs.
+ */
+export function repairContextEventOrder(database: DatabaseSync) {
+  const columns = new Set((database.prepare("PRAGMA table_info(context_change_events)").all() as Array<{ name?: string }>).map((row) => String(row.name)));
+  if (!columns.has("sequence") || !columns.has("object_type")) return;
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    let next = Number((database.prepare("SELECT COALESCE(MAX(sequence), 0) AS value FROM context_change_events").get() as { value: number }).value);
+    const pending = database.prepare("SELECT rowid AS row FROM context_change_events WHERE sequence IS NULL ORDER BY rowid").all() as Array<{ row: number }>;
+    const assign = database.prepare("UPDATE context_change_events SET sequence = ? WHERE rowid = ?");
+    for (const { row } of pending) assign.run(++next, row);
+    database.exec(`UPDATE context_change_events SET object_type =
+      CASE WHEN operation LIKE 'subject.%' THEN 'subject' ELSE 'claim' END WHERE object_type IS NULL`);
+    database.exec("COMMIT");
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* the original error matters */ }
+    throw error;
+  }
+}

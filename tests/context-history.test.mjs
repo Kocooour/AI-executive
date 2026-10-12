@@ -126,8 +126,9 @@ test("undo and redo of people and organizations: create, rename and archive", ()
   const undoRename = undo(ws);
   assert.equal(undoRename.object.title, "Jana");
   assert.equal(undoRename.object.revision, renamed.revision + 1);
-  assert.equal(undoRename.step.fromTitle, "Jan");
-  assert.equal(undoRename.step.toTitle, "Jana");
+  // Named as the step was done: the rename went from Jana to Jan, and Undo restores Jana.
+  assert.equal(undoRename.step.fromTitle, "Jana");
+  assert.equal(undoRename.step.toTitle, "Jan");
   assert.equal(redo(ws).object.title, "Jan");
   undo(ws); // rename again
   const undoOrg = undo(ws);
@@ -427,4 +428,104 @@ test("the integration API and bearer-token routes expose no undo or redo", () =>
   assert.match(route, /isAuthenticated\(request\)/);
   assert.doesNotMatch(route, /isIntegrationAuthenticated/);
   assert.match(route, /requireSameOrigin/);
+});
+
+test("a command reports the history step it recorded; a no-op and a retry report none or the original", () => {
+  const ws = newWorkspace();
+  const input = { commandId: randomUUID(), workspaceId: ws, id: randomUUID(), expectedRevision: 0, subject: { entityId: `workspace:${ws}` },
+    predicate: "preference", literal: { type: "string", value: "x" }, freshness: "current", sensitivity: "normal" };
+  const created = claims.createOwnerClaim(input);
+  assert.equal(created.historyEventId, history.getContextHistory(ws).undo.eventId);
+  assert.equal(claims.createOwnerClaim(input).historyEventId, created.historyEventId, "a retry returns the original step");
+  const noop = claims.updateOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: input.id, expectedRevision: 1, predicate: "preference",
+    literal: { type: "string", value: "x" }, freshness: "current", sensitivity: "normal" });
+  assert.deepEqual([noop.changed, noop.historyEventId], [false, null]);
+  const person = makeSubject(ws, "Hana");
+  const same = subjects.renameStandaloneSubject({ commandId: randomUUID(), workspaceId: ws, id: person.id, expectedRevision: 1, title: "Hana" });
+  assert.deepEqual([same.changed, same.historyEventId], [false, null]);
+});
+
+test("skipping a step that cannot succeed makes the next older step the top, and changes no object", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws);
+  const edited = edit(ws, claim, "later");
+  const olderTop = history.getContextHistory(ws).undo;
+  // The edited claim changes outside the history: its newest step can never be undone now.
+  db().prepare("UPDATE context_claims SET literal_value = ?, revision = revision + 1 WHERE id = ?").run(JSON.stringify("outside"), claim.id);
+  const other = makeSubject(ws, "Ida");
+  rename(ws, other, "Ida B.");
+  rename(ws, subjects.getStandaloneSubject(ws, other.id), "Ida C.");
+  // Make the claim's step the top: undo the two renames and the subject create is below; instead block with the claim step directly.
+  undo(ws); undo(ws); undo(ws); // renames and the subject create
+  const top = history.getContextHistory(ws).undo;
+  assert.equal(top.eventId, olderTop.eventId);
+  assert.throws(() => undo(ws), (error) => error.code === "undo_conflict");
+  const rowsBefore = events(ws).length;
+  const stored = getClaim(ws, claim.id);
+  // A stale expectation is refused.
+  assert.throws(() => history.runHistoryCommand({ action: "skip", stack: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: "stale" }),
+    (error) => error.code === "history_changed");
+  assert.equal(events(ws).length, rowsBefore);
+  const skipped = history.runHistoryCommand({ action: "skip", stack: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: top.eventId });
+  assert.equal(skipped.step.eventId, top.eventId);
+  assert.equal(events(ws).length, rowsBefore + 1);
+  const last = events(ws).at(-1);
+  assert.deepEqual([last.kind, last.reverts_event_id], ["skip", top.eventId]);
+  assert.deepEqual({ ...getClaim(ws, claim.id) }, { ...stored }, "no object changed");
+  assert.equal(edited.literal.value, "later");
+  // The next older step is the top now; the skipped one is no longer on either stack.
+  const state = history.getContextHistory(ws);
+  assert.equal(state.undo.operation, "create");
+  assert.ok(!state.recent.some((item) => item.eventId === top.eventId));
+  // Its conflict is real: the claim was edited outside, so the older create cannot be undone either; the older steps of other objects can.
+  const ws2 = newWorkspace();
+  const keep = makeSubject(ws2, "Older person");
+  const broken = makeClaim(ws2);
+  db().prepare("UPDATE context_claims SET archived_at = NULL, literal_value = ?, revision = revision + 1 WHERE id = ?").run(JSON.stringify("outside"), broken.id);
+  assert.throws(() => undo(ws2), (error) => error.code === "undo_conflict");
+  const t = history.getContextHistory(ws2).undo.eventId;
+  history.runHistoryCommand({ action: "skip", stack: "undo", commandId: randomUUID(), workspaceId: ws2, expectedEventId: t });
+  assert.notEqual(undo(ws2).object.archivedAt, null);
+  assert.equal(subjects.getStandaloneSubject(ws2, keep.id).archivedAt !== null, true);
+  // A skip on the redo stack leaves the undo stack alone, and the skip itself is not a step.
+  const ws3 = newWorkspace();
+  makeClaim(ws3); makeSubject(ws3, "Redo person");
+  undo(ws3);
+  const redoTop = history.getContextHistory(ws3);
+  history.runHistoryCommand({ action: "skip", stack: "redo", commandId: randomUUID(), workspaceId: ws3, expectedEventId: redoTop.redo.eventId });
+  const after = history.getContextHistory(ws3);
+  assert.equal(after.redo, null);
+  assert.equal(after.undo.operation, "create");
+  assert.equal(after.recent.length, 1);
+  // The skip survives a restart.
+  const seen = child(`const history = await import("./lib/context-history.ts"); console.log(JSON.stringify(history.getContextHistory(${JSON.stringify(ws3)})));`);
+  assert.deepEqual(seen, JSON.parse(JSON.stringify(after)));
+});
+
+test("events written without a sequence by an older binary are ordered on the next start", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws);
+  // A rolled-back binary inserts a change event with no sequence, object type or kind linkage.
+  const changed = { ...claim, literal: { type: "string", value: "from the old binary" }, revision: claim.revision + 1 };
+  db().prepare("UPDATE context_claims SET literal_value = ?, revision = revision + 1 WHERE id = ?").run(JSON.stringify("from the old binary"), claim.id);
+  db().prepare(`INSERT INTO context_change_events (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
+    before_payload, after_payload, created_at) VALUES (?, ?, ?, 'owner', ?, 'update', ?, ?, ?, ?, ?)`)
+    .run("old-binary-event", randomUUID(), ws, claim.id, claim.revision, changed.revision, JSON.stringify(claim), JSON.stringify(changed), Date.now());
+  assert.equal(db().prepare("SELECT sequence FROM context_change_events WHERE id = 'old-binary-event'").get().sequence, null);
+  migrations.repairContextEventOrder(db());
+  const row = db().prepare("SELECT sequence, object_type FROM context_change_events WHERE id = 'old-binary-event'").get();
+  assert.equal(row.object_type, "claim");
+  assert.equal(Number(row.sequence), Number(db().prepare("SELECT MAX(sequence) AS m FROM context_change_events").get().m));
+  // It is the top step and Undo targets it.
+  assert.equal(history.getContextHistory(ws).undo.eventId, "old-binary-event");
+  assert.equal(undo(ws).object.literal.value, "Quiet mornings");
+  assert.equal(history.getContextHistory(ws).redo.operation, "update");
+  // A process starting on this file repairs it by itself.
+  const ws2 = newWorkspace();
+  const second = makeClaim(ws2);
+  db().prepare(`INSERT INTO context_change_events (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
+    before_payload, after_payload, created_at) VALUES ('old-two', ?, ?, 'owner', ?, 'review', 1, 1, NULL, ?, ?)`)
+    .run(randomUUID(), ws2, second.id, JSON.stringify(second), Date.now());
+  const seen = child(`const history = await import("./lib/context-history.ts"); console.log(JSON.stringify(history.getContextHistory(${JSON.stringify(ws2)}).undo.eventId));`);
+  assert.equal(seen, "old-two");
 });

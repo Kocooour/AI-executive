@@ -500,12 +500,22 @@ export function isEligibleClaim(claim: ContextClaim, projectId?: string, today =
 export function listClaimHistory(workspaceId: string, claimId: string) {
   assertWorkspace(workspaceId);
   if (!idPattern.test(claimId)) throw new ContextClaimError("Claim identifier is invalid");
-  return getDatabase().prepare(`SELECT e.operation, e.before_revision AS beforeRevision, e.after_revision AS afterRevision,
-    e.created_at AS createdAt, e.kind,
+  const rows = getDatabase().prepare(`SELECT e.id, e.operation, e.before_revision AS beforeRevision, e.after_revision AS afterRevision,
+    e.created_at AS createdAt, e.kind, e.reverts_event_id AS revertsEventId, e.before_payload AS beforePayload, e.after_payload AS afterPayload,
     (SELECT r.decision FROM context_review_events r WHERE r.workspace_id = e.workspace_id AND r.claim_id = e.object_id
       AND r.claim_revision = e.after_revision ORDER BY r.created_at DESC LIMIT 1) AS decision
     FROM context_change_events e WHERE e.workspace_id = ? AND e.object_id = ?
-    ORDER BY e.created_at DESC, e.rowid DESC LIMIT 100`).all(workspaceId, claimId);
+    ORDER BY e.created_at DESC, e.rowid DESC LIMIT 100`).all(workspaceId, claimId) as Array<Record<string, unknown>>;
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  const status = (payload: unknown) => { try { return (JSON.parse(String(payload)) as { reviewStatus?: string } | null)?.reviewStatus ?? null; } catch { return null; } };
+  // The review state the action itself leads to: what an Undo took away, or what a Redo brought back.
+  const resultOf = (row: Record<string, unknown>): string | null => {
+    if (row.kind === "undo") return status(row.beforePayload);
+    if (row.kind === "skip") { const target = byId.get(String(row.revertsEventId)); return target ? resultOf(target) : null; }
+    return status(row.afterPayload);
+  };
+  return rows.map((row) => ({ operation: row.operation, beforeRevision: row.beforeRevision, afterRevision: row.afterRevision,
+    createdAt: row.createdAt, kind: row.kind, decision: row.decision, reviewStatus: resultOf(row) }));
 }
 
 /** The part of a claim that Undo/Redo restores and compares; revisions and timestamps are not part of it. */

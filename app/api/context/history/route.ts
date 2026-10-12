@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../../lib/auth";
 import { ContextCommandError } from "../../../../lib/context-commands";
-import { getContextHistory, runHistoryCommand, type HistoryAction } from "../../../../lib/context-history";
+import { getContextHistory, runHistoryCommand, type HistoryAction, type HistoryCommandAction } from "../../../../lib/context-history";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 
@@ -34,8 +34,8 @@ export async function POST(request: Request) {
     if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
     const body = await readJsonBody<Record<string, unknown>>(request, 4 * 1024);
     const action = String(body.action || "");
-    if (action !== "undo" && action !== "redo") throw new HttpInputError("Unknown context history action");
-    const result = runHistoryCommand({ action: action as HistoryAction, commandId: String(body.idempotencyKey || ""),
+    if (action !== "undo" && action !== "redo" && action !== "skip") throw new HttpInputError("Unknown context history action");
+    const result = runHistoryCommand({ action: action as HistoryCommandAction, stack: body.stack === "redo" ? "redo" : body.stack === "undo" ? "undo" : undefined, commandId: String(body.idempotencyKey || ""),
       workspaceId: String(body.workspaceId || ""), expectedEventId: String(body.expectedEventId || "") });
     recordSecurityEvent(request, `context.history.${action}`, "allowed", { objectId: result.step.objectId });
     return NextResponse.json(result);

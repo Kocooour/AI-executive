@@ -14,11 +14,13 @@ import { getDatabase } from "./server-store";
 // again like any other step.
 
 export type HistoryAction = "undo" | "redo";
+/** "skip" removes a step that can never succeed from its stack, changing no object. */
+export type HistoryCommandAction = HistoryAction | "skip";
 
 export interface HistoryStep {
   eventId: string;
   /** What the underlying event is: an ordinary change, or an earlier undo/redo. */
-  kind: "change" | "undo" | "redo";
+  kind: "change" | "undo" | "redo" | "skip";
   /** The operation the step performs, e.g. "update", "review", "subject.rename". */
   operation: string;
   objectType: "claim" | "subject";
@@ -56,7 +58,11 @@ export function readHistoryStacks(workspaceId: string) {
   let undo: string[] = [];
   let redo: string[] = [];
   for (const row of rows) {
-    if (row.kind === "undo" && row.reverts_event_id) {
+    if (row.kind === "skip" && row.reverts_event_id) {
+      // The step is dropped from whichever stack holds it; nothing is put anywhere and the redo stack stays.
+      undo = undo.filter((id) => id !== row.reverts_event_id);
+      redo = redo.filter((id) => id !== row.reverts_event_id);
+    } else if (row.kind === "undo" && row.reverts_event_id) {
       undo = undo.filter((id) => id !== row.reverts_event_id);
       redo.push(row.id);
     } else if (row.kind === "redo" && row.reverts_event_id) {
@@ -107,8 +113,9 @@ function describe(event: EventRow, direction: HistoryAction): HistoryStep {
   } else {
     step.label = after?.title || "";
     step.subjectType = after?.type ?? null;
-    step.fromTitle = after?.title ?? null;
-    step.toTitle = before?.title ?? null;
+    // Named as the step was done: "Jana → Jan" is the rename from Jana to Jan, whichever way it is applied now.
+    step.fromTitle = (direction === "undo" ? before?.title : after?.title) ?? null;
+    step.toTitle = (direction === "undo" ? after?.title : before?.title) ?? null;
   }
   return step;
 }
@@ -126,30 +133,34 @@ export function getContextHistory(workspaceId: string): HistoryState {
     recent: stacks.undo.slice(0, recentLimit).map((id) => step(id, "undo")).filter((item): item is HistoryStep => Boolean(item)) };
 }
 
-type HistoryResult = { step: HistoryStep; objectType: "claim" | "subject"; object: ContextClaim | StandaloneSubject };
+type HistoryResult = { step: HistoryStep; objectType: "claim" | "subject"; object: ContextClaim | StandaloneSubject | null };
 
 export interface HistoryCommandInput {
   commandId: string;
   workspaceId: string;
-  action: HistoryAction;
+  action: HistoryCommandAction;
+  /** For "skip": which stack the step is on. */
+  stack?: HistoryAction;
   /** The step the client saw on top of the stack; anything else means the history moved on. */
   expectedEventId: string;
 }
 
 /** Undo or redo the top step of the workspace's stack, as one command (idempotent, one transaction). */
 export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHooks) {
-  if (input.action !== "undo" && input.action !== "redo") throw new ContextCommandError("Unknown history action");
+  if (input.action !== "undo" && input.action !== "redo" && input.action !== "skip") throw new ContextCommandError("Unknown history action");
+  if (input.action === "skip" && input.stack !== "undo" && input.stack !== "redo") throw new ContextCommandError("Skip needs the undo or redo stack");
+  const side: HistoryAction = input.action === "skip" ? input.stack! : input.action;
   if (!contextIdPattern.test(String(input.expectedEventId || ""))) throw new ContextCommandError("Expected history step is invalid");
   const result = runContextCommand<HistoryResult>({
     operation: `history.${input.action}`, commandId: input.commandId, workspaceId: input.workspaceId, hooks,
-    request: { action: input.action, workspaceId: input.workspaceId, expectedEventId: input.expectedEventId },
+    request: { action: input.action, stack: input.action === "skip" ? input.stack : undefined, workspaceId: input.workspaceId, expectedEventId: input.expectedEventId },
     mutate: () => {
       const stacks = readHistoryStacks(input.workspaceId);
-      const top = (input.action === "undo" ? stacks.undo : stacks.redo)[0];
+      const top = (side === "undo" ? stacks.undo : stacks.redo)[0];
       if (!top || top !== input.expectedEventId) {
         throw new ContextCommandError(top
           ? "The history changed in the meantime. Nothing was changed."
-          : input.action === "undo" ? "There is nothing to undo" : "There is nothing to redo", 409, "history_changed");
+          : side === "undo" ? "There is nothing to undo" : "There is nothing to redo", 409, "history_changed");
       }
       const event = loadEvents(input.workspaceId, [top]).get(top)!;
       const objectType = objectTypeOf(event);
@@ -159,11 +170,16 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
         WHERE workspace_id = ? AND object_id = ? ORDER BY sequence DESC, rowid DESC LIMIT 1`)
         .get(input.workspaceId, event.object_id) as { after_revision: number } | undefined;
       const expectedRevision = Number(latest?.after_revision ?? event.after_revision);
-      const step = describe(event, input.action);
-      const common = { objectId: event.object_id, operation: event.operation, objectType, kind: input.action,
+      const step = describe(event, side);
+      if (input.action === "skip") {
+        // A marker only: no object is touched, and the revision it records is the one the object already has.
+        return { objectId: event.object_id, operation: event.operation, objectType, kind: "skip" as const, revertsEventId: event.id, changed: true,
+          result: { step, objectType, object: null }, before: null, after: { revision: expectedRevision, payload: {} } };
+      }
+      const common = { objectId: event.object_id, operation: event.operation, objectType, kind: side,
         revertsEventId: event.id, changed: true };
       if (objectType === "claim") {
-        const { claim, before } = compensateClaim({ workspaceId: input.workspaceId, id: event.object_id, mode: input.action, expectedRevision,
+        const { claim, before } = compensateClaim({ workspaceId: input.workspaceId, id: event.object_id, mode: side, expectedRevision,
           before: parse<ContextClaim>(event.before_payload), after: parse<ContextClaim>(event.after_payload)! });
         return { ...common, result: { step, objectType, object: claim }, before: { revision: before.revision, payload: before },
           after: { revision: claim.revision, payload: claim } };
