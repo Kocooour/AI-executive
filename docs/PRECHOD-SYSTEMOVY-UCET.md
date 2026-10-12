@@ -66,6 +66,8 @@ df -h / /var /opt | cat
 # Relativni hodnota ve vydane verzi zpusobi, ze `next build` selze a `next start` bezi, ale vsechny pozadavky na data koncí chybou 500.
 OLD_DIR=$(systemctl show ai-executive -p WorkingDirectory --value)
 FOUND=0
+# systemctl show uvozuje hodnoty s mezerou ("AI_EXECUTIVE_DATA_DIR=/a b"); takovou cestu postup nepodporuje.
+systemctl show ai-executive -p Environment --value | grep -qE "[\"']AI_EXECUTIVE_DATA_DIR=" && { echo "STOP: AI_EXECUTIVE_DATA_DIR v jednotce obsahuje mezeru nebo uvozovky; nahlasit"; exit 1; }
 unit_value=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | tail -n1)
 [ -z "$unit_value" ] || { echo "jednotka/drop-in: $unit_value"; FOUND=1; case "$unit_value" in /*) ;; *) echo "STOP: relativni hodnota v jednotce"; exit 1;; esac; }
 for f in "$OLD_DIR"/.env "$OLD_DIR"/.env.*; do
@@ -109,7 +111,13 @@ OLD_ENV_MODE=$(stat -c %a "$OLD_ENV")
 # Jednotka se vypisuje bez hodnot promennych a bez argumentu spousteni (mohou obsahovat tajne udaje
 # s jakymkoli nazvem); nazvy klicu a cesta programu se vypisuji zvlast.
 echo "== unit vcetne drop-inu (bez Environment= a bez argumentu Exec*)"
-systemctl cat ai-executive --no-pager | grep -vE '^[[:space:]]*Environment=' | sed -E 's/^([[:space:]]*Exec[A-Za-z]*=[^[:space:]]*).*/\1 <argumenty skryty>/'
+# Hodnoty jen u bezpecnych voleb; ostatni volby jen nazvem; radky bez volby (i pokracovani za "\") se vynechaji.
+systemctl cat ai-executive --no-pager | awk '
+  /^# \// || /^\[/ { print; next }
+  match($0, /^[[:space:]]*[A-Za-z]+=/) {
+    name = substr($0, RSTART, RLENGTH - 1); gsub(/[[:space:]]/, "", name)
+    if (name ~ /^(User|Group|WorkingDirectory|Type|Restart|RestartSec|UMask|StateDirectory|StateDirectoryMode|ProtectSystem|ProtectHome|NoNewPrivileges|PrivateTmp)$/) print; else print name "=<skryto>"
+  }'
 echo "== EnvironmentFiles (ocekavano prazdne)"; systemctl show ai-executive -p EnvironmentFiles --value
 echo "== drop-iny"; systemctl show ai-executive -p DropInPaths --value | tr ' ' '\n'
 echo "== klice Environment= v jednotce"; systemctl show ai-executive -p Environment --value | grep -oE '(^| )[A-Za-z_][A-Za-z0-9_]*=' | tr -d ' =' | sort || true
@@ -154,9 +162,11 @@ set -euo pipefail
 umask 077
 . /var/backups/ai-executive/migrace.vars
 gitsafe() { local f rc; f=$(mktemp); printf '[safe]\n\tdirectory = *\n' > "$f"; GIT_CONFIG_GLOBAL="$f" git "$@"; rc=$?; rm -f "$f"; return $rc; }
+systemctl show ai-executive -p Environment --value | grep -qE "[\"']AI_EXECUTIVE_DATA_DIR=" && { echo "STOP: AI_EXECUTIVE_DATA_DIR v jednotce obsahuje mezeru nebo uvozovky; nahlasit"; exit 1; }
 OLD_DATA=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | tail -n1)
 [ -n "$OLD_DATA" ] || OLD_DATA=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$OLD_ENV" | tail -n1 | tr -d "\"'")
 [ -n "$OLD_DATA" ] || OLD_DATA="$OLD_DIR/.data"
+case "$OLD_DATA" in *[[:space:]]*) echo "STOP: cesta k datum obsahuje mezeru; nahlasit"; exit 1;; esac
 case "$OLD_DATA" in /*) ;; *) OLD_DATA="$OLD_DIR/$OLD_DATA";; esac
 echo "OLD_DATA=$OLD_DATA"; ls -la --time-style=+%F "$OLD_DATA" | awk '{print $1,$3,$4,$5,$6,$7}'
 # Zaloha i uklid pracuji s adresarem samotnym: symlink (i v nadrazene ceste) by zalohoval jen odkaz.
@@ -256,7 +266,9 @@ Co je skutečná kontrola: **počty záznamů v tabulkách** (`check-data` je č
 ```bash
 set -Eeuo pipefail
 # Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
+# EXIT pokryje chybu (set -e), explicitni "exit 1" u STOP podminek i preruseni; uspesny konec (kod 0) nic nedela.
+trap 'rc=$?; trap - EXIT; if [ "$rc" -ne 0 ]; then echo "CHYBA, STOP nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; fi' EXIT
+trap 'exit 130' INT TERM HUP
 umask 077
 . /var/backups/ai-executive/migrace.vars
 systemctl stop ai-executive
@@ -290,7 +302,9 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-kopie.json"
 ```bash
 set -Eeuo pipefail
 # Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
+# EXIT pokryje chybu (set -e), explicitni "exit 1" u STOP podminek i preruseni; uspesny konec (kod 0) nic nedela.
+trap 'rc=$?; trap - EXIT; if [ "$rc" -ne 0 ]; then echo "CHYBA, STOP nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; fi' EXIT
+trap 'exit 130' INT TERM HUP
 if getent passwd ai-executive >/dev/null; then
   echo "Ucet existuje:"; id ai-executive
 else
@@ -310,7 +324,9 @@ Klonuje se lokálně ze stávajícího checkoutu (stejný commit, bez síťovýc
 ```bash
 set -Eeuo pipefail
 # Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
+# EXIT pokryje chybu (set -e), explicitni "exit 1" u STOP podminek i preruseni; uspesny konec (kod 0) nic nedela.
+trap 'rc=$?; trap - EXIT; if [ "$rc" -ne 0 ]; then echo "CHYBA, STOP nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; fi' EXIT
+trap 'exit 130' INT TERM HUP
 umask 022
 . /var/backups/ai-executive/migrace.vars
 test ! -e /opt/ai-executive || { echo "STOP: /opt/ai-executive uz existuje"; exit 1; }
@@ -351,7 +367,9 @@ if runuser -u ai-executive -- touch /opt/ai-executive/.probe 2>/dev/null; then r
 ```bash
 set -Eeuo pipefail
 # Kroky 2–5 meni jen nova umisteni; pri chybe nebo preruseni (Ctrl-C, ztracene SSH) se puvodni sluzba spusti zpet.
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
+# EXIT pokryje chybu (set -e), explicitni "exit 1" u STOP podminek i preruseni; uspesny konec (kod 0) nic nedela.
+trap 'rc=$?; trap - EXIT; if [ "$rc" -ne 0 ]; then echo "CHYBA, STOP nebo preruseni (kod $rc) -> spoustim puvodni sluzbu"; systemctl start ai-executive; fi' EXIT
+trap 'exit 130' INT TERM HUP
 umask 077
 . /var/backups/ai-executive/migrace.vars
 test ! -e /var/lib/ai-executive -o -z "$(ls -A /var/lib/ai-executive 2>/dev/null)" || { echo "STOP: /var/lib/ai-executive neni prazdny"; exit 1; }
@@ -389,7 +407,7 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
 set -euo pipefail
 # Trap z kroku 2–5 (spusteni puvodni sluzby) tu uz neplati: po daemon-reload je nactena nova jednotka.
 # Pri selhani tohoto kroku plati "Kdyz selze" nize (krok 9), ne automaticky start.
-trap - ERR INT TERM HUP
+trap - ERR INT TERM HUP EXIT
 . /var/backups/ai-executive/migrace.vars
 # Nova jednotka nesmi zdedit nic ze stareho nastaveni: kazdy drop-in krome doplnku bezpecnostnich
 # upozorneni jde do zalohy (i ten, ktery jen vypina hardening, napr. ProtectSystem=false).
