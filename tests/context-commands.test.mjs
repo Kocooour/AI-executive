@@ -208,6 +208,54 @@ test("an unknown stored sensitivity is read as restricted and needs review, with
   assert.equal(db().prepare("SELECT freshness FROM context_claims WHERE id = ?").get(claim.id).freshness, "current");
 });
 
+test("a Context Inbox approval retried later is the same command, although its ingestion time differs", async () => {
+  const inbox = await import("../lib/context-inbox.ts");
+  const input = { commandId: randomUUID(), workspaceId: "personal", id: randomUUID(), subjectId: "workspace:personal",
+    predicate: "preference", literal: { type: "string", value: "Bez porad v pátek" }, freshness: "needs_review",
+    validFrom: null, validTo: null, evidenceExcerpt: "Bez porad v pátek" };
+  const first = inbox.approveContextInboxClaim(input);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const retry = inbox.approveContextInboxClaim({ ...input, validFrom: undefined });
+  assert.equal(retry.replayed, true);
+  assert.equal(retry.claim.id, first.claim.id);
+  assert.equal(retry.claim.source.ingestedAt, first.claim.source.ingestedAt);
+  assert.equal(claims.listOwnerClaims("personal").filter((item) => item.id === input.id).length, 1);
+  assert.throws(() => inbox.approveContextInboxClaim({ ...input, predicate: "importance" }), (error) => error.code === "idempotency_conflict");
+});
+
+test("a stored sensitivity nobody recognises is repaired by any save with a valid level", () => {
+  const claim = claims.createOwnerClaim(claimInput()).claim;
+  db().prepare("UPDATE context_claims SET sensitivity = 'weird' WHERE id = ?").run(claim.id);
+  const read = claims.listOwnerClaims("personal").find((item) => item.id === claim.id);
+  assert.equal(read.sensitivity, "restricted");
+  assert.equal(read.freshness, "needs_review");
+  const saved = claims.updateOwnerClaim(updateInput(read, { sensitivity: "restricted", freshness: "needs_review" }));
+  assert.equal(saved.changed, true);
+  assert.equal(saved.claim.revision, read.revision + 1);
+  assert.equal(db().prepare("SELECT sensitivity FROM context_claims WHERE id = ?").get(claim.id).sensitivity, "restricted");
+  assert.equal(eventCount(claim.id), 2);
+  // Now the level is valid and an identical save is a no-op again.
+  assert.equal(claims.updateOwnerClaim(updateInput(saved.claim)).changed, false);
+});
+
+test("absent, null and empty optional fields are one request for idempotency", () => {
+  const base = claimInput();
+  claims.createOwnerClaim(base);
+  const variants = [
+    { validFrom: null }, { validFrom: "", validTo: "" }, { source: null, evidence: null }, { source: undefined, target: undefined }, {},
+  ];
+  for (const extra of variants) assert.equal(claims.createOwnerClaim({ ...base, ...extra }).replayed, true, JSON.stringify(extra));
+  const claim = claims.listOwnerClaims("personal").find((item) => item.id === base.id);
+  const update = updateInput(claim, { literal: { type: "string", value: "Jinak" } });
+  claims.updateOwnerClaim(update);
+  assert.equal(claims.updateOwnerClaim({ ...update, validFrom: null, validTo: "", source: null }).replayed, true);
+  const reviewKey = randomUUID();
+  const current = claims.listOwnerClaims("personal").find((item) => item.id === base.id);
+  const reviewInput = { commandId: reviewKey, workspaceId: "personal", id: base.id, expectedRevision: current.revision, decision: "confirmed" };
+  claims.reviewOwnerClaim(reviewInput);
+  assert.equal(claims.reviewOwnerClaim({ ...reviewInput, reason: "" }).replayed, true);
+});
+
 test("schema migrations: the sensitive rows are converted once, and a reopened database does not run them again", async () => {
   const claim = claims.createOwnerClaim(claimInput()).claim;
   const rows = db().prepare("SELECT id, applied_at FROM schema_migrations").all();

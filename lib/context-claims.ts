@@ -301,10 +301,25 @@ function rowForClaim(id: string, workspaceId: string) {
 
 type ClaimMutation = { claim: ContextClaim; before: ContextClaim | null; changed: boolean };
 
+/** What the client asked for, with absent and empty optional fields written one way, so a retry hashes equal. */
+function requestOf<T extends object>(input: T): object {
+  const value = input as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...value };
+  if ("predicate" in out) {
+    for (const key of ["validFrom", "validTo"]) out[key] = out[key] || null;
+    for (const key of ["source", "evidence", "literal", "target"]) out[key] = out[key] ?? null;
+  }
+  if ("decision" in out) out.reason = typeof out.reason === "string" ? out.reason.trim() || null : null;
+  return out;
+}
+
+/** Server-generated values (such as an ingestion time) must not be part of the request that is hashed. */
+export interface ClaimCommandMeta { clientRequest?: object }
+
 function claimCommand(operation: string, input: { commandId: string; workspaceId: string }, hooks: CommandHooks | undefined,
-  mutate: () => ClaimMutation) {
+  mutate: () => ClaimMutation, meta?: ClaimCommandMeta) {
   return runContextCommand({
-    operation, commandId: input.commandId, workspaceId: input.workspaceId, request: input, hooks,
+    operation, commandId: input.commandId, workspaceId: input.workspaceId, request: requestOf(meta?.clientRequest ?? input), hooks,
     mutate: () => {
       const { claim, before, changed } = mutate();
       return { result: { claim }, objectId: claim.id, operation, changed,
@@ -331,7 +346,7 @@ function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: Cl
   return { subject, literal, target, source, evidence, validFrom, validTo };
 }
 
-export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks) {
+export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks, meta?: ClaimCommandMeta) {
   const input = normalizeSensitivityInput(raw);
   return claimCommand("create", input, hooks, () => {
     const subject = canonicalSubject(input.workspaceId, input.subject);
@@ -351,7 +366,7 @@ export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks) {
         input.sensitivity, clean.validFrom, clean.validTo, clean.source ? JSON.stringify(clean.source) : null,
         clean.evidence ? JSON.stringify(clean.evidence) : null, now, now);
     return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before: null, changed: true };
-  });
+  }, meta);
 }
 
 export function updateOwnerClaim(raw: UpdateClaimInput, hooks?: CommandHooks) {
@@ -372,7 +387,9 @@ export function updateOwnerClaim(raw: UpdateClaimInput, hooks?: CommandHooks) {
     const existing = { predicate: before.predicate, literal: before.literal, targetId: before.target?.id || null,
       freshness: before.freshness, sensitivity: before.sensitivity, validFrom: before.validFrom, validTo: before.validTo,
       source: before.source, evidence: before.evidence };
-    if (stable(comparable) === stable(existing)) return { claim: before, before, changed: false };
+    // A stored level nobody recognises is repaired by any save with a valid level, even an identical one.
+    const unrecognisedLevel = !sensitivities.has(row.sensitivity);
+    if (!unrecognisedLevel && stable(comparable) === stable(existing)) return { claim: before, before, changed: false };
     const now = Date.now();
     requireChanged(getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
       freshness=?, sensitivity=?, valid_from=?, valid_to=?, source_metadata=?, evidence_metadata=?, revision=revision+1,

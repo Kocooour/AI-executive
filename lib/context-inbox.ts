@@ -129,10 +129,16 @@ export function approveContextInboxClaim(input: {
   literal?: { type: ClaimLiteralType; value: string | number | boolean }; targetSubjectId?: string; freshness: ClaimFreshness;
   validFrom?: string | null; validTo?: string | null; evidenceExcerpt?: string;
 }) {
+  // The retry fingerprint is what the client sent. The ingestion time is made here and must not
+  // change it, or a retry after a lost response would be refused as a different command.
+  const clientRequest = { commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, subjectId: input.subjectId,
+    predicate: input.predicate, literal: input.literal, targetSubjectId: input.targetSubjectId, freshness: input.freshness,
+    validFrom: input.validFrom, validTo: input.validTo, evidenceExcerpt: input.evidenceExcerpt, origin: "context-inbox" };
   return createOwnerClaim({ commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, expectedRevision: 0,
     subject: { entityId: input.subjectId }, predicate: input.predicate, literal: input.literal,
     target: input.targetSubjectId ? { subjectId: input.targetSubjectId } : undefined,
     freshness: input.freshness, sensitivity: "confidential", validFrom: input.validFrom, validTo: input.validTo,
     source: { provider: "manual-context-inbox", ingestedAt: new Date().toISOString(), coverage: "excerpt" },
-    evidence: input.evidenceExcerpt ? { excerpt: input.evidenceExcerpt.slice(0, 500), stance: "supports" } : null });
+    evidence: input.evidenceExcerpt ? { excerpt: input.evidenceExcerpt.slice(0, 500), stance: "supports" } : null },
+    undefined, { clientRequest });
 }
