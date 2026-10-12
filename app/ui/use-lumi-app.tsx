@@ -211,7 +211,7 @@ export function useLumiApp() {
   // requested for, not to whatever the editor shows when it arrives.
   const contextIntents = useRef(new Map<string, { signature: string; commandKey: string; objectId: string }>());
   const contextInFlight = useRef(new Set<string>());
-  const claimEditor = useRef({ objectId: "", nonce: 0, signature: "" });
+  const claimEditor = useRef({ objectId: "", nonce: 0, signature: "", subjectId: "" });
   const subjectDraft = useRef({ newTitle: "", editId: "", editTitle: "" });
   const contextIntent = (scope: string, signature: string) => {
     const current = contextIntents.current.get(scope);
@@ -225,6 +225,7 @@ export function useLumiApp() {
     claimFreshness, claimSensitivity, claimValidFrom, claimValidTo, claimSourceProvider, claimSourceLocator, claimEvidence]);
   claimEditor.current.objectId = editingClaim?.id || "";
   claimEditor.current.signature = claimDraftSignature;
+  claimEditor.current.subjectId = claimSubjectId;
   subjectDraft.current = { newTitle: newSubjectTitle, editId: subjectEditId, editTitle: subjectEditTitle };
   const setClaimBusy = (key: string, busy: boolean) => {
     if (busy) contextInFlight.current.add(`claim:${key}`); else contextInFlight.current.delete(`claim:${key}`);
@@ -659,8 +660,15 @@ export function useLumiApp() {
         setClaimStatus(target ? tr("saved") : tr("savedANewClaim"));
       } else {
         // Typed again while this was saved: the newer draft stays and continues from the saved revision.
-        if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
-        setClaimStatus(tr("saved"));
+        // The subject of a saved claim cannot change, so the editor shows the subject it was saved with.
+        const saved = data.claim as ContextClaimItem | undefined;
+        if (saved) {
+          const savedSubjectId = saved.subject.canonicalEntityId || saved.subject.id;
+          const subjectChanged = claimEditor.current.subjectId !== savedSubjectId;
+          setEditingClaim(saved);
+          setClaimSubjectId(savedSubjectId);
+          setClaimStatus(subjectChanged ? tr("savedSubjectKept") : tr("saved"));
+        } else setClaimStatus(tr("saved"));
       }
       if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setClaimStatus(tr("savedListNotRefreshed"));

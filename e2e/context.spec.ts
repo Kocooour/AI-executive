@@ -178,6 +178,30 @@ test("typing again while a save is in flight keeps the newer text and continues 
   await expect(editor(page).getByRole("status")).not.toContainText("Konflikt");
 });
 
+test("changing the subject while a new claim is saved keeps the subject it was saved with", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.subject.inflight";
+  await page.route("**/api/context/claims", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.fulfill({ response });
+  });
+  await fillDraft(page, predicate, "hodnota");
+  await saveButton(page).click();
+  const subject = editor(page).getByLabel("O kom / čem");
+  const other = await subject.locator("option").evaluateAll((options) =>
+    (options as HTMLOptionElement[]).map((option) => option.value).find((value) => value && value !== "workspace:personal"));
+  expect(other).toBeTruthy();
+  await subject.selectOption(other!);
+  await expect(editor(page).getByRole("status")).toHaveText("Uloženo u původního subjektu. Subjekt uloženého tvrzení nejde změnit; pro jiný vytvořte nové tvrzení.", { timeout: 15_000 });
+  // The editor shows what the server stores, and the subject cannot be changed on the saved claim.
+  await expect(subject).toHaveValue("workspace:personal");
+  await expect(subject).toBeDisabled();
+  const saved = (await serverClaims(page)).filter((claim) => claim.predicate === predicate);
+  expect(saved).toHaveLength(1);
+});
+
 test("sensitivity has three levels and only normal claims are eligible for AI", async ({ page }) => {
   await openContext(page);
   const select = editor(page).getByLabel("Citlivost");
