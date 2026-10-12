@@ -500,3 +500,38 @@ test("a browser never signed in is not told its sign-in expired when the connect
   await expect(page.locator(".authCard .authNotice")).toHaveCount(0);
   await context.close();
 });
+
+// Started offline, a title is being edited when the server comes back misconfigured (sign-in
+// enabled but not set up): the edit is kept in this browser, not lost with the app screen.
+test("an offline start that finds the server misconfigured keeps a title being edited", async ({ browser }) => {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const page = await context.newPage();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const original = `Před nastavením serveru ${Date.now()}`;
+  await page.locator(".capture input").fill(original);
+  await page.locator(".capture input").press("Enter");
+  await expectOnServer(page, (entity) => entity.title === original, true);
+  await page.route("**/api/**", (route) => route.abort());
+  await page.reload();
+  await expect(page.locator(".offlineStart")).toBeVisible();
+  await page.locator("article", { hasText: original }).first().click();
+  const field = page.locator("input.titleEdit");
+  await expect(field).toHaveValue(original);
+  const edited = `${original} upraveno`;
+  await field.fill(edited);
+  await page.unroute("**/api/**");
+  await page.route("**/api/auth/status", (route) => route.fulfill({ json: { enabled: true, configured: false, authenticated: false } }));
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.locator(".authCard")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(() => page.evaluate((title) => new Promise<boolean>((resolve) => {
+    const request = indexedDB.open("ai-executive");
+    request.onsuccess = () => {
+      const all = request.result.transaction("entities").objectStore("entities").getAll();
+      all.onsuccess = () => { resolve((all.result as Array<{ title: string }>).some((entity) => entity.title === title)); request.result.close(); };
+      all.onerror = () => resolve(false);
+    };
+    request.onerror = () => resolve(false);
+  }), edited)).toBe(true);
+  await context.close();
+});

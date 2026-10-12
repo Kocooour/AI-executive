@@ -76,6 +76,10 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
       const state = await fetchClientAuthStatus();
       if (version !== authCheckVersion.current) return;
       setAuthEnabled(state.enabled);
+      // Leaving the offline view for any screen other than the app (sign-in, misconfigured server):
+      // the field being edited is committed first, so the change is kept in this browser.
+      const leavingOfflineView = authStateRef.current === "unavailable" && showsOfflineView() && !state.authenticated;
+      if (leavingOfflineView && document.activeElement instanceof HTMLElement) document.activeElement.blur();
       if (state.enabled && !state.configured) {
         setAuthError(tr("authMisconfigured"));
         setAuthState("misconfigured");
@@ -86,8 +90,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
       // like an expiry noticed online (sessionEndHandler): leaving a field commits what was typed
       // in it, the reason is said, and signing in in another tab brings this one back.
       // Only a browser that was signed in (and so showed the offline view) has had a session to end.
-      if (next === "required" && authStateRef.current === "unavailable" && showsOfflineView()) {
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      if (next === "required" && leavingOfflineView) {
         answerConfirm(false);
         setAuthPassword("");
         setAuthNotice(tr("sessionEnded"));
