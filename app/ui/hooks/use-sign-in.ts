@@ -2,18 +2,21 @@
 import { useEffect, useRef, useState } from "react";
 import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
-import { watchSession } from "../../../lib/session-watch";
+import { failWhileOffline, watchSession } from "../../../lib/session-watch";
+import { clearSignedOut } from "../../../lib/local-data";
 import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
 // the sign-in screen when the session ends. Moved verbatim from use-lumi-app.tsx. What happens
 // with the data after signing in, and whether the user has just signed out, belong to the sync
 // part of the app and are passed in as `afterSignIn` and `isSignedOut`.
-export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignIn }: {
+export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOfflineView, afterSignIn }: {
   tr: (key: string) => string;
   language: string;
   answerConfirm: (confirmed: boolean) => void;
   isSignedOut: () => boolean;
+  // The app is shown from this browser's data without confirmed access (a signed-in browser started offline).
+  showsOfflineView: () => boolean;
   afterSignIn: () => Promise<unknown>;
 }) {
   const [authState, setAuthState] = useState<
@@ -53,14 +56,19 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
   };
   // A sign-in error shown in one language is not kept after the language changes.
   useEffect(() => setAuthError(""), [language]);
+  const offlineMessage = useRef("");
+  offlineMessage.current = tr("offlineStartTitle");
   useEffect(() => {
     const original = window.fetch;
-    const watched = watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current());
+    const watched = failWhileOffline(
+      watchSession(original.bind(window), window.location.origin, () => sessionEndHandler.current()),
+      window.location.origin, () => authStateRef.current === "unavailable", () => offlineMessage.current);
     window.fetch = watched as typeof window.fetch;
     return () => { if (window.fetch === watched) window.fetch = original; };
   }, []);
   useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
   // `quiet`: a check in the background keeps the screen as it is until there is an answer.
+  // Returns the state this check found, or nothing when a newer check replaced it.
   async function checkAccess(quiet = false) {
     const version = ++authCheckVersion.current;
     setAuthError("");
@@ -69,15 +77,32 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
       const state = await fetchClientAuthStatus();
       if (version !== authCheckVersion.current) return;
       setAuthEnabled(state.enabled);
+      // Leaving the offline view for any screen other than the app (sign-in, misconfigured server):
+      // the field being edited is committed first, so the change is kept in this browser.
+      const leavingOfflineView = authStateRef.current === "unavailable" && showsOfflineView() && !state.authenticated;
+      if (leavingOfflineView && document.activeElement instanceof HTMLElement) document.activeElement.blur();
       if (state.enabled && !state.configured) {
         setAuthError(tr("authMisconfigured"));
         setAuthState("misconfigured");
-        return;
+        return "misconfigured";
       }
-      setAuthState(state.authenticated ? "ready" : "required");
+      const next = state.authenticated ? "ready" : "required";
+      // From the offline view straight to the sign-in screen: the session ended meanwhile, handled
+      // like an expiry noticed online (sessionEndHandler): leaving a field commits what was typed
+      // in it, the reason is said, and signing in in another tab brings this one back.
+      // Only a browser that was signed in (and so showed the offline view) has had a session to end.
+      if (next === "required" && leavingOfflineView) {
+        answerConfirm(false);
+        setAuthPassword("");
+        setAuthNotice(tr("sessionEnded"));
+        sessionEndedHere.current = true;
+      }
+      setAuthState(next);
+      return next;
     } catch {
       if (version !== authCheckVersion.current) return;
       setAuthState("unavailable");
+      return "unavailable";
     }
   }
   useEffect(() => {
@@ -136,6 +161,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
         return;
       }
       setAuthPassword("");
+      clearSignedOut();
       setAuthState("ready");
       await afterSignIn();
     } catch {
@@ -162,6 +188,7 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, afterSignI
       });
       const result = await verifyResponse.json();
       if (!verifyResponse.ok) throw new Error(localizeServerError(result.error, tr) || tr("passkeySignInFailed"));
+      clearSignedOut();
       setAuthState("ready");
       await afterSignIn();
     } catch (error) {

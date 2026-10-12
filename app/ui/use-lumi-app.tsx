@@ -1,7 +1,7 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
-import { clearLocalData, finishInterruptedWipe, hasUnsentChanges } from "../../lib/local-data";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
@@ -150,6 +150,7 @@ export function useLumiApp() {
     language,
     answerConfirm,
     isSignedOut: () => signedOut.current,
+    showsOfflineView: () => offlineViewRef.current,
     afterSignIn: () => {
       // Whatever this page believed about the server before signing in is not to be trusted
       // (the local copy may have been cleared by a sign-out in another tab).
@@ -206,10 +207,14 @@ export function useLumiApp() {
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // One confirmation at a time: asking again answers the previous question with "no".
   const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  // Set below where the offline view is decided; the app screen (and its dialog) is shown then too.
+  const offlineViewRef = useRef(false);
+  // The first request for the server copy, while it is still waiting for an answer.
+  const startupStoreRequest = useRef<AbortController | null>(null);
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
-    // The dialog lives in the signed-in screen; without it a question could never be answered.
-    if (authStateRef.current !== "ready") return Promise.resolve(false);
+    // The dialog lives in the app screen; without it a question could never be answered.
+    if (authStateRef.current !== "ready" && !offlineViewRef.current) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
       confirmResolver.current = resolve;
       setConfirmRequest(request);
@@ -245,6 +250,12 @@ export function useLumiApp() {
     const history = [...messages, user];
     setMessages(history);
     setAiText("");
+    // Access could not be checked (an offline start): the assistant cannot be reached, and asking
+    // would wait on a stalled connection instead of saying so.
+    if (authStateRef.current === "unavailable") {
+      setMessages([...history, { role: "assistant", content: tr("assistantOffline") }]);
+      return;
+    }
     setAiBusy(true);
     try {
       await syncQueue.current;
@@ -269,7 +280,9 @@ export function useLumiApp() {
     } catch (error) {
       setMessages([...history, {
         role: "assistant",
-        content: error instanceof Error ? error.message : tr("assistantRequestFailed"),
+        // A request that did not reach the server (no connection) is said in the interface
+        // language, not with the browser's own message.
+        content: error instanceof TypeError ? tr("assistantOffline") : error instanceof Error ? error.message : tr("assistantRequestFailed"),
       }]);
     } finally {
       setAiBusy(false);
@@ -740,8 +753,13 @@ export function useLumiApp() {
     async function initialize() {
       const initializationVersion = localDataVersion.current;
       await finishInterruptedWipe();
+      // Given up once the access check finds no connection, so a stalled request does not keep the
+      // offline view empty: the data kept in this browser is shown instead (catch below).
+      const storeRequest = new AbortController();
+      startupStoreRequest.current = storeRequest;
+      if (authStateRef.current === "unavailable") storeRequest.abort();
       try {
-        const response = await fetch("/api/store", { cache: "no-store" });
+        const response = await fetch("/api/store", { cache: "no-store", signal: storeRequest.signal });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
         await ensureDefaultWorkspace();
@@ -857,16 +875,26 @@ export function useLumiApp() {
         }
         if (localDataVersion.current !== initializationVersion) return;
         localStorage.setItem("ai-executive-server-synced", "1");
+        markSignedIn();
         clearSentMarkers(sentMarkers);
         setSyncStatus("synced");
       } catch {
         await ensureDefaultWorkspace();
         await load();
         setSyncStatus("offline");
+      } finally {
+        if (startupStoreRequest.current === storeRequest) startupStoreRequest.current = null;
       }
     }
     initialize();
   }, []);
+  useEffect(() => {
+    if (authState !== "unavailable") return;
+    startupStoreRequest.current?.abort();
+    // The start may already be waiting on a later request (a second fetch or a save): the data kept
+    // in this browser is shown now rather than when that request gives up.
+    void ensureDefaultWorkspace().then(load).catch(() => undefined);
+  }, [authState]);
 
   // Signing out removes the local copy of the data. Unsent changes are sent first; if that is not
   // possible the user decides whether to drop them. Without the server nothing is removed, because
@@ -875,6 +903,14 @@ export function useLumiApp() {
     if (logoutBusy) return;
     setLogoutBusy(true);
     setLogoutError("");
+    // Started offline: access is checked again first, so changes made meanwhile are sent if the
+    // connection is back (without a confirmed session they could not be, and would be offered for
+    // discarding). Still without access, sign-out is refused as before.
+    if (authStateRef.current === "unavailable" && (await checkAccess(true)) !== "ready") {
+      setLogoutError(tr("signOutOffline"));
+      setLogoutBusy(false);
+      return;
+    }
     let leaving = false;
     let askedOthers = false;
     let heartbeat = 0;
@@ -897,12 +933,14 @@ export function useLumiApp() {
         hasUnsent: hasUnsentChanges,
         // Notes drafts kept in the device go into the local copy first, so they are sent too.
         sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
-        serverReachable: () => fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
+        // Both requests are bounded: a stalled connection ends in "no connection", not a sign-out
+        // that never finishes.
+        serverReachable: () => fetch("/api/auth/status", { cache: "no-store", signal: AbortSignal.timeout(8_000) }).then((response) => response.ok).catch(() => false),
         confirmDiscard: () => askConfirm({ title: tr("signOutDiscardTitle"), message: tr("signOutDiscard"), confirmLabel: tr("signOutDiscardAction"), danger: true }),
         // From here nothing may be edited and no pull or sync still in flight may write data back.
         block: () => { signedOut.current = true; document.body.inert = true; },
         unblock: () => { signedOut.current = false; document.body.inert = false; },
-        endSession: () => fetch("/api/auth/logout", { method: "POST" }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
+        endSession: () => fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
         wipe: () => clearLocalData().catch(() => undefined),
       });
@@ -975,10 +1013,11 @@ export function useLumiApp() {
 
   // The address follows the view: a change of view adds a history step, so Back and Forward move
   // between views and a reload stays where the user was. A record id from a notification link is
-  // dropped from the address once the link has been handled. Nothing is recorded while signed out.
+  // dropped from the address once the link has been handled. Nothing is recorded while signed out;
+  // the offline view (started without a connection) shows the app, so it is recorded there too.
   const addressedView = useRef<string | null>(null);
   useEffect(() => {
-    if (!addressReady || authState !== "ready") return;
+    if (!addressReady || (authState !== "ready" && !offlineViewRef.current)) return;
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
     if (hasRecordLink && !deepLinkDone) return;
     const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
@@ -1172,9 +1211,12 @@ export function useLumiApp() {
   const captureItemsRef = useRef(items);
   captureItemsRef.current = items;
   const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
+  // Without access to the server (an offline start) there is no suggestion to wait for: asking would
+  // only keep the add button disabled until the request is given up.
+  const captureServerUnavailable = authState === "unavailable";
   useEffect(() => {
     const parsed = parseCapture(draft);
-    if (!capture || captureType !== "task" || parsed.title.length < 3) {
+    if (!capture || captureType !== "task" || parsed.title.length < 3 || captureServerUnavailable) {
       captureSuggestionVersion.current += 1;
       setCaptureSuggestion(null);
       setCaptureSuggestionBusy(false);
@@ -1228,10 +1270,15 @@ export function useLumiApp() {
               ? "existing"
               : "none");
         setCaptureSuggestion(suggestion);
-      } catch {
+      } catch (error) {
         if (captureSuggestionVersion.current === version) {
           setCaptureSuggestion(null);
-          setCaptureSuggestionError(tr("suggestionUnavailable"));
+          // Without a connection there is simply no suggestion; the task can still be added, so
+          // this is not shown as an error.
+          // A request that did not reach the server, or stalled until it was given up (the server is
+          // unreachable), means no connection, not a failed suggestion.
+          const unreachable = error instanceof TypeError || (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"));
+          setCaptureSuggestionError(unreachable ? "" : tr("suggestionUnavailable"));
         }
       } finally {
         window.clearTimeout(abortTimer);
@@ -1243,7 +1290,7 @@ export function useLumiApp() {
       window.clearTimeout(abortTimer);
       controller.abort();
     };
-  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language]);
+  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language, captureServerUnavailable]);
 
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
@@ -1407,7 +1454,33 @@ export function useLumiApp() {
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
     language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); postToTabs({ type: "restored", from: tabId.current }); } });
-  const attentionState = useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
+  // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
+  // browser has synchronized with the server before and still holds its data (signing out removes
+  // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
+  // checked again in the background; if the server then says the session has ended, the sign-in
+  // screen replaces the app, and nothing typed meanwhile is lost (it waits to be sent).
+  // Whether this browser is signed in is kept as its own mark, not guessed from the records: an
+  // account may have none (everything deleted). A browser signed in before this mark existed
+  // counts if it has synchronized and holds records.
+  const offlineView = authState === "unavailable" && (() => {
+    try {
+      if (localStorage.getItem("ai-executive-wipe-pending") === "1") return false;
+      if (localStorage.getItem(signedOutKey) === "1") return false;
+      if (localStorage.getItem(signedInKey) === "1") return true;
+      return localStorage.getItem("ai-executive-server-synced") === "1" && items.some((entity) => entity.type !== "workspace");
+    } catch { return false; }
+  })();
+  offlineViewRef.current = offlineView;
+  // "Try again" in the offline banner: a check that still finds no connection says so for a moment.
+  const [offlineRetry, setOfflineRetry] = useState<"" | "checking" | "failed">("");
+  async function retryAccess() {
+    setOfflineRetry("checking");
+    // The result of this check, not the last rendered state (the screen may not have updated yet).
+    const result = await checkAccess(true);
+    setOfflineRetry(result === "unavailable" ? "failed" : "");
+    window.setTimeout(() => setOfflineRetry((state) => (state === "failed" ? "" : state)), 4_000);
+  }
+  const attentionState = useAttention({ authState, offlineView, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut: () => signedOut.current || document.body.inert });
   const calendarTomorrowDate = new Date(`${calendarToday}T12:00:00Z`);
   calendarTomorrowDate.setUTCDate(calendarTomorrowDate.getUTCDate() + 1);
   const calendarTomorrow = calendarTomorrowDate.toISOString().slice(0, 10);
@@ -2597,6 +2670,9 @@ export function useLumiApp() {
     authNotice,
     authPassword,
     authState,
+    offlineView,
+    offlineRetry,
+    retryAccess,
     backupStatus,
     backups,
     badgeStatus,

@@ -8,10 +8,12 @@ import { cachedAttention, saveAttention } from "../../../lib/attention-cache";
 // The "Needs attention" list on Home: loading and refreshing the server's evaluation, keeping the
 // last one while the connection is lost (marked out of date), and snooze/dismiss. Moved verbatim
 // from use-lumi-app.tsx; the values it needs from the rest of the app are passed in.
-export function useAttention({ authState, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
+export function useAttention({ authState, offlineView = false, activeWorkspaceId, syncStatus, items, pendingDeletedIds, tr, language, signingOut }: {
   tr: (key: string) => string;
   language: string;
   authState: string;
+  // The app shows this browser's data without having checked access (started offline).
+  offlineView?: boolean;
   activeWorkspaceId: string;
   syncStatus: string;
   items: Entity[];
@@ -100,13 +102,13 @@ export function useAttention({ authState, activeWorkspaceId, syncStatus, items, 
   useEffect(() => {
     attentionLoadVersion.current += 1;
     let kept: AttentionResponse | null = null;
-    try { kept = authState === "ready" ? cachedAttention<AttentionResponse>(localStorage, activeWorkspaceId) : null; } catch { kept = null; }
+    try { kept = authState === "ready" || offlineView ? cachedAttention<AttentionResponse>(localStorage, activeWorkspaceId) : null; } catch { kept = null; }
     setAttention(kept);
     setAttentionFromCache(Boolean(kept));
-    setAttentionOutdated(false);
+    setAttentionOutdated(Boolean(kept) && offlineView);
     setAttentionError("");
     setShowAllAttention(false);
-  }, [authState, activeWorkspaceId]);
+  }, [authState, offlineView, activeWorkspaceId]);
   // Out of date from the moment the connection is lost until a load succeeds again, so the label
   // does not flip while a queued edit retries its sync.
   useEffect(() => {

@@ -10,6 +10,25 @@ import { attentionCacheKey } from "./attention-cache";
 const pendingSyncKey = "ai-executive-pending-sync";
 const serverSyncedKey = "ai-executive-server-synced";
 const wipePendingKey = "ai-executive-wipe-pending";
+// Set once this browser has completed a synchronization with the server, removed by signing out: a start without a
+// connection then shows the data kept here (owner decision 2026-10-09), also when there is none yet.
+export const signedInKey = "ai-executive-signed-in";
+// Called when a synchronization with the server has completed: only then does this browser hold the
+// account's data, so only then may a later start without a connection show it.
+export function markSignedIn() {
+  try {
+    // A synchronization that was already under way when this browser signed out (possibly in
+    // another tab) must not mark it signed in again after the local copy was removed.
+    if (localStorage.getItem(signedOutKey) === "1") return;
+    localStorage.setItem(signedInKey, "1");
+  } catch { /* storage unavailable */ }
+}
+// Set by signing out (the local copy removed), cleared by the next sign-in. While it is set this
+// browser is not offered the offline view, whatever a late synchronization leaves behind.
+export const signedOutKey = "ai-executive-signed-out";
+export function clearSignedOut() {
+  try { localStorage.removeItem(signedOutKey); } catch { /* storage unavailable */ }
+}
 const localDataKeys = [
   pendingSyncKey,
   "ai-executive-pending-deletions",
@@ -20,6 +39,7 @@ const localDataKeys = [
   "ai-executive-active-workspace",
   "ai-executive-write-workspace",
   attentionCacheKey,
+  signedInKey,
 ];
 
 // True when this browser may hold something the server does not: a change waiting to be sent, or
@@ -42,6 +62,7 @@ export async function hasUnsentChanges() {
 // completed by finishInterruptedWipe() on the next start.
 export async function clearLocalData(timeoutMs = 4000) {
   localStorage.setItem(wipePendingKey, "1");
+  localStorage.setItem(signedOutKey, "1");
   localDataKeys.forEach((key) => localStorage.removeItem(key));
   // Deletions and restorations waiting to be sent are one key each (lib/pending-markers.ts).
   clearAllMarkers(localStorage);
