@@ -498,6 +498,12 @@ export function useLumiApp() {
     if (calendarWorkspaceSelection.current === workspaceId) setStandaloneSubjects(Array.isArray(data.subjects) ? data.subjects : []);
   }
 
+  // Once a command has succeeded, refreshing the lists is best effort: a failed refresh is not a failed
+  // save, and the UI must already show the saved state so a new click cannot repeat a create.
+  async function refreshAfterCommand(...loads: Array<() => Promise<void>>) {
+    try { for (const load of loads) await load(); return true; } catch { return false; }
+  }
+
   async function subjectAction(action: "create" | "rename" | "archive", subject?: StandaloneSubjectItem) {
     const workspaceId = calendarWorkspaceSelection.current;
     const busyKey = `subject:${action}:${subject?.id || workspaceId}`;
@@ -517,12 +523,13 @@ export function useLumiApp() {
       if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("thisPersonOrOrganization")) : localizeServerError(data.error, tr) || tr("subjectActionFailed"));
       finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
-      await loadStandaloneSubjects(workspaceId); await loadContextClaims(workspaceId);
       // Only the draft this response belongs to is closed; anything typed meanwhile stays.
       const draft = subjectDraft.current;
       if (action === "create") { if (draft.newTitle === title) setNewSubjectTitle(""); }
       else if (draft.editId === subject?.id && (action === "archive" || draft.editTitle === title)) { setSubjectEditId(""); setSubjectEditTitle(""); }
       setSubjectStatus(tr("saved"));
+      const refreshed = await refreshAfterCommand(() => loadStandaloneSubjects(workspaceId), () => loadContextClaims(workspaceId));
+      if (!refreshed && calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(tr("savedListNotRefreshed"));
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(commandFailureMessage(error, tr("subjectActionFailed"))); }
     finally {
       contextInFlight.current.delete(busyKey);
@@ -644,15 +651,19 @@ export function useLumiApp() {
       }
       finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
-      await loadContextClaims(workspaceId);
-      if (!editorStillShows()) { setClaimStatus(tr("saved")); return; }
-      if (claimEditor.current.signature === sentSignature) {
+      // The editor follows the saved claim before anything else can fail: a draft that still looked
+      // unsaved would send a new create (new key and id) on the next click.
+      if (!editorStillShows()) setClaimStatus(tr("saved"));
+      else if (claimEditor.current.signature === sentSignature) {
         resetClaimDraft();
-        setClaimStatus(tr("savedANewClaim"));
+        setClaimStatus(target ? tr("saved") : tr("savedANewClaim"));
       } else {
         // Typed again while this was saved: the newer draft stays and continues from the saved revision.
         if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
         setClaimStatus(tr("saved"));
+      }
+      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+        setClaimStatus(tr("savedListNotRefreshed"));
       }
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
@@ -684,7 +695,6 @@ export function useLumiApp() {
       }
       finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
-      await loadContextClaims(workspaceId);
       // The editor is touched only when it shows this very claim: an archived claim cannot be edited
       // any more; a reviewed one keeps the draft and continues from the new revision.
       if (claimEditor.current.objectId === claim.id) {
@@ -692,6 +702,9 @@ export function useLumiApp() {
         else if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
       }
       setClaimStatus(tr("saved"));
+      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+        setClaimStatus(tr("savedListNotRefreshed"));
+      }
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) {
         setClaimStatus(commandFailureMessage(error, tr("claimActionFailed")));
@@ -741,8 +754,10 @@ export function useLumiApp() {
       finishContextIntent(busyKey);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
-      await loadContextClaims(workspaceId);
       setContextInboxStatus(tr("proposalAddedToThe"));
+      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+        setContextInboxStatus(tr("savedListNotRefreshed"));
+      }
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("contextProposalSaveFailed"))); }
     finally { contextInFlight.current.delete(busyKey); setContextInboxBusy(""); }
   }
@@ -764,9 +779,11 @@ export function useLumiApp() {
       if (!response.ok) throw new Error(data.code === "duplicate_subject" ? (tr("personExistsSelectThem")) : localizeServerError(data.error, tr) || tr("personCreateFailed"));
       finishContextIntent(busyKey);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
-      await loadStandaloneSubjects(workspaceId);
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
       setContextInboxStatus(tr("personCreatedSaveThe"));
+      if (!(await refreshAfterCommand(() => loadStandaloneSubjects(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+        setContextInboxStatus(tr("savedListNotRefreshed"));
+      }
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("personCreateFailed"))); }
     finally { contextInFlight.current.delete(busyKey); setContextInboxBusy(""); }
   }

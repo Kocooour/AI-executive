@@ -94,6 +94,38 @@ test("a save whose response is lost is retried without creating a second claim",
   await expect(valueInput(page)).toHaveValue("");
 });
 
+test("a saved claim stays saved when the list cannot be loaded afterwards", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.refresh.fails";
+  let posts = 0;
+  let failNextList = false;
+  await page.route("**/api/context/claims**", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      posts += 1;
+      const response = await route.fetch();
+      failNextList = true;
+      return route.fulfill({ response });
+    }
+    if (failNextList) {
+      // The claim was saved; only the list that follows cannot be loaded.
+      failNextList = false;
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Unavailable" }) });
+    }
+    return route.continue();
+  });
+  await fillDraft(page, predicate, "uloženo jednou");
+  await saveButton(page).click();
+  await expect(editor(page).getByRole("status")).toHaveText("Uloženo, ale seznam se nepodařilo znovu načíst. Aktuální stav ukáže Obnovit tvrzení nebo nové načtení stránky.");
+  // The editor no longer holds the saved draft, so another save cannot repeat the create.
+  await expect(valueInput(page)).toHaveValue("");
+  expect(posts).toBe(1);
+  await page.unroute("**/api/context/claims**");
+  expect((await serverClaims(page)).filter((claim) => claim.predicate === predicate)).toHaveLength(1);
+  await page.getByRole("button", { name: "Obnovit tvrzení" }).click();
+  await expect(card(page, predicate)).toHaveCount(1);
+});
+
 test("a late answer for one claim does not overwrite the editor that now shows another", async ({ page }) => {
   await openContext(page);
   await seedClaim(page, "e2e.switch.a", "hodnota A");
