@@ -95,7 +95,10 @@ export function SettingsView({ app }: { app: LumiApp }) {
     writeWorkspaceId,
   } = app;
   // Access exists only with sign-in enabled; never leave the page without a visible section.
-  const settingsSection = requestedSection === "access" && !authEnabled ? "general" : requestedSection;
+  // Started offline the access check has not answered yet; the section stays, so that signing out
+  // is offered (and refused with an explanation while there is no connection).
+  const accessShown = authEnabled || app.offlineView;
+  const settingsSection = requestedSection === "access" && !accessShown ? "general" : requestedSection;
   // On narrow screens the row scrolls sideways: keep the current section's button in sight when
   // Settings opens on a section chosen elsewhere. Only the row moves, never the page.
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -111,7 +114,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
           {view === "Settings" && (
             <div className="settingsPanel">
               <div className="settingsTabs" role="navigation" aria-label={tr("settingsSections")} ref={tabsRef}>
-                {(["general", "workspace", ...(authEnabled ? ["access"] : []), "notifications", "calendar", "data", "context"] as const).map((name) => (
+                {(["general", "workspace", ...(accessShown ? ["access"] : []), "notifications", "calendar", "data", "context"] as const).map((name) => (
                   <button key={name} type="button" aria-current={settingsSection === name ? "page" : undefined} onClick={() => setSettingsSection(name)}>
                     {tr(settingsTabLabels[name])}
                   </button>
@@ -168,6 +171,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 <span className={`installStatus ${standalone ? "installed" : ""}`}>
                   {standalone ? tr("installed") : tr("browserMode")}
                 </span>
+                <p>{tr("refreshInstalledIcon")}</p>
               </section>
               <section hidden={settingsSection !== "workspace"}>
                 <h2>{tr("workspace")}</h2>
@@ -258,7 +262,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   {tr("sharedWorkspacesInfo")}
                 </p>
               </section>
-              {authEnabled && (
+              {accessShown && (
                 <section hidden={settingsSection !== "access"}>
                   <h2>{tr("access")}</h2>
                   <p>{tr("ownerSession")}</p>

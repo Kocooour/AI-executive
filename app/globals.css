@@ -50,7 +50,7 @@ body {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
+  background: url("/icons/lumi-icon-v3-192.png") center / cover no-repeat;
 }
 .authCard h1,
 .authCard p {
@@ -125,7 +125,7 @@ body {
   display: block;
   width: 54px;
   height: 54px;
-  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
+  background: url("/icons/lumi-icon-v3-192.png") center / cover no-repeat;
 }
 main {
   display: grid;
@@ -1506,7 +1506,7 @@ article {
   flex: 0 0 32px;
   place-items: center;
   border-radius: 10px;
-  background: url("/icons/lumi-icon-v2-192.png") center / cover no-repeat;
+  background: url("/icons/lumi-icon-v3-192.png") center / cover no-repeat;
 }
 .workspaceButton {
   min-height: 42px;
@@ -3520,3 +3520,10 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .waitingField legend { padding: 0 4px; font-size: 13px; color: var(--muted); }
 .waitingField .inlineCheck { display: flex; gap: 8px; align-items: center; }
 .waitingField small { color: var(--muted); font-size: 12px; }
+
+.offlineStart { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+.offlineStart p { margin: 0; }
+.offlineStart button { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; padding: 6px 12px; font: inherit; cursor: pointer; }
+/* The main way back from an offline start: a full-size touch target on phones. */
+@media (pointer: coarse), (max-width: 700px) { .offlineStart button { min-height: 44px; min-width: 44px; padding: 10px 16px; } }
+.offlineStart button:disabled { opacity: .6; cursor: default; }

@@ -7,6 +7,7 @@ import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable
 import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
 import { writeTime } from "../../../lib/clock";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
+import { markSignedIn } from "../../../lib/local-data";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -304,6 +305,7 @@ export function useSync() {
         return;
       }
       localStorage.setItem("ai-executive-server-synced", "1");
+      markSignedIn();
       clearSentMarkers(sentMarkers);
       setSyncStatus("synced");
     }));
@@ -344,6 +346,7 @@ export function useSync() {
         // holds exactly the server copy it is synchronized; without the mark every later start
         // would send that copy back to the server as if it were the browser's own data.
         if (afterSignIn) localStorage.setItem("ai-executive-server-synced", "1");
+        markSignedIn();
         return "synced" as const;
       });
       if (outcome === "save") { await syncToServer(); return; }

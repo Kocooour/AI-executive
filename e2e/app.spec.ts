@@ -634,6 +634,8 @@ test("signing out clears the local copy; signing in again restores it from the s
   // Only the empty placeholder workspace may be there (it is created when the sign-in screen loads).
   expect(local.filter((title) => title !== "Personal")).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem("ai-executive-attention"))).toBeNull();
+  // Nor does the mark that lets an offline start show data.
+  expect(await page.evaluate(() => localStorage.getItem("ai-executive-signed-in"))).toBeNull();
   expect(await page.evaluate(() => fetch("/api/store").then((response) => response.status))).toBe(401);
   await signIn(page);
   await sidebarView(page, "Doručené").click();

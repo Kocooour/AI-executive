@@ -6,6 +6,11 @@
 // reasons (wrong password, no session yet) and are not a signal.
 export function isSessionEnd(url: string, status: number, origin: string): boolean {
   if (status !== 401) return false;
+  return isDataRequest(url, origin);
+}
+
+// A request for the app's data (any API of this origin except sign-in and access checks).
+export function isDataRequest(url: string, origin: string): boolean {
   let target: URL;
   try {
     target = new URL(url, origin);
@@ -17,11 +22,37 @@ export function isSessionEnd(url: string, status: number, origin: string): boole
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+const requestUrl = (input: RequestInfo | URL) => (typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+
+// What still goes out while access could not be checked: the access check, signing in (password or
+// passkey) and signing out. Everything else of this origin's API, passkey management included,
+// needs a confirmed session.
+const withoutAccess = new Set(["/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/passkeys/login/options", "/api/auth/passkeys/login/verify"]);
+export function needsAccess(url: string, origin: string): boolean {
+  let target: URL;
+  try {
+    target = new URL(url, origin);
+  } catch {
+    return false;
+  }
+  return target.origin === origin && target.pathname.startsWith("/api/") && !withoutAccess.has(target.pathname);
+}
+
+// While access could not be checked (an app started without a connection), requests that need a
+// session fail at once as "no connection" instead of waiting on a connection that may swallow them;
+// every action then ends with its usual offline handling. The access check, signing in and signing
+// out still go out, so the app notices when the server is back.
+export function failWhileOffline(fetchImpl: FetchLike, origin: string, offline: () => boolean, message: () => string): FetchLike {
+  return (input, init) => {
+    if (offline() && needsAccess(requestUrl(input), origin)) return Promise.reject(new TypeError(message()));
+    return fetchImpl(input, init);
+  };
+}
+
 export function watchSession(fetchImpl: FetchLike, origin: string, onEnded: () => void): FetchLike {
   return async (input, init) => {
     const response = await fetchImpl(input, init);
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (isSessionEnd(url, response.status, origin)) onEnded();
+    if (isSessionEnd(requestUrl(input), response.status, origin)) onEnded();
     return response;
   };
 }

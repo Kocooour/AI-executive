@@ -28,7 +28,7 @@ export default function GlobalError({
       <body>
         <main style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "-apple-system, sans-serif" }}>
           <div style={{ width: "min(82vw, 360px)", textAlign: "center" }}>
-            <img src="/icons/lumi-icon-v2-192.png" alt="" width="48" height="48" />
+            <img src="/icons/lumi-icon-v3-192.png" alt="" width="48" height="48" />
             <h1>Aplikaci se nepodařilo načíst</h1>
             <p>Chyba byla bezpečně odeslána k diagnostice.</p>
             <button type="button" onClick={reset}>Zkusit znovu</button>
