@@ -570,12 +570,25 @@ cp -a /var/lib/ai-executive "$BK/novy-stav-pred-navratem-$(date +%Y%m%d-%H%M%S)"
 # Od teto chvile se meni jednotka; pri selhani dal plati "Kdyz selze i navrat" (nic nespoustet naslepo).
 trap - ERR INT TERM HUP
 
-# Puvodni jednotka a drop-iny ze zalohy.
-rm -f /etc/systemd/system/ai-executive.service
-rm -rf /etc/systemd/system/ai-executive.service.d
-cp -a "$BK/systemd/ai-executive.service" /etc/systemd/system/ai-executive.service
-if [ -d "$BK/systemd/ai-executive.service.d" ]; then cp -a "$BK/systemd/ai-executive.service.d" /etc/systemd/system/ai-executive.service.d; fi
-if [ -d "$BK/removed-dropins" ]; then mkdir -p /etc/systemd/system/ai-executive.service.d; cp -a "$BK/removed-dropins/." /etc/systemd/system/ai-executive.service.d/; fi
+# Puvodni jednotka a drop-iny ze zalohy. Nic se nemaze predem: puvodni definice se nejdriv cela
+# pripravi vedle (STAGE, mimo adresare, ktere systemd cte) a pak se na misto jen prejmenuje.
+# Soubor jednotky tak nikdy nechybi (vzdy cela nova, nebo cela puvodni); jen mezi poslednimi dvema
+# prejmenovanimi muze byt na okamzik puvodni jednotka s novymi nebo zadnymi drop-iny. Pri chybe nebo
+# preruseni se 9.1 spusti znovu: dokonci navrat a nic nepouzije naslepo (sluzba je zastavena).
+U=/etc/systemd/system/ai-executive.service; D=$U.d; NOW=$(date +%Y%m%d-%H%M%S)
+STAGE=/etc/systemd/ai-executive-navrat-$NOW
+mkdir -p "$BK/nova-jednotka-$NOW"; cp -a "$U" "$BK/nova-jednotka-$NOW/"
+if [ -d "$D" ]; then cp -a "$D" "$BK/nova-jednotka-$NOW/"; fi
+install -d -m 0700 "$STAGE"
+[ "$(stat -c %d "$STAGE")" = "$(stat -c %d /etc/systemd/system)" ] || { echo "STOP: $STAGE neni na stejnem souborovem systemu jako /etc/systemd/system; nahlasit"; exit 1; }
+cp -a "$BK/systemd/ai-executive.service" "$STAGE/ai-executive.service"
+if [ -d "$BK/systemd/ai-executive.service.d" ]; then cp -a "$BK/systemd/ai-executive.service.d" "$STAGE/ai-executive.service.d"; else install -d -m 0755 "$STAGE/ai-executive.service.d"; fi
+if [ -d "$BK/removed-dropins" ]; then cp -a "$BK/removed-dropins/." "$STAGE/ai-executive.service.d/"; fi
+# Vymena: jednotka jednim prejmenovanim (prepise novou), drop-iny dvema prejmenovanimi.
+mv -T "$STAGE/ai-executive.service" "$U"
+if [ -d "$D" ]; then mv -T "$D" "$STAGE/nahrazene.service.d"; fi
+if [ -n "$(ls -A "$STAGE/ai-executive.service.d")" ]; then mv -T "$STAGE/ai-executive.service.d" "$D"; fi
+rm -rf "$STAGE"   # nova jednotka je ulozena v $BK/nova-jednotka-$NOW
 if [ "$ALERTS" = 1 ]; then chown -R "$OLD_USER":hermes /var/lib/ai-executive-security/outbox; chmod 2770 /var/lib/ai-executive-security/outbox; fi
 systemctl daemon-reload
 systemctl reset-failed ai-executive || true
@@ -628,7 +641,7 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-navratu.json" "$VOLATILE" "$I
 
 **Kontrola:** `User=` je původní účet, `WorkingDirectory` původní checkout, `/api/store` → `401`, `/api/auth/status` → `200`, HTTPS `401`, integrita `ok`, počty beze změny.
 **Hlášení:** co selhalo (číslo kroku, výpis), že běží původní konfigurace, kde je uložen nový stav (`$BK/novy-stav-pred-navratem-*`, `/var/lib/ai-executive`), cesty záloh a zda byla použita obnova 9.2. Po návratu **nepokračovat** v dalším pokusu bez pokynu vlastníka.
-**Když selže i návrat:** `systemctl status ai-executive`, `journalctl -u ai-executive -n 50`; originály `.data`/`.env` jsou nedotčené (nebo je obnoví 9.2) a zálohy v `$BK`. Zastavit a nahlásit, nic dalšího nemazat.
+**Když selže i návrat:** pokud 9.1 skončilo během vracení jednotky, soubor jednotky v `/etc/systemd/system` nechybí (je celý nový, nebo celý původní; drop-iny mohou být rozpracované) a případný `/etc/systemd/ai-executive-navrat-*` systemd nečte; nic nespouštět a 9.1 spustit znovu, návrat dokončí (zbylý `ai-executive-navrat-*` uvést do hlášení). Jinak `systemctl status ai-executive`, `journalctl -u ai-executive -n 50`; originály `.data`/`.env` jsou nedotčené (nebo je obnoví 9.2) a zálohy v `$BK`. Zastavit a nahlásit, nic dalšího nemazat.
 
 **Úklid po návratu (pro pozdější nový pokus; jen na pokyn vlastníka).** Nový stav je nejdřív uložen v 9.1 (`$BK/novy-stav-pred-navratem-*`); teprve pak lze odstranit nepoužité artefakty:
 
@@ -715,6 +728,7 @@ on_error() {
     echo "  cd /opt/ai-executive && git reset --hard $PREV && pnpm install --frozen-lockfile && pnpm build"
     echo "  chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive"
     echo "  Data se NEVRACI automaticky: obnova $B/data jen po rozhodnuti vlastnika (viz 'Navrat chybne verze', cast B)."
+    cmp -s /etc/ai-executive/ai-executive.env "$B/env" || echo "  POZOR: env se lisi od $B/env (stav pri nasazeni); rozhoduje vlastnik (viz 'Navrat chybne verze', ENV_NAVRAT)."
     echo "  chown -R ai-executive:ai-executive /var/lib/ai-executive; systemctl start ai-executive"
   fi
   exit $rc
@@ -751,16 +765,32 @@ echo "Nasazeno: $PREV -> $(git rev-parse HEAD); zaloha $B"
 
 Poté stejné kontroly jako v kroku 8 (bez části pro vlastníka): služba aktivní a pod `ai-executive`; autentizační hranice (`/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200`) lokálně i přes `https://vm13861.tail412944.ts.net:8443`; žurnál bez `EACCES`/`EROFS`/`SQLITE_CANTOPEN`. Tabulky, které chybějí v záloze (nové v novém release), `cmp_tables` hlásí jen jako `INFO nova tabulka`.
 
-Návrat chybné verze (po úspěšném startu nebo selhání kontrol):
+Návrat chybné verze (po úspěšném startu nebo selhání kontrol). Nasazení samo env soubor nemění, ale vlastník ho mohl mezitím upravit pro novou verzi; předchozí verze běžela s kopií `$B/env`. Když se liší, blok skončí STOP ještě před zastavením služby, vypíše jen názvy změněných klíčů (ne hodnoty) a čeká na rozhodnutí vlastníka: `ENV_NAVRAT=obnovit` vrátí env z doby nasazení (současný se nejdřív uloží), `ENV_NAVRAT=ponechat` ho nechá (např. po rotaci tajného údaje, kterou nesmí návrat vrátit).
 
 ```bash
 set -euo pipefail
 . /var/backups/ai-executive/migrace.vars
+ENV_NOW=/etc/ai-executive/ai-executive.env
+test -f "$B/env" || { echo "STOP: $B/env neexistuje (spravne B z vypisu nasazeni?)"; exit 1; }
+if ! cmp -s "$ENV_NOW" "$B/env"; then
+  echo "env se od nasazeni zmenil; klice s rozdilem (jen nazvy):"
+  envlines() { grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' "$1" | sort || true; }
+  { diff <(envlines "$B/env") <(envlines "$ENV_NOW") || true; } | sed -nE 's/^[<>][[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/  \2/p' | sort -u
+  case "${ENV_NAVRAT:-}" in
+    obnovit|ponechat) echo "env: $ENV_NAVRAT (rozhodnuti vlastnika)";;
+    *) echo "STOP: rozhodnuti vlastnika: ENV_NAVRAT=obnovit nebo ENV_NAVRAT=ponechat, pak blok spustit znovu; sluzba bezi beze zmeny"; exit 1;;
+  esac
+fi
 # A) Kod: predchozi verze. Data zustavaji, jak jsou (zmeny od nasazeni se neztrati).
 systemctl stop ai-executive
 systemctl is-active --quiet ai-executive && { echo "STOP: sluzba porad bezi"; exit 1; }
 cd /opt/ai-executive && git reset --hard "$PREV" && pnpm install --frozen-lockfile && pnpm build
 chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive
+if [ "${ENV_NAVRAT:-}" = obnovit ]; then
+  (umask 077; cp -a "$ENV_NOW" "$B/env-pred-navratem-$(date +%Y%m%d-%H%M%S)")
+  install -o root -g root -m 0600 "$B/env" "$ENV_NOW.navrat"; mv -T "$ENV_NOW.navrat" "$ENV_NOW"
+  echo "env vracen z $B/env (soucasny ulozen v $B/env-pred-navratem-*)"
+fi
 runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite
 systemctl start ai-executive
 ```
