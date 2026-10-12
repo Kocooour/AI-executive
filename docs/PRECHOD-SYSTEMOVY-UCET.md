@@ -74,6 +74,7 @@ for f in "$OLD_DIR"/.env "$OLD_DIR"/.env.*; do
   [ -f "$f" ] || continue; [ "$(basename "$f")" = .env.example ] && continue
   v=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$f" | tail -n1 | tr -d "\"'")
   [ -z "$v" ] || { echo "$f: $v"; FOUND=1; case "$v" in /*) ;; *) echo "STOP: relativni hodnota v $f"; exit 1;; esac; }
+  case "$v" in *[[:space:]]*) echo "STOP: hodnota v $f obsahuje mezeru; postup ji nepodporuje, nahlasit"; exit 1;; esac
 done
 [ "$FOUND" = 1 ] || echo "AI_EXECUTIVE_DATA_DIR neni nastavena (pouzije se <cwd>/.data)"
 ```
@@ -234,9 +235,10 @@ cmp_tables() {
   ' "$@"
 }
 # Po startu je meni sama sluzba (bezpecnostni log, plan. vyhodnoceni pozornosti kazdych 5 min, push, kalendar).
-VOLATILE=security_events,security_alerts,notification_deliveries,metadata,attention_states,attention_history,pact_agent_runs
+VOLATILE=security_events,security_alerts,metadata,attention_states,attention_history,pact_agent_runs
 # Zaznamy, ktere se samy nahrazuji nebo vyprsi (5min navrhy AI, vyzvy passkey, udalosti obnovenych kalendaru).
-IGNORED=ai_proposals,passkey_challenges,calendar_events
+# notification_deliveries: bez zapnutych upozorneni sluzba po startu smaze radek attention:baseline (pocet klesne o 1).
+IGNORED=ai_proposals,passkey_challenges,calendar_events,notification_deliveries
 FUNCS
 } > /var/backups/ai-executive/migrace.vars
 chmod 0600 /var/backups/ai-executive/migrace.vars
@@ -526,7 +528,7 @@ echo "Celkem selhani: $FAILS"
 [ "$FAILS" -eq 0 ]
 ```
 
-**Kontrola (automatická část):** poslední řádek `Celkem selhani: 0` a blok skončí s kódem `0` (při jakémkoli selhání je kód nenulový); `ps` a `User` ukazují `ai-executive`; poslech jen na `127.0.0.1:3000`; Tailscale Serve míří na `127.0.0.1:3000`; `/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200` lokálně i přes HTTPS; `check-data` skončí s `integrity: ok`; stabilní tabulky (`entities`, `relations`, `tombstones`, `calendar_sources`, `push_subscriptions`, `passkey_credentials` a další datové) mají stejné počty jako v `fakta-original.json`, provozní (`security_events`, `notification_deliveries`, `metadata`, `attention_*`, …) neubyly, krátkodobé (`ai_proposals`, `passkey_challenges`, `calendar_events`) a nové tabulky novějšího release se jen vypíšou jako `INFO`; v žurnálu `0` chyb přístupu; fronta bezpečnostních upozornění (jen s doplňkem) je `2770 ai-executive:hermes`.
+**Kontrola (automatická část):** poslední řádek `Celkem selhani: 0` a blok skončí s kódem `0` (při jakémkoli selhání je kód nenulový); `ps` a `User` ukazují `ai-executive`; poslech jen na `127.0.0.1:3000`; Tailscale Serve míří na `127.0.0.1:3000`; `/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200` lokálně i přes HTTPS; `check-data` skončí s `integrity: ok`; stabilní tabulky (`entities`, `relations`, `tombstones`, `calendar_sources`, `push_subscriptions`, `passkey_credentials` a další datové) mají stejné počty jako v `fakta-original.json`, provozní (`security_events`, `metadata`, `attention_*`, …) neubyly, krátkodobé nebo služby samy uklízené (`ai_proposals`, `passkey_challenges`, `calendar_events`, `notification_deliveries`) a nové tabulky novějšího release se jen vypíšou jako `INFO`; v žurnálu `0` chyb přístupu; fronta bezpečnostních upozornění (jen s doplňkem) je `2770 ai-executive:hermes`.
 
 Automatickou část spusťte **dřív**, než vlastník začne s kontrolami níže: změny, které při nich udělá (přihlášení, záloha, nový úkol), by jinak porovnání počtů ohlásilo jako rozdíl.
 
@@ -561,7 +563,8 @@ umask 077
 . /var/backups/ai-executive/migrace.vars
 # Dokud se nezacne vracet jednotka, plati nova konfigurace: selhani nebo preruseni ji spusti zpet.
 trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky -> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
-systemctl stop ai-executive || true
+systemctl stop ai-executive
+systemctl is-active --quiet ai-executive && { echo "STOP: nova sluzba porad bezi; navrat nepokracuje"; exit 1; }
 # Novy stav ulozit pro pripadne dohledani zmen (zustane take v /var/lib/ai-executive).
 cp -a /var/lib/ai-executive "$BK/novy-stav-pred-navratem-$(date +%Y%m%d-%H%M%S)"
 # Od teto chvile se meni jednotka; pri selhani dal plati "Kdyz selze i navrat" (nic nespoustet naslepo).
@@ -660,7 +663,8 @@ echo "stare .data a .env uz nejsou v domove"
 if runuser -u "$OLD_USER" -- test -r "$OLDHOME_BK/env"; then echo "CHYBA: sdileny ucet cte zalohu"; exit 1; fi
 echo "sdileny ucet zalohu necte"
 systemctl is-active ai-executive
-curl -sS -o /dev/null -w '/api/store: %{http_code}\n' http://127.0.0.1:3000/api/store
+CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 http://127.0.0.1:3000/api/store); echo "/api/store: $CODE"
+[ "$CODE" = 401 ] || { echo "CHYBA: /api/store bez relace vraci $CODE, ma 401"; exit 1; }
 echo "== podklady pro hlaseni"
 echo "zalohy:"; ls -d /var/backups/ai-executive/* | sed 's/^/  /'
 echo "systemd-analyze security: $(tail -n 1 "$BK/systemd-analyze-security.txt")"
@@ -710,7 +714,7 @@ on_error() {
     echo "Kod nebo sestaveni se zmenily, sluzba je ZASTAVENA. Navrat (sestavi znovu predchozi verzi $PREV):"
     echo "  cd /opt/ai-executive && git reset --hard $PREV && pnpm install --frozen-lockfile && pnpm build"
     echo "  chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive"
-    echo "  find /var/lib/ai-executive -mindepth 1 -delete && cp -a $B/data/. /var/lib/ai-executive/   # jen pokud nova verze zmenila data"
+    echo "  Data se NEVRACI automaticky: obnova $B/data jen po rozhodnuti vlastnika (viz 'Navrat chybne verze', cast B)."
     echo "  chown -R ai-executive:ai-executive /var/lib/ai-executive; systemctl start ai-executive"
   fi
   exit $rc
@@ -752,10 +756,24 @@ Návrat chybné verze (po úspěšném startu nebo selhání kontrol):
 ```bash
 set -euo pipefail
 . /var/backups/ai-executive/migrace.vars
+# A) Kod: predchozi verze. Data zustavaji, jak jsou (zmeny od nasazeni se neztrati).
 systemctl stop ai-executive
+systemctl is-active --quiet ai-executive && { echo "STOP: sluzba porad bezi"; exit 1; }
 cd /opt/ai-executive && git reset --hard "$PREV" && pnpm install --frozen-lockfile && pnpm build
 chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive
-# Jen pokud nova verze zmenila data: vyprazdnit stav (vcetne starych -wal/-shm) a vratit zalohu.
+runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite
+systemctl start ai-executive
+```
+
+**B) Jen na výslovné rozhodnutí vlastníka** (nová verze data poškodila nebo změnila tak, že je stará verze nečte): obnova dat ze zálohy `$B/data`. Všechno, co se od nasazení zapsalo, se tím **ztratí**; proto se současný stav nejdřív uloží.
+
+```bash
+set -euo pipefail
+. /var/backups/ai-executive/migrace.vars
+systemctl stop ai-executive
+systemctl is-active --quiet ai-executive && { echo "STOP: sluzba porad bezi"; exit 1; }
+umask 077; cp -a /var/lib/ai-executive "$B/stav-pred-obnovou-$(date +%Y%m%d-%H%M%S)"
+# Vyprazdnit stav (vcetne starych -wal/-shm) a vratit zalohu.
 find /var/lib/ai-executive -mindepth 1 -delete
 cp -a "$B/data/." /var/lib/ai-executive/
 chown -R ai-executive:ai-executive /var/lib/ai-executive; chmod 0700 /var/lib/ai-executive

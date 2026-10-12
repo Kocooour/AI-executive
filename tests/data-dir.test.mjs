@@ -12,8 +12,9 @@ test("an absolute path is not normalized (\"..\" after a symlink resolves on dis
   assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "/mnt/link/../state" }), "/mnt/link/../state");
 });
 
-test("surrounding whitespace is trimmed", () => {
-  assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "  /var/lib/ai-executive \n" }), "/var/lib/ai-executive");
+test("the configured value is not trimmed (a path is used exactly as configured)", () => {
+  assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "/srv/Lumi " }), "/srv/Lumi ");
+  assert.throws(() => resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: " /var/lib/ai-executive" }), /absolute/);
 });
 
 test("a relative data directory is rejected", () => {

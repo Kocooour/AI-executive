@@ -7,8 +7,9 @@ import path from "node:path";
  * Unset keeps the development default `<cwd>/.data`.
  */
 export function resolveDataDirectory(env: Record<string, string | undefined> = process.env) {
-  const configured = env.AI_EXECUTIVE_DATA_DIR?.trim();
-  if (!configured) return path.join(process.cwd(), ".data");
+  // Taken verbatim (no trimming): a path is used exactly as configured, as before this helper.
+  const configured = env.AI_EXECUTIVE_DATA_DIR;
+  if (!configured || !configured.trim()) return path.join(process.cwd(), ".data");
   if (!path.isAbsolute(configured)) {
     throw new Error("AI_EXECUTIVE_DATA_DIR must be an absolute path.");
   }
