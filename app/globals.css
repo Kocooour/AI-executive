@@ -2408,7 +2408,10 @@ article:hover > .dragHandle,
 .contextHistoryBar button { display: block; min-height: 44px; min-width: 0; padding: 8px 12px; text-align: left; overflow-wrap: anywhere; }
 .contextHistoryBar button strong { margin-right: 4px; }
 .contextHistoryStatus { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
-.contextUndoOffer { display: block; max-width: 100%; min-height: 40px; margin-top: 6px; text-align: left; overflow-wrap: anywhere; }
+.contextUndoOffer { display: block; max-width: 100%; min-height: 44px; margin: 8px 0 12px; padding: 8px 14px; border: 1px solid var(--line, #c9c9ce); border-radius: 10px; background: var(--surface, transparent); color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.contextHistorySkip { grid-column: 1 / -1; display: grid; gap: 8px; }
+.contextHistorySkip p { margin: 0; }
+.contextHistorySkip button { min-height: 44px; justify-self: start; }
 .contextInboxInput { display: grid; gap: 6px; }
 .contextInbox textarea { width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--line, #d9d9dd); border-radius: 10px; background: var(--input, transparent); color: inherit; padding: 11px; font: inherit; }
 .contextInboxActions, .contextInboxProposal .contextClaimActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
