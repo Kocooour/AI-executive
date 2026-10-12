@@ -124,8 +124,12 @@ stat -c '%a %U:%G %n' "$OLD_ENV" "$OLD_DIR" "$OLD_HOME"
 [ "$OTHER" = 0 ] || { echo "STOP: .env obsahuje radky mimo KLIC=hodnota (viceradkove hodnoty); systemd EnvironmentFile je cte jinak nez dotenv"; exit 1; }
 [ "$(grep -c '\$' "$OLD_ENV" || true)" = 0 ] && [ "$(grep -cE '^[[:space:]]*export[[:space:]]' "$OLD_ENV" || true)" = 0 ] \
   || { echo "STOP: .env obsahuje \$ nebo prefix export; systemd by hodnotu cetl jinak nez dotenv (napr. stary hash hesla s \$ je treba nejdriv vygenerovat znovu ve formatu scrypt:...)"; exit 1; }
-[ "$(grep -cE '^[^#]*=.*[[:space:]]#' "$OLD_ENV" || true)" = 0 ] \
-  || { echo "STOP: .env ma za hodnotou komentar (\" #...\"); dotenv ho zahodi, systemd ho vezme jako soucast hodnoty. Vlastnik ho musi nejdriv presunout na samostatny radek."; exit 1; }
+# "#" v hodnote: dotenv (Next.js) hodnotu bez uvozovek na "#" utne, systemd ji necha celou. Projde jen "#"
+# uvnitr hodnoty cele v uvozovkach (KLIC="a#b" nebo KLIC='a#b', za uvozovkou uz nic).
+HASHES=$({ grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=.*#' "$OLD_ENV" || true; } \
+  | { grep -vE "^[^=]*=[[:space:]]*(\"[^\"]*\"|'[^']*')[[:space:]]*\$" || true; } | wc -l)
+[ "$HASHES" = 0 ] \
+  || { echo "STOP: .env ma $HASHES radku s \"#\" v hodnote bez uvozovek nebo s komentarem za hodnotou; dotenv a systemd je ctou jinak. Vlastnik musi hodnotu dat do uvozovek nebo komentar presunout na samostatny radek."; exit 1; }
 [ -z "$STRAY" ] || { echo "STOP: dalsi .env* soubory v checkoutu"; exit 1; }
 printf 'OLD_USER=%q\nOLD_DIR=%q\nOLD_HOME=%q\nOLD_ENV=%q\nOLD_ENV_MODE=%q\n' "$OLD_USER" "$OLD_DIR" "$OLD_HOME" "$OLD_ENV" "$OLD_ENV_MODE" > "$VARS"
 chmod 0600 "$VARS"
@@ -148,6 +152,18 @@ test -f "$OLD_DIR/scripts/check-data.mjs" || { echo "STOP: stavajici checkout ne
 
 echo "== doplnek bezpecnostnich upozorneni"
 if [ -f /etc/systemd/system/ai-executive.service.d/20-security-alerts.conf ]; then ALERTS=1; ls -ld /var/lib/ai-executive-security/outbox; else ALERTS=0; echo "neni nainstalovan"; fi
+# Fronta upozorneni se prenasi jen ve tvaru, ktery instaluje ops/security-alerts/install.sh (drop-in s presne
+# touto cestou). Jinde nastavena (.env, hlavni jednotka, jiny drop-in, jina cesta) by se po prechodu tise zmenila.
+OUTBOX_UNIT=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_SECURITY_OUTBOX_DIR=//p' | head -n1)
+[ "$(grep -cE '^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_SECURITY_OUTBOX_DIR[[:space:]]*=' "$OLD_ENV" || true)" = 0 ] \
+  || { echo "STOP: AI_EXECUTIVE_SECURITY_OUTBOX_DIR je v .env; nahlasit (nova jednotka by ji nesmela zapisovat)"; exit 1; }
+if [ "$ALERTS" = 1 ]; then
+  [ "$OUTBOX_UNIT" = /var/lib/ai-executive-security/outbox ] || { echo "STOP: fronta upozorneni ma necekanou cestu '$OUTBOX_UNIT'; nahlasit"; exit 1; }
+  [ "$(grep -l AI_EXECUTIVE_SECURITY_OUTBOX_DIR /etc/systemd/system/ai-executive.service /etc/systemd/system/ai-executive.service.d/*.conf 2>/dev/null)" = /etc/systemd/system/ai-executive.service.d/20-security-alerts.conf ] \
+    || { echo "STOP: AI_EXECUTIVE_SECURITY_OUTBOX_DIR je nastavena i mimo 20-security-alerts.conf; nahlasit"; exit 1; }
+else
+  [ -z "$OUTBOX_UNIT" ] || { echo "STOP: AI_EXECUTIVE_SECURITY_OUTBOX_DIR je nastavena bez doplnku bezpecnostnich upozorneni; nahlasit"; exit 1; }
+fi
 echo "== jine jednotky/cron odkazujici na stary adresar (jen nazvy souboru; samotna jednotka ai-executive.service tu vzdy je)"
 grep -rIl -e "$OLD_DIR" -e "$OLD_DATA" /etc/systemd /etc/cron* /var/spool/cron 2>/dev/null || true
 
@@ -203,10 +219,10 @@ echo "Ulozeno: /var/backups/ai-executive/migrace.vars (bez tajnych udaju; origin
 
 - `User` je jeden obyčejný účet (`hermesadmin`), `FragmentPath` je `/etc/systemd/system/ai-executive.service`.
 - `EnvironmentFiles` je prázdné. V `.env` je to, co Next.js načítá z `cwd`. V checkoutu jsou **právě** `.env` a (sledovaný v gitu) `.env.example`; jakýkoli jiný `.env*` soubor (`.env.local`, `.env.production`) Next načítá také a postup by ho nepřenesl, blok se zastaví.
-- Klíče `Environment=` v jednotce jsou jen z množiny `NODE_ENV`, `PORT`, `AI_EXECUTIVE_DATA_DIR`, `AI_EXECUTIVE_SECURITY_OUTBOX_DIR`. Jiné klíče by se musely přenést do env souboru; to je rozhodnutí k nahlášení.
+- Klíče `Environment=` v jednotce jsou jen z množiny `NODE_ENV`, `PORT`, `AI_EXECUTIVE_DATA_DIR`, `AI_EXECUTIVE_SECURITY_OUTBOX_DIR`. Jiné klíče by se musely přenést do env souboru; to je rozhodnutí k nahlášení. `AI_EXECUTIVE_SECURITY_OUTBOX_DIR` se přenáší jen v podobě, kterou instaluje doplněk (`20-security-alerts.conf` s cestou `/var/lib/ai-executive-security/outbox`); jinak blok sám zastaví.
 - Port je `3000` na `127.0.0.1` a `tailscale serve status` ukazuje `https://vm13861.tail412944.ts.net:8443` → `http://127.0.0.1:3000`.
 - „Ostatní neprázdné řádky `.env`“ je `0`. Nenulový počet znamená víceřádkovou hodnotu (např. PEM klíč), kterou systemd `EnvironmentFile` nečte stejně jako dotenv: **zastavit a nahlásit**, hodnotu nevypisovat.
-- Řádky `.env` s `$`, prefixem `export`, uvozovkami nebo komentářem na řádku: **systemd `EnvironmentFile` se liší od dotenv, který používá Next.js**. systemd neexpanduje `$VAR`, prefix `export` neakceptuje, uvozovky odstraňuje jinak a komentář na řádku nepodporuje. Pokud je počet `$` a `export` nenulový, **zastavit a nahlásit** (hodnota by se po přechodu jinak interpretovala, např. heslový hash nebo secret). Počty uvozovek a komentářů nahlásit také; hodnoty nevypisovat. Hash hesla v aktuálním formátu `scrypt:<sůl>:<hash>` je bezpečný.
+- Řádky `.env` s `$`, prefixem `export`, `#` v hodnotě bez uvozovek nebo komentářem za hodnotou: **systemd `EnvironmentFile` se liší od dotenv, který používá Next.js**. systemd neexpanduje `$VAR`, prefix `export` neakceptuje a `#` v hodnotě bere jako její součást, kdežto dotenv hodnotu bez uvozovek na `#` utne. Ve všech těchto případech blok **sám zastaví** (hodnota by se po přechodu jinak interpretovala, např. heslový hash nebo secret); `#` uvnitř hodnoty celé v uvozovkách je v pořádku. Počet řádků s uvozovkami jen nahlásit; hodnoty nevypisovat. Hash hesla v aktuálním formátu `scrypt:<sůl>:<hash>` je bezpečný.
 - Seznam „jiné jednotky/cron“ vždy obsahuje samotnou jednotku `ai-executive.service`; zajímají nás **další** soubory.
 - `check-data` vypíše `"integrity":"ok"` a počty tabulek (zapsané do `inventura-pred.json`; slouží jen jako informace, závazný základ se pořídí po zastavení v kroku 2).
 - `git status --porcelain` je prázdné (čistý checkout).
@@ -592,8 +608,11 @@ mv "$OLD_ENV" "$OLDHOME_BK/env"
 chown -R root:root "$OLDHOME_BK"; chmod -R go-rwx "$OLDHOME_BK"
 # V checkoutu smi zustat jen sledovany .env.example; .env a .data nikoli.
 LEFT=$(runuser -u "$OLD_USER" -- ls -A "$OLD_DIR" | grep -E '^\.(env|data)' | grep -vxF .env.example || true)
-[ -z "$LEFT" ] && echo "stare .data a .env uz nejsou v domove" || echo "CHYBA: porad tam je: $LEFT"
-runuser -u "$OLD_USER" -- test -r "$OLDHOME_BK/env" && echo "CHYBA: ucet cte zalohu" || echo "sdileny ucet zalohu necte"
+[ -z "$LEFT" ] || { echo "CHYBA: v checkoutu porad je: $LEFT"; exit 1; }
+[ ! -e "$OLD_DATA" ] || { echo "CHYBA: puvodni data $OLD_DATA porad existuji"; exit 1; }
+echo "stare .data a .env uz nejsou v domove"
+if runuser -u "$OLD_USER" -- test -r "$OLDHOME_BK/env"; then echo "CHYBA: sdileny ucet cte zalohu"; exit 1; fi
+echo "sdileny ucet zalohu necte"
 systemctl is-active ai-executive
 curl -sS -o /dev/null -w '/api/store: %{http_code}\n' http://127.0.0.1:3000/api/store
 echo "== podklady pro hlaseni"
