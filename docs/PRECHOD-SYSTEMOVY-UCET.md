@@ -101,6 +101,9 @@ test "$FRAGMENT" = /etc/systemd/system/ai-executive.service || { echo "STOP: jed
 OLD_HOME=$(getent passwd "$OLD_USER" | cut -d: -f6)
 OLD_ENV="$OLD_DIR/.env"
 test -f "$OLD_ENV" || { echo "STOP: $OLD_ENV neexistuje"; exit 1; }
+# Zaloha (cp -a) i uklid pracuji se souborem samotnym; symlink by zalohoval jen odkaz a skutecny soubor
+# s tajnymi udaji by zustal na cili odkazu.
+[ ! -L "$OLD_ENV" ] && [ "$(readlink -f "$OLD_ENV")" = "$OLD_ENV" ] || { echo "STOP: $OLD_ENV je symlink nebo vede pres symlink; nahlasit"; exit 1; }
 OLD_ENV_MODE=$(stat -c %a "$OLD_ENV")
 
 # Jednotka se vypisuje bez hodnot promennych a bez argumentu spousteni (mohou obsahovat tajne udaje
@@ -159,6 +162,10 @@ echo "OLD_DATA=$OLD_DATA"; ls -la --time-style=+%F "$OLD_DATA" | awk '{print $1,
 # Zaloha i uklid pracuji s adresarem samotnym: symlink (i v nadrazene ceste) by zalohoval jen odkaz.
 [ "$(readlink -f "$OLD_DATA")" = "$OLD_DATA" ] || { echo "STOP: $OLD_DATA je symlink nebo vede pres symlink ($(readlink -f "$OLD_DATA")); nahlasit"; exit 1; }
 test -f "$OLD_DATA/store.sqlite" || { echo "STOP: store.sqlite nenalezen"; exit 1; }
+# Ani uvnitr dat nesmi byt symlinky (cp -a je kopiruje jako odkazy, manifest je vynecha a check-data by
+# sel po odkazu k puvodnim datum).
+LINKS=$(find "$OLD_DATA" -type l | wc -l)
+[ "$LINKS" = 0 ] || { echo "STOP: v $OLD_DATA je $LINKS symlinku; nahlasit"; find "$OLD_DATA" -type l -printf '  %P\n'; exit 1; }
 test -f "$OLD_DIR/scripts/check-data.mjs" || { echo "STOP: stavajici checkout nema scripts/check-data.mjs (viz krok 0)"; exit 1; }
 
 echo "== doplnek bezpecnostnich upozorneni"
@@ -528,12 +535,16 @@ Platí kdykoli před krokem 10 (po kroku 10 viz „Obnova ze zálohy“ níže).
 **9.1 Zastavení a původní jednotka:**
 
 ```bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 . /var/backups/ai-executive/migrace.vars
+# Dokud se nezacne vracet jednotka, plati nova konfigurace: selhani nebo preruseni ji spusti zpet.
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky -> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
 systemctl stop ai-executive || true
 # Novy stav ulozit pro pripadne dohledani zmen (zustane take v /var/lib/ai-executive).
 cp -a /var/lib/ai-executive "$BK/novy-stav-pred-navratem-$(date +%Y%m%d-%H%M%S)"
+# Od teto chvile se meni jednotka; pri selhani dal plati "Kdyz selze i navrat" (nic nespoustet naslepo).
+trap - ERR INT TERM HUP
 
 # Puvodni jednotka a drop-iny ze zalohy.
 rm -f /etc/systemd/system/ai-executive.service
