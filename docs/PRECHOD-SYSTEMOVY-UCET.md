@@ -66,11 +66,11 @@ df -h / /var /opt | cat
 # Relativni hodnota ve vydane verzi zpusobi, ze `next build` selze a `next start` bezi, ale vsechny pozadavky na data koncí chybou 500.
 OLD_DIR=$(systemctl show ai-executive -p WorkingDirectory --value)
 FOUND=0
-unit_value=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | head -n1)
+unit_value=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | tail -n1)
 [ -z "$unit_value" ] || { echo "jednotka/drop-in: $unit_value"; FOUND=1; case "$unit_value" in /*) ;; *) echo "STOP: relativni hodnota v jednotce"; exit 1;; esac; }
 for f in "$OLD_DIR"/.env "$OLD_DIR"/.env.*; do
   [ -f "$f" ] || continue; [ "$(basename "$f")" = .env.example ] && continue
-  v=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$f" | head -n1 | tr -d "\"'")
+  v=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$f" | tail -n1 | tr -d "\"'")
   [ -z "$v" ] || { echo "$f: $v"; FOUND=1; case "$v" in /*) ;; *) echo "STOP: relativni hodnota v $f"; exit 1;; esac; }
 done
 [ "$FOUND" = 1 ] || echo "AI_EXECUTIVE_DATA_DIR neni nastavena (pouzije se <cwd>/.data)"
@@ -103,11 +103,14 @@ OLD_ENV="$OLD_DIR/.env"
 test -f "$OLD_ENV" || { echo "STOP: $OLD_ENV neexistuje"; exit 1; }
 OLD_ENV_MODE=$(stat -c %a "$OLD_ENV")
 
-echo "== unit vcetne drop-inu"; systemctl cat ai-executive --no-pager | sed -E 's/((PASSWORD|SECRET|TOKEN|KEY)[A-Z_]*=).*/\1<skryto>/'
+# Jednotka se vypisuje bez hodnot promennych a bez argumentu spousteni (mohou obsahovat tajne udaje
+# s jakymkoli nazvem); nazvy klicu a cesta programu se vypisuji zvlast.
+echo "== unit vcetne drop-inu (bez Environment= a bez argumentu Exec*)"
+systemctl cat ai-executive --no-pager | grep -vE '^[[:space:]]*Environment=' | sed -E 's/^([[:space:]]*Exec[A-Za-z]*=[^[:space:]]*).*/\1 <argumenty skryty>/'
 echo "== EnvironmentFiles (ocekavano prazdne)"; systemctl show ai-executive -p EnvironmentFiles --value
 echo "== drop-iny"; systemctl show ai-executive -p DropInPaths --value | tr ' ' '\n'
 echo "== klice Environment= v jednotce"; systemctl show ai-executive -p Environment --value | grep -oE '(^| )[A-Za-z_][A-Za-z0-9_]*=' | tr -d ' =' | sort || true
-echo "== ExecStart"; systemctl show ai-executive -p ExecStart --value | head -c 600; echo
+echo "== ExecStart (jen program)"; systemctl show ai-executive -p ExecStart --value | grep -oE 'path=[^ ;]*' | head -n1
 echo "== porty"; ss -ltnp | grep -E ':(3000|8443)\b' || true
 echo "== tailscale serve"; tailscale serve status || true
 OTHER=$(other_lines "$OLD_ENV"); echo "ostatni neprazdne radky .env (nejsou KLIC=...): $OTHER"
@@ -128,6 +131,12 @@ stat -c '%a %U:%G %n' "$OLD_ENV" "$OLD_DIR" "$OLD_HOME"
 # uvnitr hodnoty cele v uvozovkach (KLIC="a#b" nebo KLIC='a#b', za uvozovkou uz nic).
 HASHES=$({ grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=.*#' "$OLD_ENV" || true; } \
   | { grep -vE "^[^=]*=[[:space:]]*(\"[^\"]*\"|'[^']*')[[:space:]]*\$" || true; } | wc -l)
+# Dalsi zapisy, ktere dotenv cte jinak nez systemd: hodnota ve zpetnych apostrofech (dotenv je odstrani)
+# a jakekoli zpetne lomitko (dotenv v uvozovkach rozvine \n, systemd ma pro escapy vlastni pravidla).
+ESCAPES=$({ grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(`|.*\\)' "$OLD_ENV" || true; } | wc -l)
+[ "$ESCAPES" = 0 ] || { echo "STOP: .env ma $ESCAPES radku s hodnotou ve zpetnych apostrofech nebo se zpetnym lomitkem; dotenv a systemd je ctou jinak. Nahlasit."; exit 1; }
+DUP=$(keys "$OLD_ENV" | uniq -d | wc -l)
+[ "$DUP" = 0 ] || { echo "STOP: .env obsahuje $DUP klicu zapsanych vicekrat (dotenv bere posledni zapis); nahlasit"; exit 1; }
 [ "$HASHES" = 0 ] \
   || { echo "STOP: .env ma $HASHES radku s \"#\" v hodnote bez uvozovek nebo s komentarem za hodnotou; dotenv a systemd je ctou jinak. Vlastnik musi hodnotu dat do uvozovek nebo komentar presunout na samostatny radek."; exit 1; }
 [ -z "$STRAY" ] || { echo "STOP: dalsi .env* soubory v checkoutu"; exit 1; }
@@ -142,11 +151,13 @@ set -euo pipefail
 umask 077
 . /var/backups/ai-executive/migrace.vars
 gitsafe() { local f rc; f=$(mktemp); printf '[safe]\n\tdirectory = *\n' > "$f"; GIT_CONFIG_GLOBAL="$f" git "$@"; rc=$?; rm -f "$f"; return $rc; }
-OLD_DATA=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | head -n1)
-[ -n "$OLD_DATA" ] || OLD_DATA=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$OLD_ENV" | head -n1 | tr -d "\"'")
+OLD_DATA=$(systemctl show ai-executive -p Environment --value | tr ' ' '\n' | sed -n 's/^AI_EXECUTIVE_DATA_DIR=//p' | tail -n1)
+[ -n "$OLD_DATA" ] || OLD_DATA=$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?AI_EXECUTIVE_DATA_DIR[[:space:]]*=[[:space:]]*//p' "$OLD_ENV" | tail -n1 | tr -d "\"'")
 [ -n "$OLD_DATA" ] || OLD_DATA="$OLD_DIR/.data"
 case "$OLD_DATA" in /*) ;; *) OLD_DATA="$OLD_DIR/$OLD_DATA";; esac
 echo "OLD_DATA=$OLD_DATA"; ls -la --time-style=+%F "$OLD_DATA" | awk '{print $1,$3,$4,$5,$6,$7}'
+# Zaloha i uklid pracuji s adresarem samotnym: symlink (i v nadrazene ceste) by zalohoval jen odkaz.
+[ "$(readlink -f "$OLD_DATA")" = "$OLD_DATA" ] || { echo "STOP: $OLD_DATA je symlink nebo vede pres symlink ($(readlink -f "$OLD_DATA")); nahlasit"; exit 1; }
 test -f "$OLD_DATA/store.sqlite" || { echo "STOP: store.sqlite nenalezen"; exit 1; }
 test -f "$OLD_DIR/scripts/check-data.mjs" || { echo "STOP: stavajici checkout nema scripts/check-data.mjs (viz krok 0)"; exit 1; }
 
