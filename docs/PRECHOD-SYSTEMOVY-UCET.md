@@ -243,13 +243,27 @@ cmp_tables() {
   ' "$@"
 }
 # cmp_sqlite_bytes <pred.json> <po.json>: po zastaveni sluzby musi byt hlavni SQLite soubor
-# i pripadny WAL byte-for-byte stejny. Pocty radku samy neodhalí zmenu hodnot v existujicim zaznamu.
+# i pripadny nenulovy WAL byte-for-byte stejny. Chybejici a prazdny WAL nenesou data.
+# Pocty radku samy neodhalí zmenu hodnot v existujicim zaznamu.
 cmp_sqlite_bytes() {
   /usr/bin/node -e '
     const fs = require("fs"); const [a, b] = process.argv.slice(1);
     const x = JSON.parse(fs.readFileSync(a, "utf8")), y = JSON.parse(fs.readFileSync(b, "utf8"));
-    const keys = ["mainFileBytes", "mainFileSha256", "walBytes", "walSha256"];
-    const different = keys.filter((key) => x[key] !== y[key]);
+    const has = (f, key) => Object.hasOwn(f, key);
+    const hash = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+    const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    const valid = (f) => f !== null && typeof f === "object" && !Array.isArray(f)
+      && ["mainFileBytes", "mainFileSha256", "walBytes", "walSha256"].every((key) => has(f, key))
+      && Number.isSafeInteger(f.mainFileBytes) && f.mainFileBytes >= 0 && hash(f.mainFileSha256)
+      && ((f.walBytes === null && f.walSha256 === null)
+        || (Number.isSafeInteger(f.walBytes) && f.walBytes >= 0 && hash(f.walSha256)
+          && (f.walBytes !== 0 || f.walSha256 === emptyHash)));
+    if (!valid(x) || !valid(y)) { console.log("SQLITE SOUBORY: CHYBI FAKTA"); process.exit(1); }
+    const different = [];
+    if (x.mainFileBytes !== y.mainFileBytes || x.mainFileSha256 !== y.mainFileSha256) different.push("hlavni soubor");
+    // Cteni jen pro cteni muze po cistem zastaveni vytvorit prazdny -wal.
+    const wal = (f) => f.walBytes === null || f.walBytes === 0 ? null : `${f.walBytes}:${f.walSha256}`;
+    if (wal(x) !== wal(y)) different.push("WAL");
     if (different.length) { console.log("SQLITE SOUBORY: ROZDIL (" + different.join(", ") + ")"); process.exit(1); }
     console.log("SQLITE SOUBORY: shodne");
   ' "$@"
