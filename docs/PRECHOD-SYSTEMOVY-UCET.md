@@ -562,14 +562,13 @@ set -Eeuo pipefail
 umask 077
 . /var/backups/ai-executive/migrace.vars
 # Dokud se nezacne vracet jednotka, plati nova konfigurace: selhani nebo preruseni ji spusti zpet.
-trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky -> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; exit $rc' ERR INT TERM HUP
+# Jen kdyz je nainstalovana jednotka jeste nova (sablona); v opakovanem 9.1 po prerusene vymene se nic nespousti.
+RESTART=0; cmp -s /etc/systemd/system/ai-executive.service /opt/ai-executive/deployment/ai-executive.service && RESTART=1
+trap 'rc=$?; trap - ERR INT TERM HUP; echo "CHYBA nebo preruseni (kod $rc) pred vracenim jednotky"; if [ "$RESTART" = 1 ]; then echo "-> spoustim sluzbu (novou konfiguraci) zpet"; systemctl start ai-executive; else echo "-> jednotka uz neni nova, nic nespoustim (viz Kdyz selze i navrat)"; fi; exit $rc' ERR INT TERM HUP
 systemctl stop ai-executive
 systemctl is-active --quiet ai-executive && { echo "STOP: nova sluzba porad bezi; navrat nepokracuje"; exit 1; }
 # Novy stav ulozit pro pripadne dohledani zmen (zustane take v /var/lib/ai-executive).
 cp -a /var/lib/ai-executive "$BK/novy-stav-pred-navratem-$(date +%Y%m%d-%H%M%S)"
-# Od teto chvile se meni jednotka; pri selhani dal plati "Kdyz selze i navrat" (nic nespoustet naslepo).
-trap - ERR INT TERM HUP
-
 # Puvodni jednotka a drop-iny ze zalohy. Nic se nemaze predem: puvodni definice se nejdriv cela
 # pripravi vedle (STAGE, mimo adresare, ktere systemd cte) a pak se na misto jen prejmenuje.
 # Soubor jednotky tak nikdy nechybi (vzdy cela nova, nebo cela puvodni); jen mezi poslednimi dvema
@@ -580,10 +579,13 @@ STAGE=/etc/systemd/ai-executive-navrat-$NOW
 mkdir -p "$BK/nova-jednotka-$NOW"; cp -a "$U" "$BK/nova-jednotka-$NOW/"
 if [ -d "$D" ]; then cp -a "$D" "$BK/nova-jednotka-$NOW/"; fi
 install -d -m 0700 "$STAGE"
-[ "$(stat -c %d "$STAGE")" = "$(stat -c %d /etc/systemd/system)" ] || { echo "STOP: $STAGE neni na stejnem souborovem systemu jako /etc/systemd/system; nahlasit"; exit 1; }
+[ "$(stat -c %d "$STAGE")" = "$(stat -c %d /etc/systemd/system)" ] || { echo "STOP: $STAGE neni na stejnem souborovem systemu jako /etc/systemd/system; nahlasit"; false; }   # spusti trap
 cp -a "$BK/systemd/ai-executive.service" "$STAGE/ai-executive.service"
 if [ -d "$BK/systemd/ai-executive.service.d" ]; then cp -a "$BK/systemd/ai-executive.service.d" "$STAGE/ai-executive.service.d"; else install -d -m 0755 "$STAGE/ai-executive.service.d"; fi
 if [ -d "$BK/removed-dropins" ]; then cp -a "$BK/removed-dropins/." "$STAGE/ai-executive.service.d/"; fi
+# Az do teto chvile je nainstalovana nova jednotka netknuta: selhani pripravy (plny disk, STAGE) ji spusti zpet.
+# Od prvniho prejmenovani se meni jednotka; pri selhani dal plati "Kdyz selze i navrat" (nic nespoustet naslepo).
+trap - ERR INT TERM HUP
 # Vymena: jednotka jednim prejmenovanim (prepise novou), drop-iny dvema prejmenovanimi.
 mv -T "$STAGE/ai-executive.service" "$U"
 if [ -d "$D" ]; then mv -T "$D" "$STAGE/nahrazene.service.d"; fi
