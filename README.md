@@ -424,6 +424,8 @@ Acceptance tests must cover integration with existing tasks, workspaces, offline
 - An existing `.data/store.json` is migrated on first access without changing entity IDs or relations and remains as a recovery copy.
 - Logical JSON backups live in `.data/backups`. Settings can create and restore them; restore creates a safety backup first.
 - One automatic daily backup is created before the first data change of the day.
+- `AI_EXECUTIVE_DATA_DIR`, when set, must be an absolute path (a relative value would depend on the working directory, so it is rejected: the process stays up, but `next build` fails and every request that touches the store answers 500). After the move to a dedicated service account, production uses `/var/lib/ai-executive`.
+- `pnpm check-data <path to store.sqlite>` opens a database (or a copied backup) read-only and prints only integrity results, row counts per table, and size/SHA-256 of the file (plus WAL size); it never prints content, exits 1 when the file has no tables, and should be run as the account that owns the data (opening creates `-wal`/`-shm`).
 
 These describe current backups. Graph v2's complete context export, encrypted recovery and history coverage are target requirements above, not claims about existing logical JSON backups.
 
@@ -445,7 +447,7 @@ The MVP4 security layer adds streamed request-size limits, schema validation, ra
 
 MVP4 also introduces the persistent workspace boundary. `All my work` is an aggregate view, never a write target; each create operation resolves to one explicit workspace. Cross-workspace relations are rejected. Shared workspaces currently have an owner membership seam, but invitations and additional accounts remain disabled until multi-user identity and server-side membership authorization are implemented.
 
-The hardened unit template at `deployment/ai-executive.service` intentionally uses a dedicated `ai-executive` account, owner-only state directory, loopback binding, an external root-managed environment file, no Linux capabilities, and systemd filesystem/device isolation. Migrate the existing data and service only during a planned maintenance window; do not install the template over the current shared `hermesadmin` service without moving `.data` and `.env` first.
+The hardened unit template at `deployment/ai-executive.service` intentionally uses a dedicated `ai-executive` account, owner-only state directory, loopback binding, an external root-managed environment file, no Linux capabilities, and systemd filesystem/device isolation. Migrate the existing data and service only during a planned maintenance window; do not install the template over the current shared `hermesadmin` service without moving `.data` and `.env` first. The step-by-step migration, verification and rollback procedure is in [docs/PRECHOD-SYSTEMOVY-UCET.md](docs/PRECHOD-SYSTEMOVY-UCET.md); `deployment/rehearsal/rehearse.sh` rehearses its file-system part in a disposable environment.
 
 Production authentication fails closed: without a valid password hash and session secret the protected APIs return `401` and sign-in returns `503`. Only local non-production development can explicitly opt out with `AI_EXECUTIVE_AUTH_ENABLED=false`. Generate a password hash without placing the password in shell history:
 

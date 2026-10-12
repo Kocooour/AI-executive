@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { resolveDataDirectory } from "./data-dir";
 import { sendSecurityNotification } from "./notifications";
 import { getDatabase } from "./server-store";
 
@@ -111,7 +112,7 @@ function classify(signal: SecuritySignal) {
 function outboxDirectory() {
   const configured = process.env.AI_EXECUTIVE_SECURITY_OUTBOX_DIR?.trim();
   return configured || path.join(
-    process.env.AI_EXECUTIVE_DATA_DIR || path.join(process.cwd(), ".data"),
+    resolveDataDirectory(),
     "security-outbox",
   );
 }

@@ -65,6 +65,8 @@ and the application itself listens only on loopback.
 Recommendation: move the app to a dedicated unprivileged account and apply the
 same systemd hardening pattern used by the new Hermes alert delivery service.
 
+Status: the migration runbook is `docs/PRECHOD-SYSTEMOVY-UCET.md`; this finding stays open until it has been carried out on the server.
+
 ### P2 — Public Hermes MCP information surface
 
 Tailscale Funnel exposes the Hermes bridge on the hostname's default HTTPS
