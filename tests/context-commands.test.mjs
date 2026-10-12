@@ -256,6 +256,14 @@ test("absent, null and empty optional fields are one request for idempotency", (
   assert.equal(claims.reviewOwnerClaim({ ...reviewInput, reason: "" }).replayed, true);
 });
 
+test("claim history names the review decision", () => {
+  let claim = claims.createOwnerClaim(claimInput()).claim;
+  claim = review(claim, "confirmed");
+  claim = review(claim, "proposed");
+  const history = claims.listClaimHistory("personal", claim.id);
+  assert.deepEqual(history.map((event) => [event.operation, event.decision ?? null]), [["review", "proposed"], ["review", "confirmed"], ["create", null]]);
+});
+
 test("schema migrations: the sensitive rows are converted once, and a reopened database does not run them again", async () => {
   const claim = claims.createOwnerClaim(claimInput()).claim;
   const rows = db().prepare("SELECT id, applied_at FROM schema_migrations").all();

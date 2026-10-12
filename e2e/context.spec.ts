@@ -197,4 +197,32 @@ test("a claim can be confirmed, rejected and returned to review", async ({ page 
   await claim.getByRole("button", { name: "Potvrdit" }).click();
   await state("Potvrzeno");
   expect((await serverClaims(page)).find((item) => item.predicate === "e2e.review.cycle")?.revision).toBe(5);
+  // The history names each decision, not just "reviewed".
+  await claim.getByRole("button", { name: "Historie" }).click();
+  const history = claim.locator(".contextSubjectHistory li");
+  await expect(history).toHaveCount(5);
+  await expect(history.filter({ hasText: "Vráceno ke kontrole" })).toHaveCount(1);
+  await expect(history.filter({ hasText: "Odmítnuto" })).toHaveCount(1);
+  await expect(history.filter({ hasText: "Potvrzeno" })).toHaveCount(2);
+});
+
+test("claim cards stack and fit a phone screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openContext(page);
+  await seedClaim(page, "e2e.phone.layout", "Dlouhá hodnota, která se musí zalomit na šířku telefonu a nesmí zůstat jeden znak na řádek");
+  await openContext(page);
+  const claim = card(page, "e2e.phone.layout");
+  await claim.getByRole("button", { name: "Historie" }).click();
+  await expect(claim.locator(".contextSubjectHistory li")).toHaveCount(1);
+  const box = (await claim.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  expect((await claim.locator("p").first().boundingBox())!.width).toBeGreaterThan(200);
+  const history = (await claim.locator(".contextSubjectHistory li").first().boundingBox())!;
+  expect(history.width).toBeGreaterThan(200);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  for (const section of await page.locator(".contextWorkspace > section").all()) {
+    const sectionBox = (await section.boundingBox())!;
+    expect(sectionBox.x + sectionBox.width).toBeLessThanOrEqual(390);
+  }
 });

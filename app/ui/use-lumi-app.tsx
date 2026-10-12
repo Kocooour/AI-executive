@@ -96,7 +96,7 @@ export function useLumiApp() {
     [contextStatus, setContextStatus] = useState(""),
     [contextBusy, setContextBusy] = useState(false),
     [contextClaims, setContextClaims] = useState<ContextClaimItem[]>([]),
-    [claimHistory, setClaimHistory] = useState<Record<string, Array<{ operation: string; beforeRevision: number | null; afterRevision: number; createdAt: number }>>>({}),
+    [claimHistory, setClaimHistory] = useState<Record<string, Array<{ operation: string; beforeRevision: number | null; afterRevision: number; createdAt: number; decision?: string | null }>>>({}),
     [standaloneSubjects, setStandaloneSubjects] = useState<StandaloneSubjectItem[]>([]),
     [subjectSearch, setSubjectSearch] = useState(""),
     [newSubjectTitle, setNewSubjectTitle] = useState(""),

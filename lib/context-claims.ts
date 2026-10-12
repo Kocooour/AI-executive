@@ -500,7 +500,10 @@ export function isEligibleClaim(claim: ContextClaim, projectId?: string, today =
 export function listClaimHistory(workspaceId: string, claimId: string) {
   assertWorkspace(workspaceId);
   if (!idPattern.test(claimId)) throw new ContextClaimError("Claim identifier is invalid");
-  return getDatabase().prepare(`SELECT operation, before_revision AS beforeRevision, after_revision AS afterRevision,
-    created_at AS createdAt FROM context_change_events WHERE workspace_id = ? AND object_id = ?
-    ORDER BY created_at DESC LIMIT 100`).all(workspaceId, claimId);
+  return getDatabase().prepare(`SELECT e.operation, e.before_revision AS beforeRevision, e.after_revision AS afterRevision,
+    e.created_at AS createdAt,
+    (SELECT r.decision FROM context_review_events r WHERE r.workspace_id = e.workspace_id AND r.claim_id = e.object_id
+      AND r.claim_revision = e.after_revision ORDER BY r.created_at DESC LIMIT 1) AS decision
+    FROM context_change_events e WHERE e.workspace_id = ? AND e.object_id = ?
+    ORDER BY e.created_at DESC, e.rowid DESC LIMIT 100`).all(workspaceId, claimId);
 }
