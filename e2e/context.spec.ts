@@ -202,6 +202,47 @@ test("changing the subject while a new claim is saved keeps the subject it was s
   expect(saved).toHaveLength(1);
 });
 
+test("a rename whose response is lost is replayed even after an unrelated field changes", async ({ page }) => {
+  await openContext(page);
+  const original = `E2E person ${Date.now()}`;
+  const renamed = `${original} renamed`;
+  const seeded = await page.evaluate(async (title) => {
+    const response = await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "create", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: crypto.randomUUID(),
+        expectedRevision: 0, type: "person", title }) });
+    return (await response.json()).subject as { id: string };
+  }, original);
+  await openContext(page);
+  const sent: Array<{ idempotencyKey: string }> = [];
+  let posts = 0;
+  await page.route("**/api/context/subjects", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    posts += 1;
+    sent.push(JSON.parse(route.request().postData() || "{}"));
+    if (posts === 1) { await route.fetch(); await route.abort("connectionreset"); return; }
+    await route.continue();
+  });
+  const people = page.locator(".contextPeople");
+  const row = people.locator("article", { hasText: original });
+  await row.getByRole("button", { name: "Přejmenovat" }).click();
+  await people.getByLabel("Upravit jméno").fill(renamed);
+  await people.getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(people.getByRole("status")).toContainText("Spojení se přerušilo");
+  // The type of a new person has nothing to do with this rename.
+  await people.getByLabel("Typ").selectOption("organization");
+  await people.getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(people.locator("article", { hasText: renamed })).toHaveCount(1);
+  expect(posts).toBe(2);
+  expect(sent[1].idempotencyKey).toBe(sent[0].idempotencyKey);
+  await page.unroute("**/api/context/subjects");
+  await page.evaluate(async (id) => {
+    const list = await (await fetch("/api/context/subjects?workspaceId=personal&includeArchived=true", { cache: "no-store" })).json();
+    const subject = (list.subjects as Array<{ id: string; revision: number }>).find((item) => item.id === id)!;
+    await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "archive", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id, expectedRevision: subject.revision }) });
+  }, seeded.id);
+});
+
 test("sensitivity has three levels and only normal claims are eligible for AI", async ({ page }) => {
   await openContext(page);
   const select = editor(page).getByLabel("Citlivost");

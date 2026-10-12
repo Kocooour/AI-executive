@@ -511,7 +511,10 @@ export function useLumiApp() {
     if (contextInFlight.current.has(busyKey)) return;
     const title = subject ? subjectEditTitle : newSubjectTitle;
     const scope = `subject:${action}:${subject?.id || workspaceId}`;
-    const intent = contextIntent(scope, JSON.stringify([workspaceId, subject?.revision || 0, newSubjectType, title]));
+    // Only what this action sends decides whether a retry is the same intent: the new-subject type
+    // means nothing to a rename, and neither the type nor a title to an archive.
+    const intent = contextIntent(scope, JSON.stringify(action === "create" ? [workspaceId, newSubjectType, title]
+      : action === "rename" ? [workspaceId, subject?.revision || 0, title] : [workspaceId, subject?.revision || 0]));
     const subjectId = subject?.id || intent.objectId;
     contextInFlight.current.add(busyKey);
     setSubjectBusy(true); setSubjectStatus("");
