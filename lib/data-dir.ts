@@ -12,5 +12,7 @@ export function resolveDataDirectory(env: Record<string, string | undefined> = p
   if (!path.isAbsolute(configured)) {
     throw new Error("AI_EXECUTIVE_DATA_DIR must be an absolute path.");
   }
-  return path.normalize(configured);
+  // Used as configured, not normalized: with a symlink before "..", normalizing would point
+  // somewhere else than the file system does (and than the running service did before).
+  return configured;
 }

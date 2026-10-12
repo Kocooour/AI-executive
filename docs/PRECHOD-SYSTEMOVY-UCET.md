@@ -387,6 +387,9 @@ cmp_tables "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
 
 ```bash
 set -euo pipefail
+# Trap z kroku 2–5 (spusteni puvodni sluzby) tu uz neplati: po daemon-reload je nactena nova jednotka.
+# Pri selhani tohoto kroku plati "Kdyz selze" nize (krok 9), ne automaticky start.
+trap - ERR INT TERM HUP
 . /var/backups/ai-executive/migrace.vars
 # Nova jednotka nesmi zdedit nic ze stareho nastaveni: kazdy drop-in krome doplnku bezpecnostnich
 # upozorneni jde do zalohy (i ten, ktery jen vypina hardening, napr. ProtectSystem=false).
@@ -591,10 +594,13 @@ set -euo pipefail
 for f in "$OLD_DATA"/store.sqlite-*; do [ -e "$f" ] && chown --reference="$OLD_DATA/store.sqlite" "$f"; done
 systemctl start ai-executive
 for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
-systemctl show ai-executive -p User --value
-curl -sS -o /dev/null -w '/api/store: %{http_code}\n' http://127.0.0.1:3000/api/store
-curl -sS -o /dev/null -w '/api/auth/status: %{http_code}\n' http://127.0.0.1:3000/api/auth/status
-curl -sS -o /dev/null -w 'HTTPS /api/store: %{http_code}\n' --max-time 15 https://vm13861.tail412944.ts.net:8443/api/store
+curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest || { echo "SELHANI: puvodni sluzba po navratu neodpovida"; exit 1; }
+test "$(systemctl show ai-executive -p User --value)" = "$OLD_USER" || { echo "SELHANI: sluzba nebezi pod $OLD_USER"; exit 1; }
+code() { curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$1"; }
+want() { [ "$2" = "$3" ] && echo "OK    $1 ($2)" || { echo "SELHANI $1 (je $2, ma byt $3)"; exit 1; }; }
+want "/api/store bez relace" "$(code http://127.0.0.1:3000/api/store)" 401
+want "/api/auth/status" "$(code http://127.0.0.1:3000/api/auth/status)" 200
+want "HTTPS /api/store bez relace" "$(code https://vm13861.tail412944.ts.net:8443/api/store)" 401
 runuser -u "$OLD_USER" -- /usr/bin/node "$OLD_DIR/scripts/check-data.mjs" "$OLD_DATA/store.sqlite" | tee "$BK/fakta-po-navratu.json"
 cmp_tables "$BK/fakta-original.json" "$BK/fakta-po-navratu.json" "$VOLATILE" "$IGNORED"
 ```

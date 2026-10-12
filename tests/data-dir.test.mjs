@@ -8,6 +8,10 @@ test("an absolute data directory is used as configured", () => {
   assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "/var/lib/ai-executive" }), "/var/lib/ai-executive");
 });
 
+test("an absolute path is not normalized (\"..\" after a symlink resolves on disk, not in the string)", () => {
+  assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "/mnt/link/../state" }), "/mnt/link/../state");
+});
+
 test("surrounding whitespace is trimmed", () => {
   assert.equal(resolveDataDirectory({ AI_EXECUTIVE_DATA_DIR: "  /var/lib/ai-executive \n" }), "/var/lib/ai-executive");
 });

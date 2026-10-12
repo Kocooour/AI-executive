@@ -198,7 +198,9 @@ stop_instance "$OLD_PID"
 
 # --- procedure step 1-2: inventory, backup, verify the copy ------------------------------------
 step "Procedure step 2: backup and verified copy"
-OLD_FACTS=$(facts "$OLD_USER" "$REPO" "$OLD_DIR/.data/store.sqlite")
+# From the old account's own checkout, as in the real procedure (the invoking checkout may sit
+# under a directory the old account cannot enter).
+OLD_FACTS=$(facts "$OLD_USER" "$OLD_DIR" "$OLD_DIR/.data/store.sqlite")
 OLD_TABLES=$(printf '%s' "$OLD_FACTS" | tables_of)
 equal "old data: integrity ok" "$(printf '%s' "$OLD_FACTS" | integrity_of)" ok
 echo "      tables: $OLD_TABLES"
