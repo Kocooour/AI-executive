@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../../lib/auth";
 import {
   archiveOwnerClaim,
-  ContextClaimError,
   createOwnerClaim,
   currentContextDate,
   isEligibleClaim,
@@ -14,9 +13,10 @@ import {
   type ClaimFreshness,
   type ClaimLiteralType,
   type ClaimReviewStatus,
-  type ClaimSensitivity,
+  type ClaimSensitivityInput,
   type ClaimSourceMetadata,
 } from "../../../../lib/context-claims";
+import { ContextCommandError } from "../../../../lib/context-commands";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 
@@ -58,7 +58,7 @@ export async function GET(request: Request) {
       claims: claims.map((claim) => ({ ...claim, eligibleForAI: isEligibleClaim(claim, projectId, today) })),
     });
   } catch (error) {
-    const status = error instanceof ContextClaimError ? error.status : 400;
+    const status = error instanceof ContextCommandError ? error.status : 400;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Context claims are unavailable" }, { status });
   }
 }
@@ -85,7 +85,7 @@ export async function POST(request: Request) {
         literal: literal(body),
         target: ref(body.target),
         freshness: String(body.freshness || "") as ClaimFreshness,
-        sensitivity: String(body.sensitivity || "") as ClaimSensitivity,
+        sensitivity: String(body.sensitivity || "") as ClaimSensitivityInput,
         validFrom: body.validFrom == null ? null : String(body.validFrom),
         validTo: body.validTo == null ? null : String(body.validTo),
         source: body.source as ClaimSourceMetadata | null | undefined,
@@ -105,13 +105,13 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, `context.claim.${action}`, "allowed", { objectId: common.id });
     return NextResponse.json(result, { status: action === "create" ? 201 : 200 });
   } catch (error) {
-    const status = error instanceof ContextClaimError ? error.status : error instanceof HttpInputError ? error.status : 400;
+    const status = error instanceof ContextCommandError ? error.status : error instanceof HttpInputError ? error.status : 400;
     recordSecurityEvent(request, "context.claim.write", "failed", {
-      reason: error instanceof ContextClaimError ? error.code : "invalid_request",
+      reason: error instanceof ContextCommandError ? error.code : "invalid_request",
     });
     return NextResponse.json({
       error: error instanceof Error ? error.message : "Context claim request failed",
-      code: error instanceof ContextClaimError ? error.code : "invalid_request",
+      code: error instanceof ContextCommandError ? error.code : "invalid_request",
     }, { status });
   }
 }

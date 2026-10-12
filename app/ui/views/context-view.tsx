@@ -6,7 +6,7 @@ export function ContextView({ app }: { app: LumiApp }) {
   const {
     approveContextInbox,
     calendarWorkspaceSelection,
-    claimBusyId,
+    claimBusyIds,
     claimEvidence,
     claimFilterId,
     claimFreshness,
@@ -83,6 +83,11 @@ export function ContextView({ app }: { app: LumiApp }) {
     tr,
     view,
   } = app;
+  const providerLabel = (provider: string) => {
+    const key = `sourceProvider_${provider.replace(/[^A-Za-z0-9]+/g, "_")}`;
+    const label = tr(key);
+    return label === key ? provider : label;
+  };
   return (
     <>
           {view === "Context" && (
@@ -94,7 +99,7 @@ export function ContextView({ app }: { app: LumiApp }) {
                     <h2>{tr("whatLumiKnows")}</h2>
                     <p>{tr("ownerControlledClaimsFor")}</p>
                   </div>
-                  <div className="contextHeaderActions"><button onClick={reloadContextClaims} disabled={Boolean(claimBusyId)}>{tr("reloadClaims")}</button><button className="primaryAction" onClick={resetClaimDraft}>{tr("newClaim")}</button></div>
+                  <div className="contextHeaderActions"><button onClick={reloadContextClaims}>{tr("reloadClaims")}</button><button className="primaryAction" onClick={resetClaimDraft}>{tr("newClaim")}</button></div>
                 </div>
                 <div className="contextStats">
                   <span><strong>{contextClaims.length}</strong>{tr("claims")}</span>
@@ -172,11 +177,11 @@ export function ContextView({ app }: { app: LumiApp }) {
                   </>}
                   <div className="preferenceGrid">
                     <label>{tr("freshness")}<select value={claimFreshness} onChange={(event) => setClaimFreshness(event.target.value as ContextClaimItem["freshness"])}><option value="current">{tr("current")}</option><option value="needs_review">{tr("needsReview")}</option><option value="stale">{tr("stale")}</option></select></label>
-                    <label>{tr("sensitivity")}<select value={claimSensitivity} onChange={(event) => setClaimSensitivity(event.target.value as ContextClaimItem["sensitivity"])}><option value="normal">{tr("normal")}</option><option value="sensitive">{tr("sensitive")}</option></select></label>
+                    <label>{tr("sensitivity")}<select value={claimSensitivity} onChange={(event) => setClaimSensitivity(event.target.value as ContextClaimItem["sensitivity"])}><option value="normal">{tr("normal")}</option><option value="confidential">{tr("confidential")}</option><option value="restricted">{tr("restricted")}</option></select></label>
                   </div>
                   <div className="preferenceGrid"><label>{tr("validFromOptional")}<input type="date" value={claimValidFrom} onChange={(event) => setClaimValidFrom(event.target.value)} /></label><label>{tr("validToOptional")}<input type="date" value={claimValidTo} onChange={(event) => setClaimValidTo(event.target.value)} /></label></div>
                   <details><summary>{tr("sourceAndEvidenceOptional")}</summary><div className="preferenceGrid"><label>{tr("sourceProvider")}<input value={claimSourceProvider} maxLength={80} onChange={(event) => setClaimSourceProvider(event.target.value)} /></label><label>{tr("urlLocator")}<input value={claimSourceLocator} maxLength={2000} onChange={(event) => setClaimSourceLocator(event.target.value)} /></label></div><label>{tr("evidenceExcerpt")}<textarea value={claimEvidence} maxLength={2000} onChange={(event) => setClaimEvidence(event.target.value)} /></label></details>
-                  <div className="notificationActions"><button className="primaryAction" disabled={Boolean(claimBusyId) || !claimSubjectId || !claimPredicate.trim() || (claimValueMode === "target" ? !claimTargetId : claimValue === "" || (claimValueType === "number" && !Number.isFinite(Number(claimValue))))} onClick={saveContextClaim}>{claimBusyId ? (tr("saving")) : tr("save")}</button>{editingClaim && <button disabled={Boolean(claimBusyId)} onClick={resetClaimDraft}>{tr("cancel")}</button>}</div>
+                  <div className="notificationActions"><button className="primaryAction" disabled={claimBusyIds.includes(editingClaim?.id || `new:${calendarWorkspaceSelection.current}`) || !claimSubjectId || !claimPredicate.trim() || (claimValueMode === "target" ? !claimTargetId : claimValue === "" || (claimValueType === "number" && !Number.isFinite(Number(claimValue))))} onClick={saveContextClaim}>{claimBusyIds.includes(editingClaim?.id || `new:${calendarWorkspaceSelection.current}`) ? (tr("saving")) : tr("save")}</button>{editingClaim && <button onClick={resetClaimDraft}>{tr("cancel")}</button>}</div>
                   {claimStatus && <p className={claimStatus.toLowerCase().includes("konflikt") || claimStatus.toLowerCase().includes("conflict") ? "contextConflict" : "saveConfirmation"} role="status">{claimStatus}</p>}
                 </div>
               </section>
@@ -187,10 +192,10 @@ export function ContextView({ app }: { app: LumiApp }) {
                   {[...contextClaims].filter((claim) => claimFilterId === "all" || (claimFilterId === "review" ? claim.reviewStatus === "proposed" : claim.subject.canonicalEntityId === claimFilterId || claim.subject.id === claimFilterId || claim.target?.id === claimFilterId || claim.target?.canonicalEntityId === claimFilterId)).sort((a, b) => Number(a.reviewStatus !== "proposed") - Number(b.reviewStatus !== "proposed") || b.updatedAt - a.updatedAt).map((claim) => <article key={claim.id} className={`contextClaimCard ${claim.reviewStatus} ${claim.freshness}`}>
                     <header><div><strong>{claim.subject.title}</strong><small>{contextSubjectTypeLabel(claim.subject.type)} · rev. {claim.revision}</small></div><span className={`claimState ${claim.reviewStatus}`}>{claim.reviewStatus === "proposed" ? (tr("proposed")) : claim.reviewStatus === "confirmed" ? (tr("confirmed")) : (tr("rejected2"))}</span></header>
                     <p><b>{contextPredicateLabel(claim.predicate)}</b> → {String(claim.literal?.value ?? claim.target?.title ?? "—")}{claim.target?.archivedAt ? (tr("archived2")) : ""}</p>
-                    <div className="claimMeta"><span>{claim.freshness === "current" ? (tr("current2")) : claim.freshness === "needs_review" ? (tr("needsReview2")) : (tr("stale2"))}</span><span>{claim.sensitivity === "sensitive" ? (tr("sensitive2")) : (tr("normal2"))}</span><span className={claim.source ? "hasSource" : "missingSource"}>{claim.source ? (claim.source.provider || claim.source.locator || (tr("sourceAvailable"))) : (tr("missingSourceOwnerStatement"))}</span></div>
+                    <div className="claimMeta"><span>{claim.freshness === "current" ? (tr("current2")) : claim.freshness === "needs_review" ? (tr("needsReview2")) : (tr("stale2"))}</span><span>{claim.sensitivity === "restricted" ? tr("restricted2") : claim.sensitivity === "confidential" ? tr("confidential2") : tr("normal2")}</span><span className={claim.source ? "hasSource" : "missingSource"}>{claim.source ? (claim.source.provider ? providerLabel(claim.source.provider) : claim.source.locator || (tr("sourceAvailable"))) : (tr("missingSourceOwnerStatement"))}</span></div>
                     {claim.evidence?.excerpt && <blockquote>{claim.evidence.excerpt}</blockquote>}
-                    {claimHistory[claim.id] && <ol className="contextSubjectHistory">{claimHistory[claim.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{contextPredicateLabel(event.operation)} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
-                    <div className="contextClaimActions">{claim.reviewStatus !== "confirmed" && <button className="primaryAction" disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "review", "confirmed")}>{tr("confirm")}</button>}{claim.reviewStatus !== "rejected" && <button disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "review", "rejected")}>{tr("reject")}</button>}<button disabled={Boolean(claimBusyId)} onClick={() => editContextClaim(claim)}>{tr("edit")}</button><button onClick={() => showClaimHistory(claim)}>{tr("history")}</button><button className="textAction danger" disabled={Boolean(claimBusyId)} onClick={() => contextClaimAction(claim, "archive")}>{tr("archive")}</button></div>
+                    {claimHistory[claim.id] && <ol className="contextSubjectHistory">{claimHistory[claim.id].map((event, index) => <li key={`${event.createdAt}:${index}`}>{event.operation === "review" && event.decision ? tr(`claimReview_${event.decision}`) : contextPredicateLabel(event.operation)} · rev. {event.afterRevision} · {new Date(event.createdAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}</li>)}</ol>}
+                    <div className="contextClaimActions">{claim.reviewStatus !== "confirmed" && <button className="primaryAction" disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "confirmed")}>{tr("confirm")}</button>}{claim.reviewStatus !== "rejected" && <button disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "rejected")}>{tr("reject")}</button>}{claim.reviewStatus !== "proposed" && <button disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "review", "proposed")}>{tr("returnToReview")}</button>}<button onClick={() => editContextClaim(claim)}>{tr("edit")}</button><button onClick={() => showClaimHistory(claim)}>{tr("history")}</button><button className="textAction danger" disabled={claimBusyIds.includes(claim.id)} onClick={() => contextClaimAction(claim, "archive")}>{tr("archive")}</button></div>
                   </article>)}
                   {!contextClaims.some((claim) => claimFilterId === "all" || (claimFilterId === "review" ? claim.reviewStatus === "proposed" : claim.subject.canonicalEntityId === claimFilterId || claim.subject.id === claimFilterId || claim.target?.id === claimFilterId || claim.target?.canonicalEntityId === claimFilterId)) && <p>{tr("noStructuredClaimsIn")}</p>}
                 </div>

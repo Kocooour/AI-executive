@@ -2318,8 +2318,11 @@ article:hover > .dragHandle,
   display: grid;
   gap: 18px;
   max-width: 980px;
+  min-width: 0;
 }
 .contextWorkspace > section {
+  box-sizing: border-box;
+  min-width: 0;
   border: 1px solid var(--line, #e5e5e7);
   border-radius: 16px;
   background: var(--surface, #fff);
@@ -2364,6 +2367,10 @@ article:hover > .dragHandle,
 .contextClaimForm summary { cursor: pointer; margin-bottom: 10px; }
 .contextClaimList { display: grid; gap: 12px; }
 .contextClaimCard {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--line, #e2e2e5);
   border-left: 4px solid #e49b26;
   border-radius: 12px;

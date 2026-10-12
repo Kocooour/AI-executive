@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { runSchemaMigrations } from "./schema-migrations";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 
@@ -41,7 +42,21 @@ export function getDatabase() {
   chmodSync(dataDirectory, 0o700);
   const database = new DatabaseSync(databasePath);
   chmodSync(databasePath, 0o600);
+  // Set before the setup below, because the legacy migration reads through getDatabase(). The setup is
+  // synchronous, so no other caller can see the connection half-initialised; if it fails, the connection
+  // is closed and forgotten, so the next call starts again and retries the migrations.
   databaseInstance = database;
+  try {
+    initialiseDatabase(database);
+  } catch (error) {
+    databaseInstance = null;
+    try { database.close(); } catch { /* the original error matters */ }
+    throw error;
+  }
+  return database;
+}
+
+function initialiseDatabase(database: DatabaseSync) {
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = FULL;
@@ -394,9 +409,9 @@ export function getDatabase() {
   for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
     if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
   }
+  runSchemaMigrations(database);
   migrateLegacyStore(database);
   ensureDefaultWorkspace(database);
-  return database;
 }
 
 function migrateContextChangeEventScope(database: DatabaseSync) {

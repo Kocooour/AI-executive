@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../../lib/auth";
 import { approveContextInboxClaim, previewContextInbox } from "../../../../lib/context-inbox";
-import { ContextClaimError } from "../../../../lib/context-claims";
+import { ContextCommandError } from "../../../../lib/context-commands";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     }
     throw new HttpInputError("Unknown context inbox action");
   } catch (error) {
-    const status = error instanceof ContextClaimError ? error.status : error instanceof HttpInputError ? error.status : 400;
+    const status = error instanceof ContextCommandError ? error.status : error instanceof HttpInputError ? error.status : 400;
     recordSecurityEvent(request, "context.inbox", "failed");
     return NextResponse.json({ error: error instanceof Error ? error.message : "Context inbox failed" }, { status });
   }

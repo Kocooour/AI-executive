@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { getDatabase, readSnapshot } from "./server-store";
+import { assertCommandWorkspace, contextIdPattern, ContextCommandError, requireChanged, runContextCommand, type CommandHooks } from "./context-commands";
+import { getDatabase } from "./server-store";
 
 export type StandaloneSubjectType = "person" | "organization";
 export interface StandaloneSubject {
@@ -14,28 +14,16 @@ export interface StandaloneSubject {
   updatedAt: number;
 }
 
-export class ContextSubjectError extends Error {
-  status: number;
-  code: string;
-  constructor(message: string, status = 400, code = "invalid") {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
+export class ContextSubjectError extends ContextCommandError {}
 
 type SubjectRow = {
   id: string; workspace_id: string; subject_type: string; canonical_entity_id: string | null;
   display_title: string; revision: number; archived_at: number | null; created_at: number; updated_at: number;
 };
-const idPattern = /^[A-Za-z0-9:_-]{1,240}$/;
+const idPattern = contextIdPattern;
 const titlePattern = /\S/u;
 
-function assertWorkspace(workspaceId: string) {
-  if (!workspaceId || workspaceId === "all" || !readSnapshot().entities.some((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)) {
-    throw new ContextSubjectError("Workspace not found", 404, "workspace_not_found");
-  }
-}
+const assertWorkspace = assertCommandWorkspace;
 
 function normalizeTitle(title: string) {
   return title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("cs-CZ")
@@ -92,7 +80,7 @@ type SubjectCommand = {
   type?: StandaloneSubjectType; title?: string;
 };
 
-function runCommand(operation: "create" | "rename" | "archive", input: SubjectCommand) {
+function runCommand(operation: "create" | "rename" | "archive", input: SubjectCommand, hooks?: CommandHooks) {
   if (!idPattern.test(input.commandId) || !idPattern.test(input.id)) throw new ContextSubjectError("Invalid command or subject identifier");
   if (operation === "create" && input.id.startsWith("canonical:")) {
     throw new ContextSubjectError("Subject identifier uses a reserved prefix", 400, "reserved_subject_id");
@@ -100,72 +88,59 @@ function runCommand(operation: "create" | "rename" | "archive", input: SubjectCo
   assertWorkspace(input.workspaceId);
   const title = operation === "archive" ? undefined : cleanTitle(String(input.title || ""));
   if (operation === "create" && input.type !== "person" && input.type !== "organization") throw new ContextSubjectError("Invalid subject type");
-  const requestHash = createHash("sha256").update(JSON.stringify({ operation: `subject.${operation}`, ...input })).digest("hex");
-  const database = getDatabase();
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const prior = database.prepare(`SELECT request_hash, result_payload FROM context_commands
-      WHERE workspace_id = ? AND idempotency_key = ?`).get(input.workspaceId, input.commandId) as
-      { request_hash: string; result_payload: string } | undefined;
-    if (prior) {
-      if (prior.request_hash !== requestHash) throw new ContextSubjectError("Idempotency key was reused", 409, "idempotency_conflict");
-      database.exec("COMMIT");
-      return { ...JSON.parse(prior.result_payload), replayed: true } as { subject: StandaloneSubject; replayed: boolean };
-    }
-    const beforeRow = rowFor(input.id, input.workspaceId);
-    const before = beforeRow ? deserialize(beforeRow) : null;
-    if (operation === "create") {
-      if (input.expectedRevision !== 0) throw new ContextSubjectError("New subjects require revision 0", 409, "revision_conflict");
-      if (database.prepare("SELECT id FROM context_subjects WHERE id = ?").get(input.id)) throw new ContextSubjectError("Subject ID already exists", 409, "subject_exists");
-    } else {
-      if (!before) throw new ContextSubjectError("Person or organization not found", 404, "not_found");
-      if (before.revision !== input.expectedRevision) throw new ContextSubjectError("Subject changed on another device", 409, "revision_conflict");
-      if (before.archivedAt) throw new ContextSubjectError("Subject is archived", 409, "archived");
-    }
-    if (title && (operation === "create" || before?.title !== title)) {
-      const candidates = database.prepare(`SELECT id, display_title FROM context_subjects WHERE workspace_id = ?
-        AND subject_type = ? AND canonical_entity_id IS NULL AND archived_at IS NULL`)
-        .all(input.workspaceId, operation === "create" ? input.type! : before!.type) as
-        Array<{ id: string; display_title: string }>;
-      const duplicates = candidates.filter((candidate) => candidate.id !== input.id && normalizeTitle(candidate.display_title) === normalizeTitle(title));
-      if (duplicates.length) throw new ContextSubjectError("A person or organization with this name already exists", 409, "duplicate_subject");
-    }
-    const now = Date.now();
-    const changed = operation === "create" || operation === "archive" || before?.title !== title;
-    if (operation === "create") {
-      database.prepare(`INSERT INTO context_subjects
-        (id, workspace_id, subject_type, canonical_entity_id, display_title, revision, created_at, updated_at, archived_at)
-        VALUES (?, ?, ?, NULL, ?, 1, ?, ?, NULL)`).run(input.id, input.workspaceId, input.type!, title!, now, now);
-    } else if (changed && operation === "rename") {
-      database.prepare(`UPDATE context_subjects SET display_title = ?, revision = revision + 1, updated_at = ?
-        WHERE id = ? AND workspace_id = ? AND revision = ?`).run(title!, now, input.id, input.workspaceId, input.expectedRevision);
-    } else if (changed) {
-      database.prepare(`UPDATE context_subjects SET archived_at = ?, revision = revision + 1, updated_at = ?
-        WHERE id = ? AND workspace_id = ? AND revision = ?`).run(now, now, input.id, input.workspaceId, input.expectedRevision);
-    }
-    const subject = deserialize(rowFor(input.id, input.workspaceId)!);
-    if (changed) {
-      database.prepare(`INSERT INTO context_change_events
-        (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
-         before_payload, after_payload, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?)`).run(
-          randomUUID(), input.commandId, input.workspaceId, input.id, `subject.${operation}`, before?.revision ?? null,
-          subject.revision, before ? JSON.stringify(before) : null, JSON.stringify(subject), now);
-    }
-    const result = { subject, replayed: false };
-    database.prepare(`INSERT INTO context_commands
-      (workspace_id, idempotency_key, request_hash, result_payload, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(input.workspaceId, input.commandId, requestHash, JSON.stringify(result), now);
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+  const request = { commandId: input.commandId, workspaceId: input.workspaceId, id: input.id,
+    expectedRevision: input.expectedRevision, ...(operation === "create" ? { type: input.type } : {}),
+    ...(title === undefined ? {} : { title }) };
+  return runContextCommand({
+    operation: `subject.${operation}`, commandId: input.commandId, workspaceId: input.workspaceId, request, hooks,
+    mutate: () => {
+      const database = getDatabase();
+      const beforeRow = rowFor(input.id, input.workspaceId);
+      const before = beforeRow ? deserialize(beforeRow) : null;
+      if (operation === "create") {
+        if (input.expectedRevision !== 0) throw new ContextSubjectError("New subjects require revision 0", 409, "revision_conflict");
+        if (database.prepare("SELECT id FROM context_subjects WHERE id = ?").get(input.id)) throw new ContextSubjectError("Subject ID already exists", 409, "subject_exists");
+      } else {
+        if (!before) throw new ContextSubjectError("Person or organization not found", 404, "not_found");
+        if (before.revision !== input.expectedRevision) throw new ContextSubjectError("Subject changed on another device", 409, "revision_conflict");
+        if (before.archivedAt) throw new ContextSubjectError("Subject is archived", 409, "archived");
+      }
+      const changed = operation === "create" || operation === "archive" || before?.title !== title;
+      // Only a real name change is checked against other names, so returning to an earlier name
+      // (A -> B -> A) is not blocked by the earlier history of this very subject.
+      if (title && changed) {
+        const candidates = database.prepare(`SELECT id, display_title FROM context_subjects WHERE workspace_id = ?
+          AND subject_type = ? AND canonical_entity_id IS NULL AND archived_at IS NULL`)
+          .all(input.workspaceId, operation === "create" ? input.type! : before!.type) as
+          Array<{ id: string; display_title: string }>;
+        const duplicates = candidates.filter((candidate) => candidate.id !== input.id && normalizeTitle(candidate.display_title) === normalizeTitle(title));
+        if (duplicates.length) throw new ContextSubjectError("A person or organization with this name already exists", 409, "duplicate_subject");
+      }
+      const now = Date.now();
+      if (operation === "create") {
+        database.prepare(`INSERT INTO context_subjects
+          (id, workspace_id, subject_type, canonical_entity_id, display_title, revision, created_at, updated_at, archived_at)
+          VALUES (?, ?, ?, NULL, ?, 1, ?, ?, NULL)`).run(input.id, input.workspaceId, input.type!, title!, now, now);
+      } else if (changed && operation === "rename") {
+        requireChanged(database.prepare(`UPDATE context_subjects SET display_title = ?, revision = revision + 1, updated_at = ?
+          WHERE id = ? AND workspace_id = ? AND revision = ?`).run(title!, now, input.id, input.workspaceId, input.expectedRevision),
+          "Subject changed on another device");
+      } else if (changed) {
+        requireChanged(database.prepare(`UPDATE context_subjects SET archived_at = ?, revision = revision + 1, updated_at = ?
+          WHERE id = ? AND workspace_id = ? AND revision = ?`).run(now, now, input.id, input.workspaceId, input.expectedRevision),
+          "Subject changed on another device");
+      }
+      const subject = deserialize(rowFor(input.id, input.workspaceId)!);
+      return { result: { subject }, objectId: input.id, operation: `subject.${operation}`, changed,
+        before: before ? { revision: before.revision, payload: before } : null,
+        after: { revision: subject.revision, payload: subject } };
+    },
+  });
 }
 
-export const createStandaloneSubject = (input: SubjectCommand & { type: StandaloneSubjectType; title: string; expectedRevision: 0 }) => runCommand("create", input);
-export const renameStandaloneSubject = (input: SubjectCommand & { title: string }) => runCommand("rename", input);
-export const archiveStandaloneSubject = (input: SubjectCommand) => runCommand("archive", input);
+export const createStandaloneSubject = (input: SubjectCommand & { type: StandaloneSubjectType; title: string; expectedRevision: 0 }, hooks?: CommandHooks) => runCommand("create", input, hooks);
+export const renameStandaloneSubject = (input: SubjectCommand & { title: string }, hooks?: CommandHooks) => runCommand("rename", input, hooks);
+export const archiveStandaloneSubject = (input: SubjectCommand, hooks?: CommandHooks) => runCommand("archive", input, hooks);
 
 export function listStandaloneSubjectHistory(workspaceId: string, id: string) {
   getStandaloneSubject(workspaceId, id);

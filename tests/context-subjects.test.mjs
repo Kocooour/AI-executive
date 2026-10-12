@@ -131,7 +131,7 @@ test("Context Inbox suggests a person without persisting preview and requires se
     freshness: "needs_review", evidenceExcerpt: proposal.evidenceExcerpt }).claim;
   assert.equal(saved.target.id, existing.id);
   assert.equal(saved.reviewStatus, "proposed");
-  assert.equal(saved.sensitivity, "sensitive");
+  assert.equal(saved.sensitivity, "confidential");
   assert.equal(claims.isEligibleClaim(saved), false);
   const ambiguous = inbox.previewContextInbox("personal", "Apollo – na výsledek čeká Jana a Petr").proposals[0];
   assert.equal(ambiguous.suggestedTarget, undefined);
