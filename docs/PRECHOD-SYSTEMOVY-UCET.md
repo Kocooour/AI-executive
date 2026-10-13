@@ -242,6 +242,32 @@ cmp_tables() {
     console.log(bad ? "TABULKY: ROZDIL" : "TABULKY: shodne"); process.exit(bad ? 1 : 0);
   ' "$@"
 }
+# cmp_sqlite_bytes <pred.json> <po.json>: po zastaveni sluzby musi byt hlavni SQLite soubor
+# i pripadny nenulovy WAL byte-for-byte stejny. Chybejici a prazdny WAL nenesou data.
+# Pocty radku samy neodhalí zmenu hodnot v existujicim zaznamu.
+cmp_sqlite_bytes() {
+  /usr/bin/node -e '
+    const fs = require("fs"); const [a, b] = process.argv.slice(1);
+    const x = JSON.parse(fs.readFileSync(a, "utf8")), y = JSON.parse(fs.readFileSync(b, "utf8"));
+    const has = (f, key) => Object.hasOwn(f, key);
+    const hash = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+    const emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    const valid = (f) => f !== null && typeof f === "object" && !Array.isArray(f)
+      && ["mainFileBytes", "mainFileSha256", "walBytes", "walSha256"].every((key) => has(f, key))
+      && Number.isSafeInteger(f.mainFileBytes) && f.mainFileBytes >= 0 && hash(f.mainFileSha256)
+      && ((f.walBytes === null && f.walSha256 === null)
+        || (Number.isSafeInteger(f.walBytes) && f.walBytes >= 0 && hash(f.walSha256)
+          && (f.walBytes !== 0 || f.walSha256 === emptyHash)));
+    if (!valid(x) || !valid(y)) { console.log("SQLITE SOUBORY: CHYBI FAKTA"); process.exit(1); }
+    const different = [];
+    if (x.mainFileBytes !== y.mainFileBytes || x.mainFileSha256 !== y.mainFileSha256) different.push("hlavni soubor");
+    // Cteni jen pro cteni muze po cistem zastaveni vytvorit prazdny -wal.
+    const wal = (f) => f.walBytes === null || f.walBytes === 0 ? null : `${f.walBytes}:${f.walSha256}`;
+    if (wal(x) !== wal(y)) different.push("WAL");
+    if (different.length) { console.log("SQLITE SOUBORY: ROZDIL (" + different.join(", ") + ")"); process.exit(1); }
+    console.log("SQLITE SOUBORY: shodne");
+  ' "$@"
+}
 # Po startu je meni sama sluzba (bezpecnostni log, plan. vyhodnoceni pozornosti kazdych 5 min, push, kalendar).
 VOLATILE=security_events,security_alerts,metadata,attention_states,attention_history,pact_agent_runs
 # Zaznamy, ktere se samy nahrazuji nebo vyprsi (5min navrhy AI, vyzvy passkey, udalosti obnovenych kalendaru).
@@ -290,7 +316,7 @@ cp -a "$OLD_DATA" "$BK/data"
 cp -a "$OLD_ENV" "$BK/env"
 cp -a /etc/systemd/system/ai-executive.service "$BK/systemd/"
 if [ -d /etc/systemd/system/ai-executive.service.d ]; then cp -a /etc/systemd/system/ai-executive.service.d "$BK/systemd/"; fi
-# Obsah kopie proti originalu (krome -wal/-shm, jejich data overi pocty zaznamu nize).
+# Obsah kopie proti originalu (krome -shm; WAL je kontrolovan nize pres velikost a SHA-256).
 diff -rq -x '*-wal' -x '*-shm' "$OLD_DATA" "$BK/data" && echo "kopie dat = original (bez -wal/-shm)"
 find "$BK" -type d -exec chmod 0700 {} +; find "$BK" -type f -exec chmod 0600 {} +
 chown -R root:root "$BK"
@@ -302,9 +328,10 @@ runuser -u "$OLD_USER" -- /usr/bin/node "$OLD_DIR/scripts/check-data.mjs" "$OLD_
 /usr/bin/node "$OLD_DIR/scripts/check-data.mjs" "$BK/data/store.sqlite" > "$BK/fakta-kopie.json"
 cat "$BK/fakta-kopie.json"
 cmp_tables "$BK/fakta-original.json" "$BK/fakta-kopie.json"
+cmp_sqlite_bytes "$BK/fakta-original.json" "$BK/fakta-kopie.json"
 ```
 
-**Kontrola:** `kopie dat = original`, `Manifest OK`, kopie má `"integrity":"ok"`, nenulový počet tabulek a `TABULKY: shodne`. `fakta-original.json` je závazný základ pro všechna další porovnání.
+**Kontrola:** `kopie dat = original`, `Manifest OK`, kopie má `"integrity":"ok"`, nenulový počet tabulek, `TABULKY: shodne` a `SQLITE SOUBORY: shodne`. `fakta-original.json` je závazný základ pro všechna další porovnání.
 **Když selže:** trap službu spustí zpět sám (i při přerušení). Ověřit `systemctl is-active ai-executive` a `/api/auth/status`, nahlásit. Nic dalšího nedělat, originály jsou nedotčené.
 
 ### 3. Účet
@@ -406,9 +433,10 @@ diff -rq -x '*-wal' -x '*-shm' "$BK/data" /var/lib/ai-executive && echo "nove mi
 runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$BK/fakta-nove-misto.json"
 cat "$BK/fakta-nove-misto.json"
 cmp_tables "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
+cmp_sqlite_bytes "$BK/fakta-original.json" "$BK/fakta-nove-misto.json"
 ```
 
-**Kontrola:** `diff` klíčů ukáže nanejvýš smazané řádky `AI_EXECUTIVE_DATA_DIR`/`PORT`/`NODE_ENV` (jen názvy); počet těchto klíčů v novém souboru je `0`; vlastníci a režimy `600 root:root` a `700 ai-executive:ai-executive`; `nove misto = zaloha`; `integrity` je `ok` a `TABULKY: shodne` (počty jsou rozhodující kontrola, viz krok 2).
+**Kontrola:** `diff` klíčů ukáže nanejvýš smazané řádky `AI_EXECUTIVE_DATA_DIR`/`PORT`/`NODE_ENV` (jen názvy); počet těchto klíčů v novém souboru je `0`; vlastníci a režimy `600 root:root` a `700 ai-executive:ai-executive`; `nove misto = zaloha`; `integrity` je `ok`, `TABULKY: shodne` a `SQLITE SOUBORY: shodne` (počty jsou rozhodující kontrola, viz krok 2).
 **Když selže:** trap spustí původní službu zpět. Pak `rm -rf /var/lib/ai-executive /etc/ai-executive/ai-executive.env`, zjistit příčinu a nahlásit; další pokus začíná krokem 2. Originály jsou nedotčené.
 
 ### 6. Instalace šablony
