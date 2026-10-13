@@ -47,6 +47,10 @@ export interface CommandMutation<T> {
   before: { revision: number; payload: unknown } | null;
   after: { revision: number; payload: unknown };
   changed: boolean;
+  /** Undo/Redo only: what kind of step this is and the event it reverses. Ordinary changes omit both. */
+  kind?: "change" | "undo" | "redo" | "skip";
+  revertsEventId?: string;
+  objectType?: "claim" | "subject";
 }
 
 export interface CommandRequest<T> {
@@ -60,7 +64,7 @@ export interface CommandRequest<T> {
   hooks?: CommandHooks;
 }
 
-export function runContextCommand<T extends object>(command: CommandRequest<T>): T & { replayed: boolean; changed: boolean } {
+export function runContextCommand<T extends object>(command: CommandRequest<T>): T & { replayed: boolean; changed: boolean; historyEventId: string | null } {
   if (!contextIdPattern.test(command.commandId)) throw new ContextCommandError("Idempotency key is invalid");
   assertCommandWorkspace(command.workspaceId);
   const database = getDatabase();
@@ -75,19 +79,25 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
         throw new ContextCommandError("Idempotency key was already used for another command", 409, "idempotency_conflict");
       }
       database.exec("COMMIT");
-      return { ...JSON.parse(prior.result_payload), replayed: true } as T & { replayed: boolean; changed: boolean };
+      return { ...JSON.parse(prior.result_payload), replayed: true } as T & { replayed: boolean; changed: boolean; historyEventId: string | null };
     }
     const mutation = command.mutate();
     command.hooks?.afterMutate?.();
+    const eventId = randomUUID();
     if (mutation.changed) {
       database.prepare(`INSERT INTO context_change_events
         (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
-         before_payload, after_payload, created_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?)`)
-        .run(randomUUID(), command.commandId, command.workspaceId, mutation.objectId, mutation.operation,
+         before_payload, after_payload, created_at, sequence, object_type, kind, reverts_event_id)
+        VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?,
+          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM context_change_events), ?, ?, ?)`)
+        .run(eventId, command.commandId, command.workspaceId, mutation.objectId, mutation.operation,
           mutation.before?.revision ?? null, mutation.after.revision,
-          mutation.before ? JSON.stringify(mutation.before.payload) : null, JSON.stringify(mutation.after.payload), Date.now());
+          mutation.before ? JSON.stringify(mutation.before.payload) : null, JSON.stringify(mutation.after.payload), Date.now(),
+          mutation.objectType ?? (mutation.operation.startsWith("subject.") ? "subject" : "claim"),
+          mutation.kind ?? "change", mutation.revertsEventId ?? null);
     }
-    const result = { ...mutation.result, replayed: false, changed: mutation.changed };
+    // The id of the history step this command recorded (null for a no-op); a retry returns the original one.
+    const result = { ...mutation.result, replayed: false, changed: mutation.changed, historyEventId: mutation.changed ? eventId : null };
     database.prepare(`INSERT INTO context_commands
       (workspace_id, idempotency_key, request_hash, result_payload, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(command.workspaceId, command.commandId, hash, JSON.stringify(result), Date.now());

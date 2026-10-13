@@ -17,7 +17,7 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
-import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
+import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
@@ -96,7 +96,7 @@ export function useLumiApp() {
     [contextStatus, setContextStatus] = useState(""),
     [contextBusy, setContextBusy] = useState(false),
     [contextClaims, setContextClaims] = useState<ContextClaimItem[]>([]),
-    [claimHistory, setClaimHistory] = useState<Record<string, Array<{ operation: string; beforeRevision: number | null; afterRevision: number; createdAt: number; decision?: string | null }>>>({}),
+    [claimHistory, setClaimHistory] = useState<Record<string, Array<{ operation: string; kind?: string; reviewStatus?: string | null; beforeRevision: number | null; afterRevision: number; createdAt: number; decision?: string | null }>>>({}),
     [standaloneSubjects, setStandaloneSubjects] = useState<StandaloneSubjectItem[]>([]),
     [subjectSearch, setSubjectSearch] = useState(""),
     [newSubjectTitle, setNewSubjectTitle] = useState(""),
@@ -105,7 +105,7 @@ export function useLumiApp() {
     [subjectStatus, setSubjectStatus] = useState(""),
     [subjectEditId, setSubjectEditId] = useState(""),
     [subjectEditTitle, setSubjectEditTitle] = useState(""),
-    [subjectHistory, setSubjectHistory] = useState<Record<string, Array<{ operation: string; beforeRevision: number | null; afterRevision: number; beforeTitle: string | null; afterTitle: string | null; createdAt: number }>>>({}),
+    [subjectHistory, setSubjectHistory] = useState<Record<string, Array<{ operation: string; kind?: string; beforeRevision: number | null; afterRevision: number; beforeTitle: string | null; afterTitle: string | null; createdAt: number }>>>({}),
     [claimFilterId, setClaimFilterId] = useState("all"),
     [claimSubjectId, setClaimSubjectId] = useState(""),
     [claimPredicate, setClaimPredicate] = useState("preference"),
@@ -123,6 +123,13 @@ export function useLumiApp() {
     [editingClaim, setEditingClaim] = useState<ContextClaimItem | null>(null),
     [claimStatus, setClaimStatus] = useState(""),
     [claimBusyIds, setClaimBusyIds] = useState<string[]>([]),
+    [contextHistory, setContextHistory] = useState<ContextHistoryState>({ undo: null, redo: null, recent: [] }),
+    [historyBusy, setHistoryBusy] = useState(false),
+    [historyStatus, setHistoryStatus] = useState(""),
+    // A refused step that can never succeed, offered for skipping together with the refusal.
+    [historySkip, setHistorySkip] = useState<{ stack: "undo" | "redo"; eventId: string } | null>(null),
+    // Which part of the Context view offers Undo for the edit that was just saved.
+    [historyOffer, setHistoryOffer] = useState<"" | "claim" | "subject" | "inbox">(""),
     [contextInboxText, setContextInboxText] = useState(""),
     [contextInboxProposals, setContextInboxProposals] = useState<ContextInboxProposal[]>([]),
     [contextInboxTasks, setContextInboxTasks] = useState<ContextInboxTaskDraft[]>([]),
@@ -203,6 +210,8 @@ export function useLumiApp() {
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
+  const contextHistoryLoadVersion = useRef(0);
+  const contextShortcut = useRef<{ active: boolean; run: (action: "undo" | "redo") => void }>({ active: false, run: () => undefined });
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // Context commands. One user intent keeps one idempotency key (and, for a new object, one id)
@@ -214,6 +223,7 @@ export function useLumiApp() {
   const claimEditor = useRef({ objectId: "", nonce: 0, signature: "", subjectId: "" });
   const subjectDraft = useRef({ newTitle: "", editId: "", editTitle: "" });
   const contextIntent = (scope: string, signature: string) => {
+    setHistoryOffer("");
     const current = contextIntents.current.get(scope);
     if (current && current.signature === signature) return current;
     const next = { signature, commandKey: crypto.randomUUID(), objectId: crypto.randomUUID() };
@@ -499,6 +509,39 @@ export function useLumiApp() {
     if (calendarWorkspaceSelection.current === workspaceId) setStandaloneSubjects(Array.isArray(data.subjects) ? data.subjects : []);
   }
 
+  async function loadContextHistory(workspaceId = calendarWorkspaceSelection.current) {
+    const loadVersion = ++contextHistoryLoadVersion.current;
+    const response = await fetch(`/api/context/history?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextHistoryFailed"));
+    if (loadVersion !== contextHistoryLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
+    const state: ContextHistoryState = { undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] };
+    setContextHistory(state);
+    return state;
+  }
+
+  // After a saved edit the area where it was made offers Undo for it, and the history bar follows.
+  // Only when this very command recorded a step and that step is the one on top: a save that changed
+  // nothing (no step) never offers to undo some older, unrelated step.
+  function offerContextUndo(area: "claim" | "subject" | "inbox", workspaceId: string, historyEventId: unknown) {
+    setHistoryStatus("");
+    setHistorySkip(null);
+    if (typeof historyEventId !== "string") { setHistoryOffer(""); loadContextHistory(workspaceId).catch(() => undefined); return; }
+    loadContextHistory(workspaceId).then((state) => setHistoryOffer(state && state.undo?.eventId === historyEventId ? area : "")).catch(() => undefined);
+  }
+
+  // What a step does, in words: "Renaming the person" with its target ("Jana → Jan"), for the history bar.
+  const quote = (text: string) => language === "cs" ? `‚${text}‘` : `“${text}”`;
+  const contextStepText = (step: ContextHistoryStep) => {
+    const kind = step.subjectType === "organization" ? "organization" : "person";
+    const action = step.objectType === "claim"
+      ? step.operation === "review" ? tr(`historyStepReview_${step.reviewStatus || "proposed"}`) : tr(`historyStep_${step.operation}`)
+      : tr(`historyStep_${step.operation.replace(".", "_")}_${kind}`);
+    const target = step.objectType === "claim" ? quote(contextPredicateLabel(step.label))
+      : step.operation === "subject.rename" && step.fromTitle && step.toTitle ? `${step.fromTitle} → ${step.toTitle}` : step.label;
+    return { action, target };
+  };
+
   // Once a command has succeeded, refreshing the lists is best effort: a failed refresh is not a failed
   // save, and the UI must already show the saved state so a new click cannot repeat a create.
   async function refreshAfterCommand(...loads: Array<() => Promise<void>>) {
@@ -532,6 +575,7 @@ export function useLumiApp() {
       if (action === "create") { if (draft.newTitle === title) setNewSubjectTitle(""); }
       else if (draft.editId === subject?.id && (action === "archive" || draft.editTitle === title)) { setSubjectEditId(""); setSubjectEditTitle(""); }
       setSubjectStatus(tr("saved"));
+      offerContextUndo("subject", workspaceId, data.historyEventId);
       const refreshed = await refreshAfterCommand(() => loadStandaloneSubjects(workspaceId), () => loadContextClaims(workspaceId));
       if (!refreshed && calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(tr("savedListNotRefreshed"));
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setSubjectStatus(commandFailureMessage(error, tr("subjectActionFailed"))); }
@@ -556,6 +600,7 @@ export function useLumiApp() {
     setClaimStatus(tr("reloading"));
     try {
       await loadContextClaims(workspaceId);
+      loadContextHistory(workspaceId).catch(() => undefined);
       if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(tr("claimsReloadedYourDraft"));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) setClaimStatus(error instanceof Error ? error.message : tr("contextClaimsUnavailable"));
@@ -592,7 +637,7 @@ export function useLumiApp() {
     setClaimEvidence("");
   }
 
-  function editContextClaim(claim: ContextClaimItem) {
+  function editContextClaim(claim: ContextClaimItem, scroll = true) {
     claimEditor.current.nonce += 1;
     setEditingClaim(claim);
     setClaimSubjectId(claim.subject.canonicalEntityId || claim.subject.id);
@@ -609,7 +654,7 @@ export function useLumiApp() {
     setClaimSourceLocator(claim.source?.locator || "");
     setClaimEvidence(claim.evidence?.excerpt || "");
     setClaimStatus("");
-    window.setTimeout(() => document.getElementById("context-claim-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    if (scroll) window.setTimeout(() => document.getElementById("context-claim-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
 
   async function saveContextClaim() {
@@ -673,6 +718,7 @@ export function useLumiApp() {
           setClaimStatus(subjectChanged ? tr("savedSubjectKept") : tr("saved"));
         } else setClaimStatus(tr("saved"));
       }
+      offerContextUndo("claim", workspaceId, data.historyEventId);
       if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setClaimStatus(tr("savedListNotRefreshed"));
       }
@@ -713,6 +759,7 @@ export function useLumiApp() {
         else if (data.claim) setEditingClaim(data.claim as ContextClaimItem);
       }
       setClaimStatus(tr("saved"));
+      offerContextUndo("claim", workspaceId, data.historyEventId);
       if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setClaimStatus(tr("savedListNotRefreshed"));
       }
@@ -724,6 +771,68 @@ export function useLumiApp() {
       setClaimBusy(claim.id, false);
     }
   }
+
+  // Undo/Redo of the top step of this workspace's history. The step the person saw is sent with the
+  // request, so a history that moved on (another tab, a double click) is refused instead of undoing
+  // something else. One intent keeps one key until it is answered; a refusal changes nothing.
+  // "skip" is the owner's way out of a step that is refused for good: it drops that step from its stack
+  // and changes no data.
+  async function contextHistoryAction(action: "undo" | "redo" | "skip") {
+    const workspaceId = calendarWorkspaceSelection.current;
+    const skipping = action === "skip" ? historySkip : null;
+    if (action === "skip" && !skipping) return;
+    const side = skipping ? skipping.stack : action as "undo" | "redo";
+    const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? contextHistory.undo : contextHistory.redo;
+    const busyKey = `history:${workspaceId}`;
+    if (!step || contextInFlight.current.has(busyKey)) return;
+    const scope = `history:${action}:${side}:${workspaceId}`;
+    const intent = contextIntent(scope, JSON.stringify([workspaceId, action, side, step.eventId]));
+    contextInFlight.current.add(busyKey);
+    setHistoryBusy(true); setHistoryStatus(""); setHistoryOffer(""); setHistorySkip(null);
+    // The result of this action replaces what an earlier command said about itself.
+    setClaimStatus(""); setSubjectStatus(""); setContextInboxStatus("");
+    try {
+      const response = await fetch("/api/context/history", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, idempotencyKey: intent.commandKey, workspaceId, expectedEventId: step.eventId, stack: skipping ? skipping.stack : undefined }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        // An answer from the server is final for this attempt; the next click is a new intent.
+        finishContextIntent(scope);
+        const reason = data.code === "history_changed" ? tr("contextHistoryChanged")
+          : data.code === "undo_conflict" || data.code === "revision_conflict" ? tr("contextUndoConflict")
+          : data.code === "duplicate_subject" ? tr("contextUndoDuplicate")
+          : data.code === "archived_subject" || data.code === "invalid_subject" ? tr("contextUndoArchivedSubject")
+          : localizeServerError(data.error, tr) || tr("contextHistoryFailed");
+        if (calendarWorkspaceSelection.current === workspaceId) {
+          setHistoryStatus(reason);
+          // A step that can never succeed would block everything below it: the owner may skip it.
+          if (!skipping && ["undo_conflict", "revision_conflict", "duplicate_subject", "archived_subject", "invalid_subject"].includes(data.code)) {
+            setHistorySkip({ stack: side, eventId: step.eventId });
+          }
+          loadContextHistory(workspaceId).catch(() => undefined);
+          refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId));
+        }
+        return;
+      }
+      finishContextIntent(scope);
+      if (calendarWorkspaceSelection.current !== workspaceId) return;
+      setContextHistory({ undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] });
+      const text = contextStepText(data.step as ContextHistoryStep);
+      setHistoryStatus(`${tr(action === "undo" ? "contextUndone" : action === "redo" ? "contextRedone" : "contextSkipped")} ${text.action} ${text.target}`);
+      if (action === "skip") return;
+      // The editor follows the claim when it shows it: an archived claim cannot be edited any more.
+      if (data.objectType === "claim" && claimEditor.current.objectId === (data.object as ContextClaimItem).id) {
+        if ((data.object as ContextClaimItem).archivedAt) resetClaimDraft(); else editContextClaim(data.object as ContextClaimItem, false);
+      }
+      await refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId));
+    } catch (error) {
+      if (calendarWorkspaceSelection.current === workspaceId) setHistoryStatus(commandFailureMessage(error, tr("contextHistoryFailed")));
+    } finally {
+      contextInFlight.current.delete(busyKey);
+      setHistoryBusy(false);
+    }
+  }
+  contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action); } };
 
   async function previewContextInbox() {
     if (!contextInboxText.trim() || contextInboxBusy) return;
@@ -766,6 +875,7 @@ export function useLumiApp() {
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       setContextInboxStatus(tr("proposalAddedToThe"));
+      offerContextUndo("inbox", workspaceId, data.historyEventId);
       if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setContextInboxStatus(tr("savedListNotRefreshed"));
       }
@@ -792,6 +902,7 @@ export function useLumiApp() {
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       setContextInboxProposals((current) => current.map((item) => item.id === proposal.id ? { ...item, selectedTargetId: id } : item));
       setContextInboxStatus(tr("personCreatedSaveThe"));
+      offerContextUndo("inbox", workspaceId, data.historyEventId);
       if (!(await refreshAfterCommand(() => loadStandaloneSubjects(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setContextInboxStatus(tr("savedListNotRefreshed"));
       }
@@ -808,6 +919,9 @@ export function useLumiApp() {
     loadCalendar(workspaceId).catch(() => undefined);
     loadDurableContext(workspaceId).catch(() => setContextStatus(tr("contextIsUnavailable")));
     setContextClaims([]);
+    setContextHistory({ undo: null, redo: null, recent: [] });
+    setHistoryStatus(""); setHistoryOffer("");
+    loadContextHistory(workspaceId).catch(() => setHistoryStatus(tr("contextHistoryFailed")));
     setClaimHistory({});
     setStandaloneSubjects([]);
     setSubjectHistory({});
@@ -1207,6 +1321,24 @@ export function useLumiApp() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z undo and redo in Context, but only outside text fields: there they
+  // keep the browser's own undo for what is being typed.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== "z" || event.defaultPrevented) return;
+      if (!contextShortcut.current.active || confirmResolver.current) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") || (target as HTMLElement | null)?.isContentEditable) return;
+      event.preventDefault();
+      contextShortcut.current.run(event.shiftKey ? "redo" : "undo");
+    };
+    // Another tab or device may have changed the history while this page was in the background.
+    const onFocus = () => { if (contextShortcut.current.active) loadContextHistory().catch(() => undefined); };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("focus", onFocus);
+    return () => { window.removeEventListener("keydown", onKeyDown); window.removeEventListener("focus", onFocus); };
   }, []);
 
   useEffect(() => {
@@ -2832,6 +2964,13 @@ export function useLumiApp() {
     contextBusy,
     contextClaimAction,
     contextClaims,
+    contextHistory,
+    contextHistoryAction,
+    contextStepText,
+    historyBusy,
+    historyOffer,
+    historySkip,
+    historyStatus,
     contextContent,
     contextInboxBusy,
     contextInboxProposals,

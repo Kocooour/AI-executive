@@ -75,6 +75,15 @@ export function matchingStandaloneSubjects(workspaceId: string, type: Standalone
       (normalizeTitle(subject.title).includes(name) || name.includes(normalizeTitle(subject.title))))));
 }
 
+function assertNoDuplicateSubject(workspaceId: string, type: StandaloneSubjectType, id: string, title: string) {
+  const candidates = getDatabase().prepare(`SELECT id, display_title FROM context_subjects WHERE workspace_id = ?
+    AND subject_type = ? AND canonical_entity_id IS NULL AND archived_at IS NULL`).all(workspaceId, type) as
+    Array<{ id: string; display_title: string }>;
+  if (candidates.some((candidate) => candidate.id !== id && normalizeTitle(candidate.display_title) === normalizeTitle(title))) {
+    throw new ContextSubjectError("A person or organization with this name already exists", 409, "duplicate_subject");
+  }
+}
+
 type SubjectCommand = {
   commandId: string; workspaceId: string; id: string; expectedRevision: number;
   type?: StandaloneSubjectType; title?: string;
@@ -108,14 +117,7 @@ function runCommand(operation: "create" | "rename" | "archive", input: SubjectCo
       const changed = operation === "create" || operation === "archive" || before?.title !== title;
       // Only a real name change is checked against other names, so returning to an earlier name
       // (A -> B -> A) is not blocked by the earlier history of this very subject.
-      if (title && changed) {
-        const candidates = database.prepare(`SELECT id, display_title FROM context_subjects WHERE workspace_id = ?
-          AND subject_type = ? AND canonical_entity_id IS NULL AND archived_at IS NULL`)
-          .all(input.workspaceId, operation === "create" ? input.type! : before!.type) as
-          Array<{ id: string; display_title: string }>;
-        const duplicates = candidates.filter((candidate) => candidate.id !== input.id && normalizeTitle(candidate.display_title) === normalizeTitle(title));
-        if (duplicates.length) throw new ContextSubjectError("A person or organization with this name already exists", 409, "duplicate_subject");
-      }
+      if (title && changed) assertNoDuplicateSubject(input.workspaceId, operation === "create" ? input.type! : before!.type, input.id, title);
       const now = Date.now();
       if (operation === "create") {
         database.prepare(`INSERT INTO context_subjects
@@ -144,16 +146,41 @@ export const archiveStandaloneSubject = (input: SubjectCommand, hooks?: CommandH
 
 export function listStandaloneSubjectHistory(workspaceId: string, id: string) {
   getStandaloneSubject(workspaceId, id);
-  const rows = getDatabase().prepare(`SELECT operation, before_revision AS beforeRevision, after_revision AS afterRevision,
+  const rows = getDatabase().prepare(`SELECT operation, kind, before_revision AS beforeRevision, after_revision AS afterRevision,
     before_payload AS beforePayload, after_payload AS afterPayload, created_at AS createdAt
     FROM context_change_events WHERE workspace_id = ? AND object_id = ?
     ORDER BY created_at DESC, rowid DESC LIMIT 100`).all(workspaceId, id) as Array<Record<string, unknown>>;
   return rows.map((row) => ({
     operation: String(row.operation),
+    kind: String(row.kind || "change"),
     beforeRevision: row.beforeRevision == null ? null : Number(row.beforeRevision),
     afterRevision: Number(row.afterRevision),
     beforeTitle: row.beforePayload ? String((JSON.parse(String(row.beforePayload)) as { title?: string }).title || "") : null,
     afterTitle: row.afterPayload ? String((JSON.parse(String(row.afterPayload)) as { title?: string }).title || "") : null,
     createdAt: Number(row.createdAt),
   }));
+}
+
+/**
+ * Undo/Redo of one person/organization step, as a new revision (see compensateClaim in context-claims).
+ * `after` is the state the reversed step left the subject in, `before` the state it started from; a step
+ * that created the subject is reversed by archiving it. Must run inside a context command.
+ */
+export function compensateSubject(input: { workspaceId: string; id: string; expectedRevision: number;
+  before: StandaloneSubject | null; after: StandaloneSubject }) {
+  const row = rowFor(input.id, input.workspaceId);
+  if (!row) throw new ContextSubjectError("The person or organization no longer exists", 409, "undo_conflict");
+  const current = deserialize(row);
+  if (current.revision !== input.expectedRevision || current.title !== input.after.title ||
+    (current.archivedAt != null) !== (input.after.archivedAt != null)) {
+    throw new ContextSubjectError("The person or organization was changed after this step", 409, "undo_conflict");
+  }
+  const title = (input.before ?? input.after).title;
+  const archived = input.before ? input.before.archivedAt != null : true;
+  if (!archived) assertNoDuplicateSubject(input.workspaceId, current.type, input.id, title);
+  const now = Date.now();
+  requireChanged(getDatabase().prepare(`UPDATE context_subjects SET display_title = ?, archived_at = ?, revision = revision + 1, updated_at = ?
+    WHERE id = ? AND workspace_id = ? AND revision = ?`).run(title, archived ? (current.archivedAt ?? now) : null, now,
+    input.id, input.workspaceId, input.expectedRevision), "Subject changed on another device");
+  return { subject: deserialize(rowFor(input.id, input.workspaceId)!), before: current };
 }

@@ -36,6 +36,7 @@ function seedClaim(page: Page, predicate: string, value: string, sensitivity = "
 // so the claims made here are archived again and no longer listed.
 test.afterEach(async ({ page }) => {
   await page.unroute("**/api/context/claims").catch(() => undefined);
+  await page.unroute("**/api/context/history?*").catch(() => undefined);
   if (!page.url().startsWith("http")) await page.goto("/");
   await page.evaluate(async () => {
     const response = await fetch("/api/context/claims?workspaceId=personal", { cache: "no-store" });
@@ -322,4 +323,270 @@ test("claim cards stack and fit a phone screen", async ({ page }) => {
     const sectionBox = (await section.boundingBox())!;
     expect(sectionBox.x + sectionBox.width).toBeLessThanOrEqual(390);
   }
+});
+
+// Undo and Redo of the Context (claims, people, organizations): durable, and a reversal is a new revision.
+const historyBar = (page: Page) => page.locator(".contextHistoryBar");
+const undoButton = (page: Page) => historyBar(page).getByRole("button", { name: /^Zpět/ });
+const redoButton = (page: Page) => historyBar(page).getByRole("button", { name: /^Znovu/ });
+
+async function saveNewClaim(page: Page, predicate: string, value: string) {
+  await fillDraft(page, predicate, value);
+  await saveButton(page).click();
+  await expect(editor(page).getByRole("status")).toHaveText("Uloženo. Nové tvrzení čeká na kontrolu.");
+}
+
+async function editClaim(page: Page, predicate: string, value: string) {
+  await card(page, predicate).getByRole("button", { name: "Opravit" }).click();
+  await valueInput(page).fill(value);
+  await saveButton(page).click();
+  await expect(card(page, predicate)).toContainText(value);
+}
+
+const serverValue = async (page: Page, predicate: string) => (await serverClaims(page)).find((claim) => claim.predicate === predicate);
+
+test("claim steps are undone twice and redone once, and the bar names each step", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.walk";
+  await expect(undoButton(page)).toBeVisible();
+  await saveNewClaim(page, predicate, "first value");
+  // The saved edit offers a concrete Undo right next to its confirmation, and the bar says the same.
+  await expect(editor(page).getByRole("button", { name: new RegExp(`^Zpět: Přidání tvrzení .*${predicate}`) })).toBeVisible();
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  await expect(undoButton(page)).toContainText(predicate);
+  await editClaim(page, predicate, "second value");
+  await editClaim(page, predicate, "third value");
+  await expect(undoButton(page)).toContainText("Úprava tvrzení");
+  await expect(redoButton(page)).toBeDisabled();
+  await expect(redoButton(page)).toContainText("Není co obnovit");
+  expect((await serverValue(page, predicate))?.revision).toBe(3);
+
+  await undoButton(page).click();
+  await expect(card(page, predicate)).toContainText("second value");
+  await expect(historyBar(page).getByRole("status")).toContainText("Vráceno zpět: Úprava tvrzení");
+  await undoButton(page).click();
+  await expect(card(page, predicate)).toContainText("first value");
+  await expect(redoButton(page)).toContainText("Úprava tvrzení");
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  await redoButton(page).click();
+  await expect(card(page, predicate)).toContainText("second value");
+  await expect(card(page, predicate)).not.toContainText("third value");
+  // Every reversal is a new revision: 1 create, 2 and 3 edits, 4 and 5 undos, 6 redo.
+  const claim = await serverValue(page, predicate);
+  expect(claim?.revision).toBe(6);
+  expect(claim?.literal?.value).toBe("second value");
+  // The undone third edit is still redoable; a new edit would end that.
+  await expect(redoButton(page)).toContainText("Úprava tvrzení");
+  await editClaim(page, predicate, "fourth value");
+  await expect(redoButton(page)).toBeDisabled();
+});
+
+test("Undo survives a reload and the editor follows the undone claim", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.reload";
+  await saveNewClaim(page, predicate, "kept value");
+  await editClaim(page, predicate, "changed value");
+  await undoButton(page).click();
+  await expect(card(page, predicate)).toContainText("kept value");
+  await page.reload();
+  await expect(editor(page)).toBeVisible();
+  await waitUntilQuiet(page);
+  // Nothing is held in the page: both stacks come from the server.
+  await expect(redoButton(page)).toContainText("Úprava tvrzení");
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  await redoButton(page).click();
+  await expect(card(page, predicate)).toContainText("changed value");
+  // With the claim open in the editor, Undo of its last edit brings the editor to the new revision.
+  await card(page, predicate).getByRole("button", { name: "Opravit" }).click();
+  await expect(valueInput(page)).toHaveValue("changed value");
+  await undoButton(page).click();
+  await expect(valueInput(page)).toHaveValue("kept value");
+  // Undoing the create archives the claim, and the editor lets go of it.
+  await undoButton(page).click();
+  await expect(card(page, predicate)).toHaveCount(0);
+  await expect(editor(page).getByRole("heading", { name: "Přidat tvrzení" })).toBeVisible();
+  expect((await serverValue(page, predicate))).toBeUndefined();
+});
+
+test("an Undo that no longer matches the history is refused and nothing is changed", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.stale";
+  await saveNewClaim(page, predicate, "mine");
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  // Another tab (or device) edits the same claim; this page still shows the older step. (A page that
+  // regains focus would refresh the bar by itself, so the refresh is held back here.)
+  const staleBar = await page.evaluate(() => fetch("/api/context/history?workspaceId=personal", { cache: "no-store" }).then((response) => response.text()));
+  await page.route("**/api/context/history?*", (route) => route.request().method() === "GET"
+    ? route.fulfill({ status: 200, contentType: "application/json", body: staleBar }) : route.continue());
+  const other = await page.context().newPage();
+  await other.goto("/?view=Context");
+  await expect(other.locator("#context-claim-editor")).toBeVisible();
+  const edited = await other.evaluate(async (target) => {
+    const list = await (await fetch("/api/context/claims?workspaceId=personal", { cache: "no-store" })).json();
+    const claim = (list.claims as Array<{ id: string; predicate: string; revision: number }>).find((item) => item.predicate === target)!;
+    const response = await fetch("/api/context/claims", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "update", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: claim.id,
+        expectedRevision: claim.revision, predicate: target, literal: { type: "string", value: "from the other tab" },
+        freshness: "current", sensitivity: "normal" }) });
+    return response.status;
+  }, predicate);
+  expect(edited).toBe(200);
+  await other.close();
+  const before = await serverValue(page, predicate);
+  await undoButton(page).click();
+  await expect(historyBar(page).getByRole("status")).toContainText("Historie se mezitím změnila");
+  await expect(historyBar(page).getByRole("status")).toContainText("nic nevrátilo");
+  const after = await serverValue(page, predicate);
+  expect(after?.revision).toBe(before?.revision);
+  expect(after?.literal?.value).toBe("from the other tab");
+  // Once the page reads the history again, the bar shows the step that really is on top, and that one can be undone.
+  await page.unroute("**/api/context/history?*");
+  await page.getByRole("button", { name: "Obnovit tvrzení" }).click();
+  await expect(undoButton(page)).toContainText("Úprava tvrzení");
+  await undoButton(page).click();
+  await expect(card(page, predicate)).toContainText("mine");
+});
+
+test("Ctrl+Z undoes outside text fields and leaves the browser's own undo inside them", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.keys";
+  await saveNewClaim(page, predicate, "typed once");
+  await editClaim(page, predicate, "typed twice");
+  const posts: string[] = [];
+  page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/api/context/history")) posts.push(request.postData() || ""); });
+  // Inside the value field the shortcut belongs to the field.
+  await card(page, predicate).getByRole("button", { name: "Opravit" }).click();
+  await valueInput(page).click();
+  await page.keyboard.type(" and more");
+  await page.keyboard.press("Control+KeyZ");
+  await page.keyboard.press("Control+Shift+KeyZ");
+  await page.waitForTimeout(400);
+  expect(posts).toHaveLength(0);
+  await expect(card(page, predicate)).toContainText("typed twice");
+  // Outside any field it is the context Undo/Redo.
+  await page.getByRole("heading", { name: "Co Lumi ví" }).click();
+  await page.keyboard.press("Control+KeyZ");
+  await expect(card(page, predicate)).toContainText("typed once");
+  expect(posts).toHaveLength(1);
+  await page.keyboard.press("Control+Shift+KeyZ");
+  await expect(card(page, predicate)).toContainText("typed twice");
+  expect(posts).toHaveLength(2);
+  expect((await serverValue(page, predicate))?.revision).toBe(4);
+});
+
+test("the history bar fits a phone screen and its buttons are easy to hit", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openContext(page);
+  const predicate = "e2e.history.a_long_relationship_name_that_has_to_wrap_on_a_phone_screen";
+  await seedClaim(page, predicate, "x");
+  await openContext(page);
+  await expect(undoButton(page)).toContainText(predicate);
+  for (const button of [undoButton(page), redoButton(page)]) {
+    const box = (await button.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await undoButton(page).tap().catch(() => undoButton(page).click());
+  await expect(card(page, predicate)).toHaveCount(0);
+  await expect(redoButton(page)).toContainText(predicate);
+});
+
+test("a save that changed nothing offers no Undo for an older step", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.noop";
+  await saveNewClaim(page, predicate, "unchanged");
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  // Saving the claim again without any change records no step, so nothing is offered.
+  await card(page, predicate).getByRole("button", { name: "Opravit" }).click();
+  await saveButton(page).click();
+  await expect(editor(page).getByRole("status")).toHaveText("Uloženo.");
+  await expect(editor(page).getByRole("button", { name: /^Zpět:/ })).toHaveCount(0);
+  expect((await serverValue(page, predicate))?.revision).toBe(1);
+  // The same for a person renamed to the name they already have.
+  const title = `E2E noop ${Date.now()}`;
+  const seeded = await page.evaluate(async (name) => {
+    const response = await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "create", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id: crypto.randomUUID(),
+        expectedRevision: 0, type: "person", title: name }) });
+    return (await response.json()).subject as { id: string };
+  }, title);
+  await openContext(page);
+  const people = page.locator(".contextPeople");
+  await people.locator("article", { hasText: title }).getByRole("button", { name: "Přejmenovat" }).click();
+  await people.getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(people.getByRole("status")).toHaveText("Uloženo.");
+  await expect(people.getByRole("button", { name: /^Zpět:/ })).toHaveCount(0);
+  // A real change does offer it, naming the step.
+  await people.locator("article", { hasText: title }).getByRole("button", { name: "Přejmenovat" }).click();
+  await people.getByLabel("Upravit jméno").fill(`${title} B`);
+  await people.getByRole("button", { name: "Uložit", exact: true }).click();
+  const offer = people.getByRole("button", { name: /^Zpět: Přejmenování osoby/ });
+  await expect(offer).toBeVisible();
+  expect((await offer.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await offer.click();
+  await expect(people.locator("article", { hasText: title }).first()).toBeVisible();
+  await expect(historyBar(page).getByRole("status")).toContainText(`Vráceno zpět: Přejmenování osoby ${title} → ${title} B`);
+  await expect(people.getByRole("status")).toHaveCount(0);
+  await page.evaluate(async (id) => {
+    const list = await (await fetch("/api/context/subjects?workspaceId=personal&includeArchived=true", { cache: "no-store" })).json();
+    const subject = (list.subjects as Array<{ id: string; revision: number }>).find((item) => item.id === id)!;
+    await fetch("/api/context/subjects", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "archive", idempotencyKey: crypto.randomUUID(), workspaceId: "personal", id, expectedRevision: subject.revision }) });
+  }, seeded.id);
+});
+
+test("a step that is refused for good can be skipped, which changes no data and reaches the older step", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.skip";
+  await saveNewClaim(page, predicate, "older value");
+  await editClaim(page, predicate, "newer value");
+  // The server's refusal is simulated for the first Undo (a real one needs a change outside the history).
+  let refused = false;
+  await page.route("**/api/context/history", async (route) => {
+    if (route.request().method() === "POST" && !refused && route.request().postData()?.includes('"action":"undo"')) {
+      refused = true;
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "The claim was changed after this step", code: "undo_conflict" }) });
+    }
+    return route.continue();
+  });
+  const before = await serverValue(page, predicate);
+  await undoButton(page).click();
+  await expect(historyBar(page).getByRole("status")).toContainText("Nevráceno");
+  const skip = historyBar(page).getByRole("button", { name: "Přeskočit tento krok" });
+  await expect(skip).toBeVisible();
+  await expect(historyBar(page)).toContainText("data se nijak nezmění");
+  await skip.click();
+  await expect(historyBar(page).getByRole("status")).toContainText("Přeskočeno: Úprava tvrzení");
+  await expect(skip).toHaveCount(0);
+  // Nothing changed in the claim; the older step (the create) is the top now.
+  const after = await serverValue(page, predicate);
+  expect(after?.revision).toBe(before?.revision);
+  expect(after?.literal?.value).toBe("newer value");
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+  await card(page, predicate).getByRole("button", { name: "Historie" }).click();
+  await expect(card(page, predicate).locator(".contextSubjectHistory li").first()).toContainText("Přeskočeno: Úprava tvrzení");
+  // It stays skipped after a reload.
+  await page.reload();
+  await expect(editor(page)).toBeVisible();
+  await expect(undoButton(page)).toContainText("Přidání tvrzení");
+});
+
+test("the Undo offer is a real button that is not covered on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openContext(page);
+  await saveNewClaim(page, "e2e.history.offer", "phone");
+  const offer = editor(page).getByRole("button", { name: /^Zpět: Přidání tvrzení/ });
+  await offer.scrollIntoViewIfNeeded();
+  const box = (await offer.boundingBox())!;
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  const covered = await offer.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return !(hit === element || element.contains(hit));
+  });
+  expect(covered).toBe(false);
+  expect(await offer.evaluate((element) => getComputedStyle(element).borderTopWidth)).not.toBe("0px");
 });
