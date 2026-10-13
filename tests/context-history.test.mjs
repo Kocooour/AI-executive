@@ -488,18 +488,63 @@ test("skipping a step that cannot succeed makes the next older step the top, and
   assert.notEqual(undo(ws2).object.archivedAt, null);
   assert.equal(subjects.getStandaloneSubject(ws2, keep.id).archivedAt !== null, true);
   // A skip on the redo stack leaves the undo stack alone, and the skip itself is not a step.
-  const ws3 = newWorkspace();
-  makeClaim(ws3); makeSubject(ws3, "Redo person");
-  undo(ws3);
-  const redoTop = history.getContextHistory(ws3);
-  history.runHistoryCommand({ action: "skip", stack: "redo", commandId: randomUUID(), workspaceId: ws3, expectedEventId: redoTop.redo.eventId });
-  const after = history.getContextHistory(ws3);
-  assert.equal(after.redo, null);
-  assert.equal(after.undo.operation, "create");
-  assert.equal(after.recent.length, 1);
+  const ws4 = newWorkspace();
+  const blocked = makeSubject(ws4, "Original person");
+  undo(ws4);
+  // Simulate a concurrent write outside Context commands without clearing the Redo stack.
+  db().prepare("UPDATE context_subjects SET display_title = ?, revision = revision + 1 WHERE id = ?").run("Externally changed", blocked.id);
+  const redoStep = history.getContextHistory(ws4).redo;
+  assert.throws(() => redo(ws4), (error) => error.code === "undo_conflict");
+  history.runHistoryCommand({ action: "skip", stack: "redo", commandId: randomUUID(), workspaceId: ws4, expectedEventId: redoStep.eventId });
+  const redoAfter = history.getContextHistory(ws4);
+  assert.equal(redoAfter.redo, null);
+  assert.equal(redoAfter.undo, null);
   // The skip survives a restart.
-  const seen = child(`const history = await import("./lib/context-history.ts"); console.log(JSON.stringify(history.getContextHistory(${JSON.stringify(ws3)})));`);
-  assert.deepEqual(seen, JSON.parse(JSON.stringify(after)));
+  const seen = child(`const history = await import("./lib/context-history.ts"); console.log(JSON.stringify(history.getContextHistory(${JSON.stringify(ws4)})));`);
+  assert.deepEqual(seen, JSON.parse(JSON.stringify(redoAfter)));
+});
+
+test("skip refuses a compensatable step without object, history, review or idempotency writes", () => {
+  const ws = newWorkspace();
+  let claim = makeClaim(ws);
+  claim = review(ws, claim, "confirmed");
+  const top = history.getContextHistory(ws).undo.eventId;
+  const key = randomUUID();
+  const rowBefore = db().prepare("SELECT * FROM context_claims WHERE id = ?").get(claim.id);
+  const eventCount = events(ws).length;
+  const reviewCount = claims.listClaimReviewEvents(ws, claim.id).length;
+  const commandCount = db().prepare("SELECT COUNT(*) AS n FROM context_commands WHERE workspace_id = ?").get(ws).n;
+  assert.throws(() => history.runHistoryCommand({ action: "skip", stack: "undo", commandId: key, workspaceId: ws, expectedEventId: top }),
+    (error) => error.status === 409 && error.code === "skip_not_needed");
+  assert.deepEqual(db().prepare("SELECT * FROM context_claims WHERE id = ?").get(claim.id), rowBefore);
+  assert.equal(events(ws).length, eventCount);
+  assert.equal(claims.listClaimReviewEvents(ws, claim.id).length, reviewCount);
+  assert.equal(db().prepare("SELECT COUNT(*) AS n FROM context_commands WHERE workspace_id = ?").get(ws).n, commandCount);
+  assert.equal(history.getContextHistory(ws).undo.eventId, top);
+  assert.equal(history.runHistoryCommand({ action: "undo", commandId: key, workspaceId: ws, expectedEventId: top }).changed, true,
+    "the rejected skip did not consume its idempotency key");
+
+  const redoTop = history.getContextHistory(ws).redo.eventId;
+  const redoRowBefore = db().prepare("SELECT * FROM context_claims WHERE id = ?").get(claim.id);
+  const redoEventCount = events(ws).length;
+  const redoReviewCount = claims.listClaimReviewEvents(ws, claim.id).length;
+  assert.throws(() => history.runHistoryCommand({ action: "skip", stack: "redo", commandId: randomUUID(), workspaceId: ws, expectedEventId: redoTop }),
+    (error) => error.status === 409 && error.code === "skip_not_needed");
+  assert.deepEqual(db().prepare("SELECT * FROM context_claims WHERE id = ?").get(claim.id), redoRowBefore);
+  assert.equal(events(ws).length, redoEventCount);
+  assert.equal(claims.listClaimReviewEvents(ws, claim.id).length, redoReviewCount);
+  assert.equal(history.getContextHistory(ws).redo.eventId, redoTop);
+});
+
+test("skip refuses an unexpected compensation failure", () => {
+  const ws = newWorkspace();
+  makeClaim(ws);
+  const top = history.getContextHistory(ws).undo.eventId;
+  db().prepare("UPDATE context_change_events SET after_payload = ? WHERE id = ?").run("invalid JSON", top);
+  const eventCount = events(ws).length;
+  assert.throws(() => history.runHistoryCommand({ action: "skip", stack: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: top }), SyntaxError);
+  assert.equal(events(ws).length, eventCount);
+  assert.equal(history.readHistoryStacks(ws).undo[0], top);
 });
 
 test("events written without a sequence by an older binary are ordered on the next start", () => {

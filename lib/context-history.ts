@@ -50,6 +50,7 @@ type EventRow = {
 };
 
 const recentLimit = 20;
+const skippableConflicts = new Set(["undo_conflict", "duplicate_subject", "archived_subject"]);
 
 /** The two stacks of a workspace, newest step first, as event ids. */
 export function readHistoryStacks(workspaceId: string) {
@@ -172,6 +173,28 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
       const expectedRevision = Number(latest?.after_revision ?? event.after_revision);
       const step = describe(event, side);
       if (input.action === "skip") {
+        // Try the very same compensation as Undo/Redo under the command's write lock. The savepoint
+        // rolls back even a successful attempt (including claim review events), so this check never
+        // changes an object. Only a known, user-resolvable conflict permits dropping the step.
+        const database = getDatabase();
+        let failure: unknown;
+        database.exec("SAVEPOINT context_skip_preflight");
+        try {
+          if (objectType === "claim") {
+            compensateClaim({ workspaceId: input.workspaceId, id: event.object_id, mode: side, expectedRevision,
+              before: parse<ContextClaim>(event.before_payload), after: parse<ContextClaim>(event.after_payload)! });
+          } else {
+            compensateSubject({ workspaceId: input.workspaceId, id: event.object_id, expectedRevision,
+              before: parse<StandaloneSubject>(event.before_payload), after: parse<StandaloneSubject>(event.after_payload)! });
+          }
+        } catch (error) {
+          failure = error;
+        } finally {
+          database.exec("ROLLBACK TO SAVEPOINT context_skip_preflight");
+          database.exec("RELEASE SAVEPOINT context_skip_preflight");
+        }
+        if (!failure) throw new ContextCommandError("This step can still be undone or redone", 409, "skip_not_needed");
+        if (!(failure instanceof ContextCommandError && failure.status === 409 && skippableConflicts.has(failure.code))) throw failure;
         // A marker only: no object is touched, and the revision it records is the one the object already has.
         return { objectId: event.object_id, operation: event.operation, objectType, kind: "skip" as const, revertsEventId: event.id, changed: true,
           result: { step, objectType, object: null }, before: null, after: { revision: expectedRevision, payload: {} } };
