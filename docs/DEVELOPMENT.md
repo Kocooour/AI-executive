@@ -1,6 +1,6 @@
 # Development workflow
 
-This guide defines the local conventions for developing and testing Lumi in parallel. It supplements [AGENTS.md](../AGENTS.md); the product and architecture contract remains [README.md](../README.md).
+This guide defines the local conventions for developing and testing Lumi in parallel. It supplements [AGENTS.md](../AGENTS.md); the canonical product requirements are in [PRODUCT.md](PRODUCT.md), UX/UI requirements in [UX-UI.md](UX-UI.md), and technical contracts in [ARCHITECTURE.md](ARCHITECTURE.md); [README.md](../README.md) is the index.
 
 ## Working conventions
 
