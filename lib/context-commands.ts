@@ -50,7 +50,10 @@ export interface CommandMutation<T> {
   /** Undo/Redo only: what kind of step this is and the event it reverses. Ordinary changes omit both. */
   kind?: "change" | "undo" | "redo" | "skip";
   revertsEventId?: string;
-  objectType?: "claim" | "subject";
+  objectType?: "claim" | "subject" | "source" | "evidence";
+  /** The claim this change affects (evidence changes touch their claim) and the revision the claim reached. */
+  claimId?: string;
+  claimRevision?: number;
 }
 
 export interface CommandRequest<T> {
@@ -62,6 +65,8 @@ export interface CommandRequest<T> {
   request: unknown;
   mutate: () => CommandMutation<T>;
   hooks?: CommandHooks;
+  /** Who made the change; the owner unless the server itself repaired data. */
+  actor?: "owner" | "system";
 }
 
 export function runContextCommand<T extends object>(command: CommandRequest<T>): T & { replayed: boolean; changed: boolean; historyEventId: string | null } {
@@ -69,6 +74,7 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
   assertCommandWorkspace(command.workspaceId);
   const database = getDatabase();
   const hash = createHash("sha256").update(`${command.operation}:${stableStringify(command.request)}`).digest("hex");
+  const startedAt = Date.now();
   database.exec("BEGIN IMMEDIATE");
   try {
     const prior = database.prepare(`SELECT request_hash, result_payload FROM context_commands
@@ -84,17 +90,20 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
     const mutation = command.mutate();
     command.hooks?.afterMutate?.();
     const eventId = randomUUID();
+    const objectType = mutation.objectType ?? (mutation.operation.startsWith("subject.") ? "subject"
+      : mutation.operation.startsWith("source.") ? "source" : mutation.operation.startsWith("evidence.") ? "evidence" : "claim");
     if (mutation.changed) {
       database.prepare(`INSERT INTO context_change_events
         (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
-         before_payload, after_payload, created_at, sequence, object_type, kind, reverts_event_id)
-        VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?,
-          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM context_change_events), ?, ?, ?)`)
-        .run(eventId, command.commandId, command.workspaceId, mutation.objectId, mutation.operation,
+         before_payload, after_payload, created_at, sequence, object_type, kind, reverts_event_id, claim_id, claim_revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM context_change_events), ?, ?, ?, ?, ?)`)
+        .run(eventId, command.commandId, command.workspaceId, command.actor ?? "owner", mutation.objectId, mutation.operation,
           mutation.before?.revision ?? null, mutation.after.revision,
           mutation.before ? JSON.stringify(mutation.before.payload) : null, JSON.stringify(mutation.after.payload), Date.now(),
-          mutation.objectType ?? (mutation.operation.startsWith("subject.") ? "subject" : "claim"),
-          mutation.kind ?? "change", mutation.revertsEventId ?? null);
+          objectType, mutation.kind ?? "change", mutation.revertsEventId ?? null,
+          objectType === "claim" ? mutation.objectId : mutation.claimId ?? null,
+          objectType === "claim" ? mutation.after.revision : mutation.claimRevision ?? null);
     }
     // The id of the history step this command recorded (null for a no-op); a retry returns the original one.
     const result = { ...mutation.result, replayed: false, changed: mutation.changed, historyEventId: mutation.changed ? eventId : null };
@@ -102,6 +111,10 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
       (workspace_id, idempotency_key, request_hash, result_payload, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(command.workspaceId, command.commandId, hash, JSON.stringify(result), Date.now());
     command.hooks?.beforeCommit?.();
+    // Claims this command wrote have their evidence records in line with their JSON view (an older binary that edits the
+    // JSON bumps the revision without this mark, which is how the start-up reconciliation finds it).
+    database.prepare(`UPDATE context_claims SET legacy_synced_revision = revision WHERE workspace_id = ? AND updated_at >= ?
+      AND legacy_synced_revision IS NOT revision`).run(command.workspaceId, startedAt);
     database.exec("COMMIT");
     return result;
   } catch (error) {

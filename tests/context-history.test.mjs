@@ -76,7 +76,7 @@ test("undo and redo of every claim operation are new revisions and only append h
   // update -> previous editable fields, including source and evidence; redo -> the newer ones
   let claim = getClaim(ws, created.id);
   const updated = edit(ws, claim, "Loud evenings", { predicate: "importance", freshness: "stale", sensitivity: "restricted",
-    validFrom: "2026-01-01", validTo: "2026-12-31", source: { provider: "manual", locator: "https://example.test/a" },
+    validFrom: "2026-01-01", validTo: "2026-12-31", source: { provider: "manual", locator: "https://example.test/a", coverage: "excerpt" },
     evidence: { excerpt: "Quoted", stance: "supports" } });
   assert.equal(undo(ws).object.revision, updated.revision + 1);
   claim = getClaim(ws, created.id);

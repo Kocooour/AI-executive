@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { assertCommandWorkspace, contextIdPattern, ContextCommandError, requireChanged, runContextCommand, stableStringify, type CommandHooks } from "./context-commands";
 import { getNotificationPreferences } from "./notifications";
-import { getDatabase, readSnapshot } from "./server-store";
+import { getDatabase, onDatabaseReady, readSnapshot } from "./server-store";
+import { reconcileLegacyClaimJson } from "./context-legacy-repair";
 import { getStandaloneSubject } from "./context-subjects";
+import {
+  activeEvidenceByClaim, applyLegacySourceEvidence, claimEvidence, claimEvidenceResponseLimit, evidenceSetFingerprint, legacyProjection,
+  reprojectClaimJson, restoreClaimEvidence, summarizeCoverage, validateSourceTimestamp,
+  type ClaimEvidenceItem, type ClaimEvidenceMetadata, type ClaimSourceCoverage, type ClaimSourceMetadata,
+} from "./context-sources";
+import { checkRelation, getRelationDefinition, relationStatusOf, type RelationStatus } from "./context-relations";
+
+export type { ClaimEvidenceMetadata, ClaimSourceMetadata } from "./context-sources";
 
 export type ClaimReviewStatus = "proposed" | "confirmed" | "rejected";
 export type ClaimFreshness = "current" | "needs_review" | "stale";
@@ -22,23 +31,6 @@ export interface ClaimSubjectRef {
   archivedAt?: number | null;
 }
 
-export interface ClaimSourceMetadata {
-  provider?: string;
-  externalId?: string;
-  locator?: string;
-  author?: string;
-  authorRole?: string;
-  sourceAt?: string;
-  ingestedAt?: string;
-  coverage?: "metadata" | "excerpt" | "body";
-}
-
-export interface ClaimEvidenceMetadata {
-  locator?: string;
-  excerpt?: string;
-  stance?: "supports" | "contradicts";
-}
-
 export interface ContextClaim {
   id: string;
   workspaceId: string;
@@ -52,8 +44,16 @@ export interface ContextClaim {
   provenance: "owner";
   validFrom: string | null;
   validTo: string | null;
+  /** The newest evidence's source and the evidence itself, in the shape claims had before the records; kept for older clients. */
   source: ClaimSourceMetadata | null;
   evidence: ClaimEvidenceMetadata | null;
+  /** Active evidence records with their source, newest first, capped. */
+  evidenceItems: ClaimEvidenceItem[];
+  /** How many active evidence records the claim has (the list above is capped). */
+  evidenceCount: number;
+  sourceCoverage: ClaimSourceCoverage;
+  /** Relationship claims only: whether the predicate and the endpoint types are in the relation registry. */
+  relationStatus: RelationStatus | null;
   revision: number;
   archivedAt: number | null;
   recordedAt: number;
@@ -170,18 +170,6 @@ function validateDate(value: string | null | undefined, label: string) {
   return value;
 }
 
-function validateSourceTimestamp(value: string, label: string) {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    validateDate(value, label);
-    return;
-  }
-  const match = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d{1,9})?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
-  if (!match) throw new ContextClaimError(`${label} is invalid`);
-  const [, year, month, day] = match;
-  validateDate(`${year}-${month}-${day}`, label);
-  if (Number.isNaN(Date.parse(value))) throw new ContextClaimError(`${label} is invalid`);
-}
-
 function cleanMetadata<T extends Record<string, unknown>>(value: T | null | undefined, limits: Record<string, number>): T | null {
   if (!value) return null;
   const output: Record<string, unknown> = {};
@@ -210,7 +198,7 @@ function cleanSource(value: ClaimSourceMetadata | null | undefined) {
 
 function cleanEvidence(value: ClaimEvidenceMetadata | null | undefined, source: ClaimSourceMetadata | null) {
   const evidence = cleanMetadata(value as Record<string, unknown> | null | undefined, {
-    locator: 1000, excerpt: 2000, stance: 20,
+    locator: 1000, excerpt: 500, stance: 20,
   }) as ClaimEvidenceMetadata | null;
   if (evidence && !source) throw new ContextClaimError("Evidence requires source metadata");
   if (evidence?.stance && !new Set(["supports", "contradicts"]).has(evidence.stance)) {
@@ -275,20 +263,28 @@ function readSubject(id: string): ClaimSubjectRef {
     revision: Number(row.revision), archivedAt: row.archived_at == null ? null : Number(row.archived_at) };
 }
 
-function deserialize(row: ClaimRow): ContextClaim {
+function deserialize(row: ClaimRow, preloaded?: ClaimEvidenceItem[]): ContextClaim {
   const level = readSensitivity(row.sensitivity);
+  const evidenceAll = preloaded ?? claimEvidence(row.workspace_id, row.id);
+  const projection = legacyProjection(evidenceAll);
+  const subject = readSubject(row.subject_id);
+  const target = row.target_subject_id ? readSubject(row.target_subject_id) : null;
+  // A relationship outside the registry is not rewritten; it reads as needing review (and so is never eligible).
+  const relationStatus = target ? relationStatusOf(row.predicate, subject.type, target.type) : null;
+  const unregistered = relationStatus != null && relationStatus !== "registered";
   const literal = row.literal_type ? {
     type: row.literal_type as ClaimLiteralType,
     value: JSON.parse(String(row.literal_value)),
   } : null;
   return {
-    id: row.id, workspaceId: row.workspace_id, subject: readSubject(row.subject_id), predicate: row.predicate,
-    literal, target: row.target_subject_id ? readSubject(row.target_subject_id) : null,
-    reviewStatus: row.review_status as ClaimReviewStatus, freshness: level.unknown ? "needs_review" : row.freshness as ClaimFreshness,
+    id: row.id, workspaceId: row.workspace_id, subject, predicate: row.predicate,
+    literal, target,
+    reviewStatus: row.review_status as ClaimReviewStatus, freshness: level.unknown || unregistered ? "needs_review" : row.freshness as ClaimFreshness,
     sensitivity: level.sensitivity, provenance: "owner",
     validFrom: row.valid_from, validTo: row.valid_to,
-    source: row.source_metadata ? JSON.parse(row.source_metadata) : null,
-    evidence: row.evidence_metadata ? JSON.parse(row.evidence_metadata) : null,
+    source: projection.source, evidence: projection.evidence,
+    evidenceItems: evidenceAll.slice(0, claimEvidenceResponseLimit), evidenceCount: evidenceAll.length,
+    sourceCoverage: summarizeCoverage(evidenceAll), relationStatus,
     revision: Number(row.revision), archivedAt: row.archived_at == null ? null : Number(row.archived_at),
     recordedAt: Number(row.recorded_at), updatedAt: Number(row.updated_at),
   };
@@ -329,6 +325,25 @@ function claimCommand(operation: string, input: { commandId: string; workspaceId
   });
 }
 
+/** On an update the subject is the claim's own, which the request does not repeat. */
+function subjectOfExistingClaim(input: UpdateClaimInput) {
+  const row = rowForClaim(input.id, input.workspaceId);
+  if (!row) throw new ContextClaimError("Claim not found", 404, "not_found");
+  return readSubject(row.subject_id);
+}
+
+/**
+ * An active relationship claim is unique per subject, predicate and target in a workspace; for a symmetric relation
+ * the reverse direction is the same relationship.
+ */
+function duplicateRelationId(workspaceId: string, subjectId: string, predicate: string, targetId: string, exceptId: string) {
+  const symmetric = getRelationDefinition(predicate)?.symmetric === true;
+  const row = getDatabase().prepare(`SELECT id FROM context_claims WHERE workspace_id = ? AND predicate = ? AND archived_at IS NULL AND id != ?
+    AND ((subject_id = ? AND target_subject_id = ?) ${symmetric ? "OR (subject_id = ? AND target_subject_id = ?)" : ""}) LIMIT 1`)
+    .get(...[workspaceId, predicate, exceptId, subjectId, targetId, ...(symmetric ? [targetId, subjectId] : [])]) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: ClaimSubjectRef) {
   if (!idPattern.test(input.id)) throw new ContextClaimError("Claim identifier is invalid");
   if (!predicatePattern.test(input.predicate)) throw new ContextClaimError("Predicate is invalid");
@@ -338,6 +353,16 @@ function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: Cl
   const literal = cleanLiteral(input.literal);
   const target = input.target ? canonicalSubject(input.workspaceId, input.target) : null;
   if (Boolean(literal) === Boolean(target)) throw new ContextClaimError("Claim requires exactly one literal or target");
+  if (target) {
+    // A relationship claim must be a registered relation between allowed endpoint types; literal claims keep free predicates.
+    const subjectType = (subject ?? subjectOfExistingClaim(input as UpdateClaimInput)).type;
+    const check = checkRelation(input.predicate, subjectType, target.type);
+    if (!check.ok) {
+      throw new ContextClaimError(check.reason === "unregistered_predicate"
+        ? `"${input.predicate}" is not a known relation. Choose one from the relation registry.`
+        : `The relation "${input.predicate}" does not link a ${subjectType} to a ${target.type}`, 400, "invalid_relation");
+    }
+  }
   const source = cleanSource(input.source);
   const evidence = cleanEvidence(input.evidence, source);
   const validFrom = validateDate(input.validFrom, "validFrom");
@@ -353,6 +378,9 @@ export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks, me
     const clean = validateCommon(input, subject);
     if (Number(input.expectedRevision) !== 0) throw new ContextClaimError("New claims require revision 0", 409, "revision_conflict");
     if (rowForClaim(input.id, input.workspaceId)) throw new ContextClaimError("Claim already exists", 409, "claim_exists");
+    if (clean.target && duplicateRelationId(input.workspaceId, subject.id, input.predicate, clean.target.id, input.id)) {
+      throw new ContextClaimError("This relationship already exists", 409, "duplicate_relation");
+    }
     ensureSubject(input.workspaceId, subject);
     if (clean.target) ensureSubject(input.workspaceId, clean.target);
     const now = Date.now();
@@ -363,8 +391,10 @@ export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks, me
       VALUES (?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, 'owner', ?, ?, ?, ?, 1, NULL, ?, ?)`)
       .run(input.id, input.workspaceId, subject.id, input.predicate, clean.literal?.type || null,
         clean.literal ? JSON.stringify(clean.literal.value) : null, clean.target?.id || null, input.freshness,
-        input.sensitivity, clean.validFrom, clean.validTo, clean.source ? JSON.stringify(clean.source) : null,
-        clean.evidence ? JSON.stringify(clean.evidence) : null, now, now);
+        input.sensitivity, clean.validFrom, clean.validTo, null, null, now, now);
+    // The legacy source/evidence input becomes records (and the JSON columns are written back from them).
+    if (applyLegacySourceEvidence({ workspaceId: input.workspaceId, claimId: input.id, claimSensitivity: input.sensitivity as ClaimSensitivity,
+      source: clean.source, evidence: clean.evidence })) reprojectClaimJson(input.workspaceId, input.id);
     return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before: null, changed: true };
   }, meta);
 }
@@ -380,24 +410,29 @@ export function updateOwnerClaim(raw: UpdateClaimInput, hooks?: CommandHooks) {
       ? { entityId: before.subject.canonicalEntityId } : { subjectId: before.subject.id });
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be edited", 409, "archived");
+    if (clean.target && duplicateRelationId(input.workspaceId, before.subject.id, input.predicate, clean.target.id, input.id)) {
+      throw new ContextClaimError("This relationship already exists", 409, "duplicate_relation");
+    }
     if (clean.target) ensureSubject(input.workspaceId, clean.target);
     const comparable = { predicate: input.predicate, literal: clean.literal, targetId: clean.target?.id || null,
-      freshness: input.freshness, sensitivity: input.sensitivity, validFrom: clean.validFrom, validTo: clean.validTo,
-      source: clean.source, evidence: clean.evidence };
+      freshness: input.freshness, sensitivity: input.sensitivity, validFrom: clean.validFrom, validTo: clean.validTo };
     const existing = { predicate: before.predicate, literal: before.literal, targetId: before.target?.id || null,
-      freshness: before.freshness, sensitivity: before.sensitivity, validFrom: before.validFrom, validTo: before.validTo,
-      source: before.source, evidence: before.evidence };
+      freshness: before.freshness, sensitivity: before.sensitivity, validFrom: before.validFrom, validTo: before.validTo };
+    // A legacy `source` in the request sets the claim's newest evidence; an absent or null one leaves the records alone
+    // (evidence is removed by archiving it). Changing the records changes the claim's support, so it is an edit too.
+    const evidenceChanged = applyLegacySourceEvidence({ workspaceId: input.workspaceId, claimId: input.id,
+      claimSensitivity: input.sensitivity as ClaimSensitivity, source: clean.source, evidence: clean.evidence });
     // A stored level nobody recognises is repaired by any save with a valid level, even an identical one.
     const unrecognisedLevel = !sensitivities.has(row.sensitivity);
-    if (!unrecognisedLevel && stable(comparable) === stable(existing)) return { claim: before, before, changed: false };
+    if (!unrecognisedLevel && !evidenceChanged && stable(comparable) === stable(existing)) return { claim: before, before, changed: false };
     const now = Date.now();
     requireChanged(getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
-      freshness=?, sensitivity=?, valid_from=?, valid_to=?, source_metadata=?, evidence_metadata=?, revision=revision+1,
+      freshness=?, sensitivity=?, valid_from=?, valid_to=?, revision=revision+1,
       review_status='proposed', updated_at=? WHERE id=? AND workspace_id=? AND revision=?`)
       .run(input.predicate, clean.literal?.type || null, clean.literal ? JSON.stringify(clean.literal.value) : null,
         clean.target?.id || null, input.freshness, input.sensitivity, clean.validFrom, clean.validTo,
-        clean.source ? JSON.stringify(clean.source) : null, clean.evidence ? JSON.stringify(clean.evidence) : null,
         now, input.id, input.workspaceId, input.expectedRevision), "Claim changed on another device");
+    if (evidenceChanged) reprojectClaimJson(input.workspaceId, input.id);
     return { claim: deserialize(rowForClaim(input.id, input.workspaceId)!), before, changed: true };
   });
 }
@@ -414,6 +449,10 @@ export function reviewOwnerClaim(input: ReviewClaimInput, hooks?: CommandHooks) 
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be reviewed", 409, "archived");
     if (before.reviewStatus === input.decision) return { claim: before, before, changed: false };
+    // A relationship outside the registry cannot be confirmed; it is fixed first. Rejecting and returning it to review stay open.
+    if (input.decision === "confirmed" && before.target && before.relationStatus !== "registered") {
+      throw new ContextClaimError("Choose a known relation before confirming this claim", 409, "relation_needs_fix");
+    }
     const now = Date.now();
     requireChanged(getDatabase().prepare(`UPDATE context_claims SET review_status=?, revision=revision+1, updated_at=?
       WHERE id=? AND workspace_id=? AND revision=?`).run(input.decision, now, input.id, input.workspaceId, input.expectedRevision),
@@ -458,7 +497,8 @@ export function listOwnerClaims(workspaceId: string, options: { includeArchived?
   const rows = getDatabase().prepare(`SELECT * FROM context_claims WHERE workspace_id = ?
     ${options.includeArchived ? "" : "AND archived_at IS NULL"} ORDER BY updated_at DESC LIMIT 500`)
     .all(workspaceId) as unknown as ClaimRow[];
-  return rows.map(deserialize).filter((claim) => !options.projectId ||
+  const evidence = activeEvidenceByClaim(workspaceId);
+  return rows.map((row) => deserialize(row, evidence.get(row.id) ?? [])).filter((claim) => !options.projectId ||
     claim.subject.canonicalEntityId === options.projectId || claim.target?.canonicalEntityId === options.projectId);
 }
 
@@ -491,6 +531,7 @@ export function currentContextDate() {
 export function isEligibleClaim(claim: ContextClaim, projectId?: string, today = currentContextDate()) {
   return !claim.archivedAt && claim.reviewStatus === "confirmed" && claim.freshness === "current" &&
     claim.sensitivity === "normal" && // confidential and restricted never reach agents or AI
+    (claim.relationStatus == null || claim.relationStatus === "registered") &&
     (!claim.validFrom || claim.validFrom <= today) &&
     (!claim.validTo || claim.validTo >= today) && liveCanonicalReference(claim.workspaceId, claim.subject) &&
     (!claim.target || liveCanonicalReference(claim.workspaceId, claim.target)) &&
@@ -519,10 +560,44 @@ export function listClaimHistory(workspaceId: string, claimId: string) {
 }
 
 /** The part of a claim that Undo/Redo restores and compares; revisions and timestamps are not part of it. */
-export function claimFingerprint(claim: ContextClaim) {
+export function claimFingerprint(claim: ContextClaim, legacyEvidence = false) {
   return { predicate: claim.predicate, literal: claim.literal, targetId: claim.target?.id ?? null, freshness: claim.freshness,
     sensitivity: readSensitivity(claim.sensitivity).sensitivity, validFrom: claim.validFrom ?? null, validTo: claim.validTo ?? null,
-    source: claim.source ?? null, evidence: claim.evidence ?? null, reviewStatus: claim.reviewStatus, archived: claim.archivedAt != null };
+    // Steps recorded before evidence became records only know the single legacy source/evidence; newer ones compare the records.
+    ...(legacyEvidence || !claim.evidenceItems ? { source: claim.source ?? null, evidence: claim.evidence ?? null }
+      : { evidenceSet: evidenceSetFingerprint(claim.evidenceItems) }),
+    reviewStatus: claim.reviewStatus, archived: claim.archivedAt != null };
+}
+
+/** A claim as it is read inside a command (the same shape the API returns). */
+export function readOwnerClaim(workspaceId: string, id: string) {
+  const row = rowForClaim(id, workspaceId);
+  return row ? deserialize(row) : null;
+}
+
+/**
+ * What an agent, an external tool or an AI provider may see of a claim. Only eligible claims get here, and of their
+ * evidence only the records whose source is "normal" survive: a confidential or restricted source (and every
+ * excerpt, locator, author or external id of it) is not mentioned at all, not even by count. The owner-only
+ * fields (the legacy source/evidence JSON, account, external id, source locator, author) are dropped.
+ */
+export interface AgentClaimEvidence {
+  stance: "supports" | "contradicts" | null;
+  excerpt: string | null;
+  metadataOnly: boolean;
+  source: { provider: string | null; sourceAt: string | null; coverage: "metadata" | "excerpt" | "body" | null };
+}
+export type AgentClaim = Omit<ContextClaim, "source" | "evidence" | "evidenceItems" | "evidenceCount" | "sourceCoverage"> & {
+  evidence: AgentClaimEvidence[];
+  sourceCoverage: ClaimSourceCoverage;
+};
+
+export function toAgentClaim(claim: ContextClaim): AgentClaim {
+  const { source: _source, evidence: _evidence, evidenceItems, evidenceCount: _count, sourceCoverage: _coverage, ...rest } = claim;
+  const visible = evidenceItems.filter((item) => item.source.sensitivity === "normal" && !item.source.archivedAt);
+  return { ...rest, sourceCoverage: summarizeCoverage(visible),
+    evidence: visible.map((item) => ({ stance: item.stance, excerpt: item.excerpt, metadataOnly: item.metadataOnly,
+      source: { provider: item.source.provider, sourceAt: item.source.sourceAt, coverage: item.source.coverage } })) };
 }
 
 function undoConflict(message: string) {
@@ -541,12 +616,19 @@ export function compensateClaim(input: { workspaceId: string; id: string; mode: 
   const row = rowForClaim(input.id, input.workspaceId);
   if (!row) throw undoConflict("The claim no longer exists");
   const current = deserialize(row);
-  if (current.revision !== input.expectedRevision || stable(claimFingerprint(current)) !== stable(claimFingerprint(input.after))) {
+  const legacyEvidence = !input.after.evidenceItems || (input.before != null && !input.before.evidenceItems);
+  if (current.revision !== input.expectedRevision || stable(claimFingerprint(current, legacyEvidence)) !== stable(claimFingerprint(input.after, legacyEvidence))) {
     throw undoConflict("The claim was changed after this step");
   }
-  const target = input.before ? claimFingerprint(input.before) : { ...claimFingerprint(input.after), archived: true };
+  const target = input.before ? claimFingerprint(input.before, legacyEvidence) : { ...claimFingerprint(input.after, legacyEvidence), archived: true };
   const targetClaim = input.before ?? input.after;
   if (!target.archived) {
+    if (targetClaim.target && duplicateRelationId(input.workspaceId, current.subject.id, target.predicate, targetClaim.target.id, input.id)) {
+      throw undoConflict("An active claim already has this relationship");
+    }
+    if (targetClaim.target && target.reviewStatus === "confirmed" && relationStatusOf(target.predicate, current.subject.type, targetClaim.target.type) !== "registered") {
+      throw undoConflict("This relationship is not a known relation, so it cannot be confirmed");
+    }
     // A claim that comes back must still have a valid subject and target (neither archived nor gone).
     const refOf = (ref: ClaimSubjectRef): CanonicalRefInput => ref.canonicalEntityId ? { entityId: ref.canonicalEntityId } : { subjectId: ref.id };
     try {
@@ -559,13 +641,24 @@ export function compensateClaim(input: { workspaceId: string; id: string; mode: 
   }
   const now = Date.now();
   const archivedAt = target.archived ? (current.archivedAt ?? now) : null;
+  // Evidence goes back with the claim: the recorded set when the step has one, else the single legacy evidence.
+  if (!target.archived && input.before) {
+    if (input.before.evidenceItems && !legacyEvidence) {
+      restoreClaimEvidence({ workspaceId: input.workspaceId, claimId: input.id, target: input.before.evidenceItems });
+    } else if (stable(legacyProjection(current.evidenceItems)) !== stable({ source: input.before.source ?? null, evidence: input.before.evidence ?? null })) {
+      // Recorded before evidence became records: the newest evidence is replaced by the one the step started from.
+      restoreClaimEvidence({ workspaceId: input.workspaceId, claimId: input.id, target: current.evidenceItems.slice(1) });
+      applyLegacySourceEvidence({ workspaceId: input.workspaceId, claimId: input.id, claimSensitivity: target.sensitivity as ClaimSensitivity,
+        source: input.before.source ?? null, evidence: input.before.evidence ?? null, append: true });
+    }
+  }
   requireChanged(getDatabase().prepare(`UPDATE context_claims SET predicate=?, literal_type=?, literal_value=?, target_subject_id=?,
-    freshness=?, sensitivity=?, valid_from=?, valid_to=?, source_metadata=?, evidence_metadata=?, review_status=?, archived_at=?,
+    freshness=?, sensitivity=?, valid_from=?, valid_to=?, review_status=?, archived_at=?,
     revision=revision+1, updated_at=? WHERE id=? AND workspace_id=? AND revision=?`)
     .run(target.predicate, target.literal?.type || null, target.literal ? JSON.stringify(target.literal.value) : null, target.targetId,
       target.freshness, target.sensitivity, target.validFrom, target.validTo,
-      target.source ? JSON.stringify(target.source) : null, target.evidence ? JSON.stringify(target.evidence) : null,
       target.reviewStatus, archivedAt, now, input.id, input.workspaceId, input.expectedRevision), "Claim changed on another device");
+  if (!target.archived) reprojectClaimJson(input.workspaceId, input.id);
   const claim = deserialize(rowForClaim(input.id, input.workspaceId)!);
   if (target.reviewStatus !== current.reviewStatus) {
     getDatabase().prepare(`INSERT INTO context_review_events
@@ -575,3 +668,6 @@ export function compensateClaim(input: { workspaceId: string; id: string; mode: 
   }
   return { claim, before: current };
 }
+
+// Claims edited by an older binary since the last start are brought in line with their evidence records.
+onDatabaseReady(() => { reconcileLegacyClaimJson(); });

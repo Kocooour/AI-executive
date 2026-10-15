@@ -22,6 +22,8 @@ import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
 import { useDayPlan } from "./hooks/use-day-plan";
+import { useContextEvidence } from "./hooks/use-context-evidence";
+import { getRelationDefinition, relationsBetween } from "../../lib/context-relations";
 import { useBackups } from "./hooks/use-backups";
 import { usePasskeys } from "./hooks/use-passkeys";
 import { useSignIn } from "./hooks/use-sign-in";
@@ -117,9 +119,6 @@ export function useLumiApp() {
     [claimSensitivity, setClaimSensitivity] = useState<ContextClaimItem["sensitivity"]>("normal"),
     [claimValidFrom, setClaimValidFrom] = useState(""),
     [claimValidTo, setClaimValidTo] = useState(""),
-    [claimSourceProvider, setClaimSourceProvider] = useState(""),
-    [claimSourceLocator, setClaimSourceLocator] = useState(""),
-    [claimEvidence, setClaimEvidence] = useState(""),
     [editingClaim, setEditingClaim] = useState<ContextClaimItem | null>(null),
     [claimStatus, setClaimStatus] = useState(""),
     [claimBusyIds, setClaimBusyIds] = useState<string[]>([]),
@@ -129,7 +128,7 @@ export function useLumiApp() {
     // A refused step that can never succeed, offered for skipping together with the refusal.
     [historySkip, setHistorySkip] = useState<{ stack: "undo" | "redo"; eventId: string } | null>(null),
     // Which part of the Context view offers Undo for the edit that was just saved.
-    [historyOffer, setHistoryOffer] = useState<"" | "claim" | "subject" | "inbox">(""),
+    [historyOffer, setHistoryOffer] = useState<"" | "claim" | "subject" | "inbox" | "evidence" | "source">(""),
     [contextInboxText, setContextInboxText] = useState(""),
     [contextInboxProposals, setContextInboxProposals] = useState<ContextInboxProposal[]>([]),
     [contextInboxTasks, setContextInboxTasks] = useState<ContextInboxTaskDraft[]>([]),
@@ -171,6 +170,18 @@ export function useLumiApp() {
     const key = `predicate_${predicate}`;
     const label = tr(key);
     return label === key ? predicate : label;
+  };
+  // The name of a source's provider: `sourceProvider_<name>` in the dictionary; an unknown one is shown as it is.
+  const providerLabel = (provider: string) => {
+    const key = `sourceProvider_${provider.replace(/[^A-Za-z0-9]+/g, "_")}`;
+    const label = tr(key);
+    return label === key ? provider : label;
+  };
+  // A relationship reads with its registry label in the interface language; from the target's side with the inverse.
+  const relationLabel = (predicate: string, side: "forward" | "inverse" = "forward") => {
+    const definition = getRelationDefinition(predicate);
+    if (!definition) return contextPredicateLabel(predicate);
+    return (side === "forward" ? definition.labels : definition.inverse)[language === "cs" ? "cs" : "en"];
   };
   const contextSubjectTypeLabel = (type: string) => {
     if (type === "person") return tr("person");
@@ -232,7 +243,16 @@ export function useLumiApp() {
   };
   const finishContextIntent = (scope: string) => { contextIntents.current.delete(scope); };
   const claimDraftSignature = JSON.stringify([claimSubjectId, claimPredicate, claimValue, claimValueType, claimValueMode, claimTargetId,
-    claimFreshness, claimSensitivity, claimValidFrom, claimValidTo, claimSourceProvider, claimSourceLocator, claimEvidence]);
+    claimFreshness, claimSensitivity, claimValidFrom, claimValidTo]);
+  // The relation select offers exactly the registered relations that link the chosen kinds of items; a literal
+  // claim keeps its free-text predicate. A predicate that does not fit the chosen items counts as not chosen.
+  const endpointType = (id: string) => standaloneSubjects.find((subject) => subject.id === id)?.type ?? items.find((item) => item.id === id)?.type ?? "";
+  const claimSubjectType = endpointType(claimSubjectId);
+  const claimTargetType = endpointType(claimTargetId);
+  const claimRelationOptions = claimValueMode === "target" && claimSubjectType && claimTargetType ? relationsBetween(claimSubjectType, claimTargetType) : [];
+  const claimEffectivePredicate = claimValueMode === "target"
+    ? claimRelationOptions.some((entry) => entry.predicate === claimPredicate) ? claimPredicate : ""
+    : claimPredicate.trim();
   claimEditor.current.objectId = editingClaim?.id || "";
   claimEditor.current.signature = claimDraftSignature;
   claimEditor.current.subjectId = claimSubjectId;
@@ -523,7 +543,7 @@ export function useLumiApp() {
   // After a saved edit the area where it was made offers Undo for it, and the history bar follows.
   // Only when this very command recorded a step and that step is the one on top: a save that changed
   // nothing (no step) never offers to undo some older, unrelated step.
-  function offerContextUndo(area: "claim" | "subject" | "inbox", workspaceId: string, historyEventId: unknown) {
+  function offerContextUndo(area: "claim" | "subject" | "inbox" | "evidence" | "source", workspaceId: string, historyEventId: unknown) {
     setHistoryStatus("");
     setHistorySkip(null);
     if (typeof historyEventId !== "string") { setHistoryOffer(""); loadContextHistory(workspaceId).catch(() => undefined); return; }
@@ -536,8 +556,10 @@ export function useLumiApp() {
     const kind = step.subjectType === "organization" ? "organization" : "person";
     const action = step.objectType === "claim"
       ? step.operation === "review" ? tr(`historyStepReview_${step.reviewStatus || "proposed"}`) : tr(`historyStep_${step.operation}`)
+      : step.objectType === "source" || step.objectType === "evidence" ? tr(`historyStep_${step.operation.replace(".", "_")}`)
       : tr(`historyStep_${step.operation.replace(".", "_")}_${kind}`);
-    const target = step.objectType === "claim" ? quote(contextPredicateLabel(step.label))
+    const target = step.objectType === "claim" || step.objectType === "evidence" ? quote(contextPredicateLabel(step.label))
+      : step.objectType === "source" ? quote(providerLabel(step.label))
       : step.operation === "subject.rename" && step.fromTitle && step.toTitle ? `${step.fromTitle} → ${step.toTitle}` : step.label;
     return { action, target };
   };
@@ -632,27 +654,22 @@ export function useLumiApp() {
     setClaimSensitivity("normal");
     setClaimValidFrom("");
     setClaimValidTo("");
-    setClaimSourceProvider("");
-    setClaimSourceLocator("");
-    setClaimEvidence("");
   }
 
   function editContextClaim(claim: ContextClaimItem, scroll = true) {
     claimEditor.current.nonce += 1;
     setEditingClaim(claim);
     setClaimSubjectId(claim.subject.canonicalEntityId || claim.subject.id);
-    setClaimPredicate(claim.predicate);
+    // A relationship outside the registry has to be edited to one inside it: the select starts empty.
+    setClaimPredicate(claim.target && claim.relationStatus !== "registered" ? "" : claim.predicate);
     setClaimValue(String(claim.literal?.value ?? ""));
     setClaimValueType(claim.literal?.type || "string");
     setClaimValueMode(claim.target ? "target" : "literal");
-    setClaimTargetId(claim.target?.id || "");
+    setClaimTargetId(claim.target?.canonicalEntityId || claim.target?.id || "");
     setClaimFreshness(claim.freshness);
     setClaimSensitivity(claim.sensitivity);
     setClaimValidFrom(claim.validFrom || "");
     setClaimValidTo(claim.validTo || "");
-    setClaimSourceProvider(claim.source?.provider || "");
-    setClaimSourceLocator(claim.source?.locator || "");
-    setClaimEvidence(claim.evidence?.excerpt || "");
     setClaimStatus("");
     if (scroll) window.setTimeout(() => document.getElementById("context-claim-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
@@ -664,7 +681,7 @@ export function useLumiApp() {
     if (contextInFlight.current.has(`claim:${objectKey}`)) return;
     const sentSignature = claimDraftSignature;
     const sentNonce = claimEditor.current.nonce;
-    const sentPredicate = claimPredicate.trim();
+    const sentPredicate = claimEffectivePredicate;
     const scope = `claim:save:${objectKey}`;
     const intent = contextIntent(scope, JSON.stringify([workspaceId, target?.revision || 0, sentSignature]));
     const claimId = target?.id || intent.objectId;
@@ -676,7 +693,6 @@ export function useLumiApp() {
     try {
       const parsedValue = claimValueType === "number" ? Number(claimValue)
         : claimValueType === "boolean" ? claimValue === "true" : claimValue;
-      const hasSource = Boolean(claimSourceProvider.trim() || claimSourceLocator.trim());
       const response = await fetch("/api/context/claims", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -689,13 +705,13 @@ export function useLumiApp() {
             ? { subjectId: claimTargetId } : { entityId: claimTargetId }) : undefined,
           freshness: claimFreshness, sensitivity: claimSensitivity,
           validFrom: claimValidFrom || null, validTo: claimValidTo || null,
-          source: hasSource ? { provider: claimSourceProvider.trim() || undefined, locator: claimSourceLocator.trim() || undefined } : null,
-          evidence: hasSource && claimEvidence.trim() ? { excerpt: claimEvidence.trim(), stance: "supports" } : null,
         }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (data.code === "duplicate_relation") throw new Error(tr("duplicateRelationError"));
         if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
+        if (data.code === "invalid_relation") throw new Error(tr("invalidRelationError"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimSaveFailed"));
       }
       finishContextIntent(scope);
@@ -747,6 +763,7 @@ export function useLumiApp() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (data.code === "relation_needs_fix") throw new Error(tr("relationFixFirst"));
         if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimActionFailed"));
       }
@@ -810,7 +827,7 @@ export function useLumiApp() {
             setHistorySkip({ stack: side, eventId: step.eventId });
           }
           loadContextHistory(workspaceId).catch(() => undefined);
-          refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId));
+          refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId), () => loadContextSources(workspaceId));
         }
         return;
       }
@@ -823,8 +840,8 @@ export function useLumiApp() {
       // The editor follows the claim when it shows it: an archived claim cannot be edited any more.
       if (data.objectType === "claim" && claimEditor.current.objectId === (data.object as ContextClaimItem).id) {
         if ((data.object as ContextClaimItem).archivedAt) resetClaimDraft(); else editContextClaim(data.object as ContextClaimItem, false);
-      }
-      await refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId));
+      } else if (data.objectType === "evidence" && data.object?.claim) syncEditedClaim(data.object.claim as ContextClaimItem);
+      await refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadStandaloneSubjects(workspaceId), () => loadContextSources(workspaceId));
     } catch (error) {
       if (calendarWorkspaceSelection.current === workspaceId) setHistoryStatus(commandFailureMessage(error, tr("contextHistoryFailed")));
     } finally {
@@ -832,6 +849,11 @@ export function useLumiApp() {
       setHistoryBusy(false);
     }
   }
+  // A claim whose revision moved because its evidence changed: the editor keeps the draft and follows the revision.
+  const syncEditedClaim = (claim: ContextClaimItem) => { if (claimEditor.current.objectId === claim.id) setEditingClaim(claim); };
+  const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
+    contextInFlight, commandFailureMessage, refreshAfterCommand, offerContextUndo, loadContextClaims, syncEditedClaim });
+  const { loadContextSources } = evidenceState;
   contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action); } };
 
   async function previewContextInbox() {
@@ -876,7 +898,7 @@ export function useLumiApp() {
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       setContextInboxStatus(tr("proposalAddedToThe"));
       offerContextUndo("inbox", workspaceId, data.historyEventId);
-      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadContextSources(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setContextInboxStatus(tr("savedListNotRefreshed"));
       }
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("contextProposalSaveFailed"))); }
@@ -2871,6 +2893,13 @@ export function useLumiApp() {
   );
   return {
     ...attentionState,
+    ...evidenceState,
+    claimEffectivePredicate,
+    claimRelationOptions,
+    claimSubjectType,
+    claimTargetType,
+    providerLabel,
+    relationLabel,
     setDayPlanNow,
     dayPlanStatus,
     setDayPlanStatus,
@@ -2941,14 +2970,11 @@ export function useLumiApp() {
     checkAccess,
     checklistDraft,
     claimBusyIds,
-    claimEvidence,
     claimFilterId,
     claimFreshness,
     claimHistory,
     claimPredicate,
     claimSensitivity,
-    claimSourceLocator,
-    claimSourceProvider,
     claimStatus,
     claimSubjectId,
     claimTargetId,
@@ -3089,13 +3115,10 @@ export function useLumiApp() {
     setCaptureSuggestion,
     setCaptureSuggestionError,
     setChecklistDraft,
-    setClaimEvidence,
     setClaimFilterId,
     setClaimFreshness,
     setClaimPredicate,
     setClaimSensitivity,
-    setClaimSourceLocator,
-    setClaimSourceProvider,
     setClaimSubjectId,
     setClaimTargetId,
     setClaimValidFrom,

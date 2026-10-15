@@ -1,3 +1,5 @@
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { waitUntilQuiet } from "./helpers";
@@ -542,15 +544,11 @@ test("a step that is refused for good can be skipped, which changes no data and 
   const predicate = "e2e.history.skip";
   await saveNewClaim(page, predicate, "older value");
   await editClaim(page, predicate, "newer value");
-  // The server's refusal is simulated for the first Undo (a real one needs a change outside the history).
-  let refused = false;
-  await page.route("**/api/context/history", async (route) => {
-    if (route.request().method() === "POST" && !refused && route.request().postData()?.includes('"action":"undo"')) {
-      refused = true;
-      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "The claim was changed after this step", code: "undo_conflict" }) });
-    }
-    return route.continue();
-  });
+  // A real refusal: the claim moves on outside the history (another writer), so its newest step can never be undone.
+  const database = new DatabaseSync(path.join(process.env.LUMI_E2E_RUN_DIR!, "data", "store.sqlite"));
+  database.exec("PRAGMA busy_timeout = 5000");
+  database.prepare("UPDATE context_claims SET revision = revision + 1 WHERE predicate = ? AND workspace_id = 'personal'").run(predicate);
+  database.close();
   const before = await serverValue(page, predicate);
   await undoButton(page).click();
   await expect(historyBar(page).getByRole("status")).toContainText("Nevráceno");

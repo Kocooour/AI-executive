@@ -89,11 +89,11 @@ test("relationship claims stay separate from person confirmation and honor AI el
   const reviewed = claims.reviewOwnerClaim({ commandId: randomUUID(), id: proposal.id, workspaceId: "personal",
     expectedRevision: proposal.revision, decision: "confirmed" }).claim;
   assert.equal(claims.isEligibleClaim(reviewed), true);
-  const sensitive = relation(person.id, { sensitivity: "sensitive" });
+  const sensitive = relation(person.id, { sensitivity: "sensitive", predicate: "related_to" });
   const sensitiveReviewed = claims.reviewOwnerClaim({ commandId: randomUUID(), id: sensitive.id, workspaceId: "personal",
     expectedRevision: sensitive.revision, decision: "confirmed" }).claim;
   assert.equal(claims.isEligibleClaim(sensitiveReviewed), false);
-  const stale = relation(person.id, { freshness: "stale" });
+  const stale = relation(create("Petr Druhý").id, { freshness: "stale" });
   const staleReviewed = claims.reviewOwnerClaim({ commandId: randomUUID(), id: stale.id, workspaceId: "personal",
     expectedRevision: stale.revision, decision: "confirmed" }).claim;
   assert.equal(claims.isEligibleClaim(staleReviewed), false);
