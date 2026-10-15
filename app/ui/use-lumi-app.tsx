@@ -898,7 +898,7 @@ export function useLumiApp() {
       setContextInboxProposals((current) => current.filter((item) => item.id !== proposal.id));
       setContextInboxStatus(tr("proposalAddedToThe"));
       offerContextUndo("inbox", workspaceId, data.historyEventId);
-      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
+      if (!(await refreshAfterCommand(() => loadContextClaims(workspaceId), () => loadContextSources(workspaceId))) && calendarWorkspaceSelection.current === workspaceId) {
         setContextInboxStatus(tr("savedListNotRefreshed"));
       }
     } catch (error) { if (calendarWorkspaceSelection.current === workspaceId) setContextInboxStatus(commandFailureMessage(error, tr("contextProposalSaveFailed"))); }
