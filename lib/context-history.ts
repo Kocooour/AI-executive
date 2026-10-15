@@ -1,10 +1,12 @@
 import { assertCommandWorkspace, contextIdPattern, ContextCommandError, runContextCommand, type CommandHooks } from "./context-commands";
 import { compensateClaim, type ClaimReviewStatus, type ContextClaim } from "./context-claims";
 import { compensateSubject, type StandaloneSubject } from "./context-subjects";
+import { compensateEvidence, summarizeClaim, type EvidenceStepPayload } from "./context-evidence";
+import { compensateSource, sourceLabel, type ContextSource } from "./context-sources";
 import { getDatabase } from "./server-store";
 
-// Durable, workspace-scoped, multi-step Undo/Redo for the Context Graph (claims, people and
-// organizations). The history is the table of change events: nothing in it is ever rewritten, and an
+// Durable, workspace-scoped, multi-step Undo/Redo for the Context Graph (claims, people, organizations,
+// sources and claim evidence). The history is the table of change events: nothing in it is ever rewritten, and an
 // Undo or Redo is a new compensating command that appends one more event. The stacks are not stored
 // anywhere else; they are derived from the events in order, so they are the same after a restart:
 //   change  -> goes on the undo stack, and the redo stack is emptied (those steps stay in history)
@@ -13,6 +15,7 @@ import { getDatabase } from "./server-store";
 // A step that was undone and redone is therefore represented by the redo event, which can be undone
 // again like any other step.
 
+export type HistoryObjectType = "claim" | "subject" | "source" | "evidence";
 export type HistoryAction = "undo" | "redo";
 /** "skip" removes a step that can never succeed from its stack, changing no object. */
 export type HistoryCommandAction = HistoryAction | "skip";
@@ -23,9 +26,9 @@ export interface HistoryStep {
   kind: "change" | "undo" | "redo" | "skip";
   /** The operation the step performs, e.g. "update", "review", "subject.rename". */
   operation: string;
-  objectType: "claim" | "subject";
+  objectType: HistoryObjectType;
   objectId: string;
-  /** Predicate (claims) or name (people and organizations) of the object. */
+  /** Predicate (claims, evidence), name (people and organizations) or provider/identifier (sources) of the object. */
   label: string;
   subjectTitle: string | null;
   subjectType: string | null;
@@ -34,6 +37,8 @@ export interface HistoryStep {
   toTitle: string | null;
   /** The review state the described action leads to (claims). */
   reviewStatus: ClaimReviewStatus | null;
+  /** Evidence steps: what the evidence cites. */
+  sourceTitle: string | null;
   at: number;
 }
 
@@ -85,8 +90,9 @@ function loadEvents(workspaceId: string, ids: string[]) {
   return new Map(rows.map((row) => [row.id, row]));
 }
 
-function objectTypeOf(event: EventRow): "claim" | "subject" {
-  return event.object_type === "subject" || (!event.object_type && event.operation.startsWith("subject.")) ? "subject" : "claim";
+function objectTypeOf(event: EventRow): HistoryObjectType {
+  if (event.object_type === "subject" || event.object_type === "source" || event.object_type === "evidence") return event.object_type;
+  return !event.object_type && event.operation.startsWith("subject.") ? "subject" : "claim";
 }
 
 function parse<T>(payload: string | null) {
@@ -104,8 +110,16 @@ function describe(event: EventRow, direction: HistoryAction): HistoryStep {
   const before = parse<ContextClaim & StandaloneSubject>(event.before_payload);
   const step: HistoryStep = { eventId: event.id, kind: event.kind as HistoryStep["kind"], operation: event.operation, objectType,
     objectId: event.object_id, label: "", subjectTitle: null, subjectType: null, fromTitle: null, toTitle: null, reviewStatus: null,
-    at: Number(event.created_at) };
-  if (objectType === "claim") {
+    sourceTitle: null, at: Number(event.created_at) };
+  if (objectType === "source") {
+    step.label = sourceLabel(parse<ContextSource>(event.after_payload) ?? { provider: null, externalId: null, locator: null, author: null });
+  } else if (objectType === "evidence") {
+    const payload = parse<EvidenceStepPayload>(event.after_payload);
+    step.label = payload?.claim.predicate || "";
+    step.subjectTitle = payload?.claim.subjectTitle ?? null;
+    step.subjectType = payload?.claim.subjectType ?? null;
+    step.sourceTitle = payload?.evidence ? sourceLabel(payload.evidence.source) : null;
+  } else if (objectType === "claim") {
     step.label = after?.predicate || "";
     step.subjectTitle = after?.subject?.title ?? null;
     step.subjectType = after?.subject?.type ?? null;
@@ -134,7 +148,7 @@ export function getContextHistory(workspaceId: string): HistoryState {
     recent: stacks.undo.slice(0, recentLimit).map((id) => step(id, "undo")).filter((item): item is HistoryStep => Boolean(item)) };
 }
 
-type HistoryResult = { step: HistoryStep; objectType: "claim" | "subject"; object: ContextClaim | StandaloneSubject | null };
+type HistoryResult = { step: HistoryStep; objectType: HistoryObjectType; object: unknown };
 
 export interface HistoryCommandInput {
   commandId: string;
@@ -166,10 +180,13 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
       const event = loadEvents(input.workspaceId, [top]).get(top)!;
       const objectType = objectTypeOf(event);
       // The newest event for this object tells which revision it must still be at: anything else
-      // (an edit that is not in the history) is a later change that Undo must not overwrite.
-      const latest = getDatabase().prepare(`SELECT after_revision FROM context_change_events
-        WHERE workspace_id = ? AND object_id = ? ORDER BY sequence DESC, rowid DESC LIMIT 1`)
-        .get(input.workspaceId, event.object_id) as { after_revision: number } | undefined;
+      // (an edit that is not in the history) is a later change that Undo must not overwrite. For a claim, an
+      // evidence event counts too (it changes the claim's revision); sources and evidence compare their content instead.
+      const latest = getDatabase().prepare(objectType === "claim" || objectType === "evidence"
+        ? `SELECT CASE WHEN object_type = 'evidence' THEN claim_revision ELSE after_revision END AS after_revision FROM context_change_events
+          WHERE workspace_id = ? AND (claim_id = ? OR (object_id = ? AND COALESCE(object_type, 'claim') = 'claim')) ORDER BY sequence DESC, rowid DESC LIMIT 1`
+        : `SELECT after_revision FROM context_change_events WHERE workspace_id = ? AND object_id = ? AND ? IS NOT NULL ORDER BY sequence DESC, rowid DESC LIMIT 1`)
+        .get(input.workspaceId, objectType === "evidence" ? (parse<EvidenceStepPayload>(event.after_payload)?.claim.id ?? "") : event.object_id, event.object_id) as { after_revision: number } | undefined;
       const expectedRevision = Number(latest?.after_revision ?? event.after_revision);
       const step = describe(event, side);
       if (input.action === "skip") {
@@ -183,6 +200,12 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
           if (objectType === "claim") {
             compensateClaim({ workspaceId: input.workspaceId, id: event.object_id, mode: side, expectedRevision,
               before: parse<ContextClaim>(event.before_payload), after: parse<ContextClaim>(event.after_payload)! });
+          } else if (objectType === "evidence") {
+            compensateEvidence({ workspaceId: input.workspaceId, id: event.object_id, mode: side, expectedClaimRevision: expectedRevision,
+              before: parse<EvidenceStepPayload>(event.before_payload)!, after: parse<EvidenceStepPayload>(event.after_payload)! });
+          } else if (objectType === "source") {
+            compensateSource({ workspaceId: input.workspaceId, id: event.object_id,
+              before: parse<ContextSource>(event.before_payload), after: parse<ContextSource>(event.after_payload)! });
           } else {
             compensateSubject({ workspaceId: input.workspaceId, id: event.object_id, expectedRevision,
               before: parse<StandaloneSubject>(event.before_payload), after: parse<StandaloneSubject>(event.after_payload)! });
@@ -196,7 +219,8 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
         if (!failure) throw new ContextCommandError("This step can still be undone or redone", 409, "skip_not_needed");
         if (!(failure instanceof ContextCommandError && failure.status === 409 && skippableConflicts.has(failure.code))) throw failure;
         // A marker only: no object is touched, and the revision it records is the one the object already has.
-        return { objectId: event.object_id, operation: event.operation, objectType, kind: "skip" as const, revertsEventId: event.id, changed: true,
+        const claimLink = objectType === "evidence" ? { claimId: parse<EvidenceStepPayload>(event.after_payload)!.claim.id, claimRevision: expectedRevision } : {};
+        return { objectId: event.object_id, operation: event.operation, objectType, kind: "skip" as const, revertsEventId: event.id, changed: true, ...claimLink,
           result: { step, objectType, object: null }, before: null, after: { revision: expectedRevision, payload: {} } };
       }
       const common = { objectId: event.object_id, operation: event.operation, objectType, kind: side,
@@ -206,6 +230,19 @@ export function runHistoryCommand(input: HistoryCommandInput, hooks?: CommandHoo
           before: parse<ContextClaim>(event.before_payload), after: parse<ContextClaim>(event.after_payload)! });
         return { ...common, result: { step, objectType, object: claim }, before: { revision: before.revision, payload: before },
           after: { revision: claim.revision, payload: claim } };
+      }
+      if (objectType === "evidence") {
+        const { evidence, claim, before } = compensateEvidence({ workspaceId: input.workspaceId, id: event.object_id, mode: side, expectedClaimRevision: expectedRevision,
+          before: parse<EvidenceStepPayload>(event.before_payload)!, after: parse<EvidenceStepPayload>(event.after_payload)! });
+        return { ...common, claimId: claim.id, claimRevision: claim.revision, result: { step, objectType, object: { evidence, claim } },
+          before: { revision: before.evidence!.revision, payload: before },
+          after: { revision: evidence.revision, payload: { evidence, claim: summarizeClaim(claim) } } };
+      }
+      if (objectType === "source") {
+        const { source, before } = compensateSource({ workspaceId: input.workspaceId, id: event.object_id,
+          before: parse<ContextSource>(event.before_payload), after: parse<ContextSource>(event.after_payload)! });
+        return { ...common, result: { step, objectType, object: source }, before: { revision: before.revision, payload: before },
+          after: { revision: source.revision, payload: source } };
       }
       const { subject, before } = compensateSubject({ workspaceId: input.workspaceId, id: event.object_id, expectedRevision,
         before: parse<StandaloneSubject>(event.before_payload), after: parse<StandaloneSubject>(event.after_payload)! });
