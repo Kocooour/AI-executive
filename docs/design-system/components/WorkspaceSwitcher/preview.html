@@ -1,0 +1,30 @@
+<!-- @dsCard group="Navigace" height=300 subtitle="Prostor vidět na první pohled: dlaždice, proužek, menu" -->
+<div class="row">
+  <div class="win p"><div class="band"></div><div class="side"><button class="ws"><span class="tile">O</span><b>Osobní</b><span class="chev">⌄</span></button></div><div class="main"><h1>Dnes</h1></div></div>
+  <div class="menu" role="menu" aria-label="Prostory">
+    <button class="opt p on"><span class="tile">O</span>Osobní<em>1</em><kbd>⌘1</kbd></button>
+    <button class="opt w"><span class="tile">P</span>Pracovní<em>4</em><kbd>⌘2</kbd></button>
+    <button class="opt f"><span class="tile">R</span>Rodinný<em>2</em><kbd>⌘3</kbd></button>
+    <hr><button class="opt a"><span class="tile">∗</span>Všechna práce<em class="ro">jen čtení</em></button>
+  </div>
+  <div class="win w"><div class="band"></div><div class="side"><button class="ws"><span class="tile">P</span><b>Pracovní</b><span class="chev">⌄</span></button></div><div class="main"><h1>Dnes</h1></div></div>
+</div>
+<style>
+body{margin:0;font-family:var(--font-sans);color:var(--text);background:var(--app-bg)}
+.row{display:flex;gap:16px;padding:16px;align-items:flex-start;flex-wrap:wrap}
+.p{--wsc:var(--ws-personal)} .w{--wsc:var(--ws-work)} .f{--wsc:var(--ws-family)} .a{--wsc:var(--ws-all)}
+.win{width:250px;height:150px;border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden;display:grid;grid-template-columns:120px 1fr;grid-template-rows:3px 1fr;background:var(--app-bg)}
+.band{grid-column:1/-1;background:var(--wsc)}
+.side{background:var(--sidebar-bg);padding:8px 6px}
+.main{padding:14px} h1{margin:0;font-size:22px;font-weight:720;letter-spacing:-.03em}
+.ws{font:inherit;font-size:13px;display:flex;align-items:center;gap:6px;width:100%;min-height:36px;padding:0 6px;border:0;border-radius:var(--radius-xs);background:none;color:var(--text);cursor:pointer}
+.ws:focus-visible,.opt:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.tile{width:22px;height:22px;flex:none;border-radius:6px;background:var(--wsc);color:var(--on-ws);display:grid;place-items:center;font-size:12px;font-weight:700}
+.chev{margin-left:auto;color:var(--muted-light)}
+.menu{width:220px;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-soft);padding:6px;display:grid;gap:2px}
+.opt{font:inherit;font-size:13px;display:flex;align-items:center;gap:8px;min-height:36px;padding:0 8px;border:0;border-radius:var(--radius-xs);background:none;color:var(--text);text-align:left;cursor:pointer}
+.opt.on{background:var(--hover);font-weight:650}
+em{margin-left:auto;font-style:normal;font-size:11px;color:var(--muted-light)} .ro{font-size:11px}
+kbd{font:inherit;font-size:11px;color:var(--muted-light);min-width:22px;text-align:right}
+hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+</style>

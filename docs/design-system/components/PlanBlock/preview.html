@@ -1,0 +1,20 @@
+<!-- @dsCard group="Plánování" height=230 subtitle="Událost · Přijatý blok · Návrh" -->
+<h2>Plán <span>3 h volno</span></h2>
+<ul>
+  <li><time>9:00</time><div class="b event">Standup týmu</div></li>
+  <li><time>10:00</time><div class="b confirmed">Připravit podklady pro investory<span>90 min</span></div></li>
+  <li><time>13:00</time><div class="b proposed"><b>Návrh</b>Zaplatit fakturu za hosting<span>60 min</span><button>Přijmout</button></div></li>
+</ul>
+<style>
+body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
+h2{font-size:17px;font-weight:700;margin:0 0 8px;display:flex;gap:8px;align-items:baseline;max-width:520px} h2 span{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-width:520px}
+li{display:grid;grid-template-columns:44px 1fr;gap:10px;align-items:center}
+time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.b{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;border-radius:var(--radius-md);font-size:14px}
+.b span{margin-left:auto;font-size:12px;color:var(--muted)}
+.event{background:var(--surface-subtle)} .confirmed{border:1.5px solid var(--accent)} .proposed{border:1.5px dashed var(--proposal)}
+.proposed b{font-size:11px;font-weight:650;color:var(--accent)}
+button{font:inherit;font-size:13px;font-weight:600;border:0;background:none;color:var(--accent);cursor:pointer;padding:0 4px}
+button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+</style>
