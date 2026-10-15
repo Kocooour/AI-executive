@@ -118,6 +118,9 @@ export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspac
         // The source exists now: a retry of the evidence must cite it, not create it again.
         setEvidenceDraft((current) => current && current.claimId === claim.id ? { ...current, mode: "existing", sourceId } : current);
         await refreshAfterCommand(() => loadContextSources(workspaceId));
+        // The source already existed with less coverage than the draft's content needs: nothing is submitted, the draft now
+        // cites that source, and the person chooses between raising its coverage and saving without the excerpt.
+        if (hasContent && !content(created.data.source?.coverage)) { setEvidenceStatus(tr("evidenceDedupMetadataOnly")); return; }
       }
       if (!sourceId) throw new Error(tr("evidenceChooseSource"));
       const fields = { locator: draft.locator.trim() || null, excerpt: draft.excerpt.trim() || null, stance: draft.stance };

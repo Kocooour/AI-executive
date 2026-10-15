@@ -92,8 +92,9 @@ export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClai
       <label>{tr("evidenceStance")}<select value={draft.stance} onChange={(event) => patchEvidenceDraft({ stance: event.target.value as "supports" | "contradicts" })}>
         <option value="supports">{tr("evidenceStanceSupports")}</option><option value="contradicts">{tr("evidenceStanceContradicts")}</option></select></label>
       {!contentAllowed && (draft.mode === "new" || draft.sourceId) && <p className="metadataOnlyNote" role="note">{tr("evidenceMetadataOnlyHint")}</p>}
-      <label>{tr("evidenceLocator")}<input data-user-content value={draft.locator} maxLength={1000} disabled={!contentAllowed} onChange={(event) => patchEvidenceDraft({ locator: event.target.value })} /></label>
-      <label>{tr("evidenceExcerptLabel")}<textarea data-user-content value={draft.excerpt} maxLength={500} disabled={!contentAllowed} onChange={(event) => patchEvidenceDraft({ excerpt: event.target.value })} /></label>
+      <label>{tr("evidenceLocator")}<input data-user-content value={draft.locator} maxLength={1000} disabled={!contentAllowed && !hasContent} onChange={(event) => patchEvidenceDraft({ locator: event.target.value })} /></label>
+      <label>{tr("evidenceExcerptLabel")}<textarea data-user-content value={draft.excerpt} maxLength={500} disabled={!contentAllowed && !hasContent} onChange={(event) => patchEvidenceDraft({ excerpt: event.target.value })} /></label>
+      {app.evidenceStatus && <p className="metadataOnlyNote" role="alert">{app.evidenceStatus}</p>}
       <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={!canSave}>{evidenceBusy ? tr("saving") : tr("evidenceSave")}</button><button type="button" onClick={closeEvidenceForm}>{tr("cancel")}</button></div>
     </form>}
   </details>;

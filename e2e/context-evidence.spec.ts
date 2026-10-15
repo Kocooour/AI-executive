@@ -345,3 +345,31 @@ test("the evidence source picker tells sources apart", async ({ page }) => {
   expect(new Set(labels).size).toBe(4);
   expect(labels.some((label) => label.includes("#alpha"))).toBe(true);
 });
+
+test("a new source that already exists with metadata only does not submit the excerpt, and the draft can still be saved without it", async ({ page }) => {
+  const predicate = "e2e.evidence.dedup";
+  await openContext(page);
+  await seedClaim(page, predicate, "dedup");
+  await seedSource(page, { provider: "e2e.dedup", externalId: "dedup-1", coverage: "metadata" });
+  await openContext(page);
+  const claim = card(page, predicate);
+  await claim.locator(".claimEvidence summary").click();
+  await claim.getByRole("button", { name: "Přidat důkaz" }).click();
+  const form = claim.locator(".contextEvidenceForm");
+  await form.getByTestId("evidence-source-mode").selectOption("new");
+  await form.getByLabel("Poskytovatel (například e-mail nebo dokument)").fill("e2e.dedup");
+  await form.getByLabel("Externí ID").fill("dedup-1");
+  await form.getByTestId("source-coverage").selectOption("body");
+  await form.getByLabel("Úryvek (nejvýše 500 znaků)").fill("A quote the existing source cannot carry");
+  await form.getByRole("button", { name: "Uložit důkaz" }).click();
+  await expect(claim.locator(".evidenceItem")).toHaveCount(0);
+  await expect(claim).toContainText("už existuje jen s metadaty");
+  // The draft now cites the existing source; the fields stay editable so they can be cleared, then Save works.
+  await expect(form.getByTestId("evidence-source-mode")).toHaveValue("existing");
+  await expect(form.getByLabel("Úryvek (nejvýše 500 znaků)")).toBeEnabled();
+  await expect(form.getByRole("button", { name: "Uložit důkaz" })).toBeDisabled();
+  await form.getByLabel("Úryvek (nejvýše 500 znaků)").fill("");
+  await form.getByRole("button", { name: "Uložit důkaz" }).click();
+  await expect(claim.locator(".evidenceItem")).toHaveCount(1);
+  await expect(claim.locator(".claimMeta .coverageBadge")).toHaveText("jen metadata");
+});
