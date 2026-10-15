@@ -348,20 +348,6 @@ function reviewClaimsCiting(workspaceId: string, sourceId: string, reason: strin
   }
 }
 
-/** Coverage of a source set by the start-up reconciliation of a JSON edit made by an older binary; the citing claims go back to review. */
-export function setSourceCoverageForRepair(workspaceId: string, sourceId: string, coverage: SourceCoverage | null) {
-  if (!hasContentCoverage(coverage) && contentEvidenceCount(sourceId)) {
-    throw new ContextSourceError("Evidence with an excerpt or a location cites this source, so it needs excerpt or body coverage", 409, "coverage_in_use");
-  }
-  getDatabase().prepare("UPDATE context_sources SET coverage = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND workspace_id = ?").run(coverage, Date.now(), sourceId, workspaceId);
-  reviewClaimsCiting(workspaceId, sourceId, "legacy-reconcile");
-}
-
-/** Whether another claim's active evidence cites the source. */
-export function sourceSharedWithOtherClaims(workspaceId: string, sourceId: string, claimId: string) {
-  return Boolean(getDatabase().prepare("SELECT 1 FROM context_evidence WHERE workspace_id = ? AND source_id = ? AND claim_id != ? AND archived_at IS NULL LIMIT 1").get(workspaceId, sourceId, claimId));
-}
-
 /** Whether a change from one source state to another touches what evidence rests on (everything but a stricter sensitivity). */
 function changesBasis(before: CleanSourceFields | ContextSource, after: CleanSourceFields | ContextSource) {
   const keys = ["account", "provider", "externalId", "locator", "author", "authorRole", "sourceAt", "ingestedAt", "coverage"] as const;
@@ -599,4 +585,57 @@ export function restoreClaimEvidence(input: { workspaceId: string; claimId: stri
 export function evidenceSetFingerprint(items: Array<Pick<ClaimEvidenceItem, "id" | "sourceId" | "locator" | "excerpt" | "stance">>) {
   return items.map((item) => ({ id: item.id, sourceId: item.sourceId, locator: item.locator ?? null, excerpt: item.excerpt ?? null, stance: item.stance ?? null }))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rebuild from the legacy JSON (start-up reconciliation of an edit made by an older binary)
+
+const coverageRank: Record<string, number> = { metadata: 1, excerpt: 2, body: 3 };
+const rankOf = (coverage: string | null | undefined) => coverageRank[coverage ?? ""] ?? 0;
+
+/**
+ * Rebuilds a claim's evidence from its legacy JSON source/evidence: its active evidence is archived, the source is resolved
+ * (the one it already cites when the fields match, else the one with the same external item, else a new one) and the evidence
+ * is created from the JSON. The JSON is the whole truth about coverage: absent means unknown. Coverage is raised to what the
+ * rebuilt evidence needs (an excerpt or a location implies at least `excerpt`) before the evidence is validated; it is lowered
+ * only on a source that no other claim cites. Sensitivity only gets stricter. Must run inside a command (one transaction).
+ */
+export function rebuildClaimEvidenceFromLegacy(input: { workspaceId: string; claimId: string; claimSensitivity: SourceSensitivity;
+  source: ClaimSourceMetadata | null; evidence: ClaimEvidenceMetadata | null }) {
+  const database = getDatabase();
+  const now = Date.now();
+  const items = claimEvidence(input.workspaceId, input.claimId);
+  const oldPrimary = items[0];
+  database.prepare("UPDATE context_evidence SET archived_at = ?, revision = revision + 1, updated_at = ? WHERE workspace_id = ? AND claim_id = ? AND archived_at IS NULL")
+    .run(now, now, input.workspaceId, input.claimId);
+  if (!input.source) return;
+  const evidence = cleanEvidenceFields(input.evidence ?? {});
+  const fields = cleanSourceFields({ ...input.source }, { sensitivity: input.claimSensitivity });
+  const needsContent = Boolean(evidence.excerpt || evidence.locator);
+  let wanted: SourceCoverage | null = fields.coverage;
+  if (needsContent && rankOf(wanted) < rankOf("excerpt")) wanted = "excerpt";
+  const withoutCoverage = (value: ClaimSourceMetadata | null) => { if (!value) return null; const { coverage: _c, ...rest } = value; return rest; };
+  let target: ContextSource | null = null;
+  const duplicate = findDuplicateSource(input.workspaceId, fields);
+  if (duplicate) target = deserializeSource(duplicate);
+  else if (oldPrimary && !oldPrimary.source.archivedAt && sameJson(withoutCoverage(legacyProjection([oldPrimary]).source), withoutCoverage(input.source))) target = oldPrimary.source;
+  let sourceId: string;
+  if (target) {
+    sourceId = target.id;
+    const cited = Boolean(database.prepare("SELECT 1 FROM context_evidence WHERE workspace_id = ? AND source_id = ? AND archived_at IS NULL LIMIT 1").get(input.workspaceId, target.id));
+    const sensitivity = strictness[fields.sensitivity] > strictness[target.sensitivity] ? fields.sensitivity : target.sensitivity;
+    const coverage = rankOf(wanted) > rankOf(target.coverage) || (rankOf(wanted) < rankOf(target.coverage) && !cited) ? wanted : target.coverage;
+    if (sensitivity !== target.sensitivity || coverage !== target.coverage) {
+      const current = deserializeSource(sourceRow(target.id, input.workspaceId)!);
+      writeSource(input.workspaceId, target.id, { ...fieldsOf(current), sensitivity, coverage }, null, current.revision);
+      if (coverage !== target.coverage) reviewClaimsCiting(input.workspaceId, target.id, "legacy-reconcile");
+    }
+  } else {
+    sourceId = `src:${randomUUID()}`;
+    insertSource(input.workspaceId, sourceId, { ...fields, coverage: wanted });
+  }
+  const live = sourceRow(sourceId, input.workspaceId)!;
+  assertEvidenceFitsSource({ coverage: live.coverage }, evidence);
+  database.prepare(`INSERT INTO context_evidence (id, workspace_id, revision, claim_id, source_id, locator, excerpt, stance, created_at, updated_at, archived_at)
+    VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL)`).run(`ev:${randomUUID()}`, input.workspaceId, input.claimId, sourceId, evidence.locator, evidence.excerpt, evidence.stance, now, now);
 }

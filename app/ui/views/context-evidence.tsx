@@ -55,13 +55,14 @@ function SourceSummary({ app, source, showName = true }: { app: LumiApp; source:
   </small>;
 }
 
-function EvidenceRow({ app, item }: { app: LumiApp; item: ContextEvidenceItem }) {
+function EvidenceRow({ app, item, identity }: { app: LumiApp; item: ContextEvidenceItem; identity: string }) {
   const { tr, archiveEvidence, evidenceBusy } = app;
   return <li className="evidenceItem" data-metadata-only={item.metadataOnly ? "true" : "false"}>
     <span className={`evidenceStance stance-${item.stance || "none"}`}>{tr(item.stance === "supports" ? "evidenceStanceSupports" : item.stance === "contradicts" ? "evidenceStanceContradicts" : "evidenceStanceNone")}</span>
     {item.excerpt && <blockquote data-user-content>{item.excerpt}</blockquote>}
     {item.locator && <small>{tr("evidenceLocator")}: <span data-user-content>{item.locator}</span></small>}
-    <SourceSummary app={app} source={item.source} />
+    <small className="evidenceIdentity" data-user-content>{identity}</small>
+    <SourceSummary app={app} source={item.source} showName={false} />
     {item.metadataOnly && <small className="metadataOnlyNote">{tr("evidenceMetadataOnly")}</small>}
     <button type="button" className="textAction danger" disabled={evidenceBusy} onClick={() => archiveEvidence(item)}
       aria-label={`${tr("evidenceArchive")}: ${item.excerpt || item.locator || sourceName(app, item.source)}`.slice(0, 160)}>{tr("evidenceArchive")}</button>
@@ -80,7 +81,7 @@ export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClai
   const canSave = Boolean(draft) && !evidenceBusy && (draft!.mode === "existing" ? Boolean(draft!.sourceId) : Boolean(draft!.source.coverage && (draft!.source.provider.trim() || draft!.source.externalId.trim() || draft!.source.locator.trim() || draft!.source.author.trim()))) && (!hasContent || contentAllowed);
   return <details className="claimEvidence" open={open || Boolean(draft)} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>{tr("evidenceSection")} ({claim.evidenceCount})</summary>
-    {claim.evidenceItems.length ? <ul className="evidenceList">{claim.evidenceItems.map((item) => <EvidenceRow key={item.id} app={app} item={item} />)}</ul> : <p>{tr("evidenceNone")}</p>}
+    {claim.evidenceItems.length ? <ul className="evidenceList">{pickerLabels(app, claim.evidenceItems.map((item) => item.source)).map((identity, index) => <EvidenceRow key={claim.evidenceItems[index].id} app={app} item={claim.evidenceItems[index]} identity={identity} />)}</ul> : <p>{tr("evidenceNone")}</p>}
     {!draft && !claim.archivedAt && <button type="button" onClick={() => { setOpen(true); openEvidenceForm(claim); }}>{tr("evidenceAdd")}</button>}
     {draft && <form className="contextEvidenceForm" onSubmit={(event) => { event.preventDefault(); if (canSave) void submitEvidence(claim); }}>
       <label>{tr("evidenceSourceChoice")}<select data-testid="evidence-source-mode" value={draft.mode} onChange={(event) => patchEvidenceDraft({ mode: event.target.value as "existing" | "new" })}>

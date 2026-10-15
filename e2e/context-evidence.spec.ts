@@ -144,6 +144,8 @@ test("evidence with a new source shows its coverage, is listed under the sources
   await expect(evidence).toHaveCount(1);
   await expect(evidence).toContainText("The quoted sentence");
   await expect(evidence).toContainText("Alex Sender");
+  // The saved row names its source as the picker does.
+  await expect(evidence.locator(".evidenceIdentity")).toContainText("#e2e-ext-1");
   await expect(evidence).toContainText("2026-05-01");
   await expect(evidence).toHaveAttribute("data-metadata-only", "false");
   // Adding evidence returned the claim to review, and the offer names the step.
@@ -372,4 +374,21 @@ test("a new source that already exists with metadata only does not submit the ex
   await form.getByRole("button", { name: "Uložit důkaz" }).click();
   await expect(claim.locator(".evidenceItem")).toHaveCount(1);
   await expect(claim.locator(".claimMeta .coverageBadge")).toHaveText("jen metadata");
+});
+
+test("a relation to a workspace can be created and selected again", async ({ page }) => {
+  await openContext(page);
+  const person = await seedPerson(page, "person", "e2e Workspace Person");
+  await openContext(page);
+  await editor(page).getByLabel("O kom / čem").selectOption(person.id);
+  await editor(page).getByTestId("claim-mode").selectOption("target");
+  await editor(page).getByTestId("claim-target").selectOption("workspace:personal");
+  await editor(page).getByTestId("claim-relation").selectOption({ label: "souvisí s" });
+  await editor(page).getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(editor(page).getByRole("status")).toContainText("Uloženo");
+  const claim = card(page, "e2e Workspace Person");
+  await expect(claim).toHaveCount(1);
+  await claim.getByRole("button", { name: "Opravit" }).click();
+  await expect(editor(page).getByTestId("claim-target")).toHaveValue("workspace:personal");
+  await expect(editor(page).getByTestId("claim-relation")).toHaveValue("related_to");
 });

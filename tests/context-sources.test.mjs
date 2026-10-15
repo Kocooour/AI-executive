@@ -703,7 +703,7 @@ test("an edit of the JSON source/evidence by an older binary is reconciled at th
   claim = review(ws, claim, "confirmed");
   assert.equal(repair.reconcileLegacyClaimJson(), 0, "nothing to reconcile after a normal write");
   // The older binary edits the JSON columns only.
-  db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ? WHERE id = ?")
+  db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ?, revision = revision + 1 WHERE id = ?")
     .run(JSON.stringify({ provider: "chat", coverage: "excerpt" }), JSON.stringify({ excerpt: "Edited by old code" }), claim.id);
   const eventsBefore = events(ws).length;
   assert.equal(repair.reconcileLegacyClaimJson(), 1);
@@ -712,7 +712,7 @@ test("an edit of the JSON source/evidence by an older binary is reconciled at th
   assert.equal(read.source.provider, "chat");
   assert.equal(read.evidenceCount, 1);
   assert.equal(read.reviewStatus, "proposed");
-  assert.equal(read.revision, claim.revision + 1);
+  assert.equal(read.revision, claim.revision + 2);
   const event = events(ws).at(-1);
   assert.deepEqual([events(ws).length, event.actor, event.operation, event.claim_id, event.claim_revision], [eventsBefore + 1, "system", "claim.legacy_reconcile", claim.id, read.revision]);
   assert.equal(claims.listClaimReviewEvents(ws, claim.id)[0].decision, "proposed");
@@ -724,85 +724,134 @@ test("an edit of the JSON source/evidence by an older binary is reconciled at th
 
   // An older binary that cleared the source archives the evidence.
   const cleared = getClaim(ws, claim.id);
-  db().prepare("UPDATE context_claims SET source_metadata = NULL, evidence_metadata = NULL WHERE id = ?").run(claim.id);
+  db().prepare("UPDATE context_claims SET source_metadata = NULL, evidence_metadata = NULL, revision = revision + 1 WHERE id = ?").run(claim.id);
   assert.equal(repair.reconcileLegacyClaimJson(), 1);
   assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
-  assert.equal(getClaim(ws, claim.id).revision, cleared.revision + 1);
+  assert.equal(getClaim(ws, claim.id).revision, cleared.revision + 2);
   assert.equal(repair.reconcileLegacyClaimJson(), 0);
 });
 
-// --- review round 3 ----------------------------------------------------------------------------
+// --- review round 4 ----------------------------------------------------------------------------
 
-const oldWrites = (claim, source, evidenceJson) => db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ? WHERE id = ?")
+// What an older binary does to a claim: it writes the JSON columns and bumps the revision.
+const oldWrites = (claim, source, evidenceJson) => db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ?, revision = revision + 1 WHERE id = ?")
   .run(source === null ? null : JSON.stringify(source), evidenceJson === null ? null : JSON.stringify(evidenceJson), claim.id);
+const syncedOf = (id) => db().prepare("SELECT legacy_synced_revision AS synced, revision FROM context_claims WHERE id = ?").get(id);
 
-test("a rollback that writes an earlier JSON again after the records moved on is repaired again", () => {
+test("every command of this release marks the claims it wrote as in line with their records", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Base" } });
+  assert.equal(syncedOf(claim.id).synced, syncedOf(claim.id).revision);
+  const source = sources.getContextSource(ws, claim.evidenceItems[0].sourceId);
+  editSource(ws, source, { author: "Sam" });
+  assert.equal(syncedOf(claim.id).synced, syncedOf(claim.id).revision, "also a claim touched through its source");
+  oldWrites(claim, { provider: "chat", coverage: "excerpt" }, { excerpt: "Old" });
+  assert.notEqual(syncedOf(claim.id).synced, syncedOf(claim.id).revision, "an older binary leaves the mark behind");
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(syncedOf(claim.id).synced, syncedOf(claim.id).revision);
+});
+
+test("a cycle of edits A, then B, then A again is repaired each time and never replayed or repaired twice", () => {
   const ws = newWorkspace();
   const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Base" } });
   const A = [{ provider: "chat", coverage: "excerpt" }, { excerpt: "Version A" }];
   oldWrites(claim, ...A);
   assert.equal(repair.reconcileLegacyClaimJson(), 1);
   assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version A");
-  // The records move on (the new app), then a rollback writes A again.
-  const current = getClaim(ws, claim.id);
-  editEvidence(ws, current.evidenceItems[0], { excerpt: "Version B" });
-  assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version B");
+  assert.equal(repair.reconcileLegacyClaimJson(), 0, "a second start changes nothing");
+  editEvidence(ws, getClaim(ws, claim.id).evidenceItems[0], { excerpt: "Version B" });
+  assert.equal(repair.reconcileLegacyClaimJson(), 0, "this release's own writes need no repair");
   oldWrites(claim, ...A);
-  assert.equal(repair.reconcileLegacyClaimJson(), 1, "the divergence is new, so it is repaired, not replayed");
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
   assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version A");
   assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  const event = events(ws).at(-1);
+  assert.deepEqual([event.actor, event.operation], ["system", "claim.legacy_reconcile"]);
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "proposed");
 });
 
-test("a claim whose evidence the new app archived is reconciled when a rollback writes a source again; a never-converted claim is left to the conversion", () => {
+test("an edit that leaves the JSON reading like the records only marks the claim", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Same" } });
+  const eventsBefore = events(ws).length;
+  db().prepare("UPDATE context_claims SET revision = revision + 1 WHERE id = ?").run(claim.id);
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  assert.equal(events(ws).length, eventsBefore);
+  assert.equal(syncedOf(claim.id).synced, syncedOf(claim.id).revision);
+});
+
+test("a claim whose evidence the new app archived is rebuilt when a rollback writes a source again; a never-converted claim is left to the conversion", () => {
   const ws = newWorkspace();
   const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Gone" } });
   archiveEvidence(ws, getClaim(ws, claim.id).evidenceItems[0]);
-  assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
   assert.equal(repair.reconcileLegacyClaimJson(), 0);
   oldWrites(claim, { provider: "chat", coverage: "excerpt" }, { excerpt: "Written by old code" });
   assert.equal(repair.reconcileLegacyClaimJson(), 1);
   const read = getClaim(ws, claim.id);
   assert.deepEqual([read.evidenceCount, read.evidence.excerpt, read.reviewStatus], [1, "Written by old code", "proposed"]);
-  assert.equal(repair.reconcileLegacyClaimJson(), 0);
-  // No rows at all: the conversion's job.
   const plain = makeClaim(ws);
   oldWrites(plain, { provider: "chat", coverage: "excerpt" }, { excerpt: "Never converted" });
   assert.equal(repair.reconcileLegacyClaimJson(), 0);
   assert.equal(getClaim(ws, plain.id).evidenceCount, 0);
   migrations.repairLegacySourceRecords(db());
   assert.equal(getClaim(ws, plain.id).evidenceCount, 1);
+  assert.equal(syncedOf(plain.id).synced, syncedOf(plain.id).revision, "the conversion marks what it converted");
 });
 
-test("coverage edits by an older binary: an unshared source follows the JSON, a shared one is only raised", () => {
+test("a rebuild that lands on an existing metadata-only source raises it to what the excerpt needs", () => {
   const ws = newWorkspace();
-  const coverageOf = (claim) => getClaim(ws, claim.id).evidenceItems[0].source.coverage;
-  const body = makeClaim(ws, { source: { provider: "email", coverage: "body" }, evidence: { excerpt: "Q" } });
-  oldWrites(body, { provider: "email", coverage: "metadata" }, { excerpt: "Q" });
-  // lowering with content evidence would break the rule: it is skipped, nothing changes
-  const before = coverageOf(body);
-  repair.reconcileLegacyClaimJson();
-  assert.equal(coverageOf(body), before);
-  const bare = makeClaim(ws, { source: { provider: "chat", coverage: "body" } });
-  oldWrites(bare, { provider: "chat", coverage: "metadata" }, null);
-  assert.equal(repair.reconcileLegacyClaimJson() >= 1, true);
-  assert.equal(coverageOf(bare), "metadata");
-  // metadata -> body, and an excerpt added at the same time is accepted
-  oldWrites(bare, { provider: "chat", coverage: "body" }, { excerpt: "Now with an excerpt" });
+  const target = makeSource(ws, { provider: "email", externalId: "target-1", coverage: "metadata" }).source;
+  const other = review(ws, addEvidence(ws, makeClaim(ws), target).claim, "confirmed");
+  const claim = makeClaim(ws, { source: { provider: "chat", coverage: "excerpt" }, evidence: { excerpt: "Base" } });
+  oldWrites(claim, { provider: "email", externalId: "target-1", coverage: "metadata" }, { excerpt: "A quote for the existing source" });
   assert.equal(repair.reconcileLegacyClaimJson(), 1);
-  assert.deepEqual([coverageOf(bare), getClaim(ws, bare.id).evidence.excerpt], ["body", "Now with an excerpt"]);
+  const read = getClaim(ws, claim.id);
+  assert.equal(read.evidenceItems[0].sourceId, target.id, "the existing source is the target");
+  assert.equal(read.evidence.excerpt, "A quote for the existing source", "the evidence is kept");
+  assert.equal(sources.getContextSource(ws, target.id).coverage, "excerpt", "raised, never metadata-only with an excerpt");
+  assert.equal(getClaim(ws, other.id).reviewStatus, "proposed", "the other claim citing it goes back to review");
+});
 
-  // a shared source stays at the strongest coverage
-  const shared = makeSource(ws, { provider: "email", externalId: "shared-cov", coverage: "body" }).source;
-  const one = addEvidence(ws, makeClaim(ws), shared, { excerpt: "One" }).claim;
-  const two = addEvidence(ws, makeClaim(ws), shared, { excerpt: "Two" }).claim;
-  oldWrites(one, { provider: "email", externalId: "shared-cov", coverage: "metadata" }, { excerpt: "One" });
-  repair.reconcileLegacyClaimJson();
-  assert.equal(sources.getContextSource(ws, shared.id).coverage, "body", "never lowered from one claim's JSON");
-  assert.equal(two.evidenceCount, 1);
-  const weak = makeSource(ws, { provider: "email", externalId: "shared-weak", coverage: "metadata" }).source;
-  const a = addEvidence(ws, makeClaim(ws), weak).claim;
-  addEvidence(ws, makeClaim(ws), weak);
-  oldWrites(a, { provider: "email", externalId: "shared-weak", coverage: "body" }, null);
-  repair.reconcileLegacyClaimJson();
-  assert.equal(sources.getContextSource(ws, weak.id).coverage, "body", "raised when the JSON says stronger");
+test("a rebuild lowers coverage only on a source no other claim cites, and omitted coverage means unknown", () => {
+  const ws = newWorkspace();
+  // shared: refused (the strongest coverage stays)
+  const shared = makeSource(ws, { provider: "email", externalId: "low-shared", coverage: "body" }).source;
+  addEvidence(ws, makeClaim(ws), shared, { excerpt: "Other" });
+  const one = addEvidence(ws, makeClaim(ws), shared, { excerpt: "Mine" }).claim;
+  oldWrites(one, { provider: "email", externalId: "low-shared", coverage: "metadata" }, null);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(sources.getContextSource(ws, shared.id).coverage, "body");
+  assert.equal(getClaim(ws, one.id).evidenceItems[0].sourceId, shared.id);
+  // unshared: lowered, also to nothing when the JSON omits the coverage
+  const own = makeClaim(ws, { source: { provider: "chat", externalId: "low-own", coverage: "body" } });
+  oldWrites(own, { provider: "chat", externalId: "low-own", coverage: "metadata" }, null);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(getClaim(ws, own.id).evidenceItems[0].source.coverage, "metadata");
+  oldWrites(own, { provider: "chat", externalId: "low-own" }, null);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(getClaim(ws, own.id).evidenceItems[0].source.coverage, null);
+  // an excerpt implies at least excerpt coverage, whatever the JSON says
+  oldWrites(own, { provider: "chat", externalId: "low-own" }, { excerpt: "Needs content" });
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.deepEqual([getClaim(ws, own.id).evidenceItems[0].source.coverage, getClaim(ws, own.id).evidence.excerpt], ["excerpt", "Needs content"]);
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+});
+
+test("legacy JSON with an excerpt or a location never becomes a metadata-only source in the migration", () => {
+  const old = legacyDatabase();
+  const insert = old.prepare(`INSERT INTO context_claims VALUES (?, 'personal', 'workspace:x', 'preference', 'string', '"v"', NULL, 'confirmed', 'current', 'normal', 'owner',
+    NULL, NULL, ?, ?, 3, NULL, 1000, 2000)`);
+  insert.run("c-meta-excerpt", JSON.stringify({ provider: "mail2", coverage: "metadata" }), JSON.stringify({ excerpt: "Quoted" }));
+  insert.run("c-none-locator", JSON.stringify({ provider: "mail3" }), JSON.stringify({ locator: "page 2" }));
+  insert.run("c-meta-only", JSON.stringify({ provider: "mail4", coverage: "metadata" }), null);
+  // two claims share an item: one metadata-only, one with an excerpt but no coverage
+  insert.run("c-s1", JSON.stringify({ provider: "mail5", externalId: "sh-1", coverage: "metadata" }), null);
+  insert.run("c-s2", JSON.stringify({ provider: "mail5", externalId: "sh-1" }), JSON.stringify({ excerpt: "Quoted" }));
+  migrations.runSchemaMigrations(old, migrationList());
+  const coverage = (claimId) => old.prepare("SELECT s.coverage FROM context_evidence e JOIN context_sources s ON s.id = e.source_id WHERE e.claim_id = ?").get(claimId).coverage;
+  assert.equal(coverage("c-meta-excerpt"), "excerpt");
+  assert.equal(coverage("c-none-locator"), "excerpt");
+  assert.equal(coverage("c-meta-only"), "metadata", "no content: nothing is raised");
+  assert.equal(coverage("c-s1"), "excerpt");
+  assert.equal(old.prepare("SELECT COUNT(*) AS n FROM context_evidence e JOIN context_sources s ON s.id = e.source_id WHERE (e.excerpt IS NOT NULL OR e.locator IS NOT NULL) AND COALESCE(s.coverage, 'metadata') = 'metadata'").get().n, 0);
 });

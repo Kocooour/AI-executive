@@ -99,6 +99,17 @@ export const schemaMigrations: SchemaMigration[] = [
       convertLegacySourcesAndEvidence(database);
     },
   },
+  {
+    // Context Graph v2: the revision at which a claim's evidence records last matched its legacy JSON source/evidence. Every
+    // command of this release marks the claims it wrote; an older binary bumps the revision without marking it, so the
+    // start-up reconciliation can tell a claim it edited from one it did not touch.
+    id: "2026-10-context-claims-legacy-synced-revision",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(context_claims)").all() as Array<{ name?: string }>).map((row) => String(row.name)));
+      if (!columns.has("legacy_synced_revision")) database.exec("ALTER TABLE context_claims ADD COLUMN legacy_synced_revision INTEGER");
+      database.exec("UPDATE context_claims SET legacy_synced_revision = revision WHERE legacy_synced_revision IS NULL");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
@@ -201,7 +212,11 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
     const sourceId = externalId
       ? `src:${createHash("sha256").update(JSON.stringify([claim.workspace_id, provider ?? "", externalId])).digest("hex").slice(0, 32)}`
       : `src:claim:${claim.id}`;
-    const coverage = typeof source.coverage === "string" && coverageRank[source.coverage] ? source.coverage : null;
+    const detail = parseObject(claim.evidence_metadata);
+    const carriesContent = Boolean(text(detail?.excerpt) || text(detail?.locator));
+    let coverage = typeof source.coverage === "string" && coverageRank[source.coverage] ? source.coverage : null;
+    // An excerpt or a location in the evidence proves Lumi had content: never a metadata-only source carrying excerpt evidence.
+    if (carriesContent && (coverageRank[coverage ?? ""] ?? 0) < coverageRank.excerpt) coverage = "excerpt";
     const sensitivity = legacySensitivity(claim.sensitivity);
     const existing = sources.get(sourceId);
     if (existing) {
@@ -213,8 +228,7 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
         author: text(source.author), authorRole: text(source.authorRole), sourceAt: text(source.sourceAt),
         ingestedAt: text(source.ingestedAt), coverage, sensitivity, createdAt: Number(claim.recorded_at), updatedAt: Number(claim.updated_at) });
     }
-    const detail = parseObject(claim.evidence_metadata);
-    if (text(detail?.excerpt) || text(detail?.locator)) contentSources.add(sourceId);
+    if (carriesContent) contentSources.add(sourceId);
     evidence.push({ id: `ev:${claim.id}`, workspace: claim.workspace_id, claimId: claim.id, sourceId,
       locator: text(detail?.locator), excerpt: text(detail?.excerpt),
       stance: detail?.stance === "supports" || detail?.stance === "contradicts" ? detail.stance : null,
@@ -248,11 +262,17 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
   const insertEvidence = database.prepare(`INSERT OR IGNORE INTO context_evidence
     (id, workspace_id, revision, claim_id, source_id, locator, excerpt, stance, created_at, updated_at, archived_at)
     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+  const converted: string[] = [];
   const sourceExists = database.prepare("SELECT 1 FROM context_sources WHERE id = ?");
   for (const item of evidence) {
     const sourceId = resolved.get(item.sourceId) ?? item.sourceId;
     if (!sourceExists.get(sourceId)) continue;
     insertEvidence.run(item.id, item.workspace, item.claimId, sourceId, item.locator, item.excerpt, item.stance, item.createdAt, item.updatedAt);
+    converted.push(item.claimId);
+  }
+  // The converted claims have their records in line with their JSON (where the column already exists).
+  if ((database.prepare("PRAGMA table_info(context_claims)").all() as Array<{ name?: string }>).some((column) => column.name === "legacy_synced_revision")) {
+    for (const id of converted) database.prepare("UPDATE context_claims SET legacy_synced_revision = revision WHERE id = ?").run(id);
   }
 }
 

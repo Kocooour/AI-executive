@@ -665,7 +665,7 @@ export function useLumiApp() {
     setClaimValue(String(claim.literal?.value ?? ""));
     setClaimValueType(claim.literal?.type || "string");
     setClaimValueMode(claim.target ? "target" : "literal");
-    setClaimTargetId(claim.target?.id || "");
+    setClaimTargetId(claim.target?.canonicalEntityId || claim.target?.id || "");
     setClaimFreshness(claim.freshness);
     setClaimSensitivity(claim.sensitivity);
     setClaimValidFrom(claim.validFrom || "");

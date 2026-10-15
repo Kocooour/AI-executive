@@ -74,6 +74,7 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
   assertCommandWorkspace(command.workspaceId);
   const database = getDatabase();
   const hash = createHash("sha256").update(`${command.operation}:${stableStringify(command.request)}`).digest("hex");
+  const startedAt = Date.now();
   database.exec("BEGIN IMMEDIATE");
   try {
     const prior = database.prepare(`SELECT request_hash, result_payload FROM context_commands
@@ -110,6 +111,10 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
       (workspace_id, idempotency_key, request_hash, result_payload, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(command.workspaceId, command.commandId, hash, JSON.stringify(result), Date.now());
     command.hooks?.beforeCommit?.();
+    // Claims this command wrote have their evidence records in line with their JSON view (an older binary that edits the
+    // JSON bumps the revision without this mark, which is how the start-up reconciliation finds it).
+    database.prepare(`UPDATE context_claims SET legacy_synced_revision = revision WHERE workspace_id = ? AND updated_at >= ?
+      AND legacy_synced_revision IS NOT revision`).run(command.workspaceId, startedAt);
     database.exec("COMMIT");
     return result;
   } catch (error) {
