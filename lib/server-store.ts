@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { repairContextEventOrder, runSchemaMigrations } from "./schema-migrations";
+import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations } from "./schema-migrations";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 
@@ -411,6 +411,7 @@ function initialiseDatabase(database: DatabaseSync) {
   }
   runSchemaMigrations(database);
   repairContextEventOrder(database);
+  repairLegacySourceRecords(database);
   migrateLegacyStore(database);
   ensureDefaultWorkspace(database);
 }

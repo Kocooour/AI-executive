@@ -130,7 +130,7 @@ export interface CleanSourceFields {
 }
 
 /** Trims, turns empty values into null and checks limits. Nothing is ever filled in. */
-export function cleanSourceFields(input: SourceFieldsInput | null | undefined, options: { sensitivity?: SourceSensitivity } = {}): CleanSourceFields {
+export function cleanSourceFields(input: SourceFieldsInput | null | undefined, options: { sensitivity?: SourceSensitivity; requireCoverage?: boolean } = {}): CleanSourceFields {
   if (!input || typeof input !== "object") throw new ContextSourceError("Source is invalid");
   const out: Record<string, string | null> = {};
   for (const [key, limit] of Object.entries(sourceTextLimits)) {
@@ -142,6 +142,7 @@ export function cleanSourceFields(input: SourceFieldsInput | null | undefined, o
   for (const key of ["sourceAt", "ingestedAt"] as const) if (out[key]) validateSourceTimestamp(out[key]!, key);
   const coverage = input.coverage == null || (input.coverage as unknown) === "" ? null : input.coverage;
   if (coverage !== null && !coverageLevels.has(coverage)) throw new ContextSourceError("Source coverage is invalid");
+  if (coverage === null && options.requireCoverage) throw new ContextSourceError("Source coverage is required", 400, "coverage_required");
   const sensitivity = input.sensitivity ?? options.sensitivity;
   if (!sensitivity || !sensitivityLevels.has(sensitivity)) throw new ContextSourceError("Source sensitivity is required and must be normal, confidential or restricted");
   if (!out.provider && !out.externalId && !out.locator && !out.author) {
@@ -323,6 +324,34 @@ export function sourceLabel(source: Pick<ContextSource, "provider" | "externalId
 
 const strictness: Record<SourceSensitivity, number> = { normal: 0, confidential: 1, restricted: 2 };
 
+/**
+ * A change to a source that alters what its evidence rests on (anything but a stricter sensitivity) returns every
+ * active claim citing it to "proposed", with a review event, and rewrites those claims' legacy JSON view. Lowering the
+ * sensitivity therefore never exposes confirmed evidence to agents until the owner confirms the claims again.
+ */
+function reviewClaimsCiting(workspaceId: string, sourceId: string, reason: string) {
+  const database = getDatabase();
+  const claims = database.prepare(`SELECT DISTINCT c.id, c.review_status, c.revision FROM context_claims c JOIN context_evidence e ON e.claim_id = c.id
+    WHERE e.source_id = ? AND e.archived_at IS NULL AND c.workspace_id = ? AND c.archived_at IS NULL`).all(sourceId, workspaceId) as
+    Array<{ id: string; review_status: string; revision: number }>;
+  const now = Date.now();
+  for (const claim of claims) {
+    if (claim.review_status !== "proposed") {
+      requireChanged(database.prepare(`UPDATE context_claims SET review_status = 'proposed', revision = revision + 1, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND revision = ?`).run(now, claim.id, workspaceId, claim.revision), "Claim changed on another device");
+      database.prepare(`INSERT INTO context_review_events (id, workspace_id, claim_id, claim_revision, actor, decision, reason, created_at)
+        VALUES (?, ?, ?, ?, 'owner', 'proposed', ?, ?)`).run(randomUUID(), workspaceId, claim.id, claim.revision + 1, reason, now);
+    }
+    reprojectClaimJson(workspaceId, claim.id);
+  }
+}
+
+/** Whether a change from one source state to another touches what evidence rests on (everything but a stricter sensitivity). */
+function changesBasis(before: CleanSourceFields | ContextSource, after: CleanSourceFields | ContextSource) {
+  const keys = ["account", "provider", "externalId", "locator", "author", "authorRole", "sourceAt", "ingestedAt", "coverage"] as const;
+  return keys.some((key) => (before[key] ?? null) !== (after[key] ?? null)) || strictness[after.sensitivity] < strictness[before.sensitivity];
+}
+
 function findDuplicateSource(workspaceId: string, fields: Pick<CleanSourceFields, "provider" | "account" | "externalId">, exceptId?: string) {
   if (!fields.externalId) return null;
   const row = getDatabase().prepare(`SELECT * FROM context_sources WHERE workspace_id = ? AND COALESCE(provider, '') = ? AND COALESCE(account, '') = ?
@@ -365,7 +394,7 @@ function fieldsOf(source: ContextSource): CleanSourceFields {
 // ---------------------------------------------------------------------------------------------
 // Source commands
 
-export interface SourceCommandInput { commandId: string; workspaceId: string; id: string; expectedRevision: number }
+export interface SourceCommandInput { commandId: string; workspaceId: string; id: string; expectedRevision: number; /** Required when an update lowers the sensitivity. */ reason?: string | null }
 export type CreateSourceInput = SourceCommandInput & SourceFieldsInput & { expectedRevision: 0 };
 export type UpdateSourceInput = SourceCommandInput & SourceFieldsInput;
 
@@ -374,8 +403,11 @@ type SourceOperation = "create" | "update" | "archive";
 function runSourceCommand(operation: SourceOperation, input: SourceCommandInput & SourceFieldsInput, hooks?: CommandHooks) {
   if (!idPattern.test(input.commandId) || !idPattern.test(String(input.id))) throw new ContextSourceError("Invalid command or source identifier");
   assertCommandWorkspace(input.workspaceId);
-  const clean = operation === "archive" ? null : cleanSourceFields(input);
-  const request = { commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, expectedRevision: input.expectedRevision, ...(clean ?? {}) };
+  const clean = operation === "archive" ? null : cleanSourceFields(input, { requireCoverage: operation === "create" });
+  const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+  if (reason.length > 500) throw new ContextSourceError("The reason is too long", 400, "reason_invalid");
+  const request = { commandId: input.commandId, workspaceId: input.workspaceId, id: input.id, expectedRevision: input.expectedRevision, ...(clean ?? {}),
+    ...(operation === "update" && reason ? { reason } : {}) };
   return runContextCommand({
     operation: `source.${operation}`, commandId: input.commandId, workspaceId: input.workspaceId, request, hooks,
     mutate: () => {
@@ -387,10 +419,17 @@ function runSourceCommand(operation: SourceOperation, input: SourceCommandInput 
         if (existing || getDatabase().prepare("SELECT 1 FROM context_sources WHERE id = ?").get(input.id)) throw new ContextSourceError("Source ID already exists", 409, "source_exists");
         const duplicate = findDuplicateSource(input.workspaceId, clean!);
         if (duplicate) {
-          // The same external item is one source: the existing record is returned and nothing is written.
-          const source = readSourceWithCount(duplicate);
-          return { result: { source, deduplicated: true }, objectId: source.id, operation: "source.create", objectType: "source" as const, changed: false,
-            before: null, after: { revision: source.revision, payload: source } };
+          // The same external item is one source: the existing record is returned. A stricter requested sensitivity
+          // raises it (recorded as this command's change event); it is never silently ignored.
+          const existingSource = readSourceWithCount(duplicate);
+          if (strictness[clean!.sensitivity] > strictness[existingSource.sensitivity]) {
+            writeSource(input.workspaceId, existingSource.id, { ...fieldsOf(existingSource), sensitivity: clean!.sensitivity }, null, existingSource.revision);
+            const raised = readSourceWithCount(sourceRow(existingSource.id, input.workspaceId)!);
+            return { result: { source: raised, deduplicated: true }, objectId: raised.id, operation: "source.update", objectType: "source" as const, changed: true,
+              before: { revision: existingSource.revision, payload: existingSource }, after: { revision: raised.revision, payload: raised } };
+          }
+          return { result: { source: existingSource, deduplicated: true }, objectId: existingSource.id, operation: "source.create", objectType: "source" as const, changed: false,
+            before: null, after: { revision: existingSource.revision, payload: existingSource } };
         }
         insertSource(input.workspaceId, input.id, clean!);
       } else {
@@ -408,13 +447,18 @@ function runSourceCommand(operation: SourceOperation, input: SourceCommandInput 
             if (!hasContentCoverage(clean!.coverage) && contentEvidenceCount(input.id)) {
               throw new ContextSourceError("Evidence with an excerpt or a location cites this source, so it needs excerpt or body coverage", 409, "coverage_in_use");
             }
+            const lowered = strictness[clean!.sensitivity] < strictness[before.sensitivity];
+            if (lowered && !reason) throw new ContextSourceError("Lowering a source's sensitivity needs a reason", 400, "reason_required");
             writeSource(input.workspaceId, input.id, clean!, null, before.revision);
+            if (changesBasis(before, clean!)) reviewClaimsCiting(input.workspaceId, input.id, lowered ? reason : "source");
           }
         }
       }
       const source = readSourceWithCount(sourceRow(input.id, input.workspaceId)!);
+      // A reviewed downgrade keeps its reason in the change event.
+      const lowerReason = operation === "update" && changed && before && strictness[source.sensitivity] < strictness[before.sensitivity] ? { reason } : {};
       return { result: { source, deduplicated: false }, objectId: input.id, operation: `source.${operation}`, objectType: "source" as const, changed,
-        before: before ? { revision: before.revision, payload: before } : null, after: { revision: source.revision, payload: source } };
+        before: before ? { revision: before.revision, payload: before } : null, after: { revision: source.revision, payload: { ...source, ...lowerReason } } };
     },
   });
 }
@@ -447,6 +491,7 @@ export function compensateSource(input: { workspaceId: string; id: string; befor
     throw new ContextSourceError("Evidence with an excerpt or a location cites this source", 409, "undo_conflict");
   }
   writeSource(input.workspaceId, input.id, fields, target.archivedAt == null ? null : (current.archivedAt ?? Date.now()), current.revision);
+  if (changesBasis(current, fields)) reviewClaimsCiting(input.workspaceId, input.id, "history");
   return { source: readSourceWithCount(sourceRow(input.id, input.workspaceId)!), before: current };
 }
 
@@ -470,7 +515,8 @@ export function applyLegacySourceEvidence(input: { workspaceId: string; claimId:
   const evidence = cleanEvidenceFields(input.evidence ?? {});
   const fields = cleanSourceFields({ ...input.source }, { sensitivity: input.claimSensitivity });
   assertEvidenceFitsSource(fields, evidence);
-  if (items.length >= claimEvidenceStoredLimit) throw new ContextSourceError("This claim already has the most evidence it can hold", 409, "evidence_limit");
+  // Replacing the newest evidence is net zero; only an addition can exceed the limit.
+  if (items.length - (!input.append && items[0] ? 1 : 0) >= claimEvidenceStoredLimit) throw new ContextSourceError("This claim already has the most evidence it can hold", 409, "evidence_limit");
   const database = getDatabase();
   const now = Date.now();
   const primary = input.append ? undefined : items[0];
@@ -509,8 +555,8 @@ export function restoreClaimEvidence(input: { workspaceId: string; claimId: stri
   const database = getDatabase();
   const now = Date.now();
   const wanted = new Map(input.target.map((item) => [item.id, item]));
-  const rows = database.prepare("SELECT id, archived_at FROM context_evidence WHERE workspace_id = ? AND claim_id = ?").all(input.workspaceId, input.claimId) as
-    Array<{ id: string; archived_at: number | null }>;
+  const rows = database.prepare("SELECT id, archived_at, source_id, locator, excerpt, stance FROM context_evidence WHERE workspace_id = ? AND claim_id = ?").all(input.workspaceId, input.claimId) as
+    Array<{ id: string; archived_at: number | null; source_id: string; locator: string | null; excerpt: string | null; stance: string | null }>;
   const known = new Set(rows.map((row) => row.id));
   for (const item of input.target) {
     if (!known.has(item.id)) throw new ContextSourceError("Evidence of this step no longer exists", 409, "undo_conflict");
@@ -526,6 +572,8 @@ export function restoreClaimEvidence(input: { workspaceId: string; claimId: stri
       if (row.archived_at == null) database.prepare("UPDATE context_evidence SET archived_at = ?, revision = revision + 1, updated_at = ? WHERE id = ?").run(now, now, row.id);
       continue;
     }
+    // Evidence whose content is already as recorded keeps its revision.
+    if (row.archived_at == null && row.source_id === item.sourceId && row.locator === item.locator && row.excerpt === item.excerpt && row.stance === item.stance) continue;
     database.prepare(`UPDATE context_evidence SET source_id=?, locator=?, excerpt=?, stance=?, archived_at=NULL, revision=revision+1, updated_at=? WHERE id=?`)
       .run(item.sourceId, item.locator, item.excerpt, item.stance, now, row.id);
   }

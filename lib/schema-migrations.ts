@@ -177,7 +177,7 @@ const text = (value: unknown) => typeof value === "string" && value !== "" ? val
 
 /**
  * Converts each claim's JSON source/evidence into records. Sources that name the same external item
- * (workspace, provider, externalId) become one record, with the strictest sensitivity and the weakest
+ * (workspace, provider, externalId) become one record, with the strictest sensitivity and the strongest
  * coverage of the claims that shared it. Deterministic ids and INSERT OR IGNORE make a second run a no-op.
  */
 export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
@@ -205,8 +205,8 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
     const existing = sources.get(sourceId);
     if (existing) {
       existing.sensitivity = stricter(existing.sensitivity, sensitivity);
-      // The weakest coverage wins: a shared source must not claim more content than any claim ever had of it.
-      if ((coverageRank[coverage ?? ""] ?? 0) < (coverageRank[existing.coverage ?? ""] ?? 0)) existing.coverage = coverage;
+      // The strongest coverage wins: the source is one external item, and a claim with an excerpt proves Lumi had content.
+      if ((coverageRank[coverage ?? ""] ?? 0) > (coverageRank[existing.coverage ?? ""] ?? 0)) existing.coverage = coverage;
     } else {
       sources.set(sourceId, { id: sourceId, workspace: claim.workspace_id, provider, externalId, locator: text(source.locator),
         author: text(source.author), authorRole: text(source.authorRole), sourceAt: text(source.sourceAt),
@@ -230,5 +230,19 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL)`);
   for (const item of evidence) {
     insertEvidence.run(item.id, item.workspace, item.claimId, item.sourceId, item.locator, item.excerpt, item.stance, item.createdAt, item.updatedAt);
+  }
+}
+
+/** Runs at every start: claims written by an older binary after the migration (a rollback) get their records too. */
+export function repairLegacySourceRecords(database: DatabaseSync) {
+  const tables = new Set((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row) => row.name));
+  if (!tables.has("context_sources") || !tables.has("context_evidence")) return;
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    convertLegacySourcesAndEvidence(database);
+    database.exec("COMMIT");
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch { /* the original error matters */ }
+    throw error;
   }
 }

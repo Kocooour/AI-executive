@@ -96,11 +96,15 @@ test("related_to is symmetric and valid between any two endpoints; supersedes ne
   const jana = person("Jana");
   const acme = organization("Acme");
   assert.equal(relate(jana.id, "related_to", acme.id).relationStatus, "registered");
-  assert.equal(relate(acme.id, "related_to", jana.id).relationStatus, "registered");
+  assert.equal(relate(acme.id, "related_to", "project:rel").relationStatus, "registered");
   assert.equal(relate("task:rel", "related_to", "note:rel").relationStatus, "registered");
   assert.equal(relations.getRelationDefinition("related_to").inverse.cs, relations.getRelationDefinition("related_to").labels.cs);
   assert.throws(() => relate(jana.id, "supersedes", acme.id), (error) => error.code === "invalid_relation");
   assert.equal(relate(jana.id, "waiting_for", acme.id).relationStatus, "registered", "waiting_for keeps existing data valid");
+  // supersedes is for work items and notes, never for people or organizations.
+  assert.equal(relations.checkRelation("supersedes", "person", "person").ok, false);
+  assert.equal(relations.checkRelation("supersedes", "organization", "organization").ok, false);
+  assert.equal(relations.checkRelation("supersedes", "area", "area").ok, true);
 });
 
 test("a literal claim keeps a free-text predicate", () => {
@@ -174,4 +178,45 @@ test("an Undo of a relationship step does not validate the relation it brings ba
   const state = history.getContextHistory(ws).undo;
   const undone = history.runHistoryCommand({ action: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: state.eventId });
   assert.equal(undone.object.predicate, "works_for");
+});
+
+test("an active relationship is unique per subject, predicate and target; related_to also in reverse (409 duplicate_relation)", () => {
+  const jana = person("Jana");
+  const acme = organization("Acme");
+  const first = relate(jana.id, "works_for", acme.id);
+  assert.throws(() => relate(jana.id, "works_for", acme.id), (error) => error.status === 409 && error.code === "duplicate_relation");
+  const related = relate(jana.id, "related_to", acme.id);
+  assert.throws(() => relate(acme.id, "related_to", jana.id), (error) => error.code === "duplicate_relation");
+  assert.throws(() => relate(jana.id, "related_to", acme.id), (error) => error.code === "duplicate_relation");
+  // Another predicate is another relationship, and an archived claim frees the slot.
+  assert.equal(relate(jana.id, "waiting_for", acme.id).relationStatus, "registered");
+  const other = relate(jana.id, "participates_in", "project:rel");
+  assert.throws(() => claims.updateOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: other.id, expectedRevision: other.revision, predicate: "works_for",
+    target: { subjectId: acme.id }, freshness: "current", sensitivity: "normal" }), (error) => error.code === "duplicate_relation");
+  const archived = claims.archiveOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: related.id, expectedRevision: related.revision }).claim;
+  const again = relate(acme.id, "related_to", jana.id);
+  assert.equal(again.relationStatus, "registered");
+  const archiveEvent = db().prepare("SELECT id FROM context_change_events WHERE workspace_id = ? AND object_id = ? AND operation = 'archive'").get(ws, related.id);
+  // Undoing the archive would bring a second active related_to between the two back: refused, nothing written.
+  const undoArchive = () => history.runHistoryCommand({ action: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: archiveEvent.id });
+  // Make the archive the top step: undo what came after it (creating `again` is one step; the claim of `again`).
+  history.runHistoryCommand({ action: "undo", commandId: randomUUID(), workspaceId: ws, expectedEventId: history.getContextHistory(ws).undo.eventId });
+  assert.equal(history.getContextHistory(ws).undo.eventId, archiveEvent.id);
+  db().prepare("UPDATE context_claims SET archived_at = NULL WHERE id = ?").run(again.id);
+  assert.throws(() => undoArchive(), (error) => error.code === "undo_conflict");
+  assert.equal(archived.archivedAt !== null, true);
+  assert.ok(first);
+});
+
+test("an unregistered relationship cannot be confirmed, but can be rejected and returned to review", () => {
+  const jana = person("Jana");
+  const acme = organization("Acme");
+  const created = relate(jana.id, "works_for", acme.id);
+  db().prepare("UPDATE context_claims SET predicate = 'owns' WHERE id = ?").run(created.id);
+  let current = claims.listOwnerClaims(ws).find((claim) => claim.id === created.id);
+  const review = (decision) => claims.reviewOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: created.id, expectedRevision: current.revision, decision }).claim;
+  assert.throws(() => review("confirmed"), (error) => error.status === 409 && error.code === "relation_needs_fix");
+  current = review("rejected");
+  current = review("proposed");
+  assert.equal(current.reviewStatus, "proposed");
 });

@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       coverage: optional(body.coverage) as SourceCoverage | null, sensitivity: optional(body.sensitivity) as SourceSensitivity | null };
     let result;
     if (action === "create") result = createContextSource({ ...common, ...fields, expectedRevision: common.expectedRevision as 0 });
-    else if (action === "update") result = updateContextSource({ ...common, ...fields });
+    else if (action === "update") result = updateContextSource({ ...common, ...fields, reason: optional(body.reason) });
     else if (action === "archive") result = archiveContextSource(common);
     else throw new HttpInputError("Unknown context source action");
     recordSecurityEvent(request, `context.source.${action}`, "allowed", { objectId: common.id });

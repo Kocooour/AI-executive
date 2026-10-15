@@ -45,7 +45,7 @@ export const relationRegistry: readonly RelationDefinition[] = [
   { predicate: "related_to", labels: { cs: "souvisí s", en: "is related to" }, inverse: { cs: "souvisí s", en: "is related to" },
     subjectTypes: relationEndpointTypes, targetTypes: relationEndpointTypes, symmetric: true },
   { predicate: "supersedes", labels: { cs: "nahrazuje", en: "supersedes" }, inverse: { cs: "je nahrazeno", en: "is superseded by" },
-    subjectTypes: relationEndpointTypes, targetTypes: relationEndpointTypes, symmetric: false, sameType: true },
+    subjectTypes: ["task", "project", "note", "area"], targetTypes: ["task", "project", "note", "area"], symmetric: false, sameType: true },
   // Continuity addition: existing claims, the Context Inbox and the Attention "waiting" rule already use
   // waiting_for as a relationship to a person or organization.
   { predicate: "waiting_for", labels: { cs: "čeká na", en: "is waiting for" }, inverse: { cs: "očekává se od", en: "is awaited from" },

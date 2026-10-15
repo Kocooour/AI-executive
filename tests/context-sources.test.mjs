@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +16,7 @@ const evidence = await import("../lib/context-evidence.ts");
 const history = await import("../lib/context-history.ts");
 const inbox = await import("../lib/context-inbox.ts");
 const migrations = await import("../lib/schema-migrations.ts");
+const pact = await import("../lib/pact.ts");
 const store = await import("../lib/server-store.ts");
 
 const db = () => store.getDatabase();
@@ -110,11 +111,11 @@ test("the migration turns legacy JSON source/evidence into records, invents noth
   assert.deepEqual([bare.provider, bare.external_id, bare.author, bare.source_at, bare.ingested_at, bare.coverage, bare.sensitivity],
     ["owner", null, null, null, null, null, "confidential"]);
 
-  // Two claims naming the same external item share one source: the strictest sensitivity, the weakest coverage.
+  // Two claims naming the same external item share one source: the strictest sensitivity, the strongest coverage.
   const [sharedA, sharedB] = [evidenceOf("c-shared-a")[0], evidenceOf("c-shared-b")[0]];
   assert.equal(sharedA.source_id, sharedB.source_id);
   const shared = source(sharedA.source_id);
-  assert.deepEqual([shared.sensitivity, shared.coverage], ["confidential", "excerpt"]);
+  assert.deepEqual([shared.sensitivity, shared.coverage], ["confidential", "body"], "strictest sensitivity, strongest coverage");
   assert.notEqual(source(evidenceOf("c-other-ws")[0].source_id).id, shared.id, "another workspace gets its own source");
   assert.equal(source(evidenceOf("c-other-ws")[0].source_id).workspace_id, "other");
 
@@ -200,8 +201,11 @@ test("source input is validated and never completed by the server", () => {
   bad({ ingestedAt: "next week" }, /ingestedAt is invalid/);
   bad({ provider: null, externalId: null, locator: null, author: null }, /at least/);
   bad({ provider: "x".repeat(81) }, /provider is invalid/);
-  const loose = makeSource(ws, { coverage: undefined, provider: "owner" });
-  assert.equal(loose.source.coverage, null, "a missing coverage stays missing");
+  bad({ coverage: undefined }, /coverage is required/);
+  bad({ coverage: null }, /coverage is required/);
+  // A legacy-shaped claim source without coverage keeps its coverage missing (and so counts as metadata-only).
+  const legacy = makeClaim(ws, { source: { provider: "owner" } });
+  assert.equal(legacy.evidenceItems[0].source.coverage, null);
 });
 
 test("a source is one record per external item, per provider and account", () => {
@@ -271,13 +275,13 @@ test("metadata-only: an excerpt or a location needs a source with content covera
   const ws = newWorkspace();
   const claim = makeClaim(ws);
   const metadataSource = makeSource(ws, { coverage: "metadata" }).source;
-  const unknownSource = makeSource(ws, { coverage: undefined, provider: "owner" }).source;
+  const unknownSource = makeClaim(ws, { source: { provider: "owner" } }).evidenceItems[0].source;
   for (const source of [metadataSource, unknownSource]) {
     assert.throws(() => addEvidence(ws, claim, source, { excerpt: "A quote" }), (error) => error.status === 400 && error.code === "metadata_only_source");
     assert.throws(() => addEvidence(ws, claim, source, { locator: "line 4" }), (error) => error.code === "metadata_only_source");
   }
-  assert.equal(count("SELECT COUNT(*) AS count FROM context_evidence WHERE workspace_id = ?", ws), 0);
-  assert.equal(events(ws).length, 3, "only the claim and the two sources");
+  assert.equal(count("SELECT COUNT(*) AS count FROM context_evidence WHERE claim_id = ?", claim.id), 0);
+  assert.equal(events(ws).filter((event) => event.object_type === "evidence").length, 0);
   // Excerpt length is capped.
   const body = makeSource(ws, { coverage: "body" }).source;
   assert.throws(() => addEvidence(ws, claim, body, { excerpt: "x".repeat(501) }), (error) => error.code === "evidence_too_long");
@@ -508,4 +512,147 @@ test("a Context Inbox approval records a confidential excerpt source and stays r
   assert.equal(count("SELECT COUNT(*) AS count FROM context_evidence WHERE claim_id = ?", proposal.id), 1);
   assert.equal(count("SELECT COUNT(*) AS count FROM context_sources WHERE provider = 'manual-context-inbox' AND id IN (SELECT source_id FROM context_evidence WHERE claim_id = ?)", proposal.id), 1);
   assert.equal(undo(ws).object.archivedAt !== null, true, "an approval is one undoable claim step");
+});
+
+// --- review round 1 ----------------------------------------------------------------------------
+
+test("lowering a source's sensitivity needs a recorded reason and sends the citing claims back to review", () => {
+  const ws = newWorkspace();
+  const source = makeSource(ws, { sensitivity: "confidential", coverage: "body" }).source;
+  let claim = makeClaim(ws);
+  claim = addEvidence(ws, claim, source, { excerpt: "Quoted" }).claim;
+  claim = review(ws, claim, "confirmed");
+  const visibleToAgents = () => pact.resolvePACTContext({ workspaceId: ws }).claims.find((item) => item.id === claim.id)?.evidence.length ?? -1;
+  assert.equal(visibleToAgents(), 0, "hidden while the source is confidential");
+
+  assert.throws(() => editSource(ws, source, { sensitivity: "normal" }), (error) => error.status === 400 && error.code === "reason_required");
+  assert.throws(() => editSource(ws, source, { sensitivity: "normal", reason: "   " }), (error) => error.code === "reason_required");
+  assert.equal(sources.getContextSource(ws, source.id).sensitivity, "confidential");
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "confirmed");
+
+  const lowered = editSource(ws, source, { sensitivity: "normal", reason: "Published newsletter" });
+  assert.equal(lowered.source.sensitivity, "normal");
+  const after = getClaim(ws, claim.id);
+  assert.equal(after.reviewStatus, "proposed");
+  assert.equal(after.revision, claim.revision + 1);
+  assert.equal(claims.listClaimReviewEvents(ws, claim.id)[0].reason, "Published newsletter");
+  // The reason is part of the change event.
+  const event = events(ws).at(-1);
+  assert.equal(event.operation, "source.update");
+  assert.equal(JSON.parse(event.after_payload).reason, "Published newsletter");
+  // Agents see nothing new until the claim is confirmed again.
+  assert.equal(claims.isEligibleClaim(after), false);
+  assert.equal(visibleToAgents(), -1);
+  review(ws, after, "confirmed");
+  assert.equal(visibleToAgents(), 1);
+
+  // Raising needs no reason and does not touch the claims' review.
+  const raised = editSource(ws, lowered.source, { sensitivity: "restricted" });
+  assert.equal(raised.source.sensitivity, "restricted");
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "confirmed");
+  assert.equal(visibleToAgents(), 0);
+});
+
+test("a source edit that changes what the evidence rests on returns the citing claims to review", () => {
+  const ws = newWorkspace();
+  const source = makeSource(ws, { author: "Alex", coverage: "body" }).source;
+  let claim = review(ws, addEvidence(ws, makeClaim(ws), source, { excerpt: "Quoted" }).claim, "confirmed");
+  for (const change of [{ author: "Sam" }, { authorRole: "editor" }, { locator: "https://example.test/new" }, { externalId: "ext-new" }, { provider: "chat" },
+    { account: "me@example.test" }, { sourceAt: "2026-01-02" }, { coverage: "excerpt" }]) {
+    const current = sources.getContextSource(ws, source.id);
+    editSource(ws, current, change);
+    assert.equal(getClaim(ws, claim.id).reviewStatus, "proposed", JSON.stringify(change));
+    claim = review(ws, getClaim(ws, claim.id), "confirmed");
+  }
+  // An edit that changes nothing, or only raises the sensitivity, leaves the review alone.
+  editSource(ws, sources.getContextSource(ws, source.id), {});
+  editSource(ws, sources.getContextSource(ws, source.id), { sensitivity: "confidential" });
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "confirmed");
+  // The claim's legacy JSON view follows the source.
+  assert.equal(getClaim(ws, claim.id).source.provider, "chat");
+});
+
+test("Undo of a source step that lowers sensitivity also sends the citing claims back to review", () => {
+  const ws = newWorkspace();
+  const source = makeSource(ws, { coverage: "body" }).source;
+  const claim = review(ws, addEvidence(ws, makeClaim(ws), source, { excerpt: "Quoted" }).claim, "confirmed");
+  editSource(ws, source, { sensitivity: "confidential" });
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "confirmed");
+  undo(ws);
+  assert.equal(sources.getContextSource(ws, source.id).sensitivity, "normal");
+  assert.equal(getClaim(ws, claim.id).reviewStatus, "proposed");
+});
+
+test("a source create that deduplicates raises the existing source to a stricter requested sensitivity", () => {
+  const ws = newWorkspace();
+  const first = makeSource(ws, { externalId: "msg-77", sensitivity: "normal" }).source;
+  const same = makeSource(ws, { externalId: "msg-77", sensitivity: "normal" });
+  assert.deepEqual([same.deduplicated, same.changed], [true, false]);
+  const stricter = makeSource(ws, { externalId: "msg-77", sensitivity: "restricted" });
+  assert.equal(stricter.deduplicated, true);
+  assert.equal(stricter.changed, true);
+  assert.equal(stricter.source.id, first.id);
+  assert.equal(stricter.source.sensitivity, "restricted");
+  assert.equal(stricter.source.revision, first.revision + 1);
+  const event = events(ws).at(-1);
+  assert.deepEqual([event.object_type, event.object_id, event.operation, event.id], ["source", first.id, "source.update", stricter.historyEventId]);
+  // A weaker request never lowers it.
+  assert.equal(makeSource(ws, { externalId: "msg-77", sensitivity: "normal" }).source.sensitivity, "restricted");
+});
+
+test("claims written by an older binary after the migration get their records at the next start", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws);
+  db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ?, sensitivity = 'confidential' WHERE id = ?")
+    .run(JSON.stringify({ provider: "email", externalId: "rollback-1", coverage: "excerpt" }), JSON.stringify({ excerpt: "Old quote", stance: "supports" }), claim.id);
+  assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
+  migrations.repairLegacySourceRecords(db());
+  const read = getClaim(ws, claim.id);
+  assert.equal(read.evidenceCount, 1);
+  assert.deepEqual([read.evidenceItems[0].excerpt, read.evidenceItems[0].source.sensitivity, read.sourceCoverage], ["Old quote", "confidential", "content"]);
+  // Idempotent, and an evidence the owner archived is not brought back.
+  migrations.repairLegacySourceRecords(db());
+  assert.equal(count("SELECT COUNT(*) AS count FROM context_evidence WHERE claim_id = ?", claim.id), 1);
+  archiveEvidence(ws, read.evidenceItems[0]);
+  migrations.repairLegacySourceRecords(db());
+  assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
+  // It runs at every database initialisation.
+  assert.match(readFileSync("lib/server-store.ts", "utf8"), /repairLegacySourceRecords\(database\)/);
+});
+
+test("replacing the newest legacy evidence at the limit is net zero and allowed", () => {
+  const ws = newWorkspace();
+  let claim = makeClaim(ws);
+  const source = makeSource(ws).source;
+  for (let index = 0; index < 20; index += 1) claim = addEvidence(ws, claim, source, { excerpt: `Quote ${index}` }).claim;
+  const replaced = claims.updateOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: claim.id, expectedRevision: claim.revision, predicate: claim.predicate,
+    literal: claim.literal, freshness: "current", sensitivity: "normal", source: { provider: "manual", coverage: "excerpt" }, evidence: { excerpt: "Replacement" } }).claim;
+  assert.equal(replaced.evidenceCount, 20);
+  assert.equal(replaced.evidence.excerpt, "Replacement");
+});
+
+test("a claim Undo or Redo leaves the revision of unchanged evidence alone", () => {
+  const ws = newWorkspace();
+  const source = makeSource(ws).source;
+  let claim = makeClaim(ws);
+  claim = addEvidence(ws, claim, source, { excerpt: "Kept" }).claim;
+  const edited = claims.updateOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: claim.id, expectedRevision: claim.revision, predicate: claim.predicate,
+    literal: { type: "string", value: "Changed" }, freshness: "current", sensitivity: "normal" }).claim;
+  const revisionOf = () => db().prepare("SELECT revision FROM context_evidence WHERE claim_id = ?").get(claim.id).revision;
+  const before = revisionOf();
+  undo(ws);
+  redo(ws);
+  assert.equal(revisionOf(), before);
+  assert.equal(edited.evidenceCount, 1);
+});
+
+test("the migration merges a shared external id with the strongest coverage, so excerpt evidence stays valid", () => {
+  const old = legacyDatabase();
+  old.prepare(`INSERT INTO context_claims VALUES ('c-meta', 'personal', 'workspace:x', 'preference', 'string', '"v"', NULL, 'confirmed', 'current', 'normal', 'owner',
+    NULL, NULL, ?, NULL, 3, NULL, 1000, 2000)`).run(JSON.stringify({ provider: "email", externalId: "shared-1", coverage: "metadata" }));
+  migrations.runSchemaMigrations(old, migrationList());
+  const row = old.prepare("SELECT s.coverage, s.sensitivity FROM context_evidence e JOIN context_sources s ON s.id = e.source_id WHERE e.claim_id = 'c-shared-b'").get();
+  assert.equal(row.coverage, "body");
+  const excerpt = old.prepare("SELECT excerpt FROM context_evidence WHERE claim_id = 'c-shared-a'").get();
+  assert.equal(excerpt.excerpt, "A");
 });

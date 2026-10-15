@@ -8,7 +8,7 @@ import {
   reprojectClaimJson, restoreClaimEvidence, summarizeCoverage, validateSourceTimestamp,
   type ClaimEvidenceItem, type ClaimEvidenceMetadata, type ClaimSourceCoverage, type ClaimSourceMetadata,
 } from "./context-sources";
-import { checkRelation, relationStatusOf, type RelationStatus } from "./context-relations";
+import { checkRelation, getRelationDefinition, relationStatusOf, type RelationStatus } from "./context-relations";
 
 export type { ClaimEvidenceMetadata, ClaimSourceMetadata } from "./context-sources";
 
@@ -331,6 +331,18 @@ function subjectOfExistingClaim(input: UpdateClaimInput) {
   return readSubject(row.subject_id);
 }
 
+/**
+ * An active relationship claim is unique per subject, predicate and target in a workspace; for a symmetric relation
+ * the reverse direction is the same relationship.
+ */
+function duplicateRelationId(workspaceId: string, subjectId: string, predicate: string, targetId: string, exceptId: string) {
+  const symmetric = getRelationDefinition(predicate)?.symmetric === true;
+  const row = getDatabase().prepare(`SELECT id FROM context_claims WHERE workspace_id = ? AND predicate = ? AND archived_at IS NULL AND id != ?
+    AND ((subject_id = ? AND target_subject_id = ?) ${symmetric ? "OR (subject_id = ? AND target_subject_id = ?)" : ""}) LIMIT 1`)
+    .get(...[workspaceId, predicate, exceptId, subjectId, targetId, ...(symmetric ? [targetId, subjectId] : [])]) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
 function validateCommon(input: CreateClaimInput | UpdateClaimInput, subject?: ClaimSubjectRef) {
   if (!idPattern.test(input.id)) throw new ContextClaimError("Claim identifier is invalid");
   if (!predicatePattern.test(input.predicate)) throw new ContextClaimError("Predicate is invalid");
@@ -365,6 +377,9 @@ export function createOwnerClaim(raw: CreateClaimInput, hooks?: CommandHooks, me
     const clean = validateCommon(input, subject);
     if (Number(input.expectedRevision) !== 0) throw new ContextClaimError("New claims require revision 0", 409, "revision_conflict");
     if (rowForClaim(input.id, input.workspaceId)) throw new ContextClaimError("Claim already exists", 409, "claim_exists");
+    if (clean.target && duplicateRelationId(input.workspaceId, subject.id, input.predicate, clean.target.id, input.id)) {
+      throw new ContextClaimError("This relationship already exists", 409, "duplicate_relation");
+    }
     ensureSubject(input.workspaceId, subject);
     if (clean.target) ensureSubject(input.workspaceId, clean.target);
     const now = Date.now();
@@ -394,6 +409,9 @@ export function updateOwnerClaim(raw: UpdateClaimInput, hooks?: CommandHooks) {
       ? { entityId: before.subject.canonicalEntityId } : { subjectId: before.subject.id });
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be edited", 409, "archived");
+    if (clean.target && duplicateRelationId(input.workspaceId, before.subject.id, input.predicate, clean.target.id, input.id)) {
+      throw new ContextClaimError("This relationship already exists", 409, "duplicate_relation");
+    }
     if (clean.target) ensureSubject(input.workspaceId, clean.target);
     const comparable = { predicate: input.predicate, literal: clean.literal, targetId: clean.target?.id || null,
       freshness: input.freshness, sensitivity: input.sensitivity, validFrom: clean.validFrom, validTo: clean.validTo };
@@ -430,6 +448,10 @@ export function reviewOwnerClaim(input: ReviewClaimInput, hooks?: CommandHooks) 
     if (before.revision !== input.expectedRevision) throw new ContextClaimError("Claim changed on another device", 409, "revision_conflict");
     if (before.archivedAt) throw new ContextClaimError("Archived claims cannot be reviewed", 409, "archived");
     if (before.reviewStatus === input.decision) return { claim: before, before, changed: false };
+    // A relationship outside the registry cannot be confirmed; it is fixed first. Rejecting and returning it to review stay open.
+    if (input.decision === "confirmed" && before.target && before.relationStatus !== "registered") {
+      throw new ContextClaimError("Choose a known relation before confirming this claim", 409, "relation_needs_fix");
+    }
     const now = Date.now();
     requireChanged(getDatabase().prepare(`UPDATE context_claims SET review_status=?, revision=revision+1, updated_at=?
       WHERE id=? AND workspace_id=? AND revision=?`).run(input.decision, now, input.id, input.workspaceId, input.expectedRevision),
@@ -600,6 +622,12 @@ export function compensateClaim(input: { workspaceId: string; id: string; mode: 
   const target = input.before ? claimFingerprint(input.before, legacyEvidence) : { ...claimFingerprint(input.after, legacyEvidence), archived: true };
   const targetClaim = input.before ?? input.after;
   if (!target.archived) {
+    if (targetClaim.target && duplicateRelationId(input.workspaceId, current.subject.id, target.predicate, targetClaim.target.id, input.id)) {
+      throw undoConflict("An active claim already has this relationship");
+    }
+    if (targetClaim.target && target.reviewStatus === "confirmed" && relationStatusOf(target.predicate, current.subject.type, targetClaim.target.type) !== "registered") {
+      throw undoConflict("This relationship is not a known relation, so it cannot be confirmed");
+    }
     // A claim that comes back must still have a valid subject and target (neither archived nor gone).
     const refOf = (ref: ClaimSubjectRef): CanonicalRefInput => ref.canonicalEntityId ? { entityId: ref.canonicalEntityId } : { subjectId: ref.id };
     try {
