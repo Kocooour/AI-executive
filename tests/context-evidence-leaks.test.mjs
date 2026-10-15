@@ -117,7 +117,7 @@ test("the integration routes and agent code never read sources or evidence", () 
     assert.equal(sensitive.test(readFileSync(file, "utf8")), false, file);
   }
   // The owner-only routes check the owner session and take no bearer token.
-  for (const route of ["sources", "evidence", "relations"]) {
+  for (const route of ["sources", "evidence"]) {
     const text = readFileSync(`app/api/context/${route}/route.ts`, "utf8").replace(/^\s*\/\/.*$/gm, "");
     assert.match(text, /isAuthenticated\(request\)/);
     assert.doesNotMatch(text, /bearer|authorization/i);

@@ -180,11 +180,25 @@ export interface ContextClaimItem {
   validTo: string | null;
   source: { provider?: string; locator?: string; author?: string; sourceAt?: string; coverage?: string } | null;
   evidence: { locator?: string; excerpt?: string; stance?: string } | null;
+  evidenceItems: ContextEvidenceItem[];
+  evidenceCount: number;
+  sourceCoverage: "missing" | "metadata_only" | "content";
+  relationStatus: "registered" | "unregistered" | "invalid_endpoints" | null;
   revision: number;
   archivedAt: number | null;
   recordedAt: number;
   updatedAt: number;
   eligibleForAI?: boolean;
+}
+export interface ContextSourceItem {
+  id: string; workspaceId: string; revision: number; account: string | null; provider: string | null; externalId: string | null;
+  locator: string | null; author: string | null; authorRole: string | null; sourceAt: string | null; ingestedAt: string | null;
+  coverage: "metadata" | "excerpt" | "body" | null; sensitivity: ClaimSensitivity; createdAt: number; updatedAt: number;
+  archivedAt: number | null; evidenceCount?: number;
+}
+export interface ContextEvidenceItem {
+  id: string; claimId: string; revision: number; sourceId: string; locator: string | null; excerpt: string | null;
+  stance: "supports" | "contradicts" | null; metadataOnly: boolean; archivedAt: number | null; source: ContextSourceItem;
 }
 export interface ContextInboxProposal {
   id: string; kind: "claim";
@@ -198,9 +212,9 @@ export interface ContextInboxProposal {
   selectedTargetId?: string;
 }
 export interface ContextHistoryStep {
-  eventId: string; kind: "change" | "undo" | "redo"; operation: string; objectType: "claim" | "subject"; objectId: string;
+  eventId: string; kind: "change" | "undo" | "redo"; operation: string; objectType: "claim" | "subject" | "source" | "evidence"; objectId: string;
   label: string; subjectTitle: string | null; subjectType: string | null; fromTitle: string | null; toTitle: string | null;
-  reviewStatus: "proposed" | "confirmed" | "rejected" | null; at: number;
+  reviewStatus: "proposed" | "confirmed" | "rejected" | null; sourceTitle?: string | null; at: number;
 }
 export interface ContextHistoryState { undo: ContextHistoryStep | null; redo: ContextHistoryStep | null; recent: ContextHistoryStep[]; }
 export interface StandaloneSubjectItem { id: string; workspaceId: string; type: "person" | "organization"; title: string; revision: number; archivedAt: number | null; }

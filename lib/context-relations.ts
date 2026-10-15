@@ -85,8 +85,3 @@ export function relationStatusOf(predicate: string, subjectType: string, targetT
   const check = checkRelation(predicate, subjectType, targetType);
   return check.ok ? "registered" : check.reason === "unregistered_predicate" ? "unregistered" : "invalid_endpoints";
 }
-
-/** The registry as sent to the client, so the UI offers exactly what the server accepts. */
-export function relationRegistryForClient() {
-  return { version: RELATION_REGISTRY_VERSION, relations: relationRegistry.map((entry) => ({ ...entry })) };
-}
