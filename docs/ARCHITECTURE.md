@@ -34,7 +34,7 @@ For production, run one always-on Node.js process (the current deployment uses s
 
 ```bash
 pnpm build
-pnpm start -- --hostname 127.0.0.1
+pnpm exec next start --hostname 127.0.0.1
 ```
 
 
