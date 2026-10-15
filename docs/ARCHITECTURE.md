@@ -26,15 +26,15 @@
 ## Run
 
 ```bash
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
 For production, run one always-on Node.js process (the current deployment uses systemd):
 
 ```bash
-npm run build
-npm run start -- --hostname 127.0.0.1
+pnpm build
+pnpm start -- --hostname 127.0.0.1
 ```
 
 

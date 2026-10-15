@@ -25,8 +25,8 @@ Jde o lokálně orientovanou instalovatelnou PWA nad **Next.js, SQLite a Dexie**
 ## Spuštění pro vývoj
 
 ```bash
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
 Produkční proces běží jako vždy zapnutá Node.js služba. Postup, omezení a bezpečnostní kontrolní kroky viz [technická specifikace](docs/ARCHITECTURE.md#run) a [návod pro vývoj](docs/DEVELOPMENT.md).

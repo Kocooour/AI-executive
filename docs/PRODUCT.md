@@ -8,10 +8,11 @@
 - Níže zavedené identifikátory `LUMI-FR-xxx` jsou stabilní odkazy na funkční oblasti, nikoli nové změny chování. Detailní zdrojová pravidla a akceptační scénáře zůstávají závazné v původním rozsahu.
 - Priorita obrazovky v UX specifikaci nepředstavuje tvrzení, že je již vyvinuta. P0/P1/P2 vyjadřují pořadí cílového dodání.
 - Explicitní oddělení **Personal** a **Shared**, důvěryhodnost tvrzení a schválení účinků mají přednost před pohodlím automatizace.
+- Stav ve funkčním registru níže je **pouze orientační**. Pro rozlišení skutečně implementovaných funkcí od cílových požadavků jsou závazné části [Current MVP](ARCHITECTURE.md#current-mvp), [PACT implementation status](ARCHITECTURE.md#pact-implementation-status) a [Shipped foundation and phased delivery](#shipped-foundation-and-phased-delivery).
 
 ## Registr funkčních požadavků
 
-| ID | Funkční oblast a minimální produktový závazek | Stav podle současné specifikace | Vazba na UX |
+| ID | Funkční oblast a minimální produktový závazek | Stav (orientační přehled) | Vazba na UX |
 |---|---|---|---|
 | **LUMI-FR-001** | Remember: kanonické úkoly/projekty/oblasti/poznámky/vztahy, historie a jednoznačné workspaces | Existující základ; širší Graph v2 je cíl | [Projekt](UX-UI.md#ux-přehled), Inbox, Notes |
 | **LUMI-FR-002** | Quick Capture, Inbox, bezpečné třídění návrhů a kontextových výtažků | Částečně dodáno, cílová interakce rozšířena | Inbox, mobile capture |
@@ -34,7 +35,7 @@ Typické scénáře: zachytit poznámku hlasem či textem; roztřídit příchoz
 
 ## Měření přínosu a rozsah
 
-Následující metriky jsou **návrh měření**, nikoliv již naměřené hodnoty či slíbené cílové procento: podíl aktivních projektů s další akcí; podíl upozornění vyhodnocených jako užitečné; doba od zachycení ke správnému zařazení; počet konfliktů odhalených před vznikem problému; podíl návrhů schválených/upravených/zamítnutých; podíl úspěšně dokončených a reverzibilních akcí; frekvence duplicitních či neopodstatněných notifikací; výskyt synchronizačních konfliktů a porušení soukromí (cílově žádné). Baseline a cílové hodnoty vyžadují samostatné rozhodnutí.
+Závazný výčet produktových metrik a pravidla jejich ochrany soukromí jsou uvedeny v kapitole [Shipped foundation and phased delivery](#shipped-foundation-and-phased-delivery), v odstavci začínajícím „Privacy-preserving product metrics“. Toto rozdělení dokumentace nepřidává nové metriky ani nemění jejich pravidla měření.
 
 Do cílového rozsahu patří osobní a sdílené workspaces, PWA, kanonické úkoly, Context Graph a schvalované nástroje. Mimo počáteční rozsah patří firemní BI, povinná nativní macOS aplikace, neomezená autonomie agentů nebo povinný cloudový účet třetí strany.
 

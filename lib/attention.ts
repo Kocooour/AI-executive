@@ -19,8 +19,8 @@ export interface AttentionItem {
   title: string;
   ruleId: AttentionRule;
   ruleVersion: 1;
-  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene, 5 planned day passed (README, Attention
-  // contract).
+  // 1 overdue, 2 due soon, 3 waiting, 4 project hygiene, 5 planned day passed (docs/PRODUCT.md,
+  // Attention contract).
   severity: 1 | 2 | 3 | 4 | 5;
   reasonCode: AttentionRule;
   reason: string;
