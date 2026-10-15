@@ -13,9 +13,9 @@ export function CoverageBadge({ app, coverage }: { app: LumiApp; coverage: Conte
   return <span className={`coverageBadge coverage-${coverage}`}>{app.tr(coverageKey[coverage])}</span>;
 }
 
-function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice }: { app: LumiApp; fields: SourceFields; onChange: (patch: Partial<SourceFields>) => void; idPrefix: string; requireChoice?: boolean }) {
+function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice, disabled }: { app: LumiApp; fields: SourceFields; onChange: (patch: Partial<SourceFields>) => void; idPrefix: string; requireChoice?: boolean; disabled?: boolean }) {
   const { tr } = app;
-  const text = (key: keyof SourceFields, label: string, maxLength: number, placeholder?: string) => <label key={key}>{label}<input data-user-content value={fields[key]} maxLength={maxLength} placeholder={placeholder}
+  const text = (key: keyof SourceFields, label: string, maxLength: number, placeholder?: string) => <label key={key}>{label}<input data-user-content value={fields[key]} maxLength={maxLength} placeholder={placeholder} disabled={disabled}
     onChange={(event) => onChange({ [key]: event.target.value } as Partial<SourceFields>)} /></label>;
   return <div className="contextSourceFields" id={idPrefix}>
     <div className="preferenceGrid">{text("provider", tr("srcProvider"), 80)}{text("author", tr("srcAuthor"), 200)}</div>
@@ -24,9 +24,9 @@ function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice }: { 
     {text("ingestedAt", tr("srcIngestedAt"), 40, "2026-05-02")}
     {text("locator", tr("srcLocator"), 2000)}
     <div className="preferenceGrid">
-      <label>{tr("srcCoverage")}<select data-testid="source-coverage" value={fields.coverage} onChange={(event) => onChange({ coverage: event.target.value as SourceFields["coverage"] })}>
+      <label>{tr("srcCoverage")}<select data-testid="source-coverage" value={fields.coverage} disabled={disabled} onChange={(event) => onChange({ coverage: event.target.value as SourceFields["coverage"] })}>
         <option value="">{requireChoice ? tr("srcCoverageChoose") : tr("srcCoverageUnknown")}</option><option value="metadata">{tr("srcCoverageMetadata")}</option><option value="excerpt">{tr("srcCoverageExcerpt")}</option><option value="body">{tr("srcCoverageBody")}</option></select></label>
-      <label>{tr("sensitivity")}<select value={fields.sensitivity} onChange={(event) => onChange({ sensitivity: event.target.value as SourceFields["sensitivity"] })}>
+      <label>{tr("sensitivity")}<select value={fields.sensitivity} disabled={disabled} onChange={(event) => onChange({ sensitivity: event.target.value as SourceFields["sensitivity"] })}>
         <option value="normal">{tr("normal")}</option><option value="confidential">{tr("confidential")}</option><option value="restricted">{tr("restricted")}</option></select></label>
     </div>
   </div>;
@@ -83,20 +83,20 @@ export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClai
     <summary>{tr("evidenceSection")} ({claim.evidenceCount})</summary>
     {claim.evidenceItems.length ? <ul className="evidenceList">{pickerLabels(app, claim.evidenceItems.map((item) => item.source)).map((identity, index) => <EvidenceRow key={claim.evidenceItems[index].id} app={app} item={claim.evidenceItems[index]} identity={identity} />)}</ul> : <p>{tr("evidenceNone")}</p>}
     {!draft && !claim.archivedAt && <button type="button" onClick={() => { setOpen(true); openEvidenceForm(claim); }}>{tr("evidenceAdd")}</button>}
-    {draft && <form className="contextEvidenceForm" onSubmit={(event) => { event.preventDefault(); if (canSave) void submitEvidence(claim); }}>
-      <label>{tr("evidenceSourceChoice")}<select data-testid="evidence-source-mode" value={draft.mode} onChange={(event) => patchEvidenceDraft({ mode: event.target.value as "existing" | "new" })}>
+    {draft && <form className="contextEvidenceForm" aria-busy={evidenceBusy} onSubmit={(event) => { event.preventDefault(); if (canSave) void submitEvidence(claim); }}>
+      <label>{tr("evidenceSourceChoice")}<select data-testid="evidence-source-mode" value={draft.mode} disabled={evidenceBusy} onChange={(event) => patchEvidenceDraft({ mode: event.target.value as "existing" | "new" })}>
         <option value="existing" disabled={!liveSources.length}>{tr("evidenceSourceExisting")}</option><option value="new">{tr("evidenceSourceNew")}</option></select></label>
       {draft.mode === "existing"
-        ? <label>{tr("sourceSection")}<select data-testid="evidence-source-pick" value={draft.sourceId} onChange={(event) => patchEvidenceDraft({ sourceId: event.target.value })}>
+        ? <label>{tr("sourceSection")}<select data-testid="evidence-source-pick" value={draft.sourceId} disabled={evidenceBusy} onChange={(event) => patchEvidenceDraft({ sourceId: event.target.value })}>
           <option value="">{tr("evidenceChooseSource")}</option>{pickerLabels(app, liveSources).map((label, index) => <option key={liveSources[index].id} value={liveSources[index].id}>{label}</option>)}</select></label>
-        : <SourceFieldsForm app={app} fields={draft.source} onChange={patchDraftSource} idPrefix={`new-source-${claim.id}`} requireChoice />}
-      <label>{tr("evidenceStance")}<select value={draft.stance} onChange={(event) => patchEvidenceDraft({ stance: event.target.value as "supports" | "contradicts" })}>
+        : <SourceFieldsForm app={app} fields={draft.source} onChange={patchDraftSource} idPrefix={`new-source-${claim.id}`} requireChoice disabled={evidenceBusy} />}
+      <label>{tr("evidenceStance")}<select value={draft.stance} disabled={evidenceBusy} onChange={(event) => patchEvidenceDraft({ stance: event.target.value as "supports" | "contradicts" })}>
         <option value="supports">{tr("evidenceStanceSupports")}</option><option value="contradicts">{tr("evidenceStanceContradicts")}</option></select></label>
       {!contentAllowed && (draft.mode === "new" || draft.sourceId) && <p className="metadataOnlyNote" role="note">{tr("evidenceMetadataOnlyHint")}</p>}
-      <label>{tr("evidenceLocator")}<input data-user-content value={draft.locator} maxLength={1000} disabled={!contentAllowed && !hasContent} onChange={(event) => patchEvidenceDraft({ locator: event.target.value })} /></label>
-      <label>{tr("evidenceExcerptLabel")}<textarea data-user-content value={draft.excerpt} maxLength={500} disabled={!contentAllowed && !hasContent} onChange={(event) => patchEvidenceDraft({ excerpt: event.target.value })} /></label>
+      <label>{tr("evidenceLocator")}<input data-user-content value={draft.locator} maxLength={1000} disabled={evidenceBusy || (!contentAllowed && !hasContent)} onChange={(event) => patchEvidenceDraft({ locator: event.target.value })} /></label>
+      <label>{tr("evidenceExcerptLabel")}<textarea data-user-content value={draft.excerpt} maxLength={500} disabled={evidenceBusy || (!contentAllowed && !hasContent)} onChange={(event) => patchEvidenceDraft({ excerpt: event.target.value })} /></label>
       {app.evidenceStatus && <p className="metadataOnlyNote" role="alert">{app.evidenceStatus}</p>}
-      <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={!canSave}>{evidenceBusy ? tr("saving") : tr("evidenceSave")}</button><button type="button" onClick={closeEvidenceForm}>{tr("cancel")}</button></div>
+      <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={!canSave}>{evidenceBusy ? tr("saving") : tr("evidenceSave")}</button><button type="button" disabled={evidenceBusy} onClick={closeEvidenceForm}>{tr("cancel")}</button></div>
     </form>}
   </details>;
 }
@@ -114,11 +114,11 @@ export function ContextSources({ app }: { app: LumiApp }) {
     <div className="contextSourceList">
       {contextSources.filter((source) => !source.archivedAt).map((source) => <article key={source.id} className="contextSourceCard">
         {sourceEdit?.id === source.id
-          ? <form onSubmit={(event) => { event.preventDefault(); saveSourceEdit(); }}>
-            <SourceFieldsForm app={app} fields={sourceEdit.fields} onChange={patchSourceEdit} idPrefix={`edit-source-${source.id}`} />
-            {lowered && <label className="sourceReason">{tr("sourceReasonLabel")}<input data-testid="source-reason" data-user-content value={sourceEdit.reason} maxLength={500} onChange={(event) => setSourceReason(event.target.value)} /></label>}
+          ? <form aria-busy={sourceBusy} onSubmit={(event) => { event.preventDefault(); saveSourceEdit(); }}>
+            <SourceFieldsForm app={app} fields={sourceEdit.fields} onChange={patchSourceEdit} idPrefix={`edit-source-${source.id}`} disabled={sourceBusy} />
+            {lowered && <label className="sourceReason">{tr("sourceReasonLabel")}<input data-testid="source-reason" data-user-content value={sourceEdit.reason} disabled={sourceBusy} maxLength={500} onChange={(event) => setSourceReason(event.target.value)} /></label>}
             {lowered && <small role="note">{tr("sourceLowerExplain")}</small>}
-            <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={sourceBusy || (lowered && !sourceEdit.reason.trim())}>{tr("save")}</button><button type="button" onClick={cancelSourceEdit}>{tr("cancel")}</button></div>
+            <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={sourceBusy || (lowered && !sourceEdit.reason.trim())}>{tr("save")}</button><button type="button" disabled={sourceBusy} onClick={cancelSourceEdit}>{tr("cancel")}</button></div>
           </form>
           : <>
             <strong data-user-content>{sourceName(app, source)}</strong>

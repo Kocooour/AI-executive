@@ -392,3 +392,47 @@ test("a relation to a workspace can be created and selected again", async ({ pag
   await expect(editor(page).getByTestId("claim-target")).toHaveValue("workspace:personal");
   await expect(editor(page).getByTestId("claim-relation")).toHaveValue("related_to");
 });
+
+test("the evidence and source forms are locked while a save is in flight, so nothing typed during it is lost", async ({ page }) => {
+  const predicate = "e2e.evidence.inflight";
+  await openContext(page);
+  await seedClaim(page, predicate, "saved while typing");
+  const source = await seedSource(page, { provider: "e2e.inflight", coverage: "body" });
+  await openContext(page);
+
+  // Evidence: the request is held until the form has been checked.
+  let releaseEvidence = () => {};
+  const evidenceHeld = new Promise<void>((resolve) => { releaseEvidence = resolve; });
+  await page.route("**/api/context/evidence", async (route) => { await evidenceHeld; await route.continue(); });
+  const claim = card(page, predicate);
+  await claim.locator(".claimEvidence summary").click();
+  await claim.getByRole("button", { name: "Přidat důkaz" }).click();
+  const form = claim.locator(".contextEvidenceForm");
+  await form.getByTestId("evidence-source-mode").selectOption("existing");
+  await form.getByTestId("evidence-source-pick").selectOption(source.id);
+  await form.getByLabel("Úryvek (nejvýše 500 znaků)").fill("Excerpt A");
+  await form.getByRole("button", { name: "Uložit důkaz" }).click();
+  await expect(form).toHaveAttribute("aria-busy", "true");
+  for (const control of [form.getByLabel("Úryvek (nejvýše 500 znaků)"), form.getByLabel("Místo ve zdroji"), form.getByTestId("evidence-source-pick"), form.getByRole("button", { name: "Zrušit" })]) {
+    await expect(control).toBeDisabled();
+  }
+  releaseEvidence();
+  await expect(claim.locator(".evidenceItem")).toContainText("Excerpt A");
+  await expect(form).toHaveCount(0);
+  await page.unroute("**/api/context/evidence");
+
+  // Source edit: the same lock.
+  let releaseSource = () => {};
+  const sourceHeld = new Promise<void>((resolve) => { releaseSource = resolve; });
+  await page.route("**/api/context/sources", async (route) => { if (route.request().method() === "POST") await sourceHeld; await route.continue(); });
+  await page.locator(".contextSourceCard", { hasText: "e2e.inflight" }).getByRole("button", { name: "Opravit" }).click();
+  const sourceForm = page.locator(".contextSourceCard form");
+  await sourceForm.getByLabel("Autor", { exact: true }).fill("Author A");
+  await sourceForm.getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(sourceForm).toHaveAttribute("aria-busy", "true");
+  await expect(sourceForm.getByLabel("Autor", { exact: true })).toBeDisabled();
+  await expect(sourceForm.getByTestId("source-coverage")).toBeDisabled();
+  releaseSource();
+  await expect(sourceForm).toHaveCount(0);
+  await expect(page.locator(".contextSourceCard", { hasText: "e2e.inflight" })).toContainText("Author A");
+});
