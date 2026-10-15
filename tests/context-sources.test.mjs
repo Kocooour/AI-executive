@@ -730,3 +730,79 @@ test("an edit of the JSON source/evidence by an older binary is reconciled at th
   assert.equal(getClaim(ws, claim.id).revision, cleared.revision + 1);
   assert.equal(repair.reconcileLegacyClaimJson(), 0);
 });
+
+// --- review round 3 ----------------------------------------------------------------------------
+
+const oldWrites = (claim, source, evidenceJson) => db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ? WHERE id = ?")
+  .run(source === null ? null : JSON.stringify(source), evidenceJson === null ? null : JSON.stringify(evidenceJson), claim.id);
+
+test("a rollback that writes an earlier JSON again after the records moved on is repaired again", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Base" } });
+  const A = [{ provider: "chat", coverage: "excerpt" }, { excerpt: "Version A" }];
+  oldWrites(claim, ...A);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version A");
+  // The records move on (the new app), then a rollback writes A again.
+  const current = getClaim(ws, claim.id);
+  editEvidence(ws, current.evidenceItems[0], { excerpt: "Version B" });
+  assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version B");
+  oldWrites(claim, ...A);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1, "the divergence is new, so it is repaired, not replayed");
+  assert.equal(getClaim(ws, claim.id).evidence.excerpt, "Version A");
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+});
+
+test("a claim whose evidence the new app archived is reconciled when a rollback writes a source again; a never-converted claim is left to the conversion", () => {
+  const ws = newWorkspace();
+  const claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "Gone" } });
+  archiveEvidence(ws, getClaim(ws, claim.id).evidenceItems[0]);
+  assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  oldWrites(claim, { provider: "chat", coverage: "excerpt" }, { excerpt: "Written by old code" });
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  const read = getClaim(ws, claim.id);
+  assert.deepEqual([read.evidenceCount, read.evidence.excerpt, read.reviewStatus], [1, "Written by old code", "proposed"]);
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  // No rows at all: the conversion's job.
+  const plain = makeClaim(ws);
+  oldWrites(plain, { provider: "chat", coverage: "excerpt" }, { excerpt: "Never converted" });
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  assert.equal(getClaim(ws, plain.id).evidenceCount, 0);
+  migrations.repairLegacySourceRecords(db());
+  assert.equal(getClaim(ws, plain.id).evidenceCount, 1);
+});
+
+test("coverage edits by an older binary: an unshared source follows the JSON, a shared one is only raised", () => {
+  const ws = newWorkspace();
+  const coverageOf = (claim) => getClaim(ws, claim.id).evidenceItems[0].source.coverage;
+  const body = makeClaim(ws, { source: { provider: "email", coverage: "body" }, evidence: { excerpt: "Q" } });
+  oldWrites(body, { provider: "email", coverage: "metadata" }, { excerpt: "Q" });
+  // lowering with content evidence would break the rule: it is skipped, nothing changes
+  const before = coverageOf(body);
+  repair.reconcileLegacyClaimJson();
+  assert.equal(coverageOf(body), before);
+  const bare = makeClaim(ws, { source: { provider: "chat", coverage: "body" } });
+  oldWrites(bare, { provider: "chat", coverage: "metadata" }, null);
+  assert.equal(repair.reconcileLegacyClaimJson() >= 1, true);
+  assert.equal(coverageOf(bare), "metadata");
+  // metadata -> body, and an excerpt added at the same time is accepted
+  oldWrites(bare, { provider: "chat", coverage: "body" }, { excerpt: "Now with an excerpt" });
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.deepEqual([coverageOf(bare), getClaim(ws, bare.id).evidence.excerpt], ["body", "Now with an excerpt"]);
+
+  // a shared source stays at the strongest coverage
+  const shared = makeSource(ws, { provider: "email", externalId: "shared-cov", coverage: "body" }).source;
+  const one = addEvidence(ws, makeClaim(ws), shared, { excerpt: "One" }).claim;
+  const two = addEvidence(ws, makeClaim(ws), shared, { excerpt: "Two" }).claim;
+  oldWrites(one, { provider: "email", externalId: "shared-cov", coverage: "metadata" }, { excerpt: "One" });
+  repair.reconcileLegacyClaimJson();
+  assert.equal(sources.getContextSource(ws, shared.id).coverage, "body", "never lowered from one claim's JSON");
+  assert.equal(two.evidenceCount, 1);
+  const weak = makeSource(ws, { provider: "email", externalId: "shared-weak", coverage: "metadata" }).source;
+  const a = addEvidence(ws, makeClaim(ws), weak).claim;
+  addEvidence(ws, makeClaim(ws), weak);
+  oldWrites(a, { provider: "email", externalId: "shared-weak", coverage: "body" }, null);
+  repair.reconcileLegacyClaimJson();
+  assert.equal(sources.getContextSource(ws, weak.id).coverage, "body", "raised when the JSON says stronger");
+});

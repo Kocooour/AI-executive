@@ -348,6 +348,20 @@ function reviewClaimsCiting(workspaceId: string, sourceId: string, reason: strin
   }
 }
 
+/** Coverage of a source set by the start-up reconciliation of a JSON edit made by an older binary; the citing claims go back to review. */
+export function setSourceCoverageForRepair(workspaceId: string, sourceId: string, coverage: SourceCoverage | null) {
+  if (!hasContentCoverage(coverage) && contentEvidenceCount(sourceId)) {
+    throw new ContextSourceError("Evidence with an excerpt or a location cites this source, so it needs excerpt or body coverage", 409, "coverage_in_use");
+  }
+  getDatabase().prepare("UPDATE context_sources SET coverage = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND workspace_id = ?").run(coverage, Date.now(), sourceId, workspaceId);
+  reviewClaimsCiting(workspaceId, sourceId, "legacy-reconcile");
+}
+
+/** Whether another claim's active evidence cites the source. */
+export function sourceSharedWithOtherClaims(workspaceId: string, sourceId: string, claimId: string) {
+  return Boolean(getDatabase().prepare("SELECT 1 FROM context_evidence WHERE workspace_id = ? AND source_id = ? AND claim_id != ? AND archived_at IS NULL LIMIT 1").get(workspaceId, sourceId, claimId));
+}
+
 /** Whether a change from one source state to another touches what evidence rests on (everything but a stricter sensitivity). */
 function changesBasis(before: CleanSourceFields | ContextSource, after: CleanSourceFields | ContextSource) {
   const keys = ["account", "provider", "externalId", "locator", "author", "authorRole", "sourceAt", "ingestedAt", "coverage"] as const;
