@@ -65,6 +65,8 @@ export interface CommandRequest<T> {
   request: unknown;
   mutate: () => CommandMutation<T>;
   hooks?: CommandHooks;
+  /** Who made the change; the owner unless the server itself repaired data. */
+  actor?: "owner" | "system";
 }
 
 export function runContextCommand<T extends object>(command: CommandRequest<T>): T & { replayed: boolean; changed: boolean; historyEventId: string | null } {
@@ -93,9 +95,9 @@ export function runContextCommand<T extends object>(command: CommandRequest<T>):
       database.prepare(`INSERT INTO context_change_events
         (id, command_id, workspace_id, actor, object_id, operation, before_revision, after_revision,
          before_payload, after_payload, created_at, sequence, object_type, kind, reverts_event_id, claim_id, claim_revision)
-        VALUES (?, ?, ?, 'owner', ?, ?, ?, ?, ?, ?, ?,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           (SELECT COALESCE(MAX(sequence), 0) + 1 FROM context_change_events), ?, ?, ?, ?, ?)`)
-        .run(eventId, command.commandId, command.workspaceId, mutation.objectId, mutation.operation,
+        .run(eventId, command.commandId, command.workspaceId, command.actor ?? "owner", mutation.objectId, mutation.operation,
           mutation.before?.revision ?? null, mutation.after.revision,
           mutation.before ? JSON.stringify(mutation.before.payload) : null, JSON.stringify(mutation.after.payload), Date.now(),
           objectType, mutation.kind ?? "change", mutation.revertsEventId ?? null,

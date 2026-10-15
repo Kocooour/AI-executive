@@ -189,6 +189,7 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
     author: string | null; authorRole: string | null; sourceAt: string | null; ingestedAt: string | null; coverage: string | null;
     sensitivity: string; createdAt: number; updatedAt: number };
   const sources = new Map<string, SourceDraft>();
+  const contentSources = new Set<string>();
   const evidence: Array<{ id: string; workspace: string; claimId: string; sourceId: string; locator: string | null; excerpt: string | null;
     stance: string | null; createdAt: number; updatedAt: number }> = [];
   for (const claim of claims) {
@@ -213,6 +214,7 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
         ingestedAt: text(source.ingestedAt), coverage, sensitivity, createdAt: Number(claim.recorded_at), updatedAt: Number(claim.updated_at) });
     }
     const detail = parseObject(claim.evidence_metadata);
+    if (text(detail?.excerpt) || text(detail?.locator)) contentSources.add(sourceId);
     evidence.push({ id: `ev:${claim.id}`, workspace: claim.workspace_id, claimId: claim.id, sourceId,
       locator: text(detail?.locator), excerpt: text(detail?.excerpt),
       stance: detail?.stance === "supports" || detail?.stance === "contradicts" ? detail.stance : null,
@@ -221,15 +223,36 @@ export function convertLegacySourcesAndEvidence(database: DatabaseSync) {
   const insertSource = database.prepare(`INSERT OR IGNORE INTO context_sources
     (id, workspace_id, revision, account, provider, external_id, locator, author, author_role, source_at, ingested_at, coverage,
      sensitivity, created_at, updated_at, archived_at) VALUES (?, ?, 1, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+  // A source whose external item already has a record (a random id from the command, or an earlier conversion) is merged into
+  // that record: the strictest sensitivity, and the strongest coverage when the legacy evidence carries content. Evidence
+  // only ever points at a source that exists.
+  const resolved = new Map<string, string>();
+  const keyLookup = database.prepare(`SELECT id, sensitivity, coverage FROM context_sources WHERE workspace_id = ? AND COALESCE(provider, '') = ?
+    AND COALESCE(account, '') = '' AND external_id = ? AND archived_at IS NULL`);
   for (const source of sources.values()) {
+    const found = source.externalId ? keyLookup.get(source.workspace, source.provider ?? "", source.externalId) as
+      { id: string; sensitivity: string; coverage: string | null } | undefined : undefined;
+    if (found && found.id !== source.id) {
+      resolved.set(source.id, found.id);
+      const sensitivity = stricter(found.sensitivity, source.sensitivity);
+      const raiseCoverage = contentSources.has(source.id) && (coverageRank[source.coverage ?? ""] ?? 0) > (coverageRank[found.coverage ?? ""] ?? 0);
+      if (sensitivity !== found.sensitivity || raiseCoverage) {
+        database.prepare("UPDATE context_sources SET sensitivity = ?, coverage = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
+          .run(sensitivity, raiseCoverage ? source.coverage : found.coverage, Date.now(), found.id);
+      }
+      continue;
+    }
     insertSource.run(source.id, source.workspace, source.provider, source.externalId, source.locator, source.author, source.authorRole,
       source.sourceAt, source.ingestedAt, source.coverage, source.sensitivity, source.createdAt, source.updatedAt);
   }
   const insertEvidence = database.prepare(`INSERT OR IGNORE INTO context_evidence
     (id, workspace_id, revision, claim_id, source_id, locator, excerpt, stance, created_at, updated_at, archived_at)
     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL)`);
+  const sourceExists = database.prepare("SELECT 1 FROM context_sources WHERE id = ?");
   for (const item of evidence) {
-    insertEvidence.run(item.id, item.workspace, item.claimId, item.sourceId, item.locator, item.excerpt, item.stance, item.createdAt, item.updatedAt);
+    const sourceId = resolved.get(item.sourceId) ?? item.sourceId;
+    if (!sourceExists.get(sourceId)) continue;
+    insertEvidence.run(item.id, item.workspace, item.claimId, sourceId, item.locator, item.excerpt, item.stance, item.createdAt, item.updatedAt);
   }
 }
 

@@ -36,6 +36,18 @@ const databasePath = path.join(dataDirectory, "store.sqlite");
 const legacyStorePath = path.join(dataDirectory, "store.json");
 let databaseInstance: DatabaseSync | null = null;
 
+// Work that needs the Context modules (which themselves read through getDatabase) and so cannot be imported here: a module
+// registers it, and it runs once the database is initialised (at once if that already happened).
+const readyHooks: Array<() => void> = [];
+function runHook(hook: () => void) {
+  try { hook(); } catch (error) { console.error("Database start-up repair failed:", error instanceof Error ? error.message : error); }
+}
+function runReadyHooks() { for (const hook of readyHooks) runHook(hook); }
+export function onDatabaseReady(hook: () => void) {
+  readyHooks.push(hook);
+  if (databaseInstance) runHook(hook);
+}
+
 export function getDatabase() {
   if (databaseInstance) return databaseInstance;
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
@@ -48,6 +60,7 @@ export function getDatabase() {
   databaseInstance = database;
   try {
     initialiseDatabase(database);
+    runReadyHooks();
   } catch (error) {
     databaseInstance = null;
     try { database.close(); } catch { /* the original error matters */ }

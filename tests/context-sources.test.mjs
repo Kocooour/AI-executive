@@ -17,6 +17,7 @@ const history = await import("../lib/context-history.ts");
 const inbox = await import("../lib/context-inbox.ts");
 const migrations = await import("../lib/schema-migrations.ts");
 const pact = await import("../lib/pact.ts");
+const repair = await import("../lib/context-legacy-repair.ts");
 const store = await import("../lib/server-store.ts");
 
 const db = () => store.getDatabase();
@@ -655,4 +656,77 @@ test("the migration merges a shared external id with the strongest coverage, so 
   assert.equal(row.coverage, "body");
   const excerpt = old.prepare("SELECT excerpt FROM context_evidence WHERE claim_id = 'c-shared-a'").get();
   assert.equal(excerpt.excerpt, "A");
+});
+
+// --- review round 2 ----------------------------------------------------------------------------
+
+test("a source change bumps the revision of claims that were already in review, so a stale confirm is refused", () => {
+  const ws = newWorkspace();
+  const source = makeSource(ws, { sensitivity: "confidential", coverage: "body" }).source;
+  const claim = addEvidence(ws, makeClaim(ws), source, { excerpt: "Quoted" }).claim;
+  assert.equal(claim.reviewStatus, "proposed");
+  editSource(ws, source, { sensitivity: "normal", reason: "Published" });
+  const moved = getClaim(ws, claim.id);
+  assert.equal(moved.revision, claim.revision + 1);
+  assert.equal(moved.reviewStatus, "proposed");
+  assert.equal(claims.listClaimReviewEvents(ws, claim.id).filter((event) => event.reason === "Published").length, 0, "no review event: it was already in review");
+  assert.throws(() => claims.reviewOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: claim.id, expectedRevision: claim.revision, decision: "confirmed" }),
+    (error) => error.status === 409 && error.code === "revision_conflict");
+  assert.equal(claims.reviewOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: claim.id, expectedRevision: moved.revision, decision: "confirmed" }).claim.reviewStatus, "confirmed");
+  // The same in an Undo of a source step.
+  const proposed = claims.reviewOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: claim.id, expectedRevision: getClaim(ws, claim.id).revision, decision: "proposed" }).claim;
+  editSource(ws, sources.getContextSource(ws, source.id), { sensitivity: "confidential" });
+  const before = getClaim(ws, claim.id).revision;
+  undo(ws);
+  assert.equal(getClaim(ws, claim.id).revision, before + 1);
+  assert.ok(proposed);
+});
+
+test("the repair merges a rollback claim into an existing source with the same external item", () => {
+  const ws = newWorkspace();
+  const existing = makeSource(ws, { externalId: "dup-9", provider: "email", sensitivity: "normal", coverage: "metadata" }).source;
+  const claim = makeClaim(ws);
+  db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ?, sensitivity = 'confidential' WHERE id = ?")
+    .run(JSON.stringify({ provider: "email", externalId: "dup-9", coverage: "body" }), JSON.stringify({ excerpt: "Old quote" }), claim.id);
+  migrations.repairLegacySourceRecords(db());
+  const read = getClaim(ws, claim.id);
+  assert.equal(read.evidenceCount, 1);
+  assert.equal(read.evidenceItems[0].sourceId, existing.id, "the evidence cites the existing source");
+  assert.deepEqual([read.evidenceItems[0].source.sensitivity, read.evidenceItems[0].source.coverage], ["confidential", "body"]);
+  assert.equal(count("SELECT COUNT(*) AS count FROM context_evidence e WHERE NOT EXISTS (SELECT 1 FROM context_sources s WHERE s.id = e.source_id)"), 0);
+  assert.equal(count("SELECT COUNT(*) AS count FROM context_sources WHERE workspace_id = ? AND external_id = 'dup-9'", ws), 1);
+});
+
+test("an edit of the JSON source/evidence by an older binary is reconciled at the next start, once, as a system event", () => {
+  const ws = newWorkspace();
+  let claim = makeClaim(ws, { source: { provider: "email", coverage: "excerpt" }, evidence: { excerpt: "First quote", stance: "supports" } });
+  claim = review(ws, claim, "confirmed");
+  assert.equal(repair.reconcileLegacyClaimJson(), 0, "nothing to reconcile after a normal write");
+  // The older binary edits the JSON columns only.
+  db().prepare("UPDATE context_claims SET source_metadata = ?, evidence_metadata = ? WHERE id = ?")
+    .run(JSON.stringify({ provider: "chat", coverage: "excerpt" }), JSON.stringify({ excerpt: "Edited by old code" }), claim.id);
+  const eventsBefore = events(ws).length;
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  const read = getClaim(ws, claim.id);
+  assert.equal(read.evidence.excerpt, "Edited by old code");
+  assert.equal(read.source.provider, "chat");
+  assert.equal(read.evidenceCount, 1);
+  assert.equal(read.reviewStatus, "proposed");
+  assert.equal(read.revision, claim.revision + 1);
+  const event = events(ws).at(-1);
+  assert.deepEqual([events(ws).length, event.actor, event.operation, event.claim_id, event.claim_revision], [eventsBefore + 1, "system", "claim.legacy_reconcile", claim.id, read.revision]);
+  assert.equal(claims.listClaimReviewEvents(ws, claim.id)[0].decision, "proposed");
+  // A second start changes nothing.
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
+  assert.equal(events(ws).length, eventsBefore + 1);
+  // The step is on the Undo stack like any change and restores the earlier evidence.
+  assert.equal(undo(ws).object.evidence.excerpt, "First quote");
+
+  // An older binary that cleared the source archives the evidence.
+  const cleared = getClaim(ws, claim.id);
+  db().prepare("UPDATE context_claims SET source_metadata = NULL, evidence_metadata = NULL WHERE id = ?").run(claim.id);
+  assert.equal(repair.reconcileLegacyClaimJson(), 1);
+  assert.equal(getClaim(ws, claim.id).evidenceCount, 0);
+  assert.equal(getClaim(ws, claim.id).revision, cleared.revision + 1);
+  assert.equal(repair.reconcileLegacyClaimJson(), 0);
 });

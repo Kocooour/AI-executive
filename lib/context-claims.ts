@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { assertCommandWorkspace, contextIdPattern, ContextCommandError, requireChanged, runContextCommand, stableStringify, type CommandHooks } from "./context-commands";
 import { getNotificationPreferences } from "./notifications";
-import { getDatabase, readSnapshot } from "./server-store";
+import { getDatabase, onDatabaseReady, readSnapshot } from "./server-store";
+import { reconcileLegacyClaimJson } from "./context-legacy-repair";
 import { getStandaloneSubject } from "./context-subjects";
 import {
   activeEvidenceByClaim, applyLegacySourceEvidence, claimEvidence, claimEvidenceResponseLimit, evidenceSetFingerprint, legacyProjection,
@@ -667,3 +668,6 @@ export function compensateClaim(input: { workspaceId: string; id: string; mode: 
   }
   return { claim, before: current };
 }
+
+// Claims edited by an older binary since the last start are brought in line with their evidence records.
+onDatabaseReady(() => { reconcileLegacyClaimJson(); });

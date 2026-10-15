@@ -336,9 +336,11 @@ function reviewClaimsCiting(workspaceId: string, sourceId: string, reason: strin
     Array<{ id: string; review_status: string; revision: number }>;
   const now = Date.now();
   for (const claim of claims) {
+    // Every citing claim gets a new revision, so a client holding the old one cannot confirm without seeing the change;
+    // a review event is written only when the claim was not already in review.
+    requireChanged(database.prepare(`UPDATE context_claims SET review_status = 'proposed', revision = revision + 1, updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND revision = ?`).run(now, claim.id, workspaceId, claim.revision), "Claim changed on another device");
     if (claim.review_status !== "proposed") {
-      requireChanged(database.prepare(`UPDATE context_claims SET review_status = 'proposed', revision = revision + 1, updated_at = ?
-        WHERE id = ? AND workspace_id = ? AND revision = ?`).run(now, claim.id, workspaceId, claim.revision), "Claim changed on another device");
       database.prepare(`INSERT INTO context_review_events (id, workspace_id, claim_id, claim_revision, actor, decision, reason, created_at)
         VALUES (?, ?, ?, ?, 'owner', 'proposed', ?, ?)`).run(randomUUID(), workspaceId, claim.id, claim.revision + 1, reason, now);
     }
