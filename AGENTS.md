@@ -6,7 +6,7 @@ These instructions apply to every software-development task in this repository.
 
 Use the following four-role workflow for every development iteration, including bug fixes, refactors, UI work, integrations, security changes, and deployment preparation:
 
-1. The primary strong model owns requirements analysis, solution design, architecture, validation against the Lumi product specification in README.md, and the final decision on readiness.
+1. The primary strong model owns requirements analysis, solution design, architecture, validation against the canonical Lumi requirements in docs/PRODUCT.md, with UI acceptance in docs/UX-UI.md and technical contracts in docs/ARCHITECTURE.md, and the final decision on readiness.
 2. Delegate implementation to one medium model. Prefer `gpt-6-sol` unless the task or environment requires another comparable model.
 3. After an implementation is available, run two independent lightweight test agents in parallel. Prefer `gpt-6-luna`:
    - Tester A covers functional behavior, UX, responsive/mobile behavior, and acceptance criteria.
@@ -29,9 +29,9 @@ Do not treat an implementation as complete before both independent testers have 
 
 ## Scope control
 
-- Validate every iteration against the canonical Lumi product specification in README.md and the user's latest requirements.
+- Validate every iteration against the canonical Lumi product specification in docs/PRODUCT.md, relevant UX in docs/UX-UI.md and technical requirements in docs/ARCHITECTURE.md and the user's latest requirements.
 - Preserve existing work and data. Do not remove or overwrite unrelated behavior.
-- If a proposed change materially diverges from the canonical README specification or requires a product decision, ask the user before implementing that divergence.
+- If a proposed change materially diverges from the canonical docs/PRODUCT.md specification or requires a product decision, ask the user before implementing that divergence.
 - Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
 - The primary model remains accountable for the delivered result and must not accept agent findings without review.
 
