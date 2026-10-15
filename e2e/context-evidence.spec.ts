@@ -259,7 +259,7 @@ test("relations, evidence and sources fit a phone screen and their buttons are e
   }
   // The relation select and the preview line fit too.
   const person = await seedPerson(page, "person", "e2e Phone Person");
-  const organization = await seedPerson(page, "organization", "e2e Phone Organization With A Rather Long Name");
+  const organization = await seedPerson(page, "organization", "e2e Phone Organization Zeta Holdings International Limited");
   await openContext(page);
   await editor(page).getByLabel("O kom / čem").selectOption(person.id);
   await editor(page).getByTestId("claim-mode").selectOption("target");
