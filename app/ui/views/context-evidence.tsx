@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import type { ContextClaimItem, ContextEvidenceItem, ContextSourceItem } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import type { SourceFields } from "../hooks/use-context-evidence";
@@ -12,7 +13,7 @@ export function CoverageBadge({ app, coverage }: { app: LumiApp; coverage: Conte
   return <span className={`coverageBadge coverage-${coverage}`}>{app.tr(coverageKey[coverage])}</span>;
 }
 
-function SourceFieldsForm({ app, fields, onChange, idPrefix }: { app: LumiApp; fields: SourceFields; onChange: (patch: Partial<SourceFields>) => void; idPrefix: string }) {
+function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice }: { app: LumiApp; fields: SourceFields; onChange: (patch: Partial<SourceFields>) => void; idPrefix: string; requireChoice?: boolean }) {
   const { tr } = app;
   const text = (key: keyof SourceFields, label: string, maxLength: number, placeholder?: string) => <label key={key}>{label}<input data-user-content value={fields[key]} maxLength={maxLength} placeholder={placeholder}
     onChange={(event) => onChange({ [key]: event.target.value } as Partial<SourceFields>)} /></label>;
@@ -23,7 +24,7 @@ function SourceFieldsForm({ app, fields, onChange, idPrefix }: { app: LumiApp; f
     {text("locator", tr("srcLocator"), 2000)}
     <div className="preferenceGrid">
       <label>{tr("srcCoverage")}<select data-testid="source-coverage" value={fields.coverage} onChange={(event) => onChange({ coverage: event.target.value as SourceFields["coverage"] })}>
-        <option value="">{tr("srcCoverageUnknown")}</option><option value="metadata">{tr("srcCoverageMetadata")}</option><option value="excerpt">{tr("srcCoverageExcerpt")}</option><option value="body">{tr("srcCoverageBody")}</option></select></label>
+        <option value="">{requireChoice ? tr("srcCoverageChoose") : tr("srcCoverageUnknown")}</option><option value="metadata">{tr("srcCoverageMetadata")}</option><option value="excerpt">{tr("srcCoverageExcerpt")}</option><option value="body">{tr("srcCoverageBody")}</option></select></label>
       <label>{tr("sensitivity")}<select value={fields.sensitivity} onChange={(event) => onChange({ sensitivity: event.target.value as SourceFields["sensitivity"] })}>
         <option value="normal">{tr("normal")}</option><option value="confidential">{tr("confidential")}</option><option value="restricted">{tr("restricted")}</option></select></label>
     </div>
@@ -32,12 +33,12 @@ function SourceFieldsForm({ app, fields, onChange, idPrefix }: { app: LumiApp; f
 
 const sourceName = (app: LumiApp, source: ContextSourceItem) => source.provider ? app.providerLabel(source.provider) : source.externalId || source.locator || source.author || "—";
 
-function SourceSummary({ app, source }: { app: LumiApp; source: ContextSourceItem }) {
+function SourceSummary({ app, source, showName = true }: { app: LumiApp; source: ContextSourceItem; showName?: boolean }) {
   const { tr, language } = app;
   const coverage = source.coverage ? tr(`srcCoverage${source.coverage[0].toUpperCase()}${source.coverage.slice(1)}`) : tr("srcCoverageUnknown");
   return <small className="evidenceSource">
-    <span data-user-content>{sourceName(app, source)}</span>
-    {source.author ? <> · <span data-user-content>{source.author}{source.authorRole ? ` (${source.authorRole})` : ""}</span></> : null}
+    {showName && <span data-user-content>{sourceName(app, source)}</span>}
+    {source.author ? <>{showName ? " · " : ""}<span data-user-content>{source.author}{source.authorRole ? ` (${source.authorRole})` : ""}</span></> : null}
     {source.sourceAt ? <> · <time data-user-content dateTime={source.sourceAt}>{/^\d{4}-\d{2}-\d{2}$/.test(source.sourceAt) ? source.sourceAt : new Date(source.sourceAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB")}</time></> : null}
     {" "}<span className={`coverageBadge srcCoverageBadge-${source.coverage || "unknown"}`}>{coverage}</span>
     {source.sensitivity !== "normal" ? <> <span className="sensitivityBadge">{source.sensitivity === "restricted" ? tr("restricted2") : tr("confidential2")}</span></> : null}
@@ -58,24 +59,26 @@ function EvidenceRow({ app, item }: { app: LumiApp; item: ContextEvidenceItem })
 }
 
 export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClaimItem }) {
+  // Stays open while the person works with this claim's evidence (saving, archiving or undoing does not collapse it).
+  const [open, setOpen] = useState(false);
   const { tr, evidenceDraft, evidenceBusy, contextSources, openEvidenceForm, closeEvidenceForm, patchEvidenceDraft, patchDraftSource, submitEvidence, draftCoverage } = app;
   const draft = evidenceDraft && evidenceDraft.claimId === claim.id ? evidenceDraft : null;
   const liveSources = contextSources.filter((source) => !source.archivedAt);
   const coverage = draft ? draftCoverage(draft) : null;
   const contentAllowed = coverage === "excerpt" || coverage === "body";
   const hasContent = Boolean(draft && (draft.excerpt.trim() || draft.locator.trim()));
-  const canSave = Boolean(draft) && !evidenceBusy && (draft!.mode === "existing" ? Boolean(draft!.sourceId) : Boolean(draft!.source.provider.trim() || draft!.source.externalId.trim() || draft!.source.locator.trim() || draft!.source.author.trim())) && (!hasContent || contentAllowed);
-  return <details className="claimEvidence" open={Boolean(draft) || undefined}>
+  const canSave = Boolean(draft) && !evidenceBusy && (draft!.mode === "existing" ? Boolean(draft!.sourceId) : Boolean(draft!.source.coverage && (draft!.source.provider.trim() || draft!.source.externalId.trim() || draft!.source.locator.trim() || draft!.source.author.trim()))) && (!hasContent || contentAllowed);
+  return <details className="claimEvidence" open={open || Boolean(draft)} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>{tr("evidenceSection")} ({claim.evidenceCount})</summary>
     {claim.evidenceItems.length ? <ul className="evidenceList">{claim.evidenceItems.map((item) => <EvidenceRow key={item.id} app={app} item={item} />)}</ul> : <p>{tr("evidenceNone")}</p>}
-    {!draft && !claim.archivedAt && <button type="button" onClick={() => openEvidenceForm(claim)}>{tr("evidenceAdd")}</button>}
+    {!draft && !claim.archivedAt && <button type="button" onClick={() => { setOpen(true); openEvidenceForm(claim); }}>{tr("evidenceAdd")}</button>}
     {draft && <form className="contextEvidenceForm" onSubmit={(event) => { event.preventDefault(); if (canSave) void submitEvidence(claim); }}>
       <label>{tr("evidenceSourceChoice")}<select data-testid="evidence-source-mode" value={draft.mode} onChange={(event) => patchEvidenceDraft({ mode: event.target.value as "existing" | "new" })}>
         <option value="existing" disabled={!liveSources.length}>{tr("evidenceSourceExisting")}</option><option value="new">{tr("evidenceSourceNew")}</option></select></label>
       {draft.mode === "existing"
         ? <label>{tr("sourceSection")}<select data-testid="evidence-source-pick" value={draft.sourceId} onChange={(event) => patchEvidenceDraft({ sourceId: event.target.value })}>
           <option value="">{tr("evidenceChooseSource")}</option>{liveSources.map((source) => <option key={source.id} value={source.id}>{sourceName(app, source)}{source.author ? ` · ${source.author}` : ""}{source.coverage ? ` · ${tr(`srcCoverage${source.coverage[0].toUpperCase()}${source.coverage.slice(1)}`)}` : ""}</option>)}</select></label>
-        : <SourceFieldsForm app={app} fields={draft.source} onChange={patchDraftSource} idPrefix={`new-source-${claim.id}`} />}
+        : <SourceFieldsForm app={app} fields={draft.source} onChange={patchDraftSource} idPrefix={`new-source-${claim.id}`} requireChoice />}
       <label>{tr("evidenceStance")}<select value={draft.stance} onChange={(event) => patchEvidenceDraft({ stance: event.target.value as "supports" | "contradicts" })}>
         <option value="supports">{tr("evidenceStanceSupports")}</option><option value="contradicts">{tr("evidenceStanceContradicts")}</option></select></label>
       {!contentAllowed && (draft.mode === "new" || draft.sourceId) && <p className="metadataOnlyNote" role="note">{tr("evidenceMetadataOnlyHint")}</p>}
@@ -87,7 +90,9 @@ export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClai
 }
 
 export function ContextSources({ app }: { app: LumiApp }) {
-  const { tr, contextSources, sourceEdit, sourceBusy, sourceStatus, startSourceEdit, cancelSourceEdit, patchSourceEdit, saveSourceEdit, archiveSource, historyOffer, contextHistory, historyBusy, contextHistoryAction } = app;
+  const { tr, contextSources, sourceEdit, setSourceReason, sourceBusy, sourceStatus, startSourceEdit, cancelSourceEdit, patchSourceEdit, saveSourceEdit, archiveSource, historyOffer, contextHistory, historyBusy, contextHistoryAction } = app;
+  const rank = { normal: 0, confidential: 1, restricted: 2 };
+  const lowered = Boolean(sourceEdit && rank[sourceEdit.fields.sensitivity] < rank[sourceEdit.original]);
   const undoStep = historyOffer === "source" && sourceStatus && contextHistory.undo ? contextHistory.undo : null;
   const stepText = undoStep ? app.contextStepText(undoStep) : null;
   return <section className="contextSources" aria-labelledby="context-sources-title">
@@ -99,11 +104,14 @@ export function ContextSources({ app }: { app: LumiApp }) {
         {sourceEdit?.id === source.id
           ? <form onSubmit={(event) => { event.preventDefault(); saveSourceEdit(); }}>
             <SourceFieldsForm app={app} fields={sourceEdit.fields} onChange={patchSourceEdit} idPrefix={`edit-source-${source.id}`} />
-            <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={sourceBusy}>{tr("save")}</button><button type="button" onClick={cancelSourceEdit}>{tr("cancel")}</button></div>
+            {lowered && <label className="sourceReason">{tr("sourceReasonLabel")}<input data-testid="source-reason" data-user-content value={sourceEdit.reason} maxLength={500} onChange={(event) => setSourceReason(event.target.value)} /></label>}
+            {lowered && <small role="note">{tr("sourceLowerExplain")}</small>}
+            <div className="contextClaimActions"><button type="submit" className="primaryAction" disabled={sourceBusy || (lowered && !sourceEdit.reason.trim())}>{tr("save")}</button><button type="button" onClick={cancelSourceEdit}>{tr("cancel")}</button></div>
           </form>
           : <>
             <strong data-user-content>{sourceName(app, source)}</strong>
-            <SourceSummary app={app} source={source} />
+            <SourceSummary app={app} source={source} showName={false} />
+            {(source.account || source.externalId || source.locator) && <small className="sourceIdentity" data-user-content>{[source.account, source.externalId, source.locator].filter(Boolean).join(" · ")}</small>}
             <small>{tr("sourceUsedBy").replace("{count}", String(source.evidenceCount ?? 0))}</small>
             <div className="contextClaimActions">
               <button type="button" onClick={() => startSourceEdit(source)}>{tr("edit")}</button>

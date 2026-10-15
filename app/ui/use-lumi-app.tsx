@@ -709,6 +709,7 @@ export function useLumiApp() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (data.code === "duplicate_relation") throw new Error(tr("duplicateRelationError"));
         if (response.status === 409) throw new Error(tr("conflictTheClaimChanged"));
         if (data.code === "invalid_relation") throw new Error(tr("invalidRelationError"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimSaveFailed"));
@@ -762,6 +763,7 @@ export function useLumiApp() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if (data.code === "relation_needs_fix") throw new Error(tr("relationFixFirst"));
         if (response.status === 409) throw new Error(tr("conflictReloadTheCurrent"));
         throw new Error(localizeServerError(data.error, tr) || tr("claimActionFailed"));
       }

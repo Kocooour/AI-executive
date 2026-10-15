@@ -125,12 +125,20 @@ test("evidence with a new source shows its coverage, is listed under the sources
   await form.getByTestId("evidence-source-mode").selectOption("new");
   await form.getByLabel("Poskytovatel (například e-mail nebo dokument)").fill("e2e.mail");
   await form.getByLabel("Autor", { exact: true }).fill("Alex Sender");
+  await form.getByLabel("Externí ID").fill("e2e-ext-1");
   await form.getByLabel("Datum zdroje (RRRR-MM-DD)").fill("2026-05-01");
+  // Nothing is preselected: the coverage has to be chosen, and until then no excerpt can be typed or saved.
+  await expect(form.getByTestId("source-coverage")).toHaveValue("");
+  await expect(form.getByLabel("Úryvek (nejvýše 500 znaků)")).toBeDisabled();
+  await expect(form.getByRole("button", { name: "Uložit důkaz" })).toBeDisabled();
   await form.getByTestId("source-coverage").selectOption("excerpt");
+  await expect(form.getByLabel("Úryvek (nejvýše 500 znaků)")).toBeEnabled();
   await form.getByLabel("Úryvek (nejvýše 500 znaků)").fill("The quoted sentence");
   await form.getByRole("button", { name: "Uložit důkaz" }).click();
 
   await expect(claim.locator(".claimMeta .coverageBadge")).toHaveText("doložený obsah");
+  // The evidence section stays open after saving, archiving and undoing.
+  await expect(claim.locator(".claimEvidence")).toHaveAttribute("open", "");
   const evidence = claim.locator(".evidenceItem");
   await expect(evidence).toHaveCount(1);
   await expect(evidence).toContainText("The quoted sentence");
@@ -145,9 +153,22 @@ test("evidence with a new source shows its coverage, is listed under the sources
   const source = page.locator(".contextSourceCard", { hasText: "e2e.mail" });
   await expect(source).toContainText("Počet důkazů, které ho používají: 1");
   await expect(source.locator(".srcCoverageBadge-excerpt")).toBeVisible();
+  // The card names the provider once and tells apart sources by their external id.
+  await expect(source.locator(".sourceIdentity")).toContainText("e2e-ext-1");
+  expect((await source.innerText()).split("e2e.mail").length - 1).toBe(1);
 
   await undoButton(page).click();
   await expect(claim.locator(".claimMeta .coverageBadge")).toHaveText("bez zdroje");
+  await expect(claim.locator(".evidenceItem")).toHaveCount(0);
+  await expect(claim.locator(".claimEvidence")).toHaveAttribute("open", "");
+  await page.getByRole("button", { name: /^Znovu/ }).click();
+  await expect(claim.locator(".evidenceItem")).toHaveCount(1);
+  await claim.locator(".evidenceItem").getByRole("button", { name: /^Archivovat důkaz/ }).click();
+  await expect(claim.locator(".evidenceItem")).toHaveCount(0);
+  await expect(claim.locator(".claimEvidence")).toHaveAttribute("open", "");
+  await undoButton(page).click();
+  await expect(claim.locator(".evidenceItem")).toHaveCount(1);
+  await undoButton(page).click();
   await expect(claim.locator(".evidenceItem")).toHaveCount(0);
   await expect(source).toContainText("Počet důkazů, které ho používají: 0");
 
@@ -214,7 +235,13 @@ test("a relationship outside the registry is marked for review and can be edited
   database.close();
   await openContext(page);
   const claim = card(page, "e2e Initech");
-  await expect(claim.locator(".relationUnknown")).toHaveText("neznámý vztah — vyžaduje kontrolu");
+  await expect(claim.locator(".claimMeta .relationUnknown")).toHaveText("„owns“ (neznámý vztah — vyžaduje kontrolu)");
+  // It cannot be confirmed: the button is disabled and says what to do; the server refuses as well.
+  await expect(claim.getByRole("button", { name: "Potvrdit" })).toBeDisabled();
+  await expect(claim).toContainText("nejdřív vyberte známý vztah");
+  const stored = await page.evaluate(async () => ((await (await fetch("/api/context/claims?workspaceId=personal", { cache: "no-store" })).json()).claims as Array<{ id: string; predicate: string; revision: number }>).find((item) => item.predicate === "owns")!);
+  const refused = await api(page, "/api/context/claims", { action: "review", id: stored.id, expectedRevision: stored.revision, decision: "confirmed" });
+  expect([refused.status, refused.body.code]).toEqual([409, "relation_needs_fix"]);
   await expect(claim).toContainText("prověřit");
   expect(await page.evaluate(async () => ((await (await fetch("/api/context/claims?workspaceId=personal", { cache: "no-store" })).json()).claims as Array<{ predicate: string; relationStatus: string }>)
     .find((item) => item.predicate === "owns")?.relationStatus)).toBe("unregistered");
@@ -268,4 +295,33 @@ test("relations, evidence and sources fit a phone screen and their buttons are e
   const preview = (await page.getByTestId("relation-preview").boundingBox())!;
   expect(preview.x + preview.width).toBeLessThanOrEqual(390);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test("lowering a source's sensitivity asks for a reason and sends its claims back to review", async ({ page }) => {
+  const predicate = "e2e.evidence.downgrade";
+  await openContext(page);
+  const seeded = await seedClaim(page, predicate, "rests on a confidential source");
+  const source = await seedSource(page, { provider: "e2e.memo", coverage: "body", sensitivity: "confidential" });
+  const added = await api(page, "/api/context/evidence", { action: "add", id: newId(), claimId: seeded.id, expectedClaimRevision: seeded.revision, expectedRevision: 0, sourceId: source.id, excerpt: "A memo line" });
+  expect(added.status).toBe(201);
+  const confirmed = await api(page, "/api/context/claims", { action: "review", id: seeded.id, expectedRevision: added.body.claim.revision, decision: "confirmed" });
+  expect(confirmed.status).toBe(200);
+  await openContext(page);
+  const claim = card(page, predicate);
+  await expect(claim.locator(".claimState")).toHaveText("Potvrzeno");
+  const sourceCard = page.locator(".contextSourceCard", { hasText: "e2e.memo" });
+  await sourceCard.getByRole("button", { name: "Opravit" }).click();
+  const form = page.locator(".contextSourceCard form");
+  await expect(form.getByTestId("source-reason")).toHaveCount(0);
+  await form.getByLabel("Citlivost").selectOption("normal");
+  await expect(form.getByTestId("source-reason")).toBeVisible();
+  await expect(form.getByRole("button", { name: "Uložit", exact: true })).toBeDisabled();
+  // The server refuses a lowering without a reason as well.
+  const refused = await api(page, "/api/context/sources", { action: "update", id: source.id, expectedRevision: source.revision, provider: "e2e.memo", coverage: "body", sensitivity: "normal" });
+  expect([refused.status, refused.body.code]).toEqual([400, "reason_required"]);
+  await form.getByTestId("source-reason").fill("The memo was published");
+  await form.getByRole("button", { name: "Uložit", exact: true }).click();
+  await expect(claim.locator(".claimState")).toHaveText("Ke kontrole");
+  const reviews = await page.evaluate(async (id) => (await (await fetch(`/api/context/claims?workspaceId=personal&claimId=${id}`, { cache: "no-store" })).json()).history as Array<{ operation: string }>, seeded.id);
+  expect(reviews.length).toBeGreaterThan(0);
 });

@@ -14,11 +14,11 @@ export interface SourceFields {
   ingestedAt: string; coverage: SourceCoverageChoice; sensitivity: "normal" | "confidential" | "restricted";
 }
 export const emptySourceFields: SourceFields = { provider: "", account: "", externalId: "", locator: "", author: "", authorRole: "",
-  sourceAt: "", ingestedAt: "", coverage: "excerpt", sensitivity: "normal" };
+  sourceAt: "", ingestedAt: "", coverage: "", sensitivity: "normal" };
 export interface EvidenceDraft {
   claimId: string; mode: "existing" | "new"; sourceId: string; locator: string; excerpt: string; stance: "supports" | "contradicts"; source: SourceFields;
 }
-export interface SourceEdit { id: string; revision: number; fields: SourceFields }
+export interface SourceEdit { id: string; revision: number; fields: SourceFields; /** The sensitivity the source has now; lowering it asks for a reason. */ original: SourceFields["sensitivity"]; reason: string }
 
 const content = (coverage: string | null | undefined) => coverage === "excerpt" || coverage === "body";
 const sourceFieldsOf = (source: ContextSourceItem): SourceFields => ({ provider: source.provider ?? "", account: source.account ?? "", externalId: source.externalId ?? "",
@@ -74,7 +74,7 @@ export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspac
     const byCode: Record<string, string> = { metadata_only_source: "evidenceMetadataOnlyHint", revision_conflict: "evidenceConflict",
       source_in_use: "sourceInUseError", coverage_in_use: "sourceCoverageInUseError", duplicate_source: "sourceDuplicateError",
       duplicate_evidence: "evidenceDuplicateError", evidence_limit: "evidenceLimitError", archived_source: "sourceArchivedError",
-      evidence_too_long: "evidenceTooLongError" };
+      evidence_too_long: "evidenceTooLongError", reason_required: "sourceReasonRequired", coverage_required: "sourceCoverageRequired" };
     return data.code && byCode[data.code] ? tr(byCode[data.code]) : localizeServerError(data.error, tr) || fallback;
   };
   async function post(url: string, body: unknown) {
@@ -166,20 +166,21 @@ export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspac
     }
   }
 
-  const startSourceEdit = (source: ContextSourceItem) => { setSourceStatus(""); setSourceEdit({ id: source.id, revision: source.revision, fields: sourceFieldsOf(source) }); };
+  const startSourceEdit = (source: ContextSourceItem) => { setSourceStatus(""); setSourceEdit({ id: source.id, revision: source.revision, fields: sourceFieldsOf(source), original: source.sensitivity, reason: "" }); };
   const cancelSourceEdit = () => setSourceEdit(null);
+  const setSourceReason = (reason: string) => setSourceEdit((current) => current ? { ...current, reason } : current);
   const patchSourceEdit = (patch: Partial<SourceFields>) => setSourceEdit((current) => current ? { ...current, fields: { ...current.fields, ...patch } } : current);
 
-  async function sourceCommand(action: "update" | "archive", source: ContextSourceItem, fields?: SourceFields) {
+  async function sourceCommand(action: "update" | "archive", source: ContextSourceItem, fields?: SourceFields, reason?: string) {
     const workspaceId = calendarWorkspaceSelection.current;
     const busyKey = `source:${action}:${source.id}`;
     if (contextInFlight.current.has(busyKey)) return;
     const body = fields ? sourceBody(fields) : {};
-    const intent = contextIntent(busyKey, JSON.stringify([workspaceId, source.revision, body]));
+    const intent = contextIntent(busyKey, JSON.stringify([workspaceId, source.revision, body, reason || null]));
     contextInFlight.current.add(busyKey);
     setSourceBusy(true); setSourceStatus("");
     try {
-      const done = await post("/api/context/sources", { action, idempotencyKey: intent.commandKey, workspaceId, id: source.id, expectedRevision: source.revision, ...body });
+      const done = await post("/api/context/sources", { action, idempotencyKey: intent.commandKey, workspaceId, id: source.id, expectedRevision: source.revision, ...body, ...(reason ? { reason } : {}) });
       if (!done.ok) throw new Error(errorText(done.data, tr("sourceFailed")));
       finishContextIntent(busyKey);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
@@ -197,11 +198,11 @@ export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspac
   const saveSourceEdit = () => {
     if (!sourceEdit) return;
     const source = contextSources.find((candidate) => candidate.id === sourceEdit.id);
-    if (source) void sourceCommand("update", { ...source, revision: sourceEdit.revision }, sourceEdit.fields);
+    if (source) void sourceCommand("update", { ...source, revision: sourceEdit.revision }, sourceEdit.fields, sourceEdit.reason.trim());
   };
   const archiveSource = (source: ContextSourceItem) => sourceCommand("archive", source);
 
   return { archiveEvidence, archiveSource, cancelSourceEdit, closeEvidenceForm, contextSources, draftCoverage, evidenceBusy, evidenceDraft, evidenceStatus,
-    loadContextSources, openEvidenceForm, patchDraftSource, patchEvidenceDraft, patchSourceEdit, saveSourceEdit, setEvidenceStatus, sourceBusy, sourceEdit,
+    loadContextSources, openEvidenceForm, patchDraftSource, patchEvidenceDraft, patchSourceEdit, saveSourceEdit, setSourceReason, setEvidenceStatus, sourceBusy, sourceEdit,
     sourceStatus, startSourceEdit, submitEvidence };
 }
