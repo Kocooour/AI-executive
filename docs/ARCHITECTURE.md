@@ -242,7 +242,8 @@ Retain existing canonical relations such as belongs_to_project and belongs_to_ar
 - blocked_by — blokováno;
 - arose_from — vzniklo z;
 - related_to — souvisí s (symmetric);
-- supersedes — nahrazuje.
+- supersedes — nahrazuje;
+- waiting_for — čeká na (the target is a person or organization; used by the Context Inbox, the waiting attention rule and the day plan).
 
 Disambiguate legacy owns during review instead of equating ownership with responsibility. A suggested next step is not evidence for blocked_by. Keep documentary provenance in evidence records. A wiki link only creates a navigational mention; it must not silently create a confirmed semantic claim.
 
