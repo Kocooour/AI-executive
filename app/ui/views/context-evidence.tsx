@@ -21,6 +21,7 @@ function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice }: { 
     <div className="preferenceGrid">{text("provider", tr("srcProvider"), 80)}{text("author", tr("srcAuthor"), 200)}</div>
     <div className="preferenceGrid">{text("authorRole", tr("srcAuthorRole"), 120)}{text("sourceAt", tr("srcSourceAt"), 40, "2026-05-01")}</div>
     <div className="preferenceGrid">{text("account", tr("srcAccount"), 200)}{text("externalId", tr("srcExternalId"), 240)}</div>
+    {text("ingestedAt", tr("srcIngestedAt"), 40, "2026-05-02")}
     {text("locator", tr("srcLocator"), 2000)}
     <div className="preferenceGrid">
       <label>{tr("srcCoverage")}<select data-testid="source-coverage" value={fields.coverage} onChange={(event) => onChange({ coverage: event.target.value as SourceFields["coverage"] })}>
@@ -29,6 +30,14 @@ function SourceFieldsForm({ app, fields, onChange, idPrefix, requireChoice }: { 
         <option value="normal">{tr("normal")}</option><option value="confidential">{tr("confidential")}</option><option value="restricted">{tr("restricted")}</option></select></label>
     </div>
   </div>;
+}
+
+const short = (value: string, length = 40) => value.length > length ? `${value.slice(0, length - 1)}…` : value;
+/** One label per source, each different from the others: a short id suffix only when everything else is equal. */
+function pickerLabels(app: LumiApp, sources: ContextSourceItem[]) {
+  const base = sources.map((source) => [sourceName(app, source), source.author, source.account, source.externalId && `#${source.externalId}`, source.locator && short(source.locator),
+    source.coverage && app.tr(`srcCoverage${source.coverage[0].toUpperCase()}${source.coverage.slice(1)}`)].filter(Boolean).map((part) => short(String(part), 40)).join(" · "));
+  return sources.map((source, index) => base.filter((label) => label === base[index]).length > 1 ? `${base[index]} · ${source.id.slice(-4)}` : base[index]);
 }
 
 const sourceName = (app: LumiApp, source: ContextSourceItem) => source.provider ? app.providerLabel(source.provider) : source.externalId || source.locator || source.author || "—";
@@ -40,6 +49,7 @@ function SourceSummary({ app, source, showName = true }: { app: LumiApp; source:
     {showName && <span data-user-content>{sourceName(app, source)}</span>}
     {source.author ? <>{showName ? " · " : ""}<span data-user-content>{source.author}{source.authorRole ? ` (${source.authorRole})` : ""}</span></> : null}
     {source.sourceAt ? <> · <time data-user-content dateTime={source.sourceAt}>{/^\d{4}-\d{2}-\d{2}$/.test(source.sourceAt) ? source.sourceAt : new Date(source.sourceAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB")}</time></> : null}
+    {source.ingestedAt ? <> · {tr("srcIngestedShort")} <span data-user-content>{/^\d{4}-\d{2}-\d{2}$/.test(source.ingestedAt) ? source.ingestedAt : new Date(source.ingestedAt).toLocaleDateString(language === "cs" ? "cs-CZ" : "en-GB")}</span></> : null}
     {" "}<span className={`coverageBadge srcCoverageBadge-${source.coverage || "unknown"}`}>{coverage}</span>
     {source.sensitivity !== "normal" ? <> <span className="sensitivityBadge">{source.sensitivity === "restricted" ? tr("restricted2") : tr("confidential2")}</span></> : null}
   </small>;
@@ -77,7 +87,7 @@ export function ClaimEvidence({ app, claim }: { app: LumiApp; claim: ContextClai
         <option value="existing" disabled={!liveSources.length}>{tr("evidenceSourceExisting")}</option><option value="new">{tr("evidenceSourceNew")}</option></select></label>
       {draft.mode === "existing"
         ? <label>{tr("sourceSection")}<select data-testid="evidence-source-pick" value={draft.sourceId} onChange={(event) => patchEvidenceDraft({ sourceId: event.target.value })}>
-          <option value="">{tr("evidenceChooseSource")}</option>{liveSources.map((source) => <option key={source.id} value={source.id}>{sourceName(app, source)}{source.author ? ` · ${source.author}` : ""}{source.coverage ? ` · ${tr(`srcCoverage${source.coverage[0].toUpperCase()}${source.coverage.slice(1)}`)}` : ""}</option>)}</select></label>
+          <option value="">{tr("evidenceChooseSource")}</option>{pickerLabels(app, liveSources).map((label, index) => <option key={liveSources[index].id} value={liveSources[index].id}>{label}</option>)}</select></label>
         : <SourceFieldsForm app={app} fields={draft.source} onChange={patchDraftSource} idPrefix={`new-source-${claim.id}`} requireChoice />}
       <label>{tr("evidenceStance")}<select value={draft.stance} onChange={(event) => patchEvidenceDraft({ stance: event.target.value as "supports" | "contradicts" })}>
         <option value="supports">{tr("evidenceStanceSupports")}</option><option value="contradicts">{tr("evidenceStanceContradicts")}</option></select></label>

@@ -126,6 +126,7 @@ test("evidence with a new source shows its coverage, is listed under the sources
   await form.getByLabel("Poskytovatel (například e-mail nebo dokument)").fill("e2e.mail");
   await form.getByLabel("Autor", { exact: true }).fill("Alex Sender");
   await form.getByLabel("Externí ID").fill("e2e-ext-1");
+  await form.getByLabel("Zaznamenáno (RRRR-MM-DD nebo celý čas)").fill("2026-05-02");
   await form.getByLabel("Datum zdroje (RRRR-MM-DD)").fill("2026-05-01");
   // Nothing is preselected: the coverage has to be chosen, and until then no excerpt can be typed or saved.
   await expect(form.getByTestId("source-coverage")).toHaveValue("");
@@ -155,6 +156,7 @@ test("evidence with a new source shows its coverage, is listed under the sources
   await expect(source.locator(".srcCoverageBadge-excerpt")).toBeVisible();
   // The card names the provider once and tells apart sources by their external id.
   await expect(source.locator(".sourceIdentity")).toContainText("e2e-ext-1");
+  await expect(source).toContainText("zaznamenáno 2026-05-02");
   expect((await source.innerText()).split("e2e.mail").length - 1).toBe(1);
 
   await undoButton(page).click();
@@ -324,4 +326,22 @@ test("lowering a source's sensitivity asks for a reason and sends its claims bac
   await expect(claim.locator(".claimState")).toHaveText("Ke kontrole");
   const reviews = await page.evaluate(async (id) => (await (await fetch(`/api/context/claims?workspaceId=personal&claimId=${id}`, { cache: "no-store" })).json()).history as Array<{ operation: string }>, seeded.id);
   expect(reviews.length).toBeGreaterThan(0);
+});
+
+test("the evidence source picker tells sources apart", async ({ page }) => {
+  const predicate = "e2e.evidence.picker";
+  await openContext(page);
+  await seedClaim(page, predicate, "picker");
+  await seedSource(page, { provider: "e2e.picker", externalId: "alpha", coverage: "body" });
+  await seedSource(page, { provider: "e2e.picker", externalId: "beta", coverage: "body" });
+  await seedSource(page, { provider: "e2e.picker", locator: "https://example.test/same", coverage: "body" });
+  await seedSource(page, { provider: "e2e.picker", locator: "https://example.test/same", coverage: "body", author: "" , externalId: null });
+  await openContext(page);
+  const claim = card(page, predicate);
+  await claim.locator(".claimEvidence summary").click();
+  await claim.getByRole("button", { name: "Přidat důkaz" }).click();
+  const labels = (await claim.getByTestId("evidence-source-pick").locator("option").allTextContents()).filter((label) => label.includes("e2e.picker"));
+  expect(labels.length).toBe(4);
+  expect(new Set(labels).size).toBe(4);
+  expect(labels.some((label) => label.includes("#alpha"))).toBe(true);
 });
