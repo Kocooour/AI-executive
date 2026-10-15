@@ -14,7 +14,7 @@ export type { ClaimEvidenceMetadata, ClaimSourceMetadata } from "./context-sourc
 
 export type ClaimReviewStatus = "proposed" | "confirmed" | "rejected";
 export type ClaimFreshness = "current" | "needs_review" | "stale";
-// Three levels (README, Context Graph v2). Only "normal" may reach agents, external tools or AI
+// Three levels (docs/ARCHITECTURE.md, Context Graph v2). Only "normal" may reach agents, external tools or AI
 // providers; "confidential" and "restricted" never do by default. The two-level "sensitive" of
 // earlier clients is still accepted as input and stored as "confidential".
 export type ClaimSensitivity = "normal" | "confidential" | "restricted";

@@ -14,7 +14,7 @@
 
 Rules for changes:
 
-- Client-side filtering in a view is presentation only. Workspace authorization, revisions and approvals stay on the server path described in the repository README.
+- Client-side filtering in a view is presentation only. Workspace authorization, revisions and approvals stay on the server path described in [the architecture contract](../../docs/ARCHITECTURE.md), with product requirements in [PRODUCT.md](../../docs/PRODUCT.md).
 - Add new state and handlers to the domain hook they belong to, or to `use-lumi-app.tsx` while that area has none; do not duplicate state inside a view.
 - `use-lumi-app.tsx` was split one domain at a time, each move verbatim and in its own PR. The sync core (local copy, revision, saving and loading) is in `use-sync.ts`; the start-up synchronization, sign-out and the refresh on focus still live in `use-lumi-app.tsx`, because they also set up the address, workspaces and the session.
 - Pure logic without React or UI strings belongs in `lib/` with a test.
