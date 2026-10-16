@@ -22,6 +22,24 @@ test("Home shows the brief with seeded attention", async ({ page }) => {
   await expect(attention.locator(".attentionStale")).toHaveCount(0);
 });
 
+test("navigation icons and keyboard focus follow the selected appearance", async ({ page }) => {
+  await page.goto("/");
+  const inbox = sidebarView(page, "Doručené");
+  const icon = inbox.locator(".navIcon--inbox");
+  await expect(icon).toBeVisible();
+  await inbox.focus();
+  await expect(inbox).toHaveCSS("outline-width", "3px");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", /^(light|dark)$/);
+  const originalTheme = await page.locator("html").getAttribute("data-theme");
+  const originalColor = await icon.evaluate((element) => getComputedStyle(element).color);
+  await page.locator(".themeToggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", originalTheme === "dark" ? "light" : "dark");
+  const alternateColor = await icon.evaluate((element) => getComputedStyle(element).color);
+  expect(alternateColor).not.toBe(originalColor);
+  await page.locator(".themeToggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", originalTheme!);
+});
+
 test("a captured task appears in Inbox and reaches the server", async ({ page }) => {
   const title = `Zachycený úkol ${Date.now()}`;
   await page.goto("/");
@@ -505,6 +523,24 @@ test("losing the connection keeps the attention list and marks it out of date", 
 
 test.describe("on a phone-sized screen", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("bottom navigation and More menu have touch-sized controls", async ({ page }) => {
+    await page.goto("/");
+    const sizes = await page.locator(".mobileNav button").evaluateAll((buttons) =>
+      buttons.map((button) => ({ width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height }))
+    );
+    expect(sizes).toHaveLength(5);
+    for (const size of sizes) {
+      expect(size.width).toBeGreaterThanOrEqual(44);
+      expect(size.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.locator(".mobileNav button").last().click();
+    await expect(page.locator(".mobileMore")).toBeVisible();
+    const menuHeights = await page.locator(".mobileMore button").evaluateAll((buttons) =>
+      buttons.map((button) => button.getBoundingClientRect().height)
+    );
+    for (const height of menuHeights) expect(height).toBeGreaterThanOrEqual(44);
+  });
 
   test("the brief and the bottom navigation work without sideways scrolling", async ({ page }) => {
     await page.goto("/");

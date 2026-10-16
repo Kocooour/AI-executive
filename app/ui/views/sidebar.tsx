@@ -93,7 +93,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
               }}
               key={x}
             >
-              <span className="navLabel"><span aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
+              <span className="navLabel"><span className={`navIcon navIcon--${x.toLowerCase()}`} aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
               {sidebarCounts[x] !== undefined ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
               ) : null}

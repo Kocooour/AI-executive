@@ -1965,7 +1965,10 @@ article:hover > .dragHandle,
 .dragHandle:focus-visible {
   background: var(--surface-subtle);
   color: var(--accent);
-  outline: none;
+}
+.dragHandle:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .dragHandle:active {
   cursor: grabbing;
@@ -2516,6 +2519,17 @@ article:hover > .dragHandle,
   --success-soft: #e2f1e6;
   --warning-soft: #f5eadb;
   --danger-soft: #f5e2e5;
+  --focus-ring: #315fbb;
+  --nav-icon-home: #566675;
+  --nav-icon-inbox: #2476a4;
+  --nav-icon-today: #947200;
+  --nav-icon-upcoming: #b9455d;
+  --nav-icon-projects: #7051a9;
+  --nav-icon-areas: #287c64;
+  --nav-icon-notes: #8d661d;
+  --nav-icon-calendar: #317988;
+  --nav-icon-search: #566675;
+  --nav-icon-more: #566675;
   --shadow-soft: 0 18px 55px rgba(34, 33, 31, 0.13);
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
@@ -2546,6 +2560,17 @@ article:hover > .dragHandle,
   --success-soft: #294035;
   --warning-soft: #483a24;
   --danger-soft: #482b30;
+  --focus-ring: #b6c9ff;
+  --nav-icon-home: #a9b9c8;
+  --nav-icon-inbox: #72bce8;
+  --nav-icon-today: #e8c749;
+  --nav-icon-upcoming: #fa8d9e;
+  --nav-icon-projects: #bca8ee;
+  --nav-icon-areas: #7ccbb1;
+  --nav-icon-notes: #dab970;
+  --nav-icon-calendar: #80c6d0;
+  --nav-icon-search: #a9b9c8;
+  --nav-icon-more: #a9b9c8;
   --shadow-soft: 0 20px 70px rgba(0, 0, 0, 0.42);
   color-scheme: dark;
 }
@@ -2576,6 +2601,17 @@ article:hover > .dragHandle,
     --success-soft: #294035;
     --warning-soft: #483a24;
     --danger-soft: #482b30;
+    --focus-ring: #b6c9ff;
+    --nav-icon-home: #a9b9c8;
+    --nav-icon-inbox: #72bce8;
+    --nav-icon-today: #e8c749;
+    --nav-icon-upcoming: #fa8d9e;
+    --nav-icon-projects: #bca8ee;
+    --nav-icon-areas: #7ccbb1;
+    --nav-icon-notes: #dab970;
+    --nav-icon-calendar: #80c6d0;
+    --nav-icon-search: #a9b9c8;
+    --nav-icon-more: #a9b9c8;
     color-scheme: dark;
   }
 }
@@ -2686,13 +2722,17 @@ textarea {
   font-size: 14px;
 }
 
-.appShell nav button:nth-child(2) .navLabel > span { color: #3e92d4; }
-.appShell nav button:nth-child(3) .navLabel > span { color: var(--today-accent); }
-.appShell nav button:nth-child(4) .navLabel > span { color: #e95c70; }
-.appShell nav button:nth-child(5) .navLabel > span { color: #d54a86; }
-.appShell nav button:nth-child(6) .navLabel > span { color: #45a99d; }
-.appShell nav button:nth-child(7) .navLabel > span { color: #b9ad69; }
-.appShell nav button:nth-child(8) .navLabel > span { color: #55ae67; }
+.navIcon--home { --view-icon: var(--nav-icon-home); }
+.navIcon--inbox { --view-icon: var(--nav-icon-inbox); }
+.navIcon--today { --view-icon: var(--nav-icon-today); }
+.navIcon--upcoming { --view-icon: var(--nav-icon-upcoming); }
+.navIcon--projects { --view-icon: var(--nav-icon-projects); }
+.navIcon--areas { --view-icon: var(--nav-icon-areas); }
+.navIcon--notes { --view-icon: var(--nav-icon-notes); }
+.navIcon--calendar { --view-icon: var(--nav-icon-calendar); }
+.navIcon--search { --view-icon: var(--nav-icon-search); }
+.navIcon--more { --view-icon: var(--nav-icon-more); }
+.appShell nav button .navIcon { color: var(--view-icon, var(--muted-light)); }
 
 .navCount {
   min-width: 20px;
@@ -3548,6 +3588,7 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .recordState { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .recordState.recordHeldBack { color: var(--danger); }
 .heldBack { margin: 0 0 16px; padding: 12px; border-radius: 12px; border: 1px solid var(--danger); background: var(--surface); }
+
 .heldBack h2 { margin: 0 0 4px; font-size: 15px; }
 .heldBack p { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .heldBackNote { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
@@ -3569,3 +3610,35 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 /* The main way back from an offline start: a full-size touch target on phones. */
 @media (pointer: coarse), (max-width: 700px) { .offlineStart button { min-height: 44px; min-width: 44px; padding: 10px 16px; } }
 .offlineStart button:disabled { opacity: .6; cursor: default; }
+
+/* Keyboard focus remains visible on navigation, dialogs, and form controls in both themes. */
+:is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .appShell > aside nav button,
+  .appShell > aside .workspaceButton,
+  .appShell > aside .sidebarActions button,
+  .appShell > aside .secondaryNav summary {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  .appShell .mobileNav button {
+    flex: 1 1 0;
+    min-width: 44px;
+    min-height: 50px;
+    padding: 4px 2px;
+    text-align: center;
+  }
+  .appShell .mobileNav button.active {
+    background: transparent !important;
+    color: var(--accent) !important;
+  }
+  .mobileMore button {
+    min-height: 44px;
+  }
+}

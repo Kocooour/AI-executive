@@ -37,7 +37,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setView(x);
             }}
           >
-            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={x} /></span><span>{tr(x)}</span>
+            <span className={`mobileNavIcon navIcon navIcon--${x.toLowerCase()}`} aria-hidden="true"><ViewIcon name={x} /></span><span>{tr(x)}</span>
           </button>
         ))}
       </nav>
