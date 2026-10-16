@@ -3569,3 +3569,32 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 /* The main way back from an offline start: a full-size touch target on phones. */
 @media (pointer: coarse), (max-width: 700px) { .offlineStart button { min-height: 44px; min-width: 44px; padding: 10px 16px; } }
 .offlineStart button:disabled { opacity: .6; cursor: default; }
+
+/* Note text and version history */
+.noteEditor { display: grid; gap: 10px; margin-top: 22px; min-width: 0; }
+.noteEditorHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; font-weight: 600; }
+.noteModeToggle { display: inline-flex; gap: 6px; }
+.noteModeToggle button, .revisionList button, .revisionRestore {
+  min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.noteModeToggle button[aria-pressed="true"], .revisionList button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.noteBody {
+  width: 100%; min-height: 180px; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; resize: vertical;
+}
+.markdownText { overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; min-width: 0; }
+.markdownText > :first-child { margin-top: 0; }
+.markdownText pre, .markdownText table { display: block; max-width: 100%; overflow-x: auto; }
+.markdownText pre { padding: 10px; background: var(--surface-subtle); border-radius: 8px; }
+.markdownText th, .markdownText td { border: 1px solid var(--line); padding: 4px 8px; }
+.noteStatus, .noteEmpty { margin: 0; font-size: 12px; color: var(--muted); }
+.noteHistory { display: grid; gap: 10px; margin-top: 8px; min-width: 0; }
+.noteHistory h3, .noteHistory h4 { margin: 0; font-size: 14px; }
+.revisionList { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.revisionList button { display: grid; width: 100%; gap: 2px; text-align: left; }
+.revisionList button span { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.revisionDetail { display: grid; gap: 10px; min-width: 0; }
+.revisionDiff { margin: 0; padding: 10px; max-width: 100%; overflow-x: auto; background: var(--surface-subtle); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.revisionDiff .diff-added { font-weight: 700; }
+.revisionDiff .diff-removed { text-decoration: line-through; }

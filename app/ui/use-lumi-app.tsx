@@ -40,6 +40,9 @@ export function useLumiApp() {
     [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
     [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
+    // The body of the open note while it is being typed, and the note whose last save failed locally.
+    [noteBodyDraft, setNoteBodyDraft] = useState<{ id: string; text: string } | null>(null),
+    [noteBodyError, setNoteBodyError] = useState<string | null>(null),
     [query, setQuery] = useState(""),
     [capture, setCapture] = useState(false),
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
@@ -2331,6 +2334,7 @@ export function useLumiApp() {
   // and in the device, so it is neither shown nor saved over the restored notes.
   function dropNotesBeingTyped() {
     setNotesDraft(null);
+    setNoteBodyDraft(null);
     try { clearPageNotesDrafts(localStorage, pageId.current); } catch { /* storage unavailable */ }
   }
   const dropNotesBeingTypedRef = useRef(dropNotesBeingTyped);
@@ -2349,6 +2353,71 @@ export function useLumiApp() {
     setNotesDraft((draft) => (draft && draft.id === e.id && draft.text === notes ? null : draft));
     settleNotesDraft(localStorage, pageId.current, e.id, notes);
   }
+  // The body of a note is typed like task notes: a draft kept in the device on every key press (under
+  // a key of its own, so it is never mistaken for task notes), saved through the normal save path when
+  // the field is left. A failed local write keeps the draft and says so.
+  const noteBodyKey = (id: string) => `note-body:${id}`;
+  function editNoteBody(id: string, text: string, base: string) {
+    setNoteBodyDraft({ id, text });
+    setNoteBodyError((failed) => (failed === id ? null : failed));
+    keepNotesDraft(localStorage, pageId.current, noteBodyKey(id), text, base);
+  }
+  // Writes the title and/or text of a note in one local write, then sends it to the server.
+  async function patchNoteText(e: Entity, fields: { title?: string; content?: string }, action: string, keepTypedTitle: boolean) {
+    localDataVersion.current += 1;
+    try { await db.transaction("rw", db.entities, async () => {
+      const current = (await db.entities.get(e.id)) || e;
+      const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+      await db.entities.update(e.id, {
+        ...fields,
+        properties: { ...current.properties, activity: [...activity, { at: Date.now(), action }].slice(-50) },
+        updatedAt: writeTime(),
+      });
+    }); } finally {
+      localDataVersion.current += 1;
+    }
+    await syncToServer();
+    await load();
+    const saved = (await db.entities.get(e.id)) || null;
+    setSelected((open) => (open && saved && open.id === e.id
+      ? { ...saved, title: keepTypedTitle && open.title !== e.title ? open.title : saved.title }
+      : open));
+  }
+  async function saveNoteBody(e: Pick<Entity, "id">, text: string) {
+    try {
+      const stored = await db.entities.get(e.id);
+      if (stored && stored.type === "note" && (stored.content ?? "") !== text) await patchNoteText(stored, { content: text }, "updated", true);
+    } catch {
+      setNoteBodyError(e.id);
+      return;
+    }
+    setNoteBodyError((failed) => (failed === e.id ? null : failed));
+    setNoteBodyDraft((draft) => (draft && draft.id === e.id && draft.text === text ? null : draft));
+    settleNotesDraft(localStorage, pageId.current, noteBodyKey(e.id), text);
+  }
+  // Restoring an old version is an ordinary new edit: its title and text become the note's.
+  async function restoreNoteVersion(e: Entity, title: string, content: string) {
+    try {
+      const stored = await db.entities.get(e.id);
+      if (!stored || stored.type !== "note") return false;
+      if (stored.title !== title || (stored.content ?? "") !== content) await patchNoteText(stored, { title, content }, "restored version", false);
+    } catch {
+      setNoteBodyError(e.id);
+      return false;
+    }
+    setNoteBodyError(null);
+    setNoteBodyDraft(null);
+    try { removeNoteBodyDraft(e.id); } catch { /* storage unavailable */ }
+    return true;
+  }
+  function removeNoteBodyDraft(id: string) {
+    const kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(id));
+    if (kept) dropNotesDraft(localStorage, kept);
+  }
+  const noteBodyDraftRef = useRef(noteBodyDraft);
+  noteBodyDraftRef.current = noteBodyDraft;
+  const saveNoteBodyRef = useRef(saveNoteBody);
+  saveNoteBodyRef.current = saveNoteBody;
   // A phone may close the app in the background without the field ever being left, so a draft is
   // saved as soon as the page is hidden.
   const notesDraftRef = useRef(notesDraft);
@@ -2360,6 +2429,8 @@ export function useLumiApp() {
       if (event.type === "visibilitychange" && document.visibilityState !== "hidden") return;
       const draft = notesDraftRef.current;
       if (draft) void saveNotesRef.current({ id: draft.id }, draft.text);
+      const body = noteBodyDraftRef.current;
+      if (body) void saveNoteBodyRef.current({ id: body.id }, body.text);
     };
     document.addEventListener("visibilitychange", saveDraft);
     window.addEventListener("pagehide", saveDraft);
@@ -2426,6 +2497,8 @@ export function useLumiApp() {
       // A notes draft that cannot be saved stays kept in the device and is counted as unsent.
       const notes = notesDraftRef.current;
       if (notes) await saveDraft({ id: notes.id }, notes.text).catch(() => undefined);
+      const body = noteBodyDraftRef.current;
+      if (body) await saveNoteBodyRef.current({ id: body.id }, body.text).catch(() => undefined);
       noteOpenTexts();
       return unsaved;
     }
@@ -2512,13 +2585,17 @@ export function useLumiApp() {
         if (!owners.has(draft.page)) owners.set(draft.page, await draftOwnerOpen(draft));
         if (owners.get(draft.page)) { leftToOwner = true; continue; }
       }
-      const stored = await db.entities.get(draft.id);
+      const isBody = draft.id.startsWith("note-body:");
+      const stored = await db.entities.get(isBody ? draft.id.slice("note-body:".length) : draft.id);
       if (stopped()) return leftToOwner;
-      const action = leftoverDraftAction(draft, stored ? String(stored.properties.notes || "") : undefined);
+      const action = leftoverDraftAction(draft, isBody
+        ? (stored && stored.type === "note" ? stored.content ?? "" : undefined)
+        : stored ? String(stored.properties.notes || "") : undefined);
       if (action === "conflict" && signingOut) continue;
       if (action === "save" && stored) {
         try {
-          await patch(stored, { notes: draft.text }, "updated", true);
+          if (isBody) await patchNoteText(stored, { content: draft.text }, "updated", true);
+          else await patch(stored, { notes: draft.text }, "updated", true);
         } catch {
           continue;
         }
@@ -3060,6 +3137,11 @@ export function useLumiApp() {
     newSubjectType,
     newWorkspaceDraft,
     notesDraft,
+    noteBodyDraft,
+    noteBodyError,
+    editNoteBody,
+    saveNoteBody,
+    restoreNoteVersion,
     notificationState,
     notificationStatus,
     openCapture,

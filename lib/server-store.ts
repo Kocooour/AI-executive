@@ -13,6 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations } from "./schema-migrations";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
+import { recordNoteRevisions } from "./note-revisions";
 
 export interface StoreSnapshot {
   revision: number;
@@ -791,6 +792,7 @@ export function replaceSnapshot(
       updatedAt: Date.now(),
     };
     replaceUnchecked(database, next);
+    recordNoteRevisions(database, current.entities, next.entities, "edited", next.revision);
     database.exec("COMMIT");
     return { conflict: false as const, snapshot: next };
   } catch (error) {
@@ -1058,6 +1060,7 @@ export function restoreBackup(name: string) {
       updatedAt: Date.now(),
     };
     replaceUnchecked(database, next);
+    recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
     database.exec("COMMIT");
     return next;
   } catch (error) {
