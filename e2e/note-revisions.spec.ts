@@ -168,6 +168,42 @@ test("unsaved note text never overwrites newer text from another device; the own
   await expect(page.locator(".revisionDetail")).toContainText("other device v2");
 });
 
+// Opens a note from the Notes list without reloading the page, as a person does.
+async function switchToNote(page: import("@playwright/test").Page, title: string) {
+  await page.evaluate(() => { history.pushState(null, "", "/?view=Notes"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await page.locator("main").getByText(title, { exact: true }).first().click();
+  await expect(page.getByLabel("Text poznámky").first()).toBeVisible();
+}
+
+test("a conflict found when leaving the field survives opening another note and coming back", async ({ page }) => {
+  const stamp = Date.now();
+  const a = `e2e-note-keep-a-${stamp}`;
+  const b = `e2e-note-keep-b-${stamp}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, a, "Keep A", "a base");
+  await seedNote(page, b, "Keep B", "b base");
+  await openNote(page, a);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("a unsaved");
+  await otherDeviceSaves(page, a, "a newer elsewhere");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await waitUntilSynced(page);
+  await page.locator("input.titleEdit").focus();
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  expect(await serverContent(page, a)).toBe("a newer elsewhere");
+  // Another note is opened and edited in the same page; the first note's unresolved text is not lost.
+  await switchToNote(page, "Keep B");
+  await expect(field).toHaveValue("b base", { timeout: 20_000 });
+  await field.fill("b edited");
+  await page.locator("input.titleEdit").focus();
+  await expect.poll(() => serverContent(page, b), { timeout: 20_000 }).toBe("b edited");
+  await switchToNote(page, "Keep A");
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  await expect(field).toHaveValue("a unsaved");
+  expect(await serverContent(page, a)).toBe("a newer elsewhere");
+});
+
 test("discarding my text in a conflict shows the stored text", async ({ page }) => {
   const id = `e2e-note-discard-${Date.now()}`;
   await page.goto("/");

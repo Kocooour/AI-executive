@@ -30,7 +30,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
   const [history, setHistory] = useState<History>({ state: "loading" });
   const [chosen, setChosen] = useState<number | null>(null);
   const [detail, setDetail] = useState<RevisionDetail | "unavailable" | null>(null);
-  const [restored, setRestored] = useState<{ version: number; already: boolean } | null>(null);
+  const [restored, setRestored] = useState<{ version: number; outcome: "already" | "restored" | "changed" } | null>(null);
   const [restoring, setRestoring] = useState(false);
   // Refreshed once the note's save is acknowledged: while the change waits to be sent the server has nothing new.
   const waiting = unsent.has(id);
@@ -64,7 +64,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
       .then((body) => { if (current) setDetail(body.revision); })
       .catch(() => { if (current) setDetail("unavailable"); });
     return () => { current = false; };
-  }, [id, chosen]);
+  }, [id, chosen, offline]);
 
   const diffItems = useMemo(
     () => (detail && detail !== "unavailable" ? collapseUnchanged(lineDiff(detail.content, text)) : []),
@@ -92,10 +92,10 @@ export function NoteEditor({ app }: { app: LumiApp }) {
     if (!detail || detail === "unavailable") return;
     setRestoring(true);
     const number = detail.revision;
-    if (detail.title === note.title && detail.content === stored) { setRestoring(false); setRestored({ version: number, already: true }); setChosen(null); return; }
-    const ok = await restoreNoteVersion(note, detail.title, detail.content);
+    if (detail.title === note.title && detail.content === stored) { setRestoring(false); setRestored({ version: number, outcome: "already" }); setChosen(null); return; }
+    const outcome = await restoreNoteVersion(note, detail.title, detail.content);
     setRestoring(false);
-    if (ok) { setRestored({ version: number, already: false }); setChosen(null); }
+    if (outcome !== "failed") { setRestored({ version: number, outcome }); if (outcome === "restored") setChosen(null); }
   }
 
   return (
@@ -133,7 +133,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
 
       <div className="noteHistory">
         <h3>{tr("versionHistory")}</h3>
-        {restored !== null && <p className="noteStatus" role="status">{tr(restored.already ? "revAlreadyCurrent" : "revRestoredStatus").replace("{version}", String(restored.version))}</p>}
+        {restored !== null && <p className="noteStatus" role="status">{tr(restored.outcome === "already" ? "revAlreadyCurrent" : restored.outcome === "changed" ? "revRestoreChanged" : "revRestoredStatus").replace("{version}", String(restored.version))}</p>}
         {history.state === "loading" && <p className="noteEmpty">{tr("revLoading")}</p>}
         {history.state === "unavailable" && <p className="noteEmpty" role="status">{tr("revOnlineOnly")}</p>}
         {history.state === "ready" && revisions.length === 0 && <p className="noteEmpty">{tr("revNone")}</p>}

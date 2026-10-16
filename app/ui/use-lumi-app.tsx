@@ -41,7 +41,8 @@ export function useLumiApp() {
     [selected, setSelected] = useState<Entity | null>(null),
     [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     // The body of the open note while it is being typed, and the note whose last save failed locally.
-    [noteBodyDraft, setNoteBodyDraft] = useState<{ id: string; text: string } | null>(null),
+    // `base`: the note text the draft was started from, kept in memory too so the conflict check does not depend on storage.
+    [noteBodyDraft, setNoteBodyDraft] = useState<{ id: string; text: string; base: string } | null>(null),
     [noteBodyError, setNoteBodyError] = useState<string | null>(null),
     // The note whose unsaved text started from text that has since been changed elsewhere: nothing is
     // saved over the newer text until the owner chooses.
@@ -2362,7 +2363,7 @@ export function useLumiApp() {
   // the field is left. A failed local write keeps the draft and says so.
   const noteBodyKey = (id: string) => `note-body:${id}`;
   function editNoteBody(id: string, text: string, base: string) {
-    setNoteBodyDraft({ id, text });
+    setNoteBodyDraft((open) => ({ id, text, base: open && open.id === id ? open.base : base }));
     setNoteBodyError((failed) => (failed === id ? null : failed));
     keepNotesDraft(localStorage, pageId.current, noteBodyKey(id), text, base);
   }
@@ -2393,9 +2394,11 @@ export function useLumiApp() {
       if (stored && stored.type === "note") {
         const now = stored.content ?? "";
         const kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(e.id));
+        const open = noteBodyDraftRef.current;
+        const base = kept?.base ?? (open && open.id === e.id ? open.base : undefined);
         // The text was started from text that is no longer the note's: newer text from another device
         // is never overwritten; the draft stays and the owner chooses.
-        if (now !== text && kept && kept.base !== now) {
+        if (now !== text && base !== undefined && base !== now) {
           setNoteBodyConflict(e.id);
           return;
         }
@@ -2407,7 +2410,8 @@ export function useLumiApp() {
     }
     setNoteBodyError((failed) => (failed === e.id ? null : failed));
     setNoteBodyConflict((conflict) => (conflict === e.id ? null : conflict));
-    setNoteBodyDraft((draft) => (draft && draft.id === e.id && draft.text === text ? null : draft));
+    // Typing that went on during the save now starts from what was saved.
+    setNoteBodyDraft((draft) => (draft && draft.id === e.id ? (draft.text === text ? null : { ...draft, base: text }) : draft));
     settleNotesDraft(localStorage, pageId.current, noteBodyKey(e.id), text);
   }
   // The owner's choice in a conflict: "mine" saves the draft over the newer text (which stays in the version
@@ -2431,23 +2435,26 @@ export function useLumiApp() {
     }
     setNoteBodyError((failed) => (failed === id ? null : failed));
     setNoteBodyConflict((conflict) => (conflict === id ? null : conflict));
-    setNoteBodyDraft((open) => (open && open.id === id && open.text === draft.text ? null : open));
+    setNoteBodyDraft((open) => (open && open.id === id ? (open.text === draft.text ? null : { ...open, base: draft.text }) : open));
     settleNotesDraft(localStorage, pageId.current, noteBodyKey(id), draft.text);
   }
   // Restoring an old version is an ordinary new edit: its title and text become the note's.
-  async function restoreNoteVersion(e: Entity, title: string, content: string) {
+  // "changed": after syncing, the note does not hold the restored text (newer text from another device won the merge).
+  async function restoreNoteVersion(e: Entity, title: string, content: string): Promise<"restored" | "changed" | "failed"> {
     try {
       const stored = await db.entities.get(e.id);
-      if (!stored || stored.type !== "note") return false;
+      if (!stored || stored.type !== "note") return "failed";
       if (stored.title !== title || (stored.content ?? "") !== content) await patchNoteText(stored, { title, content }, "restored version", false);
+      const after = await db.entities.get(e.id);
+      if (!after || after.title !== title || (after.content ?? "") !== content) return "changed";
     } catch {
       setNoteBodyError(e.id);
-      return false;
+      return "failed";
     }
     setNoteBodyError(null);
     setNoteBodyDraft(null);
     try { removeNoteBodyDraft(e.id); } catch { /* storage unavailable */ }
-    return true;
+    return "restored";
   }
   function removeNoteBodyDraft(id: string) {
     const kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(id));
@@ -2455,6 +2462,23 @@ export function useLumiApp() {
   }
   const noteBodyDraftRef = useRef(noteBodyDraft);
   noteBodyDraftRef.current = noteBodyDraft;
+  // The page keeps one note's draft in memory; a draft of another note this page kept (for example an
+  // unresolved conflict left by opening a different note) is taken up again when that note is opened.
+  const openNoteId = selected?.type === "note" ? selected.id : null;
+  useEffect(() => {
+    if (!openNoteId) return;
+    const open = noteBodyDraftRef.current;
+    if (open && open.id === openNoteId) return;
+    let kept: KeptNotesDraft | undefined;
+    try { kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(openNoteId)); } catch { return; }
+    if (!kept) return;
+    const found = kept;
+    setNoteBodyDraft({ id: openNoteId, text: found.text, base: found.base });
+    void db.entities.get(openNoteId).then((stored) => {
+      const now = stored?.content ?? "";
+      if (stored && now !== found.text && now !== found.base) setNoteBodyConflict(openNoteId);
+    });
+  }, [openNoteId]);
   const saveNoteBodyRef = useRef(saveNoteBody);
   saveNoteBodyRef.current = saveNoteBody;
   // A phone may close the app in the background without the field ever being left, so a draft is
@@ -2638,7 +2662,7 @@ export function useLumiApp() {
         if (open && open.id !== id) continue;
         keepNotesDraft(localStorage, pageId.current, draft.id, draft.text, draft.base);
         dropNotesDraft(localStorage, draft);
-        setNoteBodyDraft({ id, text: draft.text });
+        setNoteBodyDraft({ id, text: draft.text, base: draft.base });
         setNoteBodyConflict(id);
         continue;
       }
