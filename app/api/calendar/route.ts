@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
 import {
   deleteCalendarSource,
@@ -41,6 +42,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
   try {
     requireSameOrigin(request);
     const body = await readJsonBody<Record<string, unknown>>(request, 16 * 1024);

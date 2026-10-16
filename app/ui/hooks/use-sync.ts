@@ -10,6 +10,7 @@ import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncL
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { installRestoreFence } from "../../../lib/restore-fence-client";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -211,25 +212,42 @@ export function useSync() {
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
     if (isAdopting()) return true;
     beginAdoption();
-    // Anything computed from the old copy (a save in progress, a pull) is discarded.
-    localDataVersion.current += 2;
-    await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
-      await db.entities.clear();
-      await db.relations.clear();
-      await db.baseEntities.clear();
-      await db.baseRelations.clear();
-      if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
-      if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
-    });
-    clearAllMarkers(localStorage);
-    try { clearNotesDrafts(localStorage); } catch { /* storage unavailable */ }
-    localStorage.removeItem(pendingKey);
-    localStorage.setItem("ai-executive-server-synced", "1");
-    serverRevision.current = source.revision;
-    rememberGeneration(source.restoreGeneration);
-    setAfterRestoreFlag(notice ? "remote" : "sibling");
-    postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
-    window.location.reload();
+    try {
+      // Anything computed from the old copy (a save in progress, a pull) is discarded.
+      localDataVersion.current += 2;
+      try {
+        await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+          await db.entities.clear();
+          await db.relations.clear();
+          await db.baseEntities.clear();
+          await db.baseRelations.clear();
+          if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
+          if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
+        });
+      } catch (error) {
+        // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
+        // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
+        console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
+        try {
+          await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+            await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
+          });
+        } catch {
+          try { await db.delete(); } catch { /* nothing more can be done; the reload still happens */ }
+        }
+      }
+      const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
+      attempt(() => clearAllMarkers(localStorage));
+      attempt(() => clearNotesDrafts(localStorage));
+      attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
+      serverRevision.current = source.revision;
+      rememberGeneration(source.restoreGeneration);
+    } finally {
+      // Whatever happened above, the page reloads and starts from the server's data; the tab never stays write-blocked.
+      setAfterRestoreFlag(notice ? "remote" : "sibling");
+      postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+      window.location.reload();
+    }
     return true;
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
@@ -257,6 +275,10 @@ export function useSync() {
     setAfterRestoreFlag("sibling");
     window.location.reload();
   }
+  // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
+  useEffect(() => {
+    installRestoreFence({ generation: () => restoreGeneration.current, onRestored: () => { void replaceLocalWithServer(undefined, true).catch(() => undefined); } });
+  }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);

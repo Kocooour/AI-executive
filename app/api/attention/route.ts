@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
 import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { readSnapshot } from "../../../lib/server-store";
@@ -52,6 +53,8 @@ interface LifecycleCommand {
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
   const limited = enforceRateLimit(request, "attention-write", 60, 10 * 60_000);
   if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status, headers: { "retry-after": String(limited.retryAfter) } });
   let body: LifecycleCommand;

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import {
   aiAuditDetails,
   cancelAIProposal,
@@ -22,6 +23,9 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "ai.action", "rejected", { reason: "unauthenticated" });
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
+
   let identifier = "";
   try {
     requireSameOrigin(request);

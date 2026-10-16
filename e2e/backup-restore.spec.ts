@@ -537,6 +537,75 @@ test("a restore found by one tab reloads its sibling tab too: restored Context, 
   }
 });
 
+test("a Context claim created on a device that has not learned of a restore is refused and the device adopts the restored data", async ({ browser }) => {
+  const predicate = `${marker}.fenced`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    const name = await createManualBackup(first.page);
+    await openContext(second.page);
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    // The second device is not woken: it still holds the data that was replaced and tries to write on top of it.
+    const editor = second.page.locator("#context-claim-editor");
+    await editor.getByLabel("O kom / čem").selectOption("workspace:personal");
+    await editor.getByLabel("Vztah nebo vlastnost").fill(predicate);
+    await editor.getByLabel("Hodnota", { exact: true }).fill("napsáno nad obnovená data");
+    await editor.getByRole("button", { name: "Uložit", exact: true }).click();
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    expect((await claims(first.page)).some((claim) => claim.predicate === predicate)).toBe(false);
+    await expect(second.page.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0);
+    // After the reload the device writes normally.
+    await second.page.locator("#context-claim-editor").getByLabel("O kom / čem").selectOption("workspace:personal");
+    await second.page.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost").fill(`${predicate}.again`);
+    await second.page.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true }).fill("po obnovení");
+    await second.page.locator("#context-claim-editor").getByRole("button", { name: "Uložit", exact: true }).click();
+    await expect.poll(async () => (await claims(first.page)).some((claim) => claim.predicate === `${predicate}.again`), { timeout: 20_000 }).toBe(true);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("when the local copy cannot be replaced during adoption the page still reloads, emptied, and shows the restored data", async ({ browser }) => {
+  const kept = `e2e-backup-quota-${stamp}`, local = `e2e-backup-quota-local-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Kvóta: úkol v záloze")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    // The second device holds a record that exists only here, and its storage refuses every write (quota) from now on.
+    await second.page.evaluate(async (id) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const now = Date.now() + 60_000;
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("entities", "readwrite");
+        transaction.objectStore("entities").put({ id, type: "task", title: "Kvóta: jen v tomto prohlížeči", status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      const refuse = () => { throw new DOMException("The quota has been exceeded.", "QuotaExceededError"); };
+      const proto = IDBObjectStore.prototype as unknown as Record<string, unknown>;
+      for (const method of ["add", "put", "addAll", "putAll"]) if (typeof proto[method] === "function") proto[method] = refuse;
+    }, local);
+    await remoteWakeUp(second.page);
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await waitUntilSynced(second.page);
+    await second.page.goto("/?view=Inbox");
+    await expect(second.page.getByText("Kvóta: úkol v záloze")).toBeVisible({ timeout: 20_000 });
+    await expect(second.page.getByText("Kvóta: jen v tomto prohlížeči")).toHaveCount(0);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a backup older than the current format is marked and its restore says that Context is not changed", async ({ page }) => {
   await openBackups(page);
   // The instance has no JSON backups; the list only marks them, so one is supplied through the list response.

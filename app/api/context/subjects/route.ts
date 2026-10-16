@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import { isAuthenticated } from "../../../../lib/auth";
 import { archiveStandaloneSubject, createStandaloneSubject,
   listStandaloneSubjectHistory, listStandaloneSubjects, matchingStandaloneSubjects,
@@ -36,6 +37,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
   try {
     requireSameOrigin(request);
     const limited = enforceRateLimit(request, "context-subjects-write", 120, 60 * 60_000);

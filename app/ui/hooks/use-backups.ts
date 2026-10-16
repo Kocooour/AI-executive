@@ -62,7 +62,9 @@ export function useBackups({ language, tr, askConfirm, replaceLocal }: {
   async function applyRestored(response: Response, kind: "restore" | "import") {
     const data = await response.json();
     setAfterRestoreFlag(kind, true);
-    await replaceLocal(data.snapshot as ServerSnapshot);
+    // The server's restore has committed: that is the result reported, whatever happens to the local cleanup (which always
+    // ends in a reload, emptying the local copy if it cannot be replaced).
+    try { await replaceLocal(data.snapshot as ServerSnapshot); } catch (error) { console.error("Local cleanup after a restore failed:", error instanceof Error ? error.message : error); }
   }
 
   async function restoreServerBackup(backup: BackupSummary) {
