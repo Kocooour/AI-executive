@@ -8,7 +8,7 @@ export type WorkspaceTone = "personal" | "work" | "family" | "all";
 export function workspaceTone(id: string, title: string, kind?: unknown): WorkspaceTone {
   if (id === "all") return "all";
   if (id === "personal" || kind === "personal") return "personal";
-  if (/^(rodina|rodinn[ýy]|family|familie)(?:\\b|\\s|$)/i.test(title.trim())) return "family";
+  if (/^(rodina|rodinn[ýy]|family|familie)(?:\b|\s|$)/i.test(title.trim())) return "family";
   return "work";
 }
 
