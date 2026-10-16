@@ -103,6 +103,7 @@
   font-weight: 700;
   line-height: 1;
 }
+.appShell .workspaceButton .workspaceTile { color: var(--on-ws); }
 .workspaceTile[data-tone="personal"] { --tile-color: var(--ws-personal); }
 .workspaceTile[data-tone="work"] { --tile-color: var(--ws-work); }
 .workspaceTile[data-tone="family"] { --tile-color: var(--ws-family); }
