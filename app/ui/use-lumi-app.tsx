@@ -150,7 +150,7 @@ export function useLumiApp() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -1728,7 +1728,7 @@ export function useLumiApp() {
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
-    language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); setDataEpoch((count) => count + 1); postToTabs({ type: "restored", from: tabId.current }); } });
+    language, tr, askConfirm, replaceLocal: replaceLocalWithServer, afterRestore: () => { dropNotesBeingTyped(); setDataEpoch((count) => count + 1); postToTabs({ type: "restored", from: tabId.current }); } });
   // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
   // browser has synchronized with the server before and still holds its data (signing out removes
   // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
@@ -2559,7 +2559,7 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
-      if (message.type === "restored") { dropNotesBeingTypedRef.current(); setDataEpoch((count) => count + 1); return; }
+      if (message.type === "restored") { dropNotesBeingTypedRef.current(); void replaceLocalWithServer().catch(() => undefined); setDataEpoch((count) => count + 1); return; }
       // A tab opened (or woken) after the request still stops editing and saves what it can.
       if (message.type === "signing-out") {
         const wasBlocked = document.body.inert;

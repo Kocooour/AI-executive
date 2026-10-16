@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ServerSnapshot } from "../../../lib/server-sync";
-import { captureMarkers, clearSentMarkers } from "../../../lib/pending-markers";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { localizeServerError } from "../../../lib/server-errors";
 import type { BackupSummary, ConfirmRequest, Language } from "../types";
@@ -12,11 +11,12 @@ import type { BackupSummary, ConfirmRequest, Language } from "../types";
 // the setters are returned.
 export const maxImportBytes = 200 * 1024 * 1024;
 
-export function useBackups({ language, tr, askConfirm, applySnapshot, afterRestore }: {
+export function useBackups({ language, tr, askConfirm, replaceLocal, afterRestore }: {
   language: Language;
   tr: (key: string) => string;
   askConfirm: (request: ConfirmRequest) => Promise<boolean>;
-  applySnapshot: (snapshot: ServerSnapshot) => Promise<unknown>;
+  // Makes the server's copy the only copy here (records, held-back records, merge base, pending changes).
+  replaceLocal: (snapshot: ServerSnapshot) => Promise<unknown>;
   // Drops notes being typed here, reloads what the server holds besides the records, and tells the other tabs.
   afterRestore: () => void;
 }) {
@@ -59,11 +59,11 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, afterResto
     }
   }
 
-  // What was restored replaced the data the open notes were typed against and what waits to be sent.
-  async function applyRestored(response: Response, replaced: ReturnType<typeof captureMarkers>) {
+  // What was restored replaced the data the open notes were typed against and everything that waits to be sent: the
+  // local copy is replaced by the server's, not merged with it, so nothing of the replaced data stays or comes back.
+  async function applyRestored(response: Response) {
     const data = await response.json();
-    await applySnapshot(data.snapshot as ServerSnapshot);
-    clearSentMarkers(localStorage, replaced);
+    await replaceLocal(data.snapshot as ServerSnapshot);
     // Notes drafts were typed against the replaced data: kept, they could write it back over the
     // restored notes. Open tabs drop the drafts they hold in memory too (afterRestore); the
     // stored ones of all pages go here, also of pages that are closed. (The notes of open texts
@@ -78,9 +78,6 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, afterResto
       message: tr(backup.format === "legacy" ? "backupRestoreConfirmLegacy" : "backupRestoreConfirmFull").replace("{date}", () => dateText(backup.createdAt)) }))) return;
     setBackupBusy(true);
     report(tr("backupRestoring"));
-    // What waits to be sent now belongs to the data the backup replaces; only that is dropped. A
-    // deletion or restoration another tab records after this moment stays for its own save.
-    const replaced = captureMarkers(localStorage);
     try {
       const response = await fetch("/api/backups", {
         method: "POST",
@@ -88,7 +85,7 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, afterResto
         body: JSON.stringify({ action: "restore", name: backup.name }),
       });
       if (!response.ok) throw new Error(await errorText(response, tr("backupRestoreFailed")));
-      await applyRestored(response, replaced);
+      await applyRestored(response);
       report(tr("backupRestored"));
       await refreshList();
     } catch (error) {
@@ -131,11 +128,10 @@ export function useBackups({ language, tr, askConfirm, applySnapshot, afterResto
       message: tr("backupImportConfirm").replace("{file}", () => file.name) }))) return;
     setBackupBusy(true);
     report(tr("backupImporting"));
-    const replaced = captureMarkers(localStorage);
     try {
       const response = await fetch("/api/backups/import", { method: "POST", headers: { "content-type": "application/zip" }, body: file });
       if (!response.ok) throw new Error(await errorText(response, tr("backupImportFailed")));
-      await applyRestored(response, replaced);
+      await applyRestored(response);
       report(tr("backupImported"));
       await refreshList();
     } catch (error) {

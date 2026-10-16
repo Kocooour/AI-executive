@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -76,6 +77,7 @@ export function getDatabase() {
   try {
     initialiseDatabase(database);
     removeLeftoverTemporaryFiles();
+    repairBackupsDirectory();
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
@@ -1051,21 +1053,28 @@ export function createBackup(label = "manual") {
   }
   const name = `${stem}.sqlite`;
   const final = path.join(backupDirectory, name);
-  const temporary = path.join(backupDirectory, `.${name}.tmp`);
   const sidecar = path.join(backupDirectory, sidecarName(name));
-  removeIfExists(temporary);
+  const sidecarPartial = path.join(backupDirectory, `.${sidecarName(name)}.tmp`);
+  // The copy is made in the temporary folder, where start-up cleanup removes it if the process dies before it is
+  // cleaned (right after VACUUM INTO it still holds passkeys, push endpoints, security logs and secrets), and only the
+  // cleaned, vacuumed file is moved into the backups folder.
+  const staging = temporaryFile("backup", ".sqlite");
   let meta: BackupMeta;
   try {
-    const { counts, migrations } = writeCleanCopy(database, temporary);
-    const { bytes, sha256 } = describeFile(temporary);
+    const { counts, migrations } = writeCleanCopy(database, staging, crashAfterVacuumForTests ?? undefined);
+    const { bytes, sha256 } = describeFile(staging);
     meta = { format: "lumi-backup", version: backupFormatVersion, createdAt: createdAt.toISOString(), label: safeLabel, migrations, counts, bytes, sha256 };
-    publishFile(temporary, final);
-    writeFileSync(sidecar, JSON.stringify(meta, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    // The sidecar is in place before the database file, so a published .sqlite always has its sidecar.
+    writeFileSync(sidecarPartial, JSON.stringify(meta, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    renameSync(sidecarPartial, sidecar);
+    publishFile(staging, final);
   } catch (error) {
-    removeIfExists(temporary);
     removeIfExists(final);
     removeIfExists(sidecar);
+    removeIfExists(sidecarPartial);
     throw error;
+  } finally {
+    releaseTemporaryFile(staging);
   }
   try {
     const backups = readdirSync(backupDirectory)
@@ -1095,7 +1104,43 @@ export function createBackup(label = "manual") {
 
 export function hasDailyBackup(day: string) {
   if (!existsSync(backupDirectory)) return false;
-  return readdirSync(backupDirectory).some((entry) => entry.startsWith(day) && isBackupFile(entry) && backupStem(entry).endsWith("-daily"));
+  return readdirSync(backupDirectory).some((entry) => {
+    if (!entry.startsWith(day) || !isBackupFile(entry) || !backupStem(entry).endsWith("-daily")) return false;
+    if (entry.endsWith(".json")) return true;
+    // A database backup counts only with its sidecar and a file of the size the sidecar states.
+    try {
+      return statSync(path.join(backupDirectory, entry)).size === readSidecar(entry).bytes;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * At start: staging files of older builds and sidecars without a database file go; a database file without a readable
+ * sidecar (a crash between the two renames of an older build) is renamed to `<name>.incomplete`, which is neither listed
+ * nor counted nor deleted, so nothing of the owner's is removed silently.
+ */
+export function repairBackupsDirectory() {
+  try {
+    if (!existsSync(backupDirectory)) return;
+    const entries = readdirSync(backupDirectory);
+    for (const entry of entries) {
+      const file = path.join(backupDirectory, entry);
+      if (entry.startsWith(".") && entry.endsWith(".tmp")) removeIfExists(file);
+      else if (entry.endsWith(".meta.json") && !entries.includes(entry.replace(/\.meta\.json$/, ".sqlite"))) removeIfExists(file);
+      else if (isBackupFile(entry) && entry.endsWith(".sqlite")) {
+        let usable = true;
+        try { readSidecar(entry); } catch { usable = false; }
+        if (!usable) {
+          renameSync(file, `${file}.incomplete`);
+          removeIfExists(path.join(backupDirectory, sidecarName(entry))); // a damaged sidecar describes nothing
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Repairing the backups folder failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 export function listBackups(): BackupSummary[] {
@@ -1174,6 +1219,12 @@ function nextSnapshotAfterRestore(current: StoreSnapshot, restored: StoreSnapsho
   };
 }
 
+let crashAfterVacuumForTests: (() => void) | null = null;
+/** Tests only: runs between VACUUM INTO and the cleaning of the staging copy of a backup. */
+export function stopBackupAfterVacuumForTests(hook: (() => void) | null) {
+  if (hook !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Not available outside tests");
+  crashAfterVacuumForTests = hook;
+}
 let restoreFaultForTests: string | null = null;
 /** Tests only: makes a restore fail after the named table was replaced, to show that nothing stays changed. */
 export function failRestoreAfterTableForTests(table: string | null) {
@@ -1185,7 +1236,8 @@ export function failRestoreAfterTableForTests(table: string | null) {
 const temporaryDirectory = path.join(dataDirectory, "tmp");
 // Files this feature creates there, by prefix. Anything of these in the folder that is not in use by a request of this
 // process is left over from one that was killed, and goes at start and before the next file is made, whatever its age.
-const temporaryPrefixes = ["restore-", "export-", "import-"];
+const temporaryPrefixes = ["restore-", "export-", "import-", "backup-"];
+// Paths handed out and not yet released by their owner. Cleanup never touches one, whether or not the file exists yet.
 const temporaryInUse = new Set<string>();
 export function removeLeftoverTemporaryFiles() {
   try {
@@ -1195,7 +1247,6 @@ export function removeLeftoverTemporaryFiles() {
       if (!temporaryPrefixes.some((prefix) => entry.startsWith(prefix)) || temporaryInUse.has(file)) continue;
       removeIfExists(file);
     }
-    for (const file of temporaryInUse) if (!existsSync(file)) temporaryInUse.delete(file);
   } catch (error) {
     console.error("Cleaning temporary files failed:", error instanceof Error ? error.message : error);
   }
@@ -1209,6 +1260,10 @@ export function temporaryFile(prefix: string, extension: string) {
   temporaryInUse.add(file);
   return file;
 }
+/** The owner of a temporary file is done with it: the file is deleted and the path is no longer reserved. */
+export function releaseTemporaryFile(file: string) {
+  try { removeIfExists(file); } finally { temporaryInUse.delete(file); }
+}
 
 /**
  * Restores the owner data from a database file (a full backup or an imported package's database.sqlite): the file
@@ -1217,8 +1272,8 @@ export function temporaryFile(prefix: string, extension: string) {
  */
 export function restoreDatabaseFile(file: string) {
   const copy = temporaryFile("restore", ".sqlite");
-  prepareRestoreCopy(file, copy, schemaMigrations.map((migration) => migration.id), applySchema);
   try {
+    prepareRestoreCopy(file, copy, schemaMigrations.map((migration) => migration.id), applySchema);
     let restored: StoreSnapshot;
     const source = new DatabaseSync(copy, { readOnly: true });
     try {
@@ -1260,7 +1315,7 @@ export function restoreDatabaseFile(file: string) {
       runReadyHooks();
     }
   } finally {
-    removeIfExists(copy);
+    releaseTemporaryFile(copy);
   }
 }
 
@@ -1284,16 +1339,18 @@ export function createExportCopy() {
   const file = temporaryFile("export", ".sqlite");
   try {
     const { counts, migrations } = writeCleanCopy(getDatabase(), file);
-    return { path: file, counts, migrations, dispose: () => removeIfExists(file) };
+    return { path: file, counts, migrations, dispose: () => releaseTemporaryFile(file) };
   } catch (error) {
-    removeIfExists(file);
+    releaseTemporaryFile(file);
     throw error;
   }
 }
 
 function migrateLegacyStore(database: DatabaseSync) {
+  // Without a legacy file there is nothing to look at (and the whole store is not read into memory at every start).
+  if (!existsSync(legacyStorePath)) return;
   const current = readSnapshot();
-  if (current.revision !== 0 || current.entities.length || !existsSync(legacyStorePath)) return;
+  if (current.revision !== 0 || current.entities.length) return;
   try {
     const legacy = JSON.parse(readFileSync(legacyStorePath, "utf8")) as StoreSnapshot;
     if (!Array.isArray(legacy.entities) || !Array.isArray(legacy.relations)) return;

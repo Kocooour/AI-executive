@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { closeSync, openSync, writeSync } from "node:fs";
-import { restoreDatabaseFile, temporaryFile } from "../../../../lib/server-store";
-import { removeIfExists } from "../../../../lib/backup-engine";
-import { verifyPackage } from "../../../../lib/backup-package";
+import { releaseTemporaryFile, restoreDatabaseFile, temporaryFile } from "../../../../lib/server-store";
+import { maxImportUploadBytes, verifyPackage } from "../../../../lib/backup-package";
 import { enforceRateLimit, HttpInputError, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 import { isAuthenticated } from "../../../../lib/auth";
@@ -10,7 +9,7 @@ import { isAuthenticated } from "../../../../lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const maxUploadBytes = 200 * 1024 * 1024;
+const maxUploadBytes = maxImportUploadBytes;
 
 // Owner only. The body is the ZIP itself. It is streamed to a temporary file, checked completely (names, sizes,
 // manifest, checksums, schema), and only then restored like a backup: safety backup first, one transaction.
@@ -65,7 +64,7 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "backup.import", inputError.status >= 500 ? "failed" : "rejected", { reason: inputError.message });
     return NextResponse.json({ error: inputError.message }, { status: inputError.status, headers: { "cache-control": "no-store" } });
   } finally {
-    removeIfExists(zipPath);
-    removeIfExists(databasePath);
+    releaseTemporaryFile(zipPath);
+    releaseTemporaryFile(databasePath);
   }
 }

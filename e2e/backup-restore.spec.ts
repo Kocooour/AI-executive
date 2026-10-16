@@ -227,6 +227,67 @@ test("an export is downloaded and importing it returns the state of the export",
   await expect(page.getByText("Export: úkol po exportu")).toHaveCount(0);
 });
 
+test("a restore replaces the local copy: held-back records and pending changes of the replaced data are gone and never sent", async ({ page }) => {
+  const kept = `e2e-backup-replace-${stamp}`, held = `e2e-backup-held-${stamp}`, localOnly = `e2e-backup-localonly-${stamp}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await setStore(page, [task(kept, "Záloha: úkol, který přežije")]);
+  // A second tab of the same browser, open while the first restores.
+  const other = await page.context().newPage();
+  await other.goto("/?view=Inbox");
+  await waitUntilSynced(other);
+  await openBackups(page);
+  await page.getByRole("button", { name: "Vytvořit zálohu" }).click();
+  await expect(status(page)).toHaveText("Záloha vytvořena.");
+  await manualRow(page).getByRole("button", { name: "Obnovit" }).click();
+  await expect(confirmDialog(page)).toBeVisible();
+  // State that exists only in this browser: a record the server would refuse (no title), a valid record not sent yet, a
+  // deletion of the kept task not sent yet, and the flag that something waits to be sent.
+  await page.evaluate(async ([heldId, localId, keptId]) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const now = Date.now() + 60_000;
+    const record = (id: string, title: string) => ({ id, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction("entities", "readwrite");
+      transaction.objectStore("entities").put(record(heldId, ""));
+      transaction.objectStore("entities").put(record(localId, "Jen v tomto prohlížeči"));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+    localStorage.setItem("ai-executive-pending-deletions:0000000000000-e2e-000001", keptId);
+    localStorage.setItem("ai-executive-pending-sync", "1");
+  }, [held, localOnly, kept]);
+  await confirmRestore(page);
+  await expect(status(page)).toHaveText("Záloha obnovena.");
+  const local = await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const ids = await new Promise<string[]>((resolve, reject) => { const request = database.transaction("entities").objectStore("entities").getAllKeys(); request.onsuccess = () => resolve(request.result as string[]); request.onerror = () => reject(request.error); });
+    database.close();
+    return { ids, pending: localStorage.getItem("ai-executive-pending-sync"), markers: Object.keys(localStorage).filter((key) => key.startsWith("ai-executive-pending-deletions") || key.startsWith("ai-executive-pending-revivals")) };
+  });
+  expect(local.ids).toContain(kept);
+  expect(local.ids).not.toContain(held);
+  expect(local.ids).not.toContain(localOnly);
+  expect(local.pending).toBeNull();
+  expect(local.markers).toEqual([]);
+  // Nothing of it comes back: after later saves and a reload the server and the browser still hold only the restored data.
+  await setStore(page, [task(`e2e-backup-after-${stamp}`, "Záloha: po obnovení")]);
+  await page.reload();
+  await waitUntilSynced(page);
+  const server = (await serverEntities(page)).map((entity) => entity.id);
+  expect(server).toContain(kept);
+  expect(server).not.toContain(held);
+  expect(server).not.toContain(localOnly);
+  await page.goto("/?view=Inbox");
+  await expect(page.getByText("Záloha: úkol, který přežije")).toBeVisible();
+  await expect(page.getByText("Jen v tomto prohlížeči")).toHaveCount(0);
+  // The other tab shows the same restored copy.
+  await expect(other.getByText("Záloha: úkol, který přežije")).toBeVisible();
+  await expect(other.getByText("Jen v tomto prohlížeči")).toHaveCount(0);
+  await other.close();
+});
+
 test("a backup older than the current format is marked and its restore says that Context is not changed", async ({ page }) => {
   await openBackups(page);
   // The instance has no JSON backups; the list only marks them, so one is supplied through the list response.

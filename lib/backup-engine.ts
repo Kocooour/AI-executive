@@ -1,4 +1,5 @@
 import { chmodSync, closeSync, copyFileSync, existsSync, openSync, readSync, renameSync, statSync, unlinkSync } from "node:fs";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { HttpInputError } from "./http-security";
@@ -58,8 +59,11 @@ export function appliedMigrations(database: DatabaseSync) {
  * Writes the cleaned copy of `source` to `destination` (which must not exist) and returns what the sidecar needs.
  * Rows of the excluded tables are deleted from the copy, which is then vacuumed so they do not stay in free pages.
  */
-export function writeCleanCopy(source: DatabaseSync, destination: string) {
+export function writeCleanCopy(source: DatabaseSync, destination: string, afterVacuum?: () => void) {
   source.prepare("VACUUM INTO ?").run(destination);
+  // Until the copy below is cleaned it holds everything, passkeys and secrets included: `destination` must be in the
+  // feature's temporary folder, which is emptied at start (tests use the hook to stop here).
+  afterVacuum?.();
   chmodSync(destination, 0o600);
   const copy = new DatabaseSync(destination);
   try {
@@ -157,7 +161,21 @@ export function replaceTablesFromAttached(
   for (const table of cleared) database.exec(`DELETE FROM main.${quote(table)}`);
 }
 
+/** Moves a finished file into place; a rename within the data folder, with a copy as the fallback across file systems. */
 export function publish(temporary: string, final: string) {
   chmodSync(temporary, 0o600);
-  renameSync(temporary, final);
+  try {
+    renameSync(temporary, final);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+    const partial = path.join(path.dirname(final), `.${path.basename(final)}.tmp`);
+    try {
+      copyFileSync(temporary, partial);
+      chmodSync(partial, 0o600);
+      renameSync(partial, final);
+    } finally {
+      removeIfExists(partial);
+    }
+    removeIfExists(temporary);
+  }
 }

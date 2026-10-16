@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { createExportCopy } from "../../../../lib/server-store";
-import { assertWithinLimits, buildManifest, buildPackageParts, packageStream } from "../../../../lib/backup-package";
+import { createReadStream, statSync } from "node:fs";
+import { Readable } from "node:stream";
+import { createExportCopy, releaseTemporaryFile, temporaryFile } from "../../../../lib/server-store";
+import { verifyExportOutput, writeExportZip } from "../../../../lib/backup-package";
 import { enforceRateLimit, HttpInputError, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 import { isAuthenticated } from "../../../../lib/auth";
@@ -38,17 +40,28 @@ export async function GET(request: Request) {
     recordSecurityEvent(request, "backup.export", "failed");
     return NextResponse.json({ error: "Export failed" }, { status: 500, headers: { "cache-control": "no-store" } });
   }
+  const zipPath = temporaryFile("export-zip", ".zip");
+  const scratchPath = temporaryFile("export-check", ".sqlite");
+  let handedOver = false;
   try {
-    const parts = buildPackageParts(copy.path);
-    // A package the importer would refuse is not offered: nothing is streamed or written.
-    assertWithinLimits(parts);
-    const manifest = buildManifest(parts, { counts: copy.counts, migrations: copy.migrations });
-    const stream = packageStream(parts, manifest, copy.dispose);
+    // The ZIP is written to a file with bounded memory, then checked by the importer's own verification (upload limit,
+    // entry and size limits, inflate ratio, checksums), and only then sent. A package the importer would refuse is
+    // never offered.
+    writeExportZip(copy.path, zipPath, { counts: copy.counts, migrations: copy.migrations });
+    copy.dispose();
+    verifyExportOutput(zipPath, scratchPath);
+    releaseTemporaryFile(scratchPath);
+    const size = statSync(zipPath).size;
+    const source = createReadStream(zipPath);
+    // Deleted when the download ends, fails or is abandoned by the browser.
+    source.on("close", () => releaseTemporaryFile(zipPath));
+    handedOver = true;
     recordSecurityEvent(request, "backup.export", "allowed");
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return new Response(stream, {
+    return new Response(Readable.toWeb(source) as ReadableStream, {
       headers: {
         "content-type": "application/zip",
+        "content-length": String(size),
         "content-disposition": `attachment; filename="lumi-export-${stamp}.zip"`,
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
@@ -63,5 +76,8 @@ export async function GET(request: Request) {
     console.error("Export failed:", error);
     recordSecurityEvent(request, "backup.export", "failed");
     return NextResponse.json({ error: "Export failed" }, { status: 500, headers: { "cache-control": "no-store" } });
+  } finally {
+    releaseTemporaryFile(scratchPath);
+    if (!handedOver) releaseTemporaryFile(zipPath);
   }
 }

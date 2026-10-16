@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
-import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
+import { captureMarkers as captureMarkersIn, clearAllMarkers, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
 import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
 import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
 import { writeTime } from "../../../lib/clock";
@@ -176,6 +176,42 @@ export function useSync() {
     requeueStreak.current = requeue ? requeueStreak.current + 1 : 0;
     if (requeue && requeueStreak.current <= 2 && !signedOut.current) void syncToServer();
     return true;
+  }
+  // After a restore or an import the server holds the only truth: the local copy, the common version used for merging,
+  // the records held back on this device and everything waiting to be sent (changes, deletions, revivals) belong to the
+  // data that was replaced and must not survive or be sent. Unlike applySnapshot nothing is kept or merged. The records
+  // and the bookkeeping are shared by all tabs of the browser, so one replacement serves them all; the others only show it.
+  async function replaceLocalWithServer(snapshot?: ServerSnapshot) {
+    if (signedOut.current) return false;
+    const operation = syncQueue.current.then(() => withSyncLock(async () => {
+      let source = snapshot;
+      if (!source) {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (!response.ok) throw new Error("Server synchronization failed");
+        source = (await response.json()) as ServerSnapshot;
+      }
+      // Anything computed from the old copy (a save in progress, a pull) is discarded.
+      localDataVersion.current += 2;
+      await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+        await db.entities.clear();
+        await db.relations.clear();
+        await db.baseEntities.clear();
+        await db.baseRelations.clear();
+        if (source!.entities.length) { await db.entities.bulkAdd(source!.entities); await db.baseEntities.bulkAdd(source!.entities); }
+        if (source!.relations.length) { await db.relations.bulkAdd(source!.relations); await db.baseRelations.bulkAdd(source!.relations); }
+      });
+      clearAllMarkers(localStorage);
+      localStorage.removeItem(pendingKey);
+      localStorage.setItem("ai-executive-server-synced", "1");
+      serverRevision.current = source.revision;
+      requeueStreak.current = 0;
+      await load();
+      setSyncStatus("synced");
+      postToTabs({ type: "changed", from: tabId.current });
+      return true;
+    }));
+    syncQueue.current = operation.then(() => undefined, () => { setSyncStatus("offline"); });
+    return operation;
   }
   // Another tab changed the shared local copy: show it here too.
   useEffect(() => {
@@ -380,6 +416,7 @@ export function useSync() {
     clearSentMarkers,
     load,
     applySnapshot,
+    replaceLocalWithServer,
     putSnapshot,
     syncToServer,
     pullFromServer,

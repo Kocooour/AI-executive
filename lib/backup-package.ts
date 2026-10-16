@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, writeSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync, writeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { Unzip, UnzipInflate, Zip, ZipDeflate, type UnzipFile } from "fflate";
@@ -27,6 +27,9 @@ export interface PackageManifest {
 
 export interface PackageLimits {
   maxEntries: number;
+  maxManifestBytes: number;
+  bombFloorBytes: number;
+  maxRatio: number;
   maxTotalBytes: number;
   maxEntryBytes: number;
   maxDatabaseBytes: number;
@@ -35,18 +38,21 @@ export interface PackageLimits {
 // whatever the app exports it can import again. They are bomb protection, not a size policy: entries are counted while
 // inflating (not only as declared), and a package that inflates far beyond what it read is refused by the ratio guard.
 export const defaultPackageLimits: PackageLimits = {
-  maxEntries: 500_000,
+  maxEntries: 250_000,
+  // The manifest lists every file (about 120 bytes each), so it is bounded on its own, well below the generic entry limit.
+  maxManifestBytes: 32 * 1024 ** 2,
   maxTotalBytes: 4 * 1024 ** 3,
   maxEntryBytes: 1024 ** 3,
   maxDatabaseBytes: 2 * 1024 ** 3,
+  // Inflating more than `bombFloorBytes` needs at least 1 byte read per `maxRatio` inflated (text and database files
+  // compress about 3 to 20 times; a bomb compresses a thousand times or more).
+  bombFloorBytes: 64 * 1024 ** 2,
+  maxRatio: 200,
 };
-// Inflating more than this much needs at least 1 byte read per `maxInflateRatio` inflated (text and database files
-// compress about 3 to 20 times; a bomb compresses a thousand times or more).
-export const bombGuardFloorBytes = 64 * 1024 ** 2;
-export const maxInflateRatio = 200;
+// The largest upload the import accepts; the export refuses to produce a file above it.
+export const maxImportUploadBytes = 200 * 1024 * 1024;
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 const encoder = new TextEncoder();
 
 function safeFileName(id: string) {
@@ -73,142 +79,131 @@ export function noteMarkdown(note: Entity) {
   return lines.join("\n");
 }
 
-interface Part {
-  name: string;
-  bytes?: Uint8Array;
-  file?: string;
-  size: number;
-  sha256: string;
-}
+const tooLarge = () => new HttpInputError("Export is too large to be imported again", 413);
 
-function hashFile(file: string) {
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(1 << 20);
+// Rows as JSON text in pieces of about 256 KB: no whole table is ever held as one string.
+function* jsonArrayChunks(rows: Iterable<unknown>): Generator<Uint8Array> {
+  let batch = "[";
+  let first = true;
+  for (const row of rows) {
+    batch += (first ? "\n" : ",\n") + JSON.stringify(row);
+    first = false;
+    if (batch.length >= 256 * 1024) { yield encoder.encode(batch); batch = ""; }
+  }
+  yield encoder.encode(batch + (first ? "]\n" : "\n]\n"));
+}
+function* jsonLinesChunks(rows: Iterable<unknown>): Generator<Uint8Array> {
+  let batch = "";
+  for (const row of rows) {
+    batch += JSON.stringify(row) + "\n";
+    if (batch.length >= 256 * 1024) { yield encoder.encode(batch); batch = ""; }
+  }
+  if (batch) yield encoder.encode(batch);
+}
+function* fileChunks(file: string): Generator<Uint8Array> {
   const fd = openSync(file, "r");
-  let size = 0;
   try {
-    for (let read; (read = readSync(fd, buffer, 0, buffer.length, null)) > 0;) { hash.update(buffer.subarray(0, read)); size += read; }
+    const buffer = Buffer.allocUnsafe(256 * 1024);
+    for (let read; (read = readSync(fd, buffer, 0, buffer.length, null)) > 0;) yield Uint8Array.prototype.slice.call(buffer, 0, read);
   } finally {
     closeSync(fd);
   }
-  return { sha256: hash.digest("hex"), size };
 }
 
-/** Everything of the package except the manifest, built from a cleaned database copy. */
-export function buildPackageParts(copyPath: string) {
-  const database = new DatabaseSync(copyPath, { readOnly: true });
-  const parts: Part[] = [];
-  const text = (name: string, content: string) => {
-    const bytes = encoder.encode(content);
-    parts.push({ name, bytes, size: bytes.length, sha256: sha256(bytes) });
+export interface ExportOptions { limits?: PackageLimits; uploadLimit?: number }
+
+/**
+ * Writes the export ZIP for the cleaned database copy at `copyPath` into `zipPath`, entry by entry, with bounded memory:
+ * rows are iterated and written in batches, notes one at a time, the database in 256 KB pieces, and every entry's
+ * SHA-256 is computed while it is written. The manifest comes last (the importer accepts it at any position). The limits
+ * of the importer (entries, sizes, manifest, inflate ratio, upload size) are checked as the file grows; a package the
+ * importer would refuse aborts the export with the localized 413 before more is written.
+ */
+export function writeExportZip(copyPath: string, zipPath: string, info: { counts: Record<string, number>; migrations: string[]; createdAt?: Date }, options: ExportOptions = {}): PackageManifest {
+  const fd = openSync(zipPath, "w", 0o600);
+  try {
+    return writeExportEntries(fd, copyPath, info, options);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeExportEntries(fd: number, copyPath: string, info: { counts: Record<string, number>; migrations: string[]; createdAt?: Date }, options: ExportOptions): PackageManifest {
+  const limits = options.limits ?? defaultPackageLimits;
+  const uploadLimit = options.uploadLimit ?? maxImportUploadBytes;
+  const files: PackageManifest["files"] = {};
+  let written = 0;
+  let inflated = 0;
+  let entries = 0;
+  let manifestEstimate = 0;
+  let failure: Error | null = null;
+  const zip = new Zip((error, chunk) => {
+    if (failure) return;
+    if (error) { failure = error; return; }
+    written += chunk.length;
+    if (written > uploadLimit) { failure = tooLarge(); return; }
+    writeSync(fd, chunk);
+  });
+  const check = () => { if (failure) throw failure; };
+  const addEntry = (name: string, chunks: Iterable<Uint8Array>, entryLimit: number) => {
+    entries += 1;
+    manifestEstimate += name.length + 110;
+    // The manifest is one more entry.
+    if (entries + 1 > limits.maxEntries || manifestEstimate > limits.maxManifestBytes) throw tooLarge();
+    const deflate = new ZipDeflate(name, { level: 6 });
+    zip.add(deflate);
+    const hash = createHash("sha256");
+    let bytes = 0;
+    for (const chunk of chunks) {
+      hash.update(chunk);
+      bytes += chunk.length;
+      inflated += chunk.length;
+      if (bytes > entryLimit || inflated > limits.maxTotalBytes) throw tooLarge();
+      deflate.push(chunk, false);
+      check();
+      if (inflated > limits.bombFloorBytes && inflated > written * limits.maxRatio) throw tooLarge();
+    }
+    deflate.push(new Uint8Array(0), true);
+    check();
+    files[name] = { sha256: hash.digest("hex"), bytes };
   };
+  const text = (name: string, content: string) => addEntry(name, [encoder.encode(content)], limits.maxEntryBytes);
+  const database = new DatabaseSync(copyPath, { readOnly: true });
   try {
     const taken = new Set<string>();
-    const notes = (database.prepare("SELECT payload FROM entities ORDER BY updated_at, id").all() as Array<{ payload: string }>)
-      .map((row) => JSON.parse(String(row.payload)) as Entity)
-      .filter((entity) => entity.type === "note");
-    for (const note of notes) {
+    const notes = database.prepare("SELECT payload FROM entities WHERE json_extract(payload, '$.type') = 'note' ORDER BY updated_at, id");
+    for (const row of notes.iterate() as Iterable<{ payload: string }>) {
+      const note = JSON.parse(String(row.payload)) as Entity;
       let base = safeFileName(note.id);
       for (let index = 2; taken.has(base); index += 1) base = `${safeFileName(note.id)}-${index}`;
       taken.add(base);
       text(`notes/${base}.md`, noteMarkdown(note));
     }
     for (const table of includedTables) {
-      const rows = database.prepare(`SELECT * FROM ${quote(table)}`).all();
-      text(`data/${table}.json`, JSON.stringify(rows, null, 1));
+      addEntry(`data/${table}.json`, jsonArrayChunks(database.prepare(`SELECT * FROM ${quote(table)}`).iterate()), limits.maxEntryBytes);
     }
-    const lines = (table: string, order: string) =>
-      (database.prepare(`SELECT * FROM ${quote(table)} ORDER BY ${order}`).all() as object[]).map((row) => JSON.stringify(row)).join("\n");
-    text("history/context-changes.jsonl", lines("context_change_events", "sequence, rowid") + "\n");
-    text("history/note-revisions.jsonl", lines("note_revisions", "note_id, revision") + "\n");
+    addEntry("history/context-changes.jsonl", jsonLinesChunks(database.prepare("SELECT * FROM context_change_events ORDER BY sequence, rowid").iterate()), limits.maxEntryBytes);
+    addEntry("history/note-revisions.jsonl", jsonLinesChunks(database.prepare("SELECT * FROM note_revisions ORDER BY note_id, revision").iterate()), limits.maxEntryBytes);
   } finally {
     database.close();
   }
-  const { sha256: databaseHash, size } = hashFile(copyPath);
-  parts.push({ name: databaseEntry, file: copyPath, size, sha256: databaseHash });
-  return parts;
-}
-
-/** Refuses (before anything is streamed) a package the importer would refuse. */
-export function assertWithinLimits(parts: Part[], limits: PackageLimits = defaultPackageLimits) {
-  // The manifest is one more entry.
-  let total = 0;
-  if (parts.length + 1 > limits.maxEntries) throw new HttpInputError("Export is too large to be imported again", 413);
-  for (const part of parts) {
-    total += part.size;
-    const limit = part.name === databaseEntry ? limits.maxDatabaseBytes : limits.maxEntryBytes;
-    if (part.size > limit || total > limits.maxTotalBytes) throw new HttpInputError("Export is too large to be imported again", 413);
-  }
-}
-
-export function buildManifest(parts: Part[], info: { counts: Record<string, number>; migrations: string[]; createdAt?: Date }): PackageManifest {
-  return {
+  addEntry(databaseEntry, fileChunks(copyPath), limits.maxDatabaseBytes);
+  const manifest: PackageManifest = {
     format: exportFormat,
     version: exportVersion,
     createdAt: (info.createdAt ?? new Date()).toISOString(),
     migrations: info.migrations,
     counts: info.counts,
-    files: Object.fromEntries(parts.map((part) => [part.name, { sha256: part.sha256, bytes: part.size }])),
+    files,
   };
-}
-
-/** The ZIP as a stream: the manifest first, then the files; the database is read in pieces. */
-export function packageStream(parts: Part[], manifest: PackageManifest, onEnd: () => void) {
-  const manifestBytes = encoder.encode(JSON.stringify(manifest, null, 2));
-  let zip: Zip;
-  let controllerRef: ReadableStreamDefaultController<Uint8Array>;
-  const steps = (function* () {
-    const entries: Array<{ name: string; bytes?: Uint8Array; file?: string }> = [{ name: manifestEntry, bytes: manifestBytes }, ...parts];
-    for (const entry of entries) {
-      const deflate = new ZipDeflate(entry.name, { level: 6 });
-      zip.add(deflate);
-      if (entry.bytes) {
-        deflate.push(entry.bytes, true);
-        yield;
-      } else if (entry.file) {
-        const fd = openSync(entry.file, "r");
-        try {
-          const buffer = Buffer.allocUnsafe(256 * 1024);
-          let read = readSync(fd, buffer, 0, buffer.length, null);
-          if (read === 0) deflate.push(new Uint8Array(0), true);
-          while (read > 0) {
-            const chunk = Uint8Array.prototype.slice.call(buffer, 0, read);
-            const next = readSync(fd, buffer, 0, buffer.length, null);
-            deflate.push(chunk, next === 0);
-            read = next;
-            yield;
-          }
-        } finally {
-          closeSync(fd);
-        }
-      }
-    }
-    zip.end();
-  })();
-  let finished = false;
-  const finish = () => { if (!finished) { finished = true; onEnd(); } };
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controllerRef = controller;
-      zip = new Zip((error, chunk, final) => {
-        if (error) { controller.error(error); finish(); return; }
-        if (chunk.length) controller.enqueue(chunk);
-        if (final) { controller.close(); finish(); }
-      });
-    },
-    pull() {
-      try {
-        // Produce until the consumer has enough queued; the next pull continues.
-        while ((controllerRef.desiredSize ?? 0) > 0) {
-          if (steps.next().done) return;
-        }
-      } catch (error) {
-        controllerRef.error(error);
-        finish();
-      }
-    },
-    cancel() { finish(); },
-  });
+  const manifestBytes = encoder.encode(JSON.stringify(manifest));
+  if (manifestBytes.length > limits.maxManifestBytes) throw tooLarge();
+  const deflate = new ZipDeflate(manifestEntry, { level: 6 });
+  zip.add(deflate);
+  deflate.push(manifestBytes, true);
+  zip.end();
+  check();
+  return manifest;
 }
 
 export const badNameChecks = (name: string) =>
@@ -222,7 +217,7 @@ export const badNameChecks = (name: string) =>
  */
 export function verifyPackage(zipPath: string, databasePath: string, limits: PackageLimits = defaultPackageLimits) {
   const seen = new Map<string, { hash: ReturnType<typeof createHash>; bytes: number }>();
-  let manifestText = Buffer.alloc(0);
+  const manifestChunks: Buffer[] = [];
   let totalBytes = 0;
   let failure: HttpInputError | null = null;
   let databaseFd: number | null = null;
@@ -238,7 +233,7 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
     if (badNameChecks(name)) { fail(new HttpInputError("Invalid export package")); return; }
     if (seen.has(name)) { fail(new HttpInputError("Invalid export package")); return; }
     if (seen.size + 1 > limits.maxEntries) { fail(new HttpInputError("Export package is too large")); return; }
-    const entryLimit = name === databaseEntry ? limits.maxDatabaseBytes : limits.maxEntryBytes;
+    const entryLimit = name === databaseEntry ? limits.maxDatabaseBytes : name === manifestEntry ? limits.maxManifestBytes : limits.maxEntryBytes;
     if (typeof file.originalSize === "number" && file.originalSize > entryLimit) { fail(new HttpInputError("Export package is too large")); return; }
     const state = { hash: createHash("sha256"), bytes: 0 };
     seen.set(name, state);
@@ -251,9 +246,9 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
       state.bytes += data.length;
       totalBytes += data.length;
       if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
-      if (totalBytes > bombGuardFloorBytes && totalBytes > compressedBytes * maxInflateRatio) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
+      if (totalBytes > limits.bombFloorBytes && totalBytes > compressedBytes * limits.maxRatio) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
       state.hash.update(data);
-      if (name === manifestEntry) manifestText = Buffer.concat([manifestText, data]);
+      if (name === manifestEntry) manifestChunks.push(Buffer.from(data));
       if (name === databaseEntry && databaseFd !== null) writeSync(databaseFd, data);
     };
     file.start();
@@ -287,7 +282,7 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
   if (!seen.has(manifestEntry) || !seen.has(databaseEntry)) throw new HttpInputError("Export package has missing or unexpected files");
   let manifest: PackageManifest;
   try {
-    manifest = JSON.parse(manifestText.toString("utf8")) as PackageManifest;
+    manifest = JSON.parse(Buffer.concat(manifestChunks).toString("utf8")) as PackageManifest;
   } catch {
     throw new HttpInputError("Invalid export package");
   }
@@ -310,4 +305,18 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
     }
   }
   return manifest;
+}
+
+/**
+ * The export builds its ZIP in a file and runs the importer's own checks on it (upload size, entry and size limits, the
+ * ratio guard, checksums). A package the import would refuse is never offered; every refusal reads the same.
+ */
+export function verifyExportOutput(zipPath: string, scratchDatabasePath: string, uploadLimit = maxImportUploadBytes, limits: PackageLimits = defaultPackageLimits) {
+  if (statSync(zipPath).size > uploadLimit) throw new HttpInputError("Export is too large to be imported again", 413);
+  try {
+    return verifyPackage(zipPath, scratchDatabasePath, limits);
+  } catch (error) {
+    if (error instanceof HttpInputError) throw new HttpInputError("Export is too large to be imported again", 413);
+    throw error;
+  }
 }

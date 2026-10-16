@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { zipSync, strToU8 } from "fflate";
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "lumi-backups-v2-"));
@@ -281,26 +282,25 @@ test("the daily backup is taken once a day before the first change, in the new f
   assert.equal(files("-daily.sqlite").length, 1);
 });
 
-function exportPackage() {
+// Writes the export ZIP of the live data to a file (as the route does) and returns it.
+function writeExport(options) {
   const copy = store.createExportCopy();
-  const parts = pack.buildPackageParts(copy.path);
-  const manifest = pack.buildManifest(parts, { counts: copy.counts, migrations: copy.migrations });
-  return { copy, parts, manifest };
-}
-async function readStream(stream) {
-  const chunks = [];
-  const reader = stream.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
+  const zipPath = path.join(tmp(), `export-${Math.random().toString(36).slice(2)}.zip`);
+  try {
+    const manifest = pack.writeExportZip(copy.path, zipPath, { counts: copy.counts, migrations: copy.migrations }, options);
+    return { zipPath, manifest, copy };
+  } catch (error) {
+    rmSync(zipPath, { force: true });
+    throw error;
+  } finally {
+    copy.dispose();
   }
-  return Buffer.concat(chunks);
 }
 const { unzipSync } = await import("fflate");
 async function exportZip() {
-  const { copy, parts, manifest } = exportPackage();
-  const bytes = await readStream(pack.packageStream(parts, manifest, copy.dispose));
+  const { zipPath, manifest } = writeExport();
+  const bytes = readFileSync(zipPath);
+  rmSync(zipPath);
   return { bytes, manifest };
 }
 const tmp = () => path.join(dataDir, "tmp-test");
@@ -412,21 +412,19 @@ test("path traversal names, absurd entry counts and zip bombs are refused", asyn
 });
 
 test("a package whose database was made by a newer version is refused before anything changes", async () => {
-  const { copy, parts, manifest } = exportPackage();
+  const copy = store.createExportCopy();
   const future = new DatabaseSync(copy.path);
   future.exec("INSERT INTO schema_migrations (id, applied_at) VALUES ('2099-01-from-the-future', 'x')");
   future.close();
-  // The package is rebuilt around the altered database, so its checksums are right: only the schema check can refuse it.
-  const rebuilt = pack.buildPackageParts(copy.path);
-  const bytes = await readStream(pack.packageStream(rebuilt, pack.buildManifest(rebuilt, { counts: copy.counts, migrations: copy.migrations }), copy.dispose));
+  // The package is written around the altered database, so its checksums are right: only the schema check can refuse it.
   const zipPath = path.join(tmp(), "future.zip");
   const databasePath = path.join(tmp(), "future.sqlite");
-  writeFileSync(zipPath, bytes);
+  pack.writeExportZip(copy.path, zipPath, { counts: copy.counts, migrations: copy.migrations });
+  copy.dispose();
   pack.verifyPackage(zipPath, databasePath);
   const before = stateOf();
   assert.throws(() => store.restoreDatabaseFile(databasePath), /newer version/);
   assert.deepEqual(stateOf(), before);
-  void parts; void manifest;
 });
 
 test("scripts/check-data.mjs verifies a full backup read-only", () => {
@@ -453,16 +451,12 @@ test("a store above the old package limits is exported and imported back", async
     insert.run(entity.id, JSON.stringify(entity), 1_000 + index);
   }
   db().exec("COMMIT");
-  const { copy, parts, manifest } = exportPackage();
-  assert.ok(parts.length + 1 > 20_000);
-  assert.ok(parts.find((part) => part.name === "data/entities.json").size > 64 * 1024 ** 2);
-  pack.assertWithinLimits(parts);
-  const bytes = await readStream(pack.packageStream(parts, manifest, copy.dispose));
-  const zipPath = path.join(tmp(), "big.zip");
+  const { zipPath, manifest } = writeExport();
   const databasePath = path.join(tmp(), "big.sqlite");
-  writeFileSync(zipPath, bytes);
+  assert.ok(Object.keys(manifest.files).length + 1 > 20_000);
+  assert.ok(manifest.files["data/entities.json"].bytes > 64 * 1024 ** 2);
   const verified = pack.verifyPackage(zipPath, databasePath);
-  assert.equal(Object.keys(verified.files).length, parts.length);
+  assert.equal(Object.keys(verified.files).length, Object.keys(manifest.files).length);
   db().exec("DELETE FROM entities WHERE id LIKE 'note:big-%'");
   store.restoreDatabaseFile(databasePath);
   assert.equal(db().prepare("SELECT COUNT(*) AS value FROM entities WHERE id LIKE 'note:big-%'").get().value, 25_000);
@@ -471,21 +465,25 @@ test("a store above the old package limits is exported and imported back", async
   rmSync(databasePath, { force: true });
 });
 
-test("an export above the importer's absolute limits is refused before anything is written", () => {
-  const { copy, parts } = exportPackage();
-  try {
-    const limits = pack.defaultPackageLimits;
-    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxEntries: parts.length }), /too large to be imported again/);
-    assert.doesNotThrow(() => pack.assertWithinLimits(parts, { ...limits, maxEntries: parts.length + 1 }));
-    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxEntryBytes: 10 }), /too large to be imported again/);
-    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxTotalBytes: 100 }), /too large to be imported again/);
-    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxDatabaseBytes: 100 }), /too large to be imported again/);
-  } finally {
-    copy.dispose();
-  }
+test("an export above the importer's limits is refused while it is written, and leaves a file only for the caller to delete", () => {
+  const limits = pack.defaultPackageLimits;
+  const entryCount = Object.keys(writeExportAndRemove().files).length;
+  const refused = (changed, options = {}) => assert.throws(() => writeExportAndRemove({ limits: { ...limits, ...changed }, ...options }), (error) => error.status === 413 && error.message === "Export is too large to be imported again");
+  refused({ maxEntries: entryCount });
+  refused({ maxEntryBytes: 10 });
+  refused({ maxTotalBytes: 100 });
+  refused({ maxDatabaseBytes: 100 });
+  refused({ maxManifestBytes: 500 });
+  refused({}, { uploadLimit: 1000 });
+  assert.doesNotThrow(() => writeExportAndRemove({ limits: { ...limits, maxEntries: entryCount + 1 } }));
   // What the importer accepts is never below what the exporter writes.
-  assert.ok(pack.defaultPackageLimits.maxEntries >= 500_000 && pack.defaultPackageLimits.maxEntryBytes >= 1024 ** 3);
+  assert.ok(limits.maxEntries >= 250_000 && limits.maxEntryBytes >= 1024 ** 3);
 });
+function writeExportAndRemove(options) {
+  const written = writeExport(options);
+  rmSync(written.zipPath, { force: true });
+  return written.manifest;
+}
 
 test("a package that inflates far beyond what was read is refused by the ratio guard", () => {
   const entries = { "manifest.json": strToU8("{}"), "database.sqlite": strToU8("x"), "data/zeros.json": new Uint8Array(80 * 1024 ** 2) };
@@ -556,4 +554,157 @@ test("the backup route answers an unexpected failure with a generic message and 
   assert.equal((await refused.json()).error, "Invalid backup name");
   rmSync(file, { recursive: true });
   rmSync(path.join(backupsDir, made.name.replace(/\.sqlite$/, ".meta.json")));
+});
+
+async function builtZip() {
+  const { zipPath } = writeExport();
+  return { zipPath, scratch: `${zipPath}.sqlite`, bytes: readFileSync(zipPath) };
+}
+
+test("an export is checked with the importer's own limits: upload size, entry limits, ratio guard", async () => {
+  const { zipPath, scratch, bytes } = await builtZip();
+  try {
+    // A normal package passes with the real limits and the real upload limit.
+    assert.ok(bytes.length < pack.maxImportUploadBytes);
+    assert.equal(pack.verifyExportOutput(zipPath, scratch).format, "lumi-export");
+    // A smaller upload limit than the file: refused with the export wording, nothing else.
+    assert.throws(() => pack.verifyExportOutput(zipPath, scratch, bytes.length - 1), (error) => error.status === 413 && error.message === "Export is too large to be imported again");
+    // Entry limits.
+    assert.throws(() => pack.verifyExportOutput(zipPath, scratch, undefined, { ...pack.defaultPackageLimits, maxEntries: 3 }), /too large to be imported again/);
+    assert.throws(() => pack.verifyExportOutput(zipPath, scratch, undefined, { ...pack.defaultPackageLimits, maxManifestBytes: 100 }), /too large to be imported again/);
+  } finally {
+    rmSync(zipPath, { force: true });
+    rmSync(scratch, { force: true });
+  }
+  // Highly repetitive data inflates far beyond what is read: the importer's ratio guard would refuse it, so the export is not produced.
+  const zeros = "0".repeat(6_000_000);
+  db().prepare("INSERT INTO entities (id, payload, updated_at) VALUES (?, ?, 5)").run("note:zeros", JSON.stringify(note("note:zeros", "Zeros", zeros)));
+  try {
+    const repetitive = await builtZip();
+    try {
+      const guarded = { ...pack.defaultPackageLimits, bombFloorBytes: 1_000_000, maxRatio: 50 };
+      assert.throws(() => pack.verifyExportOutput(repetitive.zipPath, repetitive.scratch, undefined, guarded), /too large to be imported again/);
+      // The same package passes where the guard is not in the way: the refusal is the ratio guard, not a damaged package.
+      assert.equal(pack.verifyExportOutput(repetitive.zipPath, repetitive.scratch).format, "lumi-export");
+    } finally {
+      rmSync(repetitive.zipPath, { force: true });
+      rmSync(repetitive.scratch, { force: true });
+    }
+  } finally {
+    db().exec("DELETE FROM entities WHERE id = 'note:zeros'");
+  }
+});
+
+test("the manifest has its own small bound, checked while inflating", () => {
+  const entries = { "database.sqlite": strToU8("x") };
+  const files = {};
+  for (let index = 0; index < 400; index += 1) files[`notes/n${index}.md`] = { sha256: "0".repeat(64), bytes: 1 };
+  const manifest = strToU8(JSON.stringify({ format: "lumi-export", version: 1, createdAt: "x", migrations: [], counts: {}, files }));
+  const zip = Buffer.from(zipSync({ ...entries, "manifest.json": manifest }));
+  assert.throws(() => verify(zip, { ...pack.defaultPackageLimits, maxManifestBytes: manifest.length - 1 }), /too large/);
+  // Inflated far beyond the bound from a few bytes: refused before it is parsed.
+  const huge = Buffer.from(zipSync({ ...entries, "manifest.json": new Uint8Array(40 * 1024 ** 2).fill(32) }, { level: 9 }));
+  assert.ok(huge.length < 100_000);
+  assert.throws(() => verify(huge), /too large/);
+});
+
+test("reserved temporary paths are never cleaned up, whether or not the file exists yet", () => {
+  const first = store.temporaryFile("import", ".zip");
+  const second = store.temporaryFile("import-db", ".sqlite");
+  store.removeLeftoverTemporaryFiles();
+  writeFileSync(first, "uploaded so far");
+  store.temporaryFile("export", ".sqlite"); // a later reservation runs the cleanup again
+  store.removeLeftoverTemporaryFiles();
+  assert.equal(readFileSync(first, "utf8"), "uploaded so far");
+  writeFileSync(second, "second");
+  store.removeLeftoverTemporaryFiles();
+  assert.equal(existsSync(second), true);
+  store.releaseTemporaryFile(first);
+  store.releaseTemporaryFile(second);
+  assert.equal(existsSync(first), false);
+  // Once released, a file of the same name would be a leftover.
+  writeFileSync(second, "leftover");
+  store.removeLeftoverTemporaryFiles();
+  assert.equal(existsSync(second), false);
+});
+
+test("a published database backup always has its sidecar, and one without it neither counts as the day's backup nor stays in the listing", () => {
+  for (const entry of readdirSync(backupsDir)) rmSync(path.join(backupsDir, entry), { force: true });
+  const today = new Date().toISOString().slice(0, 10);
+  const daily = store.createBackup("daily");
+  assert.equal(existsSync(path.join(backupsDir, daily.name.replace(/\.sqlite$/, ".meta.json"))), true);
+  assert.equal(store.hasDailyBackup(today), true);
+  assert.deepEqual(readdirSync(backupsDir).filter((entry) => entry.startsWith(".")), []);
+  // A crash left the database file without its sidecar: the day has no usable daily backup, the owner's file is kept.
+  const sidecar = path.join(backupsDir, daily.name.replace(/\.sqlite$/, ".meta.json"));
+  const saved = readFileSync(sidecar);
+  rmSync(sidecar);
+  assert.equal(store.hasDailyBackup(today), false);
+  writeFileSync(sidecar, "{ damaged");
+  assert.equal(store.hasDailyBackup(today), false);
+  // Or the file is not the size the sidecar states.
+  writeFileSync(sidecar, saved);
+  assert.equal(store.hasDailyBackup(today), true);
+  writeFileSync(sidecar, JSON.stringify({ ...JSON.parse(saved.toString()), bytes: 1 }));
+  assert.equal(store.hasDailyBackup(today), false);
+  // At start: staging files of older builds and sidecars without a database go; a database without a sidecar is kept as .incomplete.
+  writeFileSync(sidecar, "{ damaged");
+  writeFileSync(path.join(backupsDir, ".2026-01-01T00-00-00-000Z-manual.sqlite.tmp"), "old staging");
+  writeFileSync(path.join(backupsDir, "2026-01-01T00-00-00-000Z-manual.meta.json"), "{}");
+  store.repairBackupsDirectory();
+  const left = readdirSync(backupsDir).sort();
+  assert.deepEqual(left, [`${daily.name}.incomplete`]);
+  assert.equal(store.listBackups().length, 0);
+  // Setting setEntities makes a new daily backup because none counts.
+  setEntities([project, task("task:after-repair", "After repair")]);
+  assert.equal(store.hasDailyBackup(today), true);
+});
+
+test("a backup killed after VACUUM INTO leaves no secret behind after the next start", () => {
+  const crashDir = mkdtempSync(path.join(os.tmpdir(), "lumi-crash-"));
+  const marker = `LUMI-SECRET-${Date.now()}`;
+  const script = fileURLToPath(new URL("./support/crash-backup.mjs", import.meta.url));
+  const run = (mode) => spawnSync(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", script, crashDir, mode, marker],
+    { encoding: "utf8", env: { ...process.env, NODE_TEST_CONTEXT: "child-v8" } });
+  try {
+    const crashed = run("crash");
+    assert.equal(crashed.signal, "SIGKILL", crashed.stderr);
+    const scan = (mode) => JSON.parse(run(mode).stdout.trim().split("\n").pop());
+    // The scenario is real: the killed process left the not yet cleaned copy, in the temporary folder, not in the backups.
+    const tmpDir = path.join(crashDir, "tmp");
+    const leftover = readdirSync(tmpDir).filter((entry) => entry.startsWith("backup-"));
+    assert.equal(leftover.length, 1);
+    assert.equal(readFileSync(path.join(tmpDir, leftover[0])).includes(Buffer.from(marker)), true);
+    assert.deepEqual(readdirSync(path.join(crashDir, "backups")).filter((entry) => !entry.startsWith(".") === false), []);
+    // The next start removes it.
+    assert.deepEqual(scan("start"), []);
+    assert.deepEqual(readdirSync(tmpDir), []);
+  } finally {
+    rmSync(crashDir, { recursive: true, force: true });
+  }
+});
+
+test("an export of a large store runs in a small heap, where reading whole tables does not fit", () => {
+  const lowDir = mkdtempSync(path.join(os.tmpdir(), "lumi-lowheap-"));
+  const script = fileURLToPath(new URL("./support/export-low-heap.mjs", import.meta.url));
+  const run = (nodeArgs, mode, count = "") => spawnSync(process.execPath, [...nodeArgs, "--experimental-loader", "./tests/ts-loader.mjs", script, lowDir, mode, count],
+    { encoding: "utf8", env: { ...process.env, NODE_TEST_CONTEXT: "child-v8" }, maxBuffer: 1024 ** 2 });
+  const last = (result) => JSON.parse(result.stdout.trim().split("\n").pop());
+  try {
+    // About 75 MB of notes, written with the default heap.
+    const seeded = run([], "seed", "2500");
+    assert.equal(seeded.status, 0, seeded.stderr);
+    // The first version of the export (a whole table in one string) does not fit 64 MB of heap ...
+    const naive = run(["--max-old-space-size=64"], "naive");
+    assert.notEqual(naive.status, 0, "reading the whole entities table should not fit the small heap");
+    // ... the streamed export does, and what it writes passes the importer's verification (also run in the small heap).
+    const streamed = run(["--max-old-space-size=64"], "export");
+    assert.equal(streamed.status, 0, streamed.stderr.slice(-2000));
+    const result = last(streamed);
+    assert.ok(result.entries > 2500);
+    assert.ok(result.entitiesJson > 64 * 1024 ** 2);
+    assert.ok(result.zipBytes < pack.maxImportUploadBytes);
+  } finally {
+    rmSync(lowDir, { recursive: true, force: true });
+  }
 });
