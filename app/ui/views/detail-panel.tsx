@@ -5,6 +5,7 @@ import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
+import { NoteEditor } from "./note-editor";
 import { heldBackReason } from "./held-back";
 import { useEffect, useRef, useState } from "react";
 
@@ -361,6 +362,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </label>
               </div>
             )}
+            {selected.type === "note" && <NoteEditor key={selected.id} app={app} />}
             {selected.type === "task" && (
               <div className="fields">
                 <label>

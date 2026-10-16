@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { baselineNoteRevisions } from "./note-revisions";
 
 // Named, additive schema/data migrations. Each one runs exactly once per database, inside its
 // own transaction together with the row that records it, so an interrupted run leaves no trace
@@ -108,6 +109,31 @@ export const schemaMigrations: SchemaMigration[] = [
       const columns = new Set((database.prepare("PRAGMA table_info(context_claims)").all() as Array<{ name?: string }>).map((row) => String(row.name)));
       if (!columns.has("legacy_synced_revision")) database.exec("ALTER TABLE context_claims ADD COLUMN legacy_synced_revision INTEGER");
       database.exec("UPDATE context_claims SET legacy_synced_revision = revision WHERE legacy_synced_revision IS NULL");
+    },
+  },
+  {
+    // Notes: the server keeps the history of a note's title and text. Every existing note gets revision 1 (baseline);
+    // later revisions are written by the transaction that stores a change (lib/note-revisions.ts).
+    id: "2026-10-note-revisions",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS note_revisions (
+          id TEXT PRIMARY KEY,
+          note_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          revision INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          content_sha256 TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          store_revision INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          UNIQUE(note_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS note_revisions_note_idx ON note_revisions(note_id)
+      `);
+      const row = database.prepare("SELECT value FROM metadata WHERE key = 'revision'").get() as { value?: string } | undefined;
+      baselineNoteRevisions(database, Number(row?.value) || 0);
     },
   },
 ];
