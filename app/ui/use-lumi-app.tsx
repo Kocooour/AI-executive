@@ -1183,7 +1183,8 @@ export function useLumiApp() {
         version: () => localDataVersion.current,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         drainSync: () => syncQueue.current,
-        hasUnsent: hasUnsentChanges,
+        // A note text held only in memory (storage full) counts too, so it is never dropped without asking.
+        hasUnsent: async () => (await hasUnsentChanges()) || Boolean(noteBodyDraftRef.current),
         // Notes drafts kept in the device go into the local copy first, so they are sent too.
         sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
         // Both requests are bounded: a stalled connection ends in "no connection", not a sign-out
@@ -2402,7 +2403,11 @@ export function useLumiApp() {
           setNoteBodyConflict(e.id);
           return;
         }
-        if (now !== text) await patchNoteText(stored, { content: text }, "updated", true);
+        if (now !== text) {
+          await patchNoteText(stored, { content: text }, "updated", true);
+          // Newer text from another device may have won the merge while this was being sent: the draft stays.
+          if (((await db.entities.get(e.id))?.content ?? "") !== text) { setNoteBodyConflict(e.id); return; }
+        }
       }
     } catch {
       setNoteBodyError(e.id);
@@ -2428,7 +2433,10 @@ export function useLumiApp() {
     if (!draft || draft.id !== id) return;
     try {
       const stored = await db.entities.get(id);
-      if (stored && stored.type === "note" && (stored.content ?? "") !== draft.text) await patchNoteText(stored, { content: draft.text }, "updated", true);
+      if (stored && stored.type === "note" && (stored.content ?? "") !== draft.text) {
+        await patchNoteText(stored, { content: draft.text }, "updated", true);
+        if (((await db.entities.get(id))?.content ?? "") !== draft.text) return; // still in conflict: the draft stays
+      }
     } catch {
       setNoteBodyError(id);
       return;

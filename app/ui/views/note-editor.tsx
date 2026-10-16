@@ -168,8 +168,9 @@ export function NoteEditor({ app }: { app: LumiApp }) {
                   </span>
                 ))}
             </pre>
-            <button type="button" className="revisionRestore" disabled={restoring || hasDraft} onClick={() => void restore()}>{tr("revRestore")}</button>
-            {hasDraft && <p className="noteStatus">{tr("revRestoreBlocked")}</p>}
+            <button type="button" className="revisionRestore" disabled={restoring || hasDraft || waiting} onClick={() => void restore()}>{tr("revRestore")}</button>
+            {hasDraft ? <p className="noteStatus">{tr("revRestoreBlocked")}</p>
+              : waiting && <p className="noteStatus">{tr("revRestoreWaiting")}</p>}
           </div>
         )}
       </div>

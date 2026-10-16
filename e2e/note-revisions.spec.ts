@@ -91,6 +91,26 @@ test("the version history lists versions with changes, shows a diff and restores
   await expect(page.getByRole("button", { name: "Obnovit tuto verzi" })).toBeEnabled({ timeout: 20_000 });
 });
 
+test("a version cannot be restored while the latest change has not reached the server", async ({ page }) => {
+  const id = `e2e-note-unsent-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Unsent note", "server text");
+  await openNote(page, id);
+  const list = page.locator(".revisionList");
+  await expect(list.locator("li")).toHaveCount(1, { timeout: 20_000 });
+  await list.locator("li").first().getByRole("button").click();
+  await expect(page.getByRole("button", { name: "Obnovit tuto verzi" })).toBeEnabled({ timeout: 20_000 });
+  // Saves are held back, as without a connection: the edit stays waiting in this device.
+  await page.route("**/api/store", (route) => route.request().method() === "PUT" ? route.abort() : route.continue());
+  await page.getByLabel("Text poznámky").first().fill("typed while the server is unreachable");
+  await page.locator("input.titleEdit").focus();
+  await expect(page.getByRole("button", { name: "Obnovit tuto verzi" })).toBeDisabled({ timeout: 20_000 });
+  await expect(page.locator(".noteStatus", { hasText: "Poslední změna ještě nedorazila na server" })).toBeVisible();
+  expect(await serverContent(page, id)).toBe("server text");
+  await page.unroute("**/api/store");
+});
+
 test("a note body typed but not yet saved survives a reload", async ({ page }) => {
   const id = `e2e-note-draft-${Date.now()}`;
   await page.goto("/");
