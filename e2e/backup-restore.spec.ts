@@ -606,6 +606,46 @@ test("when the local copy cannot be replaced during adoption the page still relo
   }
 });
 
+test("a browser that never stored a generation and holds an offline change adopts the restored data when the server has been restored", async ({ browser }) => {
+  const kept = `e2e-backup-dormant-${stamp}`, local = `e2e-backup-dormant-local-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Dormant: úkol v záloze")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    // The second browser is as one last used before generations were tracked: it has synchronized, holds a change made
+    // offline and knows no generation.
+    await second.page.evaluate(async (id) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const now = Date.now() + 60_000;
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("entities", "readwrite");
+        transaction.objectStore("entities").put({ id, type: "task", title: "Dormant: změna offline", status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      localStorage.setItem("ai-executive-pending-sync", "1");
+      localStorage.removeItem("ai-executive-restore-generation");
+    }, local);
+    // It is dormant while the other device restores.
+    await second.page.goto("about:blank");
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await second.page.goto("/?view=Inbox");
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await waitUntilSynced(second.page);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+    await expect(second.page.getByText("Dormant: úkol v záloze")).toBeVisible();
+    await expect(second.page.getByText("Dormant: změna offline")).toHaveCount(0);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a backup older than the current format is marked and its restore says that Context is not changed", async ({ page }) => {
   await openBackups(page);
   // The instance has no JSON backups; the list only marks them, so one is supplied through the list response.

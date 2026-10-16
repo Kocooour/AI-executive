@@ -47,6 +47,16 @@ export function useSync() {
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
+  // Whether the server's data was restored since this browser last held it, so that what it holds (or waits to send) was made
+  // against data that no longer exists. A browser that never stored a generation but has synchronized before (last used
+  // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
+  // to tell whether it predates a restore, so it adopts. One that never synchronized holds nothing to protect.
+  function restoredSinceKnown(serverGeneration: number | undefined) {
+    if (typeof serverGeneration !== "number") return false;
+    const known = restoreGeneration.current;
+    if (known !== undefined) return serverGeneration !== known;
+    return serverGeneration > 0 && localStorage.getItem("ai-executive-server-synced") === "1";
+  }
   // The generation this page started with: another tab's adoption matters only if it is newer.
   const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
@@ -365,9 +375,9 @@ export function useSync() {
         const current = (await response.json()) as ServerSnapshot;
         if (current.code === "restored") {
           // The data was restored from a backup since this device last synchronized: what is unsent here was made against
-          // data that no longer exists, and merging it would put that data back. A device that never knew a generation
-          // has nothing from before to protect and only learns the number.
-          if (restoreGeneration.current !== undefined) {
+          // data that no longer exists, and merging it would put that data back. Only a browser that never synchronized
+          // (nothing from before to protect) learns the number and goes on.
+          if (restoredSinceKnown(current.restoreGeneration)) {
             await adoptServerCopy(current, true);
             return;
           }
@@ -459,7 +469,7 @@ export function useSync() {
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
         if (snapshot.revision <= serverRevision.current) return "synced" as const;
         // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
-        if (restoreGeneration.current !== undefined && typeof snapshot.restoreGeneration === "number" && snapshot.restoreGeneration !== restoreGeneration.current) {
+        if (restoredSinceKnown(snapshot.restoreGeneration)) {
           await adoptServerCopy(snapshot, heldBack.length > 0);
           return "synced" as const;
         }
@@ -511,6 +521,7 @@ export function useSync() {
     applySnapshot,
     replaceLocalWithServer,
     restoreGeneration,
+    restoredSinceKnown,
     rememberGeneration,
     adoptServerCopy,
     restoredNotice,

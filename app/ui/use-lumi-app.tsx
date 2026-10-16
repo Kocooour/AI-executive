@@ -152,7 +152,7 @@ export function useLumiApp() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -1048,7 +1048,7 @@ export function useLumiApp() {
         }
         // The data was restored from a backup (on another device, or while this browser was away) since this browser last
         // held it: its unsent changes were made against data that no longer exists, so the server copy replaces them.
-        if (hasPendingChanges && restoreGeneration.current !== undefined && typeof snapshot.restoreGeneration === "number" && snapshot.restoreGeneration !== restoreGeneration.current) {
+        if (alreadySynchronized && hasPendingChanges && restoredSinceKnown(snapshot.restoreGeneration)) {
           await replaceLocalWithServer(snapshot, true);
           return;
         }
@@ -1094,7 +1094,7 @@ export function useLumiApp() {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
             // Restored between the read above and this save: what this start holds was made against data that no longer
             // exists. It is not merged and not sent again; the server's data replaces it (like every other adoption).
-            if (snapshot.code === "restored" && restoreGeneration.current !== undefined) {
+            if (snapshot.code === "restored" && restoredSinceKnown(snapshot.restoreGeneration)) {
               await replaceLocalWithServer(snapshot, true);
               return;
             }
@@ -1121,9 +1121,9 @@ export function useLumiApp() {
               snapshot.restoreGeneration,
             );
           }
-          if (saveResponse.status === 409 && restoreGeneration.current !== undefined) {
+          if (saveResponse.status === 409) {
             const again = (await saveResponse.json()) as ServerSnapshot;
-            if (again.code === "restored") { await replaceLocalWithServer(again, true); return; }
+            if (again.code === "restored" && restoredSinceKnown(again.restoreGeneration)) { await replaceLocalWithServer(again, true); return; }
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
           snapshot = (await saveResponse.json()) as ServerSnapshot;
