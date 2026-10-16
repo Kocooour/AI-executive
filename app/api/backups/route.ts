@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       recordSecurityEvent(request, "backup.restore", "failed", { name: body.name });
       return NextResponse.json(
         { error: error instanceof Error ? error.message : "Restore failed" },
-        { status: 400 },
+        { status: error instanceof HttpInputError ? error.status : 400 },
       );
     }
   }
