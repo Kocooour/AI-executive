@@ -2,6 +2,8 @@
 
 > **Návrh, zatím neimplementováno.** Paleta ve stylu Things, barvy prostorů, ikony navigace a porovnání cílových obrazovek z [UX-UI.md](../UX-UI.md) se stavem aplikace k `main@d7d8cca` – viz [zmeny-ui.md](zmeny-ui.md). Logo: `public/icons/lumi-icon-v3-*.png`.
 
+Lumi je osobní AI asistent pro řízení práce. Rozhraní je tiché, ve stylu Things: velký nadpis, čisté řádky, málo slov. Barva znamená buď **akci** (`accent`), **stav** (`danger`, `warning`), nebo **prostor**, ve kterém pracujete (`ws-personal`, `ws-work`, `ws-family`).
+
 ## Soubory
 
 - [tokens.json](tokens.json) – jediný zdroj hodnot (barvy pro světlé i tmavé téma, typografie, mezery, rádiusy, stín).
@@ -20,8 +22,6 @@ Jedno pravidlo pro všechny komponenty:
 | Údaj v řádku | Nejvýše jeden, vpravo, styl `meta`: datum (`danger` po termínu), odhad, nebo počet. | TaskRow, PlanBlock, NavItem |
 | Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod stylem `meta`. Jinde žádný. | AttentionItem |
 | Metadata (zdroj, workspace, čas vyhodnocení, revize) | Nikdy v seznamu. V detailu položky a v nápovědě nadpisu sekce. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
-
-Lumi je osobní AI asistent pro řízení práce. Rozhraní je tiché, ve stylu Things: velký nadpis, čisté řádky, málo slov. Barva znamená buď **akci** (`accent`), **stav** (`danger`, `warning`), nebo **prostor**, ve kterém pracujete (`ws-personal`, `ws-work`, `ws-family`).
 
 ## Méně slov
 
