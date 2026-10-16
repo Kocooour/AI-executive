@@ -1,16 +1,34 @@
 # Lumi — design systém (návrh)
 
-> **Návrh, zatím neimplementováno.** Paleta ve stylu Things, barvy prostorů, ikony navigace a porovnání cílových obrazovek z [UX-UI.md](../UX-UI.md) se stavem aplikace k `main@d7d8cca` – viz [zmeny-ui.md](zmeny-ui.md). Tokeny: [tokens.json](tokens.json); komponenty: `components/<Název>/` (README + statická ukázka používající CSS proměnné pojmenované podle tokenů). Logo: `public/icons/lumi-icon-v3-*.png`.
+> **Návrh, zatím neimplementováno.** Paleta ve stylu Things, barvy prostorů, ikony navigace a porovnání cílových obrazovek z [UX-UI.md](../UX-UI.md) se stavem aplikace k `main@d7d8cca` – viz [zmeny-ui.md](zmeny-ui.md). Logo: `public/icons/lumi-icon-v3-*.png`.
+
+## Soubory
+
+- [tokens.json](tokens.json) – jediný zdroj hodnot (barvy pro světlé i tmavé téma, typografie, mezery, rádiusy, stín).
+- [tokens.css](tokens.css) – CSS proměnné a třídy typografie vygenerované z `tokens.json` příkazem `node scripts/design-tokens.mjs`. Ručně neupravovat; `pnpm test` (`tests/design-tokens.test.mjs`) selže, když se s `tokens.json` rozejde nebo když ukázka použije neexistující token.
+- `components/<Název>/README.md` – pravidla komponenty; `preview.html` – statická ukázka, která načítá `../../tokens.css`, takže se dá otevřít přímo z checkoutu v prohlížeči. Tmavé téma: atribut `data-theme="dark"` na `<html>` nebo systémové nastavení.
+- Stejný obsah je publikovaný jako interaktivní design systém v Claude (soukromý artefakt vlastníka); zdrojem pravdy je tento adresář.
+
+## Štítky, metadata a druhý řádek
+
+Jedno pravidlo pro všechny komponenty:
+
+| Prvek | Povoleno | Kde |
+|---|---|---|
+| Záhlaví sekce | Jen tučný nadpis `card-title` („Pozornost“, „Plán“). Žádné verzálky, tečky ani podtitulek. | Home, Dnes, Kalendář |
+| Štítek | Jen dva stavové štítky „Návrh“ a „Provedeno“, malými písmeny se základní velkou počáteční (`caption`), výplň `accent-soft` / `success-soft`. Jiné štítky se nepoužívají. | ProposalCard, PlanBlock |
+| Údaj v řádku | Nejvýše jeden, vpravo, styl `meta`: datum (`danger` po termínu), odhad, nebo počet. | TaskRow, PlanBlock, NavItem |
+| Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod stylem `meta`. Jinde žádný. | AttentionItem |
+| Metadata (zdroj, workspace, čas vyhodnocení, revize) | Nikdy v seznamu. V detailu položky a v nápovědě nadpisu sekce. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
 
 Lumi je osobní AI asistent pro řízení práce. Rozhraní je tiché, ve stylu Things: velký nadpis, čisté řádky, málo slov. Barva znamená buď **akci** (`accent`), **stav** (`danger`, `warning`), nebo **prostor**, ve kterém pracujete (`ws-personal`, `ws-work`, `ws-family`).
 
 ## Méně slov
 
-- Řádek = název. Vpravo nejvýše jeden drobný údaj (datum, odhad, počet). Žádný druhý řádek, pokud nemění rozhodnutí.
+- Štítky, údaje v řádku a druhý řádek se řídí tabulkou výše.
 - Důvod doporučení má jednu krátkou větu: „Po termínu od 13. 10.“, ne „Termín 13. 10. již uplynul po konci místního dne.“
-- Technické údaje (zdroj, revize, časová zóna, čas vyhodnocení u položky) patří do detailu nebo nápovědy po najetí, ne do seznamu.
 - Stav se ukazuje jen tehdy, když je problém. „Synchronizováno“ se neukazuje, „Offline · 3 změny čekají“ ano.
-- Sekce mají jen tučný nadpis (`card-title`). Verzálkové štítky s tečkou, podtitulky typu „Takhle vypadá váš dnešní den.“ a prázdné karty („Žádný úkol právě neběží.“) se nepoužívají.
+- Pozdravy, podtitulky typu „Takhle vypadá váš dnešní den.“ a prázdné karty („Žádný úkol právě neběží.“) se nepoužívají.
 - Akce u položky se ukáží po najetí nebo fokusu (desktop) a v detailu (mobil). Na klávesnici jsou vždy dosažitelné.
 - Česky, vykáním, bez emoji a vykřičníků. Návrh mluví jako návrh („Přesunout na zítra?“), hotová věc jako hotová („Přesunuto · Zpět“).
 
@@ -31,7 +49,7 @@ Lumi je osobní AI asistent pro řízení práce. Rozhraní je tiché, ve stylu 
 
 ## Typografie
 
-- Systémové písmo `sans`. Jeden `page-title` na obrazovku, sekce `card-title`, řádky `row`, drobné údaje `meta`.
+- Systémové písmo `sans`. Jeden `page-title` na obrazovku, sekce `card-title`, řádky `row`, název doporučení `item-title`, údaj vpravo a důvod `meta`, štítky a popisky navigace `caption`.
 - Váhy 400, 540, 600, 650, 700, 720.
 
 ## Rozvržení
