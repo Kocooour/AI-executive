@@ -44,6 +44,9 @@ export function useSync() {
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
+  // What the app does besides replacing the data whenever the server's restored data is adopted (drop every note draft,
+  // reload what is loaded from the server besides the records); set by use-lumi-app.
+  const afterAdopt = useRef<() => void>(() => undefined);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
@@ -197,7 +200,11 @@ export function useSync() {
   // the records held back on this device and everything waiting to be sent (changes, deletions, revivals) belong to the
   // data that was replaced and must not survive or be sent. Unlike applySnapshot nothing is kept or merged. The records
   // and the bookkeeping are shared by all tabs of the browser, so one replacement serves them all; the others only show it.
-  // The replacement itself; the caller holds the sync lock (or is in the queue).
+  // THE one way restored server data is adopted, for an explicit restore or import, the broadcast of another tab, a save
+  // refused with code "restored" (start-up saves included) and a pull that sees a new generation: the local copy, held-back
+  // records, markers, merge base and pending flags are dropped, the snapshot and its generation adopted, every note draft
+  // dropped and what is loaded from the server reloaded (afterAdopt). `notice`: the restore happened elsewhere, say so.
+  // The caller holds the sync lock (or is in the queue); replaceLocalWithServer is the entry that takes them.
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
     // Anything computed from the old copy (a save in progress, a pull) is discarded.
     localDataVersion.current += 2;
@@ -217,11 +224,12 @@ export function useSync() {
     requeueStreak.current = 0;
     await load();
     setSyncStatus("synced");
+    afterAdopt.current();
     if (notice) setRestoredNotice(true);
     postToTabs({ type: "changed", from: tabId.current });
     return true;
   }
-  async function replaceLocalWithServer(snapshot?: ServerSnapshot) {
+  async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       let source = snapshot;
@@ -230,7 +238,7 @@ export function useSync() {
         if (!response.ok) throw new Error("Server synchronization failed");
         source = (await response.json()) as ServerSnapshot;
       }
-      return adoptServerCopy(source);
+      return adoptServerCopy(source, notice);
     }));
     syncQueue.current = operation.then(() => undefined, () => { setSyncStatus("offline"); });
     return operation;
@@ -459,6 +467,7 @@ export function useSync() {
     restoreGeneration,
     rememberGeneration,
     adoptServerCopy,
+    afterAdopt,
     restoredNotice,
     dismissRestoredNotice: () => setRestoredNotice(false),
     putSnapshot,

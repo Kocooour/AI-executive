@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { calendarAvailability, listCalendarEvents } from "./calendar";
 import { listEligibleClaims, toAgentClaim, type AgentClaim } from "./context-claims";
 import type { Entity } from "./db";
-import { getDatabase, readSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 export type PACTPermission = "read" | "propose" | "write" | "send";
 export type ContextScope = "me" | "work" | "family" | "rules" | "project" | "workspace";
@@ -106,6 +106,7 @@ function assertWorkspace(workspaceId: string) {
 }
 
 export function ensurePACTDefaults() {
+  ensureDailyBackup();
   const db = getDatabase();
   const now = Date.now();
   const upsertAgent = db.prepare(`INSERT INTO pact_agents (id, payload, version, enabled, created_at, updated_at)
@@ -165,6 +166,7 @@ export function saveOwnerContext(input: Omit<PACTContextItem, "id" | "provenance
     createdAt: now,
     updatedAt: now,
   };
+  ensureDailyBackup();
   getDatabase().prepare(`INSERT INTO pact_context
     (id, workspace_id, scope, sensitivity, provenance, payload, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -188,6 +190,7 @@ export function archiveOwnerContext(id: string, workspaceId: string) {
   const item = JSON.parse(row.payload) as PACTContextItem;
   if (item.provenance !== "owner") throw new Error("Only owner-authored context can be archived here");
   const updated: PACTContextItem = { ...item, status: "archived", updatedAt: Date.now() };
+  ensureDailyBackup();
   getDatabase().prepare(`UPDATE pact_context SET payload = ?, status = 'archived', updated_at = ? WHERE id = ? AND workspace_id = ?`)
     .run(JSON.stringify(updated), updated.updatedAt, id, workspaceId);
   return updated;
@@ -238,6 +241,7 @@ export function resolvePACTContext(input: {
 export function beginPACTRun(agentId: string, workspaceId: string, triggerMode: string, inputSummary: string) {
   assertWorkspace(workspaceId);
   const id = randomUUID();
+  ensureDailyBackup();
   getDatabase().prepare(`INSERT INTO pact_agent_runs
     (id, agent_id, workspace_id, trigger_mode, status, input_summary, created_at)
     VALUES (?, ?, ?, ?, 'running', ?, ?)`)
@@ -246,6 +250,7 @@ export function beginPACTRun(agentId: string, workspaceId: string, triggerMode: 
 }
 
 export function finishPACTRun(id: string, status: "completed" | "failed", outputSummary: string) {
+  ensureDailyBackup();
   getDatabase().prepare(`UPDATE pact_agent_runs
     SET status = ?, output_summary = ?, completed_at = ? WHERE id = ?`)
     .run(status, outputSummary.slice(0, 1000), Date.now(), id);

@@ -345,6 +345,125 @@ test("a device with an unsent change from before a restore on another device dis
   }
 });
 
+async function twoDevices(browser: import("@playwright/test").Browser) {
+  const open = async () => {
+    const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    return { context, page: await context.newPage() };
+  };
+  return { first: await open(), second: await open() };
+}
+const createManualBackup = (page: Page) => page.evaluate(async () => {
+  await fetch("/api/backups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "create" }) });
+  const list = (await fetch("/api/backups", { cache: "no-store" }).then((response) => response.json())).backups as Array<{ name: string; label: string }>;
+  return list.find((backup) => backup.label === "manual")!.name;
+});
+const restoreByApi = (page: Page, name: string) => page.evaluate(async (backup) =>
+  (await fetch("/api/backups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "restore", name: backup }) })).status, name);
+const remoteWakeUp = (page: Page) => page.evaluate(() => { window.dispatchEvent(new Event("focus")); document.dispatchEvent(new Event("visibilitychange")); });
+
+test("a restore between the start-up read and the start-up save of another device does not bring its old changes back", async ({ browser }) => {
+  const kept = `e2e-backup-startup-${stamp}`, local = `e2e-backup-startup-local-${stamp}`;
+  const { first, second } = await twoDevices(browser);
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Start: úkol v záloze")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    const name = await createManualBackup(first.page);
+    // The second device holds a change that was never sent (made before the restore).
+    await second.page.evaluate(async (id) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const now = Date.now() + 60_000;
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("entities", "readwrite");
+        transaction.objectStore("entities").put({ id, type: "task", title: "Start: změna před obnovením", status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+      localStorage.setItem("ai-executive-pending-sync", "1");
+    }, local);
+    // Its start-up save is held until the other device has restored.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let sawSave: () => void = () => {};
+    const saveSeen = new Promise<void>((resolve) => { sawSave = resolve; });
+    await second.page.route("**/api/store", async (route) => {
+      if (route.request().method() === "PUT") { sawSave(); await gate; }
+      await route.continue();
+    });
+    void second.page.reload({ waitUntil: "commit" }).catch(() => undefined);
+    await saveSeen;
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    release();
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await waitUntilSynced(second.page);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).not.toContain(local);
+    expect((await serverEntities(first.page)).map((entity) => entity.id)).toContain(kept);
+    await expect(second.page.getByText("Start: změna před obnovením")).toHaveCount(0);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("Context, open on another device, shows the restored state without navigating", async ({ browser }) => {
+  const { first, second } = await twoDevices(browser);
+  const predicate = `${marker}.remote`;
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    const name = await createManualBackup(first.page);
+    await createClaim(first.page, predicate, "vznikne po záloze");
+    await openContext(second.page);
+    await expect(second.page.locator(".contextClaimCard", { hasText: predicate })).toBeVisible();
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await remoteWakeUp(second.page);
+    await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
+    await expect(second.page.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0, { timeout: 30_000 });
+    expect((await claims(second.page)).some((claim) => claim.predicate === predicate)).toBe(false);
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("a task-notes draft typed before a restore elsewhere is dropped and cannot overwrite the restored record", async ({ browser }) => {
+  const id = `e2e-backup-draft-${stamp}`;
+  const entity = (notes: string) => ({ id, type: "task", title: "Koncept: úkol", status: "open", workspaceId: "personal", properties: { inbox: true, notes }, createdAt: 1, updatedAt: Date.now() });
+  const { first, second } = await twoDevices(browser);
+  const serverNotes = async () => ((await serverEntities(first.page)).find((item) => item.id === id)?.properties as { notes?: string } | undefined)?.notes;
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [entity("původní poznámky")]);
+    const name = await createManualBackup(first.page);
+    await setStore(first.page, [], [], { [id]: entity("změněno po záloze") });
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    const field = second.page.getByLabel("Poznámky k úkolu");
+    await expect(field).toHaveValue("změněno po záloze");
+    await field.fill("koncept před obnovením");
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await remoteWakeUp(second.page);
+    await expect(second.page.locator(".restoredNotice")).toBeHidden({ timeout: 30_000 }).catch(() => undefined);
+    await expect(field).toHaveValue("původní poznámky", { timeout: 30_000 });
+    // Leaving the field, the page being hidden or closed: nothing of the draft is saved over the restored record.
+    await second.page.locator("input.titleEdit").focus();
+    await second.page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); document.dispatchEvent(new Event("visibilitychange")); });
+    await second.page.waitForTimeout(3000);
+    await waitUntilSynced(second.page);
+    expect(await serverNotes()).toBe("původní poznámky");
+    await second.page.reload();
+    await waitUntilSynced(second.page);
+    expect(await serverNotes()).toBe("původní poznámky");
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a backup older than the current format is marked and its restore says that Context is not changed", async ({ page }) => {
   await openBackups(page);
   // The instance has no JSON backups; the list only marks them, so one is supplied through the list response.

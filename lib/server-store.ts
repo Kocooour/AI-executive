@@ -764,6 +764,24 @@ export function dropsTooMuch(current: StoreSnapshot, entities: Entity[], deleted
   return current.relations.length > 0 && dropsLarge(current.relations.length, droppedRelations);
 }
 
+/**
+ * One automatic daily backup before the first change of the day, whichever write it is: records (replaceSnapshot), Context
+ * commands, work sessions, attention states, calendar sources, PACT agents, context and runs, AI action history (the call
+ * sites are listed in docs/ARCHITECTURE.md). Only when there is data, and only when no usable daily backup exists (a database
+ * backup counts with its sidecar and size). It must be called before a write transaction, never inside one.
+ */
+export function ensureDailyBackup() {
+  const database = getDatabase();
+  if ((database as unknown as { isTransaction?: boolean }).isTransaction) {
+    console.error("ensureDailyBackup was called inside a transaction; the daily backup is skipped");
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  if (hasDailyBackup(today)) return;
+  const has = database.prepare("SELECT 1 FROM entities LIMIT 1").get();
+  if (has) createBackup("daily");
+}
+
 export function replaceSnapshot(
   baseRevision: number,
   entities: Entity[],
@@ -778,13 +796,7 @@ export function replaceSnapshot(
   if ((currentBeforeWrite.restoreGeneration ?? 0) > 0 && restoreGeneration !== currentBeforeWrite.restoreGeneration) {
     return { conflict: true as const, restored: true as const, snapshot: currentBeforeWrite };
   }
-  const today = new Date().toISOString().slice(0, 10);
-  if (
-    currentBeforeWrite.entities.length &&
-    !hasDailyBackup(today)
-  ) {
-    createBackup("daily");
-  }
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

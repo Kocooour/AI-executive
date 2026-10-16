@@ -20,6 +20,10 @@ const work = await import("../lib/work-sessions.ts");
 const engine = await import("../lib/backup-engine.ts");
 const migrations = await import("../lib/schema-migrations.ts");
 const store = await import("../lib/server-store.ts");
+const pactModule = await import("../lib/pact.ts");
+const calendarImport = await import("../lib/calendar.ts");
+const require_pact = () => pactModule;
+const calendarModule = () => calendarImport;
 
 const backupsDir = path.join(dataDir, "backups");
 const db = () => store.getDatabase();
@@ -148,4 +152,56 @@ test("a backup made at an older schema is upgraded through the real migrations a
   assert.deepEqual(readdirSync(path.join(dataDir, "tmp")), []);
   const claim = claims.listOwnerClaims(ws, { includeArchived: true })[0];
   assert.ok(claim, "restored claims can be read with the current code");
+});
+
+const dailyBackups = () => readdirSync(backupsDir).filter((entry) => entry.endsWith("-daily.sqlite"));
+const clearBackups = () => { for (const entry of readdirSync(backupsDir)) rmSync(path.join(backupsDir, entry), { force: true }); };
+const claimCountIn = (name) => {
+  const copy = new DatabaseSync(path.join(backupsDir, name), { readOnly: true });
+  try { return Number(copy.prepare("SELECT COUNT(*) AS value FROM context_claims").get().value); } finally { copy.close(); }
+};
+
+test("the first change of a day, whatever kind, creates the daily backup before it", () => {
+  // A Context command.
+  clearBackups();
+  assert.equal(dailyBackups().length, 0);
+  const claimsBefore = Number(db().prepare("SELECT COUNT(*) AS value FROM context_claims").get().value);
+  makeClaim("Written on a day without a backup");
+  assert.equal(dailyBackups().length, 1);
+  assert.equal(claimCountIn(dailyBackups()[0]), claimsBefore, "the backup does not contain the change that triggered it");
+  makeClaim("A second change the same day");
+  assert.equal(dailyBackups().length, 1, "one backup a day");
+
+  // A work-session start.
+  setEntities([task("task:daily-work", "Daily work"), note("note:1", "Note", "second text")]);
+  clearBackups();
+  const sessions = Number(db().prepare("SELECT COUNT(*) AS value FROM work_sessions").get().value);
+  const taskUpdatedAt = store.readSnapshot().entities.find((entity) => entity.id === "task:daily-work").updatedAt;
+  work.transitionWorkSession({ workspaceId: ws, action: "start", idempotencyKey: randomUUID(), taskId: "task:daily-work",
+    expectedTaskUpdatedAt: taskUpdatedAt, expectedRevision: 0, expectedState: "idle" });
+  assert.equal(dailyBackups().length, 1);
+  const copy = new DatabaseSync(path.join(backupsDir, dailyBackups()[0]), { readOnly: true });
+  try { assert.equal(Number(copy.prepare("SELECT COUNT(*) AS value FROM work_sessions").get().value), sessions); } finally { copy.close(); }
+
+  // The other writers that reach covered tables.
+  for (const write of [
+    () => db().prepare("DELETE FROM work_sessions").run(),
+  ]) write();
+  clearBackups();
+  const pact = require_pact();
+  pact.saveOwnerContext({ workspaceId: ws, scope: "me", sensitivity: "normal", title: "Fact", content: "text", projectId: undefined });
+  assert.equal(dailyBackups().length, 1, "PACT context");
+  clearBackups();
+  pact.beginPACTRun("project-manager", ws, "manual", "summary");
+  assert.equal(dailyBackups().length, 1, "PACT run");
+  clearBackups();
+  calendarModule().deleteCalendarSource("no-such-source");
+  assert.equal(dailyBackups().length, 1, "calendar source change");
+
+  // Not when there is no data to protect: the helper is the same one replaceSnapshot uses.
+  clearBackups();
+  store.ensureDailyBackup();
+  assert.equal(dailyBackups().length, 1);
+  store.ensureDailyBackup();
+  assert.equal(dailyBackups().length, 1);
 });

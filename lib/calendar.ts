@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import https from "node:https";
 import net from "node:net";
 import ical, { type EventInstance, type VEvent } from "node-ical";
-import { getDatabase, readSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 const MAX_ICS_BYTES = 2 * 1024 * 1024;
 const MAX_EVENTS = 5000;
@@ -250,6 +250,7 @@ export function saveCalendarSource(input: { label: string; url: string; workspac
   if (url.protocol !== "https:" || input.url.length > 8192) throw new Error("Calendar URL must use HTTPS");
   const id = randomUUID();
   const now = Date.now();
+  ensureDailyBackup();
   getDatabase().prepare(`INSERT INTO calendar_sources
     (id, workspace_id, provider, label, encrypted_url, status, created_at, updated_at)
     VALUES (?, ?, 'ics', ?, ?, 'pending', ?, ?)`)
@@ -261,6 +262,7 @@ export async function refreshCalendarSource(id: string) {
   const row = sourceRow(id);
   if (!row) throw new Error("Calendar source not found");
   const now = Date.now();
+  ensureDailyBackup();
   const claimed = getDatabase().prepare(`UPDATE calendar_sources SET status='syncing', updated_at=?
     WHERE id=? AND (status!='syncing' OR updated_at < ?)`)
     .run(now, id, now - 15 * 60_000);
@@ -314,6 +316,7 @@ export async function refreshAllCalendarSources() {
 }
 
 export function deleteCalendarSource(id: string) {
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

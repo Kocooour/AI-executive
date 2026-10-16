@@ -3,7 +3,7 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
-import { clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
+import { clearNotesDrafts, clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
@@ -151,7 +151,7 @@ export function useLumiApp() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, afterAdopt, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -1051,7 +1051,7 @@ export function useLumiApp() {
         // The data was restored from a backup (on another device, or while this browser was away) since this browser last
         // held it: its unsent changes were made against data that no longer exists, so the server copy replaces them.
         if (hasPendingChanges && restoreGeneration.current !== undefined && typeof snapshot.restoreGeneration === "number" && snapshot.restoreGeneration !== restoreGeneration.current) {
-          await adoptServerCopy(snapshot, true);
+          await replaceLocalWithServer(snapshot, true);
           return;
         }
         // What this start sends of the bookkeeping shared by all tabs; only that is removed.
@@ -1094,6 +1094,12 @@ export function useLumiApp() {
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
+            // Restored between the read above and this save: what this start holds was made against data that no longer
+            // exists. It is not merged and not sent again; the server's data replaces it (like every other adoption).
+            if (snapshot.code === "restored" && restoreGeneration.current !== undefined) {
+              await replaceLocalWithServer(snapshot, true);
+              return;
+            }
             const retrySnapshot = {
               ...snapshot,
               tombstones: (snapshot.tombstones || []).filter(
@@ -1116,6 +1122,10 @@ export function useLumiApp() {
               sentMarkers.revived,
               snapshot.restoreGeneration,
             );
+          }
+          if (saveResponse.status === 409 && restoreGeneration.current !== undefined) {
+            const again = (await saveResponse.json()) as ServerSnapshot;
+            if (again.code === "restored") { await replaceLocalWithServer(again, true); return; }
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
           snapshot = (await saveResponse.json()) as ServerSnapshot;
@@ -1737,7 +1747,10 @@ export function useLumiApp() {
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
-    language, tr, askConfirm, replaceLocal: replaceLocalWithServer, afterRestore: () => { dropNotesBeingTyped(); setDataEpoch((count) => count + 1); postToTabs({ type: "restored", from: tabId.current }); } });
+    language, tr, askConfirm, replaceLocal: replaceLocalWithServer, afterRestore: () => { postToTabs({ type: "restored", from: tabId.current }); } });
+  // Every adoption of restored server data (see adoptServerCopy in hooks/use-sync.ts) drops all note drafts and reloads
+  // what the app loads from the server besides the records.
+  afterAdopt.current = () => { dropNotesBeingTyped(); try { clearNotesDrafts(localStorage); } catch { /* storage unavailable */ } setDataEpoch((count) => count + 1); };
   // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
   // browser has synchronized with the server before and still holds its data (signing out removes
   // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
@@ -2568,7 +2581,7 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
-      if (message.type === "restored") { dropNotesBeingTypedRef.current(); void replaceLocalWithServer().catch(() => undefined); setDataEpoch((count) => count + 1); return; }
+      if (message.type === "restored") { void replaceLocalWithServer().catch(() => undefined); return; }
       // A tab opened (or woken) after the request still stops editing and saves what it can.
       if (message.type === "signing-out") {
         const wasBlocked = document.body.inert;

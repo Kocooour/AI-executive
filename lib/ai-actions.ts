@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Entity, Relation } from "./db";
 import { HttpInputError } from "./http-security";
 import { getNotificationPreferences } from "./notifications";
-import { getDatabase, readSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 import { completeServerAI } from "./server-ai-provider";
 import { buildCurrentPriorities } from "./current-priorities";
 import { buildDayPlan, currentDayPlanDate } from "./day-plan";
@@ -579,6 +579,7 @@ function publicActionResult(row: { result?: string | null }) {
 }
 
 export function confirmAIProposal(proposalId: string, sessionBinding: string) {
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -736,6 +737,7 @@ export function cancelAIProposal(proposalId: string, sessionBinding: string) {
 }
 
 export function undoAIAction(actionId: string, sessionBinding: string) {
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

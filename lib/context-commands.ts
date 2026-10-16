@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getDatabase, readSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 // The one write path for Context Graph objects (claims, standalone subjects, ...).
 // A command carries an idempotency key, the object id, an explicit workspace and, where it
@@ -72,6 +72,7 @@ export interface CommandRequest<T> {
 export function runContextCommand<T extends object>(command: CommandRequest<T>): T & { replayed: boolean; changed: boolean; historyEventId: string | null } {
   if (!contextIdPattern.test(command.commandId)) throw new ContextCommandError("Idempotency key is invalid");
   assertCommandWorkspace(command.workspaceId);
+  ensureDailyBackup(); // before the write transaction, so the backup does not contain this change
   const database = getDatabase();
   const hash = createHash("sha256").update(`${command.operation}:${stableStringify(command.request)}`).digest("hex");
   const startedAt = Date.now();
