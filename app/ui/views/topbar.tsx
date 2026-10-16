@@ -5,7 +5,7 @@ import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 export function Topbar({ app }: { app: LumiApp }) {
   const {
     activeWorkspaceId,
-    activeWorkspace,
+    activeWorkspaceTone,
     query,
     resolvedTheme,
     saveTheme,
@@ -28,7 +28,7 @@ export function Topbar({ app }: { app: LumiApp }) {
             aria-label={tr("switchWorkspace")}
             aria-expanded={workspaceMenuOpen}
           >
-            <WorkspaceTile tone={workspaceTone(activeWorkspaceId, workspaceName, activeWorkspace?.properties.kind)} label={workspaceName} />
+            <WorkspaceTile tone={activeWorkspaceTone} label={workspaceName} />
             <b className="mobileWorkspaceName">{workspaceName}</b><span className="workspaceChevron" aria-hidden="true">⌄</span>
           </button>
           {workspaceMenuOpen && (
@@ -37,13 +37,14 @@ export function Topbar({ app }: { app: LumiApp }) {
                 <button
                   key={workspace.id}
                   className={activeWorkspaceId === workspace.workspaceId ? "active" : ""}
+                  data-workspace-id={workspace.workspaceId}
                   onClick={() => selectWorkspace(workspace.workspaceId)}
                 >
-                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace.title, workspace.properties.kind)} label={workspace.title} />
+                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace)} label={workspace.title} />
                   <span className="workspaceOptionName">{workspace.title}</span>
                 </button>
               ))}
-              <button className={activeWorkspaceId === "all" ? "active" : ""} onClick={() => selectWorkspace("all")}><WorkspaceTile tone="all" label={tr("allWork")} /><span className="workspaceOptionName">{tr("allWork")}</span></button>
+              <button className={activeWorkspaceId === "all" ? "active" : ""} data-workspace-id="all" onClick={() => selectWorkspace("all")}><WorkspaceTile tone="all" label={tr("allWork")} /><span className="workspaceOptionName">{tr("allWork")}</span></button>
             </div>
           )}
           <label className="searchField">

@@ -1,6 +1,8 @@
 /* Lumi navigation v1: runtime implementation of docs/design-system.
-   Tokens are imported from the generated docs/design-system/tokens.css in layout.tsx.
-   Keep this file limited to navigation/layout; other screens follow in separate PRs. */
+   layout.tsx imports the generated docs/design-system/tokens.css after globals.css, so the
+   design-system palette applies to every screen (e2e/contrast.spec.ts checks them all in both
+   themes). This file holds only the navigation and workspace styles; other components follow
+   in separate PRs. */
 
 /* Both themes inherit the generated design tokens; globals.css keeps only legacy-only variables. */
 .appShell {
@@ -24,8 +26,13 @@
   background: var(--sidebar-bg);
   border-color: var(--line);
 }
-.appShell > .appPane {
-  border-top: 3px solid var(--workspace-color);
+/* The workspace band sits on the sticky top bar, so it stays visible while the page scrolls,
+   and below the safe area, so the iPhone status bar does not cover it. */
+.appShell > .appPane > .topbar {
+  background-image: linear-gradient(var(--workspace-color), var(--workspace-color));
+  background-position: 0 env(safe-area-inset-top, 0px);
+  background-size: 100% 3px;
+  background-repeat: no-repeat;
 }
 .appShell .content {
   max-width: 1040px;
@@ -122,17 +129,23 @@
   font-size: 11px;
   color: var(--muted);
 }
+/* muted is below 4.5:1 on the ws-*-soft fills; the active option uses the text colour. */
+.appShell .workspaceMenu button.active small {
+  color: var(--text);
+}
 .appShell > aside > nav button {
   color: var(--text);
   min-height: 40px;
   border-radius: var(--radius-xs);
 }
-.appShell > aside > nav button.active {
+/* :root lifts this above the legacy `:root[data-theme="dark"] .active { … !important }` in
+   globals.css, which would otherwise paint the dark sidebar in the accent instead of the workspace. */
+:root .appShell > aside > nav button.active {
   background: var(--workspace-soft) !important;
   color: var(--text) !important;
   font-weight: 700;
 }
-.appShell > aside > nav button.active .navCount {
+:root .appShell > aside > nav button.active .navCount {
   color: var(--text);
   background: transparent;
 }

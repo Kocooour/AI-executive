@@ -31,7 +31,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f4f3f1",
+  themeColor: "#ffffff",
 };
 
 const themeBootstrap = `
@@ -41,7 +41,7 @@ const themeBootstrap = `
     const resolved = dark ? "dark" : "light";
     document.documentElement.dataset.theme = resolved;
     document.documentElement.style.colorScheme = resolved;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1c1c1e" : "#f4f3f1");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1c1c1e" : "#ffffff");
   } catch {}
 `;
 
