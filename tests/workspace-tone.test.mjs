@@ -23,13 +23,13 @@ test("a stored tone wins over the title", () => {
 });
 
 test("family titles in any Czech form, in English and German are recognised", () => {
-  for (const title of ["Rodina", "Naše rodina", "Rodinné finance", "Rodinná pokladna", "RODINNÝ rozpočet", "Family", "Familie Novák"]) {
+  for (const title of ["Rodina", "Naše rodina", "Rodinné finance", "Rodinná pokladna", "RODINNÝ rozpočet", "Family", "Familie Novák", "ＲＯＤＩＮＡ"]) {
     assert.equal(workspaceTone("shared-1", shared(title)), "family", title);
   }
 });
 
 test("other shared workspaces are work, also when a word only contains the letters", () => {
-  for (const title of ["Firma", "Klient Alfa", "Prorodinný"]) {
+  for (const title of ["Firma", "Klient Alfa", "Prorodinný", "Familiar Corp", "Unfamiliar"]) {
     assert.equal(workspaceTone("shared-1", shared(title)), "work", title);
   }
 });

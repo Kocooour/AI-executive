@@ -31,6 +31,23 @@ async function navigationColours(page: Page) {
   });
 }
 
+async function scrollAndCheckBand(page: Page) {
+  // A DOM-only spacer makes the page scrollable whatever the seeded data; nothing is saved.
+  await page.evaluate(() => {
+    const spacer = document.createElement("div");
+    spacer.id = "e2e-scroll-spacer";
+    spacer.style.height = "3000px";
+    document.querySelector(".content")!.append(spacer);
+    window.scrollTo(0, 1500);
+  });
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const top = await page.locator(".appPane > .topbar").boundingBox();
+  expect(top).not.toBeNull();
+  expect(top!.y).toBeGreaterThanOrEqual(-1);
+  expect(top!.y).toBeLessThanOrEqual(1);
+  await page.evaluate(() => { document.getElementById("e2e-scroll-spacer")?.remove(); window.scrollTo(0, 0); });
+}
+
 for (const theme of ["light", "dark"] as const) {
   test(`sidebar shows a workspace tile, colour band and matching active navigation (${theme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: theme });
@@ -49,10 +66,7 @@ for (const theme of ["light", "dark"] as const) {
     expect(colours.activeBg).not.toBe(colours.accentSoft);
 
     // Scrolled down, the band stays in view on the sticky top bar.
-    await page.evaluate(() => window.scrollTo(0, 600));
-    const top = await page.locator(".appPane > .topbar").boundingBox();
-    expect(top).not.toBeNull();
-    expect(top!.y).toBeLessThanOrEqual(1);
+    await scrollAndCheckBand(page);
 
     await page.locator("aside .workspaceButton").click();
     await page.locator('aside .workspaceMenu button[data-workspace-id="all"]').click();
@@ -70,6 +84,8 @@ test("iPhone workspace and bottom navigation remain readable and keyboard-access
   await waitUntilSynced(page);
   await expect(page.locator(".mobileWorkspaceButton")).toBeVisible();
   await expect(page.locator(".mobileWorkspaceButton .workspaceTile")).toHaveAttribute("data-tone", "personal");
+  // On the phone too the top bar with the band and the workspace tile stays in view while scrolling.
+  await scrollAndCheckBand(page);
   const bottom = page.locator(".mobileNav");
   await expect(bottom).toBeVisible();
   await expect(bottom.locator("button")).toHaveCount(5);

@@ -14,7 +14,9 @@ interface WorkspaceLike {
   properties: Record<string, unknown>;
 }
 
-const familyWord = /(^|[^a-z])(rodin|famil)/;
+// "rodin…" covers every Czech form (rodina, rodinné, rodinný…); English and German need the whole
+// word, so "Familiar Corp" stays work.
+const familyWord = /(^|[^a-z])(rodin|family\b|familie\b)/;
 
 export function workspaceTone(activeId: string, workspace?: WorkspaceLike): WorkspaceTone {
   if (activeId === "all") return "all";
@@ -23,6 +25,6 @@ export function workspaceTone(activeId: string, workspace?: WorkspaceLike): Work
   if (!workspace || workspace.workspaceId === personalWorkspaceId || workspace.properties.kind === "personal") return "personal";
   const stored = workspace.properties.tone;
   if (stored === "work" || stored === "family") return stored;
-  const title = workspace.title.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const title = workspace.title.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
   return familyWord.test(title) ? "family" : "work";
 }
