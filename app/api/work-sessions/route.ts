@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
-import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
+import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { getWorkSession, transitionWorkSession, WorkSessionError, type WorkSessionAction, type WorkSessionState } from "../../../lib/work-sessions";
 
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     const workspaceId = new URL(request.url).searchParams.get("workspaceId") || "";
     return NextResponse.json(getWorkSession(workspaceId), { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    const status = error instanceof WorkSessionError ? error.status : 400;
+    const status = error instanceof WorkSessionError ? error.status : error instanceof HttpInputError ? error.status : 400;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Work session unavailable" }, { status });
   }
 }
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, `work-session.${action}`, "allowed", { workspaceScope: "single" });
     return NextResponse.json(result, { status: action === "start" ? 201 : 200 });
   } catch (error) {
-    const status = error instanceof WorkSessionError ? error.status : 400;
+    const status = error instanceof WorkSessionError ? error.status : error instanceof HttpInputError ? error.status : 400;
     recordSecurityEvent(request, "work-session.write", "failed", { reason: error instanceof WorkSessionError ? error.code : "invalid_request" });
     return NextResponse.json({ error: error instanceof Error ? error.message : "Work session failed", code: error instanceof WorkSessionError ? error.code : "invalid_request" }, { status });
   }

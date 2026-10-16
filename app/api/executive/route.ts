@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "../../../lib/auth";
-import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
+import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { readSnapshot } from "../../../lib/server-store";
 import { listPACTAgents, listPACTRuns } from "../../../lib/pact";
@@ -51,6 +51,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     recordSecurityEvent(request, "executive.agent-run", "failed");
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent run failed" }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent run failed" }, { status: error instanceof HttpInputError ? error.status : 400 });
   }
 }

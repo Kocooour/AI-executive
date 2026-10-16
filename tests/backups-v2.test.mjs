@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { after } from "node:test";
+import { spawnSync } from "node:child_process";
 import { zipSync, strToU8 } from "fflate";
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "lumi-backups-v2-"));
@@ -424,4 +425,18 @@ test("a package whose database was made by a newer version is refused before any
   assert.throws(() => store.restoreDatabaseFile(databasePath), /newer version/);
   assert.deepEqual(stateOf(), before);
   void parts; void manifest;
+});
+
+test("scripts/check-data.mjs verifies a full backup read-only", () => {
+  const made = store.createBackup("manual");
+  const file = path.join(backupsDir, made.name);
+  const before = engine.sha256File(file);
+  const result = spawnSync(process.execPath, ["scripts/check-data.mjs", file], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.integrity, "ok");
+  for (const table of scope.includedTables) assert.ok(table in report.tables, table);
+  assert.equal(report.tables.passkey_credentials, 0);
+  assert.equal(engine.sha256File(file), before);
+  assert.equal(existsSync(`${file}-wal`), false);
 });

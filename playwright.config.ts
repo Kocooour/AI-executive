@@ -18,12 +18,16 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   process.env.LUMI_E2E_PASSWORD_HASH = execFileSync(process.execPath, [path.join(__dirname, "scripts", "hash-password.mjs")], { input: `${e2ePassword}\n` })
     .toString().trim().split("\n").pop();
   process.env.LUMI_E2E_SESSION_SECRET = randomBytes(48).toString("base64");
+  // The integration API token of the test instance (listens on loopback only); the data-boundary scenarios present it to
+  // endpoints that must refuse it.
+  process.env.LUMI_E2E_INTEGRATION_TOKEN = randomBytes(32).toString("hex");
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
 const sessionSecret = process.env.LUMI_E2E_SESSION_SECRET;
 if (!passwordHash?.startsWith("scrypt:") || !sessionSecret) throw new Error("The browser test credentials were not generated; unset LUMI_E2E_RUN_DIR and run again.");
 export const sessionFile = path.join(runDir, "session.json");
+export const integrationToken = process.env.LUMI_E2E_INTEGRATION_TOKEN || "";
 
 // A sandbox may ship its own Chromium; elsewhere `pnpm exec playwright install chromium` provides it.
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
@@ -63,7 +67,7 @@ export default defineConfig({
       // Next still reads the checkout's .env files. Whatever could reach a real service from
       // there is switched off for the test instance.
       AI_EXECUTIVE_SECURITY_OUTBOX_DIR: path.join(runDir, "security-outbox"),
-      AI_EXECUTIVE_INTEGRATION_TOKEN: "",
+      AI_EXECUTIVE_INTEGRATION_TOKEN: integrationToken,
       AI_EXECUTIVE_ALLOWED_ORIGINS: "",
       // Passkeys are tested with a virtual authenticator on the test address only.
       AI_EXECUTIVE_PASSKEY_ORIGINS: `http://localhost:${port}`,
