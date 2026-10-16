@@ -105,15 +105,17 @@ function noteExists(database: DatabaseSync, noteId: string) {
 
 type Row = { revision: number; created_at: number; origin: NoteRevisionOrigin; title: string; content: string; content_sha256: string };
 
-/** Newest first, no content. `sameAsRevision`: the newest earlier revision with identical title and text. Null: unknown note. */
+/** Newest first, no content. `sameAsRevision`: the newest earlier revision with identical text (title aside). Null: unknown note. */
 export function listNoteRevisions(database: DatabaseSync, noteId: string): NoteRevisionSummary[] | null {
   if (!noteExists(database, noteId)) return null;
-  const rows = database.prepare(`SELECT revision, created_at, origin, title, length(content) AS length, content_sha256
+  const rows = database.prepare(`SELECT revision, created_at, origin, title, content, length(content) AS length
     FROM note_revisions WHERE note_id = ? ORDER BY revision ASC`).all(noteId) as unknown as Array<Row & { length: number }>;
+  // "Same text" compares the note's text only: a title-only edit still records a revision, and reads as the same text.
   const seen = new Map<string, number>();
   const summaries = rows.map((row) => {
-    const sameAsRevision = seen.get(row.content_sha256) ?? null;
-    seen.set(row.content_sha256, row.revision);
+    const text = createHash("sha256").update(row.content).digest("hex");
+    const sameAsRevision = seen.get(text) ?? null;
+    seen.set(text, row.revision);
     return { revision: Number(row.revision), createdAt: Number(row.created_at), origin: row.origin, title: row.title,
       contentLength: Number(row.length), sameAsRevision };
   });

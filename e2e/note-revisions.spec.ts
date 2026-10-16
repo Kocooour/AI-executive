@@ -82,6 +82,13 @@ test("the version history lists versions with changes, shows a diff and restores
   await expect(list.locator("li").first()).toContainText("Verze 4");
   await expect(list.locator("li").first()).toContainText("stejný text jako verze 1");
   await expect(field).toHaveValue("first line\nshared line");
+  // Restoring the version that is already the text writes nothing, and an older version can still be restored afterwards.
+  await list.locator("li").first().getByRole("button").click();
+  await page.getByRole("button", { name: "Obnovit tuto verzi" }).click();
+  await expect(page.locator(".noteStatus", { hasText: "Tato verze je už aktuální text." })).toBeVisible();
+  await expect(list.locator("li")).toHaveCount(4);
+  await list.locator("li", { hasText: "Verze 3" }).getByRole("button").click();
+  await expect(page.getByRole("button", { name: "Obnovit tuto verzi" })).toBeEnabled({ timeout: 20_000 });
 });
 
 test("a note body typed but not yet saved survives a reload", async ({ page }) => {

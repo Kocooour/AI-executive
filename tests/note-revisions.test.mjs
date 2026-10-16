@@ -121,6 +121,9 @@ test("listing marks identical text with the newest earlier revision that has it"
   assert.deepEqual(list.map((item) => [item.revision, item.sameAsRevision]), [[4, 2], [3, 1], [2, null], [1, null]]);
   assert.equal(list[0].contentLength, 6);
   assert.equal("content" in list[0], false);
+  // A title-only edit records a revision and reads as the same text as the one before it.
+  save([{ ...current("note:same"), title: "S renamed" }], [], false);
+  assert.deepEqual(revisions.listNoteRevisions(db(), "note:same").slice(0, 1).map((item) => [item.revision, item.sameAsRevision]), [[5, 4]]);
   const detail = revisions.getNoteRevision(db(), "note:same", 3);
   assert.equal(detail.content, "first");
   assert.equal(revisions.getNoteRevision(db(), "note:same", 99), null);

@@ -35,6 +35,8 @@ export function NoteEditor({ app }: { app: LumiApp }) {
   // Refreshed once the note's save is acknowledged: while the change waits to be sent the server has nothing new.
   const waiting = unsent.has(id);
   const updatedAt = note.updatedAt;
+  // Loaded again when the connection returns, so an unchanged note does not keep the online-only message.
+  const offline = syncStatus === "offline";
 
   useEffect(() => {
     if (waiting) return;
@@ -48,7 +50,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
       .then((body) => { if (current) setHistory({ state: "ready", revisions: body.revisions }); })
       .catch(() => { if (current) { setHistory({ state: "unavailable" }); setChosen(null); setDetail(null); } });
     return () => { current = false; };
-  }, [id, waiting, updatedAt]);
+  }, [id, waiting, updatedAt, offline]);
 
   useEffect(() => {
     if (chosen === null) { setDetail(null); return; }
@@ -90,7 +92,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
     if (!detail || detail === "unavailable") return;
     setRestoring(true);
     const number = detail.revision;
-    if (detail.title === note.title && detail.content === stored) { setRestored({ version: number, already: true }); setChosen(null); return; }
+    if (detail.title === note.title && detail.content === stored) { setRestoring(false); setRestored({ version: number, already: true }); setChosen(null); return; }
     const ok = await restoreNoteVersion(note, detail.title, detail.content);
     setRestoring(false);
     if (ok) { setRestored({ version: number, already: false }); setChosen(null); }

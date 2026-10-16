@@ -2591,7 +2591,7 @@ export function useLumiApp() {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(draftChannelName);
     channel.onmessage = (event) => {
-      if (event.data?.ask === pageId.current && notesDraftRef.current) channel.postMessage({ alive: pageId.current });
+      if (event.data?.ask === pageId.current && (notesDraftRef.current || noteBodyDraftRef.current)) channel.postMessage({ alive: pageId.current });
     };
     return () => channel.close();
   }, []);
