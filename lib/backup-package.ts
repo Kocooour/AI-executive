@@ -192,8 +192,6 @@ export function packageStream(parts: Part[], manifest: PackageManifest, onEnd: (
   });
 }
 
-const refuse = (message: string, status = 400): never => { throw new HttpInputError(message, status); };
-
 export const badNameChecks = (name: string) =>
   name.length === 0 || name.length > 200 || name.startsWith("/") || name.endsWith("/") || name.includes("\\") ||
   name.includes("\0") || /(^|\/)\.\.?(\/|$)/.test(name) || /^[A-Za-z]:/.test(name) || /[\u0000-\u001f]/.test(name);
@@ -209,27 +207,27 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
   let totalBytes = 0;
   let failure: HttpInputError | null = null;
   let databaseFd: number | null = null;
-  const fail = (message: string) => { if (!failure) failure = new HttpInputError(message); };
+  const fail = (error: HttpInputError) => { if (!failure) failure = error; };
 
   const unzip = new Unzip();
   unzip.register(UnzipInflate);
   unzip.onfile = (file: UnzipFile) => {
     if (failure) return;
     const name = file.name;
-    if (badNameChecks(name)) { fail("Invalid export package"); return; }
-    if (seen.has(name)) { fail("Invalid export package"); return; }
-    if (seen.size + 1 > limits.maxEntries) { fail("Export package is too large"); return; }
+    if (badNameChecks(name)) { fail(new HttpInputError("Invalid export package")); return; }
+    if (seen.has(name)) { fail(new HttpInputError("Invalid export package")); return; }
+    if (seen.size + 1 > limits.maxEntries) { fail(new HttpInputError("Export package is too large")); return; }
     const entryLimit = name === databaseEntry ? limits.maxDatabaseBytes : limits.maxEntryBytes;
-    if (typeof file.originalSize === "number" && file.originalSize > entryLimit) { fail("Export package is too large"); return; }
+    if (typeof file.originalSize === "number" && file.originalSize > entryLimit) { fail(new HttpInputError("Export package is too large")); return; }
     const state = { hash: createHash("sha256"), bytes: 0 };
     seen.set(name, state);
     if (name === databaseEntry) databaseFd = openSync(databasePath, "w", 0o600);
     file.ondata = (error, data) => {
       if (failure) return;
-      if (error) { fail("Invalid export package"); return; }
+      if (error) { fail(new HttpInputError("Invalid export package")); return; }
       state.bytes += data.length;
       totalBytes += data.length;
-      if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) { fail("Export package is too large"); file.terminate(); return; }
+      if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
       state.hash.update(data);
       if (name === manifestEntry) manifestText = Buffer.concat([manifestText, data]);
       if (name === databaseEntry && databaseFd !== null) writeSync(databaseFd, data);
@@ -247,7 +245,7 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
       try {
         unzip.push(ended ? new Uint8Array(0) : Uint8Array.prototype.slice.call(buffer, 0, read), ended);
       } catch {
-        fail("Invalid export package");
+        fail(new HttpInputError("Invalid export package"));
       }
     }
   } finally {
@@ -256,29 +254,29 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
   }
   if (failure) throw failure;
 
-  if (!seen.has(manifestEntry) || !seen.has(databaseEntry)) refuse("Export package has missing or unexpected files");
+  if (!seen.has(manifestEntry) || !seen.has(databaseEntry)) throw new HttpInputError("Export package has missing or unexpected files");
   let manifest: PackageManifest;
   try {
     manifest = JSON.parse(manifestText.toString("utf8")) as PackageManifest;
   } catch {
-    return refuse("Invalid export package");
+    throw new HttpInputError("Invalid export package");
   }
   if (
     !manifest || manifest.format !== exportFormat || manifest.version !== exportVersion || !manifest.files ||
     typeof manifest.files !== "object" || !Array.isArray(manifest.migrations)
   ) {
-    refuse("Invalid export package");
+    throw new HttpInputError("Invalid export package");
   }
   const listed = Object.keys(manifest.files).sort();
   const present = [...seen.keys()].filter((name) => name !== manifestEntry).sort();
   if (listed.length !== present.length || listed.some((name, index) => name !== present[index])) {
-    refuse("Export package has missing or unexpected files");
+    throw new HttpInputError("Export package has missing or unexpected files");
   }
   for (const name of listed) {
     const state = seen.get(name)!;
     const expected = manifest.files[name];
     if (!expected || state.hash.digest("hex") !== expected.sha256 || state.bytes !== expected.bytes) {
-      refuse("Export package does not match its checksums");
+      throw new HttpInputError("Export package does not match its checksums");
     }
   }
   return manifest;

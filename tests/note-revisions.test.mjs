@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -88,13 +88,28 @@ test("deleting a note, or a note that stops being a note, deletes its revisions"
   assert.ok(rows("note:a").length > 0);
 });
 
-test("restoring a backup records backup_restore and purges notes absent from it", () => {
+test("restoring a full backup returns the note versions to the backup and purges notes absent from it", () => {
   save([current("note:old"), current("note:a"), current("note:empty")]);
+  const atBackup = { a: rows("note:a"), old: rows("note:old") };
   const backup = store.createBackup("c1d");
   save([current("note:old"), note("note:a", "A2", "changed after the backup"), note("note:later", "Later", "x")]);
   assert.ok(rows("note:later").length === 1);
+  assert.ok(rows("note:a").length > atBackup.a.length);
   store.restoreBackup(backup.name);
   assert.equal(rows("note:later").length, 0);
+  assert.deepEqual(rows("note:a"), atBackup.a, "versions made after the backup are gone, none is added for the restore");
+  assert.equal(rows("note:a").at(-1).content, "two");
+  assert.deepEqual(rows("note:old"), atBackup.old);
+});
+
+test("restoring a legacy JSON backup records backup_restore for the notes it changes", () => {
+  save([current("note:old"), current("note:a"), current("note:empty")]);
+  const snapshot = store.readSnapshot();
+  const name = "2026-02-03T04-05-06-789Z-manual.json";
+  writeFileSync(path.join(dataDir, "backups", name), JSON.stringify(snapshot), { mode: 0o600 });
+  save([current("note:old"), note("note:a", "A3", "changed again"), note("note:later2", "Later", "x")]);
+  store.restoreBackup(name);
+  assert.equal(rows("note:later2").length, 0);
   const last = rows("note:a").at(-1);
   assert.equal(last.origin, "backup_restore");
   assert.equal(last.content, "two");
