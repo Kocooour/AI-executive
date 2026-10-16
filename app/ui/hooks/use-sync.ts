@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
+import { adoptionTransaction, db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
 import { captureMarkers as captureMarkersIn, clearAllMarkers, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
 import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
@@ -226,7 +226,7 @@ export function useSync() {
       // Anything computed from the old copy (a save in progress, a pull) is discarded.
       localDataVersion.current += 2;
       try {
-        await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+        await adoptionTransaction(async () => {
           await db.entities.clear();
           await db.relations.clear();
           await db.baseEntities.clear();
@@ -239,7 +239,7 @@ export function useSync() {
         // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
         console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
         try {
-          await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+          await adoptionTransaction(async () => {
             await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
           });
         } catch {
@@ -350,6 +350,8 @@ export function useSync() {
     queuedSaves.current += 1;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
+      // Restored data was adopted while this save waited: nothing is marked or sent.
+      if (isAdopting()) return;
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;

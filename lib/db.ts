@@ -1,4 +1,5 @@
 import Dexie, { type Table } from "dexie";
+import { adoptionWriteGuard, allowAdoptionWrites } from "./adoption";
 
 export type EntityType = "area" | "project" | "task" | "note" | "workspace";
 
@@ -68,6 +69,17 @@ class ExecutiveDB extends Dexie {
 }
 
 export const db = new ExecutiveDB();
+// From the start of adopting restored data the local database refuses every write except adoption's own (lib/adoption.ts).
+db.use({ stack: "dbcore", name: "AdoptionWriteGuard", create: adoptionWriteGuard });
+
+// A transaction over all local data whose writes pass while restored data is being adopted. Only adoption uses it.
+export function adoptionTransaction(scope: () => Promise<void>) {
+  return db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+    const transaction = Dexie.currentTransaction;
+    if (transaction?.idbtrans) allowAdoptionWrites(transaction.idbtrans);
+    await scope();
+  });
+}
 
 export async function ensureDefaultWorkspace() {
   // A local placeholder until the server copy arrives. Timestamp 0 means it can never win a

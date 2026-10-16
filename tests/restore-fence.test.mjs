@@ -98,17 +98,30 @@ test("every mutating owner route that writes covered data calls the restore fenc
   const missing = [];
   for (const file of routeFiles(root)) {
     const url = "/api/" + path.relative(root, path.dirname(file)).split(path.sep).join("/");
-    const source = readFileSync(file, "utf8");
+    // Comments are removed so that a call mentioned in a comment does not count.
+    const source = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // A handler written in a form this scan does not split on would escape it entirely.
+    assert.doesNotMatch(source, /export\s+(?:const|let|var|function)\s+(?:POST|PUT|PATCH|DELETE)\b/, `${url}: export mutating handlers as \`export async function\``);
     const parts = source.split(/(?=export\s+async\s+function\s+(?:GET|POST|PUT|PATCH|DELETE)\b)/);
     for (const part of parts) {
       const method = /^export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\b/.exec(part)?.[1];
       if (!method || method === "GET") continue;
       const key = `${method} ${url}`;
       seen.add(key);
-      const calls = part.split("fenceRestoredClient(request)").length - 1;
-      // Fenced routes check twice: early (fast refusal) and again after the body is read, right before the synchronous write.
-      if (!(key in exempt) && calls < 2) missing.push(`${key} (${calls} fence checks, needs the early one and one after the body is read)`);
-      if (key in exempt && calls > 0) missing.push(`${key} is exempt but calls the fence`);
+      const calls = part.split("fenceRestoredClient(").length - 1;
+      if (key in exempt) {
+        if (calls > 0) missing.push(`${key} is exempt but calls the fence`);
+        continue;
+      }
+      // Fenced routes check twice and return the refusal each time: early (fast refusal, before the body is read) and again
+      // after the last body read with no await in between, so nothing can resume after a restore and write stale intent.
+      const early = /const fenced = fenceRestoredClient\(request\);\s*if \(fenced\) return fenced;/.exec(part);
+      const reads = [...part.matchAll(/await readJsonBody\b/g)];
+      const lastRead = reads.length ? reads[reads.length - 1].index : -1;
+      const late = /const fencedAgain = fenceRestoredClient\(request\);\s*if \(fencedAgain\) return fencedAgain;/.exec(part);
+      if (!early || lastRead < 0 || early.index > lastRead) missing.push(`${key} (no returned fence check before the body is read)`);
+      else if (!late || late.index < lastRead) missing.push(`${key} (no returned fence check after the body is read)`);
+      else if (/\bawait\b/.test(part.slice(part.indexOf(";", lastRead) + 1, late.index))) missing.push(`${key} (an await between the body read and the second fence check)`);
     }
   }
   assert.deepEqual(missing, [], "a mutating route neither calls fenceRestoredClient nor is exempt with a reason");

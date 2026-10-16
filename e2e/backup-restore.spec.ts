@@ -506,6 +506,76 @@ test("a title being edited on another device when a restore happens is not writt
   }
 });
 
+test("a title save whose local write comes only after the restored data was adopted is refused, and the restored title stays", async ({ browser }) => {
+  const id = `e2e-backup-late-title-${stamp}`;
+  const entity = (title: string) => ({ id, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: 1, updatedAt: Date.now() });
+  const { first, second } = await twoDevices(browser);
+  const serverTitle = async () => (await serverEntities(first.page)).find((item) => item.id === id)?.title;
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [entity("Pozdní titulek: původní")]);
+    const name = await createManualBackup(first.page);
+    await setStore(first.page, [], [], { [id]: entity("Pozdní titulek: změněný po záloze") });
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    const field = second.page.locator("input.titleEdit");
+    await expect(field).toHaveValue("Pozdní titulek: změněný po záloze");
+    await field.fill("Pozdní titulek: rozepsaný před obnovením");
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    // The race is forced, not timed: a second connection holds the local "entities" store (a readwrite transaction kept
+    // alive), and the page's read of the task and its clearing of the local records are recorded. IndexedDB runs
+    // overlapping transactions in the order they were created, so the title save's read waits, adoption's transaction is
+    // created after it, and the save's write, issued only when its read returns, comes after adoption replaced the copy.
+    await second.page.evaluate(async (taskId) => {
+      const state = window as unknown as { e2eLog: string[]; e2eRelease?: boolean };
+      state.e2eLog = [];
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function (this: IDBObjectStore, query: IDBValidKey | IDBKeyRange) {
+        if (query === taskId) state.e2eLog.push(`get:${this.name}:${query}`);
+        return get.call(this, query);
+      };
+      const clear = IDBObjectStore.prototype.clear;
+      IDBObjectStore.prototype.clear = function (this: IDBObjectStore) {
+        state.e2eLog.push(`clear:${this.name}`);
+        return clear.call(this);
+      };
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const hold = database.transaction("entities", "readwrite");
+      const store = hold.objectStore("entities");
+      const keepAlive = () => { if (!state.e2eRelease) get.call(store, "e2e-hold").onsuccess = keepAlive; };
+      keepAlive();
+      hold.oncomplete = () => database.close();
+    }, id);
+    // Leaving the field saves the title: its read of the stored record waits behind the held store.
+    await field.blur();
+    await second.page.waitForFunction((taskId) => (window as unknown as { e2eLog: string[] }).e2eLog.includes(`get:entities:${taskId}`), id);
+    // The page learns of the restore and begins adopting it: its transaction, created after the save's read, asks to clear
+    // the local records. Only then is the store released.
+    await remoteWakeUp(second.page);
+    await second.page.waitForFunction(() => (window as unknown as { e2eLog: string[] }).e2eLog.includes("clear:entities"));
+    await second.page.evaluate(() => { (window as unknown as { e2eRelease: boolean }).e2eRelease = true; });
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    // After the reload the local copy holds the restored title, so nothing of the draft is sent from it.
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    await expect(second.page.locator("input.titleEdit")).toHaveValue("Pozdní titulek: původní", { timeout: 30_000 });
+    const local = await second.page.evaluate(async (taskId) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("ai-executive"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const record = await new Promise<{ title?: string } | undefined>((resolve, reject) => { const request = database.transaction("entities").objectStore("entities").get(taskId); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      database.close();
+      return record?.title;
+    }, id);
+    expect(local).toBe("Pozdní titulek: původní");
+    await second.page.waitForTimeout(1500);
+    await waitUntilSynced(second.page);
+    expect(await serverTitle()).toBe("Pozdní titulek: původní");
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
 test("a restore found by one tab reloads its sibling tab too: restored Context, no stale draft, no pre-restore edit", async ({ browser }) => {
   const predicate = `${marker}.sibling`;
   const first = await (async () => { const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" }); return { context, page: await context.newPage() }; })();

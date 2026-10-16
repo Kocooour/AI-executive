@@ -1,3 +1,4 @@
+import { isAdopting } from "./adoption";
 import { removeAllWithPrefix } from "./pending-markers";
 
 // Notes being typed are kept in the device on every key press (localStorage is written
@@ -39,6 +40,8 @@ function parse(raw: string | null): unknown {
 }
 
 function put(storage: DraftStorage, draft: KeptNotesDraft) {
+  // Restored data is being adopted (lib/adoption.ts): a draft typed against the replaced data is not kept.
+  if (isAdopting()) return;
   try {
     storage.setItem(draftKey(draft.page, draft.id), JSON.stringify(draft));
   } catch {
