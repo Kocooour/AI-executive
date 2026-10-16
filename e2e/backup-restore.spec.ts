@@ -420,7 +420,8 @@ test("Context, open on another device, shows the restored state without navigati
     await expect(second.page.locator(".contextClaimCard", { hasText: predicate })).toBeVisible();
     expect(await restoreByApi(first.page, name)).toBe(200);
     await remoteWakeUp(second.page);
-    await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
+    // The page reloads and says why.
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
     await expect(second.page.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0, { timeout: 30_000 });
     expect((await claims(second.page)).some((claim) => claim.predicate === predicate)).toBe(false);
   } finally {
@@ -447,8 +448,11 @@ test("a task-notes draft typed before a restore elsewhere is dropped and cannot 
     await field.fill("koncept před obnovením");
     expect(await restoreByApi(first.page, name)).toBe(200);
     await remoteWakeUp(second.page);
-    await expect(second.page.locator(".restoredNotice")).toBeHidden({ timeout: 30_000 }).catch(() => undefined);
-    await expect(field).toHaveValue("původní poznámky", { timeout: 30_000 });
+    // The page reloaded (the open task is not kept in the address): opened again it shows the restored notes.
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    await expect(second.page.getByLabel("Poznámky k úkolu")).toHaveValue("původní poznámky", { timeout: 30_000 });
     // Leaving the field, the page being hidden or closed: nothing of the draft is saved over the restored record.
     await second.page.locator("input.titleEdit").focus();
     await second.page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); document.dispatchEvent(new Event("visibilitychange")); });
@@ -461,6 +465,75 @@ test("a task-notes draft typed before a restore elsewhere is dropped and cannot 
   } finally {
     await first.context.close();
     await second.context.close();
+  }
+});
+
+test("a title being edited on another device when a restore happens is not written back, and the page shows the restored title", async ({ browser }) => {
+  const id = `e2e-backup-title-${stamp}`;
+  const entity = (title: string) => ({ id, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: 1, updatedAt: Date.now() });
+  const { first, second } = await twoDevices(browser);
+  const serverTitle = async () => (await serverEntities(first.page)).find((item) => item.id === id)?.title;
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [entity("Titulek: původní")]);
+    const name = await createManualBackup(first.page);
+    await setStore(first.page, [], [], { [id]: entity("Titulek: změněný po záloze") });
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    const field = second.page.locator("input.titleEdit");
+    await expect(field).toHaveValue("Titulek: změněný po záloze");
+    await field.fill("Titulek: rozepsaný před obnovením");
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    await remoteWakeUp(second.page);
+    // Leaving the field right away, while the page adopts the restored data, writes nothing.
+    await field.blur().catch(() => undefined);
+    await second.page.evaluate(() => { window.dispatchEvent(new Event("pagehide")); document.dispatchEvent(new Event("visibilitychange")); }).catch(() => undefined);
+    await expect(second.page.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await second.page.goto(`/?task=${id}`);
+    await waitUntilSynced(second.page);
+    await expect(second.page.locator("input.titleEdit")).toHaveValue("Titulek: původní", { timeout: 30_000 });
+    await second.page.waitForTimeout(3000);
+    await waitUntilSynced(second.page);
+    expect(await serverTitle()).toBe("Titulek: původní");
+    await second.page.locator("input.titleEdit").focus();
+    await second.page.getByLabel("Poznámky k úkolu").focus();
+    await second.page.waitForTimeout(1500);
+    expect(await serverTitle()).toBe("Titulek: původní");
+  } finally {
+    await first.context.close();
+    await second.context.close();
+  }
+});
+
+test("a restore found by one tab reloads its sibling tab too: restored Context, no stale draft, no pre-restore edit", async ({ browser }) => {
+  const predicate = `${marker}.sibling`;
+  const first = await (async () => { const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" }); return { context, page: await context.newPage() }; })();
+  const deviceB = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  const tab1 = await deviceB.newPage(), tab2 = await deviceB.newPage();
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    const name = await createManualBackup(first.page);
+    await createClaim(first.page, predicate, "vznikne po záloze");
+    await openContext(tab1);
+    await openContext(tab2);
+    await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toBeVisible();
+    // The sibling holds a Context draft typed before the restore.
+    await tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost").fill("e2e.backup.stale-draft");
+    await tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true }).fill("rozepsáno před obnovením");
+    expect(await restoreByApi(first.page, name)).toBe(200);
+    // Only the first tab is woken; the sibling has to follow it.
+    await remoteWakeUp(tab1);
+    await expect(tab1.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await expect(tab2.locator(".restoredNotice")).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await expect(tab2.locator(".contextClaimCard", { hasText: predicate })).toHaveCount(0);
+    await expect(tab2.locator("#context-claim-editor").getByLabel("Vztah nebo vlastnost")).not.toHaveValue("e2e.backup.stale-draft");
+    await expect(tab2.locator("#context-claim-editor").getByLabel("Hodnota", { exact: true })).toHaveValue("");
+    expect((await claims(first.page)).some((claim) => claim.predicate === predicate || claim.predicate === "e2e.backup.stale-draft")).toBe(false);
+  } finally {
+    await first.context.close();
+    await deviceB.close();
   }
 });
 

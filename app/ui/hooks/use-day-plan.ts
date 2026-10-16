@@ -8,12 +8,11 @@ import { localizeServerError } from "../../../lib/server-errors";
 // moving its blocks (approval-bound actions with Undo), and starting, pausing and finishing work on
 // a task. Moved verbatim from use-lumi-app.tsx; the values it needs from the rest of the app are
 // passed in.
-export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, items, language, tr, calendarToday,
+export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
   calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey }: {
   authState: string;
   activeWorkspaceId: string;
   writeWorkspaceId: string;
-  dataEpoch: number;
   items: Entity[];
   language: string;
   tr: (key: string) => string;
@@ -141,7 +140,7 @@ export function useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, dat
     const poll = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
     return () => { workSessionLoadVersion.current += 1; window.clearInterval(poll); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [authState, activeWorkspaceId, writeWorkspaceId, language, dataEpoch]);
+  }, [authState, activeWorkspaceId, writeWorkspaceId, language]);
   useEffect(() => {
     if (workSession?.state !== "running") return;
     const timer = window.setInterval(() => setWorkSessionNow(Date.now()), 1000);

@@ -21,7 +21,7 @@ type History = { state: "loading" } | { state: "unavailable" } | { state: "ready
 const originKey = { baseline: "revOriginBaseline", created: "revOriginCreated", edited: "revOriginEdited", backup_restore: "revOriginBackup" } as const;
 
 export function NoteEditor({ app }: { app: LumiApp }) {
-  const { selected, noteBodyDraft, noteBodyError, noteBodyConflict, resolveNoteBodyConflict, editNoteBody, saveNoteBody, restoreNoteVersion, unsent, syncStatus, language, dataEpoch, tr } = app;
+  const { selected, noteBodyDraft, noteBodyError, noteBodyConflict, resolveNoteBodyConflict, editNoteBody, saveNoteBody, restoreNoteVersion, unsent, syncStatus, language, tr } = app;
   const note = selected!;
   const id = note.id;
   const stored = note.content ?? "";
@@ -50,10 +50,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
       .then((body) => { if (current) setHistory({ state: "ready", revisions: body.revisions }); })
       .catch(() => { if (current) { setHistory({ state: "unavailable" }); setChosen(null); setDetail(null); } });
     return () => { current = false; };
-  }, [id, waiting, updatedAt, offline, dataEpoch]);
-
-  // A restored backup replaced the versions: the one that was open may no longer exist, or be another one.
-  useEffect(() => { setChosen(null); setRestored(null); }, [dataEpoch]);
+  }, [id, waiting, updatedAt, offline]);
 
   useEffect(() => {
     if (chosen === null) { setDetail(null); return; }

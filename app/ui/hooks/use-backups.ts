@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ServerSnapshot } from "../../../lib/server-sync";
-import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { setAfterRestoreFlag } from "../../../lib/adoption";
 import { localizeServerError } from "../../../lib/server-errors";
 import type { BackupSummary, ConfirmRequest, Language } from "../types";
 
@@ -11,14 +11,12 @@ import type { BackupSummary, ConfirmRequest, Language } from "../types";
 // the setters are returned.
 export const maxImportBytes = 200 * 1024 * 1024;
 
-export function useBackups({ language, tr, askConfirm, replaceLocal, afterRestore }: {
+export function useBackups({ language, tr, askConfirm, replaceLocal }: {
   language: Language;
   tr: (key: string) => string;
   askConfirm: (request: ConfirmRequest) => Promise<boolean>;
   // Makes the server's copy the only copy here (records, held-back records, merge base, pending changes).
   replaceLocal: (snapshot: ServerSnapshot) => Promise<unknown>;
-  // Drops notes being typed here, reloads what the server holds besides the records, and tells the other tabs.
-  afterRestore: () => void;
 }) {
   const [backups, setBackups] = useState<BackupSummary[]>([]),
     [backupStatus, setBackupStatus] = useState(""),
@@ -59,17 +57,12 @@ export function useBackups({ language, tr, askConfirm, replaceLocal, afterRestor
     }
   }
 
-  // What was restored replaced the data the open notes were typed against and everything that waits to be sent: the
-  // local copy is replaced by the server's, not merged with it, so nothing of the replaced data stays or comes back.
-  async function applyRestored(response: Response) {
+  // The data was replaced: the server's copy becomes the only copy here and this page reloads (adoptServerCopy in
+  // hooks/use-sync.ts), then shows the success message of this action (use-lumi-app.tsx reads the flag).
+  async function applyRestored(response: Response, kind: "restore" | "import") {
     const data = await response.json();
+    setAfterRestoreFlag(kind, true);
     await replaceLocal(data.snapshot as ServerSnapshot);
-    // Notes drafts were typed against the replaced data: kept, they could write it back over the
-    // restored notes. Open tabs drop the drafts they hold in memory too (afterRestore); the
-    // stored ones of all pages go here, also of pages that are closed. (The notes of open texts
-    // stay: they only make sign-out ask.)
-    afterRestore();
-    clearNotesDrafts(localStorage);
   }
 
   async function restoreServerBackup(backup: BackupSummary) {
@@ -85,7 +78,7 @@ export function useBackups({ language, tr, askConfirm, replaceLocal, afterRestor
         body: JSON.stringify({ action: "restore", name: backup.name }),
       });
       if (!response.ok) throw new Error(await errorText(response, tr("backupRestoreFailed")));
-      await applyRestored(response);
+      await applyRestored(response, "restore");
       report(tr("backupRestored"));
       await refreshList();
     } catch (error) {
@@ -131,7 +124,7 @@ export function useBackups({ language, tr, askConfirm, replaceLocal, afterRestor
     try {
       const response = await fetch("/api/backups/import", { method: "POST", headers: { "content-type": "application/zip" }, body: file });
       if (!response.ok) throw new Error(await errorText(response, tr("backupImportFailed")));
-      await applyRestored(response);
+      await applyRestored(response, "import");
       report(tr("backupImported"));
       await refreshList();
     } catch (error) {

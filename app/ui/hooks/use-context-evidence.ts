@@ -27,12 +27,11 @@ const sourceFieldsOf = (source: ContextSourceItem): SourceFields => ({ provider:
 /** What the server gets: trimmed text, nothing for what was left empty (the server never fills anything in). */
 const sourceBody = (fields: SourceFields) => Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, typeof value === "string" ? value.trim() || null : value]));
 
-export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
+export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
   contextInFlight, commandFailureMessage, refreshAfterCommand, offerContextUndo, loadContextClaims, syncEditedClaim }: {
   authState: string;
   activeWorkspaceId: string;
   writeWorkspaceId: string;
-  dataEpoch: number;
   tr: (key: string) => string;
   calendarWorkspaceSelection: MutableRefObject<string>;
   contextIntent: (scope: string, signature: string) => { commandKey: string; objectId: string };
@@ -69,7 +68,7 @@ export function useContextEvidence({ authState, activeWorkspaceId, writeWorkspac
     const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
     setContextSources([]); setEvidenceDraft(null); setEvidenceStatus(""); setSourceEdit(null); setSourceStatus("");
     loadContextSources(workspaceId).catch(() => setSourceStatus(tr("sourcesUnavailable")));
-  }, [authState, activeWorkspaceId, writeWorkspaceId, dataEpoch]);
+  }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   const errorText = (data: { code?: string; error?: string }, fallback: string) => {
     const byCode: Record<string, string> = { metadata_only_source: "evidenceMetadataOnlyHint", revision_conflict: "evidenceConflict",

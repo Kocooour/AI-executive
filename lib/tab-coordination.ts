@@ -63,8 +63,9 @@ export type TabMessage =
   | { type: "signing-out"; from: string }
   // The sign-out did not happen; the others may edit again.
   | { type: "sign-out-cancelled"; from: string }
-  // A backup was restored: notes being typed were typed against the replaced data and are dropped.
-  | { type: "restored"; from: string };
+  // This tab adopted restored server data (and reloads): every other tab of the browser reloads too, so none keeps state
+  // of the replaced data. `generation`: the restore generation adopted; a tab acts only if it is newer than its own.
+  | { type: "restore-adopted"; from: string; generation?: number };
 
 export function postToTabs(message: TabMessage) {
   if (typeof BroadcastChannel === "undefined") return;

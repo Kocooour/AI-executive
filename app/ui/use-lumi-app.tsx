@@ -3,10 +3,11 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
-import { clearNotesDrafts, clearPageNotesDrafts, dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
+import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
+import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
 import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
@@ -151,7 +152,7 @@ export function useLumiApp() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, afterAdopt, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -859,10 +860,7 @@ export function useLumiApp() {
   }
   // A claim whose revision moved because its evidence changed: the editor keeps the draft and follows the revision.
   const syncEditedClaim = (claim: ContextClaimItem) => { if (claimEditor.current.objectId === claim.id) setEditingClaim(claim); };
-  // Counts the restores and imports of this server data (here or in another tab): what the app loads from the server
-  // besides the synchronised records (Context, its history, sources, work sessions, note versions) reloads when it changes.
-  const [dataEpoch, setDataEpoch] = useState(0);
-  const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
+  const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
     contextInFlight, commandFailureMessage, refreshAfterCommand, offerContextUndo, loadContextClaims, syncEditedClaim });
   const { loadContextSources } = evidenceState;
   contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action); } };
@@ -971,7 +969,7 @@ export function useLumiApp() {
     }
     loadContextClaims(workspaceId).catch(() => setClaimStatus(tr("structuredContextIsUnavailable")));
     loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(tr("peopleAndOrganizationsAre")));
-  }, [authState, activeWorkspaceId, writeWorkspaceId, dataEpoch]);
+  }, [authState, activeWorkspaceId, writeWorkspaceId]);
 
   useEffect(() => {
     const savedLanguage = localStorage.getItem("ai-executive-language");
@@ -1741,16 +1739,24 @@ export function useLumiApp() {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
-  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, items, language, tr, calendarToday,
+  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
-    language, tr, askConfirm, replaceLocal: replaceLocalWithServer, afterRestore: () => { postToTabs({ type: "restored", from: tabId.current }); } });
-  // Every adoption of restored server data (see adoptServerCopy in hooks/use-sync.ts) drops all note drafts and reloads
-  // what the app loads from the server besides the records.
-  afterAdopt.current = () => { dropNotesBeingTyped(); try { clearNotesDrafts(localStorage); } catch { /* storage unavailable */ } setDataEpoch((count) => count + 1); };
+    language, tr, askConfirm, replaceLocal: replaceLocalWithServer });
+  // After the reload that ended an adoption of restored data: the success message of the action that ran it, or the notice
+  // that the restore happened elsewhere. (Applied once the app is ready, after the language has settled.)
+  useEffect(() => {
+    if (authState !== "ready") return;
+    const kind = takeAfterRestoreFlag();
+    if (!kind) return;
+    if (kind === "restore" || kind === "import") {
+      setSettingsSection("data");
+      setBackupStatus(tr(kind === "restore" ? "backupRestored" : "backupImported"));
+    } else showRestoredNotice();
+  }, [authState]);
   // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
   // browser has synchronized with the server before and still holds its data (signing out removes
   // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
@@ -2237,6 +2243,8 @@ export function useLumiApp() {
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
   // was typed meanwhile, the open detail keeps what is being typed.
   async function rename(e: Entity, title: string, seq?: number) {
+    // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
+    if (isAdopting()) return;
     if (!title.trim()) return;
     const current = (await db.entities.get(e.id)) || e;
     // Leaving the field without a change writes nothing (and cannot put back a replaced title).
@@ -2323,6 +2331,8 @@ export function useLumiApp() {
   // `properties` may be a function of the stored properties, for a change that depends on them
   // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
   async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false) {
+    // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
+    if (isAdopting()) return;
     localDataVersion.current += 1;
     // Reading and writing in one transaction: two saves of the same record started together (for
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
@@ -2360,22 +2370,13 @@ export function useLumiApp() {
   // The draft is dropped only if nothing was typed into it since this save started. If the save
   // fails the draft stays, so the text is still in the field and is saved next time.
   const pageId = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  // A restored backup replaced the data the notes were typed against: the draft is dropped here
-  // and in the device, so it is neither shown nor saved over the restored notes.
-  function dropNotesBeingTyped() {
-    setNotesDraft(null);
-    setNoteBodyDraft(null);
-    setNoteBodyConflict(null);
-    parkedNoteBodies.current.clear();
-    try { clearPageNotesDrafts(localStorage, pageId.current); } catch { /* storage unavailable */ }
-  }
-  const dropNotesBeingTypedRef = useRef(dropNotesBeingTyped);
-  dropNotesBeingTypedRef.current = dropNotesBeingTyped;
   function editNotes(id: string, text: string, base: string) {
     setNotesDraft({ id, text });
     keepNotesDraft(localStorage, pageId.current, id, text, base);
   }
   async function saveNotes(e: Pick<Entity, "id">, notes: string) {
+    // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
+    if (isAdopting()) return;
     try {
       const stored = await db.entities.get(e.id);
       if (stored && String(stored.properties.notes || "") !== notes) await patch(stored, { notes }, "updated", true);
@@ -2400,6 +2401,8 @@ export function useLumiApp() {
   }
   // Writes the title and/or text of a note in one local write, then sends it to the server.
   async function patchNoteText(e: Entity, fields: { title?: string; content?: string }, action: string, keepTypedTitle: boolean) {
+    // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
+    if (isAdopting()) return;
     localDataVersion.current += 1;
     try { await db.transaction("rw", db.entities, async () => {
       const current = (await db.entities.get(e.id)) || e;
@@ -2420,6 +2423,8 @@ export function useLumiApp() {
       : open));
   }
   async function saveNoteBody(e: Pick<Entity, "id">, text: string) {
+    // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
+    if (isAdopting()) return;
     try {
       const stored = await db.entities.get(e.id);
       // The note was deleted (for example on another device): the text is kept and the save reported as failed.
@@ -2581,7 +2586,6 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
-      if (message.type === "restored") { void replaceLocalWithServer().catch(() => undefined); return; }
       // A tab opened (or woken) after the request still stops editing and saves what it can.
       if (message.type === "signing-out") {
         const wasBlocked = document.body.inert;
@@ -3156,7 +3160,6 @@ export function useLumiApp() {
     retryAccess,
     backupStatus,
     backups,
-    dataEpoch,
     badgeStatus,
     calendarAction,
     calendarBusy,
