@@ -2,29 +2,7 @@
    Tokens are imported from the generated docs/design-system/tokens.css in layout.tsx.
    Keep this file limited to navigation/layout; other screens follow in separate PRs. */
 
-/* globals.css has a more specific legacy dark-theme selector than the generated
-   token stylesheet. Match that specificity until the legacy theme is removed. */
-:root[data-theme="dark"] {
-  --app-bg: #1c1c1e;
-  --sidebar-bg: #232326;
-  --surface: #2c2c2e;
-  --surface-subtle: #323235;
-  --surface-raised: #2c2c2e;
-  --input-bg: #262628;
-  --line: #38383b;
-  --line-strong: #48484c;
-  --text: #f5f5f7;
-  --muted: #aeaeb2;
-  --muted-light: #98989d;
-  --selected: #3a3a3d;
-  --selected-text: #ffffff;
-  --accent: #4c9bff;
-  --accent-soft: #1f3355;
-  --danger: #ff6b7f;
-  --warning: #ffb340;
-  --success: #4fd27a;
-}
-
+/* Both themes inherit the generated design tokens; globals.css keeps only legacy-only variables. */
 .appShell {
   --workspace-color: var(--ws-personal);
   --workspace-soft: var(--ws-personal-soft);
