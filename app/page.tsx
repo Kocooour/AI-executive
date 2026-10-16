@@ -18,6 +18,7 @@ import { DetailPanel } from "./ui/views/detail-panel";
 import { AssistantPanel } from "./ui/views/assistant-panel";
 import { ConfirmDialog } from "./ui/views/confirm-dialog";
 import { HeldBack } from "./ui/views/held-back";
+import { workspaceTone } from "./ui/workspace-appearance";
 
 export default function App() {
   const app = useLumiApp();
@@ -39,7 +40,7 @@ export default function App() {
     );
   }
   return (
-    <main className={`appShell view-${view.toLowerCase()}`}>
+    <main className={`appShell view-${view.toLowerCase()}`} data-workspace-tone={workspaceTone(activeWorkspaceId, workspaceName, activeWorkspace?.properties.kind)}>
       <Sidebar app={app} />
       <section className="appPane">
         {app.offlineView && (
