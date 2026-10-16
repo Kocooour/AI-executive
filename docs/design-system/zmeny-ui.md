@@ -46,7 +46,7 @@ Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení
 
 ## W. Prostor (workspace)
 
-**W1 – Barva a písmeno pro každý prostor.** Osobní `ws-personal` (modrá, O), Pracovní `ws-work` (oranžová, P), Rodinný `ws-family` (zelená, R); Všechna práce neutrální `ws-all` se štítkem „jen čtení“. Barva se uloží jako vlastnost entity `workspace` (výchozí podle pořadí, uživatel ji může změnit v Nastavení).
+**W1 – Barva a písmeno pro každý prostor.** Osobní `ws-personal` (modrá, O), Pracovní `ws-work` (oranžová, P), Rodinný `ws-family` (zelená, R); Všechna práce neutrální `ws-all` s popiskem „jen čtení“ (text `caption`, ne štítek). Barva se uloží jako vlastnost entity `workspace` (výchozí podle pořadí, uživatel ji může změnit v Nastavení).
 
 **W2 – Tři signály zároveň.** (a) Nahoře v sidebaru dlaždice 22 px s písmenem a název prostoru tučně místo „Osobní ⌄“; (b) 3px proužek v barvě prostoru přes horní okraj obsahu; (c) aktivní položka navigace má pozadí `ws-*-soft` místo šedé `selected`. Na iPhonu proužek pod stavovým řádkem a dlaždice s názvem vlevo v hlavičce (cíl 44 px). Ukázka: **WorkspaceSwitcher**, **NavItem**, **BottomNav**.
 
@@ -72,7 +72,7 @@ Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení
 
 **B4 – Řádek bez podtitulu.** Každý řádek dnes jako podtitul opakuje název seznamu („Doručené“, „Projekty“, „Poznámky“). Návrh: podtitul zrušit; vpravo nejvýše jeden drobný údaj – úkol: datum (červeně po termínu) nebo odhad; projekt: počet otevřených úkolů; poznámka: datum. Ukázka: **TaskRow**.
 
-**B5 – Search s vlastním polem.** Obrazovka Hledání je bez dotazu prázdná. Návrh: velké pole s fokusem, filtry *Vše · Úkoly · Projekty · Poznámky · Lidé* a nedávná hledání; výsledek uvádí typ, workspace, zdroj a čerstvost.
+**B5 – Search s vlastním polem.** Obrazovka Hledání je bez dotazu prázdná. Návrh: velké pole s fokusem, filtry *Vše · Úkoly · Projekty · Poznámky · Lidé* a nedávná hledání. Výsledek je jeden řádek podle pravidel systému: ikona typu, název, dlaždice prostoru a datum vpravo; zdroj a čerstvost (požadavek LUMI-UX-008) ukazuje inspektor vpravo u vybraného výsledku. Nedostupný zdroj jeden tichý řádek nad výsledky.
 
 **B6 – Texty polí Přidat.** Pole na konci každého seznamu úkolů zní „+ Přidat dnes“ i v Doručených a v Kalendáři (`entity-list.tsx:210` doplňuje vždy „Today“). U ostatních typů je špatný tvar: „Přidat projekty“, „Přidat poznámky“. Návrh: „Přidat úkol“, „Přidat projekt“, „Přidat poznámku“ a seznam, do kterého se přidává, ukázat jen pokud není zřejmý.
 
@@ -82,7 +82,7 @@ Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení
 
 **C1 – Jedna komponenta ProposalCard pro chat, Home, plán dne i Inbox.** Dnes asistent ukazuje `summary` a seznam „popisek: hodnota“ s tlačítky Potvrdit/Zrušit. Specifikace požaduje: cíl, workspace, hodnoty před → po, související položky, dopad na kalendář a jiné systémy, nevratné účinky, konflikty; po provedení výsledek, audit a Zpět; expirovaný návrh nejde schválit. Návrh:
 
-- Hlavička: štítek **Návrh**, workspace, čas vytvoření a platnost („platí ještě 9 min“).
+- Hlavička: štítek **Návrh**, dlaždice a název cílového prostoru a platnost („platí 9 min“) – jediná povolená metadata v hlavičce. Zdroj návrhu a čas vytvoření jsou v auditu.
 - Tabulka změn se sloupci *Pole · Teď · Po schválení*; nové hodnoty tučně.
 - Blok **Dopady** (kalendář, externí systémy) a **Nevratné** zvýrazněný `warning-soft`.
 - Tlačítka *Schválit* (primární) a *Odmítnout*; u expirovaného nebo konfliktního stavu *Schválit* vypnuté s důvodem a *Posoudit znovu*.
@@ -121,7 +121,7 @@ Ukázka: komponenta **ProposalCard** (stavy čeká, expirováno, provedeno).
 
 **F7 – (zrušeno)** Výměna ikon za jinou sadu se nenavrhuje.
 
-**F8 – Levé barevné okraje.** Plán dne a řádky po termínu používají levý barevný okraj (4 px) jako jediný nosič stavu. Návrh: stav vyjádřit štítkem a ikonou; okraj ponechat jen pro rozlišení návrh/potvrzeno (přerušovaný vs. plný, po celém obvodu).
+**F8 – Levé barevné okraje.** Plán dne a řádky po termínu používají levý barevný okraj (4 px) jako jediný nosič stavu. Návrh: stav vyjádřit slovem nebo datem v barvě stavu vpravo v řádku (viz TaskRow); okraj ponechat jen pro rozlišení návrh/potvrzeno (přerušovaný vs. plný, po celém obvodu).
 
 ## Pořadí dodání
 
