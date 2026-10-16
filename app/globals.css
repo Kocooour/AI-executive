@@ -2521,7 +2521,7 @@ article:hover > .dragHandle,
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
 
-:root[data-theme="dark"] {
+[data-theme="dark"] {
   --app-bg: #1f1f20;
   --sidebar-bg: #19191a;
   --surface: #29292b;
