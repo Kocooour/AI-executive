@@ -2,12 +2,14 @@
 import { primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
+import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
 export function Sidebar({ app }: { app: LumiApp }) {
   const {
     setSettingsSection,
     acceptNativeDrop,
     activeWorkspaceId,
+    activeWorkspaceTone,
     closeDetail,
     dragTarget,
     draggableSectionNames,
@@ -38,8 +40,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
             aria-label={tr("switchWorkspace")}
             aria-expanded={workspaceMenuOpen}
           >
+            <WorkspaceTile tone={activeWorkspaceTone} label={workspaceName} />
             <b>{workspaceName}</b>
-            <span>⌄</span>
+            <span className="workspaceChevron" aria-hidden="true">⌄</span>
           </button>
           {workspaceMenuOpen && (
             <div className="workspaceMenu">
@@ -47,17 +50,21 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 <button
                   key={workspace.id}
                   className={activeWorkspaceId === workspace.workspaceId ? "active" : ""}
+                  data-workspace-id={workspace.workspaceId}
                   onClick={() => selectWorkspace(workspace.workspaceId)}
                 >
-                  <span>{workspace.title}</span>
+                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace)} label={workspace.title} />
+                  <span className="workspaceOptionName">{workspace.title}</span>
                   <small>{tr(workspace.properties.kind === "personal" ? "workspaceKindPersonalShort" : "workspaceKindSharedShort")}</small>
                 </button>
               ))}
               <button
                 className={activeWorkspaceId === "all" ? "active" : ""}
+                data-workspace-id="all"
                 onClick={() => selectWorkspace("all")}
               >
-                <span>{tr("allWork")}</span>
+                <WorkspaceTile tone="all" label={tr("allWork")} />
+                <span className="workspaceOptionName">{tr("allWork")}</span>
                 <small>{tr("workspaceAggregate")}</small>
               </button>
               <button
@@ -79,6 +86,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             <button
               className={`${view === x ? "active" : ""} ${dragTarget === `section:${x}` ? "dropActive" : ""}`.trim()}
               aria-current={view === x ? "page" : undefined}
+              data-nav-view={x}
               data-drop-section={draggableSectionNames.includes(x) ? x : undefined}
               onDragEnter={() => draggableSectionNames.includes(x) && setActiveDragTarget(`section:${x}`)}
               onDragOver={(event) => {

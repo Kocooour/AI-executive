@@ -1,0 +1,253 @@
+/* Lumi navigation v1: runtime implementation of docs/design-system.
+   layout.tsx imports the generated docs/design-system/tokens.css after globals.css, so the
+   design-system palette applies to every screen (e2e/contrast.spec.ts checks them all in both
+   themes). This file holds only the navigation and workspace styles; other components follow
+   in separate PRs. */
+
+/* Both themes inherit the generated design tokens; globals.css keeps only legacy-only variables. */
+.appShell {
+  --workspace-color: var(--ws-personal);
+  --workspace-soft: var(--ws-personal-soft);
+  background: var(--app-bg);
+}
+.appShell[data-workspace-tone="work"] {
+  --workspace-color: var(--ws-work);
+  --workspace-soft: var(--ws-work-soft);
+}
+.appShell[data-workspace-tone="family"] {
+  --workspace-color: var(--ws-family);
+  --workspace-soft: var(--ws-family-soft);
+}
+.appShell[data-workspace-tone="all"] {
+  --workspace-color: var(--ws-all);
+  --workspace-soft: var(--ws-all-soft);
+}
+.appShell > aside {
+  background: var(--sidebar-bg);
+  border-color: var(--line);
+}
+/* The workspace band sits on the sticky top bar, so it stays visible while the page scrolls,
+   and below the safe area, so the iPhone status bar does not cover it. */
+.appShell > .appPane > .topbar {
+  background-image: linear-gradient(var(--workspace-color), var(--workspace-color));
+  background-position: 0 env(safe-area-inset-top, 0px);
+  background-size: 100% 3px;
+  background-repeat: no-repeat;
+}
+.appShell .content {
+  max-width: 1040px;
+}
+.appShell .pageTitleRow h1 {
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+.appShell .workspaceSwitcher {
+  min-width: 0;
+}
+.appShell .workspaceButton,
+.appShell .mobileWorkspaceButton {
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  text-align: left;
+}
+.appShell .workspaceButton {
+  display: flex;
+  min-height: 44px;
+  padding: 6px var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+}
+.appShell .workspaceButton:hover,
+.appShell .workspaceButton[aria-expanded="true"] {
+  background: var(--hover);
+}
+.appShell .workspaceButton b {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.workspaceChevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted-light);
+}
+.workspaceTile {
+  --tile-color: var(--ws-work);
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--tile-color);
+  color: var(--on-ws);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.appShell .workspaceButton .workspaceTile { color: var(--on-ws); }
+.workspaceTile[data-tone="personal"] { --tile-color: var(--ws-personal); }
+.workspaceTile[data-tone="work"] { --tile-color: var(--ws-work); }
+.workspaceTile[data-tone="family"] { --tile-color: var(--ws-family); }
+.workspaceTile[data-tone="all"] { --tile-color: var(--ws-all); }
+.appShell .workspaceMenu {
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+}
+.appShell .workspaceMenu button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 7px var(--space-2);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.appShell .workspaceMenu button:hover {
+  background: var(--hover);
+}
+.appShell .workspaceMenu button.active {
+  background: var(--workspace-soft) !important;
+  color: var(--text) !important;
+  font-weight: 650;
+}
+.workspaceOptionName {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Breaks a word only when it cannot fit on its own line; the short label next to it gives way first. */
+  overflow-wrap: break-word;
+}
+.appShell .workspaceMenu small {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+/* An option with a tile puts its short description under the name, so neither is squeezed. */
+.appShell .workspaceMenu button:has(> .workspaceTile) {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  row-gap: 1px;
+}
+.appShell .workspaceMenu button:has(> .workspaceTile) > small {
+  grid-column: 2;
+}
+/* muted is below 4.5:1 on the ws-*-soft fills; the active option uses the text colour. */
+.appShell .workspaceMenu button.active small {
+  color: var(--text);
+}
+.appShell > aside > nav button {
+  color: var(--text);
+  min-height: 40px;
+  border-radius: var(--radius-xs);
+}
+/* :root lifts this above the legacy `:root[data-theme="dark"] .active { … !important }` in
+   globals.css, which would otherwise paint the dark sidebar in the accent instead of the workspace. */
+:root .appShell > aside > nav button.active {
+  background: var(--workspace-soft) !important;
+  color: var(--text) !important;
+  font-weight: 700;
+}
+:root .appShell > aside > nav button.active .navCount {
+  color: var(--text);
+  background: transparent;
+}
+.appShell .navLabel > span {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--icon-home);
+  font-size: 16px;
+}
+.appShell > aside > nav button[data-nav-view="Home"] .navLabel > span { color: var(--icon-home); }
+.appShell > aside > nav button[data-nav-view="Inbox"] .navLabel > span { color: var(--icon-inbox); }
+.appShell > aside > nav button[data-nav-view="Today"] .navLabel > span { color: var(--icon-today); }
+.appShell > aside > nav button[data-nav-view="Upcoming"] .navLabel > span { color: var(--icon-upcoming); }
+.appShell > aside > nav button[data-nav-view="Projects"] .navLabel > span { color: var(--icon-projects); }
+.appShell > aside > nav button[data-nav-view="Areas"] .navLabel > span { color: var(--icon-areas); }
+.appShell > aside > nav button[data-nav-view="Notes"] .navLabel > span { color: var(--icon-notes); }
+.appShell > aside > nav button[data-nav-view="Calendar"] .navLabel > span { color: var(--icon-calendar); }
+.appShell > aside > nav button[data-nav-view="Search"] .navLabel > span { color: var(--icon-search); }
+
+.appShell .workspaceButton:focus-visible,
+.appShell .mobileWorkspaceButton:focus-visible,
+.appShell .workspaceMenu button:focus-visible,
+.appShell > aside > nav button:focus-visible,
+.appShell .mobileNav button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .appShell .mobileWorkspaceButton {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 39vw;
+    min-height: 44px;
+    padding: 4px 0;
+    font-size: 13px;
+  }
+  .mobileWorkspaceName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 650;
+  }
+  .appShell .mobileWorkspaceMenu.workspaceMenu {
+    max-width: min(290px, calc(100vw - 32px));
+    left: 12px;
+    width: max-content;
+    min-width: 220px;
+  }
+  .appShell .mobileNav {
+    background: color-mix(in srgb, var(--sidebar-bg) 96%, transparent);
+  }
+  .appShell .mobileNav button {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 3px;
+    min-width: 44px;
+    min-height: 44px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .appShell .mobileNav button.active {
+    background: transparent !important;
+    color: var(--text) !important;
+    font-weight: 700;
+  }
+  .appShell .mobileNav button .mobileNavIcon {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    font-size: 20px;
+    color: var(--icon-home);
+  }
+  .appShell .mobileNav button.active .mobileNavIcon {
+    background: var(--workspace-soft);
+  }
+  .appShell .mobileNav button[data-nav-view="Inbox"] .mobileNavIcon { color: var(--icon-inbox); }
+  .appShell .mobileNav button[data-nav-view="Today"] .mobileNavIcon { color: var(--icon-today); }
+  .appShell .mobileNav button[data-nav-view="Calendar"] .mobileNavIcon { color: var(--icon-calendar); }
+  .appShell .mobileNav button[data-nav-view="More"] .mobileNavIcon { color: var(--muted); }
+  .appShell .mobileCaptureButton {
+    color: var(--on-accent);
+    border-radius: var(--radius-xl);
+  }
+}

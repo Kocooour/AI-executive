@@ -1,6 +1,6 @@
 # Lumi — design systém (návrh)
 
-> **Návrh, zatím neimplementováno.** Paleta ve stylu Things, barvy prostorů, ikony navigace a porovnání cílových obrazovek z [UX-UI.md](../UX-UI.md) se stavem aplikace k `main@d7d8cca` – viz [zmeny-ui.md](zmeny-ui.md). Logo: `public/icons/lumi-icon-v3-*.png`.
+> **Částečně implementováno (navigace v1).** V runtime jsou nyní napojené generované tokeny, barevné rozlišení prostorů, dlaždice přepínače, ikony a zvýraznění navigace na desktopu i mobilu. Ukázky ostatních komponent (AttentionItem, PlanBlock, ProposalCard, 3-panelový detail aj.) jsou nadále **návrhy**, nikoli implementované UI. Podrobný seznam: [zmeny-ui.md](zmeny-ui.md). Logo: `public/icons/lumi-icon-v3-*.png`.
 
 Lumi je osobní AI asistent pro řízení práce. Rozhraní je tiché, ve stylu Things: velký nadpis, čisté řádky, málo slov. Barva znamená buď **akci** (`accent`), **stav** (`danger`, `warning`), nebo **prostor**, ve kterém pracujete (`ws-personal`, `ws-work`, `ws-family`).
 

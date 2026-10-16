@@ -26,6 +26,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
             ref={x === "More" ? moreTriggerRef : undefined}
             className={view === x || (x === "More" && (moreOpen || moreViews.includes(view))) ? "active" : ""}
             aria-label={tr(x)}
+            data-nav-view={x}
             aria-current={view === x || (x === "More" && moreViews.includes(view)) ? "page" : undefined}
             aria-expanded={x === "More" ? moreOpen : undefined}
             aria-controls={x === "More" ? "mobile-more-dialog" : undefined}

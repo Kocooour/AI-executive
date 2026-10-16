@@ -2521,7 +2521,7 @@ article:hover > .dragHandle,
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
 
-:root[data-theme="dark"] {
+[data-theme="dark"] {
   --app-bg: #1f1f20;
   --sidebar-bg: #19191a;
   --surface: #29292b;
@@ -3130,6 +3130,9 @@ h3 {
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
+    /* clip, unlike hidden, does not make body a scroll container, so the sticky top bar (and the
+       workspace band on it) stays in view; browsers without clip keep hidden. */
+    overflow-x: clip;
   }
 
   .appShell,
