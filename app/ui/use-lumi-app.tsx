@@ -858,7 +858,10 @@ export function useLumiApp() {
   }
   // A claim whose revision moved because its evidence changed: the editor keeps the draft and follows the revision.
   const syncEditedClaim = (claim: ContextClaimItem) => { if (claimEditor.current.objectId === claim.id) setEditingClaim(claim); };
-  const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
+  // Counts the restores and imports of this server data (here or in another tab): what the app loads from the server
+  // besides the synchronised records (Context, its history, sources, work sessions, note versions) reloads when it changes.
+  const [dataEpoch, setDataEpoch] = useState(0);
+  const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
     contextInFlight, commandFailureMessage, refreshAfterCommand, offerContextUndo, loadContextClaims, syncEditedClaim });
   const { loadContextSources } = evidenceState;
   contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action); } };
@@ -967,7 +970,7 @@ export function useLumiApp() {
     }
     loadContextClaims(workspaceId).catch(() => setClaimStatus(tr("structuredContextIsUnavailable")));
     loadStandaloneSubjects(workspaceId).catch(() => setSubjectStatus(tr("peopleAndOrganizationsAre")));
-  }, [authState, activeWorkspaceId, writeWorkspaceId]);
+  }, [authState, activeWorkspaceId, writeWorkspaceId, dataEpoch]);
 
   useEffect(() => {
     const savedLanguage = localStorage.getItem("ai-executive-language");
@@ -1719,13 +1722,13 @@ export function useLumiApp() {
     timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
   const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
-  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
+  const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, dataEpoch, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
-  const { backups, setBackups, backupStatus, setBackupStatus, createServerBackup, restoreServerBackup } = useBackups({
-    language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); postToTabs({ type: "restored", from: tabId.current }); } });
+  const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
+    language, tr, askConfirm, applySnapshot, afterRestore: () => { dropNotesBeingTyped(); setDataEpoch((count) => count + 1); postToTabs({ type: "restored", from: tabId.current }); } });
   // Started without a connection (owner decision 2026-10-09): access could not be checked, but this
   // browser has synchronized with the server before and still holds its data (signing out removes
   // it), so the app shows that data, marked as offline, instead of only the access screen. Access is
@@ -2556,7 +2559,7 @@ export function useLumiApp() {
       const message = event.data;
       if (!message || message.from === tabId.current) return;
       if (message.type === "sign-out-cancelled") { release(); return; }
-      if (message.type === "restored") { dropNotesBeingTypedRef.current(); return; }
+      if (message.type === "restored") { dropNotesBeingTypedRef.current(); setDataEpoch((count) => count + 1); return; }
       // A tab opened (or woken) after the request still stops editing and saves what it can.
       if (message.type === "signing-out") {
         const wasBlocked = document.body.inert;
@@ -3131,6 +3134,7 @@ export function useLumiApp() {
     retryAccess,
     backupStatus,
     backups,
+    dataEpoch,
     badgeStatus,
     calendarAction,
     calendarBusy,
@@ -3205,6 +3209,10 @@ export function useLumiApp() {
     rowError,
     setRowError,
     createServerBackup,
+    backupBusy,
+    backupFailed,
+    downloadExport,
+    importExport,
     createSuggestedTarget,
     createWorkspace,
     disableNotifications,

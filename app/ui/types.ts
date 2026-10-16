@@ -23,9 +23,16 @@ export interface AttentionResponse {
 }
 export interface BackupSummary {
   name: string;
+  // "full": a database copy; "legacy": a JSON file with tasks, projects, notes and their links only.
+  format: "full" | "legacy";
+  label: string;
   createdAt: number;
   entityCount: number;
   relationCount: number;
+  claimCount: number;
+  sourceCount: number;
+  noteRevisionCount: number;
+  workSessionCount: number;
   error?: string;
 }
 export interface PasskeySummary {
