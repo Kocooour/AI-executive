@@ -31,6 +31,7 @@ import { useNotifications } from "./hooks/use-notifications";
 import { useAppBadge } from "./hooks/use-app-badge";
 import { useSync } from "./hooks/use-sync";
 import { localizeServerError } from "../../lib/server-errors";
+import { workspaceTone } from "./workspace-tone";
 
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
@@ -1388,7 +1389,7 @@ export function useLumiApp() {
       document.documentElement.dataset.theme = resolved;
       document.documentElement.style.colorScheme = resolved;
       document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-        ?.setAttribute("content", resolved === "dark" ? "#1c1c1e" : "#f4f3f1");
+        ?.setAttribute("content", resolved === "dark" ? "#1c1c1e" : "#ffffff");
     };
     applyTheme();
     if (themeMode === "system") media.addEventListener("change", applyTheme);
@@ -3389,6 +3390,8 @@ export function useLumiApp() {
     workspaceDraft,
     workspaceMenuOpen,
     workspaceName,
+    // The colour of the active workspace, shared by the band, the tiles and the active navigation.
+    activeWorkspaceTone: workspaceTone(activeWorkspaceId, activeWorkspace),
     workspaces,
     writeWorkspace,
     writeWorkspaceId,

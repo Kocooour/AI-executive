@@ -9,7 +9,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
     setSettingsSection,
     acceptNativeDrop,
     activeWorkspaceId,
-    activeWorkspace,
+    activeWorkspaceTone,
     closeDetail,
     dragTarget,
     draggableSectionNames,
@@ -40,7 +40,7 @@ export function Sidebar({ app }: { app: LumiApp }) {
             aria-label={tr("switchWorkspace")}
             aria-expanded={workspaceMenuOpen}
           >
-            <WorkspaceTile tone={workspaceTone(activeWorkspaceId, workspaceName, activeWorkspace?.properties.kind)} label={workspaceName} />
+            <WorkspaceTile tone={activeWorkspaceTone} label={workspaceName} />
             <b>{workspaceName}</b>
             <span className="workspaceChevron" aria-hidden="true">⌄</span>
           </button>
@@ -50,15 +50,17 @@ export function Sidebar({ app }: { app: LumiApp }) {
                 <button
                   key={workspace.id}
                   className={activeWorkspaceId === workspace.workspaceId ? "active" : ""}
+                  data-workspace-id={workspace.workspaceId}
                   onClick={() => selectWorkspace(workspace.workspaceId)}
                 >
-                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace.title, workspace.properties.kind)} label={workspace.title} />
+                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace)} label={workspace.title} />
                   <span className="workspaceOptionName">{workspace.title}</span>
                   <small>{tr(workspace.properties.kind === "personal" ? "workspaceKindPersonalShort" : "workspaceKindSharedShort")}</small>
                 </button>
               ))}
               <button
                 className={activeWorkspaceId === "all" ? "active" : ""}
+                data-workspace-id="all"
                 onClick={() => selectWorkspace("all")}
               >
                 <WorkspaceTile tone="all" label={tr("allWork")} />
