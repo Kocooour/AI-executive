@@ -151,7 +151,7 @@ export function useLumiApp() {
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
-    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, putSnapshot, syncToServer,
+    deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, adoptServerCopy, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -1048,6 +1048,12 @@ export function useLumiApp() {
           await pullFromServer();
           return;
         }
+        // The data was restored from a backup (on another device, or while this browser was away) since this browser last
+        // held it: its unsent changes were made against data that no longer exists, so the server copy replaces them.
+        if (hasPendingChanges && restoreGeneration.current !== undefined && typeof snapshot.restoreGeneration === "number" && snapshot.restoreGeneration !== restoreGeneration.current) {
+          await adoptServerCopy(snapshot, true);
+          return;
+        }
         // What this start sends of the bookkeeping shared by all tabs; only that is removed.
         const sentMarkers = captureMarkers();
         let outgoing = forServer(localEntities, localRelations, null);
@@ -1084,6 +1090,7 @@ export function useLumiApp() {
             snapshot.revision,
             sentMarkers.deleted,
             sentMarkers.revived,
+            snapshot.restoreGeneration,
           );
           if (saveResponse.status === 409) {
             snapshot = (await saveResponse.json()) as ServerSnapshot;
@@ -1107,6 +1114,7 @@ export function useLumiApp() {
               snapshot.revision,
               sentMarkers.deleted,
               sentMarkers.revived,
+              snapshot.restoreGeneration,
             );
           }
           if (!saveResponse.ok) throw new Error("Initial synchronization failed");
@@ -3212,6 +3220,8 @@ export function useLumiApp() {
     createServerBackup,
     backupBusy,
     backupFailed,
+    restoredNotice,
+    dismissRestoredNotice,
     downloadExport,
     importExport,
     createSuggestedTarget,

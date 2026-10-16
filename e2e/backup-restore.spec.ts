@@ -3,6 +3,7 @@ import { unzipSync, zipSync } from "fflate";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { confirmDialog, serverEntities, waitUntilSynced } from "./helpers";
+import { sessionFile } from "../playwright.config";
 
 // Backups, restore, export and import in Settings → Data and backups. A restore returns everything in scope to the
 // backup: records, Context with its Undo steps, sources, and note versions. These scenarios change the shared
@@ -20,7 +21,7 @@ async function setStore(page: Page, add: Array<Record<string, unknown>>, removeI
     const kept = snapshot.entities.filter((entity: { id: string }) => !(removed as string[]).includes(entity.id)).map((entity: { id: string }) => (replaced as Record<string, object>)[entity.id] ?? entity);
     const entities = [...kept, ...(added as object[]).map((entity) => ({ createdAt: now, updatedAt: now, ...entity }))];
     const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision: snapshot.revision, entities, relations: snapshot.relations, deletedIds: removed, revivedIds: [] }) });
+      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities, relations: snapshot.relations, deletedIds: removed, revivedIds: [] }) });
     return saved.status;
   }, [add, removeIds, replace] as const);
   expect(status).toBe(200);
@@ -64,7 +65,7 @@ async function cleanUp(page: Page) {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
     if (mine.length) {
-      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
         entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")), relations: snapshot.relations,
         deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
     }
@@ -286,6 +287,62 @@ test("a restore replaces the local copy: held-back records and pending changes o
   await expect(other.getByText("Záloha: úkol, který přežije")).toBeVisible();
   await expect(other.getByText("Jen v tomto prohlížeči")).toHaveCount(0);
   await other.close();
+});
+
+test("a device with an unsent change from before a restore on another device discards it and shows the restored data", async ({ browser }) => {
+  const kept = `e2e-backup-device-${stamp}`;
+  const open = async () => {
+    const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+    return { context, page: await context.newPage() };
+  };
+  const first = await open(), second = await open();
+  try {
+    await first.page.goto("/");
+    await waitUntilSynced(first.page);
+    await setStore(first.page, [task(kept, "Zařízení: úkol v záloze")]);
+    await second.page.goto("/?view=Inbox");
+    await waitUntilSynced(second.page);
+    await expect(second.page.getByText("Zařízení: úkol v záloze")).toBeVisible({ timeout: 20_000 });
+    // The first device backs up, then the second goes offline and records a task.
+    const name = await first.page.evaluate(async () => {
+      await fetch("/api/backups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "create" }) });
+      const list = (await fetch("/api/backups", { cache: "no-store" }).then((response) => response.json())).backups as Array<{ name: string; label: string }>;
+      return list.find((backup) => backup.label === "manual")!.name;
+    });
+    await second.context.setOffline(true);
+    const field = second.page.locator(".capture input");
+    await field.fill("Zařízení: změna před obnovením");
+    await field.press("Enter");
+    await expect(second.page.getByText("Zařízení: změna před obnovením")).toBeVisible();
+    // The first device restores; the second comes back online with its unsent change.
+    const restored = await first.page.evaluate(async (backup) => (await fetch("/api/backups", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "restore", name: backup }) })).status, name);
+    expect(restored).toBe(200);
+    await second.context.setOffline(false);
+    const notice = second.page.locator(".restoredNotice");
+    await expect(notice).toContainText("Data byla obnovena ze zálohy.", { timeout: 30_000 });
+    await expect(notice).toContainText("neodeslané se zahodily");
+    await expect(second.page.getByText("Zařízení: změna před obnovením")).toHaveCount(0);
+    await expect(second.page.getByText("Zařízení: úkol v záloze")).toBeVisible();
+    await waitUntilSynced(second.page);
+    expect((await serverEntities(first.page)).map((entity) => entity.title)).not.toContain("Zařízení: změna před obnovením");
+    // It stays discarded after a reload, and the device saves normally again.
+    await second.page.reload();
+    await waitUntilSynced(second.page);
+    await expect(second.page.getByText("Zařízení: změna před obnovením")).toHaveCount(0);
+    await second.page.locator(".capture input").fill("Zařízení: změna po obnovení");
+    await second.page.locator(".capture input").press("Enter");
+    await expect.poll(async () => (await serverEntities(first.page)).map((entity) => entity.title), { timeout: 20_000 }).toContain("Zařízení: změna po obnovení");
+    await expect(second.page.locator(".restoredNotice")).toHaveCount(0);
+  } finally {
+    await first.page.evaluate(async () => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const mine = snapshot.entities.filter((entity: { title: string }) => entity.title.startsWith("Zařízení:")).map((entity: { id: string }) => entity.id);
+      if (mine.length) await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: snapshot.entities.filter((entity: { id: string }) => !mine.includes(entity.id)), relations: snapshot.relations, deletedIds: mine, revivedIds: [] }) });
+    }).catch(() => undefined);
+    await first.context.close();
+    await second.context.close();
+  }
 });
 
 test("a backup older than the current format is marked and its restore says that Context is not changed", async ({ page }) => {

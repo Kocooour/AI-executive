@@ -33,7 +33,7 @@ const others = () => store.readSnapshot().entities.filter((entity) => entity.id 
 const save = (notes, deletedIds = [], keep = true) => {
   const current = store.readSnapshot();
   const kept = keep ? current.entities.filter((entity) => entity.type !== "note" && entity.id !== "workspace:personal") : [];
-  return store.replaceSnapshot(current.revision, [...current.entities.filter((entity) => entity.id === "workspace:personal"), ...kept, ...notes], [], deletedIds);
+  return store.replaceSnapshot(current.revision, [...current.entities.filter((entity) => entity.id === "workspace:personal"), ...kept, ...notes], [], deletedIds, [], current.restoreGeneration);
 };
 const rows = (id) => db().prepare("SELECT revision, origin, title, content FROM note_revisions WHERE note_id = ? ORDER BY revision").all(id);
 const current = (id) => store.readSnapshot().entities.find((entity) => entity.id === id);
@@ -68,13 +68,13 @@ test("a note without content is an empty text", () => {
 test("a conflict or refused write records nothing", () => {
   const before = rows("note:a").length;
   const snapshot = store.readSnapshot();
-  const result = store.replaceSnapshot(snapshot.revision - 1, [...snapshot.entities.filter((e) => e.id !== "note:a"), note("note:a", "A2", "stale")], []);
+  const result = store.replaceSnapshot(snapshot.revision - 1, [...snapshot.entities.filter((e) => e.id !== "note:a"), note("note:a", "A2", "stale")], [], [], snapshot.restoreGeneration);
   assert.equal(result.conflict, true);
   assert.equal(rows("note:a").length, before);
   assert.equal(current("note:a").content, "two");
   // A failure part-way (an entity that cannot be stored) leaves no revision either.
   const circular = { ...note("note:a", "A2", "boom") }; circular.properties.self = circular;
-  assert.throws(() => store.replaceSnapshot(store.readSnapshot().revision, [...store.readSnapshot().entities.filter((e) => e.id !== "note:a"), circular], []));
+  assert.throws(() => store.replaceSnapshot(store.readSnapshot().revision, [...store.readSnapshot().entities.filter((e) => e.id !== "note:a"), circular], [], [], store.readSnapshot().restoreGeneration));
   assert.equal(rows("note:a").length, before);
 });
 

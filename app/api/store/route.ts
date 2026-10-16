@@ -91,12 +91,14 @@ export async function PUT(request: Request) {
       { status: 400 },
     );
   }
+  const generation = Number.isSafeInteger(body.restoreGeneration) ? Number(body.restoreGeneration) : undefined;
   const result = replaceSnapshot(
     baseRevision,
     body.entities,
     body.relations,
     deletedIds,
     revivedIds,
+    generation,
   );
   recordSecurityEvent(request, "store.write", "allowed", {
     conflict: result.conflict,
@@ -105,7 +107,10 @@ export async function PUT(request: Request) {
     deletedCount: deletedIds.length,
     revivedCount: revivedIds.length,
   });
-  return NextResponse.json(result.snapshot, {
+  // `code: "restored"`: the data was restored from a backup since this client last synchronized; nothing was written and the
+  // client replaces its copy instead of merging.
+  const restored = "restored" in result && result.restored;
+  return NextResponse.json(restored ? { ...result.snapshot, code: "restored" } : result.snapshot, {
     status: result.conflict ? 409 : 200,
     headers: { "cache-control": "no-store" },
   });

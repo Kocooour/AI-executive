@@ -165,7 +165,7 @@ test("an export holds every workspace of the owner, and is given only to the own
   await page.evaluate(async ([workspaceId, noteId]) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities,
         { id: `workspace:${workspaceId}`, type: "workspace", title: "Boundary", status: "active", workspaceId, properties: { kind: "personal", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: now, updatedAt: now },
         { id: noteId, type: "note", title: "Boundary note", content: "x", status: "active", workspaceId, properties: {}, createdAt: now, updatedAt: now }],
@@ -217,7 +217,7 @@ test("an export holds every workspace of the owner, and is given only to the own
     await page.evaluate(async ([workspaceId, noteId]) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const gone = [`workspace:${workspaceId}`, noteId];
-      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
         entities: snapshot.entities.filter((entity: { id: string }) => !gone.includes(entity.id)), relations: snapshot.relations, deletedIds: gone, revivedIds: [] }) });
     }, [second, marker]);
   }

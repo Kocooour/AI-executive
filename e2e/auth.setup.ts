@@ -22,7 +22,7 @@ setup("sign in and seed synthetic data", async ({ page }) => {
       entity("e2e-rename", "task", names.renameTask, { inbox: true }),
     ];
     const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision: snapshot.revision, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     return saved.status;
   }, seeded);
   expect(result).toBe(200);

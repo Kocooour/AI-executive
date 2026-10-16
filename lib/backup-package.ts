@@ -1,7 +1,7 @@
 import { closeSync, openSync, readSync, statSync, writeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { Unzip, UnzipInflate, Zip, ZipDeflate, type UnzipFile } from "fflate";
+import { Inflate, Zip, ZipDeflate } from "fflate";
 import { includedTables } from "./backup-scope";
 import { HttpInputError } from "./http-security";
 import type { Entity } from "./db";
@@ -38,7 +38,7 @@ export interface PackageLimits {
 // whatever the app exports it can import again. They are bomb protection, not a size policy: entries are counted while
 // inflating (not only as declared), and a package that inflates far beyond what it read is refused by the ratio guard.
 export const defaultPackageLimits: PackageLimits = {
-  maxEntries: 250_000,
+  maxEntries: 65_000,
   // The manifest lists every file (about 120 bytes each), so it is bounded on its own, well below the generic entry limit.
   maxManifestBytes: 32 * 1024 ** 2,
   maxTotalBytes: 4 * 1024 ** 3,
@@ -215,69 +215,137 @@ export const badNameChecks = (name: string) =>
  * as declared), a manifest, and every file present, listed and matching its sha256. The package's database is written to
  * `databasePath` (a temporary file the caller owns and deletes); nothing else is kept.
  */
+interface CentralEntry { name: string; method: number; compressed: number; size: number; localOffset: number }
+
+const invalidFile = () => new HttpInputError("Not a valid export file");
+const tooBig = () => new HttpInputError("Export package is too large");
+
+function readExactly(fd: number, length: number, position: number) {
+  const buffer = Buffer.alloc(length);
+  let done = 0;
+  while (done < length) {
+    const read = readSync(fd, buffer, done, length - done, position + done);
+    if (read === 0) throw invalidFile();
+    done += read;
+  }
+  return buffer;
+}
+
+/**
+ * The entries of the ZIP from its central directory (the file is read by position, never scanned). A streaming reader
+ * that looks for the end of an entry in the byte stream can cut one short when compressed data happens to contain the
+ * signature of a data descriptor, which makes valid archives fail at random; the central directory has exact sizes.
+ * Sizes and counts are checked here, before anything is inflated. ZIP64 is not accepted: an export never needs it.
+ */
+function readCentralDirectory(fd: number, fileSize: number, limits: PackageLimits): CentralEntry[] {
+  if (fileSize < 22) throw invalidFile();
+  const tailSize = Math.min(fileSize, 22 + 65535);
+  const tail = readExactly(fd, tailSize, fileSize - tailSize);
+  let end = -1;
+  for (let index = tail.length - 22; index >= 0; index -= 1) {
+    if (tail.readUInt32LE(index) === 0x06054b50) { end = index; break; }
+  }
+  if (end < 0) throw invalidFile();
+  const count = tail.readUInt16LE(end + 10);
+  const directorySize = tail.readUInt32LE(end + 12);
+  const directoryOffset = tail.readUInt32LE(end + 16);
+  if (count === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) throw invalidFile();
+  const endPosition = fileSize - tailSize + end;
+  if (count === 0 || directoryOffset + directorySize > endPosition) throw invalidFile();
+  if (count > limits.maxEntries || directorySize > 64 * 1024 ** 2) throw tooBig();
+  const directory = readExactly(fd, directorySize, directoryOffset);
+  const entries: CentralEntry[] = [];
+  const names = new Set<string>();
+  let position = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (position + 46 > directory.length || directory.readUInt32LE(position) !== 0x02014b50) throw invalidFile();
+    const flags = directory.readUInt16LE(position + 8);
+    const method = directory.readUInt16LE(position + 10);
+    const compressed = directory.readUInt32LE(position + 20);
+    const size = directory.readUInt32LE(position + 24);
+    const nameLength = directory.readUInt16LE(position + 28);
+    const extraLength = directory.readUInt16LE(position + 30);
+    const commentLength = directory.readUInt16LE(position + 32);
+    const localOffset = directory.readUInt32LE(position + 42);
+    if (position + 46 + nameLength + extraLength + commentLength > directory.length) throw invalidFile();
+    const name = directory.toString("utf8", position + 46, position + 46 + nameLength);
+    position += 46 + nameLength + extraLength + commentLength;
+    if ((flags & 1) !== 0 || (method !== 0 && method !== 8) || compressed === 0xffffffff || size === 0xffffffff || localOffset >= directoryOffset) throw invalidFile();
+    if (badNameChecks(name) || names.has(name)) throw new HttpInputError("Invalid export package");
+    names.add(name);
+    entries.push({ name, method, compressed, size, localOffset });
+  }
+  return entries;
+}
+
+/**
+ * Reads the ZIP at `zipPath` and checks it: the central directory (sane names, bounded counts and sizes), then every entry
+ * inflated in pieces, with sizes counted as they inflate (not only as declared), the inflate ratio guarded, a manifest, and
+ * every file present, listed and matching its sha256. The package's database is written to `databasePath` (a temporary
+ * file the caller owns and deletes); nothing else is kept.
+ */
 export function verifyPackage(zipPath: string, databasePath: string, limits: PackageLimits = defaultPackageLimits) {
   const seen = new Map<string, { hash: ReturnType<typeof createHash>; bytes: number }>();
   const manifestChunks: Buffer[] = [];
   let totalBytes = 0;
-  let failure: HttpInputError | null = null;
-  let databaseFd: number | null = null;
   let compressedBytes = 0;
-  let unfinished = 0;
-  const fail = (error: HttpInputError) => { if (!failure) failure = error; };
-
-  const unzip = new Unzip();
-  unzip.register(UnzipInflate);
-  unzip.onfile = (file: UnzipFile) => {
-    if (failure) return;
-    const name = file.name;
-    if (badNameChecks(name)) { fail(new HttpInputError("Invalid export package")); return; }
-    if (seen.has(name)) { fail(new HttpInputError("Invalid export package")); return; }
-    if (seen.size + 1 > limits.maxEntries) { fail(new HttpInputError("Export package is too large")); return; }
-    const entryLimit = name === databaseEntry ? limits.maxDatabaseBytes : name === manifestEntry ? limits.maxManifestBytes : limits.maxEntryBytes;
-    if (typeof file.originalSize === "number" && file.originalSize > entryLimit) { fail(new HttpInputError("Export package is too large")); return; }
-    const state = { hash: createHash("sha256"), bytes: 0 };
-    seen.set(name, state);
-    if (name === databaseEntry) databaseFd = openSync(databasePath, "w", 0o600);
-    unfinished += 1;
-    file.ondata = (error, data, final) => {
-      if (failure) return;
-      if (error) { fail(new HttpInputError("Not a valid export file")); return; }
-      if (final) unfinished -= 1;
-      state.bytes += data.length;
-      totalBytes += data.length;
-      if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
-      if (totalBytes > limits.bombFloorBytes && totalBytes > compressedBytes * limits.maxRatio) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
-      state.hash.update(data);
-      if (name === manifestEntry) manifestChunks.push(Buffer.from(data));
-      if (name === databaseEntry && databaseFd !== null) writeSync(databaseFd, data);
-    };
-    file.start();
-  };
-
   const fd = openSync(zipPath, "r");
   try {
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let ended = false;
-    while (!failure && !ended) {
-      const read = readSync(fd, buffer, 0, buffer.length, null);
-      ended = read === 0;
-      compressedBytes += read;
-      if (compressedBytes === read && read >= 4 && !(buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05))) {
-        throw new HttpInputError("Not a valid export file");
-      }
+    const fileSize = statSync(zipPath).size;
+    const entries = readCentralDirectory(fd, fileSize, limits);
+    const limitFor = (name: string) => name === databaseEntry ? limits.maxDatabaseBytes : name === manifestEntry ? limits.maxManifestBytes : limits.maxEntryBytes;
+    for (const entry of entries) if (entry.size > limitFor(entry.name)) throw tooBig();
+    for (const entry of entries) {
+      const entryLimit = limitFor(entry.name);
+      const header = readExactly(fd, 30, entry.localOffset);
+      if (header.readUInt32LE(0) !== 0x04034b50) throw invalidFile();
+      const dataStart = entry.localOffset + 30 + header.readUInt16LE(26) + header.readUInt16LE(28);
+      if (dataStart + entry.compressed > fileSize) throw invalidFile();
+      const state = { hash: createHash("sha256"), bytes: 0 };
+      seen.set(entry.name, state);
+      const databaseFd = entry.name === databaseEntry ? openSync(databasePath, "w", 0o600) : null;
+      let finished = false;
+      const take = (data: Uint8Array) => {
+        state.bytes += data.length;
+        totalBytes += data.length;
+        if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) throw tooBig();
+        if (totalBytes > limits.bombFloorBytes && totalBytes > Math.max(1, compressedBytes) * limits.maxRatio) throw tooBig();
+        state.hash.update(data);
+        if (entry.name === manifestEntry) manifestChunks.push(Buffer.from(data));
+        if (databaseFd !== null) writeSync(databaseFd, data);
+      };
       try {
-        unzip.push(ended ? new Uint8Array(0) : Uint8Array.prototype.slice.call(buffer, 0, read), ended);
-      } catch {
-        fail(new HttpInputError("Not a valid export file"));
+        const inflater = new Inflate();
+        let failed: Error | null = null;
+        inflater.ondata = (data, final) => { if (failed) return; try { take(data); } catch (error) { failed = error as Error; } if (final) finished = true; };
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        for (let done = 0; done < entry.compressed;) {
+          const length = Math.min(buffer.length, entry.compressed - done);
+          const read = readSync(fd, buffer, 0, length, dataStart + done);
+          if (read === 0) throw invalidFile();
+          done += read;
+          compressedBytes += read;
+          const chunk = Uint8Array.prototype.slice.call(buffer, 0, read);
+          if (entry.method === 0) { take(chunk); finished = done === entry.compressed; }
+          else {
+            try { inflater.push(chunk, done === entry.compressed); } catch { throw failed ?? invalidFile(); }
+          }
+          if (failed) throw failed;
+        }
+        if (entry.compressed === 0 && entry.method === 8) {
+          try { inflater.push(new Uint8Array(0), true); } catch { throw failed ?? invalidFile(); }
+          if (failed) throw failed;
+        }
+        if (entry.method === 0 && entry.compressed === 0) finished = true;
+        if (!finished || state.bytes !== entry.size) throw invalidFile();
+      } finally {
+        if (databaseFd !== null) closeSync(databaseFd);
       }
     }
   } finally {
     closeSync(fd);
-    if (databaseFd !== null) closeSync(databaseFd);
   }
-  if (failure) throw failure;
-  // Nothing readable, or an entry that ends before it is complete (a truncated or damaged archive).
-  if (seen.size === 0 || unfinished > 0) throw new HttpInputError("Not a valid export file");
+  if (seen.size === 0) throw invalidFile();
 
   if (!seen.has(manifestEntry) || !seen.has(databaseEntry)) throw new HttpInputError("Export package has missing or unexpected files");
   let manifest: PackageManifest;

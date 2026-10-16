@@ -29,6 +29,21 @@ export function useSync() {
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting");
   const serverRevision = useRef(0);
+  // The restore generation of the server data this device last held (lib/server-store.ts), kept across reloads. Sent with
+  // every save; a save from before a restore is refused by the server, and then this device replaces its copy.
+  const generationKey = "ai-executive-restore-generation";
+  const restoreGeneration = useRef<number | undefined>(undefined);
+  if (restoreGeneration.current === undefined && typeof localStorage !== "undefined") {
+    const stored = Number(localStorage.getItem(generationKey));
+    if (localStorage.getItem(generationKey) !== null && Number.isSafeInteger(stored)) restoreGeneration.current = stored;
+  }
+  function rememberGeneration(value: number | undefined) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) return;
+    restoreGeneration.current = value;
+    try { localStorage.setItem(generationKey, String(value)); } catch { /* storage unavailable: kept in memory */ }
+  }
+  // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
+  const [restoredNotice, setRestoredNotice] = useState(false);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
@@ -169,6 +184,7 @@ export function useSync() {
       }
     });
     serverRevision.current = snapshot.revision;
+    rememberGeneration(snapshot.restoreGeneration);
     await load();
     postToTabs({ type: "changed", from: tabId.current });
     // At most two such saves in a row: if the server keeps answering with something else than was
@@ -181,6 +197,30 @@ export function useSync() {
   // the records held back on this device and everything waiting to be sent (changes, deletions, revivals) belong to the
   // data that was replaced and must not survive or be sent. Unlike applySnapshot nothing is kept or merged. The records
   // and the bookkeeping are shared by all tabs of the browser, so one replacement serves them all; the others only show it.
+  // The replacement itself; the caller holds the sync lock (or is in the queue).
+  async function adoptServerCopy(source: ServerSnapshot, notice = false) {
+    // Anything computed from the old copy (a save in progress, a pull) is discarded.
+    localDataVersion.current += 2;
+    await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
+      await db.entities.clear();
+      await db.relations.clear();
+      await db.baseEntities.clear();
+      await db.baseRelations.clear();
+      if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
+      if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
+    });
+    clearAllMarkers(localStorage);
+    localStorage.removeItem(pendingKey);
+    localStorage.setItem("ai-executive-server-synced", "1");
+    serverRevision.current = source.revision;
+    rememberGeneration(source.restoreGeneration);
+    requeueStreak.current = 0;
+    await load();
+    setSyncStatus("synced");
+    if (notice) setRestoredNotice(true);
+    postToTabs({ type: "changed", from: tabId.current });
+    return true;
+  }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot) {
     if (signedOut.current) return false;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
@@ -190,25 +230,7 @@ export function useSync() {
         if (!response.ok) throw new Error("Server synchronization failed");
         source = (await response.json()) as ServerSnapshot;
       }
-      // Anything computed from the old copy (a save in progress, a pull) is discarded.
-      localDataVersion.current += 2;
-      await db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
-        await db.entities.clear();
-        await db.relations.clear();
-        await db.baseEntities.clear();
-        await db.baseRelations.clear();
-        if (source!.entities.length) { await db.entities.bulkAdd(source!.entities); await db.baseEntities.bulkAdd(source!.entities); }
-        if (source!.relations.length) { await db.relations.bulkAdd(source!.relations); await db.baseRelations.bulkAdd(source!.relations); }
-      });
-      clearAllMarkers(localStorage);
-      localStorage.removeItem(pendingKey);
-      localStorage.setItem("ai-executive-server-synced", "1");
-      serverRevision.current = source.revision;
-      requeueStreak.current = 0;
-      await load();
-      setSyncStatus("synced");
-      postToTabs({ type: "changed", from: tabId.current });
-      return true;
+      return adoptServerCopy(source);
     }));
     syncQueue.current = operation.then(() => undefined, () => { setSyncStatus("offline"); });
     return operation;
@@ -228,6 +250,7 @@ export function useSync() {
     baseRevision: number,
     deletedIds: string[] = [],
     revivedIds: string[] = [],
+    generation: number | undefined = restoreGeneration.current,
   ) {
     return fetch("/api/store", {
       signal: requestTimeout(),
@@ -239,6 +262,7 @@ export function useSync() {
         relations: snapshotRelations,
         deletedIds,
         revivedIds,
+        restoreGeneration: generation,
       }),
     });
   }
@@ -285,6 +309,16 @@ export function useSync() {
       for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
+        if (current.code === "restored") {
+          // The data was restored from a backup since this device last synchronized: what is unsent here was made against
+          // data that no longer exists, and merging it would put that data back. A device that never knew a generation
+          // has nothing from before to protect and only learns the number.
+          if (restoreGeneration.current !== undefined) {
+            await adoptServerCopy(current, true);
+            return;
+          }
+          rememberGeneration(current.restoreGeneration);
+        }
         const deletedIds = new Set(sentMarkers.deleted);
         const revivedIds = new Set(sentMarkers.revived);
         const filteredCurrent = {
@@ -370,6 +404,11 @@ export function useSync() {
         // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
         if (snapshot.revision <= serverRevision.current) return "synced" as const;
+        // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
+        if (restoreGeneration.current !== undefined && typeof snapshot.restoreGeneration === "number" && snapshot.restoreGeneration !== restoreGeneration.current) {
+          await adoptServerCopy(snapshot, heldBack.length > 0);
+          return "synced" as const;
+        }
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
@@ -417,6 +456,11 @@ export function useSync() {
     load,
     applySnapshot,
     replaceLocalWithServer,
+    restoreGeneration,
+    rememberGeneration,
+    adoptServerCopy,
+    restoredNotice,
+    dismissRestoredNotice: () => setRestoredNotice(false),
     putSnapshot,
     syncToServer,
     pullFromServer,

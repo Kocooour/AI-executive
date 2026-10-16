@@ -48,6 +48,12 @@ export default function App() {
             <button type="button" disabled={app.offlineRetry === "checking"} onClick={() => void app.retryAccess()}>{tr(app.offlineRetry === "checking" ? "checking" : "retry")}</button>
           </div>
         )}
+        {app.restoredNotice && (
+          <div className="offlineStart restoredNotice" role="status">
+            <p><b>{tr("restoredNoticeTitle")}</b> {tr("restoredNoticeDetail")}</p>
+            <button type="button" onClick={app.dismissRestoredNotice}>{tr("restoredNoticeOk")}</button>
+          </div>
+        )}
         <Topbar app={app} />
         <div className="content">
           <div className="pageIntro">

@@ -5,6 +5,7 @@ import { maxImportUploadBytes, verifyPackage } from "../../../../lib/backup-pack
 import { enforceRateLimit, HttpInputError, requireSameOrigin } from "../../../../lib/http-security";
 import { recordSecurityEvent } from "../../../../lib/security-audit";
 import { isAuthenticated } from "../../../../lib/auth";
+import { refreshAllCalendarSources } from "../../../../lib/calendar";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
     verifyPackage(zipPath, databasePath);
     const snapshot = restoreDatabaseFile(databasePath);
     recordSecurityEvent(request, "backup.import", "allowed");
+    void refreshAllCalendarSources().catch(() => undefined);
     return NextResponse.json({ snapshot }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     if (!(error instanceof HttpInputError)) console.error("Import failed:", error);

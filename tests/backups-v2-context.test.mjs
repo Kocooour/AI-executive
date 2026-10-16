@@ -28,7 +28,7 @@ const task = (id, title = id) => ({ id, type: "task", title, status: "open", wor
 const note = (id, title, content) => ({ id, type: "note", title, content, status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 2 });
 const setEntities = (entities, deleted = []) => {
   const current = store.readSnapshot();
-  const result = store.replaceSnapshot(current.revision, [current.entities.find((entity) => entity.id === "workspace:personal"), ...entities], [], deleted);
+  const result = store.replaceSnapshot(current.revision, [current.entities.find((entity) => entity.id === "workspace:personal"), ...entities], [], deleted, [], current.restoreGeneration);
   assert.equal(result.conflict, false);
 };
 const makeClaim = (value) => claims.createOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: randomUUID(), expectedRevision: 0,

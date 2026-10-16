@@ -25,6 +25,9 @@ import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
 
 export interface StoreSnapshot {
   revision: number;
+  // Counts restores and imports of this server's data (metadata, never in a backup). A client's save carries the value it
+  // knows; after a restore a save from before it is refused instead of merged back into the restored data.
+  restoreGeneration?: number;
   entities: Entity[];
   relations: Relation[];
   tombstones: Array<{ id: string; deletedAt: number }>;
@@ -671,6 +674,15 @@ const readMetadata = (database: DatabaseSync, key: string, fallback = "0") =>
     )?.value ?? fallback,
   );
 
+function readRestoreGeneration(database: DatabaseSync) {
+  return Number(readMetadata(database, "restoreGeneration", "0")) || 0;
+}
+// Inside the transaction of every restore and import.
+function bumpRestoreGeneration(database: DatabaseSync) {
+  database.prepare(`INSERT INTO metadata (key, value) VALUES ('restoreGeneration', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(readRestoreGeneration(database) + 1));
+}
+
 export function readSnapshot(): StoreSnapshot {
   const database = getDatabase();
   const entities = database
@@ -690,6 +702,7 @@ export function readSnapshot(): StoreSnapshot {
     }));
   return {
     revision: Number(readMetadata(database, "revision")),
+    restoreGeneration: readRestoreGeneration(database),
     entities,
     relations,
     tombstones,
@@ -757,8 +770,14 @@ export function replaceSnapshot(
   relations: Relation[],
   deletedIds: string[] = [],
   revivedIds: string[] = [],
+  restoreGeneration?: number,
 ) {
   const currentBeforeWrite = readSnapshot();
+  // A save made against data that has been restored since (here or on another device) is refused whole: merging it would
+  // put the replaced data back. The caller answers with the current snapshot and the client adopts it.
+  if ((currentBeforeWrite.restoreGeneration ?? 0) > 0 && restoreGeneration !== currentBeforeWrite.restoreGeneration) {
+    return { conflict: true as const, restored: true as const, snapshot: currentBeforeWrite };
+  }
   const today = new Date().toISOString().slice(0, 10);
   if (
     currentBeforeWrite.entities.length &&
@@ -806,6 +825,7 @@ export function replaceSnapshot(
     const liveEntityIds = new Set(liveEntities.map((entity) => entity.id));
     const next: StoreSnapshot = {
       revision: current.revision + 1,
+      restoreGeneration: current.restoreGeneration,
       entities: liveEntities,
       relations: relations.filter(
         (relation) =>
@@ -1190,8 +1210,9 @@ function restoreLegacyBackup(name: string) {
     const next = nextSnapshotAfterRestore(current, restored);
     replaceUnchecked(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
+    bumpRestoreGeneration(database);
     database.exec("COMMIT");
-    return next;
+    return { ...next, restoreGeneration: readRestoreGeneration(database) };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
@@ -1304,8 +1325,9 @@ export function restoreDatabaseFile(file: string) {
         replaceTablesFromAttached(database, "restore_source", replacedTables, excludedClearedTables, (table) => {
           if (restoreFaultForTests === table) throw new Error("Restore failed (test)");
         });
+        bumpRestoreGeneration(database);
         database.exec("COMMIT");
-        return next;
+        return { ...next, restoreGeneration: readRestoreGeneration(database) };
       } catch (error) {
         try { database.exec("ROLLBACK"); } catch { /* the original error matters */ }
         throw error;

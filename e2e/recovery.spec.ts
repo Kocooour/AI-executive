@@ -206,7 +206,7 @@ test("a task held for its unknown workspace is sent once the workspace exists", 
     const created = { id: `workspace:${workspace}`, type: "workspace", title: "Později", status: "active", workspaceId: workspace,
       properties: { kind: "shared", role: "owner", members: [] }, createdAt: now, updatedAt: now };
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision: snapshot.revision, entities: [...snapshot.entities, created], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, created], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     if (!response.ok) throw new Error(`workspace not created: ${response.status}`);
   }, workspaceId);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));

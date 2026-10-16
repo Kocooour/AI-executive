@@ -38,7 +38,7 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     if (snapshot.entities.some((entity: { id: string }) => entity.id === "e2e-contrast-project")) return;
     const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities, { id: "e2e-contrast-project", type: "project", title: "Projekt pro kontrolu kontrastu", status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
       relations: snapshot.relations, deletedIds: [], revivedIds: [] }) }).then((response) => { if (!response.ok) throw new Error(`Seeding the project failed: ${response.status}`); });
   });

@@ -12,6 +12,7 @@ import {
 } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { isAuthenticated } from "../../../lib/auth";
+import { refreshAllCalendarSources } from "../../../lib/calendar";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,6 +75,8 @@ export async function POST(request: Request) {
     try {
       const snapshot = restoreBackup(body.name);
       recordSecurityEvent(request, "backup.restore", "allowed", { name: body.name });
+      // The calendar cache was emptied by the restore; refreshed in the background, never delaying or failing the answer.
+      void refreshAllCalendarSources().catch(() => undefined);
       return NextResponse.json({ snapshot });
     } catch (error) {
       recordSecurityEvent(request, "backup.restore", "failed", { name: body.name });

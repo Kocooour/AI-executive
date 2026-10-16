@@ -22,7 +22,6 @@ export const includedTables = [
 export const excludedKeptTables = [
   "passkey_credentials", "passkey_challenges", "push_subscriptions", "notification_deliveries",
   "security_events", "security_alerts", "schema_migrations", "metadata",
-  "calendar_events", // a cache of the calendars, fetched again
 ] as const;
 
 // Removed from a backup file although they are excluded, except `schema_migrations`: the file needs the list of
@@ -30,7 +29,9 @@ export const excludedKeptTables = [
 export const keptInFileTables = ["schema_migrations"] as const;
 
 // Not in a backup, and emptied on restore: they refer to results or sessions from before the restore.
-export const excludedClearedTables = ["context_commands", "work_session_commands", "ai_proposals"] as const;
+// `calendar_events` is a cache of the calendar feeds: after a restore its rows may belong to a source the restored data no
+// longer has (they would keep blocking time in the day plan), so it is emptied and refreshed from the restored sources.
+export const excludedClearedTables = ["context_commands", "work_session_commands", "ai_proposals", "calendar_events"] as const;
 
 export const excludedTables: readonly string[] = [...excludedKeptTables, ...excludedClearedTables];
 export const emptiedInFileTables: readonly string[] = excludedTables.filter((table) => !(keptInFileTables as readonly string[]).includes(table));

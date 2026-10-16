@@ -304,6 +304,15 @@ export async function processCalendarRefreshes(now = Date.now()) {
   return { due: rows.length, refreshed };
 }
 
+/** After a restore: the event cache was emptied, so every restored source is fetched again. A failure is logged without the feed address. */
+export async function refreshAllCalendarSources() {
+  const rows = getDatabase().prepare("SELECT id FROM calendar_sources").all() as Array<{ id: string }>;
+  for (const row of rows) {
+    try { await refreshCalendarSource(String(row.id)); }
+    catch (error) { console.error("Calendar refresh after a restore failed:", error instanceof Error ? error.message.slice(0, 200) : "error"); }
+  }
+}
+
 export function deleteCalendarSource(id: string) {
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");

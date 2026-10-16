@@ -28,7 +28,7 @@ const project = { id: "project:p", type: "project", title: "P", status: "active"
 const workspaceEntity = () => store.readSnapshot().entities.find((entity) => entity.id === "workspace:personal");
 const setEntities = (entities, deleted = []) => {
   const current = store.readSnapshot();
-  const result = store.replaceSnapshot(current.revision, [workspaceEntity(), ...entities], [], deleted);
+  const result = store.replaceSnapshot(current.revision, [workspaceEntity(), ...entities], [], deleted, [], current.restoreGeneration);
   assert.equal(result.conflict, false);
 };
 const dump = (database, table) => JSON.stringify(database.prepare(`SELECT * FROM ${quote(table)} ORDER BY rowid`).all(), (_key, value) => value instanceof Uint8Array ? `blob:${Buffer.from(value).toString("hex")}` : value);
@@ -142,7 +142,7 @@ test("restore returns every included table to the backup, keeps excluded tables,
   assert.deepEqual(dumpAll(keptSeedable), excludedBefore);
   assert.equal(dump(db(), "schema_migrations"), migrationsBefore);
   // Metadata other than the store revision is untouched (push keys stay).
-  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt"].includes(row.key));
+  const metadata = (text) => JSON.parse(text).filter((row) => !["revision", "updatedAt", "restoreGeneration"].includes(row.key));
   assert.deepEqual(metadata(dump(db(), "metadata")), metadata(metadataBefore));
 
   // Entities: as in the backup, with the same ids; what the backup did not know is tombstoned; the revision moves on.
@@ -477,7 +477,7 @@ test("an export above the importer's limits is refused while it is written, and 
   refused({}, { uploadLimit: 1000 });
   assert.doesNotThrow(() => writeExportAndRemove({ limits: { ...limits, maxEntries: entryCount + 1 } }));
   // What the importer accepts is never below what the exporter writes.
-  assert.ok(limits.maxEntries >= 250_000 && limits.maxEntryBytes >= 1024 ** 3);
+  assert.ok(limits.maxEntries >= 65_000 && limits.maxEntryBytes >= 1024 ** 3);
 });
 function writeExportAndRemove(options) {
   const written = writeExport(options);
@@ -707,4 +707,142 @@ test("an export of a large store runs in a small heap, where reading whole table
   } finally {
     rmSync(lowDir, { recursive: true, force: true });
   }
+});
+
+test("a save made before a restore is refused whole, whatever its base revision; one that knows the generation is accepted", () => {
+  const backup = store.createBackup("manual");
+  const before = store.readSnapshot();
+  const generation = before.restoreGeneration ?? 0;
+  const save = (restoreGeneration) => store.replaceSnapshot(store.readSnapshot().revision, [workspaceEntity(), project, task("task:generation", "Late save")], [], [], [], restoreGeneration);
+  store.restoreBackup(backup.name);
+  const restored = store.readSnapshot();
+  assert.equal(restored.restoreGeneration, generation + 1);
+  const dailyBefore = files("-daily.sqlite").length;
+  for (const old of [undefined, generation, 0, generation + 7]) {
+    const refused = save(old);
+    assert.equal(refused.conflict, true);
+    assert.equal(refused.restored, true);
+    assert.equal(refused.snapshot.restoreGeneration, generation + 1);
+  }
+  // Nothing was written: not the record, not the revision, not a daily backup.
+  const after = store.readSnapshot();
+  assert.equal(after.revision, restored.revision);
+  assert.equal(after.entities.some((entity) => entity.id === "task:generation"), false);
+  assert.equal(files("-daily.sqlite").length, dailyBefore);
+  // A device that holds the restored data saves normally.
+  const accepted = save(generation + 1);
+  assert.equal(accepted.conflict, false);
+  assert.equal(accepted.snapshot.restoreGeneration, generation + 1, "the answer to a save carries the generation too");
+  assert.equal(store.readSnapshot().entities.some((entity) => entity.id === "task:generation"), true);
+  // Every kind of restore counts: a legacy backup and an import too.
+  const legacy = "2026-05-06T07-08-09-123Z-manual.json";
+  writeFileSync(path.join(backupsDir, legacy), JSON.stringify({ revision: 1, entities: [workspaceEntity()], relations: [], tombstones: [], updatedAt: 1 }), { mode: 0o600 });
+  store.restoreBackup(legacy);
+  assert.equal(store.readSnapshot().restoreGeneration, generation + 2);
+  const copy = store.createExportCopy();
+  store.restoreDatabaseFile(copy.path);
+  copy.dispose();
+  assert.equal(store.readSnapshot().restoreGeneration, generation + 3);
+  // The generation is not part of a backup: restoring never lowers it.
+  const file = new DatabaseSync(path.join(backupsDir, backup.name), { readOnly: true });
+  assert.equal(file.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGeneration'").get(), undefined);
+  file.close();
+});
+
+test("the events of a calendar cache are emptied by a restore, so a source the backup lacks leaves no blocked time", async () => {
+  const calendar = await import("../lib/calendar.ts");
+  const now = Date.now();
+  const insertSource = (id) => db().prepare(`INSERT INTO calendar_sources (id, workspace_id, provider, label, encrypted_url, status, created_at, updated_at) VALUES (?, 'personal', 'ics', ?, 'x', 'ready', 1, 1)`).run(id, id);
+  const insertEvent = (id, source) => db().prepare(`INSERT INTO calendar_events (id, source_id, workspace_id, occurrence_key, payload, start_at, end_at, updated_at) VALUES (?, ?, 'personal', ?, ?, ?, ?, 1)`)
+    .run(id, source, id, JSON.stringify({ id, title: "Blocked" }), now + 1000, now + 3_600_000);
+  db().exec("DELETE FROM calendar_sources; DELETE FROM calendar_events");
+  const backup = store.createBackup("manual"); // no calendar source
+  insertSource("later-source");
+  insertEvent("later-event", "later-source");
+  assert.equal(calendar.listCalendarEvents("personal", now, now + 7_200_000).length, 1);
+  store.restoreBackup(backup.name);
+  assert.equal(db().prepare("SELECT COUNT(*) AS value FROM calendar_sources").get().value, 0);
+  assert.equal(db().prepare("SELECT COUNT(*) AS value FROM calendar_events").get().value, 0);
+  assert.deepEqual(calendar.listCalendarEvents("personal", now, now + 7_200_000), []);
+  // A source that is in the backup keeps existing and its events are fetched again (here: refresh is attempted and fails without a feed, logged only).
+  insertSource("kept-source");
+  const withSource = store.createBackup("manual");
+  insertEvent("stale-event", "kept-source");
+  store.restoreBackup(withSource.name);
+  assert.equal(db().prepare("SELECT COUNT(*) AS value FROM calendar_events").get().value, 0);
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(" "));
+  try { await calendar.refreshAllCalendarSources(); } finally { console.error = original; }
+  assert.ok(logged.some((line) => line.includes("Calendar refresh after a restore failed")));
+  db().exec("DELETE FROM calendar_sources");
+});
+
+test("an archive whose entries contain the bytes of a data descriptor signature is read correctly (not cut at the signature)", async () => {
+  // A reader that looks for the end of an entry in the stream cuts it short at PK\x07\x08; the central directory has exact sizes.
+  const { Zip, ZipPassThrough, ZipDeflate } = await import("fflate");
+  const { createHash } = await import("node:crypto");
+  const signature = Buffer.from([0x50, 0x4b, 0x07, 0x08, 0x50, 0x4b, 0x03, 0x04, 0x50, 0x4b, 0x01, 0x02]);
+  const files = {
+    "notes/signature.md": Buffer.concat([Buffer.from("before "), signature, Buffer.alloc(300, 7), signature, Buffer.from(" after")]),
+    "data/other.json": Buffer.from("[]"),
+    "database.sqlite": Buffer.concat([signature, Buffer.alloc(1000, 1), signature]),
+  };
+  const manifest = { format: "lumi-export", version: 1, createdAt: "x", migrations: [], counts: {},
+    files: Object.fromEntries(Object.entries(files).map(([name, data]) => [name, { sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length }])) };
+  for (const useDeflate of [false, true]) {
+    const chunks = [];
+    const zip = new Zip((error, chunk) => { if (error) throw error; chunks.push(Buffer.from(chunk)); });
+    for (const [name, data] of [...Object.entries(files), ["manifest.json", Buffer.from(JSON.stringify(manifest))]]) {
+      const entry = useDeflate ? new ZipDeflate(name) : new ZipPassThrough(name);
+      zip.add(entry);
+      entry.push(data, true);
+    }
+    zip.end();
+    const verified = verify(Buffer.concat(chunks));
+    assert.deepEqual(Object.keys(verified.files).sort(), Object.keys(files).sort());
+  }
+});
+
+test("a streamed archive of many random entries always verifies (the case a streaming reader got wrong at random)", async () => {
+  const { randomBytes } = await import("node:crypto");
+  const insert = db().prepare("INSERT INTO entities (id, payload, updated_at) VALUES (?, ?, ?)");
+  db().exec("BEGIN");
+  for (let index = 0; index < 4000; index += 1) {
+    const entity = note(`note:rnd-${index}`, `Rnd ${index}`, randomBytes(1500).toString("base64"));
+    insert.run(entity.id, JSON.stringify(entity), 9_000 + index);
+  }
+  db().exec("COMMIT");
+  try {
+    for (let round = 0; round < 3; round += 1) {
+      const { zipPath } = writeExport();
+      try { assert.equal(pack.verifyExportOutput(zipPath, `${zipPath}.sqlite`).format, "lumi-export"); } finally { rmSync(zipPath, { force: true }); rmSync(`${zipPath}.sqlite`, { force: true }); }
+    }
+  } finally {
+    db().exec("DELETE FROM entities WHERE id LIKE 'note:rnd-%'; DELETE FROM note_revisions WHERE note_id LIKE 'note:rnd-%'");
+  }
+});
+
+test("the store route answers a save from before a restore with 409 and code restored, and a current one with 200", async () => {
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  const route = await import("../app/api/store/route.ts");
+  const backup = store.createBackup("manual");
+  store.restoreBackup(backup.name);
+  const current = store.readSnapshot();
+  const put = (generation) => route.PUT(new Request("http://localhost:3000/api/store", { method: "PUT", headers: { origin: "http://localhost:3000", "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: current.revision, entities: current.entities, relations: current.relations, deletedIds: [], revivedIds: [], restoreGeneration: generation }) }));
+  const refused = await put(current.restoreGeneration - 1);
+  assert.equal(refused.status, 409);
+  const body = await refused.json();
+  assert.equal(body.code, "restored");
+  assert.equal(body.restoreGeneration, current.restoreGeneration);
+  assert.equal((await put(undefined)).status, 409);
+  const accepted = await put(current.restoreGeneration);
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).restoreGeneration, current.restoreGeneration);
+  // An ordinary revision conflict is not marked as a restore.
+  const stale = await route.PUT(new Request("http://localhost:3000/api/store", { method: "PUT", headers: { origin: "http://localhost:3000", "content-type": "application/json" },
+    body: JSON.stringify({ baseRevision: 0, entities: current.entities, relations: current.relations, deletedIds: [], revivedIds: [], restoreGeneration: current.restoreGeneration }) }));
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).code, undefined);
 });

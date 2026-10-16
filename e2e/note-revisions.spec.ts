@@ -5,7 +5,7 @@ async function seedNote(page: import("@playwright/test").Page, id: string, title
   await page.evaluate(async ([noteId, noteTitle, noteContent]) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities, { id: noteId, type: "note", title: noteTitle, content: noteContent, status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
       relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
   }, [id, title, content]);
@@ -152,7 +152,7 @@ async function otherDeviceSaves(page: import("@playwright/test").Page, id: strin
   await page.evaluate(async ([noteId, text]) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const entities = snapshot.entities.map((entity: { id: string }) => (entity.id === noteId ? { ...entity, content: text, updatedAt: Date.now() + 5000 } : entity));
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
   }, [id, content]);
 }
 
@@ -234,7 +234,7 @@ test("text typed into a note that another device deletes meanwhile is kept, not 
   await field.fill("typed before it was deleted");
   await page.evaluate(async (noteId) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: snapshot.entities.filter((entity: { id: string }) => entity.id !== noteId), relations: snapshot.relations, deletedIds: [noteId], revivedIds: [] }) });
   }, id);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -343,7 +343,7 @@ test("without device storage, unsaved text of one note survives editing another 
 async function otherDeviceDeletes(page: import("@playwright/test").Page, id: string) {
   await page.evaluate(async (noteId) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: snapshot.entities.filter((entity: { id: string }) => entity.id !== noteId), relations: snapshot.relations, deletedIds: [noteId], revivedIds: [] }) });
   }, id);
 }
