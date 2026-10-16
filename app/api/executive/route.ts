@@ -42,6 +42,10 @@ export async function POST(request: Request) {
       workspaceId?: string;
       language?: "cs" | "en";
     }>(request, 4096);
+    // Checked again now that the body has been read: a restore may have completed meanwhile, and nothing awaits between this
+    // check and the synchronous write below, so a request made against replaced data cannot be applied to the restored data.
+    const fencedAgain = fenceRestoredClient(request);
+    if (fencedAgain) return fencedAgain;
     if (typeof body.workspaceId !== "string" ||
         !/^[A-Za-z0-9:_-]{1,120}$/.test(body.workspaceId) || body.workspaceId === "all") {
       return NextResponse.json({ error: "Invalid agent request" }, { status: 400 });

@@ -105,10 +105,38 @@ test("every mutating owner route that writes covered data calls the restore fenc
       if (!method || method === "GET") continue;
       const key = `${method} ${url}`;
       seen.add(key);
-      if (!part.includes("fenceRestoredClient(request)") && !(key in exempt)) missing.push(key);
+      const calls = part.split("fenceRestoredClient(request)").length - 1;
+      // Fenced routes check twice: early (fast refusal) and again after the body is read, right before the synchronous write.
+      if (!(key in exempt) && calls < 2) missing.push(`${key} (${calls} fence checks, needs the early one and one after the body is read)`);
+      if (key in exempt && calls > 0) missing.push(`${key} is exempt but calls the fence`);
     }
   }
   assert.deepEqual(missing, [], "a mutating route neither calls fenceRestoredClient nor is exempt with a reason");
   assert.deepEqual(Object.keys(exempt).filter((key) => !seen.has(key)), [], "an exemption names a route that does not exist");
   for (const [key, reason] of Object.entries(exempt)) assert.ok(reason.length > 10, key);
+});
+
+test("a restore that completes while the request body is being read is caught by the second check: nothing is written", async () => {
+  const backup = store.createBackup("manual");
+  const generation = store.readSnapshot().restoreGeneration;
+  const claims = count("context_claims"), events = count("context_change_events");
+  let restoreRan = false;
+  // The request passes the early check with the current generation; its body then takes long enough for a restore to land.
+  const lateBody = JSON.stringify(claimBody());
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (!restoreRan) { restoreRan = true; store.restoreBackup(backup.name); }
+      controller.enqueue(new TextEncoder().encode(lateBody));
+      controller.close();
+    },
+  });
+  const late = new Request("http://localhost:3000/api/context/claims", { method: "POST", duplex: "half", body: stream,
+    headers: { origin: "http://localhost:3000", "content-type": "application/json", "x-lumi-restore-generation": String(generation) } });
+  const refused = await claimsRoute.POST(late);
+  assert.equal(restoreRan, true, "the restore ran between the two checks");
+  assert.equal(store.readSnapshot().restoreGeneration, generation + 1);
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).code, "restored");
+  assert.equal(count("context_claims"), claims, "the restored data is untouched by the late request");
+  assert.equal(count("context_change_events"), events);
 });
