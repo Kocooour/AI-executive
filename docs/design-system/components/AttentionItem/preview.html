@@ -1,0 +1,25 @@
+<!-- @dsCard group="Home" height=270 subtitle="Dva řádky: co, proč, odkud a kdy · akce po najetí" -->
+<link rel="stylesheet" href="../../tokens.css">
+<section>
+  <h2>Pozornost</h2>
+  <ul>
+    <li><div><strong>Zaplatit fakturu za hosting</strong><span class="why"><b class="danger">Po termínu od 13. 10.</b> · termín úkolu · 13:31</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
+    <li class="hover"><div><strong>Spuštění Lumi beta</strong><span class="why">Nemá další krok · aktivita projektu · 13:31</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
+  </ul>
+</section>
+<style>
+body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
+section{max-width:620px}
+h2{font-size:17px;font-weight:700;margin:0 0 6px}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:8px;padding:10px 8px;border-radius:var(--radius-md)}
+li:hover,li.hover,li:focus-within{background:var(--hover)}
+li div{display:grid;gap:1px;min-width:0;flex:1}
+strong{font-size:14px;font-weight:600}
+.why{font-size:13px;color:var(--muted)} .why b{font-weight:500} .danger{color:var(--danger)}
+.acts{display:flex;gap:2px;opacity:0} li:hover .acts,li.hover .acts,li:focus-within .acts{opacity:1}
+button{font:inherit;font-size:13px;cursor:pointer;border-radius:var(--radius-sm);min-height:30px;padding:0 10px}
+button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.text{background:none;border:0;color:var(--muted)} .text:hover{color:var(--accent)}
+.open{background:none;border:0;color:var(--accent);font-weight:600}
+</style>

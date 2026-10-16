@@ -1,0 +1,13 @@
+<!-- @dsCard group="Home" height=130 subtitle="Stav se ukazuje jen při problému" -->
+<link rel="stylesheet" href="../../tokens.css">
+<div class="col">
+  <p class="line warn" role="status"><i></i>Offline · 3 změny čekají</p>
+  <p class="line"><i class="n"></i>Kalendář není připojen · <a href="#">Připojit</a></p>
+</div>
+<style>
+body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
+.col{display:grid;gap:6px}
+.line{margin:0;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px}
+i{width:7px;height:7px;border-radius:50%;background:var(--warning)} i.n{background:var(--muted-light)}
+.warn{color:var(--text)} a{color:var(--accent)}
+</style>

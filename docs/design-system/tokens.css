@@ -1,0 +1,238 @@
+/* Lumi — generated from tokens.json by scripts/design-tokens.mjs; do not edit */
+
+:root, [data-theme="light"] {
+  --app-bg: #ffffff;
+  --sidebar-bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-subtle: #f2f3f5;
+  --surface-raised: #ffffff;
+  --input-bg: #f3f4f6;
+  --line: #e6e7ea;
+  --line-strong: #d5d7db;
+  --control-border: #73767d;
+  --text: #1d1d1f;
+  --muted: #5f6168;
+  --muted-light: #6c6f76;
+  --hover: rgba(0, 0, 0, 0.045);
+  --selected: #e3e5e9;
+  --selected-text: #1d1d1f;
+  --overlay: rgba(0, 0, 0, 0.25);
+  --accent: #1a6ef0;
+  --accent-soft: #e5efff;
+  --on-accent-soft: #0f55c7;
+  --on-accent: #ffffff;
+  --proposal: var(--accent);
+  --focus-ring: var(--accent);
+  --danger: #d70f2c;
+  --danger-soft: #fde4e8;
+  --warning: #a35a00;
+  --warning-soft: #fff1dc;
+  --success: #1f8a3c;
+  --success-soft: #e0f5e6;
+  --on-success-soft: #17692f;
+  --icon-home: #3a3c42;
+  --icon-inbox: #1a8cf0;
+  --icon-today: #f2b600;
+  --icon-upcoming: #f0435a;
+  --icon-projects: #7a5af0;
+  --icon-areas: #1fae9b;
+  --icon-notes: #e0942a;
+  --icon-calendar: #2fb65c;
+  --icon-search: #5f6168;
+  --ws-personal: #5856d6;
+  --ws-personal-soft: #c9c8f5;
+  --ws-work: #c2570a;
+  --ws-work-soft: #f6c9a3;
+  --ws-family: #17803f;
+  --ws-family-soft: #b5e3c6;
+  --ws-all: #6c6f76;
+  --ws-all-soft: #dcdee2;
+  --on-ws: #ffffff;
+  --shadow-soft: 0 18px 55px rgba(34, 33, 31, 0.13);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 18px;
+  --space-6: 24px;
+  --space-8: 38px;
+  --radius-xs: 7px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --app-bg: #1c1c1e;
+  --sidebar-bg: #232326;
+  --surface: #2c2c2e;
+  --surface-subtle: #323235;
+  --surface-raised: #2c2c2e;
+  --input-bg: #262628;
+  --line: #38383b;
+  --line-strong: #48484c;
+  --control-border: #9a9aa0;
+  --text: #f5f5f7;
+  --muted: #aeaeb2;
+  --muted-light: #98989d;
+  --hover: rgba(255, 255, 255, 0.06);
+  --selected: #3a3a3d;
+  --selected-text: #ffffff;
+  --overlay: rgba(0, 0, 0, 0.55);
+  --accent: #4c9bff;
+  --accent-soft: #1f3355;
+  --on-accent-soft: #a9ccff;
+  --on-accent: #141416;
+  --proposal: var(--accent);
+  --focus-ring: var(--accent);
+  --danger: #ff6b7f;
+  --danger-soft: #4a2229;
+  --warning: #ffb340;
+  --warning-soft: #46351c;
+  --success: #4fd27a;
+  --success-soft: #1f3b2a;
+  --on-success-soft: #8fe3a8;
+  --icon-home: #d1d1d6;
+  --icon-inbox: #4aa8ff;
+  --icon-today: #ffd23f;
+  --icon-upcoming: #ff6b7f;
+  --icon-projects: #a48cff;
+  --icon-areas: #3fd0bc;
+  --icon-notes: #f2b05a;
+  --icon-calendar: #4fd27a;
+  --icon-search: #aeaeb2;
+  --ws-personal: #8e8cff;
+  --ws-personal-soft: #3a3970;
+  --ws-work: #ff9a45;
+  --ws-work-soft: #6a3c16;
+  --ws-family: #4fd27a;
+  --ws-family-soft: #1f5a35;
+  --ws-all: #98989d;
+  --ws-all-soft: #3a3a3d;
+  --on-ws: #141416;
+  --shadow-soft: 0 20px 70px rgba(0, 0, 0, 0.42);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --app-bg: #1c1c1e;
+    --sidebar-bg: #232326;
+    --surface: #2c2c2e;
+    --surface-subtle: #323235;
+    --surface-raised: #2c2c2e;
+    --input-bg: #262628;
+    --line: #38383b;
+    --line-strong: #48484c;
+    --control-border: #9a9aa0;
+    --text: #f5f5f7;
+    --muted: #aeaeb2;
+    --muted-light: #98989d;
+    --hover: rgba(255, 255, 255, 0.06);
+    --selected: #3a3a3d;
+    --selected-text: #ffffff;
+    --overlay: rgba(0, 0, 0, 0.55);
+    --accent: #4c9bff;
+    --accent-soft: #1f3355;
+    --on-accent-soft: #a9ccff;
+    --on-accent: #141416;
+    --proposal: var(--accent);
+    --focus-ring: var(--accent);
+    --danger: #ff6b7f;
+    --danger-soft: #4a2229;
+    --warning: #ffb340;
+    --warning-soft: #46351c;
+    --success: #4fd27a;
+    --success-soft: #1f3b2a;
+    --on-success-soft: #8fe3a8;
+    --icon-home: #d1d1d6;
+    --icon-inbox: #4aa8ff;
+    --icon-today: #ffd23f;
+    --icon-upcoming: #ff6b7f;
+    --icon-projects: #a48cff;
+    --icon-areas: #3fd0bc;
+    --icon-notes: #f2b05a;
+    --icon-calendar: #4fd27a;
+    --icon-search: #aeaeb2;
+    --ws-personal: #8e8cff;
+    --ws-personal-soft: #3a3970;
+    --ws-work: #ff9a45;
+    --ws-work-soft: #6a3c16;
+    --ws-family: #4fd27a;
+    --ws-family-soft: #1f5a35;
+    --ws-all: #98989d;
+    --ws-all-soft: #3a3a3d;
+    --on-ws: #141416;
+    --shadow-soft: 0 20px 70px rgba(0, 0, 0, 0.42);
+    color-scheme: dark;
+  }
+}
+
+.page-title {
+  font-family: var(--font-sans);
+  font-size: 42px;
+  line-height: 1.1;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+}
+
+.card-title {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.item-title {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
+.row {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.nav {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 540;
+}
+
+.meta {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.caption {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 500;
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
+}

@@ -1,0 +1,19 @@
+<!-- @dsCard group="Seznamy" height=220 subtitle="Jeden řádek, vpravo nejvýše jeden údaj" -->
+<link rel="stylesheet" href="../../tokens.css">
+<ul class="list">
+  <li><button class="check" aria-label="Dokončit Zaplatit fakturu za hosting"></button><strong>Zaplatit fakturu za hosting</strong><span class="r danger">13. 10.</span></li>
+  <li><button class="check" aria-label="Dokončit Odeslat smlouvu k podpisu"></button><strong>Odeslat smlouvu k podpisu</strong><span class="r">zítra</span></li>
+  <li class="sel"><button class="check" aria-label="Dokončit Připravit podklady pro investory"></button><strong>Připravit podklady pro investory</strong><span class="r">90 min</span></li>
+  <li><button class="check" aria-label="Dokončit Zavolat instalatérovi"></button><strong>Zavolat instalatérovi</strong><span class="r pending"><span aria-hidden="true">↻ </span>čeká na odeslání</span></li>
+</ul>
+<style>
+body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
+.list{list-style:none;margin:0;padding:0;max-width:560px}
+li{display:flex;gap:var(--space-3);align-items:center;min-height:36px;padding:0 8px;border-radius:var(--radius-md)}
+li:hover{background:var(--hover)} li.sel{background:var(--selected)}
+.check{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--control-border);background:none;flex:none;cursor:pointer;position:relative}
+.check::after{content:"";position:absolute;inset:-13px}
+.check:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+strong{font-size:14px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r{font-size:12px;color:var(--muted)} .danger{color:var(--danger)} .pending{color:var(--warning)}
+</style>

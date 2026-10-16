@@ -1,0 +1,49 @@
+<!-- @dsCard group="Schvalování" height=640 subtitle="Čeká · Expirováno · Provedeno" -->
+<link rel="stylesheet" href="../../tokens.css">
+<div class="wrap">
+  <section class="pc" aria-label="Návrh změny">
+    <header><span class="tag">Návrh</span><span class="wt">O</span><span class="ws">Osobní · platí 9 min</span></header>
+    <h3>Přesunout „Zaplatit fakturu za hosting“ na zítra 9:00</h3>
+    <table><thead><tr><th>Pole</th><th>Teď</th><th>Po schválení</th></tr></thead>
+      <tbody><tr><td>Kdy</td><td>Bez data</td><td><b>pá 16. 10.</b></td></tr><tr><td>Časový blok</td><td>–</td><td><b>9:00–10:00</b></td></tr></tbody></table>
+    <p class="impact">Vytvoří blok v kalendáři Práce.</p>
+    <div class="actions"><button class="primary">Schválit</button><button class="secondary">Odmítnout</button></div>
+  </section>
+  <section class="pc expired" aria-label="Expirovaný návrh">
+    <header><span class="tag">Návrh</span><span class="wt">O</span><span class="ws">Osobní · vypršel</span></header>
+    <h3>Označit „Odeslat smlouvu k podpisu“ jako hotové</h3>
+    <p class="warn" role="status">Úkol se mezitím změnil na jiném zařízení.</p>
+    <div class="actions"><button class="primary" disabled>Schválit</button><button class="secondary">Posoudit znovu</button></div>
+  </section>
+  <section class="pc done" aria-label="Provedená změna">
+    <header><span class="tag ok">Provedeno</span><span class="wt">O</span><span class="ws">Osobní</span></header>
+    <h3>Přesunuto do Spuštění Lumi beta</h3>
+    <div class="actions"><button class="secondary">Zpět</button><button class="text">Audit</button></div>
+  </section>
+</div>
+<style>
+body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text)}
+.wrap{display:grid;gap:var(--space-4);padding:var(--space-4);max-width:560px}
+.pc{background:var(--surface);border:1.5px dashed var(--proposal);border-radius:var(--radius-xl);padding:var(--space-5)}
+.pc.done{border:1px solid var(--line)}
+.pc.expired{border-color:var(--control-border)}
+header{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+.tag{font-size:11px;font-weight:650;color:var(--on-accent-soft);background:var(--accent-soft);border-radius:var(--radius-pill);padding:2px 8px}
+.tag.ok{color:var(--on-success-soft);background:var(--success-soft)}
+.ws{font-size:12px;color:var(--muted)}
+.wt{width:18px;height:18px;border-radius:5px;background:var(--ws-personal);color:var(--on-ws);display:grid;place-items:center;font-size:10px;font-weight:700}
+h3{font-size:16px;font-weight:650;line-height:1.35;margin:10px 0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-size:11px;color:var(--muted);font-weight:600;text-align:left;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
+td{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);color:var(--muted)}
+td b{color:var(--text);font-weight:650}
+.impact{font-size:13px;margin:12px 0 0;color:var(--muted)} .impact b{color:var(--text)}
+.warn{font-size:13px;background:var(--warning-soft);color:var(--text);border-radius:var(--radius-lg);padding:8px 10px;margin:0} .warn b{color:var(--warning)}
+.actions{display:flex;gap:var(--space-2);margin-top:var(--space-4);flex-wrap:wrap}
+button{font:inherit;font-size:13px;font-weight:650;min-height:36px;padding:0 14px;border-radius:var(--radius-md);cursor:pointer}
+button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.primary{background:var(--accent);color:var(--on-accent);border:0}
+.primary:disabled{opacity:.45;cursor:not-allowed}
+.secondary{background:var(--surface);color:var(--text);border:1px solid var(--control-border)}
+.text{background:none;border:0;color:var(--accent);padding:0 6px}
+</style>
