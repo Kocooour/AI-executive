@@ -18,7 +18,7 @@ Jedno pravidlo pro všechny komponenty:
 | Prvek | Povoleno | Kde |
 |---|---|---|
 | Záhlaví sekce | Jen tučný nadpis `card-title` („Pozornost“, „Plán“). Žádné verzálky, tečky ani podtitulek. | Home, Dnes, Kalendář |
-| Štítek | Jen dva stavové štítky „Návrh“ a „Provedeno“, malými písmeny se základní velkou počáteční (`caption`), výplň `accent-soft` / `success-soft`. Jiné štítky se nepoužívají. | ProposalCard, PlanBlock |
+| Štítek | Jen dva stavové štítky „Návrh“ a „Provedeno“, malými písmeny se základní velkou počáteční (`caption`), výplň `accent-soft` / `success-soft` s textem `on-accent-soft` / `on-success-soft` (≥4.5:1). Jiné štítky se nepoužívají. | ProposalCard, PlanBlock |
 | Údaj v řádku | Nejvýše jeden, vpravo, styl `meta`: datum (`danger` po termínu), odhad, nebo počet. | TaskRow, PlanBlock, NavItem |
 | Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod stylem `meta`. Jinde žádný. | AttentionItem |
 | Metadata (zdroj, workspace, čas vyhodnocení, revize) | Nikdy v seznamu. V detailu položky a v nápovědě nadpisu sekce. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
