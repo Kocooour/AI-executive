@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { lineDiff } from "../../../lib/line-diff";
+import { useEffect, useMemo, useState } from "react";
+import { collapseUnchanged, lineDiff } from "../../../lib/line-diff";
 import type { LumiApp } from "../use-lumi-app";
 import { MarkdownText } from "./markdown-text";
 
@@ -21,7 +21,7 @@ type History = { state: "loading" } | { state: "unavailable" } | { state: "ready
 const originKey = { baseline: "revOriginBaseline", created: "revOriginCreated", edited: "revOriginEdited", backup_restore: "revOriginBackup" } as const;
 
 export function NoteEditor({ app }: { app: LumiApp }) {
-  const { selected, noteBodyDraft, noteBodyError, editNoteBody, saveNoteBody, restoreNoteVersion, unsent, syncStatus, language, tr } = app;
+  const { selected, noteBodyDraft, noteBodyError, noteBodyConflict, resolveNoteBodyConflict, editNoteBody, saveNoteBody, restoreNoteVersion, unsent, syncStatus, language, tr } = app;
   const note = selected!;
   const id = note.id;
   const stored = note.content ?? "";
@@ -30,7 +30,7 @@ export function NoteEditor({ app }: { app: LumiApp }) {
   const [history, setHistory] = useState<History>({ state: "loading" });
   const [chosen, setChosen] = useState<number | null>(null);
   const [detail, setDetail] = useState<RevisionDetail | "unavailable" | null>(null);
-  const [restored, setRestored] = useState<number | null>(null);
+  const [restored, setRestored] = useState<{ version: number; already: boolean } | null>(null);
   const [restoring, setRestoring] = useState(false);
   // Refreshed once the note's save is acknowledged: while the change waits to be sent the server has nothing new.
   const waiting = unsent.has(id);
@@ -64,9 +64,16 @@ export function NoteEditor({ app }: { app: LumiApp }) {
     return () => { current = false; };
   }, [id, chosen]);
 
+  const diffItems = useMemo(
+    () => (detail && detail !== "unavailable" ? collapseUnchanged(lineDiff(detail.content, text)) : []),
+    [detail, text],
+  );
+  const hasDraft = noteBodyDraft?.id === id;
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
+  const conflict = noteBodyConflict === id && hasDraft;
   const status = noteBodyError === id ? "noteSaveFailed"
-    : noteBodyDraft?.id === id ? "noteUnsaved"
+    : conflict ? "noteConflict"
+    : hasDraft ? "noteUnsaved"
       : waiting ? (syncStatus === "offline" ? "noteSavedOffline" : "noteSaving")
         : "noteSaved";
   const revisions = history.state === "ready" ? history.revisions : [];
@@ -83,9 +90,10 @@ export function NoteEditor({ app }: { app: LumiApp }) {
     if (!detail || detail === "unavailable") return;
     setRestoring(true);
     const number = detail.revision;
+    if (detail.title === note.title && detail.content === stored) { setRestored({ version: number, already: true }); setChosen(null); return; }
     const ok = await restoreNoteVersion(note, detail.title, detail.content);
     setRestoring(false);
-    if (ok) { setRestored(number); setChosen(null); }
+    if (ok) { setRestored({ version: number, already: false }); setChosen(null); }
   }
 
   return (
@@ -111,10 +119,19 @@ export function NoteEditor({ app }: { app: LumiApp }) {
         />
       ) : text.trim() ? <MarkdownText text={text} /> : <p className="noteEmpty">{tr("noteEmptyPreview")}</p>}
       <p className="noteStatus" role="status" aria-live="polite" data-state={status}>{tr(status)}</p>
+      {conflict && (
+        <div className="noteConflict" role="alert">
+          <p>{tr("noteConflictText")}</p>
+          <div className="noteConflictActions">
+            <button type="button" onClick={() => void resolveNoteBodyConflict(id, "mine")}>{tr("noteUseMine")}</button>
+            <button type="button" onClick={() => void resolveNoteBodyConflict(id, "theirs")}>{tr("noteDiscardMine")}</button>
+          </div>
+        </div>
+      )}
 
       <div className="noteHistory">
         <h3>{tr("versionHistory")}</h3>
-        {restored !== null && <p className="noteStatus" role="status">{tr("revRestoredStatus").replace("{version}", String(restored))}</p>}
+        {restored !== null && <p className="noteStatus" role="status">{tr(restored.already ? "revAlreadyCurrent" : "revRestoredStatus").replace("{version}", String(restored.version))}</p>}
         {history.state === "loading" && <p className="noteEmpty">{tr("revLoading")}</p>}
         {history.state === "unavailable" && <p className="noteEmpty" role="status">{tr("revOnlineOnly")}</p>}
         {history.state === "ready" && revisions.length === 0 && <p className="noteEmpty">{tr("revNone")}</p>}
@@ -139,14 +156,18 @@ export function NoteEditor({ app }: { app: LumiApp }) {
             <h4 data-user-content>{tr("revVersion").replace("{n}", String(detail.revision))} · {detail.title}</h4>
             <MarkdownText text={detail.content} />
             <h4>{tr("revChanges")}</h4>
+            <p className="noteStatus">{tr("revDiffLegend").replace("{version}", String(detail.revision))}</p>
             <pre className="revisionDiff" data-user-content aria-label={tr("revChanges")}>
-              {lineDiff(detail.content, text).map((line, index) => (
-                <span key={index} className={`diff-${line.kind}`}>
-                  {line.kind === "added" ? "+ " : line.kind === "removed" ? "- " : "  "}{line.text}{"\n"}
-                </span>
-              ))}
+              {diffItems.map((line, index) => line.kind === "skipped"
+                ? <span key={index} className="diff-skipped">{tr("revUnchangedLines").replace("{count}", String(line.count))}{"\n"}</span>
+                : (
+                  <span key={index} className={`diff-${line.kind}`}>
+                    {line.kind === "added" ? "+ " : line.kind === "removed" ? "- " : "  "}{line.text}{"\n"}
+                  </span>
+                ))}
             </pre>
-            <button type="button" className="revisionRestore" disabled={restoring} onClick={() => void restore()}>{tr("revRestore")}</button>
+            <button type="button" className="revisionRestore" disabled={restoring || hasDraft} onClick={() => void restore()}>{tr("revRestore")}</button>
+            {hasDraft && <p className="noteStatus">{tr("revRestoreBlocked")}</p>}
           </div>
         )}
       </div>

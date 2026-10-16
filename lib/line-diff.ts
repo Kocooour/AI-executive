@@ -46,3 +46,24 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   }
   return [...head, ...middle, ...tail];
 }
+
+export type DiffItem = DiffLine | { kind: "skipped"; count: number };
+
+/** Long runs of unchanged lines are folded away: `context` lines are kept around every change. */
+export function collapseUnchanged(lines: DiffLine[], context = 2): DiffItem[] {
+  const near = new Array<boolean>(lines.length).fill(false);
+  lines.forEach((line, index) => {
+    if (line.kind === "same") return;
+    for (let at = Math.max(0, index - context); at <= Math.min(lines.length - 1, index + context); at += 1) near[at] = true;
+  });
+  const items: DiffItem[] = [];
+  let skipped = 0;
+  lines.forEach((line, index) => {
+    if (near[index]) {
+      if (skipped) { items.push({ kind: "skipped", count: skipped }); skipped = 0; }
+      items.push(line);
+    } else skipped += 1;
+  });
+  if (skipped) items.push({ kind: "skipped", count: skipped });
+  return items;
+}

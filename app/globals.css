@@ -3598,3 +3598,14 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .revisionDiff { margin: 0; padding: 10px; max-width: 100%; overflow-x: auto; background: var(--surface-subtle); border-radius: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .revisionDiff .diff-added { font-weight: 700; }
 .revisionDiff .diff-removed { text-decoration: line-through; }
+.noteConflict { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--danger); border-radius: 10px; }
+.noteConflict p { margin: 0; font-size: 13px; }
+.noteConflictActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.noteConflictActions button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.noteStatus[data-state="noteConflict"] { color: var(--danger); font-weight: 600; }
+.revisionRestore:disabled { opacity: 0.5; cursor: not-allowed; }
+.revisionDiff .diff-skipped { color: var(--muted); font-style: italic; }
+@media (max-width: 700px) {
+  /* The sticky close button floats over the top right corner while the panel is scrolled. */
+  .noteEditor { padding-right: 44px; }
+}

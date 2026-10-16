@@ -43,6 +43,9 @@ export function useLumiApp() {
     // The body of the open note while it is being typed, and the note whose last save failed locally.
     [noteBodyDraft, setNoteBodyDraft] = useState<{ id: string; text: string } | null>(null),
     [noteBodyError, setNoteBodyError] = useState<string | null>(null),
+    // The note whose unsaved text started from text that has since been changed elsewhere: nothing is
+    // saved over the newer text until the owner chooses.
+    [noteBodyConflict, setNoteBodyConflict] = useState<string | null>(null),
     [query, setQuery] = useState(""),
     [capture, setCapture] = useState(false),
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
@@ -2335,6 +2338,7 @@ export function useLumiApp() {
   function dropNotesBeingTyped() {
     setNotesDraft(null);
     setNoteBodyDraft(null);
+    setNoteBodyConflict(null);
     try { clearPageNotesDrafts(localStorage, pageId.current); } catch { /* storage unavailable */ }
   }
   const dropNotesBeingTypedRef = useRef(dropNotesBeingTyped);
@@ -2386,14 +2390,49 @@ export function useLumiApp() {
   async function saveNoteBody(e: Pick<Entity, "id">, text: string) {
     try {
       const stored = await db.entities.get(e.id);
-      if (stored && stored.type === "note" && (stored.content ?? "") !== text) await patchNoteText(stored, { content: text }, "updated", true);
+      if (stored && stored.type === "note") {
+        const now = stored.content ?? "";
+        const kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(e.id));
+        // The text was started from text that is no longer the note's: newer text from another device
+        // is never overwritten; the draft stays and the owner chooses.
+        if (now !== text && kept && kept.base !== now) {
+          setNoteBodyConflict(e.id);
+          return;
+        }
+        if (now !== text) await patchNoteText(stored, { content: text }, "updated", true);
+      }
     } catch {
       setNoteBodyError(e.id);
       return;
     }
     setNoteBodyError((failed) => (failed === e.id ? null : failed));
+    setNoteBodyConflict((conflict) => (conflict === e.id ? null : conflict));
     setNoteBodyDraft((draft) => (draft && draft.id === e.id && draft.text === text ? null : draft));
     settleNotesDraft(localStorage, pageId.current, noteBodyKey(e.id), text);
+  }
+  // The owner's choice in a conflict: "mine" saves the draft over the newer text (which stays in the version
+  // history), "theirs" drops the draft and shows the stored text.
+  async function resolveNoteBodyConflict(id: string, choice: "mine" | "theirs") {
+    if (choice === "theirs") {
+      setNoteBodyDraft((draft) => (draft && draft.id === id ? null : draft));
+      setNoteBodyConflict((conflict) => (conflict === id ? null : conflict));
+      setNoteBodyError((failed) => (failed === id ? null : failed));
+      try { removeNoteBodyDraft(id); } catch { /* storage unavailable */ }
+      return;
+    }
+    const draft = noteBodyDraftRef.current;
+    if (!draft || draft.id !== id) return;
+    try {
+      const stored = await db.entities.get(id);
+      if (stored && stored.type === "note" && (stored.content ?? "") !== draft.text) await patchNoteText(stored, { content: draft.text }, "updated", true);
+    } catch {
+      setNoteBodyError(id);
+      return;
+    }
+    setNoteBodyError((failed) => (failed === id ? null : failed));
+    setNoteBodyConflict((conflict) => (conflict === id ? null : conflict));
+    setNoteBodyDraft((open) => (open && open.id === id && open.text === draft.text ? null : open));
+    settleNotesDraft(localStorage, pageId.current, noteBodyKey(id), draft.text);
   }
   // Restoring an old version is an ordinary new edit: its title and text become the note's.
   async function restoreNoteVersion(e: Entity, title: string, content: string) {
@@ -2592,6 +2631,17 @@ export function useLumiApp() {
         ? (stored && stored.type === "note" ? stored.content ?? "" : undefined)
         : stored ? String(stored.properties.notes || "") : undefined);
       if (action === "conflict" && signingOut) continue;
+      if (action === "conflict" && isBody) {
+        // Never deleted silently: the text is adopted into this page's draft and the note shows the conflict.
+        const id = draft.id.slice("note-body:".length);
+        const open = noteBodyDraftRef.current;
+        if (open && open.id !== id) continue;
+        keepNotesDraft(localStorage, pageId.current, draft.id, draft.text, draft.base);
+        dropNotesDraft(localStorage, draft);
+        setNoteBodyDraft({ id, text: draft.text });
+        setNoteBodyConflict(id);
+        continue;
+      }
       if (action === "save" && stored) {
         try {
           if (isBody) await patchNoteText(stored, { content: draft.text }, "updated", true);
@@ -3139,6 +3189,8 @@ export function useLumiApp() {
     notesDraft,
     noteBodyDraft,
     noteBodyError,
+    noteBodyConflict,
+    resolveNoteBodyConflict,
     editNoteBody,
     saveNoteBody,
     restoreNoteVersion,

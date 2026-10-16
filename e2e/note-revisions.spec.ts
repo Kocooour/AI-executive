@@ -119,3 +119,85 @@ test("the note editor fits a phone width and its buttons are large enough", asyn
   expect(metrics.detail).toBeLessThanOrEqual(0);
   for (const height of metrics.buttons) expect(height).toBeGreaterThanOrEqual(44);
 });
+
+// Another device saves the note while this page still holds typed, unsaved text.
+async function otherDeviceSaves(page: import("@playwright/test").Page, id: string, content: string) {
+  await page.evaluate(async ([noteId, text]) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const entities = snapshot.entities.map((entity: { id: string }) => (entity.id === noteId ? { ...entity, content: text, updatedAt: Date.now() + 5000 } : entity));
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, entities, relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+  }, [id, content]);
+}
+
+test("unsaved note text never overwrites newer text from another device; the owner chooses", async ({ page }) => {
+  const id = `e2e-note-conflict-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Conflict note", "base text v1");
+  await openNote(page, id);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("my unsaved text");
+  await otherDeviceSaves(page, id, "other device v2");
+  // The app takes over the newer server copy (as on focus), then the field is left.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.reload();
+  await page.goto(`/?task=${id}`);
+  await waitUntilSynced(page);
+  const conflict = page.locator(".noteConflict");
+  await expect(conflict).toBeVisible({ timeout: 20_000 });
+  await expect(conflict).toContainText("změněn na jiném zařízení");
+  await expect(page.getByLabel("Text poznámky").first()).toHaveValue("my unsaved text");
+  expect(await serverContent(page, id)).toBe("other device v2");
+  await page.locator("input.titleEdit").focus();
+  await page.waitForTimeout(500);
+  expect(await serverContent(page, id)).toBe("other device v2");
+  // Using my text saves it; the other text stays in the history.
+  await conflict.getByRole("button", { name: "Použít můj text" }).click();
+  await expect.poll(() => serverContent(page, id), { timeout: 20_000 }).toBe("my unsaved text");
+  await expect(page.locator(".noteConflict")).toHaveCount(0);
+  await page.locator(".revisionList li").last().waitFor({ timeout: 20_000 });
+  await expect(page.locator(".revisionList li")).toHaveCount(3, { timeout: 20_000 });
+  await page.locator(".revisionList li", { hasText: "Verze 2" }).getByRole("button").click();
+  await expect(page.locator(".revisionDetail")).toContainText("other device v2");
+});
+
+test("discarding my text in a conflict shows the stored text", async ({ page }) => {
+  const id = `e2e-note-discard-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Discard note", "base text v1");
+  await openNote(page, id);
+  await page.getByLabel("Text poznámky").first().fill("typed text to drop");
+  await otherDeviceSaves(page, id, "newer elsewhere");
+  await page.reload();
+  await page.goto(`/?task=${id}`);
+  await waitUntilSynced(page);
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Zahodit můj text" }).click();
+  await expect(page.locator(".noteConflict")).toHaveCount(0);
+  await expect(page.getByLabel("Text poznámky").first()).toHaveValue("newer elsewhere");
+  expect(await serverContent(page, id)).toBe("newer elsewhere");
+});
+
+test("a draft left by a crashed page whose note changed meanwhile stays visible as a conflict", async ({ page }) => {
+  const id = `e2e-note-crashed-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Crashed note", "server text now");
+  await page.evaluate((noteId) => {
+    localStorage.setItem(`ai-executive-notes-drafts:old-page-crashed:note-body:${noteId}`, JSON.stringify({
+      id: `note-body:${noteId}`, text: "typed on crashed page", base: "base text v1", at: Date.now(), page: "old-page-crashed" }));
+  }, id);
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.goto(`/?task=${id}`);
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByLabel("Text poznámky").first()).toHaveValue("typed on crashed page");
+  // Still there after another reload (it was adopted by this page, not deleted).
+  await page.reload();
+  await waitUntilSynced(page);
+  await page.goto(`/?task=${id}`);
+  await expect(page.getByLabel("Text poznámky").first()).toHaveValue("typed on crashed page", { timeout: 20_000 });
+  await expect(page.locator(".noteConflict")).toBeVisible();
+  expect(await serverContent(page, id)).toBe("server text now");
+});

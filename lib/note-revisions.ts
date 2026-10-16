@@ -131,7 +131,7 @@ export function getNoteRevision(database: DatabaseSync, noteId: string, revision
 /** The answer of the revisions route for a validated query (the route checks the owner session first). */
 export function answerRevisionQuery(database: DatabaseSync, noteId: string, revisionText: string | null):
   { status: 200 | 400 | 404; body: Record<string, unknown>; count?: number } {
-  const revision = revisionText === null ? null : Number(revisionText);
+  const revision = revisionText === null ? null : /^[1-9]\d{0,9}$/.test(revisionText) ? Number(revisionText) : Number.NaN;
   if (!noteId || noteId.length > 240 || (revision !== null && (!Number.isSafeInteger(revision) || revision < 1))) {
     return { status: 400, body: { error: "Invalid note or revision" } };
   }

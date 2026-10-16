@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations } from "./schema-migrations";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
-import { recordNoteRevisions } from "./note-revisions";
+import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
 
 export interface StoreSnapshot {
   revision: number;
@@ -1083,6 +1083,8 @@ function migrateLegacyStore(database: DatabaseSync) {
       tombstones: [],
       updatedAt: Number(legacy.updatedAt) || Date.now(),
     });
+    // The migrations ran before this import: its notes get their baseline revision here.
+    baselineNoteRevisions(database, Number(legacy.revision) || 0);
     database.exec("COMMIT");
     createBackup("json-migration");
   } catch (error) {

@@ -155,6 +155,7 @@ test("the revisions answer: list without content, one revision with it, 404 and 
   assert.equal(ask("note:a", "9999").status, 404);
   assert.equal(ask("note:a", "zero").status, 400);
   assert.equal(ask("note:a", "0").status, 400);
+  for (const bad of ["0x1", "1.0", "+1", " 1", "01", "1e0", "99999999999"]) assert.equal(ask("note:a", bad).status, 400, bad);
   assert.equal(ask("").status, 400);
   save([], ["note:a"], false);
   assert.equal(ask("note:a").status, 404, "a deleted note");
@@ -183,4 +184,16 @@ test("nothing from revisions reaches agents, PACT tools, the AI provider, attent
   for (const file of [...files("app/api/integrations"), "lib/pact.ts", "lib/pact-tools.ts", "lib/pact-agent-runs.ts", "lib/day-plan.ts", "lib/attention-service.ts", "lib/ai-actions.ts", "lib/ai-provider-context.ts"]) {
     assert.equal(/note_revisions|note-revisions/.test(readFileSync(file, "utf8")), false, file);
   }
+});
+
+test("notes imported from a legacy store.json get a baseline revision", async () => {
+  const { mkdtempSync: make, writeFileSync } = await import("node:fs");
+  const dir = make(path.join(os.tmpdir(), "lumi-note-legacy-"));
+  writeFileSync(path.join(dir, "store.json"), JSON.stringify({ revision: 3, updatedAt: 1, entities: [note("note:legacy", "Legacy", "from json")], relations: [] }));
+  const { execFileSync } = await import("node:child_process");
+  const out = execFileSync(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings", "--input-type=module", "-e",
+    `const store = await import("./lib/server-store.ts"); console.log(JSON.stringify(store.getDatabase().prepare("SELECT revision, origin, content FROM note_revisions WHERE note_id = 'note:legacy'").all()));`],
+    { env: { ...process.env, AI_EXECUTIVE_DATA_DIR: dir }, encoding: "utf8" });
+  rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(JSON.parse(out.trim().split("\n").pop()), [{ revision: 1, origin: "baseline", content: "from json" }]);
 });
