@@ -20,8 +20,8 @@ Jedno pravidlo pro všechny komponenty:
 | Záhlaví sekce | Jen tučný nadpis `card-title` („Pozornost“, „Plán“). Žádné verzálky, tečky ani podtitulek. | Home, Dnes, Kalendář |
 | Štítek | Jen dva stavové štítky „Návrh“ a „Provedeno“, malými písmeny se základní velkou počáteční (`caption`), výplň `accent-soft` / `success-soft` s textem `on-accent-soft` / `on-success-soft` (≥4.5:1). Jiné štítky se nepoužívají. | ProposalCard, PlanBlock |
 | Údaj v řádku | Nejvýše jeden, vpravo, styl `meta`: datum (`danger` po termínu), odhad, nebo počet. | TaskRow, PlanBlock, NavItem |
-| Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod stylem `meta`. Jinde žádný. | AttentionItem |
-| Metadata (zdroj, workspace, čas vyhodnocení, revize) | Nikdy v seznamu. V detailu položky a v nápovědě nadpisu sekce. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
+| Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod · zdroj · čas vyhodnocení stylem `meta` (požadavek `docs/UX-UI.md` na každou kartu). Jinde žádný. | AttentionItem |
+| Metadata (zdroj, workspace, čas vyhodnocení, revize) | V seznamu ne, s výjimkou zdroje a času vyhodnocení ve druhém řádku AttentionItem. Revize, ID zdrojů a časová zóna jen v detailu. Nikdy jen v nápovědě (`title`) – ta není dostupná na dotyku ani z klávesnice. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
 
 ## Méně slov
 
@@ -34,7 +34,8 @@ Jedno pravidlo pro všechny komponenty:
 
 ## Prostor (workspace)
 
-- Každý prostor má barvu a písmeno: Osobní `ws-personal` (O), Pracovní `ws-work` (P), Rodinný `ws-family` (R). Všechna práce (jen čtení) je neutrální `ws-all`.
+- Každý prostor má barvu a písmeno: Osobní `ws-personal` (indigo, O), Pracovní `ws-work` (P), Rodinný `ws-family` (R). Všechna práce (jen čtení) je neutrální `ws-all`.
+- Barva prostoru je vždy jeden z těchto tokenů – nikdy libovolná vlastní barva, protože u ní nelze zaručit kontrast `on-ws` (testy hlídají ≥4.5:1 jen pro tuto sadu). Zda se token přiřazuje pevně podle typu prostoru, nebo ho uživatel vybírá z této sady v Nastavení, je **otevřené rozhodnutí vlastníka**; do té doby platí pevné přiřazení.
 - Prostor je vidět vždy třemi způsoby zároveň: dlaždice s písmenem a název nahoře v sidebaru, 3px proužek v barvě prostoru přes horní okraj obsahu a výrazné pozadí aktivní položky navigace `ws-*-soft` s tučným textem. Na iPhonu proužek nahoře a dlaždice v hlavičce.
 - Písmeno na dlaždici je `on-ws`. Barva nikdy není jediný nosič – vždy s názvem nebo písmenem.
 - Barvu prostoru nepoužívat pro akce ani stavy; tlačítka zůstávají modrý `accent`. Proto je Osobní indigo, ne modrá.

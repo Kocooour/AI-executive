@@ -1,10 +1,10 @@
-<!-- @dsCard group="Home" height=250 subtitle="Dva řádky: co a proč · akce po najetí" -->
+<!-- @dsCard group="Home" height=270 subtitle="Dva řádky: co, proč, odkud a kdy · akce po najetí" -->
 <link rel="stylesheet" href="../../tokens.css">
 <section>
-  <h2 title="Vyhodnoceno 15. 10. 13:31 ze serverových dat">Pozornost</h2>
+  <h2>Pozornost</h2>
   <ul>
-    <li><div><strong>Zaplatit fakturu za hosting</strong><span class="why danger">Po termínu od 13. 10.</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
-    <li class="hover"><div><strong>Spuštění Lumi beta</strong><span class="why">Nemá další krok</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
+    <li><div><strong>Zaplatit fakturu za hosting</strong><span class="why"><b class="danger">Po termínu od 13. 10.</b> · termín úkolu · 13:31</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
+    <li class="hover"><div><strong>Spuštění Lumi beta</strong><span class="why">Nemá další krok · aktivita projektu · 13:31</span></div><span class="acts"><button class="text">Odložit</button><button class="text">Skrýt</button></span><button class="open">Otevřít</button></li>
   </ul>
 </section>
 <style>
@@ -16,7 +16,7 @@ li{display:flex;align-items:center;gap:8px;padding:10px 8px;border-radius:var(--
 li:hover,li.hover,li:focus-within{background:var(--hover)}
 li div{display:grid;gap:1px;min-width:0;flex:1}
 strong{font-size:14px;font-weight:600}
-.why{font-size:13px;color:var(--muted)} .why.danger{color:var(--danger)}
+.why{font-size:13px;color:var(--muted)} .why b{font-weight:500} .danger{color:var(--danger)}
 .acts{display:flex;gap:2px;opacity:0} li:hover .acts,li.hover .acts,li:focus-within .acts{opacity:1}
 button{font:inherit;font-size:13px;cursor:pointer;border-radius:var(--radius-sm);min-height:30px;padding:0 10px}
 button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}

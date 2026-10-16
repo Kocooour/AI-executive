@@ -7,5 +7,5 @@
 **Pravidla**
 - Bez podtitulu a bez rámečku kolem seznamu; řádky leží přímo na `app-bg`, výběr `selected`, najetí `hover`.
 - Pravý údaj: datum (`danger` po termínu), jinak odhad; nic, pokud není co říct. Projekt a oblast se ukazují až v detailu nebo v seskupení seznamu.
-- Čekající synchronizace jen ikonou ↻ v `warning` s nápovědou.
+- Čekající synchronizace nahrazuje pravý údaj textem „↻ čeká na odeslání“ v `warning` – viditelně, ne jen v nápovědě (`title` není dostupný na dotyku ani z klávesnice).
 - Kroužek má okraj `control-border` (≥3:1 i na vybraném řádku), `aria-label` „Dokončit …“ a dotykový cíl 44 px.

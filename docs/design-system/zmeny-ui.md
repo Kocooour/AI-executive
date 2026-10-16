@@ -14,14 +14,14 @@ Dvě zásady od vlastníka produktu (15. 10.) platí pro všechny návrhy níže
 |---|---|
 | „Dobré odpoledne“ + „Takhle vypadá váš dnešní den.“ | „Domů“ nebo jen datum; bez podtitulku |
 | Čipy „1 v Doručených k roztřídění · Data: Synchronizováno · Dnešní kapacita: Kalendář není připojen“ | Nic. Počet Doručených je v sidebaru, problém se synchronizací jako jediný řádek jen když nastane |
-| „• VYŽADUJE POZORNOST“ + „Zdroj: serverová data · vyhodnoceno 15. 10. 13:31“ | Tučné „Pozornost“; čas vyhodnocení po najetí na nadpis |
+| „• VYŽADUJE POZORNOST“ + „Zdroj: serverová data · vyhodnoceno 15. 10. 13:31“ | Tučné „Pozornost“; zdroj a čas vyhodnocení u každé položky (viz níže) |
 | „Termín 13. 10. již uplynul po konci místního dne.“ + „Úkol · Osobní · zaznamenaný termín · vyhodnoceno …“ | „Po termínu od 13. 10.“ |
-| „Další možnosti a zdroje“, „Pokrytí a čerstvost“ | Odložit/Skrýt po najetí; zdroje v detailu |
+| „Další možnosti a zdroje“, „Pokrytí a čerstvost“ | Odložit/Skrýt po najetí nebo fokusu; ID zdrojů a revize v detailu |
 | Podtitul řádku „Doručené“, „Dnes“, „Projekty“ | Žádný; vpravo datum nebo odhad, jen když existuje |
 | „Lumi · právě teď – Žádný úkol právě neběží.“ | Nic, dokud úkol neběží |
 | „Bez vhodného bloku“ + „Po termínu · 60 min · Výchozí odhad“ + „Proč právě teď“ + 3 tlačítka u každé položky | Řádek s „60 min“ vpravo; Jiný čas/Zítra/Neplánovat po najetí |
 
-Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení“. Návrh to splňuje tak, že důvod je vidět vždy a zdroj s časem jsou o jeden krok dál (po najetí, v detailu). Pokud je potřeba mít je vidět bez interakce, je to produktové rozhodnutí do `docs/UX-UI.md`.
+Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení“. Návrh to dodržuje: všechny tři údaje jsou ve druhém řádku každé položky, krátce a bez rozbalování (zdroj jako typ důkazu, např. „termín úkolu“, „projekt bez další akce“; čas jen hodina, u starších dat datum). Je to vidět na dotyku i z klávesnice a nevyžaduje to změnu `docs/UX-UI.md`. Do detailu se přesouvají jen ID zdrojů, revize a časová zóna.
 
 **Prostor na první pohled.** Dnes je prostor jen 13px text „Osobní ⌄“ nad navigací a na mobilu 11px nad vyhledáváním. Snadno se splete, kam se právě zapisuje. Návrh – sekce **W** a komponenta **WorkspaceSwitcher**.
 
@@ -46,7 +46,7 @@ Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení
 
 ## W. Prostor (workspace)
 
-**W1 – Barva a písmeno pro každý prostor.** Osobní `ws-personal` (modrá, O), Pracovní `ws-work` (oranžová, P), Rodinný `ws-family` (zelená, R); Všechna práce neutrální `ws-all` s popiskem „jen čtení“ (text `caption`, ne štítek). Barva se uloží jako vlastnost entity `workspace` (výchozí podle pořadí, uživatel ji může změnit v Nastavení).
+**W1 – Barva a písmeno pro každý prostor.** Osobní `ws-personal` (indigo, odlišné od modrého `accent`; O), Pracovní `ws-work` (oranžová, P), Rodinný `ws-family` (zelená, R); Všechna práce neutrální `ws-all` s popiskem „jen čtení“ (text `caption`, ne štítek). Barva je vždy jeden z tokenů `ws-*` (se `ws-*-soft` a `on-ws`), nikdy libovolná barva – jen tak je zaručený kontrast písmene na dlaždici. **Otevřené rozhodnutí vlastníka:** přiřazení pevně podle typu prostoru (výchozí, platí do rozhodnutí), nebo výběr z téže pevné sady v Nastavení uložený jako odkaz na token v entitě `workspace`.
 
 **W2 – Tři signály zároveň.** (a) Nahoře v sidebaru dlaždice 22 px s písmenem a název prostoru tučně místo „Osobní ⌄“; (b) 3px proužek v barvě prostoru přes horní okraj obsahu; (c) aktivní položka navigace má pozadí `ws-*-soft` místo šedé `selected`. Na iPhonu proužek pod stavovým řádkem a dlaždice s názvem vlevo v hlavičce (cíl 44 px). Ukázka: **WorkspaceSwitcher**, **NavItem**, **BottomNav**.
 
@@ -54,7 +54,7 @@ Specifikace u Home požaduje u každé karty „důvod, zdroj, čas vyhodnocení
 
 ## A. Home / Denní brief
 
-**A1 – Doporučení na dva řádky.** Název + krátký důvod („Po termínu od 13. 10.“). Vpravo „Otevřít“; Odložit a Skrýt po najetí nebo fokusu, na mobilu v detailu. ID zdrojů, revize a časová zóna jen v detailu. Ukázka: **AttentionItem**.
+**A1 – Doporučení na dva řádky.** Název + druhý řádek *důvod · zdroj · čas vyhodnocení* („Po termínu od 13. 10. · termín úkolu · 13:31“). Vpravo „Otevřít“; Odložit a Skrýt po najetí nebo fokusu, na mobilu v detailu. ID zdrojů, revize a časová zóna jen v detailu. Ukázka: **AttentionItem**.
 
 **A2 – Plán dne jako samostatná sekce.** Plán je teď na konci karty Dnes jako dvě věty a odkaz. Návrh: sekce „Plán“ se řádky bloků; kapacita jedním údajem vpravo v nadpisu („3 h volno“), bez kalendáře nic. Ukázka: **PlanBlock**.
 
@@ -126,7 +126,7 @@ Ukázka: komponenta **ProposalCard** (stavy čeká, expirováno, provedeno).
 ## Pořadí dodání
 
 1. **Rychlé opravy (S):** B6, B7, E3, F2, F3 – texty, CSS, bez změny dat.
-2. **Tiché UI + prostor:** A1, A3, A4, B4, E1, E2 a W1–W3 – nejviditelnější změna, převážně prezentační; W1 přidává vlastnost barvy k entitě `workspace`.
+2. **Tiché UI + prostor:** A1, A3, A4, B4, E1, E2 a W1–W3 – nejviditelnější změna, převážně prezentační; W1 v pevné variantě nemění data, případná volba v Nastavení až po rozhodnutí vlastníka.
 3. **P0 mezery:** C1 ProposalCard (chat + mobilní sheet), B1 triage Inboxu, B2 inspektor a detail projektu.
 4. **Systém:** F4, F5, F6 – sjednocení tokenů v `globals.css` podle `tokens.json`.
 5. **P1:** D1 časová osa, B3 typy zachycení, B5, A2, F8.
