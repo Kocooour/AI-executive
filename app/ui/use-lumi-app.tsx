@@ -2636,14 +2636,16 @@ export function useLumiApp() {
       document.removeEventListener("visibilitychange", back);
     };
   }, []);
-  // Drafts left by other pages. A page that is still open answers on the draft channel while it
-  // holds a draft, and its drafts are left to it.
+  // Drafts left by other pages. A page that is still open answers on the draft channel, and its
+  // drafts are left to it.
   const draftChannelName = "ai-executive-notes-draft";
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(draftChannelName);
     channel.onmessage = (event) => {
-      if (event.data?.ask === pageId.current && (notesDraftRef.current || noteBodyDraftRef.current)) channel.postMessage({ alive: pageId.current });
+      // An open page always answers: every draft it kept (being typed, parked behind another note, or
+      // waiting in a conflict) is still its own, and only a page that is really gone leaves drafts behind.
+      if (event.data?.ask === pageId.current) channel.postMessage({ alive: pageId.current });
     };
     return () => channel.close();
   }, []);

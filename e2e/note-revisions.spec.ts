@@ -386,6 +386,46 @@ test("using my text when the note was deleted elsewhere keeps the text", async (
   expect(await keptBodyText(page, id)).toEqual(["my text"]);
 });
 
+test("another open tab never takes over a note text this tab set aside while editing another note", async ({ page, context }) => {
+  const stamp = Date.now();
+  const n = `e2e-note-parked-n-${stamp}`;
+  const b = `e2e-note-parked-b-${stamp}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, n, "Parked N", "n base");
+  await seedNote(page, b, "Parked B", "b base");
+  await openNote(page, n);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("n unsaved");
+  await otherDeviceSaves(page, n, "n newer elsewhere");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await waitUntilSynced(page);
+  await page.locator("input.titleEdit").focus();
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  // Tab A moves on to note B and saves it: note N's text is only set aside, nothing is being typed.
+  await switchToNote(page, "Parked B");
+  await field.fill("b edited");
+  await page.locator("input.titleEdit").focus();
+  await expect.poll(() => serverContent(page, b), { timeout: 20_000 }).toBe("b edited");
+  const keysBefore = await page.evaluate((noteId) => Object.keys(localStorage).filter((key) => key.endsWith(`note-body:${noteId}`)), n);
+  expect(keysBefore).toHaveLength(1);
+  // Tab C opens and runs its recovery of drafts left by closed pages.
+  const other = await context.newPage();
+  await other.goto("/");
+  await waitUntilSynced(other);
+  await other.waitForTimeout(2500);
+  const keysAfter = await page.evaluate((noteId) => Object.keys(localStorage).filter((key) => key.endsWith(`note-body:${noteId}`)), n);
+  expect(keysAfter).toEqual(keysBefore);
+  await other.close();
+  // After a reload of tab A the text is still there, shown as the conflict it is.
+  await page.reload();
+  await waitUntilSynced(page);
+  await switchToNote(page, "Parked N");
+  await expect(field).toHaveValue("n unsaved", { timeout: 20_000 });
+  await expect(page.locator(".noteConflict")).toBeVisible();
+  expect(await serverContent(page, n)).toBe("n newer elsewhere");
+});
+
 test("discarding my text in a conflict shows the stored text", async ({ page }) => {
   const id = `e2e-note-discard-${Date.now()}`;
   await page.goto("/");
