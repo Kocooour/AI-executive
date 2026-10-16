@@ -123,7 +123,7 @@ test("restoring a full backup returns records, Context with its Undo step, sourc
   await expect(status(page)).toHaveText("Záloha vytvořena.");
   await expect(rows(page).first()).toContainText("Úplná");
   await expect(rows(page).first()).toContainText("ruční");
-  await expect(rows(page).first()).toContainText(/\d+ záznamy · \d+ tvrzení · \d+ zdroje · \d+ verze poznámek · \d+ pracovní bloky/);
+  await expect(rows(page).first()).toContainText(/\d+ (záznam|záznamy|záznamů) · \d+ tvrzení · \d+ (zdroj|zdroje|zdrojů) · \d+ (verze poznámky|verze poznámek|verzí poznámek) · \d+ (pracovní blok|pracovní bloky|pracovních bloků)/);
   expect(await rows(page).count()).toBeGreaterThanOrEqual(Math.min(before + 1, 8));
 
   // After the backup: a task is deleted and another added, the note changes, a claim and a source are added, the claim is edited.
@@ -268,4 +268,14 @@ test("the backup section fits a 390 px screen and its controls are 44 px high", 
   expect(layout.small).toEqual([]);
   expect(layout.outside).toEqual([]);
   expect(layout.count).toBeGreaterThanOrEqual(4);
+  // Scrolled to the end, the last row's button is not under the bottom bar or its add button.
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const covered = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll<HTMLElement>(".backupList button")];
+    const last = buttons[buttons.length - 1];
+    const box = last.getBoundingClientRect();
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return { covered: !(top === last || last.contains(top)), bottom: box.bottom, height: window.innerHeight };
+  });
+  expect(covered.covered).toBe(false);
 });

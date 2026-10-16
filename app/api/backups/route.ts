@@ -59,9 +59,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: inputError.message }, { status: inputError.status });
   }
   if (body.action === "create") {
-    const backup = createBackup();
-    recordSecurityEvent(request, "backup.create", "allowed");
-    return NextResponse.json({ backup });
+    try {
+      const backup = createBackup();
+      recordSecurityEvent(request, "backup.create", "allowed");
+      return NextResponse.json({ backup });
+    } catch (error) {
+      // The detail (it may name paths) stays in the server log.
+      console.error("Backup failed:", error);
+      recordSecurityEvent(request, "backup.create", "failed");
+      return NextResponse.json({ error: error instanceof HttpInputError ? error.message : "Backup failed" }, { status: error instanceof HttpInputError ? error.status : 500 });
+    }
   }
   if (body.action === "restore" && typeof body.name === "string") {
     try {
@@ -70,9 +77,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ snapshot });
     } catch (error) {
       recordSecurityEvent(request, "backup.restore", "failed", { name: body.name });
+      // Only messages written for the owner are returned; anything else (a file system or database error that may name
+      // paths) stays in the server log.
+      if (!(error instanceof HttpInputError)) console.error("Restore failed:", error);
+      const known = error instanceof HttpInputError || (error instanceof Error && error.message === "Invalid backup name");
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Restore failed" },
-        { status: error instanceof HttpInputError ? error.status : 400 },
+        { error: known ? (error as Error).message : "Restore failed" },
+        { status: error instanceof HttpInputError ? error.status : known ? 400 : 500 },
       );
     }
   }

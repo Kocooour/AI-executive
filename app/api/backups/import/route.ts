@@ -60,6 +60,7 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "backup.import", "allowed");
     return NextResponse.json({ snapshot }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
+    if (!(error instanceof HttpInputError)) console.error("Import failed:", error);
     const inputError = error instanceof HttpInputError ? error : new HttpInputError("Import failed", 500);
     recordSecurityEvent(request, "backup.import", inputError.status >= 500 ? "failed" : "rejected", { reason: inputError.message });
     return NextResponse.json({ error: inputError.message }, { status: inputError.status, headers: { "cache-control": "no-store" } });

@@ -75,6 +75,7 @@ export function getDatabase() {
   databaseInstance = database;
   try {
     initialiseDatabase(database);
+    removeLeftoverTemporaryFiles();
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
@@ -1109,7 +1110,8 @@ export function listBackups(): BackupSummary[] {
         label: backupLabel(name),
         createdAt: modifiedAt,
         entityCount: 0, relationCount: 0, claimCount: 0, sourceCount: 0, noteRevisionCount: 0, workSessionCount: 0,
-        error: error instanceof Error ? error.message : "Invalid backup",
+        // Only messages written for the owner are shown; a validation detail of a damaged file is not.
+        error: error instanceof HttpInputError ? error.message : "Invalid backup",
       });
       try {
         if (name.endsWith(".sqlite")) {
@@ -1128,10 +1130,13 @@ export function listBackups(): BackupSummary[] {
 }
 
 function restoreLegacyBackup(name: string) {
-  const restored = JSON.parse(
-    readFileSync(path.join(backupDirectory, name), "utf8"),
-  ) as StoreSnapshot;
-  validateSnapshot(restored);
+  let restored: StoreSnapshot;
+  try {
+    restored = JSON.parse(readFileSync(path.join(backupDirectory, name), "utf8")) as StoreSnapshot;
+    validateSnapshot(restored);
+  } catch {
+    throw new HttpInputError("Invalid backup");
+  }
   createBackup("before-restore");
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
@@ -1171,20 +1176,38 @@ function nextSnapshotAfterRestore(current: StoreSnapshot, restored: StoreSnapsho
 
 let restoreFaultForTests: string | null = null;
 /** Tests only: makes a restore fail after the named table was replaced, to show that nothing stays changed. */
-export function failRestoreAfterTableForTests(table: string | null) { restoreFaultForTests = table; }
+export function failRestoreAfterTableForTests(table: string | null) {
+  // Only the test runner sets this; nothing in the app or its routes calls it.
+  if (table !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Not available outside tests");
+  restoreFaultForTests = table;
+}
 
 const temporaryDirectory = path.join(dataDirectory, "tmp");
-export function temporaryFile(prefix: string, extension: string) {
-  mkdirSync(temporaryDirectory, { recursive: true, mode: 0o700 });
-  chmodSync(temporaryDirectory, 0o700);
-  // Left-overs of an interrupted request go after an hour.
+// Files this feature creates there, by prefix. Anything of these in the folder that is not in use by a request of this
+// process is left over from one that was killed, and goes at start and before the next file is made, whatever its age.
+const temporaryPrefixes = ["restore-", "export-", "import-"];
+const temporaryInUse = new Set<string>();
+export function removeLeftoverTemporaryFiles() {
   try {
+    if (!existsSync(temporaryDirectory)) return;
     for (const entry of readdirSync(temporaryDirectory)) {
       const file = path.join(temporaryDirectory, entry);
-      if (Date.now() - statSync(file).mtimeMs > 60 * 60_000) removeIfExists(file);
+      if (!temporaryPrefixes.some((prefix) => entry.startsWith(prefix)) || temporaryInUse.has(file)) continue;
+      removeIfExists(file);
     }
-  } catch { /* cleaning is best effort */ }
-  return path.join(temporaryDirectory, `${prefix}-${randomUUID()}${extension}`);
+    for (const file of temporaryInUse) if (!existsSync(file)) temporaryInUse.delete(file);
+  } catch (error) {
+    console.error("Cleaning temporary files failed:", error instanceof Error ? error.message : error);
+  }
+}
+export function temporaryFile(prefix: string, extension: string) {
+  if (!temporaryPrefixes.some((known) => prefix.startsWith(known.slice(0, -1)))) throw new Error("Unknown temporary file kind");
+  mkdirSync(temporaryDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(temporaryDirectory, 0o700);
+  removeLeftoverTemporaryFiles();
+  const file = path.join(temporaryDirectory, `${prefix}-${randomUUID()}${extension}`);
+  temporaryInUse.add(file);
+  return file;
 }
 
 /**

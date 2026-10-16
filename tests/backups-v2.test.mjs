@@ -387,8 +387,10 @@ test("a tampered package is refused with a reason", async () => {
   assert.throws(() => verify(rezip((files) => { files["manifest.json"] = strToU8(JSON.stringify({ ...manifest(), format: "other" })); })), /Invalid export package/);
   assert.throws(() => verify(rezip((files) => { files["manifest.json"] = strToU8("{"); })), /Invalid export package/);
   // Not a ZIP at all, and a truncated one.
-  assert.throws(() => verify(Buffer.from("this is not a zip file")), /Invalid export package|missing/);
-  assert.throws(() => verify(bytes.subarray(0, Math.floor(bytes.length / 2))), /Invalid export package|missing|checksums/);
+  assert.throws(() => verify(Buffer.from("this is not a zip file")), /Not a valid export file/);
+  assert.throws(() => verify(Buffer.alloc(0)), /Not a valid export file/);
+  assert.throws(() => verify(Buffer.from("PK\u0003\u0004 and then garbage that is not an entry")), /Not a valid export file/);
+  assert.throws(() => verify(bytes.subarray(0, Math.floor(bytes.length / 2))), /Not a valid export file|missing|checksums/);
   // A manifest that lies about a size.
   assert.throws(() => verify(rezip((files) => { const lied = manifest(); lied.files["notes/note_e1.md"].bytes += 1; files["manifest.json"] = strToU8(JSON.stringify(lied)); })), /checksums/);
 });
@@ -439,4 +441,119 @@ test("scripts/check-data.mjs verifies a full backup read-only", () => {
   assert.equal(report.tables.passkey_credentials, 0);
   assert.equal(engine.sha256File(file), before);
   assert.equal(existsSync(`${file}-wal`), false);
+});
+
+test("a store above the old package limits is exported and imported back", async () => {
+  // 25 000 notes of about 3 KB: more entries than the old limit of 20 000, and data/entities.json above the old 64 MiB.
+  const { randomBytes } = await import("node:crypto");
+  const insert = db().prepare("INSERT INTO entities (id, payload, updated_at) VALUES (?, ?, ?)");
+  db().exec("BEGIN");
+  for (let index = 0; index < 25_000; index += 1) {
+    const entity = note(`note:big-${index}`, `Big ${index}`, randomBytes(2300).toString("base64"));
+    insert.run(entity.id, JSON.stringify(entity), 1_000 + index);
+  }
+  db().exec("COMMIT");
+  const { copy, parts, manifest } = exportPackage();
+  assert.ok(parts.length + 1 > 20_000);
+  assert.ok(parts.find((part) => part.name === "data/entities.json").size > 64 * 1024 ** 2);
+  pack.assertWithinLimits(parts);
+  const bytes = await readStream(pack.packageStream(parts, manifest, copy.dispose));
+  const zipPath = path.join(tmp(), "big.zip");
+  const databasePath = path.join(tmp(), "big.sqlite");
+  writeFileSync(zipPath, bytes);
+  const verified = pack.verifyPackage(zipPath, databasePath);
+  assert.equal(Object.keys(verified.files).length, parts.length);
+  db().exec("DELETE FROM entities WHERE id LIKE 'note:big-%'");
+  store.restoreDatabaseFile(databasePath);
+  assert.equal(db().prepare("SELECT COUNT(*) AS value FROM entities WHERE id LIKE 'note:big-%'").get().value, 25_000);
+  db().exec("DELETE FROM entities WHERE id LIKE 'note:big-%'; DELETE FROM note_revisions WHERE note_id LIKE 'note:big-%'");
+  rmSync(zipPath, { force: true });
+  rmSync(databasePath, { force: true });
+});
+
+test("an export above the importer's absolute limits is refused before anything is written", () => {
+  const { copy, parts } = exportPackage();
+  try {
+    const limits = pack.defaultPackageLimits;
+    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxEntries: parts.length }), /too large to be imported again/);
+    assert.doesNotThrow(() => pack.assertWithinLimits(parts, { ...limits, maxEntries: parts.length + 1 }));
+    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxEntryBytes: 10 }), /too large to be imported again/);
+    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxTotalBytes: 100 }), /too large to be imported again/);
+    assert.throws(() => pack.assertWithinLimits(parts, { ...limits, maxDatabaseBytes: 100 }), /too large to be imported again/);
+  } finally {
+    copy.dispose();
+  }
+  // What the importer accepts is never below what the exporter writes.
+  assert.ok(pack.defaultPackageLimits.maxEntries >= 500_000 && pack.defaultPackageLimits.maxEntryBytes >= 1024 ** 3);
+});
+
+test("a package that inflates far beyond what was read is refused by the ratio guard", () => {
+  const entries = { "manifest.json": strToU8("{}"), "database.sqlite": strToU8("x"), "data/zeros.json": new Uint8Array(80 * 1024 ** 2) };
+  assert.throws(() => verify(Buffer.from(zipSync(entries, { level: 9 }))), /too large/);
+});
+
+test("leftovers of a killed restore, import or export are removed at the next temporary file", () => {
+  const tempDir = path.join(dataDir, "tmp");
+  mkdirSync(tempDir, { recursive: true });
+  const stale = ["restore-old.sqlite", "export-old.sqlite", "import-old.zip", "import-db-old.sqlite"].map((name) => path.join(tempDir, name));
+  for (const file of stale) writeFileSync(file, "left over");
+  const unrelated = path.join(tempDir, "keep-me.txt");
+  writeFileSync(unrelated, "not ours");
+  const inUse = store.temporaryFile("import", ".zip");
+  writeFileSync(inUse, "in use by a running request");
+  const next = store.temporaryFile("export", ".sqlite");
+  assert.deepEqual(stale.filter((file) => existsSync(file)), []);
+  assert.equal(existsSync(unrelated), true);
+  assert.equal(existsSync(inUse), true, "a file of a request that is running is not removed");
+  assert.equal(existsSync(next), false);
+  rmSync(unrelated);
+  rmSync(inUse);
+});
+
+test("a malformed legacy backup is listed as invalid without its validation detail, and restoring it says only that", () => {
+  const name = "2026-03-04T05-06-07-890Z-manual.json";
+  writeFileSync(path.join(backupsDir, name), JSON.stringify({ revision: 1, entities: [{ id: "x", type: "workspace", title: "w" }], relations: [], tombstones: [] }), { mode: 0o600 });
+  const listed = store.listBackups().find((backup) => backup.name === name);
+  assert.equal(listed.error, "Invalid backup");
+  const before = stateOf();
+  assert.throws(() => store.restoreBackup(name), (error) => error.message === "Invalid backup");
+  assert.deepEqual(stateOf(), before);
+  writeFileSync(path.join(backupsDir, name), "{ not json");
+  assert.equal(store.listBackups().find((backup) => backup.name === name).error, "Invalid backup");
+  rmSync(path.join(backupsDir, name));
+});
+
+test("the restore test hook cannot be switched on outside the test runner", () => {
+  const saved = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  try {
+    assert.throws(() => store.failRestoreAfterTableForTests("context_claims"), /Not available outside tests/);
+  } finally {
+    process.env.NODE_TEST_CONTEXT = saved;
+  }
+});
+
+test("the backup route answers an unexpected failure with a generic message and keeps paths out of the response", async () => {
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  const route = await import("../app/api/backups/route.ts");
+  const made = store.createBackup("manual");
+  // The database file is replaced by a directory: reading it fails with an error that names its path.
+  const file = path.join(backupsDir, made.name);
+  rmSync(file);
+  mkdirSync(file);
+  const request = (body) => new Request("http://localhost:3000/api/backups", { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify(body) });
+  const originalError = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args.join(" "));
+  let response;
+  try { response = await route.POST(request({ action: "restore", name: made.name })); } finally { console.error = originalError; }
+  const text = await response.text();
+  assert.equal(response.status, 500);
+  assert.deepEqual(JSON.parse(text), { error: "Restore failed" });
+  assert.equal(text.includes(dataDir), false);
+  assert.ok(logged.some((line) => line.includes("Restore failed")), "the detail is logged on the server");
+  const refused = await route.POST(request({ action: "restore", name: "../x.sqlite" }));
+  assert.equal((await refused.json()).error, "Invalid backup name");
+  rmSync(file, { recursive: true });
+  rmSync(path.join(backupsDir, made.name.replace(/\.sqlite$/, ".meta.json")));
 });

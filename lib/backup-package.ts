@@ -31,12 +31,19 @@ export interface PackageLimits {
   maxEntryBytes: number;
   maxDatabaseBytes: number;
 }
+// Absolute limits. The exporter refuses to build a package above them and the importer refuses one above them, so
+// whatever the app exports it can import again. They are bomb protection, not a size policy: entries are counted while
+// inflating (not only as declared), and a package that inflates far beyond what it read is refused by the ratio guard.
 export const defaultPackageLimits: PackageLimits = {
-  maxEntries: 20_000,
-  maxTotalBytes: 2 * 1024 ** 3,
-  maxEntryBytes: 64 * 1024 ** 2,
-  maxDatabaseBytes: 1024 ** 3,
+  maxEntries: 500_000,
+  maxTotalBytes: 4 * 1024 ** 3,
+  maxEntryBytes: 1024 ** 3,
+  maxDatabaseBytes: 2 * 1024 ** 3,
 };
+// Inflating more than this much needs at least 1 byte read per `maxInflateRatio` inflated (text and database files
+// compress about 3 to 20 times; a bomb compresses a thousand times or more).
+export const bombGuardFloorBytes = 64 * 1024 ** 2;
+export const maxInflateRatio = 200;
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
@@ -120,6 +127,18 @@ export function buildPackageParts(copyPath: string) {
   const { sha256: databaseHash, size } = hashFile(copyPath);
   parts.push({ name: databaseEntry, file: copyPath, size, sha256: databaseHash });
   return parts;
+}
+
+/** Refuses (before anything is streamed) a package the importer would refuse. */
+export function assertWithinLimits(parts: Part[], limits: PackageLimits = defaultPackageLimits) {
+  // The manifest is one more entry.
+  let total = 0;
+  if (parts.length + 1 > limits.maxEntries) throw new HttpInputError("Export is too large to be imported again", 413);
+  for (const part of parts) {
+    total += part.size;
+    const limit = part.name === databaseEntry ? limits.maxDatabaseBytes : limits.maxEntryBytes;
+    if (part.size > limit || total > limits.maxTotalBytes) throw new HttpInputError("Export is too large to be imported again", 413);
+  }
 }
 
 export function buildManifest(parts: Part[], info: { counts: Record<string, number>; migrations: string[]; createdAt?: Date }): PackageManifest {
@@ -207,6 +226,8 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
   let totalBytes = 0;
   let failure: HttpInputError | null = null;
   let databaseFd: number | null = null;
+  let compressedBytes = 0;
+  let unfinished = 0;
   const fail = (error: HttpInputError) => { if (!failure) failure = error; };
 
   const unzip = new Unzip();
@@ -222,12 +243,15 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
     const state = { hash: createHash("sha256"), bytes: 0 };
     seen.set(name, state);
     if (name === databaseEntry) databaseFd = openSync(databasePath, "w", 0o600);
-    file.ondata = (error, data) => {
+    unfinished += 1;
+    file.ondata = (error, data, final) => {
       if (failure) return;
-      if (error) { fail(new HttpInputError("Invalid export package")); return; }
+      if (error) { fail(new HttpInputError("Not a valid export file")); return; }
+      if (final) unfinished -= 1;
       state.bytes += data.length;
       totalBytes += data.length;
       if (state.bytes > entryLimit || totalBytes > limits.maxTotalBytes) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
+      if (totalBytes > bombGuardFloorBytes && totalBytes > compressedBytes * maxInflateRatio) { fail(new HttpInputError("Export package is too large")); file.terminate(); return; }
       state.hash.update(data);
       if (name === manifestEntry) manifestText = Buffer.concat([manifestText, data]);
       if (name === databaseEntry && databaseFd !== null) writeSync(databaseFd, data);
@@ -242,10 +266,14 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
     while (!failure && !ended) {
       const read = readSync(fd, buffer, 0, buffer.length, null);
       ended = read === 0;
+      compressedBytes += read;
+      if (compressedBytes === read && read >= 4 && !(buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05))) {
+        throw new HttpInputError("Not a valid export file");
+      }
       try {
         unzip.push(ended ? new Uint8Array(0) : Uint8Array.prototype.slice.call(buffer, 0, read), ended);
       } catch {
-        fail(new HttpInputError("Invalid export package"));
+        fail(new HttpInputError("Not a valid export file"));
       }
     }
   } finally {
@@ -253,6 +281,8 @@ export function verifyPackage(zipPath: string, databasePath: string, limits: Pac
     if (databaseFd !== null) closeSync(databaseFd);
   }
   if (failure) throw failure;
+  // Nothing readable, or an entry that ends before it is complete (a truncated or damaged archive).
+  if (seen.size === 0 || unfinished > 0) throw new HttpInputError("Not a valid export file");
 
   if (!seen.has(manifestEntry) || !seen.has(databaseEntry)) throw new HttpInputError("Export package has missing or unexpected files");
   let manifest: PackageManifest;

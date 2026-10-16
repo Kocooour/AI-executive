@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { unzipSync } from "fflate";
 import { request as playwrightRequest, type APIRequestContext } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -149,8 +151,15 @@ test("the backup, export and import endpoints refuse the integration API token",
   await bearer.dispose();
 });
 
-test("an export holds every workspace of the owner, and is given only to the owner's session", async ({ baseURL, page }) => {
+test("an export holds every workspace of the owner, and is given only to the owner's session", async ({ baseURL, page }, testInfo) => {
   await page.goto("/");
+  // Secrets of the live database that must never reach an export, planted in the tables that hold them.
+  const live = new DatabaseSync(path.join(process.env.LUMI_E2E_RUN_DIR!, "data", "store.sqlite"));
+  live.exec("PRAGMA busy_timeout = 5000");
+  const secret = `e2e-secret-${Date.now()}`;
+  live.prepare("INSERT INTO passkey_credentials (credential_id, public_key, counter, transports, device_type, backed_up, rp_id, label, created_at) VALUES (?, ?, 0, '[]', 'x', 0, 'localhost', ?, 1)").run(`${secret}-passkey`, Buffer.from(`${secret}-key`), `${secret}-label`);
+  live.prepare("INSERT INTO push_subscriptions (endpoint, payload, created_at, last_seen_at) VALUES (?, ?, 1, 1)").run(`https://push.example/${secret}-endpoint`, `${secret}-payload`);
+  live.prepare("INSERT INTO metadata (key, value) VALUES ('e2eVapidMarker', ?)").run(`${secret}-vapid`);
   const second = `e2e-boundary-ws-${Date.now()}`;
   const marker = `e2e-boundary-note-${Date.now()}`;
   await page.evaluate(async ([workspaceId, noteId]) => {
@@ -184,8 +193,27 @@ test("an export holds every workspace of the owner, and is given only to the own
     const everything = Object.values(entries).map((bytes) => Buffer.from(bytes).toString("latin1")).join("\n");
     expect(everything).not.toContain("vapidKeys");
     for (const name of Object.keys(entries)) expect(name).not.toMatch(/passkey|push_subscriptions|security_/);
+    // The database inside the package: excluded tables are empty and none of the planted secrets is in its bytes.
+    const embedded = testInfo.outputPath("database.sqlite");
+    writeFileSync(embedded, entries["database.sqlite"]);
+    const inside = new DatabaseSync(embedded, { readOnly: true });
+    try {
+      for (const table of ["passkey_credentials", "passkey_challenges", "push_subscriptions", "notification_deliveries", "security_events", "security_alerts", "calendar_events", "context_commands", "work_session_commands", "ai_proposals"]) {
+        expect((inside.prepare(`SELECT COUNT(*) AS value FROM "${table}"`).get() as { value: number }).value, table).toBe(0);
+      }
+      expect((inside.prepare("SELECT key FROM metadata ORDER BY key").all() as Array<{ key: string }>).map((row) => row.key)).toEqual(["revision", "updatedAt"]);
+    } finally {
+      inside.close();
+    }
+    const bytes = Buffer.from(entries["database.sqlite"]);
+    for (const planted of [secret, integrationToken, process.env.LUMI_E2E_SESSION_SECRET!]) expect(bytes.includes(Buffer.from(planted))).toBe(false);
+    for (const [name, content] of Object.entries(entries)) if (!name.endsWith(".sqlite")) expect(Buffer.from(content).includes(Buffer.from(secret)), name).toBe(false);
     await Promise.all([owner.dispose(), bearer.dispose(), anonymous.dispose()]);
   } finally {
+    live.prepare("DELETE FROM passkey_credentials WHERE credential_id LIKE ?").run(`${secret}%`);
+    live.prepare("DELETE FROM push_subscriptions WHERE endpoint LIKE ?").run(`%${secret}%`);
+    live.exec("DELETE FROM metadata WHERE key = 'e2eVapidMarker'");
+    live.close();
     await page.evaluate(async ([workspaceId, noteId]) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const gone = [`workspace:${workspaceId}`, noteId];

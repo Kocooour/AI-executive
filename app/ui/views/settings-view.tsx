@@ -4,6 +4,7 @@ import { type DurableContextItem, type Language, type ThemeMode } from "../types
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
+import { pluralText } from "../../../lib/plural";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -102,6 +103,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
   // Started offline the access check has not answered yet; the section stays, so that signing out
   // is offered (and refused with an explanation while there is no connection).
   const accessShown = authEnabled || app.offlineView;
+  const count = (value: number, key: string) => pluralText(language, value, tr(key));
   const backupKind = (label: string) => {
     const key = `backupKind_${label.replaceAll("-", "_")}`;
     return tr(["daily", "manual", "before_restore", "json_migration", "pre_sqlite"].includes(label.replaceAll("-", "_")) ? key : "backupKind_other");
@@ -562,8 +564,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
                           {backup.error
                             ? `${tr("invalidBackup")} · ${localizeServerError(backup.error, tr)}`
                             : backup.format === "legacy"
-                              ? `${tr("backupTypeLegacy")} · ${backupKind(backup.label)} · ${backup.entityCount} ${tr("items")} · ${backup.relationCount} ${tr("relations").toLowerCase()}`
-                              : `${tr("backupTypeFull")} · ${backupKind(backup.label)} · ${backup.entityCount} ${tr("backupRecords")} · ${backup.claimCount} ${tr("backupClaims")} · ${backup.sourceCount} ${tr("backupSources")} · ${backup.noteRevisionCount} ${tr("backupNoteVersions")} · ${backup.workSessionCount} ${tr("backupWorkBlocks")}`}
+                              ? `${tr("backupTypeLegacy")} · ${backupKind(backup.label)} · ${count(backup.entityCount, "pluItems")} · ${count(backup.relationCount, "pluRelations")}`
+                              : `${tr("backupTypeFull")} · ${backupKind(backup.label)} · ${count(backup.entityCount, "pluRecords")} · ${count(backup.claimCount, "pluClaims")} · ${count(backup.sourceCount, "pluSources")} · ${count(backup.noteRevisionCount, "pluNoteVersions")} · ${count(backup.workSessionCount, "pluWorkBlocks")}`}
                         </small>
                       </span>
                       <button
