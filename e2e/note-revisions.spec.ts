@@ -224,6 +224,122 @@ test("a conflict found when leaving the field survives opening another note and 
   expect(await serverContent(page, a)).toBe("a newer elsewhere");
 });
 
+test("text typed into a note that another device deletes meanwhile is kept, not lost", async ({ page }) => {
+  const id = `e2e-note-deleted-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Deleted elsewhere", "before");
+  await openNote(page, id);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("typed before it was deleted");
+  await page.evaluate(async (noteId) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      entities: snapshot.entities.filter((entity: { id: string }) => entity.id !== noteId), relations: snapshot.relations, deletedIds: [noteId], revivedIds: [] }) });
+  }, id);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await waitUntilSynced(page);
+  await page.locator("input.titleEdit").focus().catch(() => undefined);
+  await page.mouse.click(5, 5);
+  // The text is not thrown away: it stays kept in this device.
+  await expect.poll(() => page.evaluate((noteId) => Object.keys(localStorage).some((key) => key.endsWith(`note-body:${noteId}`)
+    && JSON.parse(localStorage.getItem(key) || "{}").text === "typed before it was deleted"), id), { timeout: 20_000 }).toBe(true);
+});
+
+test("finishing a slow restore of one note does not touch the text being typed in another", async ({ page }) => {
+  const stamp = Date.now();
+  const a = `e2e-note-restore-a-${stamp}`;
+  const b = `e2e-note-restore-b-${stamp}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, a, "Restore A", "a one");
+  await seedNote(page, b, "Restore B", "b base");
+  await openNote(page, a);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("a two");
+  await page.locator("input.titleEdit").focus();
+  const list = page.locator(".revisionList");
+  await expect(list.locator("li")).toHaveCount(2, { timeout: 20_000 });
+  await list.locator("li", { hasText: "Verze 1" }).getByRole("button").click();
+  // The restore's save is held for a while, during which note B is opened and typed into.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/store", async (route) => { if (route.request().method() === "PUT") await held; await route.continue(); });
+  await page.getByRole("button", { name: "Obnovit tuto verzi" }).click();
+  // The restore is still running (its save is held) when note B is opened.
+  await expect(page.getByRole("button", { name: "Obnovit tuto verzi" })).toBeDisabled();
+  await switchToNote(page, "Restore B");
+  await field.fill("b typed during the restore");
+  release();
+  await expect.poll(() => serverContent(page, a), { timeout: 20_000 }).toBe("a one");
+  await page.unroute("**/api/store");
+  await page.waitForTimeout(1000);
+  await expect(field).toHaveValue("b typed during the restore");
+  // B's text is still known as unsaved (not reported as saved, and it is sent when the field is left).
+  await expect(page.locator(".noteStatus[data-state]")).toHaveAttribute("data-state", "noteUnsaved");
+  expect(await page.evaluate((noteId) => Object.keys(localStorage).some((key) => key.endsWith(`note-body:${noteId}`)
+    && JSON.parse(localStorage.getItem(key) || "{}").text === "b typed during the restore"), b)).toBe(true);
+});
+
+test("a draft left by a closed page never replaces the text being typed in the same note", async ({ page }) => {
+  const id = `e2e-note-live-${Date.now()}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, id, "Live note", "server text");
+  await openNote(page, id);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("live typing");
+  // A closed page left a draft of the same note that no longer fits the note's text (a conflict).
+  await page.evaluate((noteId) => localStorage.setItem(`ai-executive-notes-drafts:closed-page:note-body:${noteId}`,
+    JSON.stringify({ id: `note-body:${noteId}`, text: "left by a closed page", base: "older text", at: Date.now() - 120_000, page: "closed-page" })), id);
+  // A failed and then successful synchronization runs the recovery of left drafts again.
+  await page.route("**/api/store", (route) => route.request().method() === "GET" ? route.abort() : route.continue());
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(1500);
+  await page.unroute("**/api/store");
+  await page.evaluate(() => { window.dispatchEvent(new Event("online")); window.dispatchEvent(new Event("focus")); });
+  await waitUntilSynced(page);
+  await page.waitForTimeout(2000);
+  await expect(field).toHaveValue("live typing");
+  const kept = await page.evaluate((noteId) => Object.keys(localStorage).filter((key) => key.endsWith(`note-body:${noteId}`))
+    .map((key) => JSON.parse(localStorage.getItem(key) || "{}").text).sort(), id);
+  expect(kept).toEqual(["left by a closed page", "live typing"]);
+});
+
+test("without device storage, unsaved text of one note survives editing another note", async ({ page }) => {
+  // Device storage refuses note drafts, as when it is full.
+  await page.addInitScript(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.includes("note-body:")) throw new DOMException("full", "QuotaExceededError");
+      return original.call(this, key, value);
+    };
+  });
+  const stamp = Date.now();
+  const a = `e2e-note-memory-a-${stamp}`;
+  const b = `e2e-note-memory-b-${stamp}`;
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await seedNote(page, a, "Memory A", "a base");
+  await seedNote(page, b, "Memory B", "b base");
+  await openNote(page, a);
+  const field = page.getByLabel("Text poznámky").first();
+  await field.fill("a unsaved in memory");
+  await otherDeviceSaves(page, a, "a newer elsewhere");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await waitUntilSynced(page);
+  await page.locator("input.titleEdit").focus();
+  await expect(page.locator(".noteConflict")).toBeVisible({ timeout: 20_000 });
+  await switchToNote(page, "Memory B");
+  await field.fill("b edited");
+  await page.locator("input.titleEdit").focus();
+  await expect.poll(() => serverContent(page, b), { timeout: 20_000 }).toBe("b edited");
+  await switchToNote(page, "Memory A");
+  await expect(field).toHaveValue("a unsaved in memory", { timeout: 20_000 });
+  await expect(page.locator(".noteConflict")).toBeVisible();
+  expect(await serverContent(page, a)).toBe("a newer elsewhere");
+});
+
 test("discarding my text in a conflict shows the stored text", async ({ page }) => {
   const id = `e2e-note-discard-${Date.now()}`;
   await page.goto("/");

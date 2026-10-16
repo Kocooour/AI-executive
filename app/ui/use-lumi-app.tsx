@@ -1184,7 +1184,7 @@ export function useLumiApp() {
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         drainSync: () => syncQueue.current,
         // A note text held only in memory (storage full) counts too, so it is never dropped without asking.
-        hasUnsent: async () => (await hasUnsentChanges()) || Boolean(noteBodyDraftRef.current),
+        hasUnsent: async () => (await hasUnsentChanges()) || Boolean(noteBodyDraftRef.current) || parkedNoteBodies.current.size > 0,
         // Notes drafts kept in the device go into the local copy first, so they are sent too.
         sync: async () => { await saveLeftoverDrafts(true); await syncToServer(); },
         // Both requests are bounded: a stalled connection ends in "no connection", not a sign-out
@@ -2363,8 +2363,12 @@ export function useLumiApp() {
   // a key of its own, so it is never mistaken for task notes), saved through the normal save path when
   // the field is left. A failed local write keeps the draft and says so.
   const noteBodyKey = (id: string) => `note-body:${id}`;
+  // Drafts of other notes this page still holds, kept in memory too in case the device storage failed.
+  const parkedNoteBodies = useRef(new Map<string, { id: string; text: string; base: string }>());
   function editNoteBody(id: string, text: string, base: string) {
-    setNoteBodyDraft((open) => ({ id, text, base: open && open.id === id ? open.base : base }));
+    const open = noteBodyDraftRef.current;
+    if (open && open.id !== id) parkedNoteBodies.current.set(open.id, open);
+    setNoteBodyDraft((current) => ({ id, text, base: current && current.id === id ? current.base : base }));
     setNoteBodyError((failed) => (failed === id ? null : failed));
     keepNotesDraft(localStorage, pageId.current, noteBodyKey(id), text, base);
   }
@@ -2392,7 +2396,9 @@ export function useLumiApp() {
   async function saveNoteBody(e: Pick<Entity, "id">, text: string) {
     try {
       const stored = await db.entities.get(e.id);
-      if (stored && stored.type === "note") {
+      // The note was deleted (for example on another device): the text is kept and the save reported as failed.
+      if (!stored || stored.type !== "note") { setNoteBodyError(e.id); return; }
+      {
         const now = stored.content ?? "";
         const kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(e.id));
         const open = noteBodyDraftRef.current;
@@ -2459,9 +2465,9 @@ export function useLumiApp() {
       setNoteBodyError(e.id);
       return "failed";
     }
-    setNoteBodyError(null);
-    setNoteBodyDraft(null);
-    try { removeNoteBodyDraft(e.id); } catch { /* storage unavailable */ }
+    // Restoring is offered only while the note has no draft, so there is none to clear here. A draft typed
+    // meanwhile (in this note or in another one opened during the save) is the owner's newer text and stays.
+    setNoteBodyError((failed) => (failed === e.id ? null : failed));
     return "restored";
   }
   function removeNoteBodyDraft(id: string) {
@@ -2477,8 +2483,10 @@ export function useLumiApp() {
     if (!openNoteId) return;
     const open = noteBodyDraftRef.current;
     if (open && open.id === openNoteId) return;
-    let kept: KeptNotesDraft | undefined;
-    try { kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(openNoteId)); } catch { return; }
+    let kept: { text: string; base: string } | undefined;
+    try { kept = keptNotesDrafts(localStorage).find((draft) => draft.page === pageId.current && draft.id === noteBodyKey(openNoteId)); } catch { /* storage unavailable */ }
+    kept ??= parkedNoteBodies.current.get(openNoteId);
+    parkedNoteBodies.current.delete(openNoteId);
     if (!kept) return;
     const found = kept;
     setNoteBodyDraft({ id: openNoteId, text: found.text, base: found.base });
@@ -2666,8 +2674,8 @@ export function useLumiApp() {
       if (action === "conflict" && isBody) {
         // Never deleted silently: the text is adopted into this page's draft and the note shows the conflict.
         const id = draft.id.slice("note-body:".length);
-        const open = noteBodyDraftRef.current;
-        if (open && open.id !== id) continue;
+        // A draft this page is typing (of any note) is never replaced; the left draft waits in the device.
+        if (noteBodyDraftRef.current) continue;
         keepNotesDraft(localStorage, pageId.current, draft.id, draft.text, draft.base);
         dropNotesDraft(localStorage, draft);
         setNoteBodyDraft({ id, text: draft.text, base: draft.base });
@@ -2681,6 +2689,8 @@ export function useLumiApp() {
         } catch {
           continue;
         }
+        // Newer text from another device may have won the merge meanwhile: the left text is kept, never settled away.
+        if (isBody && ((await db.entities.get(stored.id))?.content ?? "") !== draft.text) continue;
       }
       // If that page typed on in the meantime, its draft now starts from what was saved.
       if (action === "gone") dropNotesDraft(localStorage, draft);
