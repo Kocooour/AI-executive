@@ -27,7 +27,7 @@
   --danger-soft: #fde4e8;
   --warning: #a35a00;
   --warning-soft: #fff1dc;
-  --success: #1f8a3c;
+  --success: #1a7a35;
   --success-soft: #e0f5e6;
   --on-success-soft: #17692f;
   --icon-home: #3a3c42;
@@ -79,7 +79,7 @@
   --control-border: #9a9aa0;
   --text: #f5f5f7;
   --muted: #aeaeb2;
-  --muted-light: #98989d;
+  --muted-light: #a4a4a9;
   --hover: rgba(255, 255, 255, 0.06);
   --selected: #3a3a3d;
   --selected-text: #ffffff;
@@ -132,7 +132,7 @@
     --control-border: #9a9aa0;
     --text: #f5f5f7;
     --muted: #aeaeb2;
-    --muted-light: #98989d;
+    --muted-light: #a4a4a9;
     --hover: rgba(255, 255, 255, 0.06);
     --selected: #3a3a3d;
     --selected-text: #ffffff;

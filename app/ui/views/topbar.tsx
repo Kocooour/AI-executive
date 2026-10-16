@@ -1,8 +1,11 @@
 "use client";
 import type { LumiApp } from "../use-lumi-app";
+import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
 export function Topbar({ app }: { app: LumiApp }) {
   const {
+    activeWorkspaceId,
+    activeWorkspaceTone,
     query,
     resolvedTheme,
     saveTheme,
@@ -23,20 +26,25 @@ export function Topbar({ app }: { app: LumiApp }) {
             className="mobileWorkspaceButton"
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
             aria-label={tr("switchWorkspace")}
+            aria-expanded={workspaceMenuOpen}
           >
-            {workspaceName}⌄
+            <WorkspaceTile tone={activeWorkspaceTone} label={workspaceName} />
+            <b className="mobileWorkspaceName">{workspaceName}</b><span className="workspaceChevron" aria-hidden="true">⌄</span>
           </button>
           {workspaceMenuOpen && (
             <div className="mobileWorkspaceMenu workspaceMenu">
               {workspaces.map((workspace) => (
                 <button
                   key={workspace.id}
+                  className={activeWorkspaceId === workspace.workspaceId ? "active" : ""}
+                  data-workspace-id={workspace.workspaceId}
                   onClick={() => selectWorkspace(workspace.workspaceId)}
                 >
-                  {workspace.title}
+                  <WorkspaceTile tone={workspaceTone(workspace.workspaceId, workspace)} label={workspace.title} />
+                  <span className="workspaceOptionName">{workspace.title}</span>
                 </button>
               ))}
-              <button onClick={() => selectWorkspace("all")}>{tr("allWork")}</button>
+              <button className={activeWorkspaceId === "all" ? "active" : ""} data-workspace-id="all" onClick={() => selectWorkspace("all")}><WorkspaceTile tone="all" label={tr("allWork")} /><span className="workspaceOptionName">{tr("allWork")}</span></button>
             </div>
           )}
           <label className="searchField">

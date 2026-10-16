@@ -39,7 +39,7 @@ export default function App() {
     );
   }
   return (
-    <main className={`appShell view-${view.toLowerCase()}`}>
+    <main className={`appShell view-${view.toLowerCase()}`} data-workspace-tone={app.activeWorkspaceTone}>
       <Sidebar app={app} />
       <section className="appPane">
         {app.offlineView && (
