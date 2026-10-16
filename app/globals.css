@@ -599,6 +599,13 @@ article small {
   cursor: not-allowed;
   opacity: 0.45;
 }
+.backupCreate {
+  min-height: 44px;
+}
+.backupCreate:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
 .backupTools {
   display: flex;
   flex-wrap: wrap;

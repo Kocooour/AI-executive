@@ -531,7 +531,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     <h2>{tr("backups")}</h2>
                     <p>{tr("backupInfo")}</p>
                   </div>
-                  <button className="primaryAction" onClick={createServerBackup} disabled={backupBusy}>
+                  <button className="primaryAction backupCreate" onClick={createServerBackup} disabled={backupBusy}>
                     {tr("createBackup")}
                   </button>
                 </div>
