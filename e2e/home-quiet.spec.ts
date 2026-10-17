@@ -5,12 +5,13 @@ import { heading, seeded, waitUntilSynced } from "./helpers";
 // The quiet Home of docs/design-system: a plain title, no status chips while all is well, and
 // every recommendation says why, from what and when on its own line (docs/UX-UI.md, LUMI-UX-001).
 
-// Adds tasks straight to the server store, retrying when a save of the open page takes the revision first.
+// Adds tasks straight to the server store, as another device would (with the restore generation, since
+// other specs restore backups), retrying when a save of the open page takes the revision first.
 async function addTasks(page: Page, tasks: { id: string; title: string; properties: Record<string, unknown> }[]) {
   await expect.poll(() => page.evaluate(async (newTasks) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities, ...newTasks.map((task) => ({ ...task, type: "task", status: "open", workspaceId: "personal", createdAt: now, updatedAt: now }))],
       relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     return response.status;
