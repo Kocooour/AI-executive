@@ -234,14 +234,20 @@ export function saveCalendarSource(input: { label: string; url: string; workspac
   return publicSource(sourceRow(id)!);
 }
 
+const sourceChanged = () => Object.assign(new Error("Calendar source changed during synchronization"), { sourceChanged: true });
+export const isSourceChanged = (error: unknown) => error instanceof Error && (error as { sourceChanged?: boolean }).sourceChanged === true;
+
 export async function refreshCalendarSource(id: string) {
   const row = sourceRow(id);
   if (!row) throw new Error("Calendar source not found");
   const now = Date.now();
+  // The version of the calendar this refresh fetches for. A change while it runs (another workspace, a deselect, a disconnect)
+  // bumps the revision; the fetched events then belong to the old version and nothing is written, not even an error state.
+  const revision = Number(row.revision);
   ensureDailyBackup();
   const claimed = getDatabase().prepare(`UPDATE calendar_sources SET status='syncing', updated_at=?
-    WHERE id=? AND (status!='syncing' OR updated_at < ?)`)
-    .run(now, id, now - 15 * 60_000);
+    WHERE id=? AND revision=? AND (status!='syncing' OR updated_at < ?)`)
+    .run(now, id, revision, now - 15 * 60_000);
   if (Number(claimed.changes) !== 1) throw new Error("Calendar synchronization is already running");
   try {
     const body = row.provider === "caldav" ? await fetchCalDavSource(row) : await fetchCalendar(decrypt(String(row.encrypted_url)));
@@ -249,8 +255,9 @@ export async function refreshCalendarSource(id: string) {
     const database = getDatabase();
     database.exec("BEGIN IMMEDIATE");
     try {
-      const sourceStillExists = database.prepare("SELECT 1 FROM calendar_sources WHERE id = ?").get(id);
-      if (!sourceStillExists) throw new Error("Calendar source was disconnected during synchronization");
+      const current = database.prepare("SELECT revision, workspace_id FROM calendar_sources WHERE id = ?").get(id) as { revision: number; workspace_id: string } | undefined;
+      if (!current) throw new Error("Calendar source was disconnected during synchronization");
+      if (Number(current.revision) !== revision || current.workspace_id !== row.workspace_id) throw sourceChanged();
       database.prepare("DELETE FROM calendar_events WHERE source_id = ?").run(id);
       const insert = database.prepare(`INSERT INTO calendar_events
         (id, source_id, workspace_id, occurrence_key, payload, start_at, end_at, updated_at)
@@ -262,17 +269,18 @@ export async function refreshCalendarSource(id: string) {
     } catch (error) { database.exec("ROLLBACK"); throw error; }
     return { source: publicSource(sourceRow(id)!), events };
   } catch (error) {
+    // Changed or removed meanwhile: the error state belongs to the old version, so it is not written either.
+    const errorState = getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=? AND revision=?");
     if (row.provider === "caldav") {
       // Only fixed messages are kept for an iCloud calendar: never an address, the Apple ID or a parser's quote of the data.
       // The account's state is set by refreshCalDavAccount, the only caller for an iCloud calendar.
       const message = safeCalDavMessage(error);
-      getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=?")
-        .run(now, message, now, id);
-      throw error instanceof CalDavError ? error : new Error(message);
+      errorState.run(now, message, now, id, revision);
+      throw error instanceof CalDavError || isSourceChanged(error) ? error : new Error(message);
     }
+    if (isSourceChanged(error)) throw error;
     const message = error instanceof Error ? error.message.slice(0, 500) : "Calendar refresh failed";
-    getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=?")
-      .run(now, message, now, id);
+    errorState.run(now, message, now, id, revision);
     throw new Error(message);
   }
 }
@@ -357,8 +365,16 @@ export async function refreshCalDavAccount(accountId: string) {
     .all(accountId) as Array<{ id: string }>;
   let failure: unknown = null;
   for (const source of sources) {
-    try { await refreshCalendarSource(String(source.id)); }
-    catch (error) {
+    try {
+      // A calendar changed during its fetch (moved to another workspace) is fetched once more for its new version.
+      try { await refreshCalendarSource(String(source.id)); }
+      catch (error) {
+        if (!isSourceChanged(error)) throw error;
+        if (sourceRow(String(source.id))) await refreshCalendarSource(String(source.id));
+      }
+    } catch (error) {
+      // A calendar deselected or changed meanwhile is not a failure of the account.
+      if (isSourceChanged(error) || (error instanceof Error && ["Calendar source was disconnected during synchronization", "Calendar source not found"].includes(error.message))) continue;
       failure ??= error;
       if (error instanceof CalDavAuthError) { failure = error; break; }
     }

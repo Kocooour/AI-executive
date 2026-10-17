@@ -561,6 +561,49 @@ test("a refresh that ends after the password was replaced does not overwrite the
   assert.equal(count("calendar_sources", "account_id = ?", accountId), 0);
 });
 
+test("a calendar moved to another workspace during its fetch gets no events of the old workspace (ICS too)", async () => {
+  resetCalDav();
+  ensureWorkspace("work", "Work");
+  const fake = fakeICloud();
+  const discovery = await caldav.discoverCalendars(credentials, fake.options);
+  const [home] = discovery.calendars;
+  const accountId = icloud.storeICloudAccount(credentials, discovery, [{ id: home.id, workspaceId: "personal" }]);
+  const sourceId = db().prepare("SELECT id FROM calendar_sources WHERE account_id = ?").get(accountId).id;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let reports = 0;
+  calendar.setCalDavOptionsForTests({ ...fake.options, transport: async (request) => {
+    if (request.method === "REPORT" && reports++ === 0) await gate;
+    return fake.options.transport(request);
+  } });
+  const running = calendar.refreshCalendarSource(sourceId);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // While the first fetch waits, the calendar moves to Work.
+  icloud.applyICloudSelection(accountId, discovery, [{ id: home.id, workspaceId: "work" }]);
+  const moved = { ...db().prepare("SELECT workspace_id, status, revision, last_error FROM calendar_sources WHERE id = ?").get(sourceId) };
+  release();
+  await assert.rejects(running, (error) => calendar.isSourceChanged(error));
+  assert.equal(count("calendar_events", "source_id = ? AND workspace_id = 'personal'", sourceId), 0);
+  assert.equal(count("calendar_events", "source_id = ?", sourceId), 0);
+  assert.deepEqual({ ...db().prepare("SELECT workspace_id, status, revision, last_error FROM calendar_sources WHERE id = ?").get(sourceId) }, moved);
+  assert.equal(moved.workspace_id, "work");
+  assert.equal(moved.status, "pending");
+  // The account refresh fetches it again for its new workspace.
+  await calendar.refreshCalDavAccount(accountId);
+  assert.ok(count("calendar_events", "source_id = ? AND workspace_id = 'work'", sourceId) > 0);
+  assert.equal(count("calendar_events", "source_id = ? AND workspace_id != 'work'", sourceId), 0);
+  resetCalDav();
+
+  // ICS: the same rule, with a source whose revision changes while its (failing) fetch runs: no error state is written over it.
+  db().prepare(`INSERT INTO calendar_sources (id, workspace_id, provider, label, encrypted_url, status, created_at, updated_at, revision) VALUES ('ics-move', 'personal', 'ics', 'Feed', ?, 'ready', 1, 1, 3)`)
+    .run(calendar.encrypt("https://127.0.0.1/feed.ics"));
+  const icsRun = calendar.refreshCalendarSource("ics-move");
+  db().prepare("UPDATE calendar_sources SET workspace_id = 'work', status = 'pending', revision = revision + 1 WHERE id = 'ics-move'").run();
+  await assert.rejects(icsRun);
+  assert.deepEqual({ ...db().prepare("SELECT workspace_id, status, last_error FROM calendar_sources WHERE id = 'ics-move'").get() }, { workspace_id: "work", status: "pending", last_error: null });
+  db().exec("DELETE FROM calendar_sources WHERE id = 'ics-move'");
+});
+
 test("an unknown action is refused without a rate-limit bucket; a second account is refused before Apple is asked", async () => {
   // More unknown requests from one client than any bucket allows: none is rate limited, so none was counted.
   for (let index = 0; index < 40; index += 1) {

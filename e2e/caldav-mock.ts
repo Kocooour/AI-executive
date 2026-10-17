@@ -21,6 +21,8 @@ const response = (href: string, props: string) => `<response><href>${href}</href
 export interface CalDavMock {
   url: string;
   setPassword(password: string): void;
+  /** The next `count` calendar reads (REPORT) answer 500. */
+  failReports(count: number): void;
   requests: Array<{ method: string; path: string }>;
   close(): Promise<void>;
 }
@@ -28,6 +30,7 @@ export interface CalDavMock {
 export async function startCalDavMock(port: number, password: string): Promise<CalDavMock> {
   let expected = `Basic ${Buffer.from(`${mockAppleId}:${password}`).toString("base64")}`;
   const requests: CalDavMock["requests"] = [];
+  let failingReports = 0;
   const tomorrow = ymd(Date.now() + day);
   const calendars: Record<string, { name: string; color: string; events: string[] }> = {
     home: { name: "Domov", color: "#34C759FF", events: [
@@ -63,6 +66,7 @@ export async function startCalDavMock(port: number, password: string): Promise<C
         ]));
       }
       const match = /^\/\d+\/calendars\/([a-z]+)\/$/.exec(path);
+      if (request.method === "REPORT" && failingReports > 0) { failingReports -= 1; return send(500); }
       if (request.method === "REPORT" && match && calendars[match[1]]) {
         return send(207, multistatus(calendars[match[1]].events.map((event, index) =>
           response(`${path}${index}.ics`, `<getetag>"${index}"</getetag><C:calendar-data>${escapeXml(event)}</C:calendar-data>`))));
@@ -74,6 +78,7 @@ export async function startCalDavMock(port: number, password: string): Promise<C
   return {
     url: `http://127.0.0.1:${port}/`,
     requests,
+    failReports(count) { failingReports = count; },
     setPassword(next) { expected = `Basic ${Buffer.from(`${mockAppleId}:${next}`).toString("base64")}`; },
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };

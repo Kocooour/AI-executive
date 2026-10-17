@@ -485,8 +485,9 @@ messages, logs, security events or responses; responses carry `cache-control: no
 and calendar selection share a limit of 10 per hour. Actions that ask iCloud before writing (including recording a refused password found while listing calendars) check the
 restore fence once more right before their synchronous write. A refresh writes the account's final state only if the account
 still has the revision and update time it claimed, so a disconnect, a new password or a restore during the refresh is never
-overwritten (the calendars' own states and the event cache follow the ICS precedent: written only while the calendar row still
-exists). Connecting a second Apple ID is refused before anything is sent to Apple, and an unknown action is refused before
+overwritten (likewise, for ICS and iCloud alike, a calendar's events and state are written only if the calendar still has the revision and
+workspace it had when its refresh began; a calendar moved to another workspace or deselected meanwhile gets nothing from the
+old fetch, and an account refresh fetches a moved calendar once more). Connecting a second Apple ID is refused before anything is sent to Apple, and an unknown action is refused before
 any rate limit is counted. Disconnect removes the account, its calendars and their cached events in one
 transaction. Writing to the calendar is not implemented.
 
