@@ -35,7 +35,6 @@ Produkční proces běží jako vždy zapnutá Node.js služba. Postup, omezení
 
 Uživatelský název produktu je **Lumi**. Název repozitáře a služby **AI-executive** a některé interní identifikátory či integrační cesty (např. `aifred`) zůstávají kvůli zpětné kompatibilitě stabilní. Změna dokumentace sama o sobě nemění funkčnost aplikace.
 
-
 ## Cílová sémantická paměť
 
-Plánovaná varianta C přidává lokální sémantické vyhledávání nad kanonickými poznámkami a Context Graphem. Vektorový index bude obnovitelný derivát, nikoli druhý zdroj pravdy; SQLite zůstává kanonické úložiště. Nejde o přechod na PostgreSQL ani o paralelní provoz HumanAgentWiki. Podrobné produktové, UX a bezpečnostní hranice jsou v příslušných specifikacích.
+Plánovaná varianta C přidává serverově lokální sémantické vyhledávání nad kanonickými poznámkami a Context Graphem; offline PWA hledá lexikálně v dříve synchronizovaných datech. Vektorový index bude obnovitelný derivát, nikoli druhý zdroj pravdy; SQLite zůstává kanonické úložiště. Nejde o přechod na PostgreSQL ani o paralelní provoz HumanAgentWiki. Podrobné produktové, UX a bezpečnostní hranice jsou v příslušných specifikacích.
