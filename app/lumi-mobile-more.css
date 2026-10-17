@@ -1,6 +1,8 @@
 /* E3: A quiet, accessible bottom sheet for views not in the phone's main navigation. */
 @media (max-width: 700px) {
   .appShell .mobileMoreBackdrop {
+    /* This is a modal sheet: it must also cover the fixed bottom navigation (z-index: 15). */
+    z-index: 17;
     justify-content: center;
     padding: 0 12px calc(78px + env(safe-area-inset-bottom));
   }

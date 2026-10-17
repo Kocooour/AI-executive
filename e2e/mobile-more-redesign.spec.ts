@@ -21,6 +21,12 @@ test.describe("mobile More sheet (E3)", () => {
     await expect(nav.locator("button.active")).toHaveCount(1);
     await expect(nav.locator('button[data-nav-view="More"]')).toHaveClass(/active/);
     await expect(nav.locator('button[data-nav-view="Calendar"]')).not.toHaveClass(/active/);
+    const calendarRect = await nav.locator('button[data-nav-view="Calendar"]').boundingBox();
+    expect(calendarRect).not.toBeNull();
+    await expect.poll(() => page.evaluate(({ x, y }) =>
+      Boolean(document.elementFromPoint(x, y)?.closest(".mobileMoreBackdrop")),
+      { x: calendarRect!.x + calendarRect!.width / 2, y: calendarRect!.y + calendarRect!.height / 2 },
+    )).toBe(true);
     await expect(sheet.getByRole("button", { name: "Zavřít nabídku" })).toHaveCount(1);
     await expect(sheet.locator(".mobileMoreGroup button")).toHaveCount(12);
     await sheet.locator('.mobileMoreItem[data-nav-view="Settings"]').click();
