@@ -66,6 +66,10 @@ test("labels and controls keep their contrast in every theme", () => {
     ["control-border", "app-bg", 3, "task ring"],
     ["control-border", "selected", 3, "task ring on the selected row"],
     ["control-border", "input-bg", 3, "field border"],
+    ["focus-ring", "app-bg", 3, "focus ring on the page"],
+    ["focus-ring", "sidebar-bg", 3, "focus ring in the sidebar"],
+    ["focus-ring", "surface-raised", 3, "focus ring in dialogs"],
+    ["focus-ring", "input-bg", 3, "focus ring around a field"],
   ];
   for (const { id } of tokens.color.themes) {
     for (const [fg, bg, minimum, what] of pairs) {
