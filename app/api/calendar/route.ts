@@ -5,6 +5,7 @@ import {
   deleteCalendarSource,
   listCalendarEvents,
   listCalendarSources,
+  refreshCalDavAccount,
   refreshCalendarSource,
   saveCalendarSource,
 } from "../../../lib/calendar";
@@ -73,13 +74,19 @@ export async function POST(request: Request) {
     const source = listCalendarSources().find((item) => item.id === sourceId);
     if (!source) return NextResponse.json({ error: "Calendar source not found" }, { status: 404 });
     if (action === "refresh") {
+      // An iCloud calendar is refreshed with the other calendars of its account (one claim, one account state).
+      if (source.provider === "caldav" && source.accountId) {
+        await refreshCalDavAccount(source.accountId);
+        recordSecurityEvent(request, "calendar.refresh", "allowed", { provider: "icloud" });
+        return NextResponse.json({ source: listCalendarSources().find((item) => item.id === sourceId) });
+      }
       const result = await refreshCalendarSource(sourceId);
       recordSecurityEvent(request, "calendar.refresh", "allowed", { provider: "ics" });
       return NextResponse.json(result);
     }
     if (action === "disconnect") {
       deleteCalendarSource(sourceId);
-      recordSecurityEvent(request, "calendar.disconnect", "allowed", { provider: "ics" });
+      recordSecurityEvent(request, "calendar.disconnect", "allowed", { provider: source.provider === "caldav" ? "icloud" : "ics" });
       return NextResponse.json({ removed: true });
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { existsSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +21,8 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // The integration API token of the test instance (listens on loopback only); the data-boundary scenarios present it to
   // endpoints that must refuse it.
   process.env.LUMI_E2E_INTEGRATION_TOKEN = randomBytes(32).toString("hex");
+  // The port of the mock iCloud CalDAV server that e2e/icloud-calendar.spec.ts starts on the loopback interface.
+  process.env.LUMI_E2E_CALDAV_PORT = String(40_000 + randomInt(20_000));
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
@@ -28,6 +30,7 @@ const sessionSecret = process.env.LUMI_E2E_SESSION_SECRET;
 if (!passwordHash?.startsWith("scrypt:") || !sessionSecret) throw new Error("The browser test credentials were not generated; unset LUMI_E2E_RUN_DIR and run again.");
 export const sessionFile = path.join(runDir, "session.json");
 export const integrationToken = process.env.LUMI_E2E_INTEGRATION_TOKEN || "";
+export const caldavMockPort = Number(process.env.LUMI_E2E_CALDAV_PORT);
 
 // A sandbox may ship its own Chromium; elsewhere `pnpm exec playwright install chromium` provides it.
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
@@ -73,6 +76,10 @@ export default defineConfig({
       AI_EXECUTIVE_PASSKEY_ORIGINS: `http://localhost:${port}`,
       OPENAI_API_KEY: "",
       HERMES_AI_ENABLED: "false",
+      // iCloud calendar requests of the test instance go to the local mock server instead of iCloud. The server honours the
+      // address only with both settings and only for an http:// loopback address (lib/caldav.ts, calDavTestOverride).
+      AI_EXECUTIVE_E2E: "true",
+      AI_EXECUTIVE_E2E_CALDAV_URL: `http://127.0.0.1:${process.env.LUMI_E2E_CALDAV_PORT}/`,
     },
   },
 });

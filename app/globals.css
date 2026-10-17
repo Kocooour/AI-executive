@@ -550,8 +550,24 @@ article small {
 .calendarAgenda small, .calendarSources small { color: #777; }
 .calendarSources > div { grid-template-columns: minmax(0, 1fr) auto; }
 .calendarSources span { display: grid; gap: 3px; min-width: 0; }
-.calendarConnect { display: grid; gap: 12px; margin-top: 16px; }
-.calendarConnect label { display: grid; gap: 6px; }
+.calendarConnect, .icloudForm { display: grid; gap: 12px; margin-top: 16px; }
+.calendarConnect label, .icloudForm label { display: grid; gap: 6px; }
+.icloudCalendar { margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--line, #e8e8ef); }
+.icloudCalendar .notificationActions button { min-height: 44px; }
+.icloudCalendar a { color: var(--accent, #6557e8); overflow-wrap: anywhere; }
+.icloudAccountLine { display: grid; gap: 4px; margin: 12px 0 0; min-width: 0; overflow-wrap: anywhere; }
+.icloudProblem { color: var(--danger, #b42318); }
+.icloudChoices { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.icloudChoices legend { margin-bottom: 8px; padding: 0; color: var(--muted, #777); font-size: 13px; }
+.icloudChoice { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 220px); align-items: center; gap: 8px 12px; min-width: 0; }
+.settingsPanel .icloudCheck { display: flex; align-items: center; gap: 10px; min-height: 44px; min-width: 0; color: var(--text, #20212a); font-size: 15px; cursor: pointer; }
+.settingsPanel .icloudCheck input { width: 22px; height: 22px; flex: none; margin: 0; padding: 0; }
+.icloudCheck span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.icloudColor { width: 12px; height: 12px; flex: none; border-radius: 50%; }
+.settingsPanel .icloudWorkspace select { min-height: 44px; }
+@media (max-width: 640px) {
+  .icloudChoice { grid-template-columns: minmax(0, 1fr); }
+}
 
 @media (max-width: 640px) {
   .calendarAgenda > div { grid-template-columns: 72px minmax(0, 1fr); }
