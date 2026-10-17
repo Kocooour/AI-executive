@@ -5,6 +5,7 @@ import "./globals.css";
 import "../docs/design-system/tokens.css";
 import "./lumi-navigation.css";
 import "./lumi-home.css";
+import "./lumi-mobile-more.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {
