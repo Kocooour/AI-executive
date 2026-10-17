@@ -168,6 +168,30 @@ test("iCloud: disconnecting removes its events and planning falls back to no cal
   await expect(page.locator(".calendarView").getByRole("status").first()).toContainText("Kalendář není připojen");
 });
 
+test("iCloud: when the first read fails after connecting, the connected view with its actions and the error is shown", async ({ page }) => {
+  mock.setPassword(firstPassword);
+  mock.failReports(10);
+  const block = await openCalendarSettings(page);
+  await block.getByLabel("Apple ID").fill(mockAppleId);
+  await block.getByLabel("Heslo pro aplikace").fill(firstPassword);
+  await block.getByRole("button", { name: "Najít kalendáře" }).click();
+  await expect(block.getByRole("checkbox", { name: "Domov" })).toBeChecked();
+  await block.getByRole("button", { name: "Připojit" }).click();
+  await expect(block.getByRole("alert")).toContainText("Server iCloudu vrátil chybu.", { timeout: 20_000 });
+  await expect(block.locator(".icloudAccountLine")).toContainText("j***@icloud.com");
+  await expect(block.getByRole("checkbox")).toHaveCount(0);
+  await expect(block.getByLabel("Heslo pro aplikace")).toHaveCount(0);
+  await expect(block.getByRole("button", { name: "Odpojit" })).toBeVisible();
+  // Retrying works from there.
+  mock.failReports(0);
+  await block.getByRole("button", { name: "Obnovit" }).click();
+  await expect(block.getByText("Kalendáře iCloud byly obnoveny.")).toBeVisible({ timeout: 20_000 });
+  await expect(block.locator(".icloudAccountLine")).toContainText("synchronizováno");
+  await block.getByRole("button", { name: "Odpojit" }).click();
+  await confirmDialog(page).getByRole("button", { name: "Odpojit" }).click();
+  await expect(block.getByText("iCloud byl odpojen a jeho události odstraněny.")).toBeVisible();
+});
+
 test("iCloud: an ICS calendar keeps working next to it and stays when iCloud is disconnected", async ({ page }) => {
   // An ICS source with a cached event, as a fetched feed leaves it (the test instance cannot reach an outside feed).
   const live = new DatabaseSync(path.join(process.env.LUMI_E2E_RUN_DIR!, "data", "store.sqlite"));

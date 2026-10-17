@@ -166,6 +166,7 @@ export function applyICloudSelection(accountId: string, discovery: CalDavDiscove
       byKey.set(key, source);
     }
     const wanted = new Set(selection.map((item) => item.calendar.id));
+    // A deselected calendar is deleted and a moved one gets a new revision: a refresh running for it writes nothing.
     for (const [key, source] of byKey) {
       if (wanted.has(key)) continue;
       database.prepare("DELETE FROM calendar_events WHERE source_id = ?").run(source.id);
