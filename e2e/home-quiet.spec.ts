@@ -28,6 +28,17 @@ test("Home has a plain title and shows only states that need something", async (
   await expect(page.locator(".homeNotice", { hasText: "Kalendář není připojen" }).getByRole("button", { name: "Připojit" })).toBeVisible();
 });
 
+test("workspace context stays visible away from Home", async ({ page }) => {
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await expect(page.locator(".pageIntro .eyebrow")).toHaveCount(0);
+
+  await page.goto("/?view=Today");
+  await expect(heading(page)).toHaveText("Dnes");
+  await expect(page.locator(".pageIntro .eyebrow")).toContainText(" · ");
+  await expect(page.locator(".pageIntro .eyebrow")).toContainText("PERSONAL");
+});
+
 test("a recommendation shows reason, source and evaluation time without opening anything", async ({ page }) => {
   await page.goto("/");
   await waitUntilSynced(page);
