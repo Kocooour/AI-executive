@@ -1,0 +1,134 @@
+/* Lumi Home v1: quiet Home per docs/design-system (README „Méně slov“, AttentionItem, StatusChip).
+   Sections are plain headed lists on the page, not cards; states show only when something needs doing. */
+
+.appShell .homeSection {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.appShell .homeSection + .homeSection {
+  margin-top: 28px;
+}
+.appShell .homeSectionHead {
+  margin-bottom: 4px;
+}
+.appShell .homeSectionHead h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.appShell .homeSectionHead h2 + button {
+  margin-left: auto;
+}
+.homeCapacity {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* A state that needs something: one quiet line, dot + words, no frame. */
+.homeNotice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+.homeNotice b {
+  font-weight: 600;
+}
+.homeNoticeDot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--warning);
+}
+.homeNoticeDot.muted {
+  background: var(--muted-light);
+}
+.homeNotice .textAction {
+  padding: 0;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* Recommendation: title, then why · from what · when; actions on the right. */
+.appShell .attentionItem {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px 8px;
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-top: 0;
+  border-radius: var(--radius-md);
+}
+.appShell .attentionItem:hover,
+.appShell .attentionItem:focus-within {
+  background: var(--hover);
+}
+.appShell .attentionItem strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.appShell .attentionItem .attentionWhy {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.appShell .attentionItem button {
+  border: 0;
+  background: none;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.appShell .attentionItem button:hover {
+  border-color: transparent;
+  background: var(--surface);
+}
+.appShell .attentionItem .attentionOpen {
+  color: var(--accent);
+  font-weight: 600;
+}
+.appShell .attentionActions {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+}
+.appShell .attentionActions button {
+  color: var(--muted);
+}
+/* With a mouse, Odložit/Skrýt appear on hover or keyboard focus; on touch they are always shown. */
+@media (hover: hover) {
+  .appShell .attentionItem:not(:hover):not(:focus-within) .attentionActions {
+    opacity: 0;
+  }
+}
+.appShell .attentionItem .attentionBlocked,
+.appShell .attentionItem .attentionMore {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.appShell .attentionMore summary {
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .appShell .attentionItem {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .appShell .attentionActions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .appShell .attentionItem .attentionOpen {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}

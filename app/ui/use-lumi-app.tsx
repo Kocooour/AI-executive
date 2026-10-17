@@ -1836,8 +1836,6 @@ export function useLumiApp() {
     .filter((task) => taskMatchesView(task, "Today", today))
     .sort(byManualOrder("task:Today"))
     .slice(0, 5);
-  const greetingHour = new Date().getHours();
-  const homeGreeting = greetingHour < 12 ? tr("goodMorning") : greetingHour < 18 ? tr("goodAfternoon") : tr("goodEvening");
   const visible = useMemo(
     () => {
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
@@ -3257,7 +3255,6 @@ export function useLumiApp() {
     enableNotifications,
     freeHours,
     freeWindows,
-    homeGreeting,
     homeTodayTasks,
     inspect,
     items,

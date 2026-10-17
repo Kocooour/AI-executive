@@ -207,7 +207,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                     value={text}
                     onChange={(e) => { setText(e.target.value); setRowError(false); }}
                     onKeyDown={(e) => e.key === "Enter" && createFromRow(type, text)}
-                    placeholder={`+ ${tr("add")} ${tr(type === "project" ? "Projects" : type === "area" ? "Areas" : type === "note" ? "Notes" : "Today").toLowerCase()}`}
+                    placeholder={`+ ${tr(type === "project" ? "addProject" : type === "area" ? "addArea" : type === "note" ? "addNote" : "addTask")}`}
                   />
                   <button onClick={() => createFromRow(type, text)}>{tr("add")}</button>
                   {rowError && <small role="alert" className="captureRowError">{tr("addFailed")}</small>}

@@ -4,6 +4,7 @@ import "./globals.css";
 // Runtime uses the same generated tokens as the design-system previews.
 import "../docs/design-system/tokens.css";
 import "./lumi-navigation.css";
+import "./lumi-home.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {

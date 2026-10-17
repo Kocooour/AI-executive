@@ -70,7 +70,6 @@ export function HomeView({ app }: { app: LumiApp }) {
     const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
     return Boolean(local && Number(local.updatedAt) > candidate.evaluatedAt);
   };
-  const inboxCount = sidebarCounts.Inbox;
   const capacityLabel = calendarSources.length === 0 ? tr("calendarDisconnected")
     : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown");
   const syncLabel = syncStatus === "synced" ? tr("synced") : syncStatus === "syncing" ? tr("syncing")
@@ -83,21 +82,15 @@ export function HomeView({ app }: { app: LumiApp }) {
 
   return (
     <>
-      <ul className="homeStatus" aria-label={tr("homeStatusLabel")}>
-        <li>
-          <button type="button" onClick={() => setView("Inbox")}><b>{inboxCount}</b> {tr("homeInboxToSort")}</button>
-        </li>
-        <li><span className={`homeSync ${syncStatus}`} role="status">{tr("homeDataState")}: <b>{syncLabel}</b></span></li>
-        <li>
-          <button type="button" onClick={() => setView("Calendar")}>{tr("todayCapacity")}{scopeNote}: <b>{capacityLabel}</b></button>
-        </li>
-      </ul>
+      {/* Only states that need something are shown; the Inbox count is in the navigation. */}
+      {syncStatus !== "synced" && <p className={`homeNotice homeSync ${syncStatus}`} role="status"><span className="homeNoticeDot" aria-hidden="true" />{tr("homeDataState")}: <b>{syncLabel}</b></p>}
+      {calendarSources.length === 0 && <p className="homeNotice"><span className="homeNoticeDot muted" aria-hidden="true" />{tr("calendarDisconnected")} · <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
 
       {workSession && <WorkNowCard app={app} />}
 
       <section className="homeSection attentionSection" aria-labelledby="attention-title">
         <div className="homeSectionHead">
-          <span id="attention-title"><span className="sectionDot todayDot" />{tr("attentionTitle")}</span>
+          <h2 id="attention-title">{tr("attentionTitle")}</h2>
           <button type="button" onClick={() => { if (syncStatus === "synced") void loadAttention(activeWorkspaceId).catch((error) => setAttentionError(error instanceof Error ? error.message : tr("attentionUnavailable"))); }} disabled={syncStatus !== "synced"}>
             {tr("refresh")}
           </button>
@@ -105,27 +98,27 @@ export function HomeView({ app }: { app: LumiApp }) {
         {visibleAttention ? <>
           {attentionStale
             ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr(syncStatus === "offline" ? "attentionStaleOffline" : attentionFromCache && !attentionOutdated ? "attentionStaleChecking" : "attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
-            : <p className="attentionMeta">{tr("attentionSource")} · {tr("attentionEvaluated")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>}
+            : null}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
             {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
               <div className="attentionBody">
                 <strong>{candidate.title}</strong>
-                <p>{attentionReason(candidate, language)}</p>
-                <small>{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{!attentionStale && <> · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</>}{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</small>
+                {/* One line: why, from what, when evaluated (docs/UX-UI.md asks all three on every card). */}
+                <p className="attentionWhy"><span className="attentionReason">{attentionReason(candidate, language)}</span> · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{activeWorkspaceId === "all" && <> · {workspaceTitle(candidate.workspaceId)}</>} · <span className="attentionTime">{tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</span>{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</p>
+              </div>
+              <div className="attentionActions">
+                <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
+                <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
               </div>
               <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
                 if (entity) void inspect(entity);
                 else setAttentionError(tr("attentionDetailMissing"));
               }}>{tr("attentionOpen")}</button>
+              {attentionActionsBlocked && <p className="attentionMeta attentionBlocked">{tr("attentionStaleActions")}</p>}
               <details className="attentionMore">
-                <summary>{tr("attentionMore")}</summary>
-                <div className="attentionActions">
-                  <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
-                  <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
-                </div>
-                {attentionActionsBlocked && <p className="attentionMeta">{tr("attentionStaleActions")}</p>}
-                <p className="attentionMeta">{tr("attentionSources")} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
+                <summary>{tr("attentionSourceDetails")}</summary>
+                <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionSources")} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
                 <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
               </details>
             </article>)}
@@ -139,7 +132,8 @@ export function HomeView({ app }: { app: LumiApp }) {
 
       <section className="homeSection homeToday" aria-labelledby="home-today-title">
         <div className="homeSectionHead">
-          <span id="home-today-title"><span className="sectionDot todayDot" />{tr("Today")}</span>
+          <h2 id="home-today-title">{tr("Today")}</h2>
+          {calendarSources.length > 0 && <span className="homeCapacity">{capacityLabel}{scopeNote}</span>}
           <button type="button" onClick={() => setView("Today")}>{tr("seeAll")} <span aria-hidden="true">→</span></button>
         </div>
         <div className="homeTaskList">
