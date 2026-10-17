@@ -482,8 +482,12 @@ marks the account `auth_failed`: nothing contacts Apple for it again, automatica
 password has been validated, so a revoked password cannot get the Apple ID locked. Network errors and 5xx answers are `error`
 and retried by the scheduler. The Apple ID, the password, the account number and the addresses never appear in error
 messages, logs, security events or responses; responses carry `cache-control: no-store`. Discovery, connect, password change
-and calendar selection share a limit of 10 per hour. Actions that ask iCloud before writing check the restore fence once more
-right before their synchronous write. Disconnect removes the account, its calendars and their cached events in one
+and calendar selection share a limit of 10 per hour. Actions that ask iCloud before writing (including recording a refused password found while listing calendars) check the
+restore fence once more right before their synchronous write. A refresh writes the account's final state only if the account
+still has the revision and update time it claimed, so a disconnect, a new password or a restore during the refresh is never
+overwritten (the calendars' own states and the event cache follow the ICS precedent: written only while the calendar row still
+exists). Connecting a second Apple ID is refused before anything is sent to Apple, and an unknown action is refused before
+any rate limit is counted. Disconnect removes the account, its calendars and their cached events in one
 transaction. Writing to the calendar is not implemented.
 
 The browser tests point CalDAV at a local mock server (`e2e/caldav-mock.ts`); the server honours that address only when

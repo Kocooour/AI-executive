@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
+import { pluralText } from "../../../lib/plural";
 
 // Settings → Calendars → iCloud (read-only CalDAV). The Apple ID and the app-specific password live only in this
 // component's state while a form is open: they are never written to local storage, IndexedDB or a draft, and the password
@@ -27,7 +28,9 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
   const [appPassword, setAppPassword] = useState("");
   const [choices, setChoices] = useState<CalendarChoice[]>([]);
   const [selection, setSelection] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
+  // The action that is running, as its status text key; empty when idle.
+  const [busyKey, setBusyKey] = useState("");
+  const busy = busyKey !== "";
   const [status, setStatus] = useState("");
   const [failed, setFailed] = useState(false);
   const mounted = useRef(true);
@@ -54,9 +57,9 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
     return data;
   }
 
-  async function run(action: () => Promise<string | void>, after?: () => void) {
+  async function run(statusKey: string, action: () => Promise<string | void>) {
     if (busy) return;
-    setBusy(true);
+    setBusyKey(statusKey);
     setStatus("");
     setFailed(false);
     try {
@@ -65,8 +68,7 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
     } catch (error) {
       if (mounted.current) { setStatus(error instanceof Error ? error.message : tr("icloudActionFailed")); setFailed(true); }
     } finally {
-      after?.();
-      if (mounted.current) setBusy(false);
+      if (mounted.current) setBusyKey("");
     }
   }
 
@@ -86,13 +88,13 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
   const clearSecrets = () => { setAppPassword(""); };
   const cancel = () => { setMode("idle"); setChoices([]); setSelection({}); clearSecrets(); setStatus(""); setFailed(false); };
 
-  const discover = () => run(async () => {
+  const discover = () => run("icloudFinding", async () => {
     const data = await post({ action: "discover", appleId, appPassword });
     applyChoices(Array.isArray(data.calendars) ? data.calendars : [], false);
     setMode("choose");
   });
 
-  const connect = () => run(async () => {
+  const connect = () => run("icloudConnecting", async () => {
     try {
       await post({ action: "connect", appleId, appPassword, calendars: chosen() });
     } finally {
@@ -103,27 +105,27 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
     return tr("icloudConnected");
   });
 
-  const savePassword = () => run(async () => {
+  const savePassword = () => run("icloudSavingPassword", async () => {
     try { await post({ action: "update-password", appPassword }); } finally { clearSecrets(); }
     setMode("idle");
     await reloadViews();
     return tr("icloudPasswordSaved");
   });
 
-  const editCalendars = () => run(async () => {
+  const editCalendars = () => run("icloudLoadingCalendars", async () => {
     const data = await post({ action: "calendars" });
     applyChoices(Array.isArray(data.calendars) ? data.calendars : [], true);
     setMode("edit");
   });
 
-  const saveCalendars = () => run(async () => {
+  const saveCalendars = () => run("icloudSavingSelection", async () => {
     await post({ action: "select", calendars: chosen() });
     setMode("idle"); setChoices([]); setSelection({});
     await reloadViews();
     return tr("icloudCalendarsSaved");
   });
 
-  const refresh = () => run(async () => {
+  const refresh = () => run("icloudRefreshing", async () => {
     await post({ action: "refresh" });
     await reloadViews();
     return tr("icloudRefreshed");
@@ -133,7 +135,7 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
     if (!account) return;
     const confirmed = await askConfirm({ title: tr("icloudDisconnectTitle"), message: tr("icloudDisconnectConfirm").replace("{label}", () => account.label), confirmLabel: tr("disconnect"), danger: true });
     if (!confirmed) return;
-    await run(async () => {
+    await run("icloudDisconnecting", async () => {
       await post({ action: "disconnect" });
       setAccount(null); setMode("idle");
       await reloadViews();
@@ -232,7 +234,7 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
                 <span>
                   <strong>{calendar.label}</strong>
                   <small>
-                    {workspaceName(calendar.workspaceId)} · {calendar.status === "ready" ? `${calendar.eventCount} ${tr("events")}` : calendar.status === "error" ? tr("syncFailed") : tr("icloudPending")}
+                    {workspaceName(calendar.workspaceId)} · {calendar.status === "ready" ? pluralText(language, calendar.eventCount, tr("pluEvents")) : calendar.status === "error" ? tr("syncFailed") : tr("icloudPending")}
                   </small>
                   {calendar.lastError && account.status !== "auth_failed" && <small>{localizeServerError(calendar.lastError, tr)}</small>}
                 </span>
@@ -279,7 +281,7 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
           )}
         </div>
       )}
-      {busy && <p role="status">{tr("icloudFinding")}</p>}
+      {busy && <p role="status">{tr(busyKey)}</p>}
       {!busy && status && <p role={failed ? "alert" : "status"} className={failed ? "icloudProblem" : undefined}>{status}</p>}
     </div>
   );

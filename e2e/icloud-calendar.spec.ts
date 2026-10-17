@@ -105,6 +105,10 @@ test("iCloud: a refused password stores nothing; connecting reads the chosen cal
   await expect(block.locator(".icloudAccountLine")).toContainText("synchronizováno");
   await expect(block.locator(".calendarSources")).toContainText("Domov");
   await expect(block.locator(".calendarSources")).toContainText("Práce iCloud");
+  // Counts in the right Czech form: Domov has two occurrences of the weekly meeting and the private event.
+  await expect(block.locator(".calendarSources > div", { hasText: "Domov" })).toContainText("3 události");
+  await expect(block.locator(".calendarSources > div", { hasText: "Práce" })).toContainText("1 událost");
+  await expect(block.locator(".calendarSources")).not.toContainText("událostí");
   await expect(block.getByLabel("Heslo pro aplikace")).toHaveCount(0);
 
   // Neither the password nor the Apple ID is kept in the browser or returned by the server.

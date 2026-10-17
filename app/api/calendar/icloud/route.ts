@@ -9,6 +9,7 @@ import {
   disconnectICloud,
   discoverICloud,
   getICloudAccountState,
+  iCloudAccountId,
   parseAppleId,
   parseAppPassword,
   recordRefusedPassword,
@@ -27,6 +28,9 @@ export const dynamic = "force-dynamic";
 // The owner's iCloud calendar over CalDAV, read-only. Owner session only (the integration API token is not a session).
 // Responses never contain the Apple ID, the password or an iCloud address, and are never cached.
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+
+const appleActions = new Set(["discover", "connect", "update-password", "calendars", "select"]);
+const knownActions = new Set([...appleActions, "refresh", "disconnect"]);
 
 // Only messages written in this code base are returned; anything else becomes a fixed text.
 function safeMessage(error: unknown) {
@@ -55,9 +59,12 @@ export async function POST(request: Request) {
     const fencedAgain = fenceRestoredClient(request);
     if (fencedAgain) return fencedAgain;
     action = String(body.action || "");
+    // An unknown action is refused before a rate-limit bucket is named after it.
+    if (!knownActions.has(action)) return json({ error: "Unknown action" }, 400);
+    // One account per instance: a second Apple ID is refused before its password is sent to Apple or an attempt is counted.
+    if (action === "connect" && iCloudAccountId()) throw new Error("An iCloud account is already connected");
     // Every action that sends the Apple ID to Apple shares one tight limit, so that Lumi cannot get the account locked.
-    const appleActions = ["discover", "connect", "update-password", "calendars", "select"];
-    const limited = appleActions.includes(action)
+    const limited = appleActions.has(action)
       ? enforceRateLimit(request, "calendar-icloud-apple", 10, 60 * 60_000)
       : enforceRateLimit(request, `calendar-icloud-${action}`, action === "refresh" ? 12 : 30, 60 * 60_000);
     if (limited) return json({ error: limited.error }, limited.status);
@@ -93,7 +100,12 @@ export async function POST(request: Request) {
       let discovery;
       try { discovery = await discoverICloud(storedCredentials(account)); }
       catch (error) {
-        if (error instanceof CalDavAuthError) recordRefusedPassword(String(account.id));
+        if (error instanceof CalDavAuthError) {
+          // Written after awaiting Apple: a restore that landed meanwhile refuses the write like any other.
+          const fencedAfterRefusal = fenceRestoredClient(request);
+          if (fencedAfterRefusal) return fencedAfterRefusal;
+          recordRefusedPassword(account);
+        }
         throw error;
       }
       if (action === "calendars") return json({ calendars: calendarChoices(discovery) });

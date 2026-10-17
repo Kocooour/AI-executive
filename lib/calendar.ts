@@ -264,8 +264,8 @@ export async function refreshCalendarSource(id: string) {
   } catch (error) {
     if (row.provider === "caldav") {
       // Only fixed messages are kept for an iCloud calendar: never an address, the Apple ID or a parser's quote of the data.
+      // The account's state is set by refreshCalDavAccount, the only caller for an iCloud calendar.
       const message = safeCalDavMessage(error);
-      if (error instanceof CalDavAuthError && row.account_id) markCalDavAccount(String(row.account_id), "auth_failed", message);
       getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=?")
         .run(now, message, now, id);
       throw error instanceof CalDavError ? error : new Error(message);
@@ -309,11 +309,22 @@ export function calDavCredentials(account: Record<string, unknown>): CalDavCrede
   return { username: value.username, password: value.password };
 }
 
-/** Records the account's state. A refused password stops automatic refreshes until the password is replaced. */
-export function markCalDavAccount(id: string, status: "ready" | "auth_failed" | "error", message: string | null) {
+/**
+ * Records the account's state. A refused password stops automatic refreshes until the password is replaced. The callers
+ * write after awaiting iCloud, so they pass the account version they started from (revision and updated_at): when the
+ * account was disconnected, given a new password, or replaced by a restore in the meantime, nothing is written.
+ */
+export function markCalDavAccount(
+  id: string, status: "ready" | "auth_failed" | "error", message: string | null, expected: { revision: number; updatedAt: number },
+) {
   const now = Date.now();
-  getDatabase().prepare(`UPDATE calendar_accounts SET status=?, last_error=?, last_success_at=CASE WHEN ? = 'ready' THEN ? ELSE last_success_at END,
-    revision=revision+1, updated_at=? WHERE id=?`).run(status, message, status, now, now, id);
+  const result = getDatabase().prepare(`UPDATE calendar_accounts SET status=?, last_error=?, last_success_at=CASE WHEN ? = 'ready' THEN ? ELSE last_success_at END,
+    revision=revision+1, updated_at=? WHERE id=? AND revision=? AND updated_at=?`).run(status, message, status, now, now, id, expected.revision, expected.updatedAt);
+  return Number(result.changes) === 1;
+}
+
+export function calDavAccountVersion(account: Record<string, unknown>) {
+  return { revision: Number(account.revision), updatedAt: Number(account.updated_at) };
 }
 
 async function fetchCalDavSource(row: Record<string, unknown>) {
@@ -338,6 +349,10 @@ export async function refreshCalDavAccount(accountId: string) {
     if (account.status === "auth_failed") throw new CalDavAuthError("Apple refused the app-specific password");
     throw new Error("Calendar synchronization is already running");
   }
+  // The version this refresh owns: the final state is written only if nobody changed the account meanwhile.
+  const claimedAccount = calDavAccountRow(accountId);
+  if (!claimedAccount) throw new Error("No iCloud account is connected");
+  const version = calDavAccountVersion(claimedAccount);
   const sources = getDatabase().prepare("SELECT id FROM calendar_sources WHERE account_id = ? AND provider = 'caldav' ORDER BY created_at")
     .all(accountId) as Array<{ id: string }>;
   let failure: unknown = null;
@@ -348,9 +363,9 @@ export async function refreshCalDavAccount(accountId: string) {
       if (error instanceof CalDavAuthError) { failure = error; break; }
     }
   }
-  if (!failure) markCalDavAccount(accountId, "ready", null);
-  else if (failure instanceof CalDavAuthError) markCalDavAccount(accountId, "auth_failed", failure.message);
-  else markCalDavAccount(accountId, "error", safeCalDavMessage(failure));
+  if (!failure) markCalDavAccount(accountId, "ready", null, version);
+  else if (failure instanceof CalDavAuthError) markCalDavAccount(accountId, "auth_failed", failure.message, version);
+  else markCalDavAccount(accountId, "error", safeCalDavMessage(failure), version);
   if (failure) throw failure instanceof CalDavError ? failure : new Error(safeCalDavMessage(failure));
   return { refreshed: sources.length };
 }

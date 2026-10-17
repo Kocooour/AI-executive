@@ -274,9 +274,23 @@ test("a document type (XXE) and malformed XML are refused", () => {
   assert.throws(() => caldav.parseDavXml(`<!doctype x><x/>`), /unreadable/);
   assert.throws(() => caldav.parseDavXml(`<d:multistatus xmlns:d="DAV:"><d:response></d:multistatus>`), /unreadable/);
   assert.throws(() => caldav.parseDavXml(`not xml at all`), /unreadable/);
+  // A document type inside the body markup is refused too; inside CDATA it is data.
+  assert.throws(() => caldav.parseDavXml(`<d:a xmlns:d="DAV:"><!DOCTYPE x></d:a>`), /unreadable/);
+  const cdata = caldav.parseDavXml(`<?xml version="1.0"?><d:a xmlns:d="DAV:"><![CDATA[<!DOCTYPE html> <!ENTITY x "y">]]></d:a>`);
+  assert.equal(cdata.text, `<!DOCTYPE html> <!ENTITY x "y">`);
   // Predefined and numeric entities are decoded once.
   const parsed = caldav.parseDavXml(`<d:a xmlns:d="DAV:">A &amp;#65; &#66; &lt;&gt;</d:a>`);
   assert.equal(parsed.text, "A &#65; B <>");
+});
+
+test("an event whose description contains a document type in CDATA is kept", async () => {
+  const body = vcalendar(vevent("doctype-1", [`DTSTART:${tomorrow}T070000Z`, `DTEND:${tomorrow}T073000Z`, "SUMMARY:Newsletter", "DESCRIPTION:<!DOCTYPE html><html>…</html>"]));
+  const fake = fakeICloud({ home: () => [body, body.replace("doctype-1", "doctype-2")] });
+  const bodies = await caldav.fetchCalendarObjects(credentials, `${HOME}home/`, calendar.calendarWindow(), fake.options);
+  assert.equal(bodies.length, 2);
+  // The second resource went as CDATA (odd index in the fake), the first escaped; both survive.
+  const events = await calendar.parseCalendar("s", "personal", bodies);
+  assert.deepEqual(events.map((event) => event.uid).sort(), ["doctype-1", "doctype-2"]);
 });
 
 test("size and count limits hold for PROPFIND, REPORT and the calendar as a whole", async () => {
@@ -495,6 +509,86 @@ test("a restore that lands while iCloud is being asked makes connect write nothi
   assert.equal(answer.status, 409);
   assert.equal(JSON.parse(answer.text).code, "restored");
   assert.equal(count("calendar_accounts"), 0);
+});
+
+test("a refused password found while listing calendars is not recorded when a restore landed meanwhile (fence)", async () => {
+  resetCalDav();
+  const fake = fakeICloud();
+  calendar.setCalDavOptionsForTests(fake.options);
+  const discovery = await caldav.discoverCalendars(credentials, fake.options);
+  const accountId = icloud.storeICloudAccount(credentials, discovery, [{ id: discovery.calendars[0].id, workspaceId: "personal" }]);
+  const backup = store.createBackup("manual");
+  const before = { ...db().prepare("SELECT status, revision, updated_at FROM calendar_accounts WHERE id = ?").get(accountId) };
+  let restored = false;
+  calendar.setCalDavOptionsForTests({ ...fake.options, transport: async () => {
+    if (!restored) { restored = true; store.restoreBackup(backup.name); }
+    return { status: 401, location: null, body: "" };
+  } });
+  const answer = await post({ action: "calendars" });
+  assert.equal(restored, true);
+  assert.equal(answer.status, 409);
+  assert.equal(JSON.parse(answer.text).code, "restored");
+  assert.deepEqual({ ...db().prepare("SELECT status, revision, updated_at FROM calendar_accounts WHERE id = ?").get(accountId) }, before);
+  // Without a restore the refusal is recorded.
+  calendar.setCalDavOptionsForTests({ ...fake.options, transport: async () => ({ status: 401, location: null, body: "" }) });
+  assert.equal((await post({ action: "select", calendars: [] })).status, 400);
+  assert.equal(icloud.getICloudAccountState().status, "auth_failed");
+});
+
+test("a refresh that ends after the password was replaced does not overwrite the new account state", async () => {
+  resetCalDav();
+  const fake = fakeICloud();
+  calendar.setCalDavOptionsForTests(fake.options);
+  const discovery = await caldav.discoverCalendars(credentials, fake.options);
+  const accountId = icloud.storeICloudAccount(credentials, discovery, [{ id: discovery.calendars[0].id, workspaceId: "personal" }]);
+  const replaced = { username: APPLE_ID, password: "zzzz-zzzz-zzzz-zzzz" };
+  calendar.setCalDavOptionsForTests({ ...fake.options, transport: async (request) => {
+    // While the old password is refused, the owner saves a new one.
+    if (request.method === "REPORT") { icloud.replaceICloudPassword(accountId, replaced, discovery); return { status: 401, location: null, body: "" }; }
+    return fake.options.transport(request);
+  } });
+  await assert.rejects(calendar.refreshCalDavAccount(accountId), (error) => error instanceof caldav.CalDavAuthError);
+  const row = db().prepare("SELECT status, last_error FROM calendar_accounts WHERE id = ?").get(accountId);
+  assert.equal(row.status, "ready");
+  assert.equal(row.last_error, null);
+  // A disconnect during a refresh leaves nothing behind either.
+  calendar.setCalDavOptionsForTests({ ...fake.options, transport: async (request) => {
+    if (request.method === "REPORT") icloud.disconnectICloud(accountId);
+    return fake.options.transport(request);
+  } });
+  await calendar.refreshCalDavAccount(accountId).catch(() => undefined);
+  assert.equal(count("calendar_accounts"), 0);
+  assert.equal(count("calendar_sources", "account_id = ?", accountId), 0);
+});
+
+test("an unknown action is refused without a rate-limit bucket; a second account is refused before Apple is asked", async () => {
+  // More unknown requests from one client than any bucket allows: none is rate limited, so none was counted.
+  for (let index = 0; index < 40; index += 1) {
+    const answer = await icloudRoute.POST(new Request("http://localhost:3000/api/calendar/icloud", { method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost:3000", cookie: `ai_executive_session=${sessionToken}`, "x-forwarded-for": "10.99.0.1",
+        "x-lumi-restore-generation": String(store.readSnapshot().restoreGeneration ?? 0) },
+      body: JSON.stringify({ action: `made-up-${index}` }) }));
+    assert.equal(answer.status, 400);
+    assert.equal(JSON.parse(await answer.text()).error, "Unknown action");
+  }
+  resetCalDav();
+  const fake = fakeICloud();
+  calendar.setCalDavOptionsForTests(fake.options);
+  const discovery = await caldav.discoverCalendars(credentials, fake.options);
+  icloud.storeICloudAccount(credentials, discovery, [{ id: discovery.calendars[0].id, workspaceId: "personal" }]);
+  const requests = fake.log.length;
+  const second = await post({ action: "connect", appleId: "someone.else@icloud.com", appPassword: "kkkk-kkkk-kkkk-kkkk", calendars: [{ id: discovery.calendars[0].id, workspaceId: "personal" }] });
+  assert.equal(second.status, 400);
+  assert.equal(JSON.parse(second.text).error, "An iCloud account is already connected");
+  assert.equal(fake.log.length, requests, "the second Apple ID was not sent to Apple");
+  resetCalDav();
+});
+
+test("event counts use the plural forms of the interface language", async () => {
+  const { copy } = await import("../app/ui/copy.ts");
+  const { pluralText } = await import("../lib/plural.ts");
+  assert.deepEqual([1, 3, 5, 0].map((value) => pluralText("cs", value, copy.cs.pluEvents)), ["1 událost", "3 události", "5 událostí", "0 událostí"]);
+  assert.deepEqual([1, 2].map((value) => pluralText("en", value, copy.en.pluEvents)), ["1 event", "2 events"]);
 });
 
 test("the routes need the owner session from the same origin; the integration token is refused", async () => {

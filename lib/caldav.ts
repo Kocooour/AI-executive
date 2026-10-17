@@ -192,9 +192,13 @@ function toElement(tag: string, node: RawNode, scope: Map<string, string>): XmlE
   return element;
 }
 
-/** Parses a DAV response. A document type (and with it any entity definition) is refused before parsing (no XXE). */
+/**
+ * Parses a DAV response. A document type or entity declaration in the markup (the prolog or anywhere outside CDATA) is
+ * refused before parsing (no XXE); the same text inside CDATA, such as an event description, is data and is kept.
+ */
 export function parseDavXml(text: string): XmlElement {
-  if (/<!DOCTYPE|<!ENTITY/i.test(text)) throw new CalDavError("iCloud returned an unreadable response");
+  const markup = text.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+  if (/<!DOCTYPE|<!ENTITY/i.test(markup)) throw new CalDavError("iCloud returned an unreadable response");
   if (XMLValidator.validate(text) !== true) throw new CalDavError("iCloud returned an unreadable response");
   let nodes: RawNode[];
   try { nodes = parser.parse(text) as RawNode[]; } catch { throw new CalDavError("iCloud returned an unreadable response"); }

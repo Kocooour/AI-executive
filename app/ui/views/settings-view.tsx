@@ -487,7 +487,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                       <span>
                         <strong>{source.label}</strong>
                         <small>
-                          {source.status === "ready" ? `${source.eventCount} ${tr("events")}` : tr("syncFailed")}
+                          {source.status === "ready" ? count(source.eventCount, "pluEvents") : tr("syncFailed")}
                           {source.lastSuccessAt ? ` · ${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : ""}
                         </small>
                         {source.lastError && <small role="status">{localizeServerError(source.lastError, tr)}</small>}

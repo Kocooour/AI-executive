@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { calendarKey, discoverCalendars, type CalDavCredentials, type CalDavDiscovery } from "./caldav";
-import { calDavAccountRow, calDavCredentials, calDavOptions, decrypt, encrypt, markCalDavAccount } from "./calendar";
+import { calDavAccountRow, calDavAccountVersion, calDavCredentials, calDavOptions, decrypt, encrypt, markCalDavAccount } from "./calendar";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 // The iCloud account behind the CalDAV calendars (read-only, E1). One account per instance. The browser only ever sees a
@@ -199,10 +199,13 @@ export function disconnectICloud(accountId: string) {
   });
 }
 
-/** A discovery with the stored credentials that Apple refused stops automatic refreshes, like a refused refresh. */
-export function recordRefusedPassword(accountId: string) {
+/**
+ * A discovery with the stored credentials that Apple refused stops automatic refreshes, like a refused refresh. `account` is
+ * the row read before Apple was asked: a changed or removed account is left as it is.
+ */
+export function recordRefusedPassword(account: Record<string, unknown>) {
   ensureDailyBackup();
-  markCalDavAccount(accountId, "auth_failed", "Apple refused the app-specific password");
+  return markCalDavAccount(String(account.id), "auth_failed", "Apple refused the app-specific password", calDavAccountVersion(account));
 }
 
 export function getICloudAccountState(): ICloudAccountState | null {
