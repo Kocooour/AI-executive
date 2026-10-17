@@ -52,7 +52,14 @@ export function ICloudCalendarSettings({ app }: { app: LumiApp }) {
   async function post(body: Record<string, unknown>) {
     const response = await fetch("/api/calendar/icloud", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const data = await response.json().catch(() => ({}));
-    if ("account" in data && mounted.current) setAccount(data.account ?? null);
+    if ("account" in data && mounted.current) {
+      setAccount(data.account ?? null);
+      // An answer that carries the account (also with an error, e.g. the first read failed after connecting) means the
+      // connection exists: the form is left for the connected view, where Refresh, Edit and Disconnect are, and the error is
+      // shown there. The typed credentials are dropped.
+      if (data.account) { setMode("idle"); setChoices([]); setSelection({}); setAppPassword(""); setAppleId(""); }
+      if (data.account && !response.ok) void reloadViews().catch(() => undefined);
+    }
     if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("icloudActionFailed"));
     return data;
   }

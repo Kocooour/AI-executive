@@ -18,6 +18,7 @@ export const serverErrorKeys: Record<string, string> = {
   "Calendar source is corrupt": "serverError_calendarSourceIsCorrupt",
   "Calendar source not found": "serverError_calendarSourceNotFound",
   "Calendar source was disconnected during synchronization": "serverError_calendarSourceWasDisconnectedDuringSynchronization",
+  "Calendar source changed during synchronization": "serverError_calendarSourceChangedDuringSynchronization",
   "Calendar synchronization is already running": "serverError_calendarSynchronizationIsAlreadyRunning",
   "Response is not an iCalendar feed": "serverError_responseIsNotAnIcalendarFeed",
   "Recurrence expands too frequently": "serverError_recurrenceExpandsTooFrequently",
