@@ -530,3 +530,49 @@ sudo ./ops/server-security/install.sh
 The installer creates two one-minute timers. Check them with
 `systemctl status server-security-monitor.timer server-security-alerts.timer`
 and inspect failures with `journalctl -u server-security-monitor.service -u server-security-alerts.service`.
+
+---
+
+## Semantic knowledge memory — Variant C (target architecture)
+
+This section specifies a target capability, not a deployed feature. It extends Context Graph v2 within the existing SQLite, Dexie, PACT, approval, and audit contracts. PostgreSQL, pgvector, a second canonical database, and a parallel HumanAgentWiki deployment are out of scope.
+
+### Canonical data and derived index
+
+SQLite on the canonical server owns notes, entities, claims, evidence, sources, relations, revisions, archival state, and authorization metadata. A separately stored, versioned semantic index is rebuildable from those records. Each entry identifies the canonical object and section IDs and revision, workspace, sensitivity and access-policy fingerprint, content type, language, model and index versions, indexing time, and status. Text fragments and vectors are retained copies with their own deletion policy.
+
+The index has no independent write authority or history of truth. Index only after canonical validation. Archive, deletion, revision, workspace, sensitivity, or permission changes make affected entries unavailable immediately at retrieval, even while removal or reindexing is pending. A transactional outbox and idempotent worker reconcile the index; stale entries cannot be presented as complete. Periodic reconciliation checks counts and revisions against SQLite and supports a full rebuild without claiming completeness during the rebuild.
+
+### Server-local embedding and evaluation
+
+Embedding inference and the vector index run on the canonical server, outside static serving. No model, vector index, or embedding corpus is distributed to the PWA. Local inference sends no source content to an external provider. Model artifacts have verified origin and integrity; text copies, vectors, and caches follow source retention and erasure rules.
+
+BGE-M3 is an evaluation candidate, not a selected model. Stage 1 defines numeric pass/fail thresholds *before* benchmarking: recall@k and nDCG against a lexical baseline on a human-judged Czech and mixed-language holdout; first-result latency; full and incremental reindexing time; peak RAM and disk; model download size; and the permitted operating hardware. It also fixes dataset provenance, measurement procedure, privacy rules, and fallback criteria. Stage 2 records results and model choice without protected content in telemetry. A failed benchmark keeps lexical retrieval as the supported path.
+
+A missing model, indexing failure, or rebuild does not block authorized exact and metadata search. The response identifies which sources and index revisions were actually searched and does not imply complete semantic coverage.
+
+### Typed resolver and optional MCP
+
+Only the server-side PACT Context Resolver combines lexical and semantic candidates. Before retrieval and again before serialization, it checks one explicit workspace, actor and session, subject and project scope, tool and agent allowlists, sensitivity, claim review status, freshness, source access, and size limits. Authorization applies before ranking and after it; neither a client cache nor a language model grants access.
+
+Versioned read-only operations are `context.search` (typed exact, full-text, or semantic candidates with canonical ID, match type, provenance, freshness, and citation locator), `context.get` (one authorized object, claim, or section at a requested revision), `context.neighbors` (requested graph edges with type, direction, review state, evidence, and depth/count limits), and `context.explain` (why a claim, documentary link, or similarity was returned, including index/model version and freshness limits). A requested historical revision is returned only after the current ACL, workspace, sensitivity, archival, deletion, and source/evidence checks; it never revives access to content that is no longer eligible. Citations and excerpts apply the same current checks. Similarity is ranking metadata, never a truth probability.
+
+Optional MCP may expose these four explicitly registered operations, including `context.explain`, as audited, rate- and size-limited read-only tools. It does not expose confirmation, Undo/Redo, arbitrary SQL, filesystem access, raw indexes, or provider credentials. Existing token and allowlist rules continue for external ChatGPT and Voice; new OpenAPI or MCP operations require implementation, authorization tests, and versioning.
+
+The existing Context Graph claim schema uses `normal`, `confidential`, and `restricted`. Legacy `pact_context` and compatibility API inputs retain `normal`/`sensitive`: map legacy or input `normal` to `normal`, map `sensitive` to `confidential`, retain stricter imported labels, and fail closed as `restricted` on unknown mappings. The index derives its sensitivity from the current canonical claim, source, or entity using that mapping; it never weakens a source restriction. Both `confidential` and `restricted` are excluded from external provider bundles and MCP responses by default, even when the actor can view them in the UI. Workspace type and sensitivity are checked independently; Personal and Shared are workspace boundaries, not sensitivity values.
+
+### Safe wikilinks and graph meaning
+
+Parse only `[[target]]` and `[[target|label]]`. At note save time, resolve an explicit stable target ID or an unambiguous title *among targets the editor is authorized to access in the selected workspace*, and persist the resolved target ID with the source note revision. The displayed alias may change without retargeting the link. An unresolved, ambiguous among accessible targets, or inaccessible target remains safe plain text or a repair suggestion; indistinguishable error behavior and counts must not reveal hidden targets. Rendered Markdown is sanitized and never executes link content.
+
+A wikilink is a documentary navigation mention with note provenance. It does not create a subject, confirmed claim, or semantic relation. The graph keeps separate layers for typed evidence-backed claim relations, documentary mentions, and transient ranking similarities. Only a confirmed eligible claim relation can supply an agent or plan with a semantic fact. Each edge shows type, direction, review state where applicable, freshness, validity, provenance, and evidence; similarity displays model/index version rather than confidence. Automatic similarity cannot alter a claim or relation without the existing proposal and owner review process.
+
+### Citations, audit, offline behavior, and recovery
+
+Citations bind stable source, object, revision, and section locators to a bounded authorized excerpt. Retrieval audit records actor, tool, workspace, policy and model/index versions, canonical revisions, time, and outcome; queries and content require an explicit protected retention policy. Derived metadata inherits the strictest source restriction until an audited owner-approved downgrade.
+
+Reindexing is scoped by workspace, resumable from checkpoints, and never advertises complete results during a full rebuild. Offline PWA search is lexical only over previously synchronized canonical Dexie data and visibly labels its coverage as a local subset. Semantic search, candidate combination, `context.explain`, and MCP calls require the server. Existing offline behavior remains: a previously synced, signed-in PWA can display all canonical data it holds and queue allowed edits under the Current MVP contract. No new expiring authorization lease hides that existing data while offline.
+
+New semantic-result excerpts and derived search caches are separately scoped to workspace and actor and must not extend canonical offline retention. They are cleared on sign-out and invalidated on workspace, permission, or sensitivity changes when the client next connects; no client-side vector index is kept. Confidential and restricted material is excluded from external provider and MCP paths by default. Server retrieval rechecks current authority, so stale derived entries cannot leak after revocation. Full backups and exports cover canonical data and provenance. An optional encrypted vector snapshot is verified against canonical revisions on restore and discarded and rebuilt when mismatched.
+
+Stages: (1) contracts, representative corpus, numeric evaluation gates, and canonical outbox; (2) server-local lexical/semantic retrieval, BGE-M3 benchmark, and fallback; (3) saved-ID wikilinks, graph layers, and freshness UX; (4) Resolver operations and optional MCP with negative authorization tests, including revoked/archive/delete/restrict access to historical revisions, evidence, citations, and excerpts; (5) encrypted restore, retention, and interruption/retry tests. Each stage reports shipped versus target status and requires no new external account, production deployment, or external model transfer by itself.

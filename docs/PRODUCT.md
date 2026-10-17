@@ -125,3 +125,25 @@ Privacy-preserving product metrics are activation (first captured and organized 
 
 A release meets the full Lumi target only when the user can capture, triage and find work; understand a reasoned Home brief; receive an honest plan; ask chat to prepare a change; approve it in scope; and inspect audit/Undo, including mobile/offline and restricted-workspace cases. Each roadmap phase can ship independently if its partial status is stated accurately.
 
+---
+
+## Sémantická znalostní paměť — varianta C (cílový požadavek)
+
+Lumi rozšiřuje Remember o sémantickou znalostní paměť: pomáhá najít oprávněné kanonické poznámky, Context Graph, úkoly a jejich souvislosti, i když se dotaz neshoduje doslova. Jde o vrstvu vyhledání a vysvětlení, ne o druhý „mozek“ vedle Lumi.
+
+- Kanonickou pravdou zůstávají SQLite entity, Markdown poznámky, claimy, důkazy a jejich revize. Vektorový index, embedding, skóre podobnosti, cache a importovaný text jsou vždy odvoditelné artefakty; nesmějí samy potvrdit claim, vytvořit relaci, změnit úkol ani přežít smazání či omezení zdroje.
+- Výsledek sémantického hledání zřetelně rozliší ověřený claim s evidencí, doslovný odkaz nebo bezpečný wikilink a pouze sémanticky podobný kandidát. Podobnost není důkaz, autorství ani vztah.
+- Každý výsledek nese typ, workspace, kanonický odkaz, provenance, čerstvost a přístupný zdroj. Pokud je kandidát vynechán kvůli oprávnění, citlivosti, neaktuálnímu indexu nebo neexistující konektivitě, Lumi to popíše bez prozrazení chráněného obsahu.
+- PACT Context Resolver je jediná cesta, kterou chat, agent či případné MCP rozhraní dostane výsledky. Vyžaduje jeden explicitní workspace a stejná oprávnění, citlivost, scope, review a freshness pravidla jako UI. MCP může nabídnout jen explicitně registrované typované čtení; není to přímý přístup k SQLite, souborům, indexu ani potvrzování změn.
+- Embedding se vytváří lokálně na kanonickém serveru; klientská PWA model ani vektorový index nestahuje. BGE-M3 je kandidát k vyhodnocení na českých a smíšených datech. Etapa 1 před benchmarkem stanoví číselné prahy relevance, latence, paměti, velikosti modelu a reindexace i pravidla ochrany dat; jeho volba ani kvalita se touto specifikací nepředpokládá.
+- Offline PWA hledá pouze lexikálně v kanonických datech, která již má podle stávajícího sync kontraktu uložená v Dexie; výsledky jsou označené jako neúplný lokální výřez. Sémantické hledání a kombinace kandidátů přes serverový PACT Resolver vyžadují spojení. Nová pravidla pro odvozené úryvky/index nemění stávající možnost zobrazit dříve synchronizovaná data a zachytit změny offline.
+
+Nezavádíme PostgreSQL, pgvector ani paralelní nasazení HumanAgentWiki. Tato varianta přebírá užitečné principy — lokální sémantické vyhledání, citovatelnost, bezpečné wikilinky a obnovitelný index — uvnitř existujícího modelu Lumi a jeho bezpečnostních hranic.
+
+### Produktové akceptační scénáře
+
+1. Dotaz v češtině najde relevantní oprávněnou poznámku i při odlišném slovním vyjádření a umožní otevřít přesný kanonický úsek; podobný výsledek není vydáván za potvrzený fakt.
+2. Zdroj s cílovou citlivostí confidential nebo restricted (dnešní API: sensitive → confidential), jeho úryvek, název, počet ani embedding se nevrátí neoprávněnému uživateli či workspace; externímu poskytovateli ani MCP klientovi se nevydává standardně ani při oprávněném čtení v UI. Nepřístupné cíle wikilinků neovlivní počet ani hlášení o nejednoznačnosti.
+3. Změna, archivace, smazání, změna citlivosti nebo oprávnění zneplatní indexové položky; po reindexaci odpovídají výsledky kanonickým revizím.
+4. Vypnutý/nenainstalovaný serverový model nebo neúspěšná indexace vrátí transparentně omezené serverové výsledky s přesným hledáním. Offline PWA hledá lexikálně jen v uložených kanonických datech, zachová jejich dosavadní čtení a viditelně přizná neúplnost; sémantické výsledky ani závěry nevymýšlí.
+5. Export, záloha a obnova uchovají kanonická data a jejich provenance; index lze po obnově ověřit a znovu vytvořit, aniž by se změnil obsah či review stav.
