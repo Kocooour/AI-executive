@@ -136,6 +136,8 @@ export type CaptureProjectAction = "" | "existing" | "new" | "none";
 export interface CalendarSourceState {
   id: string;
   workspaceId: string;
+  provider?: "ics" | "caldav";
+  accountId?: string | null;
   label: string;
   status: string;
   configured: boolean;

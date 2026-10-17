@@ -136,6 +136,34 @@ export const schemaMigrations: SchemaMigration[] = [
       baselineNoteRevisions(database, Number(row?.value) || 0);
     },
   },
+  {
+    // iCloud calendar over CalDAV (read-only). One account row holds the Apple ID and app-specific password encrypted with
+    // the calendar key (`encrypted_credentials`), the account's principal and calendar-home addresses (encrypted too: they
+    // contain iCloud's account number) and only a masked Apple ID as its label. A selected iCloud calendar is a calendar
+    // source with provider 'caldav' and the account it belongs to; existing ICS sources are not touched.
+    id: "2026-10-calendar-accounts-caldav",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS calendar_accounts (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          label TEXT NOT NULL,
+          encrypted_credentials TEXT NOT NULL,
+          principal_url TEXT,
+          home_url TEXT,
+          status TEXT NOT NULL,
+          last_error TEXT,
+          last_success_at INTEGER,
+          revision INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      const columns = new Set((database.prepare("PRAGMA table_info(calendar_sources)").all() as Array<{ name?: string }>).map((row) => String(row.name)));
+      if (!columns.has("account_id")) database.exec("ALTER TABLE calendar_sources ADD COLUMN account_id TEXT");
+      database.exec("CREATE INDEX IF NOT EXISTS calendar_sources_account_idx ON calendar_sources(account_id)");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

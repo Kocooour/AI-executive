@@ -5,6 +5,7 @@ import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
 import { pluralText } from "../../../lib/plural";
+import { ICloudCalendarSettings } from "./icloud-calendar-settings";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -109,6 +110,8 @@ export function SettingsView({ app }: { app: LumiApp }) {
     return tr(["daily", "manual", "before_restore", "json_migration", "pre_sqlite"].includes(label.replaceAll("-", "_")) ? key : "backupKind_other");
   };
   const settingsSection = requestedSection === "access" && !accessShown ? "general" : requestedSection;
+  // iCloud calendars are listed and managed in their own block; this list is the ICS feeds.
+  const icsSources = calendarSources.filter((source) => source.provider !== "caldav");
   // On narrow screens the row scrolls sideways: keep the current section's button in sight when
   // Settings opens on a section chosen elsewhere. Only the row moves, never the page.
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -454,13 +457,14 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 </div>
               </section>
               <section hidden={settingsSection !== "calendar"}>
+                {settingsSection === "calendar" && <ICloudCalendarSettings app={app} />}
                 <div className="sectionHeading">
                   <div>
                     <h2>{tr("calendarReadonly")}</h2>
                     <p>{tr("calendarInfo")}</p>
                   </div>
-                  <span className={`installStatus ${calendarSources.some((source) => source.status === "ready") ? "installed" : ""}`}>
-                    {calendarSources.some((source) => source.status === "ready") ? tr("readOnly") : tr("notConnected")}
+                  <span className={`installStatus ${icsSources.some((source) => source.status === "ready") ? "installed" : ""}`}>
+                    {icsSources.some((source) => source.status === "ready") ? tr("readOnly") : tr("notConnected")}
                   </span>
                 </div>
                 <div className="calendarConnect">
@@ -478,7 +482,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     onClick={() => calendarAction("connect")}>{tr("connectLoad")}</button>
                 </div>
                 <div className="calendarSources">
-                  {calendarSources.map((source) => (
+                  {icsSources.map((source) => (
                     <div key={source.id}>
                       <span>
                         <strong>{source.label}</strong>

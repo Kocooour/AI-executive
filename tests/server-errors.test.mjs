@@ -19,7 +19,8 @@ const templates = new Set();
 for (const file of [...files("lib"), ...files("app/api")]) {
   if (file.endsWith("server-errors.ts")) continue;
   const source = readFileSync(file, "utf8");
-  for (const match of source.matchAll(/(?:HttpInputError|new Error)\(\s*"((?:[^"\\]|\\.)*)"|\berror:\s*"((?:[^"\\]|\\.)*)"|\.message\s*:\s*"((?:[^"\\]|\\.)*)"/g)) messages.add(match[1] ?? match[2] ?? match[3]);
+  // The iCloud client's error classes (lib/caldav.ts) carry messages the interface shows too.
+  for (const match of source.matchAll(/(?:HttpInputError|new (?:CalDav(?:Auth)?)?Error)\(\s*"((?:[^"\\]|\\.)*)"|\berror:\s*"((?:[^"\\]|\\.)*)"|\.message\s*:\s*"((?:[^"\\]|\\.)*)"/g)) messages.add(match[1] ?? match[2] ?? match[3]);
   // Messages built from a template, with every interpolation written as ${}.
   for (const match of source.matchAll(/(?:HttpInputError|new Error)\(\s*`([^`]*)`|\berror:\s*`([^`]*)`/g)) templates.add((match[1] ?? match[2]).replace(/\$\{[^}]*\}/g, "${}"));
 }

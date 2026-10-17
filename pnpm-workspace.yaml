@@ -1,2 +1,4 @@
 overrides:
   postcss: ^8.5.23
+  # fast-xml-parser 5.11.2 accepts strnum ^2.4.2; 2.5.x was published less than two weeks before it was added.
+  strnum: 2.4.2

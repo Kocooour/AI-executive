@@ -1,21 +1,15 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import https from "node:https";
-import net from "node:net";
 import ical, { type EventInstance, type VEvent } from "node-ical";
+import { CalDavAuthError, CalDavError, defaultCalDavOptions, fetchCalendarObjects, type CalDavCredentials, type CalDavOptions } from "./caldav";
+import { resolvedTarget } from "./calendar-net";
+import { serverErrorKeys } from "./server-errors";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 const MAX_ICS_BYTES = 2 * 1024 * 1024;
 const MAX_EVENTS = 5000;
 const MAX_COMPONENTS = 5000;
 const REQUEST_DEADLINE_MS = 12_000;
-const publicIpv6 = new net.BlockList();
-publicIpv6.addSubnet("2000::", 3, "ipv6");
-const unsafeIpv6 = new net.BlockList();
-unsafeIpv6.addSubnet("2001::", 23, "ipv6");
-unsafeIpv6.addSubnet("2001:db8::", 32, "ipv6");
-unsafeIpv6.addSubnet("2002::", 16, "ipv6");
-unsafeIpv6.addSubnet("3fff::", 20, "ipv6");
 
 export interface CalendarEvent {
   id: string;
@@ -37,7 +31,9 @@ export interface CalendarEvent {
 export interface CalendarSourceState {
   id: string;
   workspaceId: string;
-  provider: "ics";
+  provider: "ics" | "caldav";
+  /** The iCloud account a CalDAV calendar belongs to; null for an ICS feed. */
+  accountId: string | null;
   label: string;
   status: string;
   configured: boolean;
@@ -54,50 +50,19 @@ function encryptionKey() {
   return createHash("sha256").update(`calendar-source\0${secret}`).digest();
 }
 
-function encrypt(value: string) {
+export function encrypt(value: string) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   return [iv, cipher.getAuthTag(), encrypted].map((part) => part.toString("base64url")).join(".");
 }
 
-function decrypt(value: string) {
+export function decrypt(value: string) {
   const parts = value.split(".").map((part) => Buffer.from(part, "base64url"));
   if (parts.length !== 3 || parts[0].length !== 12 || parts[1].length !== 16) throw new Error("Calendar source is corrupt");
   const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), parts[0]);
   decipher.setAuthTag(parts[1]);
   return Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString("utf8");
-}
-
-function isPublicAddress(address: string) {
-  if (net.isIPv4(address)) {
-    const [a, b, c] = address.split(".").map(Number);
-    return !(
-      a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-      (a === 192 && b === 88 && c === 99) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      (a === 198 && b === 51 && c === 100) ||
-      (a === 203 && b === 0 && c === 113)
-    );
-  }
-  const value = address.toLowerCase();
-  if (!net.isIPv6(value)) return false;
-  if (value.startsWith("::ffff:")) return isPublicAddress(value.slice(7));
-  return publicIpv6.check(value, "ipv6") && !unsafeIpv6.check(value, "ipv6");
-}
-
-async function resolvedTarget(url: URL) {
-  if (url.protocol !== "https:" || url.username || url.password || url.port && url.port !== "443") {
-    throw new Error("Calendar URL must use public HTTPS on port 443");
-  }
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
-  const allowed = addresses.filter((item) => isPublicAddress(item.address));
-  if (!allowed.length || allowed.length !== addresses.length) throw new Error("Calendar host resolves to a private or unsafe address");
-  return allowed[0];
 }
 
 async function fetchOnce(url: URL): Promise<{ body?: string; redirect?: URL; contentType?: string }> {
@@ -187,14 +152,24 @@ function normalizeInstance(sourceId: string, workspaceId: string, uid: string, i
   };
 }
 
-async function parseCalendar(sourceId: string, workspaceId: string, body: string) {
-  if (body.length > MAX_ICS_BYTES || body.split("\n").length > 50_000) throw new Error("Calendar feed is too large");
-  const parsed = await ical.async.parseICS(body);
-  const from = new Date(Date.now() - 14 * 24 * 60 * 60_000);
-  const to = new Date(Date.now() + 90 * 24 * 60 * 60_000);
+/** The cached horizon: 14 days back and 90 days forward. */
+export function calendarWindow(now = Date.now()) {
+  return { from: new Date(now - 14 * 24 * 60 * 60_000), to: new Date(now + 90 * 24 * 60 * 60_000) };
+}
+
+/**
+ * Normalized events of one calendar: an ICS feed (one body) or the calendar objects of a CalDAV calendar (one body per
+ * event resource). The limits on size, lines, components and occurrences apply to the calendar as a whole.
+ */
+export async function parseCalendar(sourceId: string, workspaceId: string, input: string | string[]) {
+  const bodies = Array.isArray(input) ? input : [input];
+  const totalLength = bodies.reduce((total, body) => total + body.length, 0);
+  const totalLines = bodies.reduce((total, body) => total + body.split("\n").length, 0);
+  if (totalLength > MAX_ICS_BYTES || totalLines > 50_000) throw new Error("Calendar feed is too large");
+  const { from, to } = calendarWindow();
   const events: CalendarEvent[] = [];
   let componentCount = 0;
-  for (const component of Object.values(parsed)) {
+  for (const body of bodies) for (const component of Object.values(await ical.async.parseICS(body))) {
     if (!component || component.type !== "VEVENT") continue;
     componentCount += 1;
     if (componentCount > MAX_COMPONENTS) throw new Error("Calendar contains too many components");
@@ -229,7 +204,8 @@ function publicSource(row: Record<string, unknown>): CalendarSourceState {
   const lastSuccessAt = row.last_success_at == null ? null : Number(row.last_success_at);
   const storedStatus = String(row.status);
   return {
-    id: String(row.id), workspaceId: String(row.workspace_id), provider: "ics", label: String(row.label),
+    id: String(row.id), workspaceId: String(row.workspace_id), provider: row.provider === "caldav" ? "caldav" : "ics",
+    accountId: row.account_id == null ? null : String(row.account_id), label: String(row.label),
     status: storedStatus === "ready" && lastSuccessAt && Date.now() - lastSuccessAt > 24 * 60 * 60_000 ? "stale" : storedStatus, configured: true,
     lastSyncAt: row.last_sync_at == null ? null : Number(row.last_sync_at),
     lastSuccessAt,
@@ -268,7 +244,7 @@ export async function refreshCalendarSource(id: string) {
     .run(now, id, now - 15 * 60_000);
   if (Number(claimed.changes) !== 1) throw new Error("Calendar synchronization is already running");
   try {
-    const body = await fetchCalendar(decrypt(String(row.encrypted_url)));
+    const body = row.provider === "caldav" ? await fetchCalDavSource(row) : await fetchCalendar(decrypt(String(row.encrypted_url)));
     const events = await parseCalendar(id, String(row.workspace_id), body);
     const database = getDatabase();
     database.exec("BEGIN IMMEDIATE");
@@ -286,6 +262,14 @@ export async function refreshCalendarSource(id: string) {
     } catch (error) { database.exec("ROLLBACK"); throw error; }
     return { source: publicSource(sourceRow(id)!), events };
   } catch (error) {
+    if (row.provider === "caldav") {
+      // Only fixed messages are kept for an iCloud calendar: never an address, the Apple ID or a parser's quote of the data.
+      const message = safeCalDavMessage(error);
+      if (error instanceof CalDavAuthError && row.account_id) markCalDavAccount(String(row.account_id), "auth_failed", message);
+      getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=?")
+        .run(now, message, now, id);
+      throw error instanceof CalDavError ? error : new Error(message);
+    }
     const message = error instanceof Error ? error.message.slice(0, 500) : "Calendar refresh failed";
     getDatabase().prepare("UPDATE calendar_sources SET status='error', last_sync_at=?, last_error=?, updated_at=? WHERE id=?")
       .run(now, message, now, id);
@@ -293,9 +277,88 @@ export async function refreshCalendarSource(id: string) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// iCloud (CalDAV) calendars: an account row holds the encrypted Apple ID and app-specific password; each selected
+// calendar is a source row (provider 'caldav') whose encrypted address is the calendar collection. The account lifecycle
+// (discover, connect, password, selection, disconnect) is in lib/icloud-calendar.ts.
+
+let calDavOptionsOverride: CalDavOptions | null = null;
+/** Unit tests replace the network with a fake transport. */
+export function setCalDavOptionsForTests(options: CalDavOptions | null) {
+  if (options !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Not available outside tests");
+  calDavOptionsOverride = options;
+}
+export function calDavOptions(): CalDavOptions {
+  return calDavOptionsOverride ?? defaultCalDavOptions();
+}
+
+export function safeCalDavMessage(error: unknown) {
+  if (error instanceof CalDavError) return error.message;
+  if (error instanceof Error && error.message in serverErrorKeys) return error.message;
+  // Written as an Error so that tests/server-errors.test.mjs finds (and requires a translation of) the message.
+  return new Error("iCloud calendar could not be read").message;
+}
+
+export function calDavAccountRow(id: string) {
+  return getDatabase().prepare("SELECT * FROM calendar_accounts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+}
+
+export function calDavCredentials(account: Record<string, unknown>): CalDavCredentials {
+  const value = JSON.parse(decrypt(String(account.encrypted_credentials))) as Partial<CalDavCredentials>;
+  if (typeof value.username !== "string" || typeof value.password !== "string") throw new Error("Calendar source is corrupt");
+  return { username: value.username, password: value.password };
+}
+
+/** Records the account's state. A refused password stops automatic refreshes until the password is replaced. */
+export function markCalDavAccount(id: string, status: "ready" | "auth_failed" | "error", message: string | null) {
+  const now = Date.now();
+  getDatabase().prepare(`UPDATE calendar_accounts SET status=?, last_error=?, last_success_at=CASE WHEN ? = 'ready' THEN ? ELSE last_success_at END,
+    revision=revision+1, updated_at=? WHERE id=?`).run(status, message, status, now, now, id);
+}
+
+async function fetchCalDavSource(row: Record<string, unknown>) {
+  const account = row.account_id == null ? undefined : calDavAccountRow(String(row.account_id));
+  if (!account) throw new Error("No iCloud account is connected");
+  if (account.status === "auth_failed") throw new CalDavAuthError("Apple refused the app-specific password");
+  return fetchCalendarObjects(calDavCredentials(account), decrypt(String(row.encrypted_url)), calendarWindow(), calDavOptions());
+}
+
+/**
+ * Refreshes every calendar of an iCloud account, one REPORT each. The account is claimed with the same 'syncing' pattern as a
+ * source (a claim older than 15 minutes is taken over). An account whose password was refused is not contacted at all.
+ */
+export async function refreshCalDavAccount(accountId: string) {
+  const now = Date.now();
+  ensureDailyBackup();
+  const claimed = getDatabase().prepare(`UPDATE calendar_accounts SET status='syncing', updated_at=?
+    WHERE id=? AND status!='auth_failed' AND (status!='syncing' OR updated_at < ?)`).run(now, accountId, now - 15 * 60_000);
+  if (Number(claimed.changes) !== 1) {
+    const account = calDavAccountRow(accountId);
+    if (!account) throw new Error("No iCloud account is connected");
+    if (account.status === "auth_failed") throw new CalDavAuthError("Apple refused the app-specific password");
+    throw new Error("Calendar synchronization is already running");
+  }
+  const sources = getDatabase().prepare("SELECT id FROM calendar_sources WHERE account_id = ? AND provider = 'caldav' ORDER BY created_at")
+    .all(accountId) as Array<{ id: string }>;
+  let failure: unknown = null;
+  for (const source of sources) {
+    try { await refreshCalendarSource(String(source.id)); }
+    catch (error) {
+      failure ??= error;
+      if (error instanceof CalDavAuthError) { failure = error; break; }
+    }
+  }
+  if (!failure) markCalDavAccount(accountId, "ready", null);
+  else if (failure instanceof CalDavAuthError) markCalDavAccount(accountId, "auth_failed", failure.message);
+  else markCalDavAccount(accountId, "error", safeCalDavMessage(failure));
+  if (failure) throw failure instanceof CalDavError ? failure : new Error(safeCalDavMessage(failure));
+  return { refreshed: sources.length };
+}
+
 export async function processCalendarRefreshes(now = Date.now()) {
   const rows = getDatabase().prepare(`SELECT id FROM calendar_sources
-    WHERE (status != 'syncing' OR updated_at <= ?)
+    WHERE provider != 'caldav'
+      AND (status != 'syncing' OR updated_at <= ?)
       AND (last_sync_at IS NULL OR last_sync_at <= ?)
     ORDER BY COALESCE(last_sync_at, 0) LIMIT 2`).all(now - 15 * 60_000, now - 30 * 60_000);
   let refreshed = 0;
@@ -303,15 +366,29 @@ export async function processCalendarRefreshes(now = Date.now()) {
     try { await refreshCalendarSource(String((row as { id: string }).id)); refreshed += 1; }
     catch { /* State is persisted without leaking the feed URL to logs. */ }
   }
-  return { due: rows.length, refreshed };
+  // At most one iCloud account per pass, with all of its calendars; an account whose password was refused waits for a new one.
+  const account = getDatabase().prepare(`SELECT a.id FROM calendar_accounts a
+    WHERE a.status != 'auth_failed' AND (a.status != 'syncing' OR a.updated_at <= ?)
+      AND EXISTS (SELECT 1 FROM calendar_sources s WHERE s.account_id = a.id AND (s.last_sync_at IS NULL OR s.last_sync_at <= ?))
+    ORDER BY a.updated_at LIMIT 1`).get(now - 15 * 60_000, now - 30 * 60_000) as { id: string } | undefined;
+  if (account) {
+    try { await refreshCalDavAccount(String(account.id)); refreshed += 1; }
+    catch { /* The account and its calendars keep a fixed message; nothing identifying is logged. */ }
+  }
+  return { due: rows.length + (account ? 1 : 0), refreshed };
 }
 
 /** After a restore: the event cache was emptied, so every restored source is fetched again. A failure is logged without the feed address. */
 export async function refreshAllCalendarSources() {
-  const rows = getDatabase().prepare("SELECT id FROM calendar_sources").all() as Array<{ id: string }>;
+  const rows = getDatabase().prepare("SELECT id FROM calendar_sources WHERE provider != 'caldav'").all() as Array<{ id: string }>;
   for (const row of rows) {
     try { await refreshCalendarSource(String(row.id)); }
     catch (error) { console.error("Calendar refresh after a restore failed:", error instanceof Error ? error.message.slice(0, 200) : "error"); }
+  }
+  const accounts = getDatabase().prepare("SELECT id FROM calendar_accounts").all() as Array<{ id: string }>;
+  for (const account of accounts) {
+    try { await refreshCalDavAccount(String(account.id)); }
+    catch (error) { console.error("Calendar refresh after a restore failed:", safeCalDavMessage(error)); }
   }
 }
 

@@ -14,7 +14,7 @@ export const includedTables = [
   "context_sources", "context_evidence", "note_revisions",
   "work_sessions", "work_session_intervals", "work_session_events",
   "attention_states", "attention_history",
-  "calendar_sources", "ai_action_history",
+  "calendar_sources", "calendar_accounts", "ai_action_history",
 ] as const;
 
 // Not owner data to carry around: removed from backup files and left as they are on restore. `metadata` also
