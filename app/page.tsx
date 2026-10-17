@@ -25,7 +25,6 @@ export default function App() {
     activeWorkspace,
     activeWorkspaceId,
     authState,
-    homeGreeting,
     language,
     restore,
     tr,
@@ -57,14 +56,15 @@ export default function App() {
         <Topbar app={app} />
         <div className="content">
           <div className="pageIntro">
-            <p className="eyebrow">
-              {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
-            </p>
+            {view !== "Home" && (
+              <p className="eyebrow">
+                {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
+              </p>
+            )}
             <div className="pageTitleRow">
-              <h1>{view === "Home" ? homeGreeting : tr(view)}</h1>
-              {view === "Today" && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
+              <h1>{tr(view)}</h1>
+              {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
             </div>
-            {view === "Home" && <p className="pageSubtitle">{tr("homeSubtitle")}</p>}
           </div>
           <HeldBack app={app} />
           <CalendarView app={app} />

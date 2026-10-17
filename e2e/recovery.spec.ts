@@ -336,8 +336,8 @@ test("after an offline start, deleting a project asks in the app dialog", async 
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   const project = `Projekt pro offline dotaz ${Date.now()}`;
-  await page.getByRole("textbox", { name: "+ Přidat projekty" }).fill(project);
-  await page.getByRole("textbox", { name: "+ Přidat projekty" }).press("Enter");
+  await page.getByRole("textbox", { name: "+ Přidat projekt" }).fill(project);
+  await page.getByRole("textbox", { name: "+ Přidat projekt" }).press("Enter");
   await expectOnServer(page, (entity) => entity.title === project, true);
   await page.route("**/api/**", (route) => route.abort());
   await page.reload();
