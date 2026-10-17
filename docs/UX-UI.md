@@ -72,7 +72,7 @@ Na iPhonu je základní **bottom nav Home, Inbox, Today, Calendar**, s přístup
 
 ## Sémantické hledání a Context Graph — cílové UX (varianta C)
 
-Tato kapitola rozšiřuje obrazovky Notes, Project detail, Global search a Context review; neoznačuje je za dodané. Uživatel hledá význam, ale vždy vidí, co Lumi skutečně našla a proč.
+Tato kapitola rozšiřuje obrazovky Notes, Project detail a Global search; review je jejich kontextový panel otevřený z výsledku, detailu nebo grafu, nikoli nová primární obrazovka. Neoznačuje je za dodané. Uživatel hledá význam, ale vždy vidí, co Lumi skutečně našla a proč.
 
 - Search nabízí přesné a sémantické výsledky ve stejném oprávněném workspace. Každá položka má typ, workspace, zdroj/locator, čerstvost a jeden jasný štítek: Potvrzené tvrzení, Odkaz v poznámce nebo Podobný obsah. Skóre podobnosti se uživateli nevydává za důvěryhodnost.
 - Detail výsledku vede na kanonickou položku a její konkrétní úsek, ukáže provenance/evidence a umožní otevřít oprávněné sousedy grafu. Neexistující, nejednoznačný či nepřístupný wikilink se zobrazuje jako bezpečný text/návrh opravy, ne jako skrytě vytvořená relace.
