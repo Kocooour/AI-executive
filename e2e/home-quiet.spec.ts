@@ -1,8 +1,21 @@
 import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 import { heading, seeded, waitUntilSynced } from "./helpers";
 
 // The quiet Home of docs/design-system: a plain title, no status chips while all is well, and
 // every recommendation says why, from what and when on its own line (docs/UX-UI.md, LUMI-UX-001).
+
+// Adds tasks straight to the server store, retrying when a save of the open page takes the revision first.
+async function addTasks(page: Page, tasks: { id: string; title: string; properties: Record<string, unknown> }[]) {
+  await expect.poll(() => page.evaluate(async (newTasks) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      entities: [...snapshot.entities, ...newTasks.map((task) => ({ ...task, type: "task", status: "open", workspaceId: "personal", createdAt: now, updatedAt: now }))],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+    return response.status;
+  }, tasks), { timeout: 15_000 }).toBe(200);
+}
 
 test("Home has a plain title and shows only states that need something", async ({ page }) => {
   await page.goto("/");
@@ -49,18 +62,15 @@ test("snooze and dismiss appear on hover and keyboard focus", async ({ page }) =
 test("an ordinary save does not push the list down; a slow one and offline are shown", async ({ page, context }) => {
   await page.goto("/");
   await waitUntilSynced(page);
-  // Its own tasks for today, completed on Home: saves that leave Home and the recommendations in place.
+  // Its own tasks for today, first in the Home list, completed on Home: saves that leave Home and the
+  // recommendations in place.
   const title = `Uložení z Home ${Date.now()}`;
   const offlineTitle = `${title} offline`;
-  await page.evaluate(async ([taskTitle, offlineTaskTitle]) => {
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
-      entities: [...snapshot.entities,
-        { id: `e2e-home-save-${now}`, type: "task", title: taskTitle, status: "open", workspaceId: "personal", properties: { today: true }, createdAt: now, updatedAt: now },
-        { id: `e2e-home-save-offline-${now}`, type: "task", title: offlineTaskTitle, status: "open", workspaceId: "personal", properties: { today: true }, createdAt: now, updatedAt: now }],
-      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
-  }, [title, offlineTitle]);
+  const stamp = Date.now();
+  await addTasks(page, [
+    { id: `e2e-home-save-${stamp}`, title, properties: { today: true, manualOrder: -stamp - 1 } },
+    { id: `e2e-home-save-offline-${stamp}`, title: offlineTitle, properties: { today: true, manualOrder: -stamp } },
+  ]);
   await page.goto("/");
   await waitUntilSynced(page);
   const first = page.locator(".attentionItem").first();
@@ -94,16 +104,13 @@ test("after dismissing from the keyboard, focus moves to the next recommendation
   await waitUntilSynced(page);
   // Its own overdue task, so dismissing it leaves the shared seeded items alone.
   const title = `Fokus po skrytí ${Date.now()}`;
-  await page.evaluate(async (taskTitle) => {
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const now = Date.now();
-    const deadline = new Date(now - 3 * 86_400_000).toISOString().slice(0, 10);
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
-      entities: [...snapshot.entities, { id: `e2e-focus-dismiss-${now}`, type: "task", title: taskTitle, status: "open", workspaceId: "personal", properties: { deadline }, createdAt: now, updatedAt: now }],
-      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
-  }, title);
+  const deadline = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+  await addTasks(page, [{ id: `e2e-focus-dismiss-${Date.now()}`, title, properties: { deadline } }]);
   await page.goto("/");
   await waitUntilSynced(page);
+  // Other specs may leave more than five recommendations; the new one can be past the first five.
+  const more = page.locator(".attentionSection button.textAction", { hasText: "Zobrazit dalších" });
+  if (await more.count()) await more.click();
   const item = page.locator(".attentionSection .attentionItem", { hasText: title });
   await expect(item).toBeVisible();
   await page.keyboard.press("Shift");
