@@ -22,12 +22,15 @@ import { HeldBack } from "./ui/views/held-back";
 export default function App() {
   const app = useLumiApp();
   const {
+    activeWorkspace,
+    activeWorkspaceId,
     authState,
     language,
     restore,
     tr,
     undo,
     view,
+    workspaceName,
   } = app;
   if (authState !== "ready" && !app.offlineView) {
     return (
@@ -52,8 +55,12 @@ export default function App() {
         )}
         <Topbar app={app} />
         <div className="content">
-          {/* The workspace shows in the sidebar tile and the colour band; the page has just its title. */}
           <div className="pageIntro">
+            {view !== "Home" && (
+              <p className="eyebrow">
+                {workspaceName.toUpperCase()} · {activeWorkspaceId === "all" ? "AGGREGATE" : String(activeWorkspace?.properties.kind || "PERSONAL").toUpperCase()}
+              </p>
+            )}
             <div className="pageTitleRow">
               <h1>{tr(view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
