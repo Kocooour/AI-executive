@@ -47,7 +47,7 @@ test("a task keeps its selected area and can change it after capture", async ({ 
     const second = `e2e-area-home-${now}`;
     const area = (id: string, name: string) => ({ id, type: "area", title: name, status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now });
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      baseRevision: snapshot.revision, entities: [...snapshot.entities, area(first, "Rodina"), area(second, "Dům")], relations: snapshot.relations, deletedIds: [], revivedIds: [],
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, area(first, "Rodina"), area(second, "Dům")], relations: snapshot.relations, deletedIds: [], revivedIds: [],
     }) });
     if (!response.ok) throw new Error(`Could not seed areas: ${response.status}`);
     return { first, second };
@@ -101,7 +101,7 @@ test("capture switches destination and area to the selected workspace", async ({
     const workspace = { id: `workspace:${workspaceId}`, type: "workspace", title: "Rodina sdílená", status: "active", workspaceId,
       properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: now, updatedAt: now };
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      baseRevision: snapshot.revision, entities: [...snapshot.entities, workspace, area(personalAreaId, "personal"), area(targetAreaId, workspaceId)],
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, workspace, area(personalAreaId, "personal"), area(targetAreaId, workspaceId)],
       relations: snapshot.relations, deletedIds: [], revivedIds: [],
     }) });
     if (!response.ok) throw new Error(`Could not seed shared workspace: ${response.status}`);
@@ -150,7 +150,7 @@ test("a task added from a project in another workspace offers that workspace's a
       ({ id, type, title, status: "active", workspaceId: workspace, properties: {}, createdAt: now, updatedAt: now, ...extra });
     const ids = { workspaceId, projectId: `e2e-other-project-${now}`, otherAreaId: `e2e-other-area-${now}`, personalAreaId: `e2e-own-area-${now}` };
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      baseRevision: snapshot.revision,
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities,
         entity(`workspace:${workspaceId}`, "workspace", "Druhý prostor", workspaceId, { properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } }),
         entity(ids.projectId, "project", "Projekt v druhém prostoru", workspaceId),
@@ -220,7 +220,7 @@ test("the capture dialog opened from Upcoming does not date a task that goes to 
     // A project to choose, added the way another device would add it.
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: [...snapshot.entities, { id: `e2e-capture-project-${now}`, type: "project", title: name, status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now }],
       relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
   }, "Projekt pro zachycení");

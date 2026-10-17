@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import https from "node:https";
 import net from "node:net";
 import ical, { type EventInstance, type VEvent } from "node-ical";
-import { getDatabase, readSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
 const MAX_ICS_BYTES = 2 * 1024 * 1024;
 const MAX_EVENTS = 5000;
@@ -250,6 +250,7 @@ export function saveCalendarSource(input: { label: string; url: string; workspac
   if (url.protocol !== "https:" || input.url.length > 8192) throw new Error("Calendar URL must use HTTPS");
   const id = randomUUID();
   const now = Date.now();
+  ensureDailyBackup();
   getDatabase().prepare(`INSERT INTO calendar_sources
     (id, workspace_id, provider, label, encrypted_url, status, created_at, updated_at)
     VALUES (?, ?, 'ics', ?, ?, 'pending', ?, ?)`)
@@ -261,6 +262,7 @@ export async function refreshCalendarSource(id: string) {
   const row = sourceRow(id);
   if (!row) throw new Error("Calendar source not found");
   const now = Date.now();
+  ensureDailyBackup();
   const claimed = getDatabase().prepare(`UPDATE calendar_sources SET status='syncing', updated_at=?
     WHERE id=? AND (status!='syncing' OR updated_at < ?)`)
     .run(now, id, now - 15 * 60_000);
@@ -304,7 +306,17 @@ export async function processCalendarRefreshes(now = Date.now()) {
   return { due: rows.length, refreshed };
 }
 
+/** After a restore: the event cache was emptied, so every restored source is fetched again. A failure is logged without the feed address. */
+export async function refreshAllCalendarSources() {
+  const rows = getDatabase().prepare("SELECT id FROM calendar_sources").all() as Array<{ id: string }>;
+  for (const row of rows) {
+    try { await refreshCalendarSource(String(row.id)); }
+    catch (error) { console.error("Calendar refresh after a restore failed:", error instanceof Error ? error.message.slice(0, 200) : "error"); }
+  }
+}
+
 export function deleteCalendarSource(id: string) {
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

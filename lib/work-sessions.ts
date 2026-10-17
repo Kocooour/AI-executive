@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Entity } from "./db";
-import { getDatabase } from "./server-store";
+import { ensureDailyBackup, getDatabase } from "./server-store";
 import { learnPlanning } from "./day-plan-learning";
 import { getNotificationPreferences } from "./notifications";
 
@@ -213,6 +213,7 @@ export function transitionWorkSession(input: {
     throw new WorkSessionError("Invalid work session request", 400, "invalid_request");
   }
   const requestHash = hash(input);
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

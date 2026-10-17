@@ -4,19 +4,30 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations } from "./schema-migrations";
+import { randomUUID } from "node:crypto";
+import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations, schemaMigrations } from "./schema-migrations";
+import {
+  backupFormatVersion, describeFile, prepareRestoreCopy, publish as publishFile, removeIfExists,
+  replaceTablesFromAttached, writeCleanCopy, type BackupMeta,
+} from "./backup-engine";
+import { HttpInputError } from "./http-security";
+import { excludedClearedTables, replacedTables } from "./backup-scope";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
 
 export interface StoreSnapshot {
   revision: number;
+  // Counts restores and imports of this server's data (metadata, never in a backup). A client's save carries the value it
+  // knows; after a restore a save from before it is refused instead of merged back into the restored data.
+  restoreGeneration?: number;
   entities: Entity[];
   relations: Relation[];
   tombstones: Array<{ id: string; deletedAt: number }>;
@@ -25,9 +36,16 @@ export interface StoreSnapshot {
 
 export interface BackupSummary {
   name: string;
+  // "full": a database copy (format 2, everything in scope); "legacy": a JSON file of records and links only.
+  format: "full" | "legacy";
+  label: string;
   createdAt: number;
   entityCount: number;
   relationCount: number;
+  claimCount: number;
+  sourceCount: number;
+  noteRevisionCount: number;
+  workSessionCount: number;
   error?: string;
 }
 
@@ -61,6 +79,8 @@ export function getDatabase() {
   databaseInstance = database;
   try {
     initialiseDatabase(database);
+    removeLeftoverTemporaryFiles();
+    repairBackupsDirectory();
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
@@ -75,6 +95,20 @@ function initialiseDatabase(database: DatabaseSync) {
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = FULL;
     PRAGMA busy_timeout = 5000;
+  `);
+  for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
+    if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
+  }
+  applySchema(database);
+  migrateLegacyStore(database);
+  ensureDefaultWorkspace(database);
+}
+
+// Tables, additive column changes, the named migrations and the start-up repairs. It runs on the live database and
+// on the copy of a backup that is being restored (so an older backup is brought to the current schema through the
+// same migrations); nothing here may depend on the live database or on its files.
+export function applySchema(database: DatabaseSync) {
+  database.exec(`
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS entities (
       id TEXT PRIMARY KEY,
@@ -420,14 +454,9 @@ function initialiseDatabase(database: DatabaseSync) {
       "ALTER TABLE passkey_challenges ADD COLUMN binding TEXT NOT NULL DEFAULT ''",
     );
   }
-  for (const sqliteCompanion of [`${databasePath}-wal`, `${databasePath}-shm`]) {
-    if (existsSync(sqliteCompanion)) chmodSync(sqliteCompanion, 0o600);
-  }
   runSchemaMigrations(database);
   repairContextEventOrder(database);
   repairLegacySourceRecords(database);
-  migrateLegacyStore(database);
-  ensureDefaultWorkspace(database);
 }
 
 function migrateContextChangeEventScope(database: DatabaseSync) {
@@ -645,6 +674,15 @@ const readMetadata = (database: DatabaseSync, key: string, fallback = "0") =>
     )?.value ?? fallback,
   );
 
+function readRestoreGeneration(database: DatabaseSync) {
+  return Number(readMetadata(database, "restoreGeneration", "0")) || 0;
+}
+// Inside the transaction of every restore and import.
+function bumpRestoreGeneration(database: DatabaseSync) {
+  database.prepare(`INSERT INTO metadata (key, value) VALUES ('restoreGeneration', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(readRestoreGeneration(database) + 1));
+}
+
 export function readSnapshot(): StoreSnapshot {
   const database = getDatabase();
   const entities = database
@@ -664,6 +702,7 @@ export function readSnapshot(): StoreSnapshot {
     }));
   return {
     revision: Number(readMetadata(database, "revision")),
+    restoreGeneration: readRestoreGeneration(database),
     entities,
     relations,
     tombstones,
@@ -725,23 +764,39 @@ export function dropsTooMuch(current: StoreSnapshot, entities: Entity[], deleted
   return current.relations.length > 0 && dropsLarge(current.relations.length, droppedRelations);
 }
 
+/**
+ * One automatic daily backup before the first change of the day, whichever write it is: records (replaceSnapshot), Context
+ * commands, work sessions, attention states, calendar sources, PACT agents, context and runs, AI action history (the call
+ * sites are listed in docs/ARCHITECTURE.md). Only when there is data, and only when no usable daily backup exists (a database
+ * backup counts with its sidecar and size). It must be called before a write transaction, never inside one.
+ */
+export function ensureDailyBackup() {
+  const database = getDatabase();
+  if ((database as unknown as { isTransaction?: boolean }).isTransaction) {
+    console.error("ensureDailyBackup was called inside a transaction; the daily backup is skipped");
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  if (hasDailyBackup(today)) return;
+  const has = database.prepare("SELECT 1 FROM entities LIMIT 1").get();
+  if (has) createBackup("daily");
+}
+
 export function replaceSnapshot(
   baseRevision: number,
   entities: Entity[],
   relations: Relation[],
   deletedIds: string[] = [],
   revivedIds: string[] = [],
+  restoreGeneration?: number,
 ) {
   const currentBeforeWrite = readSnapshot();
-  const today = new Date().toISOString().slice(0, 10);
-  if (
-    currentBeforeWrite.entities.length &&
-    !listBackups().some(
-      (backup) => backup.name.startsWith(today) && backup.name.endsWith("-daily.json"),
-    )
-  ) {
-    createBackup("daily");
+  // A save made against data that has been restored since (here or on another device) is refused whole: merging it would
+  // put the replaced data back. The caller answers with the current snapshot and the client adopts it.
+  if ((currentBeforeWrite.restoreGeneration ?? 0) > 0 && restoreGeneration !== currentBeforeWrite.restoreGeneration) {
+    return { conflict: true as const, restored: true as const, snapshot: currentBeforeWrite };
   }
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {
@@ -782,6 +837,7 @@ export function replaceSnapshot(
     const liveEntityIds = new Set(liveEntities.map((entity) => entity.id));
     const next: StoreSnapshot = {
       revision: current.revision + 1,
+      restoreGeneration: current.restoreGeneration,
       entities: liveEntities,
       relations: relations.filter(
         (relation) =>
@@ -802,7 +858,7 @@ export function replaceSnapshot(
 }
 
 function safeBackupName(name: string) {
-  if (!/^\d{4}-\d{2}-\d{2}T[\d-]+Z(?:-[a-z-]+)?\.json$/.test(name)) {
+  if (!/^\d{4}-\d{2}-\d{2}T[\d-]+Z(?:-[a-z-]+)?\.(?:json|sqlite)$/.test(name)) {
     throw new Error("Invalid backup name");
   }
   return name;
@@ -948,130 +1004,387 @@ export function validateSnapshot(snapshot: unknown): asserts snapshot is StoreSn
   }
 }
 
-function summarizeBackup(name: string, snapshot: StoreSnapshot): BackupSummary {
+const backupExtensions = [".sqlite", ".json"] as const;
+const backupStem = (name: string) => name.replace(/\.(sqlite|json)$/, "");
+const sidecarName = (name: string) => `${backupStem(name)}.meta.json`;
+const isBackupFile = (entry: string) => /^\d{4}-\d{2}-\d{2}T[\d-]+Z(?:-[a-z-]+)?\.(sqlite|json)$/.test(entry);
+
+function backupLabel(name: string) {
+  const match = /^\d{4}-\d{2}-\d{2}T[\d-]+Z(?:-([a-z-]+))?$/.exec(backupStem(name));
+  return match?.[1] || "manual";
+}
+
+function legacySummary(name: string, snapshot: StoreSnapshot): BackupSummary {
   return {
     name,
+    format: "legacy",
+    label: backupLabel(name),
     createdAt: statSync(path.join(backupDirectory, name)).mtimeMs,
     entityCount: snapshot.entities.length,
-      relationCount: snapshot.relations.length,
+    relationCount: snapshot.relations.length,
+    claimCount: 0,
+    sourceCount: 0,
+    noteRevisionCount: 0,
+    workSessionCount: 0,
   };
 }
 
+function fullSummary(name: string, meta: BackupMeta): BackupSummary {
+  return {
+    name,
+    format: "full",
+    label: backupLabel(name),
+    createdAt: Date.parse(meta.createdAt) || statSync(path.join(backupDirectory, name)).mtimeMs,
+    entityCount: meta.counts.entities ?? 0,
+    relationCount: meta.counts.relations ?? 0,
+    claimCount: meta.counts.context_claims ?? 0,
+    sourceCount: meta.counts.context_sources ?? 0,
+    noteRevisionCount: meta.counts.note_revisions ?? 0,
+    workSessionCount: meta.counts.work_sessions ?? 0,
+  };
+}
+
+function readSidecar(name: string): BackupMeta {
+  let meta: BackupMeta;
+  try {
+    meta = JSON.parse(readFileSync(path.join(backupDirectory, sidecarName(name)), "utf8")) as BackupMeta;
+  } catch {
+    throw new HttpInputError("Invalid backup");
+  }
+  if (
+    !meta || meta.format !== "lumi-backup" || meta.version !== backupFormatVersion ||
+    typeof meta.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(meta.sha256) ||
+    !Number.isFinite(meta.bytes) || !Array.isArray(meta.migrations) || !meta.counts || typeof meta.counts !== "object"
+  ) {
+    throw new HttpInputError("Invalid backup");
+  }
+  return meta;
+}
+
+function backupRetentionClass(entry: string) {
+  const stem = backupStem(entry);
+  if (stem.endsWith("-daily")) return "daily";
+  if (stem.endsWith("-manual")) return "manual";
+  if (stem.endsWith("-before-restore") || stem.endsWith("-json-migration") || stem.endsWith("-pre-sqlite")) return "safety";
+  return "other";
+}
+
+/** Writes a full backup (format 2): a consistent, cleaned SQLite copy plus its sidecar. */
 export function createBackup(label = "manual") {
   mkdirSync(backupDirectory, { recursive: true, mode: 0o700 });
   chmodSync(backupDirectory, 0o700);
-  const snapshot = readSnapshot();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const database = getDatabase();
   const safeLabel = label.replace(/[^a-z-]/gi, "").toLowerCase() || "manual";
-  const name = `${stamp}-${safeLabel}.json`;
-  writeFileSync(path.join(backupDirectory, name), JSON.stringify(snapshot, null, 2), {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
+  // Two backups in the same millisecond must not collide: the later one is stamped a millisecond on.
+  let createdAt = new Date();
+  let stem = "";
+  for (;;) {
+    stem = `${createdAt.toISOString().replace(/[:.]/g, "-")}-${safeLabel}`;
+    if (!backupExtensions.some((extension) => existsSync(path.join(backupDirectory, `${stem}${extension}`)))) break;
+    createdAt = new Date(createdAt.getTime() + 1);
+  }
+  const name = `${stem}.sqlite`;
+  const final = path.join(backupDirectory, name);
+  const sidecar = path.join(backupDirectory, sidecarName(name));
+  const sidecarPartial = path.join(backupDirectory, `.${sidecarName(name)}.tmp`);
+  // The copy is made in the temporary folder, where start-up cleanup removes it if the process dies before it is
+  // cleaned (right after VACUUM INTO it still holds passkeys, push endpoints, security logs and secrets), and only the
+  // cleaned, vacuumed file is moved into the backups folder.
+  const staging = temporaryFile("backup", ".sqlite");
+  let meta: BackupMeta;
+  try {
+    const { counts, migrations } = writeCleanCopy(database, staging, crashAfterVacuumForTests ?? undefined);
+    const { bytes, sha256 } = describeFile(staging);
+    meta = { format: "lumi-backup", version: backupFormatVersion, createdAt: createdAt.toISOString(), label: safeLabel, migrations, counts, bytes, sha256 };
+    // The sidecar is in place before the database file, so a published .sqlite always has its sidecar.
+    writeFileSync(sidecarPartial, JSON.stringify(meta, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    renameSync(sidecarPartial, sidecar);
+    publishFile(staging, final);
+  } catch (error) {
+    removeIfExists(final);
+    removeIfExists(sidecar);
+    removeIfExists(sidecarPartial);
+    throw error;
+  } finally {
+    releaseTemporaryFile(staging);
+  }
   try {
     const backups = readdirSync(backupDirectory)
-      .filter((entry) => entry.endsWith(".json"))
+      .filter(isBackupFile)
       .map((entry) => {
         const backupPath = path.join(backupDirectory, entry);
         chmodSync(backupPath, 0o600);
         return { entry, modifiedAt: statSync(backupPath).mtimeMs };
       })
-      .sort((a, b) => b.modifiedAt - a.modifiedAt);
-    const retentionClass = (entry: string) => {
-      if (entry.endsWith("-daily.json")) return "daily";
-      if (entry.endsWith("-manual.json")) return "manual";
-      if (
-        entry.endsWith("-before-restore.json") ||
-        entry.endsWith("-json-migration.json") ||
-        entry.endsWith("-pre-sqlite.json")
-      ) {
-        return "safety";
-      }
-      return "other";
-    };
+      .sort((a, b) => b.modifiedAt - a.modifiedAt || (a.entry < b.entry ? 1 : -1));
     const limits: Record<string, number> = { daily: 30, manual: 20, safety: 20, other: 10 };
     const seen: Record<string, number> = { daily: 0, manual: 0, safety: 0, other: 0 };
     const expired = backups.filter(({ entry }) => {
-      const category = retentionClass(entry);
+      const category = backupRetentionClass(entry);
       seen[category] += 1;
       return seen[category] > limits[category];
     });
-    for (const backup of expired) unlinkSync(path.join(backupDirectory, backup.entry));
+    for (const backup of expired) {
+      unlinkSync(path.join(backupDirectory, backup.entry));
+      if (backup.entry.endsWith(".sqlite")) removeIfExists(path.join(backupDirectory, sidecarName(backup.entry)));
+    }
   } catch (error) {
     console.error("Backup retention cleanup failed", error);
   }
-  return summarizeBackup(name, snapshot);
+  return fullSummary(name, meta);
+}
+
+export function hasDailyBackup(day: string) {
+  if (!existsSync(backupDirectory)) return false;
+  return readdirSync(backupDirectory).some((entry) => {
+    if (!entry.startsWith(day) || !isBackupFile(entry) || !backupStem(entry).endsWith("-daily")) return false;
+    if (entry.endsWith(".json")) return true;
+    // A database backup counts only with its sidecar and a file of the size the sidecar states.
+    try {
+      return statSync(path.join(backupDirectory, entry)).size === readSidecar(entry).bytes;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * At start: staging files of older builds and sidecars without a database file go; a database file without a readable
+ * sidecar (a crash between the two renames of an older build) is renamed to `<name>.incomplete`, which is neither listed
+ * nor counted nor deleted, so nothing of the owner's is removed silently.
+ */
+export function repairBackupsDirectory() {
+  try {
+    if (!existsSync(backupDirectory)) return;
+    const entries = readdirSync(backupDirectory);
+    for (const entry of entries) {
+      const file = path.join(backupDirectory, entry);
+      if (entry.startsWith(".") && entry.endsWith(".tmp")) removeIfExists(file);
+      else if (entry.endsWith(".meta.json") && !entries.includes(entry.replace(/\.meta\.json$/, ".sqlite"))) removeIfExists(file);
+      else if (isBackupFile(entry) && entry.endsWith(".sqlite")) {
+        let usable = true;
+        try { readSidecar(entry); } catch { usable = false; }
+        if (!usable) {
+          renameSync(file, `${file}.incomplete`);
+          removeIfExists(path.join(backupDirectory, sidecarName(entry))); // a damaged sidecar describes nothing
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Repairing the backups folder failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 export function listBackups(): BackupSummary[] {
   if (!existsSync(backupDirectory)) return [];
   return readdirSync(backupDirectory)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => {
+    .filter(isBackupFile)
+    .map((name): BackupSummary => {
+      const modifiedAt = statSync(path.join(backupDirectory, name)).mtimeMs;
+      const failed = (error: unknown): BackupSummary => ({
+        name,
+        format: name.endsWith(".sqlite") ? "full" : "legacy",
+        label: backupLabel(name),
+        createdAt: modifiedAt,
+        entityCount: 0, relationCount: 0, claimCount: 0, sourceCount: 0, noteRevisionCount: 0, workSessionCount: 0,
+        // Only messages written for the owner are shown; a validation detail of a damaged file is not.
+        error: error instanceof HttpInputError ? error.message : "Invalid backup",
+      });
       try {
-        const snapshot = JSON.parse(
-          readFileSync(path.join(backupDirectory, name), "utf8"),
-        ) as StoreSnapshot;
+        if (name.endsWith(".sqlite")) {
+          const meta = readSidecar(name);
+          if (statSync(path.join(backupDirectory, name)).size !== meta.bytes) throw new HttpInputError("Invalid backup");
+          return fullSummary(name, meta);
+        }
+        const snapshot = JSON.parse(readFileSync(path.join(backupDirectory, name), "utf8")) as StoreSnapshot;
         validateSnapshot(snapshot);
-        return summarizeBackup(name, snapshot);
+        return legacySummary(name, snapshot);
       } catch (error) {
-        return {
-          name,
-          createdAt: statSync(path.join(backupDirectory, name)).mtimeMs,
-          entityCount: 0,
-          relationCount: 0,
-          error: error instanceof Error ? error.message : "Invalid backup",
-        };
+        return failed(error);
       }
     })
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function restoreBackup(name: string) {
-  const restored = JSON.parse(
-    readFileSync(path.join(backupDirectory, safeBackupName(name)), "utf8"),
-  ) as StoreSnapshot;
-  validateSnapshot(restored);
+function restoreLegacyBackup(name: string) {
+  let restored: StoreSnapshot;
+  try {
+    restored = JSON.parse(readFileSync(path.join(backupDirectory, name), "utf8")) as StoreSnapshot;
+    validateSnapshot(restored);
+  } catch {
+    throw new HttpInputError("Invalid backup");
+  }
   createBackup("before-restore");
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {
     const current = readSnapshot();
-    const restoredIds = new Set(restored.entities.map((entity) => entity.id));
-    const tombstones = new Map(
-      (current.tombstones || []).map((item) => [item.id, item]),
-    );
-    for (const id of restoredIds) tombstones.delete(id);
-    for (const entity of current.entities) {
-      if (!restoredIds.has(entity.id)) {
-        tombstones.set(entity.id, { id: entity.id, deletedAt: Date.now() });
-      }
-    }
-    const next: StoreSnapshot = {
-      revision: current.revision + 1,
-      entities: restored.entities.some(
-        (entity) => entity.id === "workspace:personal",
-      )
-        ? restored.entities
-        : [defaultWorkspaceEntity(), ...restored.entities],
-      relations: restored.relations,
-      tombstones: [...tombstones.values()],
-      updatedAt: Date.now(),
-    };
+    const next = nextSnapshotAfterRestore(current, restored);
     replaceUnchecked(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
+    bumpRestoreGeneration(database);
     database.exec("COMMIT");
-    return next;
+    return { ...next, restoreGeneration: readRestoreGeneration(database) };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
   }
 }
 
+// The store part of every restore: what the backup holds replaces entities and relations; every current record
+// the backup does not have gets a tombstone and the revision moves on, so clients pull instead of writing
+// their copies back.
+function nextSnapshotAfterRestore(current: StoreSnapshot, restored: StoreSnapshot): StoreSnapshot {
+  const restoredIds = new Set(restored.entities.map((entity) => entity.id));
+  const tombstones = new Map((current.tombstones || []).map((item) => [item.id, item]));
+  for (const id of restoredIds) tombstones.delete(id);
+  for (const entity of current.entities) {
+    if (!restoredIds.has(entity.id)) tombstones.set(entity.id, { id: entity.id, deletedAt: Date.now() });
+  }
+  return {
+    revision: current.revision + 1,
+    entities: restored.entities.some((entity) => entity.id === "workspace:personal")
+      ? restored.entities
+      : [defaultWorkspaceEntity(), ...restored.entities],
+    relations: restored.relations,
+    tombstones: [...tombstones.values()],
+    updatedAt: Date.now(),
+  };
+}
+
+let crashAfterVacuumForTests: (() => void) | null = null;
+/** Tests only: runs between VACUUM INTO and the cleaning of the staging copy of a backup. */
+export function stopBackupAfterVacuumForTests(hook: (() => void) | null) {
+  if (hook !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Not available outside tests");
+  crashAfterVacuumForTests = hook;
+}
+let restoreFaultForTests: string | null = null;
+/** Tests only: makes a restore fail after the named table was replaced, to show that nothing stays changed. */
+export function failRestoreAfterTableForTests(table: string | null) {
+  // Only the test runner sets this; nothing in the app or its routes calls it.
+  if (table !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Not available outside tests");
+  restoreFaultForTests = table;
+}
+
+const temporaryDirectory = path.join(dataDirectory, "tmp");
+// Files this feature creates there, by prefix. Anything of these in the folder that is not in use by a request of this
+// process is left over from one that was killed, and goes at start and before the next file is made, whatever its age.
+const temporaryPrefixes = ["restore-", "export-", "import-", "backup-"];
+// Paths handed out and not yet released by their owner. Cleanup never touches one, whether or not the file exists yet.
+const temporaryInUse = new Set<string>();
+export function removeLeftoverTemporaryFiles() {
+  try {
+    if (!existsSync(temporaryDirectory)) return;
+    for (const entry of readdirSync(temporaryDirectory)) {
+      const file = path.join(temporaryDirectory, entry);
+      if (!temporaryPrefixes.some((prefix) => entry.startsWith(prefix)) || temporaryInUse.has(file)) continue;
+      removeIfExists(file);
+    }
+  } catch (error) {
+    console.error("Cleaning temporary files failed:", error instanceof Error ? error.message : error);
+  }
+}
+export function temporaryFile(prefix: string, extension: string) {
+  if (!temporaryPrefixes.some((known) => prefix.startsWith(known.slice(0, -1)))) throw new Error("Unknown temporary file kind");
+  mkdirSync(temporaryDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(temporaryDirectory, 0o700);
+  removeLeftoverTemporaryFiles();
+  const file = path.join(temporaryDirectory, `${prefix}-${randomUUID()}${extension}`);
+  temporaryInUse.add(file);
+  return file;
+}
+/** The owner of a temporary file is done with it: the file is deleted and the path is no longer reserved. */
+export function releaseTemporaryFile(file: string) {
+  try { removeIfExists(file); } finally { temporaryInUse.delete(file); }
+}
+
+/**
+ * Restores the owner data from a database file (a full backup or an imported package's database.sqlite): the file
+ * is copied and brought to the current schema through the real migrations, a safety backup of the current state is
+ * made, then everything is replaced in one transaction. A refused or failed restore leaves the live data as it was.
+ */
+export function restoreDatabaseFile(file: string) {
+  const copy = temporaryFile("restore", ".sqlite");
+  try {
+    prepareRestoreCopy(file, copy, schemaMigrations.map((migration) => migration.id), applySchema);
+    let restored: StoreSnapshot;
+    const source = new DatabaseSync(copy, { readOnly: true });
+    try {
+      restored = {
+        revision: 0,
+        entities: (source.prepare("SELECT payload FROM entities ORDER BY updated_at, id").all() as Array<{ payload: string }>)
+          .map((row) => JSON.parse(String(row.payload))),
+        relations: (source.prepare("SELECT payload FROM relations ORDER BY created_at, id").all() as Array<{ payload: string }>)
+          .map((row) => JSON.parse(String(row.payload))),
+        tombstones: [],
+        updatedAt: 0,
+      };
+      validateSnapshot(restored);
+    } catch {
+      throw new HttpInputError("Invalid backup");
+    } finally {
+      source.close();
+    }
+    createBackup("before-restore");
+    const database = getDatabase();
+    database.prepare("ATTACH DATABASE ? AS restore_source").run(copy);
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const current = readSnapshot();
+        const next = nextSnapshotAfterRestore(current, restored);
+        replaceUnchecked(database, next);
+        replaceTablesFromAttached(database, "restore_source", replacedTables, excludedClearedTables, (table) => {
+          if (restoreFaultForTests === table) throw new Error("Restore failed (test)");
+        });
+        bumpRestoreGeneration(database);
+        database.exec("COMMIT");
+        return { ...next, restoreGeneration: readRestoreGeneration(database) };
+      } catch (error) {
+        try { database.exec("ROLLBACK"); } catch { /* the original error matters */ }
+        throw error;
+      }
+    } finally {
+      try { database.exec("DETACH DATABASE restore_source"); } catch (error) { console.error("Detaching the restore copy failed", error); }
+      runReadyHooks();
+    }
+  } finally {
+    releaseTemporaryFile(copy);
+  }
+}
+
+function restoreFullBackup(name: string) {
+  const file = path.join(backupDirectory, name);
+  const meta = readSidecar(name);
+  if (!existsSync(file)) throw new HttpInputError("Invalid backup");
+  const actual = describeFile(file);
+  if (actual.bytes !== meta.bytes || actual.sha256 !== meta.sha256) throw new HttpInputError("Backup does not match its checksum");
+  return restoreDatabaseFile(file);
+}
+
+export function restoreBackup(name: string) {
+  const safe = safeBackupName(name);
+  if (safe.endsWith(".json")) return restoreLegacyBackup(safe);
+  return restoreFullBackup(safe);
+}
+
+/** A cleaned copy of the live database for an export; the caller deletes it with `dispose`. */
+export function createExportCopy() {
+  const file = temporaryFile("export", ".sqlite");
+  try {
+    const { counts, migrations } = writeCleanCopy(getDatabase(), file);
+    return { path: file, counts, migrations, dispose: () => releaseTemporaryFile(file) };
+  } catch (error) {
+    releaseTemporaryFile(file);
+    throw error;
+  }
+}
+
 function migrateLegacyStore(database: DatabaseSync) {
+  // Without a legacy file there is nothing to look at (and the whole store is not read into memory at every start).
+  if (!existsSync(legacyStorePath)) return;
   const current = readSnapshot();
-  if (current.revision !== 0 || current.entities.length || !existsSync(legacyStorePath)) return;
+  if (current.revision !== 0 || current.entities.length) return;
   try {
     const legacy = JSON.parse(readFileSync(legacyStorePath, "utf8")) as StoreSnapshot;
     if (!Array.isArray(legacy.entities) || !Array.isArray(legacy.relations)) return;

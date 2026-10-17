@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
 import {
   archiveOwnerContext,
@@ -32,11 +33,17 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
   try {
     requireSameOrigin(request);
     const limited = enforceRateLimit(request, "context-write", 60, 60 * 60_000);
     if (limited) return NextResponse.json({ error: limited.error }, { status: limited.status });
     const body = await readJsonBody<Record<string, unknown>>(request, 32 * 1024);
+    // Checked again now that the body has been read: a restore may have completed meanwhile, and nothing awaits between this
+    // check and the synchronous write below, so a request made against replaced data cannot be applied to the restored data.
+    const fencedAgain = fenceRestoredClient(request);
+    if (fencedAgain) return fencedAgain;
     const action = String(body.action || "");
     const workspaceId = String(body.workspaceId || "");
     if (action === "create") {

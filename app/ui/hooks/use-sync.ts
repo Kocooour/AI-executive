@@ -1,13 +1,16 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
+import { adoptionTransaction, db, readLocalWithBase, readSyncBase, replaceSyncBase, type Entity, type Relation } from "../../../lib/db";
 import { mergeSnapshots, type ServerSnapshot } from "../../../lib/server-sync";
-import { captureMarkers as captureMarkersIn, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
+import { captureMarkers as captureMarkersIn, clearAllMarkers, clearSentMarkers as clearSentMarkersIn, markPending as markPendingIn, pendingDeletedIds as pendingDeletedIdsIn, pendingRevivedIds as pendingRevivedIdsIn, type SentMarkers } from "../../../lib/pending-markers";
 import { forServer, unsentIds, type HeldBackReason } from "../../../lib/sendable";
 import { mergeEntity, mergeRelations, sameValue, withConflicts } from "../../../lib/field-merge";
 import { writeTime } from "../../../lib/clock";
 import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncLock, type TabMessage } from "../../../lib/tab-coordination";
 import { markSignedIn } from "../../../lib/local-data";
+import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
+import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { installRestoreFence } from "../../../lib/restore-fence-client";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -29,6 +32,33 @@ export function useSync() {
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting");
   const serverRevision = useRef(0);
+  // The restore generation of the server data this device last held (lib/server-store.ts), kept across reloads. Sent with
+  // every save; a save from before a restore is refused by the server, and then this device replaces its copy.
+  const generationKey = "ai-executive-restore-generation";
+  const restoreGeneration = useRef<number | undefined>(undefined);
+  if (restoreGeneration.current === undefined && typeof localStorage !== "undefined") {
+    const stored = Number(localStorage.getItem(generationKey));
+    if (localStorage.getItem(generationKey) !== null && Number.isSafeInteger(stored)) restoreGeneration.current = stored;
+  }
+  function rememberGeneration(value: number | undefined) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) return;
+    restoreGeneration.current = value;
+    try { localStorage.setItem(generationKey, String(value)); } catch { /* storage unavailable: kept in memory */ }
+  }
+  // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
+  const [restoredNotice, setRestoredNotice] = useState(false);
+  // Whether the server's data was restored since this browser last held it, so that what it holds (or waits to send) was made
+  // against data that no longer exists. A browser that never stored a generation but has synchronized before (last used
+  // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
+  // to tell whether it predates a restore, so it adopts. One that never synchronized holds nothing to protect.
+  function restoredSinceKnown(serverGeneration: number | undefined) {
+    if (typeof serverGeneration !== "number") return false;
+    const known = restoreGeneration.current;
+    if (known !== undefined) return serverGeneration !== known;
+    return serverGeneration > 0 && localStorage.getItem("ai-executive-server-synced") === "1";
+  }
+  // The generation this page started with: another tab's adoption matters only if it is newer.
+  const loadedGeneration = useRef<number | undefined>(restoreGeneration.current);
   const syncQueue = useRef<Promise<void>>(Promise.resolve());
   const localDataVersion = useRef(0);
   const signedOut = useRef(false);
@@ -169,6 +199,7 @@ export function useSync() {
       }
     });
     serverRevision.current = snapshot.revision;
+    rememberGeneration(snapshot.restoreGeneration);
     await load();
     postToTabs({ type: "changed", from: tabId.current });
     // At most two such saves in a row: if the server keeps answering with something else than was
@@ -177,12 +208,101 @@ export function useSync() {
     if (requeue && requeueStreak.current <= 2 && !signedOut.current) void syncToServer();
     return true;
   }
+  // After a restore or an import the server holds the only truth: the local copy, the common version used for merging,
+  // the records held back on this device and everything waiting to be sent (changes, deletions, revivals) belong to the
+  // data that was replaced and must not survive or be sent. Unlike applySnapshot nothing is kept or merged. The records
+  // and the bookkeeping are shared by all tabs of the browser, so one replacement serves them all; the others only show it.
+  // THE one way restored server data is adopted, for an explicit restore or import, the message of another tab, a save
+  // refused with code "restored" (start-up saves included) and a pull that sees a new generation. It ends in a page reload,
+  // so no state of the replaced data (titles, drafts, Context, history, work sessions, note versions) can survive in memory:
+  // from its first step the save paths do nothing (lib/adoption.ts); the local copy, held-back records, markers, merge base,
+  // pending flags and every persisted note draft (all pages) are dropped, the snapshot and its generation adopted, the
+  // other tabs told to reload, and this one reloads and starts from the restored state. `notice`: the restore happened
+  // elsewhere, say so after the reload. The caller holds the sync lock (or is in the queue); replaceLocalWithServer takes them.
+  async function adoptServerCopy(source: ServerSnapshot, notice = false) {
+    if (isAdopting()) return true;
+    beginAdoption();
+    try {
+      // Anything computed from the old copy (a save in progress, a pull) is discarded.
+      localDataVersion.current += 2;
+      try {
+        await adoptionTransaction(async () => {
+          await db.entities.clear();
+          await db.relations.clear();
+          await db.baseEntities.clear();
+          await db.baseRelations.clear();
+          if (source.entities.length) { await db.entities.bulkAdd(source.entities); await db.baseEntities.bulkAdd(source.entities); }
+          if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
+        });
+      } catch (error) {
+        // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
+        // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
+        console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
+        try {
+          await adoptionTransaction(async () => {
+            await db.entities.clear(); await db.relations.clear(); await db.baseEntities.clear(); await db.baseRelations.clear();
+          });
+        } catch {
+          try { await db.delete(); } catch { /* nothing more can be done; the reload still happens */ }
+        }
+      }
+      const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
+      attempt(() => clearAllMarkers(localStorage));
+      attempt(() => clearNotesDrafts(localStorage));
+      attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
+      serverRevision.current = source.revision;
+      rememberGeneration(source.restoreGeneration);
+    } finally {
+      // Whatever happened above, the page reloads and starts from the server's data; the tab never stays write-blocked.
+      setAfterRestoreFlag(notice ? "remote" : "sibling");
+      postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+      window.location.reload();
+    }
+    return true;
+  }
+  async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
+    if (signedOut.current) return false;
+    const operation = syncQueue.current.then(() => withSyncLock(async () => {
+      let source = snapshot;
+      if (!source) {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (!response.ok) throw new Error("Server synchronization failed");
+        source = (await response.json()) as ServerSnapshot;
+      }
+      return adoptServerCopy(source, notice);
+    }));
+    syncQueue.current = operation.then(() => undefined, () => { setSyncStatus("offline"); });
+    return operation;
+  }
+  // Another tab of this browser adopted restored data (its message, or the generation it stored): this one reloads too, without
+  // announcing it again, and only when that generation is newer than the one this page started with.
+  function reloadForRestore(generation: number | undefined, fromStorage = false) {
+    if (isAdopting() || signedOut.current) return;
+    // A page that never knew a generation learns the first one from storage without reloading; a message is a restore.
+    if (fromStorage && loadedGeneration.current === undefined) return;
+    if (typeof generation === "number" && loadedGeneration.current !== undefined && generation <= loadedGeneration.current) return;
+    beginAdoption();
+    setAfterRestoreFlag("sibling");
+    window.location.reload();
+  }
+  // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
+  useEffect(() => {
+    installRestoreFence({ generation: () => restoreGeneration.current, onRestored: () => { void replaceLocalWithServer(undefined, true).catch(() => undefined); } });
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
   // Another tab changed the shared local copy: show it here too.
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel(tabChannelName);
     channel.onmessage = (event: MessageEvent<TabMessage>) => {
       if (event.data?.type === "changed" && event.data.from !== tabId.current && !signedOut.current) void load().catch(() => undefined);
+      if (event.data?.type === "restore-adopted" && event.data.from !== tabId.current) reloadForRestore(event.data.generation);
     };
     return () => channel.close();
   }, []);
@@ -192,6 +312,7 @@ export function useSync() {
     baseRevision: number,
     deletedIds: string[] = [],
     revivedIds: string[] = [],
+    generation: number | undefined = restoreGeneration.current,
   ) {
     return fetch("/api/store", {
       signal: requestTimeout(),
@@ -203,6 +324,7 @@ export function useSync() {
         relations: snapshotRelations,
         deletedIds,
         revivedIds,
+        restoreGeneration: generation,
       }),
     });
   }
@@ -215,6 +337,8 @@ export function useSync() {
     void syncToServer();
   }
   async function syncToServer() {
+    // Restored data is being adopted: nothing of the replaced data is sent.
+    if (isAdopting()) return;
     // Marked at once, before waiting for an earlier save or another tab's synchronization, so
     // that no tab takes the server copy over this change in the meantime.
     markPending();
@@ -226,6 +350,8 @@ export function useSync() {
     queuedSaves.current += 1;
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       queuedSaves.current -= 1;
+      // Restored data was adopted while this save waited: nothing is marked or sent.
+      if (isAdopting()) return;
       setSyncStatus("syncing");
       localStorage.setItem(pendingKey, "1");
       const localVersion = localDataVersion.current;
@@ -249,6 +375,16 @@ export function useSync() {
       for (let attempt = 0; attempt < 3 && response.status === 409; attempt += 1) {
         mergedWithServer = true;
         const current = (await response.json()) as ServerSnapshot;
+        if (current.code === "restored") {
+          // The data was restored from a backup since this device last synchronized: what is unsent here was made against
+          // data that no longer exists, and merging it would put that data back. Only a browser that never synchronized
+          // (nothing from before to protect) learns the number and goes on.
+          if (restoredSinceKnown(current.restoreGeneration)) {
+            await adoptServerCopy(current, true);
+            return;
+          }
+          rememberGeneration(current.restoreGeneration);
+        }
         const deletedIds = new Set(sentMarkers.deleted);
         const revivedIds = new Set(sentMarkers.revived);
         const filteredCurrent = {
@@ -334,6 +470,11 @@ export function useSync() {
         // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
         if (snapshot.revision <= serverRevision.current) return "synced" as const;
+        // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
+        if (restoredSinceKnown(snapshot.restoreGeneration)) {
+          await adoptServerCopy(snapshot, heldBack.length > 0);
+          return "synced" as const;
+        }
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
@@ -380,6 +521,14 @@ export function useSync() {
     clearSentMarkers,
     load,
     applySnapshot,
+    replaceLocalWithServer,
+    restoreGeneration,
+    restoredSinceKnown,
+    rememberGeneration,
+    adoptServerCopy,
+    restoredNotice,
+    showRestoredNotice: () => setRestoredNotice(true),
+    dismissRestoredNotice: () => setRestoredNotice(false),
     putSnapshot,
     syncToServer,
     pullFromServer,

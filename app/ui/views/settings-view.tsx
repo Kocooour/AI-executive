@@ -4,6 +4,7 @@ import { type DurableContextItem, type Language, type ThemeMode } from "../types
 import { views } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
+import { pluralText } from "../../../lib/plural";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -58,6 +59,10 @@ export function SettingsView({ app }: { app: LumiApp }) {
     removePasskey,
     restoreAppBadge,
     restoreServerBackup,
+    backupBusy,
+    backupFailed,
+    downloadExport,
+    importExport,
     saveLanguage,
     saveNotificationSettings,
     saveTheme,
@@ -98,6 +103,11 @@ export function SettingsView({ app }: { app: LumiApp }) {
   // Started offline the access check has not answered yet; the section stays, so that signing out
   // is offered (and refused with an explanation while there is no connection).
   const accessShown = authEnabled || app.offlineView;
+  const count = (value: number, key: string) => pluralText(language, value, tr(key));
+  const backupKind = (label: string) => {
+    const key = `backupKind_${label.replaceAll("-", "_")}`;
+    return tr(["daily", "manual", "before_restore", "json_migration", "pre_sqlite"].includes(label.replaceAll("-", "_")) ? key : "backupKind_other");
+  };
   const settingsSection = requestedSection === "access" && !accessShown ? "general" : requestedSection;
   // On narrow screens the row scrolls sideways: keep the current section's button in sight when
   // Settings opens on a section chosen elsewhere. Only the row moves, never the page.
@@ -523,11 +533,27 @@ export function SettingsView({ app }: { app: LumiApp }) {
                     <h2>{tr("backups")}</h2>
                     <p>{tr("backupInfo")}</p>
                   </div>
-                  <button className="primaryAction" onClick={createServerBackup}>
+                  <button className="primaryAction backupCreate" onClick={createServerBackup} disabled={backupBusy}>
                     {tr("createBackup")}
                   </button>
                 </div>
-                {backupStatus && <p role="status">{backupStatus}</p>}
+                <div className="backupTools">
+                  <button type="button" className="secondaryAction" onClick={downloadExport} disabled={backupBusy}>
+                    {tr("backupExport")}
+                  </button>
+                  <button type="button" className="secondaryAction" disabled={backupBusy}
+                    onClick={() => document.getElementById("backupImportInput")?.click()}>
+                    {tr("backupImport")}
+                  </button>
+                  <input id="backupImportInput" type="file" accept=".zip,application/zip" hidden aria-label={tr("backupImportFile")}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (file) void importExport(file);
+                    }} />
+                </div>
+                <p className="backupExportInfo">{tr("backupExportInfo")}</p>
+                {backupStatus && <p role={backupFailed ? "alert" : "status"} className={backupFailed ? "formError" : undefined} aria-busy={backupBusy}>{backupStatus}</p>}
                 <div className="backupList">
                   {backups.length === 0 && <p>{tr("noBackups")}</p>}
                   {backups.slice(0, 8).map((backup) => (
@@ -537,11 +563,13 @@ export function SettingsView({ app }: { app: LumiApp }) {
                         <small>
                           {backup.error
                             ? `${tr("invalidBackup")} · ${localizeServerError(backup.error, tr)}`
-                            : `${backup.entityCount} ${tr("items")} · ${backup.relationCount} ${tr("relations").toLowerCase()}`}
+                            : backup.format === "legacy"
+                              ? `${tr("backupTypeLegacy")} · ${backupKind(backup.label)} · ${count(backup.entityCount, "pluItems")} · ${count(backup.relationCount, "pluRelations")}`
+                              : `${tr("backupTypeFull")} · ${backupKind(backup.label)} · ${count(backup.entityCount, "pluRecords")} · ${count(backup.claimCount, "pluClaims")} · ${count(backup.sourceCount, "pluSources")} · ${count(backup.noteRevisionCount, "pluNoteVersions")} · ${count(backup.workSessionCount, "pluWorkBlocks")}`}
                         </small>
                       </span>
                       <button
-                        disabled={Boolean(backup.error)}
+                        disabled={Boolean(backup.error) || backupBusy}
                         onClick={() => restoreServerBackup(backup)}
                       >
                         {tr("restore")}

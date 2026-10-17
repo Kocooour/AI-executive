@@ -50,7 +50,7 @@ test("an early change on a device with an older copy keeps what another device s
       const now = Date.now();
       const entity = { id: `foreign-${now}`, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now };
       const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ baseRevision: snapshot.revision, entities: [...snapshot.entities, entity], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+        body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, entity], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
       return saved.status;
     }, foreign);
     expect(status).toBe(200);
@@ -88,7 +88,7 @@ test("a change made while a merged save is in flight keeps what another device s
     const now = Date.now();
     const entity = { id: `foreign-merge-${now}`, type: "task", title, status: "open", workspaceId: "personal", properties: { inbox: true }, createdAt: now, updatedAt: now };
     const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision: snapshot.revision, entities: [...snapshot.entities, entity], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, entity], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     return saved.status;
   }, foreign)).toBe(200);
 

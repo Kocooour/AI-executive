@@ -1,7 +1,7 @@
 import { evaluateAttention, ongoingConditions, type AttentionClaimActivity } from "./attention";
 import { reconcileAttention } from "./attention-lifecycle";
 import { listOwnerClaims } from "./context-claims";
-import { getDatabase, type StoreSnapshot } from "./server-store";
+import { ensureDailyBackup, getDatabase, type StoreSnapshot } from "./server-store";
 
 // Shared by the attention API and the attention notification scheduler so both evaluate the same way.
 
@@ -23,6 +23,7 @@ export function reconcileWorkspace(snapshot: StoreSnapshot, workspaceId: string,
 }
 
 export function withAttentionTransaction<T>(work: () => T): T {
+  ensureDailyBackup();
   const database = getDatabase();
   database.exec("BEGIN IMMEDIATE");
   try {

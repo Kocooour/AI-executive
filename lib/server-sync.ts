@@ -3,6 +3,9 @@ import { limitConflicts, mergeEntity, mergeRelations, withConflicts } from "./fi
 
 export interface ServerSnapshot {
   revision: number;
+  // See StoreSnapshot.restoreGeneration (lib/server-store.ts); `code: "restored"` marks the refusal of a save made before a restore.
+  restoreGeneration?: number;
+  code?: string;
   entities: Entity[];
   relations: Relation[];
   tombstones?: Array<{ id: string; deletedAt: number }>;

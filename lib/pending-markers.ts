@@ -10,6 +10,8 @@
 // while the first save was on its way). The "waiting" mark comes with a token that every request
 // for a save replaces; a save removes the mark only if the token is still the one it saw.
 
+import { isAdopting } from "./adoption";
+
 export const pendingKey = "ai-executive-pending-sync";
 export const deletedKey = "ai-executive-pending-deletions";
 export const revivedKey = "ai-executive-pending-revivals";
@@ -103,6 +105,8 @@ function drop(storage: Store, listKey: string, id: string) {
 
 // A record deleted here: a restoration of it not sent yet is replaced by the deletion.
 export function recordDeleted(storage: Store, id: string) {
+  // Restored data is being adopted (lib/adoption.ts): nothing of the replaced data is recorded.
+  if (isAdopting()) return;
   migrateLegacy(storage);
   const seen = sameRecord(storage, id);
   drop(storage, revivedKey, id);
@@ -115,6 +119,8 @@ const sameRecord = (storage: Store, id: string) => [...entries(storage, deletedK
 
 // A deleted record restored here: a deletion of it not sent yet is replaced by the restoration.
 export function recordRevived(storage: Store, id: string) {
+  // Restored data is being adopted (lib/adoption.ts): nothing of the replaced data is recorded.
+  if (isAdopting()) return;
   migrateLegacy(storage);
   const seen = sameRecord(storage, id);
   drop(storage, deletedKey, id);
@@ -124,6 +130,8 @@ export function recordRevived(storage: Store, id: string) {
 // A change waits to be sent. Every call sets a new token, so a save can tell whether one came
 // after it.
 export function markPending(storage: Store) {
+  // Restored data is being adopted (lib/adoption.ts): nothing of the replaced data is recorded.
+  if (isAdopting()) return;
   storage.setItem(pendingKey, "1");
   storage.setItem(pendingSeqKey, newOp());
 }

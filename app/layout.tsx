@@ -67,6 +67,8 @@ const clientErrorBootstrap = `
     }));
     addEventListener("unhandledrejection", (event) => {
       const reason = event.reason;
+      // A save that came too late while restored data is adopted (lib/adoption.ts); the page is reloading.
+      if (reason && reason.name === "AdoptionWriteRefused") { event.preventDefault(); return; }
       report({
         kind: "unhandledrejection",
         message: reason && reason.message ? String(reason.message) : String(reason || "Unhandled rejection"),

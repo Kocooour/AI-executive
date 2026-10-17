@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../lib/restore-fence";
 import { isAuthenticated } from "../../../lib/auth";
-import { enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
+import { enforceRateLimit, HttpInputError, readJsonBody, requireSameOrigin } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { readSnapshot } from "../../../lib/server-store";
 import { listPACTAgents, listPACTRuns } from "../../../lib/pact";
@@ -30,6 +31,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!isAuthenticated(request)) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
   try {
     requireSameOrigin(request);
     const limited = enforceRateLimit(request, "executive-run", 12, 60 * 60_000);
@@ -39,6 +42,10 @@ export async function POST(request: Request) {
       workspaceId?: string;
       language?: "cs" | "en";
     }>(request, 4096);
+    // Checked again now that the body has been read: a restore may have completed meanwhile, and nothing awaits between this
+    // check and the synchronous write below, so a request made against replaced data cannot be applied to the restored data.
+    const fencedAgain = fenceRestoredClient(request);
+    if (fencedAgain) return fencedAgain;
     if (typeof body.workspaceId !== "string" ||
         !/^[A-Za-z0-9:_-]{1,120}$/.test(body.workspaceId) || body.workspaceId === "all") {
       return NextResponse.json({ error: "Invalid agent request" }, { status: 400 });
@@ -51,6 +58,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     recordSecurityEvent(request, "executive.agent-run", "failed");
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent run failed" }, { status: 400 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent run failed" }, { status: error instanceof HttpInputError ? error.status : 400 });
   }
 }

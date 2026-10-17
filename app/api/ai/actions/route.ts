@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fenceRestoredClient } from "../../../../lib/restore-fence";
 import {
   aiAuditDetails,
   cancelAIProposal,
@@ -22,6 +23,9 @@ export async function POST(request: Request) {
     recordSecurityEvent(request, "ai.action", "rejected", { reason: "unauthenticated" });
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  const fenced = fenceRestoredClient(request);
+  if (fenced) return fenced;
+
   let identifier = "";
   try {
     requireSameOrigin(request);
@@ -38,6 +42,10 @@ export async function POST(request: Request) {
       proposalId?: unknown;
       actionId?: unknown;
     }>(request, 16 * 1024);
+    // Checked again now that the body has been read: a restore may have completed meanwhile, and nothing awaits between this
+    // check and the synchronous write below, so a request made against replaced data cannot be applied to the restored data.
+    const fencedAgain = fenceRestoredClient(request);
+    if (fencedAgain) return fencedAgain;
     const action = String(body.action || "");
     identifier = String(action === "undo" ? body.actionId || "" : body.proposalId || "");
     if (!/^[0-9a-f-]{36}$/i.test(identifier)) throw new HttpInputError("Action identifier is invalid");
