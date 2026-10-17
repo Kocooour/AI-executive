@@ -530,3 +530,44 @@ sudo ./ops/server-security/install.sh
 The installer creates two one-minute timers. Check them with
 `systemctl status server-security-monitor.timer server-security-alerts.timer`
 and inspect failures with `journalctl -u server-security-monitor.service -u server-security-alerts.service`.
+
+
+---
+
+## Sémantická znalostní paměť — varianta C (cílová architektura)
+
+Tato kapitola je návrh cílové architektury, nikoli popis nasazené funkce. Rozšiřuje Personal Context Graph v2, nemění jeho kanonickou autoritu a nenahrazuje SQLite, Dexie, PACT ani stávající approval/audit hranice. Nezavádí PostgreSQL, pgvector, druhou databázi ani samostatné či paralelní nasazení HumanAgentWiki.
+
+### Kanonická data a odvozený index
+
+SQLite na kanonickém hostu nadále vlastní notes, canonical entities, claims, evidence, sources, relations, revize, archivaci a authorization metadata. Sémantický index je oddělený, verzovaný a obnovitelný derivát. Jeho položka minimálně odkazuje na kanonický object/section ID a revision, workspace, sensitivity/access policy fingerprint, typ obsahu, language/model/index version, timestamp a stav indexace; textový fragment a vektor jsou pouze kopie s vlastním retenčním režimem.
+
+Index nesmí přidat zdroj pravdy, samostatnou historii ani právo zápisu. Záznam se indexuje až po kanonické validaci a je odstraněn či znepřístupněn při archivaci, smazání, změně workspace, citlivosti, oprávnění nebo revize. Atomická outbox/fronta po transakci a idempotentní worker zajistí eventualní synchronizaci; dokud položka neodpovídá revizi, je označena pending nebo stale a nesmí být vydávána za úplnou. Periodická úplná kontrola porovná počty a revize s kanonickým stavem a umí index bezpečně vyprázdnit a znovu sestavit.
+
+### Embedding a lokální provoz
+
+Primární profil je lokální inference bez odeslání obsahu poskytovateli. BGE-M3 je kandidát, ne závazně zvolený model: před nasazením se vyhodnotí na reprezentativním, autorizovaném českém a česko-anglickém holdoutu proti lexikálnímu fallbacku. Hodnotí se recall@k a nDCG s lidským posouzením relevance, čas prvního výsledku a reindexace, RAM/disk, velikost distribuovaného artefaktu, CPU/akcelerace, determinismus verzí, licence, offline start a riziko citlivých dat. Výsledky, datasety a rozhodnutí se auditují bez ukládání chráněného obsahu do telemetrie.
+
+Žádný model není nutnou podmínkou čtení dat: při absenci modelu, chybě, odpojeném/offline profilu či probíhající reindexaci zůstává autorizované přesné/metadata hledání dostupné a odpověď uvede rozsah omezení. Model, index a cache používají oddělené úložiště mimo static serving a respektují retenční/erasure pravidla; stažené modelové artefakty mají kontrolovaný původ a integritu.
+
+### Typovaný resolver a rozhraní
+
+Pouze serverový PACT Context Resolver smí spojovat lexikální a sémantické kandidáty. Před retrieval i před serializací ověří explicitní workspace, actor/session, subject/project scope, tool/agent allowlist, sensitivity, review status, freshness, source access a limit objemu. Filtr autorizace běží před skórováním i po něm; UI, klientský index a jazykový model nejsou autorita.
+
+Zaregistrované read-only operace mají verzovaná schémata: context.search (typované kandidáty z exact/full-text/semantic retrieval s kanonickým ID, režimem shody, provenance, freshness a citovatelným locator), context.get (jeden autorizovaný objekt/claim/section v požadované verzi) a context.neighbors (explicitně vyžádané graph relations s typem, směrem, claim/review stavem, evidencí a hranicí hloubky/počtu). Context.explain vysvětluje claim, dokumentární odkaz/wikilink nebo similarity a uvede index/model verzi a omezení čerstvosti. Podobnost je pouze ranking metadata, ne pravděpodobnost pravdivosti.
+
+Případné MCP vystaví jen tyto explicitně registrované, rate/size-limited a auditované read-only nástroje s jedním workspace; potvrzení, Undo/Redo, volný SQL, souborový systém, raw index i provider credentials neexponuje. Externí ChatGPT/Voice zůstává na stávajícím tokenovém a allowlist kontraktu; nové operace se do OpenAPI či MCP přidají až současně s implementací, autorizačními testy a verzováním.
+
+### Wikilinky, graf a význam výsledků
+
+Parser podporuje pouze explicitní syntaxi [[target]] a [[target|label]]. Resolver ji vyhodnotí v aktuálním workspace přes stabilní ID nebo jednoznačný název; nejednoznačný, neexistující či nepřístupný target zůstane bezpečným prostým textem nebo návrhem k opravě. Link je navigační mention s provenance z note revision; automaticky nevytváří subject, confirmed claim ani semantic edge. Výstup/Markdown se sanitizuje, nikdy nevykonává obsah odkazu a nesmí podle rozdílného chování odhalit chráněný target.
+
+Graf vede oddělené vrstvy: typované evidence-backed claim relations, dokumentární mentions/wikilinky a dočasné rankingové similarity. Jen první vrstva je semantic relationship pro plánování či agentní fakta. Každá edge ukazuje svůj typ, směr, review stav, freshness, validitu, provenance a evidence; similarity má model/index verzi, ne confidence. Žádná automatická podobnost nesmí změnit claim nebo relaci bez návrhu a existujícího potvrzení vlastníkem.
+
+### Citace, audit, obnova a etapy
+
+Citace se váže na stabilní source/object/revision/section locator a zobrazuje jen autorizovaný omezený úryvek. Retrieval audit zaznamená actor/tool/workspace, policy a model/index version, kanonické revize, čas a outcome; neukládá dotaz ani obsah bez výslovné chráněné retention politiky. Derived metadata dědí nejpřísnější zdrojové omezení, dokud vlastník evidovaně neschválí downgrade.
+
+Reindexace je workspace-scoped, přerušitelná a obnovitelná z checkpointu; full rebuild nevytváří mezidobí falešné úplnosti. Offline cache nikdy nesmí obsahovat vyšší citlivost než povolená lokální policy a při změně workspace, relace či odhlášení se vymaže/uzamkne spolu s indexem. Záloha a export jsou úplné přes kanonická data. Vektorový index není nezávislý archiv pravdy; volitelný šifrovaný snapshot se při restore ověří proti kanonickým revizím a při nesouladu zahodí/reindexuje.
+
+Etapy: (1) kontrakt, corpus a canonical outbox; (2) lokální retrieval, BGE-M3 benchmark a fallback; (3) safe wikilinks, graf a UX čerstvosti; (4) resolver a případné MCP s negativními authorization testy; (5) šifrovaná obnova, retence a chaos/retry testy. Žádná etapa sama neautorizuje připojení účtu, změnu produkčního nasazení ani přenos dat k externímu modelu.
