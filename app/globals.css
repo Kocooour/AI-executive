@@ -1756,11 +1756,6 @@ article {
 .attentionLimits summary { cursor: pointer; }
 .attentionError, .homeSection p.attentionError { color: var(--danger); }
 @media (max-width: 700px) { .attentionItem button { min-height: 44px; } .attentionMore summary, .attentionLimits summary { padding: 15px 0; } }
-.homeStatus { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; padding: 0; list-style: none; }
-.homeStatus button, .homeSync { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font: inherit; font-size: 12px; }
-.homeStatus button { cursor: pointer; }
-.homeStatus button:hover { color: var(--accent); border-color: var(--accent); }
-.homeStatus b { color: var(--text); font-weight: 650; }
 .homeSync.synced b { color: var(--success); }
 .homeSync.offline b { color: var(--danger); }
 .homeToday { margin-bottom: 16px; }
@@ -1770,7 +1765,6 @@ article {
 .homePlan p { margin: 0 0 6px; line-height: 1.5; }
 .homePlan .dayPlanWarning { font-size: 13px; }
 @media (max-width: 700px) {
-  .homeStatus button, .homeSync { min-height: 44px; }
   .homeSectionHead button, .homeSection .textAction { min-height: 44px; }
 }
 .homeSection {

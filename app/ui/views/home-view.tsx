@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useState } from "react";
 import { taskDueTone } from "../../../lib/task-views";
 import { attentionReason, taskDueSummary } from "../format";
 import type { LumiApp } from "../use-lumi-app";
@@ -52,6 +53,14 @@ export function HomeView({ app }: { app: LumiApp }) {
     workspaces,
     writeWorkspace,
   } = app;
+  // An ordinary save shows "syncing" for a moment; the line appears only when offline or when
+  // syncing takes longer than 2 s, so the list below does not jump on every save.
+  const [slowSync, setSlowSync] = useState(false);
+  useEffect(() => {
+    if (syncStatus === "synced" || syncStatus === "offline") { setSlowSync(false); return; }
+    const timer = setTimeout(() => setSlowSync(true), 2000);
+    return () => clearTimeout(timer);
+  }, [syncStatus]);
   if (view !== "Home") return null;
 
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
@@ -80,6 +89,8 @@ export function HomeView({ app }: { app: LumiApp }) {
   // Calendar and day plan belong to one workspace; name it when Home shows the read-only aggregate.
   const scopeNote = activeWorkspaceId === "all" && writeWorkspace ? ` (${writeWorkspace.title})` : "";
 
+  const showSync = syncStatus === "offline" || (syncStatus !== "synced" && slowSync);
+
   // The snoozed or dismissed item leaves the list; keyboard focus moves to the item now in its place
   // (or the one before it, or the section heading) instead of falling back to the page.
   async function actAndKeepFocus(button: HTMLElement, candidate: Parameters<typeof actOnAttention>[0], action: "snooze" | "dismiss") {
@@ -97,7 +108,7 @@ export function HomeView({ app }: { app: LumiApp }) {
   return (
     <>
       {/* Only states that need something are shown; the Inbox count is in the navigation. */}
-      {syncStatus !== "synced" && <p className={`homeNotice homeSync ${syncStatus}`} role="status"><span className="homeNoticeDot" aria-hidden="true" />{tr("homeDataState")}: <b>{syncLabel}</b></p>}
+      <div role="status" className="homeNoticeLive">{showSync && <p className={`homeNotice homeSync ${syncStatus}`}><span className={`homeNoticeDot ${syncStatus === "offline" ? "danger" : ""}`} aria-hidden="true" />{tr("homeDataState")}: <b>{syncLabel}</b></p>}</div>
       {calendarSources.length === 0 && <p className="homeNotice"><span className="homeNoticeDot muted" aria-hidden="true" />{tr("calendarDisconnected")} · <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
 
       {workSession && <WorkNowCard app={app} />}
@@ -113,6 +124,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           {attentionStale
             ? <p className="attentionStale" role="status"><b>{tr("attentionStale")}</b> · {tr(syncStatus === "offline" ? "attentionStaleOffline" : attentionFromCache && !attentionOutdated ? "attentionStaleChecking" : "attentionStaleInfo")} {shortTime(visibleAttention.evaluatedAt, visibleAttention.timezone)}</p>
             : null}
+          {attentionActionsBlocked && (syncStatus === "synced" || showSync) && visibleAttention.items.length > 0 && <p className="attentionMeta attentionBlocked">{tr("attentionStaleActions")}</p>}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
             {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
               <div className="attentionBody">
@@ -129,7 +141,6 @@ export function HomeView({ app }: { app: LumiApp }) {
                 if (entity) void inspect(entity);
                 else setAttentionError(tr("attentionDetailMissing"));
               }}>{tr("attentionOpen")}</button>
-              {attentionActionsBlocked && <p className="attentionMeta attentionBlocked">{tr("attentionStaleActions")}</p>}
               <details className="attentionMore">
                 <summary>{tr("attentionSourceDetails")}</summary>
                 <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>

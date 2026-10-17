@@ -62,6 +62,9 @@
   border-radius: 50%;
   background: var(--warning);
 }
+.homeNoticeDot.danger {
+  background: var(--danger);
+}
 .homeNoticeDot.muted {
   background: var(--muted-light);
 }
@@ -69,6 +72,12 @@
   padding: 0;
   color: var(--accent);
   font-size: 13px;
+}
+@media (pointer: coarse), (max-width: 700px) {
+  .homeNotice .textAction {
+    min-height: 44px;
+    padding: 0 6px;
+  }
 }
 
 /* Recommendation: title, then why · from what · when; actions on the right. */
@@ -112,7 +121,7 @@
 }
 .appShell .attentionActions {
   display: flex;
-  gap: 2px;
+  gap: 8px;
   margin: 0;
 }
 .appShell .attentionActions button {
@@ -123,6 +132,8 @@
 @media (hover: hover) and (min-width: 701px) {
   .appShell .attentionItem:not(:hover):not(:focus-within) .attentionActions {
     opacity: 0;
+    /* Hidden buttons must not take a click on a touch laptop that also reports hover. */
+    pointer-events: none;
   }
 }
 .appShell .attentionItem .attentionBlocked,

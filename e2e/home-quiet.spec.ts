@@ -46,6 +46,76 @@ test("snooze and dismiss appear on hover and keyboard focus", async ({ page }) =
   await expect(actions).toHaveCSS("opacity", "1");
 });
 
+test("an ordinary save does not push the list down; a slow one and offline are shown", async ({ page, context }) => {
+  await page.goto("/");
+  await waitUntilSynced(page);
+  // Its own tasks for today, completed on Home: saves that leave Home and the recommendations in place.
+  const title = `Uložení z Home ${Date.now()}`;
+  const offlineTitle = `${title} offline`;
+  await page.evaluate(async ([taskTitle, offlineTaskTitle]) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      entities: [...snapshot.entities,
+        { id: `e2e-home-save-${now}`, type: "task", title: taskTitle, status: "open", workspaceId: "personal", properties: { today: true }, createdAt: now, updatedAt: now },
+        { id: `e2e-home-save-offline-${now}`, type: "task", title: offlineTaskTitle, status: "open", workspaceId: "personal", properties: { today: true }, createdAt: now, updatedAt: now }],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+  }, [title, offlineTitle]);
+  await page.goto("/");
+  await waitUntilSynced(page);
+  const first = page.locator(".attentionItem").first();
+  await expect(first).toBeVisible();
+  const complete = page.getByRole("button", { name: `Complete ${title}`, exact: true });
+  await expect(complete).toBeVisible();
+  const before = (await first.boundingBox())!.y;
+  // The server takes 3 s to answer the save.
+  await page.route("**/api/store", async (route) => {
+    if (route.request().method() === "PUT") await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.continue();
+  });
+  await complete.click();
+  // During the first second: no line, the list stays where it was.
+  await page.waitForTimeout(800);
+  await expect(page.locator(".homeNotice.homeSync")).toHaveCount(0);
+  expect((await first.boundingBox())!.y).toBe(before);
+  // A save still running after 2 s is shown, and the line goes once it is saved.
+  await expect(page.locator(".homeNotice.homeSync")).toBeVisible();
+  await expect(page.locator(".homeNotice.homeSync")).toHaveCount(0, { timeout: 10_000 });
+  await page.unroute("**/api/store");
+  // Offline: a save that cannot reach the server shows the line at once.
+  await context.setOffline(true);
+  await page.getByRole("button", { name: `Complete ${offlineTitle}` }).click();
+  await expect(page.locator(".homeNotice.homeSync")).toContainText("Offline", { timeout: 2_000 });
+  await context.setOffline(false);
+});
+
+test("after dismissing from the keyboard, focus moves to the next recommendation", async ({ page }) => {
+  await page.goto("/");
+  await waitUntilSynced(page);
+  // Its own overdue task, so dismissing it leaves the shared seeded items alone.
+  const title = `Fokus po skrytí ${Date.now()}`;
+  await page.evaluate(async (taskTitle) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const deadline = new Date(now - 3 * 86_400_000).toISOString().slice(0, 10);
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision,
+      entities: [...snapshot.entities, { id: `e2e-focus-dismiss-${now}`, type: "task", title: taskTitle, status: "open", workspaceId: "personal", properties: { deadline }, createdAt: now, updatedAt: now }],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+  }, title);
+  await page.goto("/");
+  await waitUntilSynced(page);
+  const item = page.locator(".attentionSection .attentionItem", { hasText: title });
+  await expect(item).toBeVisible();
+  await page.keyboard.press("Shift");
+  await item.getByRole("button", { name: `Skrýt: ${title}` }).focus();
+  await page.keyboard.press("Enter");
+  await expect(item).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const active = document.activeElement;
+    return Boolean(active && (active.classList.contains("attentionOpen") || active.id === "attention-title"));
+  })).toBe(true);
+});
+
 test.describe("on a touch phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
@@ -56,5 +126,14 @@ test.describe("on a touch phone", () => {
     const item = page.locator(".attentionItem").first();
     await expect(item.locator(".attentionActions")).toHaveCSS("opacity", "1");
     await expect(item.getByRole("button", { name: "Skrýt" })).toBeVisible();
+  });
+
+  test("the calendar notice's Připojit button is a 44px target", async ({ page }) => {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    const connect = page.locator(".homeNotice").getByRole("button", { name: "Připojit" });
+    const box = await connect.boundingBox();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(44);
   });
 });
