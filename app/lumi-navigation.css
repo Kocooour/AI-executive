@@ -190,6 +190,22 @@
   outline-offset: 2px;
 }
 
+/* On a short window the list of views scrolls on its own, so the footer with Nastavení stays in
+   view (the sidebar is sticky at 100vh). Only the list scrolls: the workspace menu is wider than
+   the sidebar and would be cut off by a scrolling sidebar. The padding keeps focus rings inside
+   the scroll area. */
+.appShell > aside > nav {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: -4px;
+  padding: 4px;
+}
+.appShell > aside > .sidebarActions {
+  flex: none;
+}
+
 /* Touch screens wide enough for the sidebar (iPad): every sidebar control is a 44px target. */
 @media (pointer: coarse) {
   .appShell > aside > nav button,

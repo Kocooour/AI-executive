@@ -80,6 +80,24 @@ test("every item of the phone More sheet is a 44px target", async ({ page }) => 
   }
 });
 
+test("on a small phone the More sheet fits on the screen and can be closed", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto("/");
+  await waitUntilSynced(page);
+  await page.locator('.mobileNav button[data-nav-view="More"]').click();
+  const sheet = page.locator(".mobileMore");
+  await expect(sheet).toBeVisible();
+  const box = await sheet.boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  // Every item can be scrolled into view and reached.
+  for (const item of await sheet.locator("button").all()) {
+    await item.scrollIntoViewIfNeeded();
+    const itemBox = await item.boundingBox();
+    expect(itemBox!.y).toBeGreaterThanOrEqual(0);
+    expect(itemBox!.y + itemBox!.height).toBeLessThanOrEqual(667);
+  }
+});
+
 test.describe("touch screen with the sidebar", () => {
   test.use({ hasTouch: true, viewport: { width: 1024, height: 768 } });
 
@@ -96,4 +114,23 @@ test.describe("touch screen with the sidebar", () => {
       expect(box!.height, await control.innerText()).toBeGreaterThanOrEqual(44);
     }
   });
+
+  for (const [height, open] of [[680, false], [768, true]] as const) {
+    test(`the settings button stays on screen at ${height}px${open ? " with more views open" : ""}`, async ({ page }) => {
+      await page.setViewportSize({ width: 1024, height });
+      await page.goto("/");
+      await waitUntilSynced(page);
+      if (open) await page.locator("aside .secondaryNav summary").click();
+      const settings = page.locator("aside .sidebarActions > button").last();
+      const box = await settings.boundingBox();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(height);
+      const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest("button")?.textContent ?? "", [box!.x + box!.width / 2, box!.y + box!.height / 2]);
+      expect(hit).toContain(await settings.innerText());
+      // The list of views scrolls on its own, so its last entry is reachable too.
+      const lastView = page.locator("aside > nav button").last();
+      await lastView.scrollIntoViewIfNeeded();
+      const lastBox = await lastView.boundingBox();
+      expect(lastBox!.y + lastBox!.height).toBeLessThanOrEqual(height);
+    });
+  }
 });
