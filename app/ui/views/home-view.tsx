@@ -71,7 +71,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     return Boolean(local && Number(local.updatedAt) > candidate.evaluatedAt);
   };
   const capacityLabel = calendarSources.length === 0 ? tr("calendarDisconnected")
-    : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown");
+    : calendarFresh ? `${freeHours.toLocaleString(locale, { maximumFractionDigits: 1 })} ${tr("freeHours")}` : tr("capacityUnknown");
   const syncLabel = syncStatus === "synced" ? tr("synced") : syncStatus === "syncing" ? tr("syncing")
     : syncStatus === "offline" ? tr("offline") : tr("connecting");
   const moreToday = (sidebarCounts.Today ?? homeTodayTasks.length) - homeTodayTasks.length;
@@ -79,6 +79,20 @@ export function HomeView({ app }: { app: LumiApp }) {
   const unscheduledTasks = visibleDayPlan ? visibleDayPlan.unscheduled.length : 0;
   // Calendar and day plan belong to one workspace; name it when Home shows the read-only aggregate.
   const scopeNote = activeWorkspaceId === "all" && writeWorkspace ? ` (${writeWorkspace.title})` : "";
+
+  // The snoozed or dismissed item leaves the list; keyboard focus moves to the item now in its place
+  // (or the one before it, or the section heading) instead of falling back to the page.
+  async function actAndKeepFocus(button: HTMLElement, candidate: Parameters<typeof actOnAttention>[0], action: "snooze" | "dismiss") {
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".attentionSection .attentionItem"));
+    const index = items.indexOf(button.closest(".attentionItem") as HTMLElement);
+    await actOnAttention(candidate, action);
+    // Let React remove the item first.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (document.activeElement && document.activeElement !== document.body && document.contains(document.activeElement)) return;
+    const opens = document.querySelectorAll<HTMLElement>(".attentionSection .attentionItem .attentionOpen");
+    const target = opens[Math.min(Math.max(index, 0), opens.length - 1)] ?? document.getElementById("attention-title");
+    target?.focus();
+  }
 
   return (
     <>
@@ -90,7 +104,7 @@ export function HomeView({ app }: { app: LumiApp }) {
 
       <section className="homeSection attentionSection" aria-labelledby="attention-title">
         <div className="homeSectionHead">
-          <h2 id="attention-title">{tr("attentionTitle")}</h2>
+          <h2 id="attention-title" tabIndex={-1}>{tr("attentionTitle")}</h2>
           <button type="button" onClick={() => { if (syncStatus === "synced") void loadAttention(activeWorkspaceId).catch((error) => setAttentionError(error instanceof Error ? error.message : tr("attentionUnavailable"))); }} disabled={syncStatus !== "synced"}>
             {tr("refresh")}
           </button>
@@ -104,11 +118,11 @@ export function HomeView({ app }: { app: LumiApp }) {
               <div className="attentionBody">
                 <strong>{candidate.title}</strong>
                 {/* One line: why, from what, when evaluated (docs/UX-UI.md asks all three on every card). */}
-                <p className="attentionWhy"><span className="attentionReason">{attentionReason(candidate, language)}</span> · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{activeWorkspaceId === "all" && <> · {workspaceTitle(candidate.workspaceId)}</>} · <span className="attentionTime">{tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</span>{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</p>
+                <p className="attentionWhy"><span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span> · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{activeWorkspaceId === "all" && <> · {workspaceTitle(candidate.workspaceId)}</>} · <span className="attentionTime">{tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</span>{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</p>
               </div>
               <div className="attentionActions">
-                <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "snooze")}>{tr("attentionSnooze")}</button>
-                <button type="button" disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={() => void actOnAttention(candidate, "dismiss")}>{tr("attentionDismiss")}</button>
+                <button type="button" aria-label={`${tr("attentionSnooze")}: ${candidate.title}`} disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={(event) => void actAndKeepFocus(event.currentTarget, candidate, "snooze")}>{tr("attentionSnooze")}</button>
+                <button type="button" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={(event) => void actAndKeepFocus(event.currentTarget, candidate, "dismiss")}>{tr("attentionDismiss")}</button>
               </div>
               <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
                 const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
@@ -118,7 +132,7 @@ export function HomeView({ app }: { app: LumiApp }) {
               {attentionActionsBlocked && <p className="attentionMeta attentionBlocked">{tr("attentionStaleActions")}</p>}
               <details className="attentionMore">
                 <summary>{tr("attentionSourceDetails")}</summary>
-                <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionSources")} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
+                <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
                 <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
               </details>
             </article>)}

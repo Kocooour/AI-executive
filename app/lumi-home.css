@@ -23,10 +23,13 @@
 .appShell .homeSectionHead h2 + button {
   margin-left: auto;
 }
-.homeCapacity {
+.appShell .homeSectionHead > .homeCapacity {
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* A state that needs something: one quiet line, dot + words, no frame. */
@@ -41,6 +44,16 @@
 }
 .homeNotice b {
   font-weight: 600;
+}
+/* The sync line drops the old pill frame of .homeSync. */
+.appShell .homeNotice.homeSync {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
 }
 .homeNoticeDot {
   width: 7px;
@@ -65,6 +78,7 @@
   padding: 10px 8px;
   margin: 0 -8px;
   border-top: 0;
+  border-bottom: 0;
   border-radius: var(--radius-md);
 }
 .appShell .attentionItem:hover,
@@ -104,8 +118,9 @@
 .appShell .attentionActions button {
   color: var(--muted);
 }
-/* With a mouse, Odložit/Skrýt appear on hover or keyboard focus; on touch they are always shown. */
-@media (hover: hover) {
+/* With a mouse on a wide window, Odložit/Skrýt appear on hover or keyboard focus; on touch and on
+   narrow windows they are always shown (an invisible row would only leave a gap). */
+@media (hover: hover) and (min-width: 701px) {
   .appShell .attentionItem:not(:hover):not(:focus-within) .attentionActions {
     opacity: 0;
   }
@@ -119,16 +134,21 @@
   font-size: 12px;
 }
 
+/* Phone: the text takes the full width, the actions share one row under it in reading order
+   (Odložit, Skrýt, Otevřít), so each item stays short. */
 @media (max-width: 700px) {
   .appShell .attentionItem {
     grid-template-columns: minmax(0, 1fr) auto;
+    padding-bottom: 4px;
+  }
+  .appShell .attentionItem .attentionBody {
+    grid-column: 1 / -1;
   }
   .appShell .attentionActions {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-column: 1;
+    margin-left: -8px;
   }
   .appShell .attentionItem .attentionOpen {
     grid-column: 2;
-    grid-row: 1;
   }
 }
