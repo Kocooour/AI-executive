@@ -12,7 +12,7 @@ test("working lists show one right-side value and no repeated view subtitles", a
 
   await page.goto("/?view=Projects");
   await expect(page.locator(".taskRow[data-entity-type='project']").first()).toHaveAttribute("data-entity-type", "project");
-  await expect(page.locator(".taskRow[data-entity-type='project'] .taskRowMeta").first()).toContainText(/\\d+ úkol/);
+  await expect(page.locator(".taskRow[data-entity-type='project'] .taskRowMeta").first()).toContainText(/\d+ úkol/);
   await expect(page.locator(".taskRow[data-entity-type='project'] small")).toHaveCount(0);
 
   await page.goto("/?view=Notes");
