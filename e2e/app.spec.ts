@@ -69,8 +69,9 @@ test("a task keeps its selected area and can change it after capture", async ({ 
   }, title)).toBe(ids.first);
   await page.goto("/?view=Inbox");
   const row = page.locator("article", { hasText: title }).first();
-  await expect(row).toContainText("Rodina");
+  await expect(row.locator(".taskRowMeta")).not.toContainText("Rodina");
   await row.click();
+  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.first);
   await page.locator("aside.detail").getByLabel("Oblast").selectOption(ids.second);
   const duration = page.locator("aside.detail").getByLabel("Odhadovaná náročnost");
   await duration.fill("4");

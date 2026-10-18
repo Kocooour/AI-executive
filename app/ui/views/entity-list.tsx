@@ -1,6 +1,6 @@
 "use client";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
-import { friendlyDate } from "../format";
+import { taskRowValue } from "../task-row-value";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
@@ -21,6 +21,9 @@ export function EntityList({ app }: { app: LumiApp }) {
     draggedEntity,
     draggingId,
     inspect,
+    items,
+    heldReasons,
+    unsent,
     language,
     priorityFilter,
     projects,
@@ -37,6 +40,18 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
+  // The relationship graph, not a legacy projectId property, owns project membership.
+  // Aggregate rows can span multiple workspaces; only count tasks from the same workspace.
+  const openTasksByProject = new Map<string, number>();
+  const projectWorkspace = new Map(projects.map((project) => [project.id, project.workspaceId]));
+  for (const task of items) {
+    if (task.type !== "task" || task.status !== "open") continue;
+    for (const projectId of targets(task.id, "belongs_to_project")) {
+      if (projectWorkspace.get(projectId) !== task.workspaceId) continue;
+      openTasksByProject.set(projectId, (openTasksByProject.get(projectId) || 0) + 1);
+    }
+  }
+
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
@@ -112,91 +127,59 @@ export function EntityList({ app }: { app: LumiApp }) {
               )}
               <div
                 className={
-                  "list " +
+                  "list taskRowList " +
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {collection.map((x) => (
-              <article
-                key={x.id}
-                className={`${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
-                data-drop-entity={x.id}
-                onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
-                onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-                onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
-                onClick={() => inspect(x)}
-              >
-                {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
-                {x.type === "task" ? (
-                  <button
-                    className="check"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      done(x.id);
-                    }}
-                  >
-                    ○
-                  </button>
-                ) : (
-                  <div className={`entityIcon ${x.type}Icon`}>
-                    {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : "▤"}
-                  </div>
-                )}
-                <div>
-                  <strong>
-                    {x.title || tr("untitledItem")}
-                    <RecordMarks app={app} entity={x} />
-                  </strong>
-                  <small>
-                    {x.type === "task"
-                      ? [
-                          x.properties.priority &&
-                          x.properties.priority !== "none"
-                            ? "● " + tr(String(x.properties.priority))
-                            : null,
-                          taskDueTone(x, today) === "dueOverdue"
-                            ? tr("Overdue")
-                            : null,
-                          taskDueTone(x, today) === "dueSoon"
-                            ? tr("dueSoon")
-                            : null,
-                          typeof x.properties.when === "string"
-                            ? friendlyDate(x.properties.when, language)
-                            : null,
-                          x.properties.deadline &&
-                            tr("deadline") + " " + friendlyDate(x.properties.deadline, language),
-                          x.properties.waiting === true
-                            ? [tr("waitingShort"), typeof x.properties.waitingFor === "string" && x.properties.waitingFor ? x.properties.waitingFor : ""].filter(Boolean).join(": ")
-                            : null,
-                          (() => {
-                            const areaId = targets(x.id, "belongs_to_area")[0];
-                            const area = areas.find((candidate) => candidate.id === areaId);
-                            return area ? `${tr("area")}: ${area.title}` : null;
-                          })(),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") ||
-                        (x.properties.today === true
-                          ? tr("Today")
-                          : x.properties.someday === true
-                            ? tr("Someday")
-                            : x.properties.inbox === true
-                              ? tr("Inbox")
-                              : tr("Anytime"))
-                      : x.type === "project" && x.properties.deadline
-                        ? `${tr("Projects")} · ${tr("deadline")} ${friendlyDate(x.properties.deadline, language)}`
-                        : tr(x.type === "project" ? "Projects" : x.type === "area" ? "Areas" : "Notes")}
-                  </small>
-                  {activeWorkspaceId === "all" && (
-                    <span className="workspaceBadge">
-                      {workspaces.find(
-                        (workspace) => workspace.workspaceId === x.workspaceId,
-                      )?.title || "Workspace"}
-                    </span>
-                  )}
-                </div>
-                  </article>
-                ))}
+                {collection.map((x) => {
+                  const meta = taskRowValue(x, language, today, {
+                    held: heldReasons.has(x.id),
+                    unsent: unsent.has(x.id),
+                    openTaskCount: openTasksByProject.get(x.id) || 0,
+                  });
+                  return (
+                    <article
+                      key={x.id}
+                      className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
+                      data-drop-entity={x.id}
+                      data-entity-type={x.type}
+                      onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
+                      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                      onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
+                      onClick={() => inspect(x)}
+                    >
+                      {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
+                      {x.type === "task" ? (
+                        <button
+                          type="button"
+                          className="check"
+                          aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            done(x.id);
+                          }}
+                        >○</button>
+                      ) : (
+                        <span className={`entityIcon ${x.type}Icon`} aria-hidden="true">
+                          {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : <ViewIcon name="Notes" />}
+                        </span>
+                      )}
+                      <div className="taskRowMain">
+                        <strong>{x.title || tr("untitledItem")}<RecordMarks app={app} entity={x} hideSync /></strong>
+                        {activeWorkspaceId === "all" && (
+                          <span className="workspaceBadge">
+                            {workspaces.find((workspace) => workspace.workspaceId === x.workspaceId)?.title || x.workspaceId}
+                          </span>
+                        )}
+                      </div>
+                      {meta.text && (
+                        <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
+                          {meta.kind === "sync" && <span aria-hidden="true">↻ </span>}{meta.text}
+                        </span>
+                      )}
+                    </article>
+                  );
+                })}
                 {collection.length === 0 && view !== "Home" && view !== "Search" && (
                   <div className="empty">{tr("nothingHere")}</div>
                 )}
