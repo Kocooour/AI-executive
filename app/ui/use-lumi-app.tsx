@@ -1340,7 +1340,13 @@ export function useLumiApp() {
     calendarTomorrow, calendarTimezone, setBadgeNow, standalone, tr });
   const dayStart = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayStart || "08:00", calendarTimezone));
   const dayEnd = Date.parse(zonedDateTimeToIso(calendarToday, notificationState?.preferences.workdayEnd || "18:00", calendarTimezone));
+  // Keep the workday slice for capacity calculations, but give Calendar its own
+  // complete local-day slice. A morning or evening commitment must not disappear
+  // merely because it falls outside the configured working interval.
+  const calendarDayStart = Date.parse(zonedDateTimeToIso(calendarToday, "00:00", calendarTimezone));
+  const calendarDayEnd = Date.parse(zonedDateTimeToIso(calendarTomorrow, "00:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
+  const calendarDayEvents = calendarEvents.filter((event) => Date.parse(event.end) > calendarDayStart && Date.parse(event.start) < calendarDayEnd);
   const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) =>
     source.status === "ready" && source.lastSuccessAt !== null &&
     calendarFreshNow >= source.lastSuccessAt && calendarFreshNow - source.lastSuccessAt <= 30 * 60_000,
@@ -2527,6 +2533,7 @@ export function useLumiApp() {
     text,
     themeMode,
     today,
+    calendarDayEvents,
     todayCalendarEvents,
     tr,
     type,
