@@ -47,6 +47,10 @@
   flex: none;
   margin: 0;
   padding: 2px 6px;
+  max-width: min(35%, 160px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
 }
 .appShell .taskRowList .taskRowMeta {
