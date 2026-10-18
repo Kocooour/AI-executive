@@ -18,7 +18,7 @@ export function openTaskCountsByProject(
     if (relation.relationType !== "belongs_to_project") continue;
     const taskWorkspace = openTaskWorkspace.get(relation.sourceEntityId);
     const projectWorkspaceId = projectWorkspace.get(relation.targetEntityId);
-    if (!taskWorkspace || taskWorkspace !== projectWorkspaceId) continue;
+    if (!taskWorkspace || taskWorkspace !== projectWorkspaceId || relation.workspaceId !== taskWorkspace) continue;
     counts.set(relation.targetEntityId, (counts.get(relation.targetEntityId) || 0) + 1);
   }
   return counts;

@@ -22,6 +22,8 @@ test("open project counts scan each relation once and retain the current workspa
     relation("r2", "t2", "p1"),
     relation("r3", "t3", "p2", "work"),
     relation("r4", "t1", "p2"),
+    // A malformed relation can name matching endpoints but belong to another workspace.
+    relation("r4b", "t1", "p1", "work"),
     relation("r5", "t1", "p1", "personal", "belongs_to_area"),
     relation("r6", "missing", "p1"),
   ];
