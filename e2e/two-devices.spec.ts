@@ -51,7 +51,8 @@ test("two devices changing different fields of one task both keep their change",
 
 test("the same field changed on two devices keeps the newer value and offers to restore the other", async ({ browser }) => {
   const laptop = await device(browser), phone = await device(browser);
-  const id = await newTask(laptop.page, `Stejné pole ${Date.now()}`);
+  const longTitle = `Stejné pole ${Date.now()} ${"dlouhý ".repeat(12)}`.trim();
+  const id = await newTask(laptop.page, longTitle);
   await phone.page.goto(`/?task=${id}`);
   await waitUntilSynced(phone.page);
   await phone.context.setOffline(true);
@@ -69,7 +70,11 @@ test("the same field changed on two devices keeps the newer value and offers to 
   // The laptop sees the replaced value on the task and in the list, and restores it.
   await laptop.page.goto("/?view=Inbox");
   await waitUntilSynced(laptop.page);
-  await expect(laptop.page.locator(".conflictMark").first()).toBeVisible();
+  await laptop.page.setViewportSize({ width: 390, height: 844 });
+  const conflictRow = laptop.page.locator(".taskRow", { hasText: longTitle });
+  await expect(conflictRow).toBeVisible();
+  await expect(conflictRow.locator(".taskRowMain strong .conflictMark")).toHaveCount(0);
+  await expect(conflictRow.locator(".taskRowMarks .conflictMark")).toBeVisible();
   await laptop.page.goto(`/?task=${id}`);
   await waitUntilSynced(laptop.page);
   const section = laptop.page.locator(".syncConflicts");
