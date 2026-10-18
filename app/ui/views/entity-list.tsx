@@ -174,7 +174,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                       </div>
                       {meta.text && (
                         <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
-                          {meta.kind === "sync" && <span aria-hidden="true">↻ </span>}{meta.text}
+                          {meta.kind === "sync" && <span aria-hidden="true">{heldReasons.has(x.id) ? "⚠ " : "↻ "}</span>}{meta.text}
                         </span>
                       )}
                     </article>
