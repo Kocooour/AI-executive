@@ -43,6 +43,11 @@
   font-weight: 590;
   font-size: 14px;
 }
+.appShell .taskRowList .taskRowMarks {
+  flex: none;
+  white-space: nowrap;
+}
+.appShell .taskRowList .taskRowMarks:empty { display: none; }
 .appShell .taskRowList .taskRow .workspaceBadge {
   flex: none;
   margin: 0;

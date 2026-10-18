@@ -1,6 +1,7 @@
 "use client";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
+import { openTaskCountsByProject } from "../open-task-counts";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
@@ -27,12 +28,12 @@ export function EntityList({ app }: { app: LumiApp }) {
     language,
     priorityFilter,
     projects,
+    scopedRelations,
     setActiveDragTarget,
     setPriorityFilter,
     setSortBy,
     setText,
     sortBy,
-    targets,
     text,
     today,
     tr,
@@ -40,17 +41,11 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
-  // The relationship graph, not a legacy projectId property, owns project membership.
-  // Aggregate rows can span multiple workspaces; only count tasks from the same workspace.
-  const openTasksByProject = new Map<string, number>();
-  const projectWorkspace = new Map(projects.map((project) => [project.id, project.workspaceId]));
-  for (const task of items) {
-    if (task.type !== "task" || task.status !== "open") continue;
-    for (const projectId of targets(task.id, "belongs_to_project")) {
-      if (projectWorkspace.get(projectId) !== task.workspaceId) continue;
-      openTasksByProject.set(projectId, (openTasksByProject.get(projectId) || 0) + 1);
-    }
-  }
+  // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
+  // owns membership; aggregate rows still count tasks in their own workspace only.
+  const openTasksByProject = view === "Projects"
+    ? openTaskCountsByProject(items, projects, scopedRelations)
+    : new Map<string, number>();
 
   return (
     <>
@@ -165,7 +160,8 @@ export function EntityList({ app }: { app: LumiApp }) {
                         </span>
                       )}
                       <div className="taskRowMain">
-                        <strong>{x.title || tr("untitledItem")}<RecordMarks app={app} entity={x} hideSync /></strong>
+                        <strong>{x.title || tr("untitledItem")}</strong>
+                        <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
                         {activeWorkspaceId === "all" && (
                           <span className="workspaceBadge">
                             {workspaces.find((workspace) => workspace.workspaceId === x.workspaceId)?.title || x.workspaceId}
