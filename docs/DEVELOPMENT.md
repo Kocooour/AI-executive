@@ -110,6 +110,14 @@ pnpm test:e2e    # browser scenarios in e2e/ (Playwright, Chromium)
 
 Add and run focused automated checks when a feature introduces them. For UI-sensitive work, test desktop and narrow/mobile layouts on the branch instance; for persistence work, include a restart, migration/rollback (when relevant), and data-isolation check.
 
+## Automatic browser tests (GitHub Actions)
+
+The [Browser E2E workflow](../.github/workflows/browser-e2e.yml) runs on every pull request, on pushes to `main`, and via manual dispatch. It checks TypeScript, runs unit tests, builds the production app and runs the complete Chromium Playwright suite against an isolated, throwaway app instance. The runner uses Node.js 22, pnpm 10, and Playwright's locked browser version. No GitHub secrets or production server are used; `playwright.config.ts` creates a temporary SQLite data directory, session secret and test user, and routes iCloud calls to a loopback mock.
+
+The CI E2E server binds to `127.0.0.1:3100`. The production build is reused through `E2E_SKIP_BUILD=1` only after `pnpm build` succeeds in the same job. Tests execute sequentially because they intentionally share one seeded server; do not enable parallel workers without redesigning fixtures. On failure, inspect the job log and the `lumi-playwright-*` artifact (trace files in `test-results/`); artifacts are retained for seven days. Locally, use the isolated checkout procedure above and run `pnpm test:e2e`.
+
+The CI job is a **verification gate**, not a deploy job. Branch protection / a required `Browser E2E / browser-e2e` check must be configured separately in GitHub repository settings if merging should be technically blocked until it passes. Do not provide real API keys, calendar passwords or production database paths to this job.
+
 ## Review and integration workflow
 
 1. An implementation author develops and validates the change in its own branch/worktree.

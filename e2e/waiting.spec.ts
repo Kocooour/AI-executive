@@ -27,10 +27,11 @@ test("a task waiting for someone comes back on its follow-up date", async ({ pag
   await waitUntilSynced(page);
   await expect(page.locator("article", { hasText: title })).toHaveCount(0);
   await page.goto("/?view=Anytime");
-  await expect(page.locator("article", { hasText: title })).toContainText("Čeká: Petr");
+  await expect(page.locator("article", { hasText: title }).locator('.taskRowMeta[data-meta-kind="state"]')).toHaveText("Čeká");
   // Changing who it waits for and closing the detail at once does not open the task again when
   // the change is saved.
   await page.locator("article", { hasText: title }).click();
+  await expect(page.locator(".waitingField").getByLabel("Čeká na", { exact: true })).toHaveValue("Petr");
   await page.locator(".waitingField").getByLabel("Čeká na", { exact: true }).fill("Petra Nová");
   await page.locator(".detail button.close").click();
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.waitingFor === "Petra Nová", true);
