@@ -9,6 +9,7 @@ import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
+import { calendarEventOverlapsLocalDay, calendarEventOverlapsLocalDays } from "../../lib/calendar-event-display";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -1343,16 +1344,14 @@ export function useLumiApp() {
   // Keep the workday slice for capacity calculations, but give Calendar its own
   // complete local-day slice. A morning or evening commitment must not disappear
   // merely because it falls outside the configured working interval.
-  const calendarDayStart = Date.parse(zonedDateTimeToIso(calendarToday, "00:00", calendarTimezone));
-  const calendarDayEnd = Date.parse(zonedDateTimeToIso(calendarTomorrow, "00:00", calendarTimezone));
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
-  const calendarDayEvents = calendarEvents.filter((event) => Date.parse(event.end) > calendarDayStart && Date.parse(event.start) < calendarDayEnd);
+  const calendarDayEvents = calendarEvents.filter((event) => calendarEventOverlapsLocalDay(event, calendarToday, calendarTimezone));
   const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) =>
     source.status === "ready" && source.lastSuccessAt !== null &&
     calendarFreshNow >= source.lastSuccessAt && calendarFreshNow - source.lastSuccessAt <= 30 * 60_000,
   );
   const nearbyCalendarEvents = calendarEvents
-    .filter((event) => Date.parse(event.end) > calendarFreshNow && Date.parse(event.start) < calendarFreshNow + 7 * 24 * 60 * 60_000)
+    .filter((event) => calendarEventOverlapsLocalDays(event, calendarToday, 7, calendarTimezone))
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const mergedBusy = todayCalendarEvents.filter((event) => event.busy).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),

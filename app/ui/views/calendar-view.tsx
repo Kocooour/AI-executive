@@ -1,15 +1,9 @@
 "use client";
 import { useMemo, useState } from "react";
 import { calendarOverviewConflictIds, calendarOverviewIntersects } from "../../../lib/calendar-overview";
+import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import type { CalendarEvent } from "../types";
 import type { LumiApp } from "../use-lumi-app";
-
-function eventTime(event: CalendarEvent, language: string, timezone: string, includeDate = false) {
-  if (event.allDay) return "";
-  return new Date(event.start).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", {
-    ...(includeDate ? { weekday: "short", day: "numeric", month: "short" } : {}), hour: "2-digit", minute: "2-digit", timeZone: timezone,
-  });
-}
 
 function blockTime(start: string | undefined, end: string | undefined, language: string, timezone: string) {
   if (!start || !end) return "";
@@ -19,7 +13,7 @@ function blockTime(start: string | undefined, end: string | undefined, language:
 
 export function CalendarView({ app }: { app: LumiApp }) {
   const { applyDayPlanAction, calendarDayEvents, calendarFresh, calendarSources, calendarStatus, calendarTimezone, dayPlanBusy, dayPlanStatus, freeHours, freeWindows,
-    inspect, items, language, loadCalendar, nearbyCalendarEvents, setCalendarStatus, setSettingsSection, setView, tr, view, visibleDayPlan } = app;
+    calendarToday, inspect, items, language, loadCalendar, nearbyCalendarEvents, setCalendarStatus, setSettingsSection, setView, tr, view, visibleDayPlan } = app;
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const todayEventIds = new Set(calendarDayEvents.map((event) => event.id));
   const nearTermEvents = nearbyCalendarEvents.filter((event) => !todayEventIds.has(event.id));
@@ -32,12 +26,16 @@ export function CalendarView({ app }: { app: LumiApp }) {
   const eventCard = (event: CalendarEvent, includeDate = false) => {
     const isOpen = openEventId === event.id;
     const hasConflict = eventConflictIds.has(event.id);
+    const display = calendarEventDisplay(event, { language, timezone: calendarTimezone, day: includeDate ? undefined : calendarToday });
+    const timeLabel = display.coversWholeDay ? tr("calendarOccupiesWholeDay") : display.time;
+    const timing = event.allDay ? `${tr("allDay")} · ${display.date}` : includeDate ? `${display.date} · ${timeLabel}` : timeLabel;
+    const continuation = [display.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), display.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(" · ");
     return <article key={event.id} className={`calendarAgendaItem ${event.busy ? "busy" : "free"} ${hasConflict ? "conflict" : ""}`.trim()}>
       <button type="button" className="calendarAgendaOpen" aria-expanded={isOpen} onClick={() => setOpenEventId((current) => current === event.id ? null : event.id)}>
-        <span>{event.allDay ? tr("allDay") : eventTime(event, language, calendarTimezone, includeDate)}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}{hasConflict ? ` · ${tr("calendarConflict")}` : ""}</small>
+        <span>{timing}</span><strong>{event.title}</strong><small>{event.busy ? tr("busy") : tr("freeTime")}{continuation ? ` · ${continuation}` : ""}{hasConflict ? ` · ${tr("calendarConflict")}` : ""}</small>
       </button>
       {isOpen && <section className="calendarEventInspector" aria-label={`${tr("calendarEventDetails")}: ${event.title}`}>
-        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? tr("allDay") : `${new Date(event.start).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: calendarTimezone })}–${new Date(event.end).toLocaleTimeString(language === "cs" ? "cs-CZ" : "en-GB", { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`}</p><p>{tr("calendarReadOnlyEvent")}</p><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
+        <strong>{tr("calendarEvent")}</strong><p>{event.allDay ? `${tr("allDay")} · ${display.detail}` : display.detail}</p>{continuation && <p>{continuation}</p>}<p>{tr("calendarReadOnlyEvent")}</p><button type="button" onClick={() => setOpenEventId(null)}>{tr("calendarCloseEvent")}</button>
       </section>}
     </article>;
   };
