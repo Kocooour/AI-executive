@@ -13,7 +13,7 @@ test("the app continues by itself when the connection comes back after a start w
   const title = `Zachyceno bez spojení ${Date.now()}`;
   await page.locator(".capture input").fill(title);
   await page.locator(".capture input").press("Enter");
-  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toBeVisible();
+  await expect(page.locator("article", { hasText: title }).locator('.taskRowMeta[data-meta-kind="sync"]')).toBeVisible();
   await context.setOffline(false);
   // The app starts again while the server cannot be reached.
   await page.route("**/api/**", (route) => route.abort());
@@ -25,14 +25,15 @@ test("the app continues by itself when the connection comes back after a start w
   const offlineTitle = `Zachyceno po startu bez spojení ${Date.now()}`;
   await page.locator(".capture input").fill(offlineTitle);
   await page.locator(".capture input").press("Enter");
-  await expect(page.locator("article", { hasText: offlineTitle }).locator(".unsentMark")).toBeVisible();
+  await expect(page.locator("article", { hasText: offlineTitle }).locator('.taskRowMeta[data-meta-kind="sync"]')).toBeVisible();
   await page.unroute("**/api/**");
   await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await expect(page.locator(".offlineStart")).toHaveCount(0, { timeout: 20_000 });
   await expect(page.locator(".appShell")).toBeVisible();
   await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === offlineTitle).length, { timeout: 20_000 }).toBe(1);
   await expect.poll(async () => (await serverEntities(page)).filter((entity) => entity.title === title).length, { timeout: 20_000 }).toBe(1);
-  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toHaveCount(0);
+  await expect(page.locator("article", { hasText: title }).locator('.taskRowMeta[data-meta-kind="sync"]')).toHaveCount(0);
+  await expect(page.locator("article", { hasText: offlineTitle }).locator('.taskRowMeta[data-meta-kind="sync"]')).toHaveCount(0);
 });
 
 // A new task shows at once, marked as waiting, while its save is still on the way.
@@ -50,10 +51,10 @@ test("a new task is shown at once and marked until the server has it", async ({ 
   await page.locator(".capture input").press("Enter");
   const row = page.locator("article", { hasText: title });
   await expect(row).toBeVisible({ timeout: 2_000 });
-  await expect(row.locator(".unsentMark")).toHaveAttribute("aria-label", "Čeká na uložení");
+  await expect(row.locator('.taskRowMeta[data-meta-kind="sync"]')).toContainText("čeká na odeslání");
   release();
   await expectOnServer(page, (entity) => entity.title === title, true);
-  await expect(row.locator(".unsentMark")).toHaveCount(0);
+  await expect(row.locator('.taskRowMeta[data-meta-kind="sync"]')).toHaveCount(0);
 });
 
 // A task without a title (left by an older version) would make the server refuse every save.
@@ -549,7 +550,7 @@ test("signing out after an offline start sends offline changes once the connecti
   const title = `Před odhlášením offline ${Date.now()}`;
   await page.locator(".capture input").fill(title);
   await page.locator(".capture input").press("Enter");
-  await expect(page.locator("article", { hasText: title }).locator(".unsentMark")).toBeVisible();
+  await expect(page.locator("article", { hasText: title }).locator('.taskRowMeta[data-meta-kind="sync"]')).toContainText("čeká na odeslání");
   await page.unroute("**/api/**");
   await page.locator("button", { hasText: "Nastavení" }).first().click();
   await settingsSections(page).filter({ hasText: "Přístup" }).click();
