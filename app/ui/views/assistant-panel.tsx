@@ -11,7 +11,10 @@ function ProposalImpact({ proposal, tr }: { proposal: AIProposal; tr: (key: stri
     if (label === "Someday") return tr("approvalFlagSomeday");
     return label;
   };
-  const fieldValue = (value: string) => value === "true" ? tr("approvalYes") : value === "false" ? tr("approvalNo") : value;
+  const fieldValue = (label: string, value: string) =>
+    ["Inbox", "Today", "Someday"].includes(label)
+      ? value === "true" ? tr("approvalYes") : value === "false" ? tr("approvalNo") : value
+      : value;
   return <div className="proposalImpact">
     <div className="proposalCritical">
       <p><b>{tr("approvalTarget")}</b><span>{proposal.review?.target || proposal.summary}</span></p>
@@ -19,7 +22,7 @@ function ProposalImpact({ proposal, tr }: { proposal: AIProposal; tr: (key: stri
       <div className="proposalBeforeAfter">
         <b>{tr("approvalBeforeAfter")}</b>
         {reviewFields.length ? reviewFields.map((field) =>
-          <p key={field.label}><span>{fieldLabel(field.label)}</span><span>{fieldValue(field.before)} → {fieldValue(field.after)}</span></p>)
+          <p key={field.label}><span>{fieldLabel(field.label)}</span><span>{fieldValue(field.label, field.before)} → {fieldValue(field.label, field.after)}</span></p>)
           : <p><span>—</span><span>{tr("approvalNoFieldChanges")}</span></p>}
       </div>
       <p><b>{tr("approvalRelated")}</b><span>{proposal.review?.related.length ? proposal.review.related.join(", ") : tr("approvalNone")}</span></p>
