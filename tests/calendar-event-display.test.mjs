@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calendarEventDisplay, calendarEventOverlapsLocalDay, calendarEventOverlapsLocalDays } from "../lib/calendar-event-display.ts";
+import { addCalendarDays, calendarEventDisplay, calendarEventOverlapsLocalDay, calendarEventOverlapsLocalDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../lib/calendar-event-display.ts";
 
 test("an overnight event is clipped to the displayed local day and says it continues", () => {
   const display = calendarEventDisplay({
@@ -57,4 +57,17 @@ test("all-day membership follows date-only bounds, not the viewer's instant offs
   assert.equal(calendarEventOverlapsLocalDay(event, "2026-10-24", "Europe/Prague"), false);
   assert.equal(calendarEventOverlapsLocalDays(event, "2026-10-18", 7, "Europe/Prague"), true);
   assert.equal(calendarEventOverlapsLocalDays(event, "2026-10-24", 7, "Europe/Prague"), false);
+});
+
+test("near-term calendar range covers tomorrow through day seven and keeps continuing events", () => {
+  const today = "2026-10-19";
+  const range = calendarLocalDayRange(addCalendarDays(today, 1), 7, "America/Los_Angeles");
+  const event = (start, end, allDay = false) => ({ start, end, allDay });
+  assert.equal(range.firstDay, "2026-10-20");
+  assert.equal(range.lastExclusiveDay, "2026-10-27");
+  assert.equal(calendarEventOverlapsLocalRange(event("2026-10-19T17:00:00Z", "2026-10-20T06:00:00Z"), range), false);
+  assert.equal(calendarEventOverlapsLocalRange(event("2026-10-19T17:00:00Z", "2026-10-20T08:00:00Z"), range), true);
+  assert.equal(calendarEventOverlapsLocalRange(event("2026-10-20T00:00:00Z", "2026-10-22T00:00:00Z", true), range), true);
+  assert.equal(calendarEventOverlapsLocalRange(event("2026-10-26T00:00:00Z", "2026-10-27T00:00:00Z", true), range), true);
+  assert.equal(calendarEventOverlapsLocalRange(event("2026-10-27T00:00:00Z", "2026-10-28T00:00:00Z", true), range), false);
 });

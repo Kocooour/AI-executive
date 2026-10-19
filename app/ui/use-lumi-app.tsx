@@ -9,7 +9,7 @@ import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
-import { calendarEventOverlapsLocalDay, calendarEventOverlapsLocalDays } from "../../lib/calendar-event-display";
+import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -1316,10 +1316,12 @@ export function useLumiApp() {
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
     testNotification, saveNotificationSettings } = useNotifications({ tr, language });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
-  const calendarTodayParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
-  const calendarToday = `${calendarTodayParts.year}-${calendarTodayParts.month}-${calendarTodayParts.day}`;
+  const calendarToday = useMemo(() => {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: calendarTimezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date(badgeNow)).map((part) => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }, [badgeNow, calendarTimezone]);
   const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
   const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
@@ -1345,14 +1347,19 @@ export function useLumiApp() {
   // complete local-day slice. A morning or evening commitment must not disappear
   // merely because it falls outside the configured working interval.
   const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
-  const calendarDayEvents = calendarEvents.filter((event) => calendarEventOverlapsLocalDay(event, calendarToday, calendarTimezone));
+  const [calendarTodayRange, calendarNearTermRange] = useMemo(() => [
+    calendarLocalDayRange(calendarToday, 1, calendarTimezone),
+    calendarLocalDayRange(addCalendarDays(calendarToday, 1), 7, calendarTimezone),
+  ], [calendarToday, calendarTimezone]);
+  const calendarDayEvents = useMemo(() => calendarEvents.filter((event) =>
+    calendarEventOverlapsLocalRange(event, calendarTodayRange)), [calendarEvents, calendarTodayRange]);
   const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) =>
     source.status === "ready" && source.lastSuccessAt !== null &&
     calendarFreshNow >= source.lastSuccessAt && calendarFreshNow - source.lastSuccessAt <= 30 * 60_000,
   );
-  const nearbyCalendarEvents = calendarEvents
-    .filter((event) => calendarEventOverlapsLocalDays(event, calendarToday, 7, calendarTimezone))
-    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const nearbyCalendarEvents = useMemo(() => calendarEvents
+    .filter((event) => calendarEventOverlapsLocalRange(event, calendarNearTermRange))
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)), [calendarEvents, calendarNearTermRange]);
   const mergedBusy = todayCalendarEvents.filter((event) => event.busy).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
