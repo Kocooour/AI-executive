@@ -3505,6 +3505,31 @@ h3 {
 .calendarView p { margin: 0; }
 .calendarView .calendarAgenda { display: grid; gap: 8px; }
 .calendarView .textAction { justify-self: start; min-height: 44px; }
+.calendarOverview { display: grid; gap: 8px; }
+.calendarOverview > h3 { margin: 8px 0 0; font-size: 1rem; }
+.calendarFreshness { font-weight: 700; }
+.calendarFreshness.stale, .calendarFreshness.disconnected { color: var(--danger, #a64220); }
+.calendarAgendaItem, .calendarPlanItem { border: 1px solid var(--line, #e8e8ef); border-radius: 12px; background: var(--surface, #fff); overflow: hidden; }
+.calendarAgendaItem.busy, .calendarPlanItem.existing { border-left: 4px solid var(--accent, #6557e8); }
+.calendarAgendaItem.free { opacity: .78; }
+.calendarAgendaItem.conflict, .calendarPlanItem.conflict { border-color: var(--danger, #a64220); border-left-color: var(--danger, #a64220); }
+.calendarAgendaOpen { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; width: 100%; align-items: center; gap: 12px; padding: 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.calendarAgendaOpen small, .calendarPlanItem small { color: var(--muted, #777); }
+.calendarEventInspector { display: grid; gap: 8px; padding: 0 12px 12px; border-top: 1px solid var(--line, #e8e8ef); }
+.calendarEventInspector p { color: var(--muted, #777); font-size: .9rem; }
+.calendarEventInspector button, .calendarPlanActions button { min-height: 40px; justify-self: start; }
+.calendarPlanList { display: grid; gap: 8px; }
+.calendarPlanItem { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px; }
+.calendarPlanItem > div { min-width: 0; }
+.calendarPlanItem strong, .calendarPlanItem small { display: block; }
+.calendarPlanItem p { margin-top: 5px; color: var(--muted, #777); font-size: .86rem; }
+.calendarPlanActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+@media (max-width: 640px) {
+  .calendarAgendaOpen, .calendarPlanItem { grid-template-columns: 72px minmax(0, 1fr); }
+  .calendarAgendaOpen small, .calendarPlanActions { grid-column: 2; }
+  .calendarPlanActions { justify-content: flex-start; }
+  .calendarPlanActions button { flex: 1 1 132px; }
+}
 .mobileCaptureButton { display: none; }
 
 @media (max-width: 700px) {
