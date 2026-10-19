@@ -367,7 +367,13 @@ export function useLumiApp() {
         body: JSON.stringify({ action, proposalId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("aiActionFailed"));
+      if (!response.ok) {
+        const message = localizeServerError(result.error, tr) || tr("aiActionFailed");
+        if (response.status === 409 && action === "confirm") {
+          setMessages((current) => current.map((item) => item.proposal?.id === proposalId ? { ...item, blocked: message } : item));
+        }
+        throw new Error(message);
+      }
       setMessages((current) => [
         ...current.map((message) =>
           message.proposal?.id === proposalId || (action === "confirm" && message.actionId)

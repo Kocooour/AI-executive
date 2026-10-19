@@ -37,6 +37,14 @@ export interface PublicAIProposal {
   summary: string;
   changes: Array<{ label: string; value: string }>;
   expiresAt: number;
+  workspaceId: string;
+  review: {
+    target: string;
+    workspace: string;
+    fields: Array<{ label: string; before: string; after: string }>;
+    related: string[];
+    sideEffects: string[];
+  };
 }
 
 export interface AIPlanResponse {
@@ -407,6 +415,52 @@ function createProposal(
   const id = randomUUID();
   const now = Date.now();
   const expiresAt = now + 5 * 60_000;
+  const snapshot = readSnapshot();
+  const previous = operation.kind === "create" ? null : snapshot.entities.find((entity) => entity.id === operation.entityId);
+  const workspace = snapshot.entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)?.title || workspaceId;
+  const fields: PublicAIProposal["review"]["fields"] = [];
+  const related: string[] = [];
+  if (previous) {
+    for (const relation of snapshot.relations) {
+      if (relation.workspaceId !== workspaceId || relation.sourceEntityId !== previous.id && relation.targetEntityId !== previous.id) continue;
+      const otherId = relation.sourceEntityId === previous.id ? relation.targetEntityId : relation.sourceEntityId;
+      const other = snapshot.entities.find((entity) => entity.id === otherId && entity.workspaceId === workspaceId);
+      if (other && !related.includes(other.title)) related.push(other.title);
+    }
+  }
+  if (operation.kind === "create") {
+    fields.push({ label: "Task", before: "Does not exist", after: operation.entity.title });
+    fields.push({ label: "When", before: "—", after: String(operation.entity.properties.when || "Anytime") });
+    for (const relation of operation.relations) {
+      const target = snapshot.entities.find((entity) => entity.id === relation.targetEntityId);
+      if (target) related.push(target.title);
+    }
+  } else if (operation.kind === "project") {
+    const oldProject = operation.expectedRelations[0] && snapshot.entities.find((entity) => entity.id === operation.expectedRelations[0].targetEntityId);
+    const newProject = snapshot.entities.find((entity) => entity.id === operation.relation.targetEntityId);
+    fields.push({ label: "Project", before: oldProject?.title || "No project", after: newProject?.title || "Unknown project" });
+    if (newProject) related.push(newProject.title);
+  } else if (previous) {
+    const after = operation.patch;
+    if (previous.status !== after.status) fields.push({ label: "Status", before: previous.status, after: after.status });
+    for (const [label, key] of [["When", "when"], ["Priority", "priority"], ["Planned start", "plannedStart"], ["Planned end", "plannedEnd"]] as const) {
+      const beforeValue = String(previous.properties[key] || "—");
+      const afterValue = String(after.properties[key] || "—");
+      if (beforeValue !== afterValue) fields.push({ label, before: beforeValue, after: afterValue });
+    }
+    if (fields.length === 0) fields.push({ label: "Planning decision", before: "No decision", after: String((after.properties.planningFeedback as { decision?: string } | undefined)?.decision || "Updated") });
+  }
+  const review = {
+    target: operation.kind === "create" ? operation.entity.title : previous?.title || summary,
+    workspace,
+    fields,
+    related,
+    sideEffects: [
+      "approvalTaskSync",
+      ...(operation.kind === "update" && fields.some((field) => ["When", "Planned start", "Planned end"].includes(field.label)) ? ["approvalCalendarView"] : []),
+      "approvalNoExternalWrite",
+    ],
+  };
   getDatabase()
     .prepare(`
       INSERT INTO ai_proposals
@@ -415,7 +469,7 @@ function createProposal(
     `)
     .run(id, sessionBinding, workspaceId, baseRevision, JSON.stringify({ operation, summary, changes }), now, expiresAt);
   getDatabase().prepare("DELETE FROM ai_proposals WHERE expires_at < ? AND status = 'pending'").run(now);
-  return { id, summary, changes, expiresAt };
+  return { id, summary, changes, expiresAt, workspaceId, review };
 }
 
 export function proposeDayPlanBlock(input: {

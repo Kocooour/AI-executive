@@ -238,11 +238,20 @@ export interface AIProposal {
   summary: string;
   changes: Array<{ label: string; value: string }>;
   expiresAt: number;
+  workspaceId: string;
+  review: {
+    target: string;
+    workspace: string;
+    fields: Array<{ label: string; before: string; after: string }>;
+    related: string[];
+    sideEffects: string[];
+  };
 }
 export interface AssistantMessage extends AIMessage {
   proposal?: AIProposal;
   actionId?: string;
   resolved?: boolean;
+  blocked?: string;
 }
 export type Language = "cs" | "en";
 export type ThemeMode = "system" | "light" | "dark";
