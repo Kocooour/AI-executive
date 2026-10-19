@@ -4,14 +4,23 @@ import type { LumiApp } from "../use-lumi-app";
 import type { AIProposal } from "../types";
 
 function ProposalImpact({ proposal, tr }: { proposal: AIProposal; tr: (key: string) => string }) {
+  const reviewFields = proposal.review?.fields || proposal.changes.map((item) => ({ label: item.label, before: "—", after: item.value }));
+  const fieldLabel = (label: string) => {
+    if (label === "Inbox") return tr("approvalFlagInbox");
+    if (label === "Today") return tr("approvalFlagToday");
+    if (label === "Someday") return tr("approvalFlagSomeday");
+    return label;
+  };
+  const fieldValue = (value: string) => value === "true" ? tr("approvalYes") : value === "false" ? tr("approvalNo") : value;
   return <div className="proposalImpact">
     <div className="proposalCritical">
       <p><b>{tr("approvalTarget")}</b><span>{proposal.review?.target || proposal.summary}</span></p>
       <p><b>{tr("workspace")}</b><span>{proposal.review?.workspace || proposal.changes.find((item) => item.label === "Workspace")?.value || "—"}</span></p>
       <div className="proposalBeforeAfter">
         <b>{tr("approvalBeforeAfter")}</b>
-        {(proposal.review?.fields || proposal.changes.map((item) => ({ label: item.label, before: "—", after: item.value }))).map((field) =>
-          <p key={field.label}><span>{field.label}</span><span>{field.before} → {field.after}</span></p>)}
+        {reviewFields.length ? reviewFields.map((field) =>
+          <p key={field.label}><span>{fieldLabel(field.label)}</span><span>{fieldValue(field.before)} → {fieldValue(field.after)}</span></p>)
+          : <p><span>—</span><span>{tr("approvalNoFieldChanges")}</span></p>}
       </div>
       <p><b>{tr("approvalRelated")}</b><span>{proposal.review?.related.length ? proposal.review.related.join(", ") : tr("approvalNone")}</span></p>
       <div className="proposalSideEffects"><b>{tr("approvalSideEffects")}</b><ul>{proposal.review?.sideEffects.length ? proposal.review.sideEffects.map((effect) => <li key={effect}>{tr(effect)}</li>) : <li>{tr("approvalLocalOnly")}</li>}</ul></div>
