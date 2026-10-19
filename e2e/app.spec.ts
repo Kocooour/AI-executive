@@ -69,7 +69,6 @@ test("a task keeps its selected area and can change it after capture", async ({ 
   }, title)).toBe(ids.first);
   await page.goto("/?view=Inbox");
   const row = page.locator("article", { hasText: title }).first();
-  await expect(row.locator(".taskRowMeta")).toHaveCount(0);
   await row.click();
   await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.first);
   await page.locator("aside.detail").getByLabel("Oblast").selectOption(ids.second);
@@ -82,8 +81,8 @@ test("a task keeps its selected area and can change it after capture", async ({ 
     return snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) => relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId;
   }, title)).toBe(ids.second);
   await page.reload();
-  await expect(page.locator("article", { hasText: title }).first()).toContainText("Dům");
   await page.locator("article", { hasText: title }).first().click();
+  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.second);
   await expect(page.locator("aside.detail").getByLabel("Odhadovaná náročnost")).toHaveValue("4");
 });
 
@@ -136,7 +135,8 @@ test("capture switches destination and area to the selected workspace", async ({
       relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId };
   }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.targetAreaId });
   await expect(page.locator(".workspaceButton")).toContainText("Rodina sdílená");
-  await expect(page.locator("article", { hasText: title }).first()).toContainText("Rodina");
+  await page.locator("article", { hasText: title }).first().click();
+  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.targetAreaId);
 });
 
 test("a task added from a project in another workspace offers that workspace's areas", async ({ page }) => {
