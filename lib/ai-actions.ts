@@ -416,7 +416,7 @@ function createProposal(
   const now = Date.now();
   const expiresAt = now + 5 * 60_000;
   const snapshot = readSnapshot();
-  const previous = operation.kind === "create" ? null : snapshot.entities.find((entity) => entity.id === operation.entityId);
+  const previous = operation.kind === "create" ? null : snapshot.entities.find((entity) => entity.id === operation.entityId && entity.workspaceId === workspaceId);
   const workspace = snapshot.entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId)?.title || workspaceId;
   const fields: PublicAIProposal["review"]["fields"] = [];
   const related: string[] = [];
@@ -432,12 +432,12 @@ function createProposal(
     fields.push({ label: "Task", before: "Does not exist", after: operation.entity.title });
     fields.push({ label: "When", before: "—", after: String(operation.entity.properties.when || "Anytime") });
     for (const relation of operation.relations) {
-      const target = snapshot.entities.find((entity) => entity.id === relation.targetEntityId);
+      const target = snapshot.entities.find((entity) => entity.id === relation.targetEntityId && entity.workspaceId === workspaceId);
       if (target) related.push(target.title);
     }
   } else if (operation.kind === "project") {
-    const oldProject = operation.expectedRelations[0] && snapshot.entities.find((entity) => entity.id === operation.expectedRelations[0].targetEntityId);
-    const newProject = snapshot.entities.find((entity) => entity.id === operation.relation.targetEntityId);
+    const oldProject = operation.expectedRelations[0] && snapshot.entities.find((entity) => entity.id === operation.expectedRelations[0].targetEntityId && entity.workspaceId === workspaceId);
+    const newProject = snapshot.entities.find((entity) => entity.id === operation.relation.targetEntityId && entity.workspaceId === workspaceId);
     fields.push({ label: "Project", before: oldProject?.title || "No project", after: newProject?.title || "Unknown project" });
     if (newProject) related.push(newProject.title);
   } else if (previous) {

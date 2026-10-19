@@ -67,4 +67,64 @@ test.describe("mobile proposal approval", () => {
     await expect(sheet.getByRole("button", { name: "Odmítnout" })).toBeEnabled();
     expect(confirmCalls).toBe(0);
   });
+
+  test("changing the write workspace in All clears proposal details and ignores a late reply", async ({ page }) => {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    const otherWorkspaceId = await page.evaluate(async () => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const workspaceId = `approval-other-${Date.now()}`;
+      const now = Date.now();
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: [...snapshot.entities, { id: `workspace:${workspaceId}`, type: "workspace", title: "Other", status: "active", workspaceId, properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: now, updatedAt: now }],
+        relations: snapshot.relations, deletedIds: [], revivedIds: [],
+      }) });
+      if (!response.ok) throw new Error(`Could not add test workspace: ${response.status}`);
+      return workspaceId;
+    });
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.getByRole("button", { name: "Přepnout workspace" }).click();
+    await page.locator('.mobileWorkspaceMenu button[data-workspace-id="all"]').click();
+
+    const proposal = { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", summary: "Přesunout Tajný úkol", workspaceId: "personal", expiresAt: Date.now() + 300_000,
+      changes: [{ label: "Workspace", value: "Personal" }], review: { target: "Tajný úkol", workspace: "Personal",
+        fields: [{ label: "When", before: "Dnes", after: "Zítra" }], related: ["Tajný projekt"], sideEffects: ["approvalTaskSync"] } };
+    let releaseLateReply: (() => void) | undefined;
+    let requestCount = 0;
+    await page.route("**/api/ai", async (route) => {
+      requestCount++;
+      if (requestCount === 2) await new Promise<void>((resolve) => { releaseLateReply = resolve; });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "Připravil jsem návrh.", proposal }) });
+    });
+    const ask = async (text: string) => {
+      await page.getByRole("button", { name: "Zeptat se AI" }).click();
+      await page.locator(".assistantComposer input").fill(text);
+      await page.locator(".assistantComposer input").press("Enter");
+    };
+    const switchWriteWorkspace = async (id: string) => {
+      await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
+      await page.locator(".mobileCaptureButton").click();
+      const capture = page.getByRole("dialog", { name: "Rychlé zadání" });
+      await capture.getByLabel("Workspace").selectOption(id);
+      await capture.getByRole("button", { name: "Zrušit" }).click();
+    };
+
+    await ask("Přesuň Tajný úkol");
+    await expect(page.getByRole("button", { name: "Zkontrolovat návrh" })).toBeVisible();
+    await switchWriteWorkspace(otherWorkspaceId);
+    await page.getByRole("button", { name: "Zeptat se AI" }).click();
+    await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");
+    await expect(page.locator(".assistantMessages")).not.toContainText("Tajný projekt");
+    await page.locator(".assistantHead").getByRole("button", { name: "Zavřít" }).click();
+
+    await ask("Připrav návrh v Other");
+    await expect.poll(() => requestCount).toBe(2);
+    await switchWriteWorkspace("personal");
+    releaseLateReply?.();
+    await page.getByRole("button", { name: "Zeptat se AI" }).click();
+    await expect(page.locator(".assistantMessages")).not.toContainText("Tajný úkol");
+    await expect(page.locator(".assistantMessages")).not.toContainText("Tajný projekt");
+  });
 });
