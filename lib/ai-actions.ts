@@ -442,13 +442,29 @@ function createProposal(
     if (newProject) related.push(newProject.title);
   } else if (previous) {
     const after = operation.patch;
-    if (previous.status !== after.status) fields.push({ label: "Status", before: previous.status, after: after.status });
+    // Review the actual values that will be written, not just the requested date.
+    // Even a same-date reschedule can remove a task from Inbox (true -> false).
+    const addChange = (label: string, beforeValue: unknown, afterValue: unknown) => {
+      const display = (value: unknown) => value === undefined || value === null || value === "" ? "—" : String(value);
+      const before = display(beforeValue);
+      const next = display(afterValue);
+      if (before !== next) fields.push({ label, before, after: next });
+    };
+    addChange("Title", previous.title, after.title);
+    addChange("Content", previous.content, after.content);
+    addChange("Status", previous.status, after.status);
     for (const [label, key] of [["When", "when"], ["Priority", "priority"], ["Planned start", "plannedStart"], ["Planned end", "plannedEnd"]] as const) {
-      const beforeValue = String(previous.properties[key] || "—");
-      const afterValue = String(after.properties[key] || "—");
-      if (beforeValue !== afterValue) fields.push({ label, before: beforeValue, after: afterValue });
+      addChange(label, previous.properties[key], after.properties[key]);
     }
-    if (fields.length === 0) fields.push({ label: "Planning decision", before: "No decision", after: String((after.properties.planningFeedback as { decision?: string } | undefined)?.decision || "Updated") });
+    for (const [label, key] of [["Inbox", "inbox"], ["Today", "today"], ["Someday", "someday"]] as const) {
+      // Missing legacy flags behave like false in list membership; do not hide false with ||.
+      addChange(label, previous.properties[key] === true, after.properties[key] === true);
+    }
+    const oldDecision = (previous.properties.planningFeedback as { decision?: string } | undefined)?.decision;
+    const newDecision = (after.properties.planningFeedback as { decision?: string } | undefined)?.decision;
+    addChange("Planning decision", oldDecision, newDecision);
+    // An empty diff means no displayed task field changes (for example, an activity-only write).
+    // Do not manufacture a generic "Planning decision: No decision -> Updated" in that case.
   }
   const review = {
     target: operation.kind === "create" ? operation.entity.title : previous?.title || summary,
