@@ -31,7 +31,7 @@ export const keptInFileTables = ["schema_migrations"] as const;
 // Not in a backup, and emptied on restore: they refer to results or sessions from before the restore.
 // `calendar_events` is a cache of the calendar feeds: after a restore its rows may belong to a source the restored data no
 // longer has (they would keep blocking time in the day plan), so it is emptied and refreshed from the restored sources.
-export const excludedClearedTables = ["context_commands", "work_session_commands", "ai_proposals", "calendar_events"] as const;
+export const excludedClearedTables = ["context_commands", "work_session_commands", "ai_proposals", "calendar_events", "semantic_index_outbox"] as const;
 
 export const excludedTables: readonly string[] = [...excludedKeptTables, ...excludedClearedTables];
 export const emptiedInFileTables: readonly string[] = excludedTables.filter((table) => !(keptInFileTables as readonly string[]).includes(table));
