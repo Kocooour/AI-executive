@@ -43,4 +43,18 @@ test.describe("B2 responsive detail inspector", () => {
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
     await expect(page.locator(".taskRow", { hasText: seeded.plainTask })).toBeVisible();
   });
+
+  test("a completing save does not replace a newer inspector selection", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?view=Inbox");
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: seeded.plainTask }).first().click();
+    const title = page.locator("aside.inspectorDetail .titleEdit");
+    await title.fill(`${seeded.plainTask} upraveno`);
+    await page.locator(".taskRow", { hasText: seeded.renameTask }).first().click();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.renameTask);
+    // The blur save of the first task may complete after this click; it must not reopen it.
+    await expect.poll(() => page.locator("aside.inspectorDetail .titleEdit").inputValue()).toBe(seeded.renameTask);
+  });
+
 });
