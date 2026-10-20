@@ -205,6 +205,59 @@ test.describe("B1 Inbox triage", () => {
     }
   });
 
+  test("concurrent Today and Waiting decisions commit only one outcome", async ({ page }) => {
+    const title = await openNewInboxTask(page);
+    const second = await page.context().newPage();
+    try {
+      await second.goto("/?view=Inbox");
+      await waitUntilSynced(second);
+      await second.locator(".taskRow", { hasText: title }).first().click();
+      await Promise.all([
+        page.locator(".inboxTriage").getByRole("button", { name: "Dnes", exact: true })
+          .evaluate((button) => (button as HTMLButtonElement).click()),
+        second.locator(".inboxTriage").getByRole("button", { name: "Čeká na" })
+          .evaluate((button) => (button as HTMLButtonElement).click()),
+      ]);
+      await expect.poll(async () => {
+        const task = (await serverEntities(page)).find((entity) => entity.title === title);
+        return {
+          inbox: task?.properties?.inbox,
+          decisions: [task?.properties?.today === true, task?.properties?.waiting === true]
+            .filter(Boolean).length,
+        };
+      }, { timeout: 20_000 }).toEqual({ inbox: false, decisions: 1 });
+    } finally {
+      await second.close();
+    }
+  });
+
+  test("confirmation from a stale tab cannot discard an already triaged task", async ({ page }) => {
+    const title = await openNewInboxTask(page);
+    const second = await page.context().newPage();
+    try {
+      await second.goto("/?view=Inbox");
+      await waitUntilSynced(second);
+      await second.locator(".taskRow", { hasText: title }).first().click();
+      await second.locator(".inboxTriage").getByRole("button", { name: "Zahodit" }).click();
+      const dialog = second.locator("dialog.confirmDialog");
+      await expect(dialog).toBeVisible();
+
+      await page.locator(".inboxTriage").getByRole("button", { name: "Dnes", exact: true }).click();
+      await expect.poll(async () => {
+        const task = (await serverEntities(page)).find((entity) => entity.title === title);
+        return { inbox: task?.properties?.inbox, today: task?.properties?.today };
+      }, { timeout: 20_000 }).toEqual({ inbox: false, today: true });
+
+      await dialog.getByRole("button", { name: "Zahodit" }).click();
+      await expect.poll(async () => {
+        const task = (await serverEntities(page)).find((entity) => entity.title === title);
+        return { exists: Boolean(task), inbox: task?.properties?.inbox, today: task?.properties?.today };
+      }, { timeout: 20_000 }).toEqual({ exists: true, inbox: false, today: true });
+    } finally {
+      await second.close();
+    }
+  });
+
   test("waiting leaves Inbox and exposes follow-up controls", async ({ page }) => {
     const title = await openNewInboxTask(page);
     await page.locator(".inboxTriage").getByRole("button", { name: "Čeká na" }).click();
