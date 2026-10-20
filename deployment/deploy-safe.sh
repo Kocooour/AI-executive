@@ -54,25 +54,82 @@ verify_service() {
   systemctl is-active --quiet "$SERVICE"
 }
 
-# Canonical row counts must not decrease. Use on deployment AND code rollback.
+# Capture IDs and lifecycle state, not user content. Run as the service account so
+# opening SQLite cannot create a root-owned -shm/-wal on the live data directory.
+# These snapshots are held only in the 0700 root-owned release backup.
+snapshot_work_sessions() {
+  runuser -u ai-executive -- /usr/bin/node - "$DATA/store.sqlite" <<'NODE'
+const { DatabaseSync } = require("node:sqlite");
+const database = new DatabaseSync(process.argv[2], { readOnly: true });
+try {
+  database.exec("BEGIN");
+  const tables = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  const hasSessions = tables.has("work_sessions");
+  const hasIntervals = tables.has("work_session_intervals");
+  if (hasSessions !== hasIntervals) throw new Error("Neúplne schema pracovnich relaci");
+  const snapshot = {
+    hasSessions,
+    sessions: hasSessions ? database.prepare(
+      "SELECT id, workspace_id, state, completed_at FROM work_sessions ORDER BY id").all() : [],
+    intervals: hasIntervals ? database.prepare(
+      "SELECT id, session_id FROM work_session_intervals ORDER BY id").all() : [],
+  };
+  database.exec("COMMIT");
+  console.log(JSON.stringify(snapshot));
+} finally { database.close(); }
+NODE
+}
+
+# Verify all non-retained owner tables monotonically, and validate session retention
+# by exact IDs rather than row counts. Finishing a session legitimately removes
+# the oldest completed session beyond 1000 and all of its intervals.
+# This verifier runs on both deployment and code rollback.
 verify_row_counts() {
-  local before="$1" after="$2"
-  /usr/bin/node - "$before" "$after" <<'NODE'
+  local before="$1" after="$2" before_sessions="$3" after_sessions="$4"
+  /usr/bin/node - "$before" "$after" "$before_sessions" "$after_sessions" <<'NODE'
 const fs = require("node:fs");
-const [a, b] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
+const [a, b, oldSessions, newSessions] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
 if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
   throw new Error("Integrita produkcni databaze selhala");
 const ignored = new Set([
   "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries",
-  // PR #79: a derived invalidation queue, not canonical user data. Its bounded
-  // trigger legitimately replaces >1000 events with one global rebuild marker.
+  // A bounded invalidation queue: 1001 records legitimately compact into 1 marker.
   "semantic_index_outbox"
 ]);
+const retentionTables = new Set(["work_sessions", "work_session_intervals"]);
 for (const [table, count] of Object.entries(a.tables)) {
-  if (ignored.has(table)) continue;
+  if (ignored.has(table) || retentionTables.has(table)) continue;
   const after = b.tables[table];
   if (!Number.isSafeInteger(after) || after < count)
     throw new Error("KRITICKY UBYTEK zaznamu: " + table + " (" + count + " -> " + after + ")");
+}
+if (oldSessions.hasSessions && !newSessions.hasSessions)
+  throw new Error("KRITICKY UBYTEK: zmizelo schema pracovnich relaci");
+if (oldSessions.hasSessions) {
+  if (a.tables.work_sessions !== oldSessions.sessions.length ||
+      a.tables.work_session_intervals !== oldSessions.intervals.length)
+    throw new Error("Nekonzistentni vychozi snapshot pracovnich relaci");
+  const liveIds = new Set(newSessions.sessions.map(s => s.id));
+  const removed = oldSessions.sessions.filter(s => !liveIds.has(s.id));
+  const removedIds = new Set(removed.map(s => s.id));
+  const liveIntervals = new Set(newSessions.intervals.map(s => s.id));
+  // Only the completed *oldest* sessions can be pruned, per workspace, when
+  // exactly 1000 newer completed sessions remain (work-sessions.ts retention).
+  for (const session of removed) {
+    if (session.state !== "completed" || !Number.isSafeInteger(session.completed_at))
+      throw new Error("KRITICKY UBYTEK zaznamu: work_sessions (aktivni nebo bez data dokonceni)");
+    const kept = newSessions.sessions.filter(s => s.workspace_id === session.workspace_id && s.state === "completed");
+    if (kept.length !== 1000 || kept.some(s => !Number.isSafeInteger(s.completed_at)) ||
+        session.completed_at > Math.min(...kept.map(s => s.completed_at)))
+      throw new Error("KRITICKY UBYTEK zaznamu: work_sessions (nejde o legitimni retenci)");
+  }
+  // Intervals may be deleted only together with a proven-pruned parent
+  // session; a missing interval for any kept session is an actual loss.
+  for (const interval of oldSessions.intervals) {
+    if (!liveIntervals.has(interval.id) && !removedIds.has(interval.session_id))
+      throw new Error("KRITICKY UBYTEK zaznamu: work_session_intervals");
+  }
+  if (removed.length) console.log("Retence pracovnich relaci overena: " + removed.length + " nejstarsich dokonceni.");
 }
 console.log("Integrita a pocty zaznamu: OK");
 NODE
@@ -117,7 +174,9 @@ on_exit() {
     if [ "$BACKUP_VALIDATED" = 1 ]; then
       if runuser -u ai-executive -- /usr/bin/node \
            "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
-         verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json"; then
+         snapshot_work_sessions > "$BACKUP/rollback-sessions.json" &&
+         verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json" \
+           "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json"; then
         echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
       else
         echo "KRITICKA CHYBA: rollback neobnovil pocet zaznamu, data nemenit naslepo." >&2
@@ -232,6 +291,7 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
   die "zaloha obsahuje neodpovidajici nebo chybejici soubory"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
+snapshot_work_sessions > "$BACKUP/before-sessions.json"
 /usr/bin/node "$APP/scripts/check-data.mjs" \
   "$BACKUP/data/store.sqlite" > "$BACKUP/copy.json"
 
@@ -271,8 +331,10 @@ systemctl start "$SERVICE"
 verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/after.json"
+snapshot_work_sessions > "$BACKUP/after-sessions.json"
 
-verify_row_counts "$BACKUP/before.json" "$BACKUP/after.json"
+verify_row_counts "$BACKUP/before.json" "$BACKUP/after.json" \
+  "$BACKUP/before-sessions.json" "$BACKUP/after-sessions.json"
 systemctl is-active --quiet "$SERVICE"
 STOPPED=0
 echo "======================================"
