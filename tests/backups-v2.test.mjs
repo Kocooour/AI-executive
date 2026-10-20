@@ -138,7 +138,16 @@ test("restore returns every included table to the backup, keeps excluded tables,
   for (const table of replaced.filter((name) => !scope.storeTables.includes(name))) {
     assert.equal(dump(db(), table), backedUp[table], `${table} is not as in the backup`);
   }
-  for (const table of scope.excludedClearedTables) assert.equal(db().prepare(`SELECT COUNT(*) AS value FROM ${quote(table)}`).get().value, 0, table);
+  for (const table of scope.excludedClearedTables.filter((name) => name !== "semantic_index_outbox")) {
+    assert.equal(db().prepare(`SELECT COUNT(*) AS value FROM ${quote(table)}`).get().value, 0, table);
+  }
+  // Restore discards stale queue entries and enqueues exactly one fresh, global rebuild.
+  // The outbox is excluded from the backup; its new marker is a side effect of restoreGeneration.
+  assert.deepEqual(db().prepare(
+    "SELECT object_type, object_id, workspace_id, operation FROM semantic_index_outbox ORDER BY id"
+  ).all().map((row) => ({ ...row })), [
+    { object_type: "rebuild", object_id: "*", workspace_id: "*", operation: "restore" },
+  ]);
   assert.deepEqual(dumpAll(keptSeedable), excludedBefore);
   assert.equal(dump(db(), "schema_migrations"), migrationsBefore);
   // Metadata other than the store revision is untouched (push keys stay).
