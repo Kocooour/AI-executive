@@ -225,6 +225,10 @@ export function useLumiApp() {
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
   const captureAreaTouched = useRef(false);
+  // B3: unsaved input is only in memory, scoped by workspace and capture type.
+  // No raw draft is written to localStorage or uploaded before confirmation.
+  const captureDrafts = useRef(new Map<string, string>());
+  const captureDraftKey = useRef("task:personal:");
   const draggingIdRef = useRef("");
   const dragScopeRef = useRef("");
   const dragTargetRef = useRef("");
@@ -1585,6 +1589,12 @@ export function useLumiApp() {
     }
   }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
+  // Closing the sheet preserves a typed draft until the app is reloaded. Sign-out
+  // discards all in-memory drafts together with the rest of the session.
+  useEffect(() => {
+    if (capture) captureDrafts.current.set(captureDraftKey.current, draft);
+  }, [capture, draft]);
+
   // The suggestion for Quick Capture depends on the text and where the task goes, not on every
   // reload of the local copy: a reload (a save, another tab, another device) must not restart it,
   // which would disable the add button for a moment and could swallow a click on it.
@@ -1741,7 +1751,35 @@ export function useLumiApp() {
     captureAreaTouched.current = true;
     setCaptureAreaId(areaId);
   }
+  function captureKey(type: "task" | "note", workspaceId: string, projectId = "") {
+    return `${type}:${workspaceId}:${projectId}`;
+  }
+  function replaceCaptureScope(type: "task" | "note", workspaceId: string, projectId = "") {
+    if (capture) captureDrafts.current.set(captureDraftKey.current, draft);
+    const key = captureKey(type, workspaceId, projectId);
+    captureDraftKey.current = key;
+    setDraft(captureDrafts.current.get(key) || "");
+  }
+  function chooseCaptureType(type: "task" | "note") {
+    if (type === captureType || captureProjectId) return;
+    replaceCaptureScope(type, writeWorkspaceId);
+    setCaptureType(type);
+    setCaptureAreaId("");
+    captureAreaTouched.current = false;
+    setCaptureSuggestion(null);
+    setCaptureSuggestionError("");
+    setCaptureProjectAction("none");
+  }
+  function discardCaptureDraft() {
+    captureDrafts.current.delete(captureDraftKey.current);
+    setDraft("");
+    setCaptureSuggestion(null);
+    setCaptureSuggestionError("");
+    setCaptureProjectAction(captureProjectId ? "existing" : "none");
+  }
   function selectCaptureWriteWorkspace(workspaceId: string) {
+    if (workspaceId === writeWorkspaceId) return;
+    replaceCaptureScope(captureType, workspaceId);
     // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
     setCaptureAreaId("");
     captureAreaTouched.current = false;
@@ -2120,11 +2158,12 @@ export function useLumiApp() {
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
     captureOpener.current = document.activeElement as HTMLElement | null;
+    const workspaceId = (projectId && items.find((item) => item.id === projectId)?.workspaceId) || writeWorkspaceId;
+    replaceCaptureScope(type, workspaceId, projectId);
     setCaptureType(type);
     setCaptureProjectId(projectId);
     setCaptureAreaId("");
     captureAreaTouched.current = false;
-    setDraft("");
     setCaptureSuggestion(null);
     setCaptureSuggestionError("");
     setCaptureSuggestionBusy(false);
@@ -2188,6 +2227,9 @@ export function useLumiApp() {
             }
           : {}),
       });
+      // The local-first commit already succeeded; do not revive a duplicate
+      // capture merely because the following server sync is delayed.
+      captureDrafts.current.delete(captureDraftKey.current);
     } catch (error) {
       console.error(error);
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
@@ -3423,6 +3465,8 @@ export function useLumiApp() {
     captureProjectId,
     captureAreaId,
     chooseCaptureArea,
+    chooseCaptureType,
+    discardCaptureDraft,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
