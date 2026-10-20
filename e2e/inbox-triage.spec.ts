@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "./fixtures";
+import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 import { seeded, serverEntities, waitUntilSynced } from "./helpers";
 
 test.describe("B1 Inbox triage", () => {
@@ -13,10 +14,9 @@ test.describe("B1 Inbox triage", () => {
     await input.press("Enter");
     const row = page.locator(".taskRow", { hasText: title }).first();
     await expect(row).toBeVisible();
-    const task = await expect.poll(async () =>
+    await expect.poll(async () =>
       (await serverEntities(page)).find((entity) => entity.title === title && entity.type === "task")?.properties?.inbox,
       { timeout: 20_000 }).toBe(true);
-    void task;
     await row.click();
     await expect(page.locator(".inboxTriage")).toBeVisible();
     return title;
