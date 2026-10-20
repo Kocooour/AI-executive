@@ -125,7 +125,8 @@ function liveEndpoint(type: string | null, id: string | null, archivedAt: number
     entity.type === type && ["workspace", "area", "project", "task", "note"].includes(entity.type));
 }
 
-function searchClaimRows(workspaceId: string, actor: ContextSearchActor) {
+/** Exact query used for retrieval, exported for EXPLAIN QUERY PLAN regression tests only. */
+export function contextSearchClaimSql(actor: ContextSearchActor) {
   const restrictions = actor !== "integration" ? "" : [
     "AND c.review_status = 'confirmed' AND c.freshness = 'current' AND c.sensitivity = 'normal'",
     "AND NOT EXISTS (SELECT 1 FROM context_evidence e",
@@ -148,7 +149,11 @@ function searchClaimRows(workspaceId: string, actor: ContextSearchActor) {
     "AND (c.target_subject_id IS NULL OR t.id IS NOT NULL)", restrictions,
     "ORDER BY c.updated_at DESC, c.id ASC LIMIT ?",
   ].join(" ");
-  return getDatabase().prepare(sql).all(workspaceId, maxScan + 1) as unknown as SearchClaimRow[];
+  return sql;
+}
+
+function searchClaimRows(workspaceId: string, actor: ContextSearchActor) {
+  return getDatabase().prepare(contextSearchClaimSql(actor)).all(workspaceId, maxScan + 1) as unknown as SearchClaimRow[];
 }
 
 export function searchContext(input: ContextSearchInput) {
