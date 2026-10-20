@@ -235,6 +235,11 @@ export function useLumiApp() {
   const inspectionVersion = useRef(0);
   const activeWorkspaceRef = useRef(activeWorkspaceId);
   activeWorkspaceRef.current = activeWorkspaceId;
+  useEffect(() => {
+    // A workspace transition makes any earlier inspection result ineligible.
+    inspectionVersion.current += 1;
+    setContext(null);
+  }, [activeWorkspaceId]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
