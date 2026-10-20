@@ -46,6 +46,20 @@ try {
   for (let i = 0; i < claimCount; i += 1) {
     insertClaim.run("scale-claim-" + i, JSON.stringify("BulkTarget claim " + i), now, now + i);
   }
+  // Every claim has real, active evidence. Without a claim_id-leading index the external
+  // NOT EXISTS correlates 5000 times with a full scan of this table.
+  const insertSource = database.prepare("INSERT INTO context_sources (id, workspace_id, revision, provider, coverage, sensitivity, created_at, updated_at) VALUES (?, 'personal', 1, ?, 'body', ?, ?, ?)");
+  insertSource.run("scale-source-normal", "scale-test", "normal", now, now);
+  insertSource.run("scale-source-protected", "scale-private", "confidential", now, now);
+  const insertEvidence = database.prepare("INSERT INTO context_evidence (id, workspace_id, revision, claim_id, source_id, created_at, updated_at, archived_at) VALUES (?, ?, 1, ?, ?, ?, ?, NULL)");
+  for (let i = 0; i < claimCount; i += 1) {
+    insertEvidence.run("scale-evidence-" + i, "personal", "scale-claim-" + i, "scale-source-normal", now, now);
+  }
+  // All of these must exclude the whole claim from EXTERNAL search, even if an active
+  // normal citation also exists. Cross-workspace evidence must not be silently ignored.
+  insertEvidence.run("scale-sensitive-evidence", "personal", "scale-claim-4999", "scale-source-protected", now, now);
+  insertEvidence.run("scale-foreign-evidence", "different-workspace", "scale-claim-4998", "scale-source-normal", now, now);
+  insertEvidence.run("scale-orphan-evidence", "personal", "scale-claim-4997", "missing-source", now, now);
   database.exec("COMMIT");
 } catch (error) { database.exec("ROLLBACK"); throw error; }
 
@@ -66,6 +80,32 @@ test("lexical search reads 5000 claims and a large snapshot without repeated ful
   assert.equal(external.results.every((hit) => hit.kind === "claim"), true);
   assert.equal("partial" in external, false);
   assert.ok(externalElapsed < 12_000, "external search took " + externalElapsed.toFixed(0) + "ms");
+});
+
+test("EXPLAIN confirms the real external guard uses the claim-leading evidence index", () => {
+  const migration = database.prepare("SELECT id FROM schema_migrations WHERE id = ?")
+    .get("2026-10-context-search-evidence-guard-index");
+  assert.ok(migration, "new additive migration is registered and applied");
+  assert.equal(Number(database.prepare("SELECT COUNT(*) AS count FROM context_evidence WHERE archived_at IS NULL")
+    .get().count), claimCount + 3);
+  const plan = database.prepare("EXPLAIN QUERY PLAN " + retrieval.contextSearchClaimSql("integration"))
+    .all("personal", claimCount + 1).map((row) => String(row.detail));
+  assert.ok(plan.some((detail) => /SEARCH e USING (?:COVERING )?INDEX context_evidence_claim_guard_idx/.test(detail)),
+    "correlated evidence predicate must use index: " + JSON.stringify(plan));
+  assert.equal(plan.some((detail) => /SCAN e(?:\\b|$)/.test(detail)), false,
+    "evidence table must not be fully scanned for each claim: " + JSON.stringify(plan));
+});
+
+test("real active evidence blocks protected, cross-workspace, and orphaned sources without changing owner results", () => {
+  const owner = retrieval.searchContext({ actor: "owner", workspaceId: "personal", query: "BulkTarget claim 4999", kinds: ["claim"] });
+  assert.equal(owner.results.some((hit) => hit.id === "scale-claim-4999"), true);
+  const external = retrieval.searchContext({ actor: "integration", workspaceId: "personal", query: "BulkTarget claim",
+    kinds: ["claim"], limit: 30 });
+  for (const id of ["scale-claim-4999", "scale-claim-4998", "scale-claim-4997"]) {
+    assert.equal(external.results.some((hit) => hit.id === id), false, id + " has forbidden evidence");
+  }
+  assert.equal(external.results[0].id, "scale-claim-4996");
+  assert.equal("partial" in external, false);
 });
 
 test("cursor over 5000 crosses mixed type categories and never becomes invalid", () => {
