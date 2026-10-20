@@ -150,6 +150,21 @@ scenarioCase("unhealthy: failed HTTP readiness triggers verified code rollback",
   assert.equal(r.service, "active");
   assert.equal(r.backups.length, 1);
 });
+scenarioCase("httpsfail: blocked Tailscale HTTPS triggers code rollback", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /sluzba nebo lokalni\/HTTPS API nejsou dostupne/);
+  assert.match(r.output, /Rollback: puvodni verze dostupna a zaznamy zachovany/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.backups.length, 1);
+});
+scenarioCase("corruptcopy: reject mismatched env, remove incomplete backup, restart original", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /zaloha env neodpovida originalu/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.deepEqual(r.backups, []);
+});
 scenarioCase("success: complete synthetic deploy validates build permissions and preserves data", (r, f) => {
   assert.equal(r.status, 0, r.output);
   assert.match(r.output, /NASAZENI DOKONCENO/);
