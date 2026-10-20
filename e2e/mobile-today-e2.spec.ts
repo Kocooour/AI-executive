@@ -127,9 +127,9 @@ for (const width of [390, 1280]) {
 
     // This repair must not change the existing Home workday-only agenda.
     await page.goto("/?view=Home");
-    await expect(page.locator(".homeView .calendarAgenda")).toContainText("Open midday calendar slot");
-    await expect(page.locator(".homeView .calendarAgenda")).not.toContainText("Evening meeting outside work hours");
-    await expect(page.locator(".homeView .calendarAgenda")).not.toContainText("Morning meeting outside work hours");
+    await expect(page.locator(".view-home .calendarAgenda")).toContainText("Open midday calendar slot");
+    await expect(page.locator(".view-home .calendarAgenda")).not.toContainText("Evening meeting outside work hours");
+    await expect(page.locator(".view-home .calendarAgenda")).not.toContainText("Morning meeting outside work hours");
     if (width === 390) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
