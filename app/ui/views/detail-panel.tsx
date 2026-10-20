@@ -118,18 +118,33 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     workSessionAction,
     workSessionBusy,
   } = app;
+  const inspectorRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  // Opening with the keyboard moves focus into the inspector; closing returns it to the
+  // row that opened it. Pointer-driven selection is left alone.
+  useEffect(() => {
+    if (selected) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.matches(".taskRowOpen")) {
+        returnFocusRef.current = active;
+        inspectorRef.current?.focus();
+      }
+    } else if (returnFocusRef.current) {
+      if (returnFocusRef.current.isConnected) returnFocusRef.current.focus();
+      returnFocusRef.current = null;
+    }
+  }, [selected?.id]);
   return (
     <>
       {selected && (
         <div className="backdrop inspectorBackdrop" onClick={closeDetail}>
-          <aside className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
+          <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
             <button
               className="close inspectorClose"
               type="button"
-              aria-label={language === "cs" ? "← Zpět" : "← Back"}
               onClick={closeDetail}
             >
-              <span className="inspectorCloseIcon" aria-hidden="true">×</span>
+              <span className="inspectorCloseIcon"><span aria-hidden="true">×</span><span className="inspectorCloseAccessible">{tr("close")}</span></span>
               <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
