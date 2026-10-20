@@ -152,6 +152,8 @@ export function useLumiApp() {
     [aiText, setAiText] = useState(""),
     [aiBusy, setAiBusy] = useState(false),
     [messages, setMessages] = useState<AssistantMessage[]>([]);
+  // A workspace change invalidates both visible conversation content and replies still in flight.
+  const assistantRequestVersion = useRef(0);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
@@ -311,6 +313,7 @@ export function useLumiApp() {
   async function askAI(promptOverride?: string) {
     const prompt = typeof promptOverride === "string" ? promptOverride.trim() : aiText.trim();
     if (!prompt || aiBusy) return;
+    const requestVersion = assistantRequestVersion.current;
     const user: { role: "user"; content: string } = {
       role: "user",
       content: prompt,
@@ -328,6 +331,7 @@ export function useLumiApp() {
     try {
       await syncQueue.current;
       if (localStorage.getItem(pendingKey) === "1") await syncToServer();
+      if (requestVersion !== assistantRequestVersion.current) return;
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -339,6 +343,7 @@ export function useLumiApp() {
         }),
       });
       const result = await response.json().catch(() => ({}));
+      if (requestVersion !== assistantRequestVersion.current) return;
       if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("assistantRequestFailed"));
       setMessages([...history, {
         role: "assistant",
@@ -346,6 +351,7 @@ export function useLumiApp() {
         proposal: result.proposal,
       }]);
     } catch (error) {
+      if (requestVersion !== assistantRequestVersion.current) return;
       setMessages([...history, {
         role: "assistant",
         // A request that did not reach the server (no connection) is said in the interface
@@ -353,12 +359,13 @@ export function useLumiApp() {
         content: error instanceof TypeError ? tr("assistantOffline") : error instanceof Error ? error.message : tr("assistantRequestFailed"),
       }]);
     } finally {
-      setAiBusy(false);
+      if (requestVersion === assistantRequestVersion.current) setAiBusy(false);
     }
   }
 
   async function resolveAIProposal(proposalId: string, action: "confirm" | "cancel") {
     if (aiBusy) return;
+    const requestVersion = assistantRequestVersion.current;
     setAiBusy(true);
     try {
       const response = await fetch("/api/ai/actions", {
@@ -367,7 +374,14 @@ export function useLumiApp() {
         body: JSON.stringify({ action, proposalId }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("aiActionFailed"));
+      if (requestVersion !== assistantRequestVersion.current) return;
+      if (!response.ok) {
+        const message = localizeServerError(result.error, tr) || tr("aiActionFailed");
+        if (response.status === 409 && action === "confirm") {
+          setMessages((current) => current.map((item) => item.proposal?.id === proposalId ? { ...item, blocked: message } : item));
+        }
+        throw new Error(message);
+      }
       setMessages((current) => [
         ...current.map((message) =>
           message.proposal?.id === proposalId || (action === "confirm" && message.actionId)
@@ -382,17 +396,19 @@ export function useLumiApp() {
       ]);
       if (action === "confirm") await pullFromServer();
     } catch (error) {
+      if (requestVersion !== assistantRequestVersion.current) return;
       setMessages((current) => [...current, {
         role: "assistant",
         content: error instanceof Error ? error.message : tr("aiActionFailed"),
       }]);
     } finally {
-      setAiBusy(false);
+      if (requestVersion === assistantRequestVersion.current) setAiBusy(false);
     }
   }
 
   async function undoAIAction(actionId: string) {
     if (aiBusy) return;
+    const requestVersion = assistantRequestVersion.current;
     setAiBusy(true);
     try {
       const response = await fetch("/api/ai/actions", {
@@ -401,6 +417,7 @@ export function useLumiApp() {
         body: JSON.stringify({ action: "undo", actionId }),
       });
       const result = await response.json().catch(() => ({}));
+      if (requestVersion !== assistantRequestVersion.current) return;
       if (!response.ok) throw new Error(localizeServerError(result.error, tr) || tr("undoFailed"));
       setMessages((current) => [
         ...current.map((message) => message.actionId === actionId ? { ...message, resolved: true } : message),
@@ -408,12 +425,13 @@ export function useLumiApp() {
       ]);
       await pullFromServer();
     } catch (error) {
+      if (requestVersion !== assistantRequestVersion.current) return;
       setMessages((current) => [...current, {
         role: "assistant",
         content: error instanceof Error ? error.message : tr("undoFailed"),
       }]);
     } finally {
-      setAiBusy(false);
+      if (requestVersion === assistantRequestVersion.current) setAiBusy(false);
     }
   }
   const contextScopeLoaded = useRef("");
@@ -1481,6 +1499,11 @@ export function useLumiApp() {
         entity.type === "workspace" && entity.workspaceId === writeWorkspaceId,
     );
     if (items.some((entity) => entity.type === "workspace") && !validWriteWorkspace) {
+      assistantRequestVersion.current += 1;
+      setMessages([]);
+      setAiText("");
+      setAiBusy(false);
+      closeDetail();
       setWriteWorkspaceId(personalWorkspaceId);
       localStorage.setItem(
         "ai-executive-write-workspace",
@@ -1626,16 +1649,25 @@ export function useLumiApp() {
   }
 
   function selectWorkspace(workspaceId: string) {
+    assistantRequestVersion.current += 1;
     setActiveWorkspaceId(workspaceId);
     if (workspaceId !== "all") selectWriteWorkspace(workspaceId);
     localStorage.setItem("ai-executive-active-workspace", workspaceId);
     setMessages([]);
     setAiText("");
+    setAiBusy(false);
     setWorkspaceMenuOpen(false);
     closeDetail();
   }
 
   function selectWriteWorkspace(workspaceId: string) {
+    if (workspaceId !== writeWorkspaceId) {
+      assistantRequestVersion.current += 1;
+      setMessages([]);
+      setAiText("");
+      setAiBusy(false);
+      closeDetail();
+    }
     setWriteWorkspaceId(workspaceId);
     localStorage.setItem("ai-executive-write-workspace", workspaceId);
   }
