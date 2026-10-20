@@ -126,11 +126,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             <button
               className="close inspectorClose"
               type="button"
-              aria-label={tr("close")}
+              aria-label={language === "cs" ? "← Zpět" : "← Back"}
               onClick={closeDetail}
             >
               <span className="inspectorCloseIcon" aria-hidden="true">×</span>
-              <span className="inspectorBackLabel" aria-hidden="true">{language === "cs" ? "← Zpět" : "← Back"}</span>
+              <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
