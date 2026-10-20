@@ -2110,6 +2110,7 @@ export function useLumiApp() {
         ...(suggestedAreaId ? { areaId: suggestedAreaId } : {}),
         ...(captureType === "task"
           ? {
+              originalCaptureText: title.slice(0, 1000),
               inbox: !suggestedProjectId && !suggestedNewProjectTitle && !suggestedDate,
               today: suggestedDate === today,
               ...(suggestedDate ? { when: suggestedDate } : {}),
@@ -2229,7 +2230,7 @@ export function useLumiApp() {
   async function createFromRow(type: EntityType, title: string) {
     setRowError(false);
     try {
-      await create(type, title);
+      await create(type, title, type === "task" ? { originalCaptureText: title.trim().slice(0, 1000) } : {});
     } catch (error) {
       // Kept in the console as well; the message alone would hide the cause.
       console.error(error);
@@ -2240,6 +2241,7 @@ export function useLumiApp() {
     sourceId: string,
     targetId: string,
     relationType: string,
+    clearInbox = false,
   ) {
     const source = await db.entities.get(sourceId);
     const target = targetId ? await db.entities.get(targetId) : null;
@@ -2247,6 +2249,11 @@ export function useLumiApp() {
     if (targetId && !target) throw new Error("The selected relation target no longer exists");
     if (target && target.workspaceId !== source.workspaceId) {
       throw new Error("Cross-workspace relations are not allowed");
+    }
+    if (clearInbox && (source.type !== "task" || relationType !== "belongs_to_project" ||
+        target?.type !== "project" || activeWorkspaceId === "all" ||
+        activeWorkspaceId !== source.workspaceId || writeWorkspaceId !== source.workspaceId)) {
+      throw new Error("Inbox triage needs an explicit writable workspace and a project in it");
     }
     const existing = await db.relations
       .where("sourceEntityId")
@@ -2266,10 +2273,19 @@ export function useLumiApp() {
           relationType,
           createdAt: relationTimestamp,
         });
+      const latest = await db.entities.get(source.id);
+      if (!latest || latest.workspaceId !== source.workspaceId) throw new Error("Relation source changed");
       await db.entities.update(source.id, {
         properties: {
-          ...source.properties,
+          ...latest.properties,
+          ...(clearInbox ? { inbox: false } : {}),
           relationsUpdatedAt: relationTimestamp,
+          ...(clearInbox ? {
+            activity: [
+              ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
+              { at: relationTimestamp, action: "triaged to project" },
+            ].slice(-50),
+          } : {}),
         },
         updatedAt: relationTimestamp,
       });
