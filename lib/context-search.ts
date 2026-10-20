@@ -179,7 +179,8 @@ export function searchContext(input: ContextSearchInput) {
   return {
     schemaVersion: CONTEXT_SEARCH_SCHEMA_VERSION, workspaceId, mode: "lexical" as const,
     results: page, nextCursor: offset + limit < hits.length ? String(offset + limit) : null,
-    partial, // Capped canonical scan, not an index-recall claim.
+    // Do not reveal the number of protected candidates through a scan-completeness side channel.
+    ...(input.actor === "owner" ? { partial } : {}),
   };
 }
 
