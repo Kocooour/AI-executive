@@ -86,6 +86,16 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "buildfail" && get("head") === before) {
+        // The old-version rebuild runs from the EXIT trap, not from the mainline.
+        // Probe with an independent flock FD; it MUST NOT be able to acquire it.
+        const probe = spawnSync("flock", ["-n", process.env.LUMI_TEST_LOCK_FILE, "true"]);
+        if (probe.status === 0) {
+          console.error("rollback lock unexpectedly released before build");
+          process.exit(91);
+        }
+        log("rollback-lock-held");
+      }
       if (scenario === "buildfail" && get("head") === target &&
           !fs.existsSync(stateFile("buildfailed"))) {
         set("buildfailed", "1");
