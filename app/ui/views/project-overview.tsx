@@ -21,7 +21,7 @@ const labels = {
     last: "Poslední aktivita",
     projectChange: "Změna projektu",
     linkedChange: "Změna navázané položky",
-    risks: "Signály rizika",
+    risks: "Rizika projektu",
     projectOverdue: "Termín projektu uplynul",
     taskOverdue: "Úkoly po termínu",
     riskNone: "Z evidovaných termínů žádné upozornění.",
