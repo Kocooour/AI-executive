@@ -60,7 +60,10 @@ on_exit() {
   echo "NASAZENI SELHALO (kod $rc), zaloha: ${BACKUP:-nevytvorena}" >&2
   if [ "$STOPPED" != 1 ]; then exit "$rc"; fi
   set +e
-  systemctl stop "$SERVICE"
+  if ! systemctl stop "$SERVICE" || systemctl is-active --quiet "$SERVICE"; then
+    echo "KRITICKA CHYBA: sluzba stale bezi; nelze bezpecne sestavovat rollback." >&2
+    exit "$rc"
+  fi
   if [ "$CHANGED" = 1 ]; then
     echo "Vracim pouze kod na $PREV; produkcni data neobnovuji." >&2
     (
@@ -76,8 +79,10 @@ on_exit() {
       exit "$rc"
     fi
   fi
-  if systemctl start "$SERVICE" && verify_service; then
-    echo "Rollback: puvodni verze dostupna lokalne i pres HTTPS." >&2
+  if systemctl start "$SERVICE" && verify_service &&
+     runuser -u ai-executive -- /usr/bin/node \
+       "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" >/dev/null; then
+    echo "Rollback: puvodni verze dostupna, SQLite integrity OK." >&2
   else
     echo "KRITICKA CHYBA: rollback neni zdravy, prover journalctl." >&2
     echo "Data nebyla automaticky obnovena; obnova vyzaduje rozhodnuti vlastnika." >&2
