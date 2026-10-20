@@ -64,8 +64,18 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const focused = useRef(false);
+  // Separate the displayed draft from incoming sync results: a slow save of A must not
+  // reset a newer B being typed while that save is still in flight.
+  const goalDraftRef = useRef(storedGoal);
+  const editVersion = useRef(0);
+  const dirty = useRef(false);
+  const pendingSaves = useRef(0);
+  const saveTail = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    if (!focused.current) setGoalDraft(storedGoal);
+    if (!focused.current && !dirty.current) {
+      goalDraftRef.current = storedGoal;
+      setGoalDraft(storedGoal);
+    }
   }, [storedGoal]);
 
   const projectTaskIds = new Set(app.sources(project.id, "belongs_to_project"));
@@ -75,7 +85,10 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
     item.workspaceId === project.workspaceId && projectTaskIds.has(item.id));
   const openTasks = linkedTasks.filter((task) => task.status === "open");
   const nextAction = [...openTasks]
-    .filter((task) => task.properties.waiting !== true && task.properties.someday !== true)
+    // An item still in Inbox has not been clarified/triaged, even if it was linked to
+    // a project through the ordinary task detail relation picker.
+    .filter((task) => task.properties.inbox !== true &&
+      task.properties.waiting !== true && task.properties.someday !== true)
     .sort(byManualOrder(`task:project:${project.id}`))[0] ?? null;
   const lastLinked = [...linkedTasks, ...linkedNotes].reduce<Entity | null>(
     (latest, task) => !latest || task.updatedAt > latest.updatedAt ? task : latest, null);
@@ -94,19 +107,32 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
     task.properties.deadline < app.today);
 
   async function saveGoal() {
-    if (readOnly) return;
-    const next = goalDraft.trim();
-    if (next === storedGoal) { focused.current = false; return; }
+    if (readOnly || !dirty.current) return;
+    const next = goalDraftRef.current.trim();
+    const version = editVersion.current;
+    pendingSaves.current += 1;
     setSaving(true);
     setSaveError(false);
-    try {
+    // Serialize saves for this field. Revisions superseded while waiting in the
+    // queue are skipped; an in-flight save finishes before a newer blur commits.
+    const save = saveTail.current.then(async () => {
+      if (version !== editVersion.current) return;
       await app.patch(project, { goal: next }, "project goal changed", true);
-      focused.current = false;
+      if (version === editVersion.current) {
+        dirty.current = false;
+        goalDraftRef.current = next;
+        if (!focused.current) setGoalDraft(next);
+      }
+    });
+    saveTail.current = save.then(() => undefined, () => undefined);
+    try {
+      await save;
     } catch {
-      setSaveError(true);
-      // Do not replace the unsent text with the old value.
+      if (version === editVersion.current) setSaveError(true);
+      // The unsent draft stays dirty; a later blur can retry it.
     } finally {
-      setSaving(false);
+      pendingSaves.current -= 1;
+      if (pendingSaves.current === 0) setSaving(false);
     }
   }
 
@@ -122,8 +148,15 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
           rows={3}
           maxLength={1000}
           onFocus={() => { focused.current = true; }}
-          onChange={(event) => { setGoalDraft(event.target.value); setSaveError(false); }}
-          onBlur={() => { void saveGoal(); }}
+          onChange={(event) => {
+            const value = event.target.value;
+            goalDraftRef.current = value;
+            editVersion.current += 1;
+            dirty.current = true;
+            setGoalDraft(value);
+            setSaveError(false);
+          }}
+          onBlur={() => { focused.current = false; void saveGoal(); }}
         />
       </label>
       <small className="projectOverviewHint">{readOnly ? t.allReadOnly : t.goalHelp}</small>
