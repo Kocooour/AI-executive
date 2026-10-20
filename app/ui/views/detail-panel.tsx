@@ -121,13 +121,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   return (
     <>
       {selected && (
-        <div className="backdrop" onClick={closeDetail}>
-          <aside className="detail" onClick={(e) => e.stopPropagation()}>
+        <div className="backdrop inspectorBackdrop" onClick={closeDetail}>
+          <aside className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
             <button
-              className="close"
+              className="close inspectorClose"
+              type="button"
+              aria-label={tr("close")}
               onClick={closeDetail}
             >
-              ×
+              <span className="inspectorCloseIcon" aria-hidden="true">×</span>
+              <span className="inspectorBackLabel" aria-hidden="true">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
