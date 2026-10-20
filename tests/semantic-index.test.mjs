@@ -131,3 +131,24 @@ test("acknowledgement removes only captured IDs; concurrent new workspace events
   assert.equal(semantic.reconcileSemanticManifest().processedEvents, 1);
   assert.equal(manifest("SELECT * FROM semantic_entries WHERE object_id = 'during-reconcile'").length, 1);
 });
+
+test("upgrading a database with outbox-v1 already applied installs the first-restore trigger", async () => {
+  // Recreate the exact pre-fix shape: v1 is marked applied, but the INSERT trigger is absent.
+  canonical.exec("DROP TRIGGER semantic_outbox_first_restore_generation");
+  canonical.prepare("DELETE FROM schema_migrations WHERE id = ?")
+    .run("2026-10-semantic-memory-first-restore-trigger");
+  assert.ok(canonical.prepare("SELECT 1 FROM schema_migrations WHERE id = ?")
+    .get("2026-10-semantic-memory-outbox-v1"));
+  assert.equal(canonical.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name = ?")
+    .get("semantic_outbox_first_restore_generation"), undefined);
+
+  const migrations = await import("../lib/schema-migrations.ts");
+  const applied = migrations.runSchemaMigrations(canonical);
+  assert.deepEqual(applied, ["2026-10-semantic-memory-first-restore-trigger"]);
+  canonical.prepare("DELETE FROM metadata WHERE key = 'restoreGeneration'").run();
+  canonical.prepare("DELETE FROM semantic_index_outbox").run();
+  canonical.prepare("INSERT INTO metadata(key, value) VALUES ('restoreGeneration', '1')").run();
+  assert.deepEqual(canonical.prepare("SELECT object_type, operation FROM semantic_index_outbox").all()
+    .map((row) => ({ ...row })), [{ object_type: "rebuild", operation: "restore" }]);
+  assert.deepEqual(migrations.runSchemaMigrations(canonical), []);
+});

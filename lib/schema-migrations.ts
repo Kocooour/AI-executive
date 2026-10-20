@@ -235,6 +235,20 @@ export const schemaMigrations: SchemaMigration[] = [
         VALUES ('rebuild', '*', '*', 'migration')`);
     },
   },
+  {
+    // Upgrade for installations that already applied semantic-memory-outbox-v1 before the
+    // first-restore INSERT trigger was added. A new ID is required: applied migrations never rerun.
+    id: "2026-10-semantic-memory-first-restore-trigger",
+    up(database) {
+      database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_first_restore_generation
+        AFTER INSERT ON metadata
+        WHEN NEW.key = 'restoreGeneration'
+        BEGIN
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'restore');
+        END`);
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
