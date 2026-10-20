@@ -8,15 +8,16 @@ import type { LumiApp } from "../use-lumi-app";
 // The All workspace is read-only: the owner must pick an explicit write workspace.
 export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
   const {
-    activeWorkspaceId, writeWorkspaceId, projects, scheduleTask, patch, relate,
-    askConfirm, remove, tr,
+    activeWorkspaceId, writeWorkspaceId, projects, triageInbox,
+    askConfirm, tr,
   } = app;
   const [projectId, setProjectId] = useState("");
   const [date, setDate] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const inScope = activeWorkspaceId !== "all" &&
-    activeWorkspaceId === task.workspaceId && writeWorkspaceId === task.workspaceId;
+    activeWorkspaceId === task.workspaceId && writeWorkspaceId === task.workspaceId &&
+    task.status === "open" && task.properties.inbox === true;
   const projectChoices = projects.filter((project) =>
     project.workspaceId === task.workspaceId && project.status === "active");
 
@@ -44,17 +45,15 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
     {!inScope && <p role="status">{tr("triageChooseWorkspace")}</p>}
     <div className="inboxTriageActions">
       <button type="button" disabled={busy || !inScope}
-        onClick={() => void act(() => scheduleTask(task, "today"))}>{tr("triageToday")}</button>
+        onClick={() => void act(() => triageInbox(task, "today"))}>{tr("triageToday")}</button>
       <button type="button" disabled={busy || !inScope}
         onClick={() => document.querySelector<HTMLInputElement>(".detail .titleEdit")?.focus()}>
         {tr("triageClarify")}
       </button>
       <button type="button" disabled={busy || !inScope}
-        onClick={() => void act(() => patch(task, {
-          waiting: true, waitingSince: Date.now(), waitingFor: "", followUpDate: "", inbox: false,
-        }, "waiting started", true))}>{tr("triageWaiting")}</button>
+        onClick={() => void act(() => triageInbox(task, "waiting"))}>{tr("triageWaiting")}</button>
       <button type="button" disabled={busy || !inScope}
-        onClick={() => void act(() => scheduleTask(task, "someday"))}>{tr("triageSomeday")}</button>
+        onClick={() => void act(() => triageInbox(task, "someday"))}>{tr("triageSomeday")}</button>
     </div>
     <label>
       {tr("triagePlan")}
@@ -62,7 +61,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
         <input aria-label={tr("triagePlan")} type="date" value={date}
           onChange={(event) => setDate(event.target.value)} disabled={busy || !inScope}/>
         <button type="button" disabled={busy || !inScope || !/^20\d{2}-\d{2}-\d{2}$/.test(date)}
-          onClick={() => void act(() => scheduleTask(task, date))}>{tr("triageApply")}</button>
+          onClick={() => void act(() => triageInbox(task, "plan", date))}>{tr("triageApply")}</button>
       </span>
     </label>
     <label>
@@ -76,7 +75,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
             <option key={project.id} value={project.id}>{project.title}</option>)}
         </select>
         <button type="button" disabled={busy || !inScope || !projectId}
-          onClick={() => void act(() => relate(task.id, projectId, "belongs_to_project", true))}>{tr("triageApply")}</button>
+          onClick={() => void act(() => triageInbox(task, "project", projectId))}>{tr("triageApply")}</button>
       </span>
     </label>
     <button type="button" className="inboxDiscard" disabled={busy || !inScope}
@@ -85,7 +84,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
           title: tr("triageDiscard"), message: tr("triageDiscardConfirm"),
           confirmLabel: tr("triageDiscard"), danger: true,
         });
-        if (accepted) await remove(task);
+        if (accepted) await triageInbox(task, "discard");
       })}>{tr("triageDiscard")}</button>
     {error && <p role="alert">{error}</p>}
   </section>;
