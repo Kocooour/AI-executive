@@ -23,8 +23,15 @@ export interface SemanticIndexEntry {
 }
 
 type Row = { id: string; workspace_id: string; revision: number; sensitivity: string;
-  review_status: string; freshness: string; archived_at: number | null; updated_at: number;
-  source_sensitivity?: string | null; };
+  review_status: string; freshness: string; archived_at: number | null; updated_at: number; };
+type ClaimSourceLink = {
+  claim_id: string;
+  evidence_id: string; evidence_workspace: string; evidence_revision: number; evidence_source_id: string;
+  source_id: string | null; source_workspace: string | null; source_revision: number | null;
+  source_sensitivity: string | null; source_archived_at: number | null;
+  source_account: string | null; source_provider: string | null;
+  source_external_id: string | null; source_coverage: string | null;
+};
 
 const sensitivityRank = { normal: 0, confidential: 1, restricted: 2 } as const;
 function sensitivity(value: unknown): keyof typeof sensitivityRank {
@@ -91,18 +98,48 @@ function appendEntries(canonical: DatabaseSync, derived: DatabaseSync, workspace
       fingerprint([workspaceId, row.id, row.revision, row.archived_at]), row.subject_type, now);
   }
   const claims = canonical.prepare(`SELECT c.id, c.workspace_id, c.revision, c.sensitivity, c.review_status,
-      c.freshness, c.archived_at, c.updated_at,
-      (SELECT GROUP_CONCAT(CASE WHEN s.id IS NULL OR s.workspace_id != c.workspace_id
-        OR s.archived_at IS NOT NULL OR e.workspace_id != c.workspace_id
-        THEN 'restricted' ELSE s.sensitivity END, ',')
-       FROM context_evidence e LEFT JOIN context_sources s ON s.id = e.source_id
-       WHERE e.claim_id = c.id AND e.archived_at IS NULL) AS source_sensitivity
+      c.freshness, c.archived_at, c.updated_at
     FROM context_claims c WHERE c.workspace_id = ? AND c.archived_at IS NULL`).all(workspaceId) as Row[];
+  // The policy fingerprint must change even when the *effective* sensitivity does
+  // not: a source may be replaced, revised, re-scoped or archived while another
+  // source keeps the claim at the same strictest level. Include source/evidence
+  // policy metadata (never titles, excerpts, locators or secret content), in stable
+  // order, to prevent a future incremental worker from reusing obsolete provenance.
+  const sourceLinks = canonical.prepare(`SELECT e.claim_id, e.id AS evidence_id,
+      e.workspace_id AS evidence_workspace, e.revision AS evidence_revision,
+      e.source_id AS evidence_source_id,
+      s.id AS source_id, s.workspace_id AS source_workspace, s.revision AS source_revision,
+      s.sensitivity AS source_sensitivity, s.archived_at AS source_archived_at,
+      s.account AS source_account, s.provider AS source_provider,
+      s.external_id AS source_external_id, s.coverage AS source_coverage
+    FROM context_evidence e
+      JOIN context_claims c ON c.id = e.claim_id
+      LEFT JOIN context_sources s ON s.id = e.source_id
+    WHERE c.workspace_id = ? AND c.archived_at IS NULL AND e.archived_at IS NULL
+    ORDER BY e.claim_id, e.id`).all(workspaceId) as ClaimSourceLink[];
+  const linksByClaim = new Map<string, ClaimSourceLink[]>();
+  for (const link of sourceLinks) {
+    const links = linksByClaim.get(link.claim_id) ?? [];
+    links.push(link);
+    linksByClaim.set(link.claim_id, links);
+  }
   for (const row of claims) {
     let level = sensitivity(row.sensitivity);
-    for (const sourceLevel of row.source_sensitivity?.split(",") ?? []) level = strictest(level, sensitivity(sourceLevel));
+    const policySources = (linksByClaim.get(row.id) ?? []).map((link) => {
+      const sourceLevel = !link.source_id || link.source_workspace !== row.workspace_id ||
+        link.source_archived_at !== null || link.evidence_workspace !== row.workspace_id
+        ? "restricted" : sensitivity(link.source_sensitivity);
+      level = strictest(level, sourceLevel);
+      return [
+        link.evidence_id, link.evidence_workspace, link.evidence_revision, link.evidence_source_id,
+        link.source_id, link.source_workspace, link.source_revision, link.source_sensitivity,
+        link.source_archived_at, link.source_account, link.source_provider,
+        link.source_external_id, link.source_coverage,
+      ];
+    });
     insert.run(workspaceId, "claim", row.id, row.revision, level,
-      fingerprint([workspaceId, row.id, row.revision, level, row.review_status, row.freshness, row.archived_at]),
+      fingerprint([workspaceId, row.id, row.revision, level, row.review_status,
+        row.freshness, row.archived_at, policySources]),
       "context_claim", now);
   }
 }
