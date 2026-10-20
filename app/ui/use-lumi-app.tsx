@@ -2255,42 +2255,61 @@ export function useLumiApp() {
         activeWorkspaceId !== source.workspaceId || writeWorkspaceId !== source.workspaceId)) {
       throw new Error("Inbox triage needs an explicit writable workspace and a project in it");
     }
-    const existing = await db.relations
-      .where("sourceEntityId")
-      .equals(sourceId)
-      .filter((r) => r.relationType === relationType)
-      .toArray();
     localDataVersion.current += 1;
     const relationTimestamp = writeTime();
-    await db.transaction("rw", db.entities, db.relations, async () => {
-      await db.relations.bulkDelete(existing.map((r) => r.id));
-      if (targetId)
-        await db.relations.add({
-          id: crypto.randomUUID(),
-          workspaceId: source.workspaceId,
-          sourceEntityId: sourceId,
-          targetEntityId: targetId,
-          relationType,
-          createdAt: relationTimestamp,
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        // Dexie serializes read-write transactions over relations across tabs.
+        // Reading the old membership outside this transaction would let both tabs
+        // observe an empty list and then each insert a belongs_to_project relation.
+        const latest = await db.entities.get(sourceId);
+        const currentTarget = targetId ? await db.entities.get(targetId) : null;
+        if (!latest || latest.type === "workspace" || latest.workspaceId !== source.workspaceId) {
+          throw new Error("Relation source changed");
+        }
+        if (targetId && (!currentTarget || currentTarget.workspaceId !== latest.workspaceId)) {
+          throw new Error("Relation target changed");
+        }
+        if (clearInbox && (latest.type !== "task" || relationType !== "belongs_to_project" ||
+            currentTarget?.type !== "project" || currentTarget.status !== "active" ||
+            activeWorkspaceId !== latest.workspaceId || writeWorkspaceId !== latest.workspaceId)) {
+          throw new Error("Inbox triage target or workspace changed");
+        }
+        const existing = await db.relations
+          .where("sourceEntityId")
+          .equals(sourceId)
+          .filter((relation) => relation.relationType === relationType)
+          .toArray();
+        await db.relations.bulkDelete(existing.map((relation) => relation.id));
+        if (targetId) {
+          await db.relations.add({
+            id: crypto.randomUUID(),
+            workspaceId: latest.workspaceId,
+            sourceEntityId: sourceId,
+            targetEntityId: targetId,
+            relationType,
+            createdAt: relationTimestamp,
+          });
+        }
+        await db.entities.update(sourceId, {
+          properties: {
+            ...latest.properties,
+            ...(clearInbox ? { inbox: false } : {}),
+            relationsUpdatedAt: relationTimestamp,
+            ...(clearInbox ? {
+              activity: [
+                ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
+                { at: relationTimestamp, action: "triaged to project" },
+              ].slice(-50),
+            } : {}),
+          },
+          updatedAt: relationTimestamp,
         });
-      const latest = await db.entities.get(source.id);
-      if (!latest || latest.workspaceId !== source.workspaceId) throw new Error("Relation source changed");
-      await db.entities.update(source.id, {
-        properties: {
-          ...latest.properties,
-          ...(clearInbox ? { inbox: false } : {}),
-          relationsUpdatedAt: relationTimestamp,
-          ...(clearInbox ? {
-            activity: [
-              ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
-              { at: relationTimestamp, action: "triaged to project" },
-            ].slice(-50),
-          } : {}),
-        },
-        updatedAt: relationTimestamp,
       });
-    });
-    localDataVersion.current += 1;
+    } finally {
+      // An aborted transaction must not leave the app in a write-in-progress state.
+      localDataVersion.current += 1;
+    }
     await syncToServer();
     await load();
     if (selected) {
