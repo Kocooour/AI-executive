@@ -233,6 +233,8 @@ export function useLumiApp() {
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
+  const inspectorSelectionRef = useRef(selected);
+  inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
   activeWorkspaceRef.current = activeWorkspaceId;
   useEffect(() => {
@@ -314,17 +316,18 @@ export function useLumiApp() {
   const sessionChannel = "ai-executive-session";
   async function inspect(e: Entity) {
     const version = ++inspectionVersion.current;
+    const workspaceAtRequest = activeWorkspaceRef.current;
     setSelected(e);
-    // Context belongs to the inspected record, not to the panel generally; never show A's while B
-    // is selected while the asynchronous lookup for B is in progress.
+    // A previous record's context must disappear immediately and must never reach the next
+    // inspector. Both the selected record and the workspace must still match after the await.
     setContext(null);
     const next = await buildContext(e.id, 2);
-    if (version !== inspectionVersion.current || (activeWorkspaceRef.current !== "all" && activeWorkspaceRef.current !== e.workspaceId)) return;
-    setSelected((open) => {
-      if (!open || open.id !== e.id || open.workspaceId !== e.workspaceId) return open;
-      setContext(next);
-      return open;
-    });
+    const stillOpen = inspectorSelectionRef.current;
+    if (version !== inspectionVersion.current ||
+        activeWorkspaceRef.current !== workspaceAtRequest ||
+        (workspaceAtRequest !== "all" && workspaceAtRequest !== e.workspaceId) ||
+        !stillOpen || stillOpen.id !== e.id || stillOpen.workspaceId !== e.workspaceId) return;
+    setContext(next);
   }
   function closeDetail() {
     inspectionVersion.current += 1;
@@ -2293,6 +2296,7 @@ export function useLumiApp() {
         }
         if (clearInbox && (latest.type !== "task" || relationType !== "belongs_to_project" ||
             currentTarget?.type !== "project" || currentTarget.status !== "active" ||
+            latest.status !== "open" || latest.properties.inbox !== true ||
             activeWorkspaceId !== latest.workspaceId || writeWorkspaceId !== latest.workspaceId)) {
           throw new Error("Inbox triage target or workspace changed");
         }
@@ -2333,9 +2337,11 @@ export function useLumiApp() {
     }
     await syncToServer();
     await load();
-    if (selected) {
-      setSelected((await db.entities.get(selected.id)) || null);
-      setContext(await buildContext(selected.id, 2));
+    // Finishing a relation write must not reopen an inspector that has since switched
+    // to another record or been closed. inspect() also guards delayed context results.
+    if (selected && inspectorSelectionRef.current?.id === selected.id) {
+      const refreshed = await db.entities.get(selected.id);
+      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
     }
   }
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
