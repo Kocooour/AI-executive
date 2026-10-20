@@ -119,7 +119,7 @@ type SearchClaimRow = {
 
 function liveEndpoint(type: string | null, id: string | null, archivedAt: number | null, workspaceId: string, byId: Map<string, Entity>) {
   if (archivedAt != null) return false;
-  if (!id) return true; // Standalone person/organization checked against the current subject row.
+  if (!id) return type === "person" || type === "organization"; // Only live standalone types are eligible.
   const entity = byId.get(id);
   return Boolean(entity && entity.workspaceId === workspaceId && entity.status !== "archived" &&
     entity.type === type && ["workspace", "area", "project", "task", "note"].includes(entity.type));
