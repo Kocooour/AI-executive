@@ -3,6 +3,7 @@ import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../../lib/local-dates";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
+import { ProjectOverview } from "./project-overview";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
@@ -258,6 +259,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             )}
             {selected.type === "project" && (
               <div className="projectDetail">
+                <ProjectOverview key={selected.id} app={app} project={selected} />
                 <div className="projectActions">
                   <button type="button" onClick={() => void setProjectStatus(selected, selected.status === "completed" ? "active" : "completed")}>{tr(selected.status === "completed" ? "reopen" : "complete")}</button>
                   <button type="button" className="danger" onClick={async () => {

@@ -172,6 +172,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Restore copy already exists",
   "Restore failed (test)",
   "Not available outside tests",
+  "Only available to tests",
   "Data was restored",
   "Unknown temporary file kind",
   "Context classification is invalid",
