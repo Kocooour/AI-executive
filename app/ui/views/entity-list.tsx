@@ -160,7 +160,11 @@ export function EntityList({ app }: { app: LumiApp }) {
                         </span>
                       )}
                       <div className="taskRowMain">
-                        <strong>{x.title || tr("untitledItem")}</strong>
+                        <strong><button
+                          type="button"
+                          className="taskRowOpen"
+                          onClick={(event) => { event.stopPropagation(); void inspect(x); }}
+                        >{x.title || tr("untitledItem")}</button></strong>
                         <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
                         {activeWorkspaceId === "all" && (
                           <span className="workspaceBadge">
