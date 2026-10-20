@@ -224,6 +224,13 @@ export const schemaMigrations: SchemaMigration[] = [
           INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
           VALUES ('rebuild', '*', '*', 'restore');
         END`);
+      database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_first_restore_generation
+        AFTER INSERT ON metadata
+        WHEN NEW.key = 'restoreGeneration'
+        BEGIN
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'restore');
+        END`);
       database.exec(`INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
         VALUES ('rebuild', '*', '*', 'migration')`);
     },

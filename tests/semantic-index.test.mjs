@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -93,7 +93,10 @@ test("a protected source forces a claim's derived sensitivity to the strictest l
 });
 
 test("a restore marker rebuilds all workspaces and a lost derived file is recoverable", () => {
+  assert.equal(canonical.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGeneration'").get(), undefined);
   canonical.prepare("INSERT INTO metadata(key, value) VALUES ('restoreGeneration', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
+  assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE operation = 'restore'").get(),
+    "the first restore must enqueue even though metadata had no row yet");
   canonical.prepare("UPDATE metadata SET value = '2' WHERE key = 'restoreGeneration'").run();
   assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE operation = 'restore'").get());
   semantic.reconcileSemanticManifest();
@@ -102,4 +105,29 @@ test("a restore marker rebuilds all workspaces and a lost derived file is recove
   semantic.reconcileSemanticManifest();
   assert.ok(existsSync(manifestPath));
   assert.equal(manifest("SELECT COUNT(*) AS n FROM semantic_entries")[0].n > 0, true);
+});
+
+test("acknowledgement removes only captured IDs; concurrent new workspace events survive", () => {
+  const old = entity("before-reconcile", "personal", "Old source");
+  canonical.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)")
+    .run(old.id, JSON.stringify(old), old.updatedAt);
+  const capturedIds = canonical.prepare("SELECT id FROM semantic_index_outbox").all().map((row) => row.id);
+  let newId;
+  semantic.setSemanticBeforeAcknowledgeForTests(() => {
+    const fresh = entity("during-reconcile", "later-workspace", "Fresh source");
+    canonical.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)")
+      .run(fresh.id, JSON.stringify(fresh), fresh.updatedAt);
+    newId = canonical.prepare("SELECT MAX(id) AS id FROM semantic_index_outbox").get().id;
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const file = `${manifestPath}${suffix}`;
+      if (existsSync(file)) assert.equal(statSync(file).mode & 0o777, 0o600, `${suffix || "database"} permissions`);
+    }
+  });
+  try { assert.equal(semantic.reconcileSemanticManifest().processedEvents, capturedIds.length); }
+  finally { semantic.setSemanticBeforeAcknowledgeForTests(null); }
+  assert.ok(newId > Math.max(...capturedIds));
+  assert.deepEqual(canonical.prepare("SELECT id FROM semantic_index_outbox").all().map((row) => row.id), [newId]);
+  assert.equal(manifest("SELECT * FROM semantic_entries WHERE object_id = 'during-reconcile'").length, 0);
+  assert.equal(semantic.reconcileSemanticManifest().processedEvents, 1);
+  assert.equal(manifest("SELECT * FROM semantic_entries WHERE object_id = 'during-reconcile'").length, 1);
 });

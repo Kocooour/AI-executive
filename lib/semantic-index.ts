@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
@@ -43,7 +43,7 @@ function openManifest() {
   // The canonical store creates and protects the parent directory first.
   const filename = path.join(resolveDataDirectory(), "semantic-index-v1.sqlite");
   const derived = new DatabaseSync(filename);
-  chmodSync(filename, 0o600);
+  protectManifestFiles(filename);
   derived.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS manifest_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS semantic_entries (
@@ -56,7 +56,14 @@ function openManifest() {
     );
     CREATE INDEX IF NOT EXISTS semantic_entries_workspace_idx ON semantic_entries(workspace_id);
   `);
+  protectManifestFiles(filename);
   return derived;
+}
+
+function protectManifestFiles(filename: string) {
+  for (const file of [filename, `${filename}-wal`, `${filename}-shm`]) {
+    if (existsSync(file)) chmodSync(file, 0o600);
+  }
 }
 
 function appendEntries(canonical: DatabaseSync, derived: DatabaseSync, workspaceId: string, now: number) {
@@ -104,12 +111,20 @@ function appendEntries(canonical: DatabaseSync, derived: DatabaseSync, workspace
  * publish the derived transaction first, then acknowledge the canonical queue. A new mutation
  * after the queue snapshot retains its newer outbox row for the next pass.
  */
+let beforeAcknowledgeForTests: (() => void) | null = null;
+export function setSemanticBeforeAcknowledgeForTests(hook: (() => void) | null) {
+  if (hook !== null && !process.env.NODE_TEST_CONTEXT) throw new Error("Only available to tests");
+  beforeAcknowledgeForTests = hook;
+}
+
 export function reconcileSemanticManifest() {
   const canonical = getDatabase();
-  const pending = canonical.prepare("SELECT workspace_id, COUNT(*) AS count FROM semantic_index_outbox GROUP BY workspace_id").all() as
-    Array<{ workspace_id: string; count: number }>;
-  const maxId = Number((canonical.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM semantic_index_outbox").get() as { id: number }).id);
+  // Capture exact IDs before reading canonical rows. A mutation committed during rebuild must
+  // leave its new outbox row intact, even if its workspace was not in this batch.
+  const pending = canonical.prepare("SELECT id, workspace_id FROM semantic_index_outbox ORDER BY id LIMIT 1000").all() as
+    Array<{ id: number; workspace_id: string }>;
   const derived = openManifest();
+  const filename = path.join(resolveDataDirectory(), "semantic-index-v1.sqlite");
   try {
     const initialized = derived.prepare("SELECT value FROM manifest_state WHERE key = 'initialized'").get();
     if (!pending.length && initialized) return { rebuiltWorkspaces: 0, processedEvents: 0 };
@@ -120,6 +135,7 @@ export function reconcileSemanticManifest() {
         .filter((entity) => entity.type === "workspace" && entity.workspaceId).map((entity) => entity.workspaceId!))
       : new Set(pending.map((row) => row.workspace_id));
     derived.exec("BEGIN IMMEDIATE");
+    protectManifestFiles(filename);
     try {
       if (all) derived.exec("DELETE FROM semantic_entries");
       const clear = derived.prepare("DELETE FROM semantic_entries WHERE workspace_id = ?");
@@ -130,11 +146,20 @@ export function reconcileSemanticManifest() {
       derived.prepare(`INSERT INTO manifest_state(key, value) VALUES ('initialized', '1')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
       derived.exec("COMMIT");
+      protectManifestFiles(filename);
     } catch (error) {
       derived.exec("ROLLBACK");
       throw error;
     }
-    if (maxId) canonical.prepare("DELETE FROM semantic_index_outbox WHERE id <= ?").run(maxId);
-    return { rebuiltWorkspaces: workspaces.size, processedEvents: pending.reduce((sum, row) => sum + row.count, 0) };
-  } finally { derived.close(); }
+    beforeAcknowledgeForTests?.();
+    if (pending.length) {
+      canonical.exec("BEGIN IMMEDIATE");
+      try {
+        const acknowledge = canonical.prepare("DELETE FROM semantic_index_outbox WHERE id = ?");
+        for (const event of pending) acknowledge.run(event.id);
+        canonical.exec("COMMIT");
+      } catch (error) { canonical.exec("ROLLBACK"); throw error; }
+    }
+    return { rebuiltWorkspaces: workspaces.size, processedEvents: pending.length };
+  } finally { protectManifestFiles(filename); derived.close(); }
 }
