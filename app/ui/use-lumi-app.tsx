@@ -319,7 +319,7 @@ export function useLumiApp() {
     // is selected while the asynchronous lookup for B is in progress.
     setContext(null);
     const next = await buildContext(e.id, 2);
-    if (version !== inspectionVersion.current || activeWorkspaceRef.current !== e.workspaceId) return;
+    if (version !== inspectionVersion.current || (activeWorkspaceRef.current !== "all" && activeWorkspaceRef.current !== e.workspaceId)) return;
     setSelected((open) => {
       if (!open || open.id !== e.id || open.workspaceId !== e.workspaceId) return open;
       setContext(next);
