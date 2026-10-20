@@ -1,5 +1,5 @@
 "use client";
-import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
@@ -253,7 +253,14 @@ export function useLumiApp() {
   // Only one pending keyboard intent per workspace while an Undo/Redo is in flight.
   // A quick Redo must not disappear just because the preceding Undo is still
   // refreshing; the queued action is resolved against the server's new stack.
-  const pendingContextShortcut = useRef<{ workspaceId: string; action: "undo" | "redo" } | null>(null);
+  const pendingContextShortcut = useRef<{ workspaceId: string; action: "undo" | "redo"; epoch: number } | null>(null);
+  // A→B→A (or Context→Home→Context) is a new interaction session even if
+  // its current workspace/view matches the original request again.
+  const contextShortcutEpoch = useRef(0);
+  useLayoutEffect(() => {
+    contextShortcutEpoch.current += 1;
+    pendingContextShortcut.current = null;
+  }, [activeWorkspaceId, writeWorkspaceId, view, authState, capture, assistantOpen, moreOpen]);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // Context commands. One user intent keeps one idempotency key (and, for a new object, one id)
@@ -856,6 +863,7 @@ export function useLumiApp() {
   // and changes no data.
   async function contextHistoryAction(action: "undo" | "redo" | "skip", after?: ContextHistoryState, keyboard = false) {
     const workspaceId = calendarWorkspaceSelection.current;
+    const shortcutEpoch = contextShortcutEpoch.current;
     const skipping = action === "skip" ? historySkip : null;
     if (action === "skip" && !skipping) return;
     const side = skipping ? skipping.stack : action as "undo" | "redo";
@@ -863,7 +871,7 @@ export function useLumiApp() {
     if (contextInFlight.current.has(busyKey)) {
       // Buttons are disabled while busy. For keyboard shortcuts, keep the latest
       // explicitly requested action rather than silently losing a quick Redo.
-      if (keyboard && action !== "skip") pendingContextShortcut.current = { workspaceId, action };
+      if (keyboard && action !== "skip") pendingContextShortcut.current = { workspaceId, action, epoch: shortcutEpoch };
       return;
     }
     const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? (after ?? currentContextHistory.current).undo : (after ?? currentContextHistory.current).redo;
@@ -924,7 +932,9 @@ export function useLumiApp() {
         // Never replay a shortcut after a failed/refused command, a view
         // change or a workspace switch. Keep the exact server-provided next
         // stack rather than a potentially stale React render of history.
-        if (committedHistory && calendarWorkspaceSelection.current === workspaceId && contextShortcut.current.active) {
+        if (committedHistory && queued.epoch === shortcutEpoch &&
+            contextShortcutEpoch.current === shortcutEpoch &&
+            calendarWorkspaceSelection.current === workspaceId && contextShortcut.current.active) {
           void contextHistoryAction(queued.action, committedHistory, true);
         }
       }
