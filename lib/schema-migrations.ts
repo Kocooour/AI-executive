@@ -112,6 +112,17 @@ export const schemaMigrations: SchemaMigration[] = [
     },
   },
   {
+    // Context Search v1: the external eligibility NOT EXISTS must find *all* active evidence
+    // of a claim, including corrupt cross-workspace links, without scanning the evidence table
+    // once per claim. The existing (workspace_id, claim_id, ...) index cannot serve that predicate
+    // because e.workspace_id is intentionally not restricted in the privacy check.
+    id: "2026-10-context-search-evidence-guard-index",
+    up(database) {
+      database.exec(`CREATE INDEX IF NOT EXISTS context_evidence_claim_guard_idx
+        ON context_evidence(claim_id, archived_at, workspace_id)`);
+    },
+  },
+  {
     // Notes: the server keeps the history of a note's title and text. Every existing note gets revision 1 (baseline);
     // later revisions are written by the transaction that stores a change (lib/note-revisions.ts).
     id: "2026-10-note-revisions",
