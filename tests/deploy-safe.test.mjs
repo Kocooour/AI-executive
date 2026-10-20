@@ -45,6 +45,31 @@ function sandbox(scenario) {
     sqlite.exec("CREATE TABLE entities(id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     sqlite.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)").run("task:keep", "{}", 1);
     sqlite.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)").run("task:other", "{}", 2);
+    if (["sessionretention", "sessionloss", "intervalloss"].includes(scenario)) {
+      // Same completed-session/interval retention that work-sessions.ts performs
+      // after finishing the active session, in the same SQLite transaction.
+      sqlite.exec(`CREATE TABLE work_sessions (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        state TEXT NOT NULL, completed_at INTEGER
+      );
+      CREATE TABLE work_session_intervals (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL
+      );`);
+      const addSession = sqlite.prepare(
+        "INSERT INTO work_sessions(id,workspace_id,state,completed_at) VALUES (?,?,?,?)");
+      const addInterval = sqlite.prepare(
+        "INSERT INTO work_session_intervals(id,session_id) VALUES (?,?)");
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        for (let i = 0; i < 1000; i++) {
+          addSession.run(`session:completed:${i}`, "personal", "completed", 10000 + i);
+          addInterval.run(`interval:${i}`, `session:completed:${i}`);
+        }
+        addSession.run("session:active", "personal", "running", null);
+        addInterval.run("interval:active", "session:active");
+        sqlite.exec("COMMIT");
+      } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+    }
     if (scenario === "outboxcompact") {
       // Match the bounded queue trigger shipped in PR #79. The queue is
       // deliberately transient: compaction is not a loss of canonical data.
@@ -186,6 +211,44 @@ scenarioCase("outboxcompact: legitimate semantic invalidation compaction does no
   const after = JSON.parse(readFileSync(path.join(f.backups, r.backups[0], "after.json"), "utf8"));
   assert.equal(before.tables.semantic_index_outbox, 1000);
   assert.equal(after.tables.semantic_index_outbox, 1);
+});
+
+scenarioCase("sessionretention: finishing active work prunes oldest completed session without rollback", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), false, "verified retention should not roll back code");
+  assert.match(r.output, /Retence pracovnich relaci overena: 1/);
+  const db = new DatabaseSync(path.join(f.data, "store.sqlite"));
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM work_sessions").get().n, 1000);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM work_session_intervals").get().n, 1000);
+    assert.equal(db.prepare("SELECT state FROM work_sessions WHERE id='session:active'").get().state, "completed");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM work_sessions WHERE id='session:completed:0'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 2);
+  } finally { db.close(); }
+  const backupDir = path.join(f.backups, r.backups[0]);
+  const before = JSON.parse(readFileSync(path.join(backupDir, "before.json"), "utf8"));
+  const after = JSON.parse(readFileSync(path.join(backupDir, "after.json"), "utf8"));
+  assert.equal(before.tables.work_sessions, 1001);
+  assert.equal(after.tables.work_sessions, 1000);
+  assert.equal(before.tables.work_session_intervals, 1001);
+  assert.equal(after.tables.work_session_intervals, 1000);
+});
+scenarioCase("sessionloss: deletion of a running session cannot masquerade as retention", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /KRITICKY UBYTEK zaznamu: work_sessions/);
+  assert.match(r.output, /KRITICKA CHYBA: rollback neobnovil pocet zaznamu/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), true);
+});
+scenarioCase("intervalloss: missing interval of retained session is rejected", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /KRITICKY UBYTEK zaznamu: work_session_intervals/);
+  assert.match(r.output, /KRITICKA CHYBA: rollback neobnovil pocet zaznamu/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
 });
 
 scenarioCase("rowloss: rollback refuses to certify lost canonical rows", (r, f) => {
