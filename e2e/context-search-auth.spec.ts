@@ -1,10 +1,15 @@
 import { expect, test } from "./fixtures";
 import { integrationToken } from "../playwright.config";
+import { waitUntilSynced } from "./helpers";
 
 // Route-level protection of raw evidence/history does not depend on client-side filtering.
 // Each test context has its own synthetic address; no production credentials are involved.
 test("owner Context Search and Explain reject bearer-only and bearer+cookie, accept owner cookie in one workspace", async ({ page, playwright }) => {
   await page.goto("/");
+  // Other E2E scenarios restore/import the test database. Wait for the browser
+  // to adopt its current restore generation before any owner write, otherwise
+  // the safety fence correctly returns 409 "restored" during hydration.
+  await waitUntilSynced(page);
   const origin = new URL(page.url()).origin;
   const query = "/api/context/search?workspaceId=personal&q=e2e-project";
   const claimId = "e2e-route-auth-" + Date.now();
@@ -19,7 +24,7 @@ test("owner Context Search and Explain reject bearer-only and bearer+cookie, acc
     });
     return { status: response.status, body: await response.json() };
   }, claimId);
-  expect(claim.status).toBe(201);
+  expect(claim.status, JSON.stringify(claim.body)).toBe(201);
   const explain = "/api/context/explain?workspaceId=personal&claimId=" + encodeURIComponent(claimId);
   const anonymous = await playwright.request.newContext({ baseURL: origin, storageState: { cookies: [], origins: [] },
     extraHTTPHeaders: { "x-forwarded-for": "10.10.20.76" } });
