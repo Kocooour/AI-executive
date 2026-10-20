@@ -139,8 +139,11 @@ test("claim policy fingerprint tracks source linkage even when sensitivity does 
 test("ordinary full-snapshot save queues only changed entities, not a global rebuild", () => {
   semantic.reconcileSemanticManifest();
   const initial = store.readSnapshot();
-  const bulk = Array.from({ length: 550 }, (_, index) =>
-    entity(`snapshot-unchanged-${index}`, "personal", `Bulk item ${index}`));
+  const bulk = Array.from({ length: 550 }, (_, index) => ({
+    id: `snapshot-unchanged-${index}`, workspaceId: "personal", type: "task",
+    title: `Bulk item ${index}`, status: "open", properties: { sensitivity: "normal" },
+    createdAt: Date.now(), updatedAt: Date.now(),
+  }));
   const created = store.replaceSnapshot(initial.revision,
     [...initial.entities, ...bulk], initial.relations, [], [], initial.restoreGeneration);
   assert.equal(created.conflict, false);
