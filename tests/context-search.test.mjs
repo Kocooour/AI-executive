@@ -63,7 +63,7 @@ test("owner sees workspace-local entities and unreviewed protected claims, with 
   assert.equal(search("Secret-PENDING-981").results.some((hit) => hit.id === ownerPending.id), true);
   assert.equal(search("Secret-CONFIDENTIAL-892").results.some((hit) => hit.id === ownerConfidential.id), true);
   assert.equal(search("Secret-OTHER-WORKSPACE-427").results.length, 0);
-  assert.equal(search("all", { workspaceId: "all" }).results.length, 0);
+  assert.throws(() => search("all", { workspaceId: "all" }), (error) => error.status === 400);
 });
 
 test("explicit workspace boundary for search, explain, and related claims", () => {
@@ -151,9 +151,13 @@ test("registered relationships are searchable and explain links with bounded his
 });
 
 test("page bounds and typed filters apply after authorization and ranking", () => {
+  approve(create(workspace, "Visible-second-428"));
   const first = search("Visible", { kinds: ["claim"], limit: 1 });
   assert.equal(first.results.length, 1);
-  assert.equal(first.nextCursor, null);
+  assert.equal(first.nextCursor, "1");
+  const second = search("Visible", { kinds: ["claim"], limit: 1, cursor: first.nextCursor });
+  assert.equal(second.results.length, 1);
+  assert.notEqual(second.results[0].id, first.results[0].id);
   assert.equal(search("Visible", { kinds: ["person"] }).results.length, 0);
   for (const input of [
     { query: "a" }, { query: "something", cursor: "-1" },
