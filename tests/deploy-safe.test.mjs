@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
-  readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, statSync,
+  readFileSync, readdirSync, rmSync, writeFileSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -50,7 +50,11 @@ function sandbox(scenario) {
   writeFileSync(path.join(state, "events"), "");
   for (const command of ["id", "stat", "du", "df", "getent", "chgrp", "sleep",
     "systemctl", "git", "pnpm", "runuser", "cp", "curl"]) {
-    symlinkSync(mockCommands, path.join(bin, command));
+    // GitHub contents files are mode 0644, so use an executable disposable shim.
+    writeFileSync(path.join(bin, command),
+      '#!/bin/sh\nLUMI_TEST_COMMAND=' + command + ' exec ' +
+      JSON.stringify(process.execPath) + ' ' + JSON.stringify(mockCommands) + ' "$@"\n',
+      { mode: 0o755 });
   }
 
   let script = source;
