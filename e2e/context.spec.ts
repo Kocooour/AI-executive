@@ -558,10 +558,10 @@ for (const transition of ["view", "workspace"] as const) {
       } else {
         await page.locator("aside .workspaceButton").click();
         await page.locator('aside .workspaceMenu [data-workspace-id="all"]').click();
-        await expect(page.locator("aside .workspaceButton")).toContainText("Vše");
+        await expect(page.locator("main.appShell")).toHaveAttribute("data-workspace-tone", "all");
         await page.locator("aside .workspaceButton").click();
         await page.locator('aside .workspaceMenu [data-workspace-id="personal"]').click();
-        await expect(page.locator("aside .workspaceButton")).toContainText("Personal");
+        await expect(page.locator("main.appShell")).toHaveAttribute("data-workspace-tone", "personal");
       }
     } finally {
       releaseUndo();
