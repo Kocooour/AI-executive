@@ -125,6 +125,8 @@ switch (name) {
   case "curl": {
     if (get("service") !== "active") process.exit(7);
     const url = args[args.length - 1];
+    if (scenario === "unhealthy" && get("head") === target &&
+        url.includes("/manifest.webmanifest")) process.exit(22);
     const code = url.includes("/api/store") ? 401 : 200;
     if (args.includes("-w")) process.stdout.write(String(code));
     break;
