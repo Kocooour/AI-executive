@@ -44,6 +44,36 @@ test.describe("B2 project overview", () => {
     await expect(page.locator(".projectOverview").getByRole("textbox", { name: "Cíl / výsledek" })).toHaveValue(text);
   });
 
+  test("All Work explains goal-only read-only restriction without disabling other project actions", async ({ page }) => {
+    const name = await createProject(page);
+    await page.locator("aside .workspaceButton").click();
+    await page.locator('aside .workspaceMenu button[data-workspace-id="all"]').click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "all");
+
+    await openProject(page, name);
+    const overview = page.locator(".projectOverview");
+    const goal = overview.getByRole("textbox", { name: "Cíl / výsledek" });
+    await expect(goal).not.toBeEditable();
+    await expect(overview.locator(".projectOverviewHint"))
+      .toContainText("Cíl projektu lze upravit jen v konkrétním prostoru");
+    await expect(overview.locator(".projectOverviewHint"))
+      .not.toContainText("Veškerá práce je pouze ke čtení");
+    // Existing project actions remain usable in All; the hint must not claim otherwise.
+    await expect(page.locator(".projectActions").getByRole("button", { name: "Dokončit" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Zavřít", exact: true }).click();
+    await page.locator("aside .workspaceButton").click();
+    await page.locator('aside .workspaceMenu button[data-workspace-id="personal"]').click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
+    await openProject(page, name);
+    const editableGoal = page.locator(".projectOverview").getByRole("textbox", { name: "Cíl / výsledek" });
+    await expect(editableGoal).toBeEditable();
+    const text = "Výsledek změněný ve vlastním prostoru";
+    await editableGoal.fill(text);
+    await editableGoal.press("Tab");
+    await expectOnServer(page, (entity) => entity.title === name && entity.properties?.goal === text, true);
+  });
+
   test("deadline risk explains its factual source; completing project updates state", async ({ page }) => {
     const name = await createProject(page);
     await openProject(page, name);
