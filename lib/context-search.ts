@@ -101,18 +101,6 @@ function claimHit(claim: ContextClaim, query: string, actor: ContextSearchActor)
   };
 }
 
-/**
- * Explicit opt-in for a bearer-token client to use context.search in one workspace.
- * A token alone, "*" and "all" never grant access. Only exact workspace IDs count.
- */
-export function assertIntegrationContextSearchPermission(workspaceId: string) {
-  assertCommandWorkspace(workspaceId);
-  const allowed = (process.env.AI_EXECUTIVE_CONTEXT_SEARCH_WORKSPACES || "").split(",").map((item) => item.trim());
-  if (!allowed.includes(workspaceId)) {
-    throw new ContextCommandError("Context search tool is not allowed in this workspace", 403, "tool_forbidden");
-  }
-}
-
 /** Only owner-confirmed live normal claims, with no protected/archived source, can leave this boundary. */
 export function externallySearchableClaim(claim: ContextClaim, today = currentContextDate()) {
   return isEligibleClaim(claim, undefined, today) &&
@@ -285,8 +273,10 @@ export function explainOwnerClaim(workspaceId: string, claimId: string) {
   const claim = readOwnerClaim(workspaceId, claimId);
   if (!claim) throw new ContextCommandError("Claim not found", 404, "not_found");
   const today = currentContextDate();
-  const eligibleForAI = externallySearchableClaim(claim, today);
-  const blockers: string[] = [];
+  const eligibleForInternalAI = isEligibleClaim(claim, undefined, today);
+  const eligibleForExternalSearch = externallySearchableClaim(claim, today);
+  const internalBlockers: string[] = [];
+  const blockers = internalBlockers;
   if (claim.archivedAt) blockers.push("archived");
   if (claim.reviewStatus !== "confirmed") blockers.push("unconfirmed");
   if (claim.freshness !== "current") blockers.push("not_current");
@@ -294,8 +284,11 @@ export function explainOwnerClaim(workspaceId: string, claimId: string) {
   if (claim.relationStatus && claim.relationStatus !== "registered") blockers.push("unregistered_relation");
   if (claim.validFrom && claim.validFrom > today) blockers.push("not_yet_valid");
   if (claim.validTo && claim.validTo < today) blockers.push("expired");
-  if (claim.evidenceItems.some((item) => item.source.sensitivity !== "normal" || item.source.archivedAt)) blockers.push("protected_source");
-  if (!eligibleForAI && !blockers.length) blockers.push("unavailable_reference");
+  if (!eligibleForInternalAI && !internalBlockers.length) internalBlockers.push("unavailable_reference");
+  const externalBlockers = [...internalBlockers];
+  if (claim.evidenceItems.some((item) => item.source.sensitivity !== "normal" || item.source.archivedAt ||
+    item.workspaceId !== workspaceId || item.source.workspaceId !== workspaceId)) externalBlockers.push("protected_source");
+  if (!eligibleForExternalSearch && !externalBlockers.length) externalBlockers.push("unavailable_reference");
   const relatedIds = getDatabase().prepare("SELECT id FROM context_claims WHERE workspace_id = ? AND archived_at IS NULL AND id != ? AND (subject_id = ? OR target_subject_id = ? OR subject_id = ? OR target_subject_id = ?) ORDER BY updated_at DESC LIMIT 16")
     .all(workspaceId, claimId, claim.subject.id, claim.subject.id, claim.target?.id ?? "", claim.target?.id ?? "") as Array<{ id: string }>;
   const related = relatedIds.slice(0, 15).map((row) => readOwnerClaim(workspaceId, row.id))
@@ -305,7 +298,8 @@ export function explainOwnerClaim(workspaceId: string, claimId: string) {
   return {
     schemaVersion: CONTEXT_SEARCH_SCHEMA_VERSION, workspaceId,
     claim: ownerClaimSummary(claim),
-    why: { eligibleForAI, blockers, reviewed: claim.reviewStatus, freshness: claim.freshness,
+    why: { eligibleForInternalAI, eligibleForExternalSearch, internalBlockers, externalBlockers,
+      reviewed: claim.reviewStatus, freshness: claim.freshness,
       validNow: (!claim.validFrom || claim.validFrom <= today) && (!claim.validTo || claim.validTo >= today),
       checkedAt: today, sourceCoverage: claim.sourceCoverage, evidenceCount: claim.evidenceCount },
     evidence: claim.evidenceItems.filter((item) => item.workspaceId === workspaceId && item.source.workspaceId === workspaceId).slice(0, 10),
