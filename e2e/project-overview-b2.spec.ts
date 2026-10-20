@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { expectOnServer, waitUntilSynced } from "./helpers";
+import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
 
 async function createProject(page: Page) {
   // Creation through the UI also verifies the project can be reopened from the list.
@@ -53,7 +53,8 @@ test.describe("B2 project overview", () => {
     await page.locator(".projectActions").getByRole("button", { name: "Dokončit" }).click();
     await expect(page.getByTestId("project-overview-status")).toHaveText("Dokončený");
     await expect(page.locator(".projectOverview")).not.toContainText("Termín projektu uplynul");
-    await expectOnServer(page, (entity) => entity.title === name && entity.status === "completed", true);
+    await expect.poll(async () => (await serverEntities(page)).some((entity) => entity.title === name && entity.status === "completed"),
+      { timeout: 20_000 }).toBe(true);
   });
 
   test("mobile inspector shows the same project overview in a full-screen sheet", async ({ page }) => {
