@@ -11,6 +11,7 @@ test.describe("B2 responsive detail inspector", () => {
     await expect(page.locator(".appPane")).toBeVisible();
     await expect(page.locator("aside.inspectorDetail")).toBeVisible();
     await expect(page.locator(".inspectorBackdrop")).toHaveCSS("position", "sticky");
+    await expect(page.getByRole("button", { name: "Zavřít", exact: true })).toBeVisible();
     await expect(page.locator(".taskRow", { hasText: seeded.plainTask })).toBeVisible();
     await page.locator(".inspectorClose").click();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
@@ -35,6 +36,7 @@ test.describe("B2 responsive detail inspector", () => {
     await waitUntilSynced(page);
     await page.locator(".taskRow", { hasText: seeded.plainTask }).first().click();
     await expect(page.locator("aside.inspectorDetail")).toBeVisible();
+    await expect(page.getByRole("button", { name: "← Zpět" })).toBeVisible();
     await expect(page.locator(".inspectorBackdrop")).toHaveCSS("position", "fixed");
     const detail = await page.locator("aside.inspectorDetail").boundingBox();
     expect(detail).not.toBeNull();
@@ -57,5 +59,36 @@ test.describe("B2 responsive detail inspector", () => {
     await expectOnServer(page, (entity) => entity.title === `${seeded.plainTask} upraveno`, true);
     await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.renameTask);
   });
+
+  test("keyboard can enter the inspector and returns focus to the originating task", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?view=Inbox");
+    await waitUntilSynced(page);
+    const opener = page.locator(".taskRow", { hasText: seeded.plainTask })
+      .first().getByRole("button", { name: seeded.plainTask });
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("aside.inspectorDetail")).toBeFocused();
+    await page.getByRole("button", { name: "Zavřít", exact: true }).click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    // Space is also provided by the native button's keyboard activation.
+    await page.keyboard.press("Space");
+    await expect(page.locator("aside.inspectorDetail")).toBeFocused();
+  });
+
+  test("rapid inspector switches keep the final selection and clear context on close", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?view=Inbox");
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: seeded.plainTask }).first().click();
+    await page.locator(".taskRow", { hasText: seeded.renameTask }).first().click();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.renameTask);
+    await page.locator(".inspectorClose").click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
+    await page.locator(".taskRow", { hasText: seeded.plainTask }).first().click();
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.plainTask);
+  });
+
 
 });
