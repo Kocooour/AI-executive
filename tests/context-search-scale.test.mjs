@@ -92,7 +92,7 @@ test("EXPLAIN confirms the real external guard uses the claim-leading evidence i
     .all("personal", claimCount + 1).map((row) => String(row.detail));
   assert.ok(plan.some((detail) => /SEARCH e USING (?:COVERING )?INDEX context_evidence_claim_guard_idx/.test(detail)),
     "correlated evidence predicate must use index: " + JSON.stringify(plan));
-  assert.equal(plan.some((detail) => /SCAN e(?:\\b|$)/.test(detail)), false,
+  assert.equal(plan.some((detail) => /SCAN e(?:\s|$)/.test(detail)), false,
     "evidence table must not be fully scanned for each claim: " + JSON.stringify(plan));
 });
 
