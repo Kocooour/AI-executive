@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { waitUntilSynced } from "./helpers";
+import { zonedDateTimeToIso } from "../lib/local-dates";
 
 // Preview-only route fixture: no write requests or synthetic task IDs are sent to the
 // canonical store. The server's day-plan response is the UI's trusted read model.
@@ -67,4 +68,71 @@ for (const width of [390, 1280]) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
   });
+
+  test("Today calendar includes early, late and all-day events at " + width + "px", async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const timezone = "Europe/Prague";
+    const localParts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const today = [localParts.year, localParts.month, localParts.day].join("-");
+    const addDay = (date: string, days: number) => {
+      const at = new Date(date + "T12:00:00Z");
+      at.setUTCDate(at.getUTCDate() + days);
+      return at.toISOString().slice(0, 10);
+    };
+    const yesterday = addDay(today, -1);
+    const tomorrow = addDay(today, 1);
+    const on = (date: string, hour: string) => zonedDateTimeToIso(date, hour, timezone);
+    const event = (id: string, title: string, start: string, end: string, busy: boolean, allDay = false) =>
+      ({ id, title, start, end, busy, allDay, timezone, sourceId: "today-mock-source",
+        workspaceId: "personal", status: "confirmed", private: false });
+    const events = [
+      event("early", "Morning meeting outside work hours", on(today, "07:00"), on(today, "07:30"), true),
+      event("midday", "Open midday calendar slot", on(today, "12:00"), on(today, "12:30"), false),
+      event("late", "Evening meeting outside work hours", on(today, "19:00"), on(today, "20:00"), true),
+      event("all-day", "All-day birthday", on(today, "00:00"), on(tomorrow, "00:00"), true, true),
+      event("overnight", "Previous evening crossing midnight", on(yesterday, "23:30"), on(today, "00:30"), true),
+      event("tomorrow", "Tomorrow must not appear", on(tomorrow, "09:00"), on(tomorrow, "10:00"), true),
+    ];
+    await page.route("**/api/calendar?**", async (route) => {
+      await route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({
+          sources: [{
+            id: "today-mock-source", workspaceId: "personal", provider: "ics",
+            label: "Synthetic calendar", status: "ready", configured: true,
+            lastSyncAt: Date.now(), lastSuccessAt: Date.now(), lastError: "",
+            eventCount: events.length, revision: 1,
+          }],
+          events,
+        }),
+      });
+    });
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    const section = page.locator(".todayCalendarCommitments");
+    await expect(section.getByRole("heading", { name: "Události v kalendáři" })).toBeVisible();
+    const agenda = section.locator(".calendarAgenda");
+    await expect(agenda.locator(":scope > div")).toHaveCount(5);
+    await expect(agenda).toContainText("Morning meeting outside work hours");
+    await expect(agenda).toContainText("Evening meeting outside work hours");
+    await expect(agenda).toContainText("Open midday calendar slot");
+    await expect(agenda).toContainText("All-day birthday");
+    await expect(agenda).toContainText("Previous evening crossing midnight");
+    await expect(agenda).not.toContainText("Tomorrow must not appear");
+    await expect(agenda.locator(".free", { hasText: "Open midday calendar slot" }))
+      .toContainText("volný čas");
+    await expect(agenda.locator("div", { hasText: "All-day birthday" })).toContainText("Celý den");
+
+    // This repair must not change the existing Home workday-only agenda.
+    await page.goto("/?view=Home");
+    await expect(page.locator(".homeView .calendarAgenda")).toContainText("Open midday calendar slot");
+    await expect(page.locator(".homeView .calendarAgenda")).not.toContainText("Evening meeting outside work hours");
+    await expect(page.locator(".homeView .calendarAgenda")).not.toContainText("Morning meeting outside work hours");
+    if (width === 390) {
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    }
+  });
+
 }
