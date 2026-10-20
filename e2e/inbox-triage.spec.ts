@@ -1,9 +1,29 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { seeded, serverEntities, waitUntilSynced } from "./helpers";
+import { serverEntities, waitUntilSynced } from "./helpers";
 
 test.describe("B1 Inbox triage", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  async function createActiveProject(page: Page) {
+    // The E2E instance is intentionally shared by the entire suite. Earlier scenarios
+    // may have completed or deleted seeded projects: each triage test owns its target.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?view=Projects");
+    await waitUntilSynced(page);
+    const name = "B1 active project " + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    const entry = page.locator(".capture input");
+    await expect(entry).toBeVisible();
+    await entry.fill(name);
+    await entry.press("Enter");
+    await expect(page.locator(".taskRow", { hasText: name })).toBeVisible();
+    await expect.poll(async () => {
+      const projects = await serverEntities(page);
+      return projects.find((project) => project.type === "project" && project.title === name)?.status;
+    }, { timeout: 20_000 }).toBe("active");
+    await page.setViewportSize({ width: 390, height: 844 });
+    return name;
+  }
 
   async function openNewInboxTask(page: Page) {
     await page.goto("/?view=Inbox");
@@ -49,15 +69,16 @@ test.describe("B1 Inbox triage", () => {
   });
 
   test("project triage moves the task atomically, with its workspace preserved", async ({ page }) => {
+    const projectName = await createActiveProject(page);
     const title = await openNewInboxTask(page);
     const projectField = page.locator(".inboxTriage label", { hasText: "Do projektu" });
-    await projectField.locator("select").selectOption({ label: seeded.project });
+    await projectField.locator("select").selectOption({ label: projectName });
     await projectField.getByRole("button", { name: "Použít" }).click();
-    await expect.poll(async () => page.evaluate(async (taskTitle) => {
+    await expect.poll(async () => page.evaluate(async ({ taskTitle, targetTitle }) => {
       const response = await fetch("/api/store", { cache: "no-store" });
       const snapshot = await response.json();
       const task = snapshot.entities.find((entity: { title: string }) => entity.title === taskTitle);
-      const project = snapshot.entities.find((entity: { title: string; type: string }) => entity.type === "project" && entity.title === "Projekt Alfa");
+      const project = snapshot.entities.find((entity: { title: string; type: string }) => entity.type === "project" && entity.title === targetTitle);
       return {
         inbox: task?.properties?.inbox,
         linked: Boolean(task && project && snapshot.relations.some((relation: {
@@ -65,10 +86,11 @@ test.describe("B1 Inbox triage", () => {
         }) => relation.sourceEntityId === task.id && relation.targetEntityId === project.id &&
           relation.workspaceId === task.workspaceId && relation.relationType === "belongs_to_project")),
       };
-    }, title), { timeout: 20_000 }).toEqual({ inbox: false, linked: true });
+    }, { taskTitle: title, targetTitle: projectName }), { timeout: 20_000 }).toEqual({ inbox: false, linked: true });
   });
 
   test("two tabs triaging one task cannot create duplicate project memberships", async ({ page }) => {
+    const projectName = await createActiveProject(page);
     const title = await openNewInboxTask(page);
     const second = await page.context().newPage();
     try {
@@ -77,8 +99,8 @@ test.describe("B1 Inbox triage", () => {
       await second.locator(".taskRow", { hasText: title }).first().click();
       const firstField = page.locator(".inboxTriage label", { hasText: "Do projektu" });
       const secondField = second.locator(".inboxTriage label", { hasText: "Do projektu" });
-      await firstField.locator("select").selectOption({ label: seeded.project });
-      await secondField.locator("select").selectOption({ label: seeded.project });
+      await firstField.locator("select").selectOption({ label: projectName });
+      await secondField.locator("select").selectOption({ label: projectName });
 
       // Dispatch in two tabs without awaiting either async handler. Both previously
       // read an empty membership outside the transaction and inserted separate links.
@@ -128,17 +150,8 @@ test.describe("B1 Inbox triage", () => {
   });
 
   test("a stale tab cannot replace a project's already completed Inbox triage", async ({ page }) => {
-    // Create a second, distinct destination through the real UI.
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto("/?view=Projects");
-    await waitUntilSynced(page);
-    const competingProject = `B1 alternate project ${Date.now()}`;
-    await page.locator(".capture input").fill(competingProject);
-    await page.locator(".capture input").press("Enter");
-    await expect(page.locator(".taskRow", { hasText: competingProject })).toBeVisible();
-    await expect.poll(async () => (await serverEntities(page))
-      .some((entity) => entity.type === "project" && entity.title === competingProject)).toBe(true);
-    await page.setViewportSize({ width: 390, height: 844 });
+    const firstProject = await createActiveProject(page);
+    const competingProject = await createActiveProject(page);
 
     const title = await openNewInboxTask(page);
     const second = await page.context().newPage();
@@ -148,13 +161,13 @@ test.describe("B1 Inbox triage", () => {
       await second.locator(".taskRow", { hasText: title }).first().click();
       const firstField = page.locator(".inboxTriage label", { hasText: "Do projektu" });
       const secondField = second.locator(".inboxTriage label", { hasText: "Do projektu" });
-      await firstField.locator("select").selectOption({ label: seeded.project });
+      await firstField.locator("select").selectOption({ label: firstProject });
       await secondField.locator("select").selectOption({ label: competingProject });
 
       // The first decision commits; the other tab has already selected a different
       // target. If that stale control remains usable, its write must be rejected.
       await firstField.getByRole("button", { name: "Použít" }).click();
-      const membership = async () => page.evaluate(async (taskTitle) => {
+      const membership = async () => page.evaluate(async ({ taskTitle, expectedProject }) => {
         const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
         const task = snapshot.entities.find((entity: { type: string; title: string }) =>
           entity.type === "task" && entity.title === taskTitle);
@@ -164,9 +177,9 @@ test.describe("B1 Inbox triage", () => {
             relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_project")
             .map((relation: { targetEntityId: string }) => relation.targetEntityId),
           expected: snapshot.entities.find((entity: { type: string; title: string }) =>
-            entity.type === "project" && entity.title === "Projekt Alfa")?.id,
+            entity.type === "project" && entity.title === expectedProject)?.id,
         };
-      }, title);
+      }, { taskTitle: title, expectedProject: firstProject });
       await expect.poll(async () => {
         const state = await membership();
         return { inbox: state.inbox, assigned: state.targets.length === 1 && state.targets[0] === state.expected };
