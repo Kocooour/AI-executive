@@ -11,6 +11,8 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    chooseCaptureType,
+    discardCaptureDraft,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,
@@ -53,6 +55,16 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             }}
           >
             <h2 id="capture-title">{captureType === "note" ? tr("addNote") : tr("quickCapture")}</h2>
+            {!captureProjectId && (
+              <div className="captureKind" role="group" aria-label={tr("captureKindLabel")}>
+                <button type="button" aria-pressed={captureType === "task"} onClick={() => chooseCaptureType("task")}>
+                  {tr("captureTaskKind")}
+                </button>
+                <button type="button" aria-pressed={captureType === "note"} onClick={() => chooseCaptureType("note")}>
+                  {tr("captureNoteKind")}
+                </button>
+              </div>
+            )}
             {workspaces.length > 1 && !captureProjectId && (
               <label className="captureWorkspace">
                 {tr("workspace")}
@@ -69,6 +81,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
               </label>
             )}
             <input
+              className="captureTitleInput"
               autoFocus
               aria-label={captureType === "note" ? tr("noteTitle") : tr("taskTitle")}
               value={draft}
@@ -269,6 +282,12 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                   </div>
                 )}
               </>
+            )}
+            {draft.trim() && (
+              <div className="captureDraftControls">
+                <p>{tr("captureDraftHint")}</p>
+                <button type="button" onClick={discardCaptureDraft}>{tr("captureClearDraft")}</button>
+              </div>
             )}
             <div>
               <button type="button" onClick={() => setCapture(false)}>
