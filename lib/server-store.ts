@@ -724,9 +724,24 @@ function replaceUnchecked(database: DatabaseSync, snapshot: StoreSnapshot) {
   const insertTombstone = database.prepare(
     "INSERT INTO tombstones (id, deleted_at) VALUES (?, ?)",
   );
-  database.exec("DELETE FROM relations; DELETE FROM entities; DELETE FROM tombstones;");
+  // Keep unchanged canonical entity rows in place. A full-snapshot client save
+  // may edit just one task; deleting/reinserting all rows would fire the semantic
+  // outbox triggers for every entity and force a global index rebuild.
+  // Compare the *stored* payload and revision so a true workspace move or
+  // deletion still invalidates both affected workspaces transactionally.
+  const existingEntities = database.prepare("SELECT id FROM entities").all() as Array<{ id: string }>;
+  const desiredIds = new Set(snapshot.entities.map((entity) => entity.id));
+  const deleteEntity = database.prepare("DELETE FROM entities WHERE id = ?");
+  const updateEntity = database.prepare(`UPDATE entities SET payload = ?, updated_at = ?
+    WHERE id = ? AND (payload != ? OR updated_at != ?)`);
+  const existingIds = new Set(existingEntities.map((row) => row.id));
+  database.exec("DELETE FROM relations; DELETE FROM tombstones;");
+  for (const { id } of existingEntities) if (!desiredIds.has(id)) deleteEntity.run(id);
   for (const entity of snapshot.entities) {
-    insertEntity.run(entity.id, JSON.stringify(entity), entity.updatedAt || 0);
+    const payload = JSON.stringify(entity);
+    const updatedAt = entity.updatedAt || 0;
+    if (existingIds.has(entity.id)) updateEntity.run(payload, updatedAt, entity.id, payload, updatedAt);
+    else insertEntity.run(entity.id, payload, updatedAt);
   }
   for (const relation of snapshot.relations) {
     insertRelation.run(
