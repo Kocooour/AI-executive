@@ -71,11 +71,11 @@ export default function App() {
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && <WorkNowCard app={app} />}
-          {view === "Today" && app.todayCalendarEvents.length > 0 && (
+          {view === "Today" && app.calendarDayEvents.length > 0 && (
             <section className="todayCalendarCommitments" aria-labelledby="today-calendar-title">
               <h2 id="today-calendar-title">{tr("todayGroupCalendar")}</h2>
               {!app.calendarFresh && <p role="status">{tr("dayPlanStale")}</p>}
-              <TodayAgenda app={app} />
+              <TodayAgenda app={app} events={app.calendarDayEvents} />
             </section>
           )}
           {view === "Today" && <DayPlanCard app={app} />}
