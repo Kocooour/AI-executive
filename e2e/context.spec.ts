@@ -516,6 +516,67 @@ test("a quick Redo while Undo is still responding is sent once, after the Undo c
   expect((await serverValue(page, predicate))?.revision).toBe(4);
 });
 
+for (const transition of ["view", "workspace"] as const) {
+  test(`queued Redo is cancelled after leaving and returning to the same ${transition}`, async ({ page }) => {
+    await openContext(page);
+    const predicate = `e2e.history.cancel.${transition}`;
+    await saveNewClaim(page, predicate, "before");
+    await editClaim(page, predicate, "after");
+    await expect(undoButton(page)).toContainText("Úprava tvrzení");
+
+    const posts: string[] = [];
+    let releaseUndo!: () => void;
+    let markUndone!: () => void;
+    const undoHeld = new Promise<void>((resolve) => { markUndone = resolve; });
+    const unblockUndo = new Promise<void>((resolve) => { releaseUndo = resolve; });
+    await page.route("**/api/context/history", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const action = JSON.parse(route.request().postData() || "{}").action as string;
+      posts.push(action);
+      if (action === "undo") {
+        const response = await route.fetch();
+        markUndone(); // Server committed, but the UI still has a pending Undo.
+        await unblockUndo;
+        return route.fulfill({ response });
+      }
+      return route.continue();
+    });
+
+    try {
+      await page.getByRole("heading", { name: "Co Lumi ví" }).click();
+      await page.keyboard.press("Control+KeyZ");
+      await undoHeld;
+      await page.keyboard.press("Control+Shift+KeyZ");
+      expect(posts).toEqual(["undo"]);
+
+      if (transition === "view") {
+        await page.locator('aside [data-nav-view="Home"]').click();
+        await expect(page.locator("main.appShell")).toHaveClass(/view-home/);
+        await page.locator("aside details.secondaryNav summary").click();
+        await page.locator("aside details.secondaryNav button").filter({ hasText: /Kontext|Context/ }).click();
+        await expect(page.getByRole("heading", { name: "Co Lumi ví" })).toBeVisible();
+      } else {
+        await page.locator("aside .workspaceButton").click();
+        await page.locator('aside .workspaceMenu [data-workspace-id="all"]').click();
+        await expect(page.locator("aside .workspaceButton")).toContainText("Vše");
+        await page.locator("aside .workspaceButton").click();
+        await page.locator('aside .workspaceMenu [data-workspace-id="personal"]').click();
+        await expect(page.locator("aside .workspaceButton")).toContainText("Personal");
+      }
+    } finally {
+      releaseUndo();
+    }
+
+    // The original Undo finishes after the user returns to the same screen.
+    // Neither reentering the same workspace nor a fresh render reauthorizes Redo.
+    await expect(historyBar(page).getByRole("status")).toContainText("Vráceno zpět");
+    await expect(card(page, predicate)).toContainText("before");
+    await page.waitForTimeout(300);
+    expect(posts).toEqual(["undo"]);
+    expect((await serverValue(page, predicate))?.revision).toBe(3);
+  });
+}
+
 test("the history bar fits a phone screen and its buttons are easy to hit", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openContext(page);
