@@ -13,6 +13,7 @@ PREV=""
 BACKUP=""
 STOPPED=0
 CHANGED=0
+BACKUP_VALIDATED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -53,6 +54,27 @@ verify_service() {
   systemctl is-active --quiet "$SERVICE"
 }
 
+# Canonical row counts must not decrease. Use on deployment AND code rollback.
+verify_row_counts() {
+  local before="$1" after="$2"
+  /usr/bin/node - "$before" "$after" <<'NODE'
+const fs = require("node:fs");
+const [a, b] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
+if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
+  throw new Error("Integrita produkcni databaze selhala");
+const ignored = new Set([
+  "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries"
+]);
+for (const [table, count] of Object.entries(a.tables)) {
+  if (ignored.has(table)) continue;
+  const after = b.tables[table];
+  if (!Number.isSafeInteger(after) || after < count)
+    throw new Error("KRITICKY UBYTEK zaznamu: " + table + " (" + count + " -> " + after + ")");
+}
+console.log("Integrita a pocty zaznamu: OK");
+NODE
+}
+
 on_exit() {
   local rc="$1"
   trap - EXIT INT TERM HUP
@@ -60,6 +82,15 @@ on_exit() {
   echo "NASAZENI SELHALO (kod $rc), zaloha: ${BACKUP:-nevytvorena}" >&2
   if [ "$STOPPED" != 1 ]; then exit "$rc"; fi
   set +e
+  # Never strand the old service with its disk filled by a partial copy.
+  # Only the exact unverified mktemp directory is ever removed.
+  if [ "$BACKUP_VALIDATED" = 0 ] &&
+     [[ "$BACKUP" == "$BACKUP_DIR"/deploy-???????? ]] &&
+     [ -d "$BACKUP" ] && [ ! -L "$BACKUP" ]; then
+    echo "Mazani neuplne (neoverene) kopie: $BACKUP" >&2
+    rm -rf --one-file-system -- "$BACKUP" ||
+      echo "KRITICKA CHYBA: neuplnou kopii nelze smazat, prover disk." >&2
+  fi
   if ! systemctl stop "$SERVICE" || systemctl is-active --quiet "$SERVICE"; then
     echo "KRITICKA CHYBA: sluzba stale bezi; nelze bezpecne sestavovat rollback." >&2
     exit "$rc"
@@ -81,11 +112,12 @@ on_exit() {
   fi
   if systemctl start "$SERVICE" && verify_service &&
      runuser -u ai-executive -- /usr/bin/node \
-       "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" >/dev/null; then
-    echo "Rollback: puvodni verze dostupna, SQLite integrity OK." >&2
+       "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
+     verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json"; then
+    echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
   else
-    echo "KRITICKA CHYBA: rollback neni zdravy, prover journalctl." >&2
-    echo "Data nebyla automaticky obnovena; obnova vyzaduje rozhodnuti vlastnika." >&2
+    echo "KRITICKA CHYBA: rollback nezajistil zachovani dat ani zdravou sluzbu." >&2
+    echo "Prover journalctl, aktualni data a predchozi zalohu; obnovu musi schvalit vlastnik." >&2
   fi
   exit "$rc"
 }
@@ -118,6 +150,28 @@ git diff --quiet "$PREV" "$TARGET" -- deployment/ai-executive.service || die "sy
 echo "Stavajici: $PREV"
 echo "Cil:       $TARGET"
 
+# Check reserve before taking the service down. Backup and build might be on
+# different filesystems. If shared, the backup check includes the build reserve.
+data_kb=$(du -sk "$DATA" | awk '{print $1}')
+backup_free_kb=$(df -Pk "$BACKUP_DIR" | awk 'END {print $4}')
+app_free_kb=$(df -Pk "$APP" | awk 'END {print $4}')
+state_free_kb=$(df -Pk "$DATA" | awk 'END {print $4}')
+build_reserve_kb=$((4 * 1024 * 1024))
+state_reserve_kb=$((512 * 1024))
+for value in "$data_kb" "$backup_free_kb" "$app_free_kb" "$state_free_kb"; do
+  [[ "$value" =~ ^[0-9]+$ ]] || die "nelze zjistit diskovou kapacitu"
+done
+if (( backup_free_kb < data_kb + build_reserve_kb + state_reserve_kb )); then
+  die "malo mista pro konzistentni zalohu + build + WAL"
+fi
+if (( app_free_kb < build_reserve_kb )); then
+  die "malo mista pro build a pripadny rollback"
+fi
+if (( state_free_kb < state_reserve_kb )); then
+  die "malo mista pro SQLite WAL"
+fi
+echo "Disk preflight: OK (zaloha $data_kb KiB, rezerva build 4 GiB a WAL 512 MiB)"
+
 echo "=== KONZISTENTNI ZALOHA ==="
 BACKUP="$(mktemp -d "$BACKUP_DIR/deploy-XXXXXXXX")"
 chmod 0700 "$BACKUP"
@@ -135,6 +189,10 @@ if [ -f "$DATA/store.sqlite-wal" ]; then
 else
   test ! -e "$BACKUP/data/store.sqlite-wal"
 fi
+# Verify source vs copy including nested files and env. SQLite -shm is volatile.
+cmp -s "$ENVFILE" "$BACKUP/env" || die "zaloha env neodpovida originalu"
+diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
+  die "zaloha obsahuje neodpovidajici nebo chybejici soubory"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
 /usr/bin/node "$APP/scripts/check-data.mjs" \
@@ -159,6 +217,7 @@ NODE
     sort -z | xargs -0 sha256sum > SHA256SUMS
   sha256sum -c --quiet SHA256SUMS
 )
+BACKUP_VALIDATED=1
 
 echo "=== FAST-FORWARD A BUILD ==="
 CHANGED=1
@@ -176,24 +235,7 @@ verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/after.json"
 
-/usr/bin/node - "$BACKUP/before.json" "$BACKUP/after.json" <<'NODE'
-const fs = require("node:fs");
-const [a, b] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
-if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
-  throw new Error("Integrita produkcni databaze selhala");
-// Additive migrations may legitimately create rows. Check for unexpected loss,
-// but do not require equality for normal app writes or schema backfills.
-const ignored = new Set([
-  "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries"
-]);
-for (const [table, count] of Object.entries(a.tables)) {
-  if (ignored.has(table)) continue;
-  const after = b.tables[table];
-  if (!Number.isSafeInteger(after) || after < count)
-    throw new Error("Neocekavany ubytek zaznamu: " + table);
-}
-console.log("Integrita a pocty produkcnich zaznamu: OK");
-NODE
+verify_row_counts "$BACKUP/before.json" "$BACKUP/after.json"
 systemctl is-active --quiet "$SERVICE"
 STOPPED=0
 echo "======================================"
