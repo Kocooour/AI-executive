@@ -88,7 +88,10 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
     // An item still in Inbox has not been clarified/triaged, even if it was linked to
     // a project through the ordinary task detail relation picker.
     .filter((task) => task.properties.inbox !== true &&
-      task.properties.waiting !== true && task.properties.someday !== true)
+      task.properties.waiting !== true && task.properties.someday !== true &&
+      // A future scheduled task belongs in Upcoming, not the next actionable step.
+      // Match the canonical taskMatchesView("Upcoming") semantics for 'when'.
+      !(typeof task.properties.when === "string" && task.properties.when > app.today))
     .sort(byManualOrder(`task:project:${project.id}`))[0] ?? null;
   const lastLinked = [...linkedTasks, ...linkedNotes].reduce<Entity | null>(
     (latest, task) => !latest || task.updatedAt > latest.updatedAt ? task : latest, null);
