@@ -8,6 +8,7 @@ import "./lumi-home.css";
 import "./lumi-task-row.css";
 import "./lumi-mobile-more.css";
 import "./lumi-inspector.css";
+import "./lumi-project-overview.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {
