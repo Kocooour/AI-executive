@@ -86,9 +86,8 @@ test.describe("B1 Inbox triage", () => {
         firstField.getByRole("button", { name: "Použít" }).evaluate((button) => (button as HTMLButtonElement).click()),
         secondField.getByRole("button", { name: "Použít" }).evaluate((button) => (button as HTMLButtonElement).click()),
       ]);
-      await expect(page.locator(".inboxTriage")).toHaveCount(0, { timeout: 20_000 });
-      await expect(second.locator(".inboxTriage")).toHaveCount(0, { timeout: 20_000 });
-
+      // Only the first triage can commit; the other tab may retain an error until
+      // it refreshes its stale inspector.
       const taskId = (await serverEntities(page)).find((entity) => entity.title === title)?.id;
       expect(taskId).toBeTruthy();
       // Inspect IndexedDB directly, not only the server: the race occurs in the
@@ -123,6 +122,65 @@ test.describe("B1 Inbox triage", () => {
           inbox: task?.properties?.inbox,
         };
       }, title), { timeout: 20_000 }).toEqual({ count: 1, inbox: false });
+    } finally {
+      await second.close();
+    }
+  });
+
+  test("a stale tab cannot replace a project's already completed Inbox triage", async ({ page }) => {
+    // Create a second, distinct destination through the real UI.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?view=Projects");
+    await waitUntilSynced(page);
+    const competingProject = `B1 alternate project ${Date.now()}`;
+    await page.locator(".capture input").fill(competingProject);
+    await page.locator(".capture input").press("Enter");
+    await expect(page.locator(".taskRow", { hasText: competingProject })).toBeVisible();
+    await expect.poll(async () => (await serverEntities(page))
+      .some((entity) => entity.type === "project" && entity.title === competingProject)).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const title = await openNewInboxTask(page);
+    const second = await page.context().newPage();
+    try {
+      await second.goto("/?view=Inbox");
+      await waitUntilSynced(second);
+      await second.locator(".taskRow", { hasText: title }).first().click();
+      const firstField = page.locator(".inboxTriage label", { hasText: "Do projektu" });
+      const secondField = second.locator(".inboxTriage label", { hasText: "Do projektu" });
+      await firstField.locator("select").selectOption({ label: seeded.project });
+      await secondField.locator("select").selectOption({ label: competingProject });
+
+      // The first decision commits; the other tab has already selected a different
+      // target. If that stale control remains usable, its write must be rejected.
+      await firstField.getByRole("button", { name: "Použít" }).click();
+      const membership = async () => page.evaluate(async (taskTitle) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+        const task = snapshot.entities.find((entity: { type: string; title: string }) =>
+          entity.type === "task" && entity.title === taskTitle);
+        return {
+          inbox: task?.properties?.inbox,
+          targets: snapshot.relations.filter((relation: { sourceEntityId: string; relationType: string }) =>
+            relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_project")
+            .map((relation: { targetEntityId: string }) => relation.targetEntityId),
+          expected: snapshot.entities.find((entity: { type: string; title: string }) =>
+            entity.type === "project" && entity.title === "Projekt Alfa")?.id,
+        };
+      }, title);
+      await expect.poll(async () => {
+        const state = await membership();
+        return { inbox: state.inbox, assigned: state.targets.length === 1 && state.targets[0] === state.expected };
+      }, { timeout: 20_000 }).toEqual({ inbox: false, assigned: true });
+
+      const competingAction = secondField.getByRole("button", { name: "Použít" });
+      if (await competingAction.isVisible() && await competingAction.isEnabled()) {
+        await competingAction.click();
+        await expect(second.getByRole("alert")).toContainText(/./);
+      }
+      await expect.poll(async () => {
+        const state = await membership();
+        return { inbox: state.inbox, assigned: state.targets.length === 1 && state.targets[0] === state.expected };
+      }, { timeout: 20_000 }).toEqual({ inbox: false, assigned: true });
     } finally {
       await second.close();
     }
