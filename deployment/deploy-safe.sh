@@ -176,18 +176,16 @@ const fs = require("node:fs");
 const [a, b] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
 if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
   throw new Error("Integrita produkcni databaze selhala");
-const volatile = new Set([
-  "security_events", "security_alerts", "metadata",
-  "attention_states", "attention_history", "pact_agent_runs", "schema_migrations"
-]);
+// Additive migrations may legitimately create rows. Check for unexpected loss,
+// but do not require equality for normal app writes or schema backfills.
 const ignored = new Set([
   "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries"
 ]);
 for (const [table, count] of Object.entries(a.tables)) {
   if (ignored.has(table)) continue;
   const after = b.tables[table];
-  if (!(volatile.has(table) ? after >= count : after === count))
-    throw new Error("Neocekavana zmena poctu zaznamu: " + table);
+  if (!Number.isSafeInteger(after) || after < count)
+    throw new Error("Neocekavany ubytek zaznamu: " + table);
 }
 console.log("Integrita a pocty produkcnich zaznamu: OK");
 NODE
