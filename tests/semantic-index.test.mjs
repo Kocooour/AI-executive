@@ -92,6 +92,77 @@ test("a protected source forces a claim's derived sensitivity to the strictest l
   assert.notEqual(next.policy_fingerprint, row.policy_fingerprint);
 });
 
+test("missing entity sensitivity fails closed until a canonical policy is explicitly assigned", () => {
+  const record = entity("without-policy", "personal", "No policy");
+  delete record.properties.sensitivity;
+  canonical.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)")
+    .run(record.id, JSON.stringify(record), record.updatedAt);
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'without-policy'")[0].sensitivity,
+    "restricted");
+  record.properties.sensitivity = "normal";
+  record.updatedAt += 1;
+  canonical.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?")
+    .run(JSON.stringify(record), record.updatedAt, record.id);
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'without-policy'")[0].sensitivity,
+    "normal");
+});
+
+test("cross-workspace evidence and foreign source changes invalidate the claim workspace", () => {
+  const now = Date.now();
+  canonical.prepare(`INSERT INTO context_claims(id, workspace_id, subject_id, predicate, review_status, freshness,
+    sensitivity, provenance, revision, recorded_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("claim-cross", "personal", "canonical:workspace:personal", "about", "confirmed", "current",
+      "normal", "owner", 1, now, now);
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'claim-cross'")[0].sensitivity,
+    "normal");
+
+  canonical.prepare(`INSERT INTO context_sources(id, workspace_id, revision, sensitivity, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`).run("source-cross", "team", 1, "normal", now, now);
+  canonical.prepare(`INSERT INTO context_evidence(id, workspace_id, revision, claim_id, source_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run("evidence-cross", "team", 1, "claim-cross", "source-cross", now, now);
+  assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE workspace_id = 'personal'").get(),
+    "foreign evidence must invalidate canonical claim workspace");
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'claim-cross'")[0].sensitivity,
+    "restricted");
+
+  canonical.prepare("UPDATE context_sources SET sensitivity = 'confidential', revision = 2 WHERE id = 'source-cross'").run();
+  assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE workspace_id = 'personal'").get(),
+    "foreign source changes must invalidate the canonical claim workspace");
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'claim-cross'")[0].sensitivity,
+    "restricted");
+
+  canonical.prepare("DELETE FROM context_evidence WHERE id = 'evidence-cross'").run();
+  assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE workspace_id = 'personal'").get(),
+    "deleting foreign evidence must also invalidate the original claim workspace");
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT sensitivity FROM semantic_entries WHERE object_id = 'claim-cross'")[0].sensitivity,
+    "normal");
+});
+
+test("unconsumed outbox is capped without losing the global rebuild requirement", () => {
+  const insert = canonical.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)");
+  canonical.exec("BEGIN IMMEDIATE");
+  try {
+    for (let index = 0; index < 1050; index++) {
+      const record = entity(`overflow-note-${index}`, "personal", "Synthetic content");
+      insert.run(record.id, JSON.stringify(record), record.updatedAt);
+    }
+    canonical.exec("COMMIT");
+  } catch (error) { canonical.exec("ROLLBACK"); throw error; }
+  assert.ok(queued() <= 1000, "bounded outbox cannot grow indefinitely while worker is disabled");
+  assert.ok(canonical.prepare("SELECT 1 FROM semantic_index_outbox WHERE object_type = 'rebuild' AND workspace_id = '*' AND operation = 'queue_compacted'").get(),
+    "compaction must preserve a full rebuild marker, not silently drop invalidation");
+  semantic.reconcileSemanticManifest();
+  assert.equal(queued(), 0);
+  assert.equal(manifest("SELECT COUNT(*) AS n FROM semantic_entries WHERE object_id LIKE 'overflow-note-%'")[0].n, 1050,
+    "global rebuild reconstructs all canonical records");
+});
+
 test("a restore marker rebuilds all workspaces and a lost derived file is recoverable", () => {
   assert.equal(canonical.prepare("SELECT 1 FROM metadata WHERE key = 'restoreGeneration'").get(), undefined);
   canonical.prepare("INSERT INTO metadata(key, value) VALUES ('restoreGeneration', '1') ON CONFLICT(key) DO UPDATE SET value = '1'").run();
