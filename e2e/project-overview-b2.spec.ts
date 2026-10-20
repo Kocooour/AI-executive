@@ -32,7 +32,7 @@ test.describe("B2 project overview", () => {
     await expect(overview.getByText("Cíl / výsledek")).toBeVisible();
     await expect(overview.getByText("Další akce")).toBeVisible();
     await expect(overview.getByText("Poslední aktivita")).toBeVisible();
-    await expect(overview.getByText("Signály rizika")).toBeVisible();
+    await expect(overview.getByText("Rizika projektu")).toBeVisible();
     await expect(overview.getByText("Není určená")).toBeVisible();
     const goal = overview.getByRole("textbox", { name: "Cíl / výsledek" });
     const text = "Hotový pilot s ověřeným předáním zákazníkovi";
