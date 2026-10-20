@@ -23,7 +23,7 @@ test.describe("B2 responsive detail inspector", () => {
     await page.locator(".taskRow", { hasText: seeded.plainTask }).first().click();
     await expect(page.locator(".appPane")).toBeHidden();
     await expect(page.locator("aside.inspectorDetail")).toBeVisible();
-    await expect(page.locator(".inspectorBackLabel")).toBeVisible();
+    await expect(page.getByRole("button", { name: "← Zpět" })).toBeVisible();
     await expect(page.locator(".inspectorBackdrop")).toHaveCSS("position", "relative");
     await page.locator(".inspectorClose").click();
     await expect(page.locator(".appPane")).toBeVisible();
