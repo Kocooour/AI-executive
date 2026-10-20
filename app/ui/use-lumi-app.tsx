@@ -246,6 +246,9 @@ export function useLumiApp() {
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
   const contextHistoryLoadVersion = useRef(0);
+  // Keyboard shortcuts can arrive before React renders a committed history response.
+  // Keep the authoritative newest stack synchronously available to the handler.
+  const currentContextHistory = useRef<ContextHistoryState>({ undo: null, redo: null, recent: [] });
   const contextShortcut = useRef<{ active: boolean; run: (action: "undo" | "redo") => void }>({ active: false, run: () => undefined });
   // Only one pending keyboard intent per workspace while an Undo/Redo is in flight.
   // A quick Redo must not disappear just because the preceding Undo is still
@@ -592,6 +595,7 @@ export function useLumiApp() {
     if (!response.ok) throw new Error(localizeServerError(data.error, tr) || tr("contextHistoryFailed"));
     if (loadVersion !== contextHistoryLoadVersion.current || calendarWorkspaceSelection.current !== workspaceId) return;
     const state: ContextHistoryState = { undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] };
+    currentContextHistory.current = state;
     setContextHistory(state);
     return state;
   }
@@ -862,7 +866,7 @@ export function useLumiApp() {
       if (keyboard && action !== "skip") pendingContextShortcut.current = { workspaceId, action };
       return;
     }
-    const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? (after ?? contextHistory).undo : (after ?? contextHistory).redo;
+    const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? (after ?? currentContextHistory.current).undo : (after ?? currentContextHistory.current).redo;
     if (!step) return;
     const scope = `history:${action}:${side}:${workspaceId}`;
     const intent = contextIntent(scope, JSON.stringify([workspaceId, action, side, step.eventId]));
@@ -897,6 +901,9 @@ export function useLumiApp() {
       finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
       committedHistory = { undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] };
+      // A GET started before this command cannot overwrite its committed stack.
+      contextHistoryLoadVersion.current += 1;
+      currentContextHistory.current = committedHistory;
       setContextHistory(committedHistory);
       const text = contextStepText(data.step as ContextHistoryStep);
       setHistoryStatus(`${tr(action === "undo" ? "contextUndone" : action === "redo" ? "contextRedone" : "contextSkipped")} ${text.action} ${text.target}`);
@@ -1015,7 +1022,8 @@ export function useLumiApp() {
     loadCalendar(workspaceId).catch(() => undefined);
     loadDurableContext(workspaceId).catch(() => setContextStatus(tr("contextIsUnavailable")));
     setContextClaims([]);
-    setContextHistory({ undo: null, redo: null, recent: [] });
+    currentContextHistory.current = { undo: null, redo: null, recent: [] };
+    setContextHistory(currentContextHistory.current);
     setHistoryStatus(""); setHistoryOffer("");
     loadContextHistory(workspaceId).catch(() => setHistoryStatus(tr("contextHistoryFailed")));
     setClaimHistory({});
