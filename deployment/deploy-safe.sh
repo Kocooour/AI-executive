@@ -110,14 +110,25 @@ on_exit() {
       exit "$rc"
     fi
   fi
-  if systemctl start "$SERVICE" && verify_service &&
-     runuser -u ai-executive -- /usr/bin/node \
-       "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
-     verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json"; then
-    echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+  if systemctl start "$SERVICE" && verify_service; then
+    if [ "$BACKUP_VALIDATED" = 1 ]; then
+      if runuser -u ai-executive -- /usr/bin/node \
+           "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
+         verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json"; then
+        echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+      else
+        echo "KRITICKA CHYBA: rollback neobnovil pocet zaznamu, data nemenit naslepo." >&2
+        echo "Porovnej $BACKUP/before.json a $BACKUP/rollback.json; o obnove rozhoduje vlastnik." >&2
+      fi
+    elif runuser -u ai-executive -- /usr/bin/node \
+         "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" >/dev/null; then
+      echo "Puvodni sluzba obnovena, neuplna zaloha odstranena." >&2
+    else
+      echo "KRITICKA CHYBA: SQLite po nezdarene zaloze neni konzistentni." >&2
+    fi
   else
-    echo "KRITICKA CHYBA: rollback nezajistil zachovani dat ani zdravou sluzbu." >&2
-    echo "Prover journalctl, aktualni data a predchozi zalohu; obnovu musi schvalit vlastnik." >&2
+    echo "KRITICKA CHYBA: rollback nebo dostupnost sluzby selhala." >&2
+    echo "Prover journalctl; produkcni data nebyla obnovena." >&2
   fi
   exit "$rc"
 }
