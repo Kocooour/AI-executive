@@ -10,8 +10,22 @@ test.describe("B1 Inbox triage", () => {
     await waitUntilSynced(page);
     const title = `B1 triage ${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const input = page.locator(".capture input");
-    await input.fill(title);
-    await input.press("Enter");
+    if (await input.isVisible()) {
+      await input.fill(title);
+      await input.press("Enter");
+    } else {
+      await page.getByRole("button", { name: "Rychlé zadání" }).click();
+      const capture = page.getByRole("dialog", { name: "Rychlé zadání" });
+      await expect(capture).toBeVisible();
+      await capture.getByRole("textbox", { name: "Název úkolu" }).fill(title);
+      await expect(capture.locator(".captureSuggestion, .captureSuggestionState.error"))
+        .toBeVisible({ timeout: 10_000 });
+      // Keep this Inbox fixture unassigned even when adaptive suggestions find a project.
+      const useSuggestion = capture.getByRole("checkbox", { name: "Použít návrh Lumi" });
+      if (await useSuggestion.isVisible()) await useSuggestion.uncheck();
+      await capture.getByRole("button", { name: "Přidat úkol" }).click();
+      await expect(capture).not.toBeVisible();
+    }
     const row = page.locator(".taskRow", { hasText: title }).first();
     await expect(row).toBeVisible();
     await expect.poll(async () =>
