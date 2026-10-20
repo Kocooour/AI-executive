@@ -175,8 +175,14 @@ test.describe("B1 Inbox triage", () => {
       const competingAction = secondField.getByRole("button", { name: "Použít" });
       if (await competingAction.isVisible() && await competingAction.isEnabled()) {
         await competingAction.click();
-        await expect(second.getByRole("alert")).toContainText(/./);
+        // It may show the stale-triage error, or disappear when another tab's
+        // persisted state refreshes the inspector.
+        await expect.poll(async () =>
+          (await second.getByRole("alert").count()) > 0 ||
+          (await second.locator(".inboxTriage").count()) === 0,
+        { timeout: 20_000 }).toBe(true);
       }
+      await waitUntilSynced(second);
       await expect.poll(async () => {
         const state = await membership();
         return { inbox: state.inbox, assigned: state.targets.length === 1 && state.targets[0] === state.expected };
