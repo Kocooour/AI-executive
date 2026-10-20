@@ -65,6 +65,37 @@ switch (name) {
         finally { db.close(); }
         set("deleted", "1");
       }
+      if (["sessionretention", "sessionloss", "intervalloss"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("retention-run"))) {
+        const db = new DatabaseSync(dbFile);
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          try {
+            if (scenario === "sessionretention") {
+              // Follow the same finish/retention rules as lib/work-sessions.ts:
+              // complete the active session, delete intervals of expired completed
+              // sessions, then retain the 1000 most recent completed sessions.
+              db.prepare("UPDATE work_sessions SET state='completed',completed_at=? WHERE id=?")
+                .run(20000, "session:active");
+              const expired = db.prepare(`SELECT id FROM work_sessions WHERE workspace_id=? AND state='completed'
+                ORDER BY completed_at DESC LIMIT -1 OFFSET 1000`).all("personal");
+              for (const item of expired)
+                db.prepare("DELETE FROM work_session_intervals WHERE session_id=?").run(item.id);
+              db.prepare(`DELETE FROM work_sessions WHERE workspace_id=? AND state='completed' AND id IN
+                (SELECT id FROM work_sessions WHERE workspace_id=? AND state='completed'
+                ORDER BY completed_at DESC LIMIT -1 OFFSET 1000)`).run("personal", "personal");
+            } else if (scenario === "sessionloss") {
+              db.prepare("DELETE FROM work_session_intervals WHERE session_id=?").run("session:active");
+              db.prepare("DELETE FROM work_sessions WHERE id=?").run("session:active");
+            } else {
+              db.prepare("DELETE FROM work_session_intervals WHERE id=?").run("interval:1");
+            }
+            db.exec("COMMIT");
+          } catch (error) { db.exec("ROLLBACK"); throw error; }
+        } finally { db.close(); }
+        set("retention-run", "1");
+        log("session-retention-" + scenario);
+      }
       if (scenario === "outboxcompact" && get("head") === target && !fs.existsSync(stateFile("compacted"))) {
         // Trigger a real SQLite compaction on first start of the new version.
         const db = new DatabaseSync(dbFile);
