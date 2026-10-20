@@ -476,6 +476,46 @@ test("Ctrl+Z undoes outside text fields and leaves the browser's own undo inside
   expect((await serverValue(page, predicate))?.revision).toBe(4);
 });
 
+test("a quick Redo while Undo is still responding is sent once, after the Undo completes", async ({ page }) => {
+  await openContext(page);
+  const predicate = "e2e.history.queued.keys";
+  await saveNewClaim(page, predicate, "one");
+  await editClaim(page, predicate, "two");
+  await expect(undoButton(page)).toContainText("Úprava tvrzení");
+  const posts: string[] = [];
+  let releaseUndo!: () => void;
+  let markUndone!: () => void;
+  const undoHeld = new Promise<void>((resolve) => { markUndone = resolve; });
+  const unblockUndo = new Promise<void>((resolve) => { releaseUndo = resolve; });
+  await page.route("**/api/context/history", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const action = JSON.parse(route.request().postData() || "{}").action as string;
+    posts.push(action);
+    if (action === "undo") {
+      // Let the server commit Undo, but withhold its response from the page.
+      // Redo must be queued rather than sent with a stale expectedEventId.
+      const response = await route.fetch();
+      markUndone();
+      await unblockUndo;
+      return route.fulfill({ response });
+    }
+    return route.continue();
+  });
+  try {
+    await page.getByRole("heading", { name: "Co Lumi ví" }).click();
+    await page.keyboard.press("Control+KeyZ");
+    await undoHeld;
+    await page.keyboard.press("Control+Shift+KeyZ");
+    expect(posts).toEqual(["undo"], "Redo must not race the in-flight Undo request");
+  } finally {
+    releaseUndo();
+  }
+  await expect.poll(() => posts).toEqual(["undo", "redo"]);
+  await expect(card(page, predicate)).toContainText("two");
+  await expect.poll(async () => (await serverValue(page, predicate))?.literal?.value).toBe("two");
+  expect((await serverValue(page, predicate))?.revision).toBe(4);
+});
+
 test("the history bar fits a phone screen and its buttons are easy to hit", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openContext(page);
