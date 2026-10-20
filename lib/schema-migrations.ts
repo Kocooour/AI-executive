@@ -175,6 +175,59 @@ export const schemaMigrations: SchemaMigration[] = [
       database.exec("CREATE INDEX IF NOT EXISTS calendar_sources_account_idx ON calendar_sources(account_id)");
     },
   },
+  {
+    // Semantic memory stage 1. Triggers put a content-free invalidation into the same transaction as
+    // every canonical mutation. The queue is deliberately outside backups: a restore enqueues a full
+    // rebuild through the restoreGeneration metadata trigger below.
+    id: "2026-10-semantic-memory-outbox-v1",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS semantic_index_outbox (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          object_type TEXT NOT NULL,
+          object_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        );
+        CREATE INDEX IF NOT EXISTS semantic_index_outbox_workspace_idx
+          ON semantic_index_outbox(workspace_id, id);
+      `);
+      for (const [table, type, workspace] of [
+        ["entities", "entity", "COALESCE(json_extract(NEW.payload, '$.workspaceId'), '')"],
+        ["context_claims", "claim", "NEW.workspace_id"],
+        ["context_subjects", "subject", "NEW.workspace_id"],
+        ["context_sources", "source", "NEW.workspace_id"],
+        ["context_evidence", "evidence", "NEW.workspace_id"],
+      ]) {
+        const oldWorkspace = workspace.replaceAll("NEW.", "OLD.");
+        for (const [operation, alias, workspaceExpr] of [
+          ["insert", "NEW", workspace],
+          ["update", "NEW", workspace],
+          ["delete", "OLD", oldWorkspace],
+        ]) {
+          database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_${table}_${operation}
+            AFTER ${operation.toUpperCase()} ON ${table}
+            BEGIN
+              INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+              VALUES ('${type}', ${alias}.id, ${workspaceExpr}, '${operation}');
+              ${operation === "update" ? `INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+              SELECT '${type}', OLD.id, ${oldWorkspace}, 'move_from'
+              WHERE ${oldWorkspace} != ${workspaceExpr};` : ""}
+            END`);
+        }
+      }
+      database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_restore_generation
+        AFTER UPDATE OF value ON metadata
+        WHEN NEW.key = 'restoreGeneration' AND NEW.value != OLD.value
+        BEGIN
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'restore');
+        END`);
+      database.exec(`INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+        VALUES ('rebuild', '*', '*', 'migration')`);
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

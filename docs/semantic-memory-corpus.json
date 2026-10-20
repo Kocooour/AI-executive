@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "provenance": "Entirely invented, non-production development examples; no customer, account or server data.",
+  "documents": [
+    {"id":"n1","workspace":"personal","kind":"note","sensitivity":"normal","text":"Porada týmu k rozpočtu je přesunuta na čtvrteční dopoledne."},
+    {"id":"n2","workspace":"personal","kind":"note","sensitivity":"normal","text":"Před odletem zkontrolovat cestovní pojištění a platnost pasu."},
+    {"id":"n3","workspace":"personal","kind":"note","sensitivity":"normal","text":"Zápis z retrospektivy: rychlejší schvalování návrhů z mobilu."},
+    {"id":"n4","workspace":"personal","kind":"note","sensitivity":"normal","text":"Faktura za hosting je splatná patnáctého listopadu."},
+    {"id":"n5","workspace":"personal","kind":"note","sensitivity":"normal","text":"Research notes: multilingual search evaluation and Czech inflection."},
+    {"id":"n6","workspace":"personal","kind":"note","sensitivity":"normal","text":"Ověřit zálohu SQLite před aktualizací aplikace."},
+    {"id":"n7","workspace":"personal","kind":"note","sensitivity":"normal","text":"Klientský návrh potřebuje připomínky od právního oddělení."},
+    {"id":"n8","workspace":"personal","kind":"note","sensitivity":"normal","text":"Zařídit servis jízdního kola před víkendovým výletem."},
+    {"id":"n9","workspace":"personal","kind":"note","sensitivity":"normal","text":"Meeting recap: the budget review was moved to Thursday morning."},
+    {"id":"n10","workspace":"personal","kind":"note","sensitivity":"normal","text":"Poznámka o pěstování bylinek na balkoně a pravidelném zalévání."},
+    {"id":"n11","workspace":"team","kind":"note","sensitivity":"normal","text":"Týmový plán zavedení nového vyhledávání."},
+    {"id":"n12","workspace":"team","kind":"note","sensitivity":"confidential","text":"Fiktivní neveřejný návrh personálního plánu."},
+    {"id":"n13","workspace":"personal","kind":"note","sensitivity":"restricted","text":"Fiktivní interní PIN pro test omezení přístupu."},
+    {"id":"n14","workspace":"personal","kind":"task","sensitivity":"normal","text":"Rezervovat vlak do Brna na pátek."},
+    {"id":"n15","workspace":"personal","kind":"task","sensitivity":"normal","text":"Zkontrolovat dostupné místo na disku serveru."},
+    {"id":"n16","workspace":"personal","kind":"note","sensitivity":"normal","text":"Dokumentace záložního postupu uvádí obnovu po výpadku napájení."}
+  ],
+  "queries": [
+    {"id":"q1","workspace":"personal","query":"Kdy se koná schůzka o financích?","relevant":{"n1":2,"n9":2}},
+    {"id":"q2","workspace":"personal","query":"co musím udělat před cestou letadlem","relevant":{"n2":2}},
+    {"id":"q3","workspace":"personal","query":"mobile approval feedback","relevant":{"n3":2}},
+    {"id":"q4","workspace":"personal","query":"kdy zaplatit server","relevant":{"n4":2}},
+    {"id":"q5","workspace":"personal","query":"čeština morphology retrieval","relevant":{"n5":2}},
+    {"id":"q6","workspace":"personal","query":"bezpečná obnova databáze","relevant":{"n6":2,"n16":1}},
+    {"id":"q7","workspace":"personal","query":"právní komentáře k návrhu","relevant":{"n7":2}},
+    {"id":"q8","workspace":"personal","query":"oprava bicyklu","relevant":{"n8":2}},
+    {"id":"q9","workspace":"personal","query":"vlak do Brna","relevant":{"n14":2}},
+    {"id":"q10","workspace":"personal","query":"volné místo storage serveru","relevant":{"n15":2}},
+    {"id":"q11","workspace":"personal","query":"personální plán","relevant":{},"mustExclude":["n12"]},
+    {"id":"q12","workspace":"personal","query":"interní PIN","relevant":{},"mustExclude":["n13"]}
+  ]
+}
