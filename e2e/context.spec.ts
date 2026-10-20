@@ -506,7 +506,7 @@ test("a quick Redo while Undo is still responding is sent once, after the Undo c
     await page.keyboard.press("Control+KeyZ");
     await undoHeld;
     await page.keyboard.press("Control+Shift+KeyZ");
-    expect(posts).toEqual(["undo"], "Redo must not race the in-flight Undo request");
+    expect(posts).toEqual(["undo"]); // Redo must not race the in-flight Undo request.
   } finally {
     releaseUndo();
   }
