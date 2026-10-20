@@ -78,7 +78,8 @@ function appendEntries(canonical: DatabaseSync, derived: DatabaseSync, workspace
     const entity = JSON.parse(row.payload) as { workspaceId?: string; type?: string; status?: string;
       properties?: { sensitivity?: string } };
     if (entity.workspaceId !== workspaceId || entity.status === "archived") continue;
-    const level = sensitivity(entity.properties?.sensitivity ?? "normal");
+    // Missing policy is unknown, never silently normal. The manifest is not an ACL.
+    const level = sensitivity(entity.properties?.sensitivity);
     insert.run(workspaceId, "entity", row.id, row.updated_at, level,
       fingerprint([workspaceId, row.id, row.updated_at, level, entity.status]), entity.type ?? "unknown", now);
   }
