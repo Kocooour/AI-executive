@@ -65,6 +65,18 @@ switch (name) {
         finally { db.close(); }
         set("deleted", "1");
       }
+      if (scenario === "outboxcompact" && get("head") === target && !fs.existsSync(stateFile("compacted"))) {
+        // Trigger a real SQLite compaction on first start of the new version.
+        const db = new DatabaseSync(dbFile);
+        try {
+          db.prepare(`INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+            VALUES ('claim', 'claim-overflow', 'personal', 'update')`).run();
+          const row = db.prepare("SELECT COUNT(*) AS n FROM semantic_index_outbox").get();
+          if (row.n !== 1) throw new Error("expected production-style queue compaction");
+        } finally { db.close(); }
+        set("compacted", "1");
+        log("outbox-compacted");
+      }
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
     process.exit(8);
