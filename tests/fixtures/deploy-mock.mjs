@@ -119,12 +119,20 @@ switch (name) {
       console.error("simulated ENOSPC while copying");
       process.exit(28);
     }
+    if (scenario === "corruptcopy" && args[args.length - 2] === path.join(root, "etc/ai-executive/ai-executive.env")) {
+      const saved = spawnSync("/bin/cp", args, { stdio: "inherit" });
+      if (saved.status !== 0) process.exit(saved.status || 1);
+      fs.appendFileSync(args[args.length - 1], "tampered\n");
+      break;
+    }
     run("/bin/cp", args);
     break;
   }
   case "curl": {
     if (get("service") !== "active") process.exit(7);
     const url = args[args.length - 1];
+    if (scenario === "httpsfail" && get("head") === target &&
+        url.startsWith("https://")) process.exit(22);
     if (scenario === "unhealthy" && get("head") === target &&
         url.includes("/manifest.webmanifest")) process.exit(22);
     const code = url.includes("/api/store") ? 401 : 200;
