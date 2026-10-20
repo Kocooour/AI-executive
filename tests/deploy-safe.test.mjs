@@ -45,6 +45,30 @@ function sandbox(scenario) {
     sqlite.exec("CREATE TABLE entities(id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL)");
     sqlite.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)").run("task:keep", "{}", 1);
     sqlite.prepare("INSERT INTO entities(id, payload, updated_at) VALUES (?, ?, ?)").run("task:other", "{}", 2);
+    if (scenario === "outboxcompact") {
+      // Match the bounded queue trigger shipped in PR #79. The queue is
+      // deliberately transient: compaction is not a loss of canonical data.
+      sqlite.exec(`CREATE TABLE semantic_index_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        object_type TEXT NOT NULL, object_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL, operation TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      );
+      CREATE TRIGGER semantic_outbox_bound_queue AFTER INSERT ON semantic_index_outbox
+        WHEN (SELECT COUNT(*) FROM semantic_index_outbox) > 1000
+        BEGIN
+          DELETE FROM semantic_index_outbox;
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'queue_compacted');
+        END;`);
+      const insert = sqlite.prepare(`INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+        VALUES ('claim', ?, 'personal', 'update')`);
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        for (let i = 0; i < 1000; i++) insert.run(`claim-${i}`);
+        sqlite.exec("COMMIT");
+      } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
+    }
   } finally { sqlite.close(); }
 
   writeFileSync(path.join(state, "service"), "active");
@@ -140,6 +164,28 @@ scenarioCase("buildfail: rollback rebuilds original code and keeps verified back
   assert.ok(statSync(path.join(f.app, ".next/BUILD_ID")).mode & 0o040,
     "rollback must restore group-readable BUILD_ID");
 });
+scenarioCase("outboxcompact: legitimate semantic invalidation compaction does not trigger rollback", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.output, /NASAZENI DOKONCENO/);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), false, "compacting a derived queue must never roll back code");
+  assert.equal(r.backups.length, 1);
+  const db = new DatabaseSync(path.join(f.data, "store.sqlite"));
+  try {
+    const rows = db.prepare("SELECT COUNT(*) AS n FROM semantic_index_outbox").get().n;
+    assert.equal(rows, 1, "trigger compacts 1001 invalidations to one rebuild marker");
+    assert.deepEqual(db.prepare("SELECT object_type, object_id, operation FROM semantic_index_outbox").get(),
+      { object_type: "rebuild", object_id: "*", operation: "queue_compacted" });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 2,
+      "canonical user rows stay unchanged");
+  } finally { db.close(); }
+  const before = JSON.parse(readFileSync(path.join(f.backups, r.backups[0], "before.json"), "utf8"));
+  const after = JSON.parse(readFileSync(path.join(f.backups, r.backups[0], "after.json"), "utf8"));
+  assert.equal(before.tables.semantic_index_outbox, 1000);
+  assert.equal(after.tables.semantic_index_outbox, 1);
+});
+
 scenarioCase("rowloss: rollback refuses to certify lost canonical rows", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /KRITICKY UBYTEK zaznamu: entities/);
