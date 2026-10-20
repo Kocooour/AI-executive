@@ -3720,3 +3720,35 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
   /* The sticky close button floats over the top right corner while the panel is scrolled. */
   .noteEditor { padding-right: 44px; }
 }
+
+
+/* B1: local-first triage in the Inbox task detail. */
+.inboxTriage {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+.inboxTriage h3 { margin: 0; font-size: 16px; }
+.inboxTriage label { display: grid; gap: 6px; min-width: 0; }
+.inboxOriginal { display: grid; gap: 4px; margin: 0; overflow-wrap: anywhere; }
+.inboxOriginal b { color: var(--muted); font-size: 12px; }
+.inboxTriageActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.inboxTriageField { display: flex; gap: 8px; min-width: 0; align-items: stretch; }
+.inboxTriageField input, .inboxTriageField select {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  background: var(--input, var(--surface));
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.inboxTriage button { min-height: 44px; }
+.inboxTriageField button { flex: 0 0 auto; }
+.inboxTriage .inboxDiscard { justify-self: start; color: var(--danger); }
+.inboxTriage p[role="alert"] { color: var(--danger); margin: 0; }
