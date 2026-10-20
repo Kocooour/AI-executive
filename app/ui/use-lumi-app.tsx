@@ -247,6 +247,10 @@ export function useLumiApp() {
   const contextClaimLoadVersion = useRef(0);
   const contextHistoryLoadVersion = useRef(0);
   const contextShortcut = useRef<{ active: boolean; run: (action: "undo" | "redo") => void }>({ active: false, run: () => undefined });
+  // Only one pending keyboard intent per workspace while an Undo/Redo is in flight.
+  // A quick Redo must not disappear just because the preceding Undo is still
+  // refreshing; the queued action is resolved against the server's new stack.
+  const pendingContextShortcut = useRef<{ workspaceId: string; action: "undo" | "redo" } | null>(null);
   const calendarWorkspaceSelection = useRef("personal");
   calendarWorkspaceSelection.current = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // Context commands. One user intent keeps one idempotency key (and, for a new object, one id)
@@ -846,20 +850,27 @@ export function useLumiApp() {
   // something else. One intent keeps one key until it is answered; a refusal changes nothing.
   // "skip" is the owner's way out of a step that is refused for good: it drops that step from its stack
   // and changes no data.
-  async function contextHistoryAction(action: "undo" | "redo" | "skip") {
+  async function contextHistoryAction(action: "undo" | "redo" | "skip", after?: ContextHistoryState, keyboard = false) {
     const workspaceId = calendarWorkspaceSelection.current;
     const skipping = action === "skip" ? historySkip : null;
     if (action === "skip" && !skipping) return;
     const side = skipping ? skipping.stack : action as "undo" | "redo";
-    const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? contextHistory.undo : contextHistory.redo;
     const busyKey = `history:${workspaceId}`;
-    if (!step || contextInFlight.current.has(busyKey)) return;
+    if (contextInFlight.current.has(busyKey)) {
+      // Buttons are disabled while busy. For keyboard shortcuts, keep the latest
+      // explicitly requested action rather than silently losing a quick Redo.
+      if (keyboard && action !== "skip") pendingContextShortcut.current = { workspaceId, action };
+      return;
+    }
+    const step = skipping ? { eventId: skipping.eventId } : side === "undo" ? (after ?? contextHistory).undo : (after ?? contextHistory).redo;
+    if (!step) return;
     const scope = `history:${action}:${side}:${workspaceId}`;
     const intent = contextIntent(scope, JSON.stringify([workspaceId, action, side, step.eventId]));
     contextInFlight.current.add(busyKey);
     setHistoryBusy(true); setHistoryStatus(""); setHistoryOffer(""); setHistorySkip(null);
     // The result of this action replaces what an earlier command said about itself.
     setClaimStatus(""); setSubjectStatus(""); setContextInboxStatus("");
+    let committedHistory: ContextHistoryState | null = null;
     try {
       const response = await fetch("/api/context/history", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, idempotencyKey: intent.commandKey, workspaceId, expectedEventId: step.eventId, stack: skipping ? skipping.stack : undefined }) });
@@ -885,7 +896,8 @@ export function useLumiApp() {
       }
       finishContextIntent(scope);
       if (calendarWorkspaceSelection.current !== workspaceId) return;
-      setContextHistory({ undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] });
+      committedHistory = { undo: data.undo ?? null, redo: data.redo ?? null, recent: Array.isArray(data.recent) ? data.recent : [] };
+      setContextHistory(committedHistory);
       const text = contextStepText(data.step as ContextHistoryStep);
       setHistoryStatus(`${tr(action === "undo" ? "contextUndone" : action === "redo" ? "contextRedone" : "contextSkipped")} ${text.action} ${text.target}`);
       if (action === "skip") return;
@@ -899,6 +911,16 @@ export function useLumiApp() {
     } finally {
       contextInFlight.current.delete(busyKey);
       setHistoryBusy(false);
+      const queued = pendingContextShortcut.current;
+      if (queued?.workspaceId === workspaceId) {
+        pendingContextShortcut.current = null;
+        // Never replay a shortcut after a failed/refused command, a view
+        // change or a workspace switch. Keep the exact server-provided next
+        // stack rather than a potentially stale React render of history.
+        if (committedHistory && calendarWorkspaceSelection.current === workspaceId && contextShortcut.current.active) {
+          void contextHistoryAction(queued.action, committedHistory, true);
+        }
+      }
     }
   }
   // A claim whose revision moved because its evidence changed: the editor keeps the draft and follows the revision.
@@ -906,7 +928,7 @@ export function useLumiApp() {
   const evidenceState = useContextEvidence({ authState, activeWorkspaceId, writeWorkspaceId, tr, calendarWorkspaceSelection, contextIntent, finishContextIntent,
     contextInFlight, commandFailureMessage, refreshAfterCommand, offerContextUndo, loadContextClaims, syncEditedClaim });
   const { loadContextSources } = evidenceState;
-  contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action); } };
+  contextShortcut.current = { active: view === "Context" && !capture && !assistantOpen && !moreOpen && authState === "ready", run: (action) => { void contextHistoryAction(action, undefined, true); } };
 
   async function previewContextInbox() {
     if (!contextInboxText.trim() || contextInboxBusy) return;
