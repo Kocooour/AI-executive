@@ -103,8 +103,21 @@ test("real active evidence blocks protected, cross-workspace, and orphaned sourc
     kinds: ["claim"], limit: 30 });
   for (const id of ["scale-claim-4999", "scale-claim-4998", "scale-claim-4997"]) {
     assert.equal(external.results.some((hit) => hit.id === id), false, id + " has forbidden evidence");
+    // Owner evidenceItems omits orphaned and cross-workspace links. Explain must still
+    // use the same full SQL guard as the external search, not that projected list.
+    const explained = retrieval.explainOwnerClaim("personal", id);
+    assert.equal(explained.why.eligibleForExternalSearch, false, id + " must be ineligible externally");
+    assert.equal(explained.why.externalBlockers.includes("protected_source"), true,
+      id + " must explain the unsafe active evidence");
+    const preciseExternal = retrieval.searchContext({ actor: "integration", workspaceId: "personal",
+      query: "BulkTarget claim " + id.slice("scale-claim-".length), kinds: ["claim"] });
+    assert.equal(preciseExternal.results.some((hit) => hit.id === id), false,
+      id + " must not appear even when searched directly");
   }
   assert.equal(external.results[0].id, "scale-claim-4996");
+  const clean = retrieval.explainOwnerClaim("personal", "scale-claim-4996");
+  assert.equal(clean.why.eligibleForExternalSearch, true);
+  assert.equal(clean.why.externalBlockers.includes("protected_source"), false);
   assert.equal("partial" in external, false);
 });
 
