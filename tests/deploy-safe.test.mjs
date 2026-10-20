@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
   readFileSync, readdirSync, rmSync, writeFileSync, statSync,
@@ -25,6 +25,8 @@ function sandbox(scenario) {
   const envfile = path.join(root, "etc/ai-executive/ai-executive.env");
   const state = path.join(root, "state");
   const bin = path.join(root, "bin");
+  const lockDir = path.join(root, "run/lock/ai-executive");
+  const lockFile = path.join(lockDir, "deploy.lock");
 
   for (const p of [app, data, backups, path.dirname(envfile), state, bin,
     path.join(app, ".next/server"), path.join(app, "scripts"),
@@ -63,6 +65,7 @@ function sandbox(scenario) {
     ["DATA", "/var/lib/ai-executive", data],
     ["ENVFILE", "/etc/ai-executive/ai-executive.env", envfile],
     ["BACKUP_DIR", "/var/backups/ai-executive", backups],
+    ["LOCK_DIR", "/run/lock/ai-executive", lockDir],
   ]) {
     const declaration = key + "=" + original;
     assert.equal(script.split(declaration).length, 2, "missing/ambiguous substitution: " + key);
@@ -76,6 +79,7 @@ function sandbox(scenario) {
     PATH: bin + ":" + process.env.PATH,
     LUMI_TEST_ROOT: root,
     LUMI_TEST_SCENARIO: scenario,
+    LUMI_TEST_LOCK_FILE: lockFile,
   };
   function execute() {
     const result = spawnSync("bash", ["-c", script, "--", newSha], {
@@ -92,7 +96,7 @@ function sandbox(scenario) {
     };
   }
   return {
-    root, app, data, backups, execute,
+    root, app, data, backups, lockDir, lockFile, execute,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -127,6 +131,10 @@ scenarioCase("buildfail: rollback rebuilds original code and keeps verified back
   assert.equal(r.head, oldSha);
   assert.equal(r.service, "active");
   assert.equal(r.events.includes("reset"), true);
+  assert.equal(r.events.includes("rollback-lock-held"), true,
+    "exclusive lock must still be active inside the EXIT trap's rollback build");
+  assert.equal(spawnSync("flock", ["-n", f.lockFile, "true"]).status, 0,
+    "lock is released after rollback completes");
   assert.equal(r.backups.length, 1);
   assert.equal(existsSync(path.join(f.backups, r.backups[0], "SHA256SUMS")), true);
   assert.ok(statSync(path.join(f.app, ".next/BUILD_ID")).mode & 0o040,
@@ -173,4 +181,38 @@ scenarioCase("success: complete synthetic deploy validates build permissions and
   assert.equal(r.backups.length, 1);
   assert.ok(statSync(path.join(f.app, ".next/BUILD_ID")).mode & 0o040);
   assert.ok(existsSync(path.join(f.backups, r.backups[0], "env")));
+  assert.equal(statSync(f.lockFile).mode & 0o777, 0o600, "lock file is root-readable only");
+  assert.equal(statSync(f.lockDir).mode & 0o777, 0o700, "lock directory is private");
+  assert.equal(spawnSync("flock", ["-n", f.lockFile, "true"]).status, 0,
+    "successful deploy releases lock without unlinking its inode");
+});
+
+test("exclusive deployment lock rejects a second process before any service or repository change", { timeout: 15000 }, async () => {
+  const fixture = sandbox("concurrent");
+  const { lockDir, lockFile } = fixture;
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  const owner = spawn("flock", ["-n", "-F", lockFile, process.execPath, "-e",
+    "process.stdout.write('LOCKED\\n'); setInterval(() => {}, 1000)"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("lock owner did not acquire lock")), 4000);
+      owner.stdout.once("data", () => { clearTimeout(timeout); resolve(); });
+      owner.once("error", (error) => { clearTimeout(timeout); reject(error); });
+      owner.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`lock owner exited early: ${code}`)); });
+    });
+    const result = fixture.execute();
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /jine nasazeni uz probiha/);
+    assert.equal(result.service, "active");
+    assert.equal(result.head, oldSha);
+    assert.deepEqual(result.backups, []);
+    assert.equal(result.events.includes("stop"), false);
+    assert.equal(result.events.includes("merge"), false);
+    assert.equal(result.events.includes("reset"), false);
+  } finally {
+    owner.kill("SIGTERM");
+    fixture.cleanup();
+  }
 });
