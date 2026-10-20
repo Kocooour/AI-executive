@@ -137,8 +137,31 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-echo "=== PRE-FLIGHT ==="
+# The lock is root-owned and lives outside the checkout so an overlapping release
+# cannot race another release's git, backup, build or rollback. FD 9 remains open
+# throughout the EXIT trap; never remove the lock file (unlinking enables split locks).
+echo "=== EXCLUSIVE DEPLOY LOCK ==="
 test "$(id -u)" = 0 || die "spust jako root"
+LOCK_DIR=/run/lock/ai-executive
+test ! -L "$LOCK_DIR" || die "symlink v adresari zamku"
+mkdir -p -m 0700 "$LOCK_DIR"
+test -d "$LOCK_DIR" && test ! -L "$LOCK_DIR" || die "neplatny adresar zamku"
+test "$(stat -c %u "$LOCK_DIR")" = 0 || die "adresar zamku nevlastni root"
+chmod 0700 "$LOCK_DIR"
+LOCK_FILE="$LOCK_DIR/deploy.lock"
+test ! -L "$LOCK_FILE" || die "symlink v souboru zamku"
+if test -e "$LOCK_FILE"; then
+  test -f "$LOCK_FILE" && test "$(stat -c %u "$LOCK_FILE")" = 0 ||
+    die "neplatny soubor zamku"
+fi
+umask 077
+exec 9>>"$LOCK_FILE"
+umask 022
+chmod 0600 "$LOCK_FILE"
+flock -n 9 || die "jine nasazeni uz probiha"
+echo "Exkluzivni zamek nasazeni: OK"
+
+echo "=== PRE-FLIGHT ==="
 [[ "$TARGET" =~ ^[0-9a-f]{40}$ ]] || die "zadej uplny 40mistny SHA"
 test "$(systemctl is-active "$SERVICE")" = active || die "sluzba nebezi"
 test "$(systemctl show "$SERVICE" -p User --value)" = ai-executive || die "jiny ucet sluzby"
