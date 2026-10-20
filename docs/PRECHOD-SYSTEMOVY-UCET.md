@@ -731,86 +731,37 @@ Starý checkout lze ponechat (už nemá tajné údaje ani data, služba ho nepou
 
 ### 11. Nasazování po přechodu
 
-Toto je nová rutina pro další verze, nahrazuje dosavadní. Spouští se jako `root`, **nikdy jako `hermesadmin`** (sdílený účet nesmí smět měnit kód, který běží s daty Lumi). Služba se při sestavování zastaví, protože `pnpm build` přepisuje `.next`, který by běžící proces používal. Ještě před zastavením služby blok ověří, že je co nasadit, že jde o fast-forward a že nová verze nemění šablonu jednotky (změnu jednotky je nutné nainstalovat a ověřit zvlášť podle kroků 6 a 8, nikdy ne mimochodem). Pokud cokoli po zastavení selže nebo je blok přerušen (Ctrl-C, ukončení, ztracené SSH spojení), trap službu nenechá potichu zastavenou: dokud se v `/opt/ai-executive` nic nezměnilo, spustí ji zpět; jakmile začal merge, instalace nebo build (i bez změny commitu může být `node_modules` nebo `.next` napůl přepsané), službu zastaví a vypíše postup, který předchozí verzi znovu sestaví. Totéž platí, když nová verze po startu do 60 s neodpovídá. Blok spouštějte v `tmux`, aby přerušené spojení neukončilo ani výpis postupu návratu.
+**Závazná produkční rutina** je verzovaná v [deployment/deploy-safe.sh](../deployment/deploy-safe.sh). Nespouštějte staré ručně kopírované bloky ani `pnpm build` s `umask 077`. Incident 20. 10. 2026: build spuštěný jako `root` vytvořil `.next/BUILD_ID` s právy `0600 root:root`. Služba pod `ai-executive` se po aktualizaci i po rollbacku opakovaně restartovala s `EACCES`. Samotné `systemctl start` proto **není** důkaz úspěšného nasazení.
+
+Spouštějte jako `root` v `tmux` (odpojení SSH nesmí přerušit rollback). Skript požaduje *plné 40znakové SHA* potvrzeného commitu na `origin/main`. Je nutné nejdříve projít povinným PR review a kompletním zeleným CI dle `AGENTS.md`; nikdy nenasazovat neověřený commit. Protože produkční checkout ještě nemusí obsahovat novou verzi skriptu, **načtěte skript z přesně ověřeného cílového commitu** bez předčasné aktualizace produkčního kódu:
 
 ```bash
-set -Eeuo pipefail
-umask 022
-. /var/backups/ai-executive/migrace.vars
+# uvnitr tmux, jako root
 cd /opt/ai-executive
-PREV=$(git rev-parse HEAD); STAMP=$(date +%Y%m%d-%H%M%S); B=/var/backups/ai-executive/deploy-$STAMP
-echo "predchozi HEAD: $PREV"
-test -z "$(git status --porcelain)" || { echo "STOP: /opt/ai-executive neni cisty"; exit 1; }
-
-# 0. Pred zastavenim sluzby: je co nasadit, jde to fast-forwardem a nemeni se jednotka?
-git fetch origin
-# Nasazuje se vetev, ze ktere produkce bezi (ulozena v kroku 1), ne natvrdo main.
-NEXT=$(git rev-parse "origin/$OLD_BRANCH")
-[ "$NEXT" != "$PREV" ] || { echo "Nic k nasazeni (origin/$OLD_BRANCH = $PREV)."; exit 0; }
-git merge-base --is-ancestor "$PREV" "$NEXT" || { echo "STOP: origin/$OLD_BRANCH neni fast-forward od $PREV; nahlasit"; exit 1; }
-if ! git diff --quiet "$PREV" "$NEXT" -- deployment/ai-executive.service; then
-  echo "STOP: nova verze meni deployment/ai-executive.service. Jednotku je treba nainstalovat a overit"
-  echo "      (krok 6 a kontroly kroku 8) jako samostatny krok s vlastnikem; sluzba bezi dal beze zmeny."
-  exit 1
-fi
-
-# Od prvni zmeny v /opt/ai-executive (merge, node_modules, .next) uz stara verze bez noveho sestaveni nepobezi.
-CHANGED=0
-on_error() {
-  local rc=$1; trap - ERR INT TERM HUP; set +e
-  echo "CHYBA (kod $rc) u prikazu: $BASH_COMMAND"
-  if [ "$CHANGED" = 0 ]; then
-    echo "Kod ani sestaveni se nezmenily -> spoustim sluzbu zpet."; systemctl start ai-executive
-  else
-    # Nova ani napul prepsana verze nesmi bezet, kdyz merge, instalace, build, start nebo kontrola dat selhaly.
-    systemctl stop ai-executive
-    echo "Kod nebo sestaveni se zmenily, sluzba je ZASTAVENA. Navrat (sestavi znovu predchozi verzi $PREV):"
-    echo "  cd /opt/ai-executive && git reset --hard $PREV && pnpm install --frozen-lockfile && pnpm build"
-    echo "  chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive"
-    echo "  Data se NEVRACI automaticky: obnova $B/data jen po rozhodnuti vlastnika (viz 'Navrat chybne verze', cast B)."
-    cmp -s /etc/ai-executive/ai-executive.env "$B/env" || echo "  POZOR: env se lisi od $B/env (stav pri nasazeni); rozhoduje vlastnik (viz 'Navrat chybne verze', ENV_NAVRAT)."
-    echo "  chown -R ai-executive:ai-executive /var/lib/ai-executive; systemctl start ai-executive"
-  fi
-  exit $rc
-}
-# Take preruseni (Ctrl-C, ukonceni, ztracene SSH spojeni) nesmi nechat sluzbu potichu zastavenou.
-# Signal mezi prikazy nechava $? klidne 0: signaly maji vlastni nenulovy kod, aby blok neskoncil "uspechem".
-trap 'on_error $?' ERR; trap 'on_error 130' INT; trap 'on_error 143' TERM; trap 'on_error 129' HUP
-
-# 1. Zaloha se zastavenim sluzby a kontrolou kopie
-systemctl stop ai-executive
-install -d -m 0700 "$B"
-cp -a /var/lib/ai-executive "$B/data"
-cp -a /etc/ai-executive/ai-executive.env "$B/env"
-runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$B/fakta-pred.json"
-/usr/bin/node /opt/ai-executive/scripts/check-data.mjs "$B/data/store.sqlite" > "$B/fakta-kopie.json"
-cmp_tables "$B/fakta-pred.json" "$B/fakta-kopie.json"   # nenulovy navrat spusti trap: kopie neprosla
-
-# 2. Nova verze (jen fast-forward na overeny commit), zavislosti a build
-CHANGED=1
-git merge --ff-only "$NEXT"
-pnpm install --frozen-lockfile
-pnpm build
-chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive
-
-# 3. Start a kontrola
-systemctl start ai-executive
-for i in $(seq 1 60); do curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest && break; sleep 1; done
-curl -fs -o /dev/null http://127.0.0.1:3000/manifest.webmanifest || { echo "NEPRIPRAVENO: nova verze neodpovida"; false; }   # spusti trap
-# Trap zustava aktivni i pro kontrolu dat po startu: poskozena data nebo chybejici zaznamy novou verzi zastavi.
-runuser -u ai-executive -- /usr/bin/node /opt/ai-executive/scripts/check-data.mjs /var/lib/ai-executive/store.sqlite > "$B/fakta-po.json"
-cmp_tables "$B/fakta-pred.json" "$B/fakta-po.json" "$VOLATILE" "$IGNORED"
-trap - ERR INT TERM HUP
-echo "Nasazeno: $PREV -> $(git rev-parse HEAD); zaloha $B"
+git fetch --no-tags origin main
+TARGET=$(git rev-parse FETCH_HEAD)   # overit, ze jde o schvaleny commit s uspesnym CI
+SCRIPT=$(mktemp /root/lumi-deploy-XXXXXXXX.sh)
+git show "$TARGET:deployment/deploy-safe.sh" > "$SCRIPT"
+chmod 0700 "$SCRIPT"
+bash -n "$SCRIPT"
+bash "$SCRIPT" "$TARGET"
 ```
 
-Poté stejné kontroly jako v kroku 8 (bez části pro vlastníka): služba aktivní a pod `ai-executive`; autentizační hranice (`/api/store` → `401`, `/api/auth/status` → `200`, přihlašovací stránka `200`) lokálně i přes `https://vm13861.tail412944.ts.net:8443`; žurnál bez `EACCES`/`EROFS`/`SQLITE_CANTOPEN`. Tabulky, které chybějí v záloze (nové v novém release), `cmp_tables` hlásí jen jako `INFO nova tabulka`.
+Předem ověřte, že běží produkční služba a že je checkout čistý. **Skript před preflightem získá exkluzivní neblokující `flock`** na souboru `/run/lock/ai-executive/deploy.lock` v adresáři `root:root` s právy `0700`. Soubor zámku se **nemaže**; druhý souběžný běh skončí před zastavením služby a změnou kódu. Zámek zůstává držený až do konce celého nasazení včetně rollbacku. Skript pak bez obcházení podmínek:
+1. Ověří `root`, účet a adresář systemd, větev `main`, čistý checkout, plný cílový SHA, fast-forward a nezměněnou systemd jednotku. **Před odstávkou** zkontroluje volné místo na úložišti pro zálohu, kód a SQLite data (velikost dat + 4 GiB na build a rollback + 512 MiB na WAL); při nedostatku místa nic nezastavuje.
+2. Zastaví službu a pořídí **konzistentní kopii celého** `/var/lib/ai-executive` (včetně SQLite WAL) a `/etc/ai-executive/ai-executive.env` do root-only umístění. Porovná zdroj s kopií (včetně konfigurace a dalších datových souborů, kromě dočasného `-shm`), integritu, cizí klíče, počty záznamů i kontrolní součty. Neověřenou částečnou kopii při selhání ihned odstraní, ale **ověřenou zálohu nikdy automaticky nemaže**. **Není závislý na historickém `cmp_tables` z `migrace.vars`**, který na produkci nemusí být dostupný.
+3. Aktualizuje kód pouze přes `git merge --ff-only`; pro instalaci a build používá `umask 022`. Zajistí čtení/traversal `.next` jen pro skupinu `ai-executive`, odstraní group-write a **ještě před startem** skutečně otestuje přístup k `.next/BUILD_ID` a server buildu pod účtem služby.
+4. Po startu ověří skutečný HTTP provoz: manifest `200`, autentizaci `200`, nepřihlášený `/api/store` `401` na loopbacku i přes Tailscale HTTPS, že služba zůstává aktivní, a integritu i očekávané počty databázových záznamů. **Historii pracovních relací ověřuje podle konkrétních ID a stavů:** při dokončení relace smí zmizet jen nejstarší dokončené relace nad retenčním limitem 1 000 v daném workspace a jen jejich intervaly; ztráta aktivní relace nebo intervalu u ponechané relace je kritická chyba. Časově sousedící zápisy tak nejsou zaměňovány za datovou ztrátu pouze kvůli poklesu celkového počtu řádků. Kontrolní snapshoty neobsahují texty uživatelských záznamů, ukládají se pouze v root-only záloze.
+5. Při selhání nebo signálu se pokusí vrátit starý commit, **znovu sestavit s opravenými právy a ověřit HTTP i HTTPS**. Po rollbacku navíc **znovu porovná počty kanonických databázových záznamů s hodnotami před nasazením**. Pokud nová migrace data smazala, neprohlásí rollback za úspěšný jen na základě `PRAGMA integrity_check`: vypíše kritickou chybu a vyžádá rozhodnutí vlastníka o případném obnovení zálohy. Produkční data ani tajné údaje automaticky nevrací ze zálohy, aby nepřepsal změny po nasazení.
+
+Izolované regresní testy nasazovacího skriptu jsou v `tests/deploy-safe.test.mjs`. Při `pnpm test` používají jen dočasný syntetický SQLite adresář, simulované `systemctl`, Git, build, síť a disk. Ověřují ENOSPC ještě před odstávkou, přerušené kopírování, selhání buildu, nedostupné HTTP, ztrátu řádků po migraci, skutečnou retenci dokončených pracovních relací i odmítnutí ztráty aktivní relace a jejího intervalu, souběžné spuštění dvou nasazení (druhé musí skončit bez zásahu do služby), držení zámku i v rollbacku a úspěšnou cestu. **Nejsou náhradou provozní rehearsal na izolovaném serveru s reálným systemd.**
+
+Závěrem zkontrolujte `journalctl -u ai-executive --since "15 minutes ago"` (zejména `EACCES`, `EROFS`, `SQLITE_CANTOPEN`) a ověřte přihlášení a mobilní UI v prohlížeči. Zálohu označenou `Zaloha:` zachovejte. **Nevyhodnocujte `active` samotné ani zelený build jako úspěšné nasazení.**
 
 Návrat chybné verze (po úspěšném startu nebo selhání kontrol). Nasazení samo env soubor nemění, ale vlastník ho mohl mezitím upravit pro novou verzi; předchozí verze běžela s kopií `$B/env`. Když se liší, blok skončí STOP ještě před zastavením služby, vypíše jen názvy změněných klíčů (ne hodnoty) a čeká na rozhodnutí vlastníka: `ENV_NAVRAT=obnovit` vrátí env z doby nasazení (současný se nejdřív uloží), `ENV_NAVRAT=ponechat` ho nechá (např. po rotaci tajného údaje, kterou nesmí návrat vrátit).
 
 ```bash
 set -euo pipefail
-. /var/backups/ai-executive/migrace.vars
 ENV_NOW=/etc/ai-executive/ai-executive.env
 test -f "$B/env" || { echo "STOP: $B/env neexistuje (spravne B z vypisu nasazeni?)"; exit 1; }
 if ! cmp -s "$ENV_NOW" "$B/env"; then
@@ -825,8 +776,16 @@ fi
 # A) Kod: predchozi verze. Data zustavaji, jak jsou (zmeny od nasazeni se neztrati).
 systemctl stop ai-executive
 systemctl is-active --quiet ai-executive && { echo "STOP: sluzba porad bezi"; exit 1; }
-cd /opt/ai-executive && git reset --hard "$PREV" && pnpm install --frozen-lockfile && pnpm build
-chown -R root:root /opt/ai-executive; chmod -R go-w /opt/ai-executive
+cd /opt/ai-executive
+umask 022
+git reset --hard "$PREV"
+pnpm install --frozen-lockfile
+pnpm build
+# Root vlastni kod, servisni skupina potrebuje cist vysledek buildu.
+chgrp -R ai-executive /opt/ai-executive/.next
+chmod -R g+rX,g-w /opt/ai-executive/.next
+runuser -u ai-executive -- test -r /opt/ai-executive/.next/BUILD_ID
+runuser -u ai-executive -- test -x /opt/ai-executive/.next/server
 if [ "${ENV_NAVRAT:-}" = obnovit ]; then
   (umask 077; cp -a "$ENV_NOW" "$B/env-pred-navratem-$(date +%Y%m%d-%H%M%S)")
   install -o root -g root -m 0600 "$B/env" "$ENV_NOW.navrat"; mv -T "$ENV_NOW.navrat" "$ENV_NOW"
