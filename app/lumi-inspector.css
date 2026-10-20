@@ -1,0 +1,104 @@
+/* B2: a detail inspector beside the list on wide desktops.
+   The existing DetailPanel continues to own edits and synchronization. */
+@media (min-width: 1200px) {
+  .appShell.inspectorOpen {
+    grid-template-columns: 238px minmax(0, 1fr) clamp(350px, 31vw, 460px);
+  }
+  .appShell.inspectorOpen > .appPane {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .appShell.inspectorOpen > .appPane .content {
+    width: 100%;
+    min-width: 0;
+    padding-inline: clamp(20px, 2.8vw, 42px);
+  }
+  .appShell.inspectorOpen > .inspectorBackdrop {
+    position: sticky;
+    inset: auto;
+    top: 0;
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+    height: 100vh;
+    min-width: 0;
+    z-index: 12;
+    background: transparent;
+    display: block;
+  }
+  .appShell.inspectorOpen .inspectorDetail {
+    width: 100%;
+    min-width: 0;
+    height: 100vh;
+    box-shadow: none;
+    border-left: 1px solid var(--line);
+    padding: 28px clamp(20px, 2.1vw, 32px);
+  }
+}
+
+/* At tablet widths show the detail as a full content view, not a blocking
+   partial overlay. The sidebar remains available for navigation. */
+@media (min-width: 701px) and (max-width: 1199px) {
+  .appShell.inspectorOpen > .appPane {
+    display: none;
+  }
+  .appShell.inspectorOpen > .inspectorBackdrop {
+    position: relative;
+    inset: auto;
+    grid-column: 2;
+    grid-row: 1;
+    display: block;
+    min-width: 0;
+    min-height: 100vh;
+    background: var(--surface-raised);
+    z-index: 1;
+  }
+  .appShell.inspectorOpen .inspectorDetail {
+    width: 100%;
+    height: auto;
+    min-height: 100vh;
+    padding: 32px clamp(24px, 5vw, 64px);
+    box-shadow: none;
+  }
+}
+
+/* A visible way back is present on tablet and phone; the wide inspector
+   keeps a conventional close icon. Both targets are keyboard reachable. */
+.inspectorClose {
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.inspectorBackLabel { display: none; }
+@media (max-width: 1199px) {
+  .inspectorClose {
+    float: none;
+    position: relative;
+    inset: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 44px;
+    padding: 0 12px;
+    margin: 0 0 10px -12px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+  }
+  .inspectorCloseIcon { display: none; }
+  .inspectorBackLabel { display: inline; }
+}
+@media (max-width: 700px) {
+  .appShell.inspectorOpen .inspectorBackdrop {
+    z-index: 40;
+  }
+  .appShell.inspectorOpen .inspectorDetail {
+    height: 100dvh;
+    min-height: 100dvh;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+}
