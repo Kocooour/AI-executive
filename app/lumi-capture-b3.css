@@ -1,0 +1,67 @@
+/* B3: lightweight mode picker and explicit draft controls.
+   Unfinished text exists only in this tab's React state, never in persistent storage. */
+.captureModal > .captureKind {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0 12px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+.captureModal > .captureKind button {
+  min-height: 44px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.captureModal > .captureKind button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--line);
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+.captureModal > .captureKind button:focus-visible,
+.captureModal > .captureDraftControls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.captureModal > .captureDraftControls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+.captureModal > .captureDraftControls p {
+  flex: 1 1 185px;
+  margin: 0;
+  line-height: 1.45;
+}
+.captureModal > .captureDraftControls button {
+  min-height: 44px;
+  border: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+@media (max-width: 700px) {
+  .captureModal > .captureKind {
+    margin-top: 10px;
+  }
+  .captureModal > .captureDraftControls button {
+    flex: 0 0 auto;
+  }
+}
