@@ -73,7 +73,7 @@ test("explicit workspace boundary for search, explain, and related claims", () =
   assert.throws(() => retrieval.explainOwnerClaim(workspace, teamNormal.id), (error) => error.status === 404);
   const explanation = retrieval.explainOwnerClaim(workspace, ownerNormal.id);
   assert.equal(explanation.claim.id, ownerNormal.id);
-  assert.equal(explanation.why.eligibleForAI, true);
+  assert.equal(explanation.why.eligibleForInternalAI, true);
   assert.equal(JSON.stringify(explanation).includes("Secret-OTHER-WORKSPACE-427"), false);
 });
 
@@ -120,8 +120,10 @@ test("a protected evidence source blocks an otherwise approved claim from the ex
     excerpt: secret, stance: "supports" }).claim;
   const confirmed = approve(withEvidence);
   const explanation = retrieval.explainOwnerClaim(workspace, confirmed.id);
-  assert.equal(explanation.why.eligibleForAI, false);
-  assert.equal(explanation.why.blockers.includes("protected_source"), true);
+  assert.equal(explanation.why.eligibleForInternalAI, true);
+  assert.equal(explanation.why.eligibleForExternalSearch, false);
+  assert.equal(explanation.why.internalBlockers.includes("protected_source"), false);
+  assert.equal(explanation.why.externalBlockers.includes("protected_source"), true);
   assert.equal(explanation.evidence[0].source.externalId, secret);
   assert.equal(explanation.reviewEvents.some((event) => event.decision === "confirmed"), true);
   assert.equal(explanation.history.length >= 2, true);
@@ -130,6 +132,35 @@ test("a protected evidence source blocks an otherwise approved claim from the ex
   assert.equal(JSON.stringify(outside).includes(secret), false);
   assert.equal(JSON.stringify(outside).includes(source.id), false);
   assert.equal(JSON.stringify(outside).includes(confirmed.id), false);
+});
+
+test("mixed normal and protected evidence explains different internal versus external policies", () => {
+  const created = create(workspace, "Mixed-source-visibility-555");
+  const regular = sources.createContextSource({ commandId: randomUUID(), workspaceId: workspace,
+    id: randomUUID(), expectedRevision: 0, provider: "public-mail",
+    coverage: "body", sensitivity: "normal" }).source;
+  const protectedSource = sources.createContextSource({ commandId: randomUUID(), workspaceId: workspace,
+    id: randomUUID(), expectedRevision: 0, provider: "sensitive-mail",
+    coverage: "body", sensitivity: "confidential", externalId: "NEVER-LEAK-EXTERNAL-555" }).source;
+  const withNormal = evidence.addClaimEvidence({ commandId: randomUUID(), workspaceId: workspace, id: randomUUID(),
+    expectedRevision: 0, claimId: created.id, expectedClaimRevision: created.revision,
+    sourceId: regular.id, excerpt: "NORMAL-VISIBLE-555", stance: "supports" }).claim;
+  const withProtected = evidence.addClaimEvidence({ commandId: randomUUID(), workspaceId: workspace, id: randomUUID(),
+    expectedRevision: 0, claimId: created.id, expectedClaimRevision: withNormal.revision,
+    sourceId: protectedSource.id, excerpt: "NEVER-LEAK-EXCERPT-555", stance: "supports" }).claim;
+  const confirmed = approve(withProtected);
+  const why = retrieval.explainOwnerClaim(workspace, confirmed.id);
+  assert.equal(why.why.eligibleForInternalAI, true);
+  assert.equal(why.why.eligibleForExternalSearch, false);
+  assert.deepEqual(why.why.internalBlockers, []);
+  assert.ok(why.why.externalBlockers.includes("protected_source"));
+  assert.equal(why.evidence.length, 2);
+  const internal = claims.toAgentClaim(confirmed);
+  assert.equal(internal.evidence.length, 1);
+  assert.equal(internal.evidence[0].excerpt, "NORMAL-VISIBLE-555");
+  const external = retrieval.searchContext({ actor: "integration", workspaceId: workspace, query: "Mixed-source-visibility" });
+  assert.deepEqual(external.results, []);
+  assert.equal(JSON.stringify(external).includes("NEVER-LEAK"), false);
 });
 
 test("registered relationships are searchable and explain links with bounded histories", () => {
