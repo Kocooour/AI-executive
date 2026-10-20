@@ -28,6 +28,7 @@ const labels = {
     riskHelp: "Jen ověřitelné termíny, nikoli úplné posouzení rizik.",
     saving: "Ukládání…",
     saveError: "Zápis vyžaduje kontrolu. Zadaný text zůstává v poli.",
+    allReadOnly: "Veškerá práce je pouze ke čtení. Pro změnu vyberte konkrétní prostor.",
   },
   en: {
     overview: "Project overview",
@@ -51,12 +52,14 @@ const labels = {
     riskHelp: "Based on recorded dates only; not a complete risk assessment.",
     saving: "Saving…",
     saveError: "Save needs attention. Your entered text is still in the field.",
+    allReadOnly: "All Work is read-only. Select one workspace to edit.",
   },
 };
 
 export function ProjectOverview({ app, project }: { app: LumiApp; project: Entity }) {
   const t = labels[app.language === "cs" ? "cs" : "en"];
   const storedGoal = typeof project.properties.goal === "string" ? project.properties.goal : "";
+  const readOnly = app.activeWorkspaceId === "all";
   const [goalDraft, setGoalDraft] = useState(storedGoal);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -89,6 +92,7 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
     task.properties.deadline < app.today);
 
   async function saveGoal() {
+    if (readOnly) return;
     const next = goalDraft.trim();
     if (next === storedGoal) { focused.current = false; return; }
     setSaving(true);
@@ -110,6 +114,7 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
         <span>{t.goal}</span>
         <textarea
           aria-label={t.goal}
+          readOnly={readOnly}
           value={goalDraft}
           placeholder={t.goalPlaceholder}
           rows={3}
@@ -119,7 +124,7 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
           onBlur={() => { void saveGoal(); }}
         />
       </label>
-      <small className="projectOverviewHint">{t.goalHelp}</small>
+      <small className="projectOverviewHint">{readOnly ? t.allReadOnly : t.goalHelp}</small>
       {saving && <small role="status">{t.saving}</small>}
       {saveError && <small role="alert">{t.saveError}</small>}
 
