@@ -108,6 +108,7 @@ export const copy: Record<Language, Record<string, string>> = {
     dayPlanRefresh: "Refresh preview", dayPlanRefreshed: "Preview updated.", dayPlanCurrent: "Current", dayPlanNext: "Next",
     dayPlanExplicitEstimate: "Your estimate", dayPlanActualEstimate: "Learned from measured work", dayPlanLearnedEstimate: "Learned planning estimate", dayPlanDefaultEstimate: "Default estimate",
     dayPlanPreferredTime: "Preferred time from previous planning", dayPlanApproved: "Approved block", dayPlanProposed: "Proposed block",
+    dayPlanGroupFixed: "Already scheduled", dayPlanGroupApproved: "Approved work blocks", dayPlanGroupSuggested: "Suggested — needs approval", dayPlanGroupUnscheduled: "Tasks without a time", todayGroupCalendar: "Calendar commitments",
 
     workNow: "Now", workNotRunning: "No task is running.", workStart: "Start", workPause: "Pause", workResume: "Resume", workFinish: "Finish",
     workElapsed: "Elapsed", workOverrun: "The estimate has been exceeded. Refresh the remaining-day preview before changing the schedule.", workReplan: "Refresh remaining-day preview",
@@ -823,6 +824,7 @@ export const copy: Record<Language, Record<string, string>> = {
     dayPlanRefresh: "Obnovit náhled", dayPlanRefreshed: "Náhled je aktuální.", dayPlanCurrent: "Právě teď", dayPlanNext: "Další",
     dayPlanExplicitEstimate: "Váš odhad", dayPlanActualEstimate: "Odhad ze změřené práce", dayPlanLearnedEstimate: "Odhad z předchozího plánování", dayPlanDefaultEstimate: "Výchozí odhad",
     dayPlanPreferredTime: "Preferovaný čas z předchozího plánování", dayPlanApproved: "Schválený blok", dayPlanProposed: "Navržený blok",
+    dayPlanGroupFixed: "Pevně naplánováno", dayPlanGroupApproved: "Schválené pracovní bloky", dayPlanGroupSuggested: "Návrhy ke schválení", dayPlanGroupUnscheduled: "Úkoly bez času", todayGroupCalendar: "Události v kalendáři",
 
     workNow: "Právě teď", workNotRunning: "Žádný úkol právě neběží.", workStart: "Spustit", workPause: "Pozastavit", workResume: "Pokračovat", workFinish: "Dokončit",
     workElapsed: "Uplynulo", workOverrun: "Odhad byl překročen. Před změnou rozvrhu obnovte náhled zbývajícího dne.", workReplan: "Obnovit náhled zbývajícího dne",
