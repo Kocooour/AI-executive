@@ -101,11 +101,26 @@ function claimHit(claim: ContextClaim, query: string, actor: ContextSearchActor)
   };
 }
 
-/** Only owner-confirmed live normal claims, with no protected/archived source, can leave this boundary. */
+// Share the same fail-closed evidence predicate between integration retrieval and owner Explain.
+// Do not read only claim.evidenceItems here: the owner projection omits missing or foreign-workspace
+// sources and may cap valid evidence, while any unsafe active link must deny external access.
+const unsafeActiveEvidenceSql = [
+  "SELECT 1 FROM context_evidence e",
+  "LEFT JOIN context_sources src ON src.id = e.source_id AND src.workspace_id = c.workspace_id",
+  "WHERE e.claim_id = c.id AND e.archived_at IS NULL AND",
+  "(e.workspace_id <> c.workspace_id OR src.id IS NULL OR src.sensitivity <> 'normal' OR src.archived_at IS NOT NULL)",
+].join(" ");
+
+function hasUnsafeActiveEvidence(workspaceId: string, claimId: string) {
+  const row = getDatabase().prepare(
+    "SELECT EXISTS (" + unsafeActiveEvidenceSql + ") AS blocked FROM context_claims c WHERE c.id = ? AND c.workspace_id = ?"
+  ).get(claimId, workspaceId) as { blocked: number } | undefined;
+  return !row || Boolean(row.blocked);
+}
+
+/** Only owner-confirmed live normal claims, with no unsafe active evidence, can leave this boundary. */
 export function externallySearchableClaim(claim: ContextClaim, today = currentContextDate()) {
-  return isEligibleClaim(claim, undefined, today) &&
-    claim.evidenceItems.every((item) => item.workspaceId === claim.workspaceId &&
-      item.source.workspaceId === claim.workspaceId && item.source.sensitivity === "normal" && !item.source.archivedAt);
+  return isEligibleClaim(claim, undefined, today) && !hasUnsafeActiveEvidence(claim.workspaceId, claim.id);
 }
 
 
@@ -129,10 +144,7 @@ function liveEndpoint(type: string | null, id: string | null, archivedAt: number
 export function contextSearchClaimSql(actor: ContextSearchActor) {
   const restrictions = actor !== "integration" ? "" : [
     "AND c.review_status = 'confirmed' AND c.freshness = 'current' AND c.sensitivity = 'normal'",
-    "AND NOT EXISTS (SELECT 1 FROM context_evidence e",
-    "LEFT JOIN context_sources src ON src.id = e.source_id AND src.workspace_id = c.workspace_id",
-    "WHERE e.claim_id = c.id AND e.archived_at IS NULL AND",
-    "(e.workspace_id <> c.workspace_id OR src.id IS NULL OR src.sensitivity <> 'normal' OR src.archived_at IS NOT NULL))",
+    "AND NOT EXISTS (" + unsafeActiveEvidenceSql + ")",
   ].join(" ");
   const sql = [
     "SELECT c.id, c.predicate, c.literal_type AS literalType, c.literal_value AS literalValue,",
@@ -279,7 +291,8 @@ export function explainOwnerClaim(workspaceId: string, claimId: string) {
   if (!claim) throw new ContextCommandError("Claim not found", 404, "not_found");
   const today = currentContextDate();
   const eligibleForInternalAI = isEligibleClaim(claim, undefined, today);
-  const eligibleForExternalSearch = externallySearchableClaim(claim, today);
+  const unsafeActiveEvidence = hasUnsafeActiveEvidence(workspaceId, claimId);
+  const eligibleForExternalSearch = eligibleForInternalAI && !unsafeActiveEvidence;
   const internalBlockers: string[] = [];
   const blockers = internalBlockers;
   if (claim.archivedAt) blockers.push("archived");
@@ -291,8 +304,7 @@ export function explainOwnerClaim(workspaceId: string, claimId: string) {
   if (claim.validTo && claim.validTo < today) blockers.push("expired");
   if (!eligibleForInternalAI && !internalBlockers.length) internalBlockers.push("unavailable_reference");
   const externalBlockers = [...internalBlockers];
-  if (claim.evidenceItems.some((item) => item.source.sensitivity !== "normal" || item.source.archivedAt ||
-    item.workspaceId !== workspaceId || item.source.workspaceId !== workspaceId)) externalBlockers.push("protected_source");
+  if (unsafeActiveEvidence) externalBlockers.push("protected_source");
   if (!eligibleForExternalSearch && !externalBlockers.length) externalBlockers.push("unavailable_reference");
   const relatedIds = getDatabase().prepare("SELECT id FROM context_claims WHERE workspace_id = ? AND archived_at IS NULL AND id != ? AND (subject_id = ? OR target_subject_id = ? OR subject_id = ? OR target_subject_id = ?) ORDER BY updated_at DESC LIMIT 16")
     .all(workspaceId, claimId, claim.subject.id, claim.subject.id, claim.target?.id ?? "", claim.target?.id ?? "") as Array<{ id: string }>;
