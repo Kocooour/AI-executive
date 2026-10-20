@@ -28,7 +28,7 @@ const labels = {
     riskHelp: "Jen ověřitelné termíny, nikoli úplné posouzení rizik.",
     saving: "Ukládání…",
     saveError: "Zápis vyžaduje kontrolu. Zadaný text zůstává v poli.",
-    allReadOnly: "Veškerá práce je pouze ke čtení. Pro změnu vyberte konkrétní prostor.",
+    allReadOnly: "Cíl projektu lze upravit jen v konkrétním prostoru. V přehledu všech prostorů je toto pole pouze ke čtení.",
   },
   en: {
     overview: "Project overview",
@@ -52,7 +52,7 @@ const labels = {
     riskHelp: "Based on recorded dates only; not a complete risk assessment.",
     saving: "Saving…",
     saveError: "Save needs attention. Your entered text is still in the field.",
-    allReadOnly: "All Work is read-only. Select one workspace to edit.",
+    allReadOnly: "The project goal can only be edited in a specific workspace. This field is read-only in All Work.",
   },
 };
 
