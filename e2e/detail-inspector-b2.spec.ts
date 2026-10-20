@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { seeded, waitUntilSynced } from "./helpers";
+import { expectOnServer, seeded, waitUntilSynced } from "./helpers";
 
 test.describe("B2 responsive detail inspector", () => {
   test("desktop keeps the working list usable beside the detail", async ({ page }) => {
@@ -53,8 +53,9 @@ test.describe("B2 responsive detail inspector", () => {
     await title.fill(`${seeded.plainTask} upraveno`);
     await page.locator(".taskRow", { hasText: seeded.renameTask }).first().click();
     await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.renameTask);
-    // The blur save of the first task may complete after this click; it must not reopen it.
-    await expect.poll(() => page.locator("aside.inspectorDetail .titleEdit").inputValue()).toBe(seeded.renameTask);
+    // Wait for A's blur save to finish; it must not reopen A over the selected B.
+    await expectOnServer(page, (entity) => entity.title === `${seeded.plainTask} upraveno`, true);
+    await expect(page.locator("aside.inspectorDetail .titleEdit")).toHaveValue(seeded.renameTask);
   });
 
 });
