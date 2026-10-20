@@ -230,6 +230,18 @@ export function useLumiApp() {
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const calendarLoadVersion = useRef(0);
+  // Every newly opened or closed inspector invalidates a context request that is still running.
+  // This prevents a slow request for A from replacing the context after the user opened B.
+  const inspectionVersion = useRef(0);
+  const inspectorSelectionRef = useRef(selected);
+  inspectorSelectionRef.current = selected;
+  const activeWorkspaceRef = useRef(activeWorkspaceId);
+  activeWorkspaceRef.current = activeWorkspaceId;
+  useEffect(() => {
+    // A workspace transition makes any earlier inspection result ineligible.
+    inspectionVersion.current += 1;
+    setContext(null);
+  }, [activeWorkspaceId]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
@@ -303,10 +315,22 @@ export function useLumiApp() {
   }, [authState]);
   const sessionChannel = "ai-executive-session";
   async function inspect(e: Entity) {
+    const version = ++inspectionVersion.current;
+    const workspaceAtRequest = activeWorkspaceRef.current;
     setSelected(e);
-    setContext(await buildContext(e.id, 2));
+    // A previous record's context must disappear immediately and must never reach the next
+    // inspector. Both the selected record and the workspace must still match after the await.
+    setContext(null);
+    const next = await buildContext(e.id, 2);
+    const stillOpen = inspectorSelectionRef.current;
+    if (version !== inspectionVersion.current ||
+        activeWorkspaceRef.current !== workspaceAtRequest ||
+        (workspaceAtRequest !== "all" && workspaceAtRequest !== e.workspaceId) ||
+        !stillOpen || stillOpen.id !== e.id || stillOpen.workspaceId !== e.workspaceId) return;
+    setContext(next);
   }
   function closeDetail() {
+    inspectionVersion.current += 1;
     setSelected(null);
     setContext(null);
   }
@@ -2043,9 +2067,9 @@ export function useLumiApp() {
     try {
       await syncToServer();
       await load();
-      if (selected) {
-        setSelected((await db.entities.get(selected.id)) || null);
-        setContext(await buildContext(selected.id, 2));
+      if (selected && inspectorSelectionRef.current?.id === selected.id) {
+        const refreshed = await db.entities.get(selected.id);
+        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
       }
     } catch {
       setSyncStatus("offline");
@@ -2110,6 +2134,7 @@ export function useLumiApp() {
         ...(suggestedAreaId ? { areaId: suggestedAreaId } : {}),
         ...(captureType === "task"
           ? {
+              originalCaptureText: title.slice(0, 1000),
               inbox: !suggestedProjectId && !suggestedNewProjectTitle && !suggestedDate,
               today: suggestedDate === today,
               ...(suggestedDate ? { when: suggestedDate } : {}),
@@ -2229,7 +2254,7 @@ export function useLumiApp() {
   async function createFromRow(type: EntityType, title: string) {
     setRowError(false);
     try {
-      await create(type, title);
+      await create(type, title, type === "task" ? { originalCaptureText: title.trim().slice(0, 1000) } : {});
     } catch (error) {
       // Kept in the console as well; the message alone would hide the cause.
       console.error(error);
@@ -2240,6 +2265,7 @@ export function useLumiApp() {
     sourceId: string,
     targetId: string,
     relationType: string,
+    clearInbox = false,
   ) {
     const source = await db.entities.get(sourceId);
     const target = targetId ? await db.entities.get(targetId) : null;
@@ -2248,38 +2274,168 @@ export function useLumiApp() {
     if (target && target.workspaceId !== source.workspaceId) {
       throw new Error("Cross-workspace relations are not allowed");
     }
-    const existing = await db.relations
-      .where("sourceEntityId")
-      .equals(sourceId)
-      .filter((r) => r.relationType === relationType)
-      .toArray();
+    if (clearInbox && (source.type !== "task" || relationType !== "belongs_to_project" ||
+        target?.type !== "project" || activeWorkspaceId === "all" ||
+        activeWorkspaceId !== source.workspaceId || writeWorkspaceId !== source.workspaceId)) {
+      throw new Error("Inbox triage needs an explicit writable workspace and a project in it");
+    }
     localDataVersion.current += 1;
     const relationTimestamp = writeTime();
-    await db.transaction("rw", db.entities, db.relations, async () => {
-      await db.relations.bulkDelete(existing.map((r) => r.id));
-      if (targetId)
-        await db.relations.add({
-          id: crypto.randomUUID(),
-          workspaceId: source.workspaceId,
-          sourceEntityId: sourceId,
-          targetEntityId: targetId,
-          relationType,
-          createdAt: relationTimestamp,
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        // Dexie serializes read-write transactions over relations across tabs.
+        // Reading the old membership outside this transaction would let both tabs
+        // observe an empty list and then each insert a belongs_to_project relation.
+        const latest = await db.entities.get(sourceId);
+        const currentTarget = targetId ? await db.entities.get(targetId) : null;
+        if (!latest || latest.type === "workspace" || latest.workspaceId !== source.workspaceId) {
+          throw new Error("Relation source changed");
+        }
+        if (targetId && (!currentTarget || currentTarget.workspaceId !== latest.workspaceId)) {
+          throw new Error("Relation target changed");
+        }
+        if (clearInbox && (latest.type !== "task" || relationType !== "belongs_to_project" ||
+            currentTarget?.type !== "project" || currentTarget.status !== "active" ||
+            latest.status !== "open" || latest.properties.inbox !== true ||
+            activeWorkspaceId !== latest.workspaceId || writeWorkspaceId !== latest.workspaceId)) {
+          throw new Error("Inbox triage target or workspace changed");
+        }
+        const existing = await db.relations
+          .where("sourceEntityId")
+          .equals(sourceId)
+          .filter((relation) => relation.relationType === relationType)
+          .toArray();
+        await db.relations.bulkDelete(existing.map((relation) => relation.id));
+        if (targetId) {
+          await db.relations.add({
+            id: crypto.randomUUID(),
+            workspaceId: latest.workspaceId,
+            sourceEntityId: sourceId,
+            targetEntityId: targetId,
+            relationType,
+            createdAt: relationTimestamp,
+          });
+        }
+        await db.entities.update(sourceId, {
+          properties: {
+            ...latest.properties,
+            ...(clearInbox ? { inbox: false } : {}),
+            relationsUpdatedAt: relationTimestamp,
+            ...(clearInbox ? {
+              activity: [
+                ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
+                { at: relationTimestamp, action: "triaged to project" },
+              ].slice(-50),
+            } : {}),
+          },
+          updatedAt: relationTimestamp,
         });
-      await db.entities.update(source.id, {
-        properties: {
-          ...source.properties,
-          relationsUpdatedAt: relationTimestamp,
-        },
-        updatedAt: relationTimestamp,
       });
-    });
-    localDataVersion.current += 1;
+    } finally {
+      // An aborted transaction must not leave the app in a write-in-progress state.
+      localDataVersion.current += 1;
+    }
     await syncToServer();
     await load();
-    if (selected) {
-      setSelected((await db.entities.get(selected.id)) || null);
-      setContext(await buildContext(selected.id, 2));
+    // Finishing a relation write must not reopen an inspector that has since switched
+    // to another record or been closed. inspect() also guards delayed context results.
+    if (selected && inspectorSelectionRef.current?.id === selected.id) {
+      const refreshed = await db.entities.get(selected.id);
+      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
+    }
+  }
+  // Inbox decisions are single-use. Every branch, including Discard, validates the latest
+  // task in the same IndexedDB write transaction as the mutation. This serializes
+  // competing kinds of triage (Today vs Waiting, project vs Discard) across tabs.
+  async function triageInbox(
+    task: Entity,
+    destination: "today" | "someday" | "waiting" | "plan" | "project" | "discard",
+    value = "",
+  ) {
+    if (activeWorkspaceRef.current === "all" || activeWorkspaceRef.current !== task.workspaceId ||
+        writeWorkspaceId !== task.workspaceId) {
+      throw new Error("Inbox triage requires an explicit writable workspace");
+    }
+    const timestamp = writeTime();
+    const discarded: { record: Entity | null; relations: Relation[] } = { record: null, relations: [] };
+    localDataVersion.current += 1;
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        const latest = await db.entities.get(task.id);
+        if (!latest || latest.type !== "task" || latest.status !== "open" ||
+            latest.properties.inbox !== true || latest.workspaceId !== task.workspaceId ||
+            activeWorkspaceRef.current !== latest.workspaceId || writeWorkspaceId !== latest.workspaceId) {
+          throw new Error("Inbox task has already been triaged or is not writable");
+        }
+        if (destination === "discard") {
+          const linked = await db.relations.filter((relation) =>
+            relation.sourceEntityId === task.id || relation.targetEntityId === task.id).toArray();
+          await db.entities.delete(task.id);
+          await db.relations.bulkDelete(linked.map((relation) => relation.id));
+          discarded.record = latest;
+          discarded.relations = linked;
+          return;
+        }
+        if (destination === "project") {
+          const project = await db.entities.get(value);
+          if (!project || project.type !== "project" || project.status !== "active" ||
+              project.workspaceId !== latest.workspaceId) {
+            throw new Error("Inbox project is no longer available in this workspace");
+          }
+          const previous = await db.relations.where("sourceEntityId").equals(task.id)
+            .filter((relation) => relation.relationType === "belongs_to_project").toArray();
+          await db.relations.bulkDelete(previous.map((relation) => relation.id));
+          await db.relations.add({
+            id: crypto.randomUUID(),
+            workspaceId: latest.workspaceId,
+            sourceEntityId: task.id,
+            targetEntityId: project.id,
+            relationType: "belongs_to_project",
+            createdAt: timestamp,
+          });
+        }
+        if (destination === "plan" && !/^20\d{2}-\d{2}-\d{2}$/.test(value)) {
+          throw new Error("Invalid Inbox scheduling date");
+        }
+        const when = destination === "today" ? ymd() : destination === "plan" ? value : "";
+        const actionProperties: Record<string, unknown> =
+          destination === "today" || destination === "someday" || destination === "plan"
+            ? {
+                when,
+                today: destination === "today" || (destination === "plan" && when === ymd()),
+                someday: destination === "someday",
+              }
+            : destination === "waiting"
+              ? { waiting: true, waitingSince: Date.now(), waitingFor: "", followUpDate: "" }
+              : destination === "project" ? { relationsUpdatedAt: timestamp } : {};
+        const activity = Array.isArray(latest.properties.activity) ? latest.properties.activity : [];
+        await db.entities.update(task.id, {
+          properties: {
+            ...latest.properties,
+            ...actionProperties,
+            inbox: false,
+            activity: [...activity, { at: timestamp, action: "inbox triaged: " + destination }].slice(-50),
+          },
+          updatedAt: timestamp,
+        });
+      });
+    } finally {
+      localDataVersion.current += 1;
+    }
+    if (discarded.record) {
+      recordDeleted(localStorage, task.id);
+      setUndo(discarded.record);
+      setUndoRelations(discarded.relations);
+    }
+    await syncToServer();
+    await load();
+    // An old decision must neither reopen an inspector nor close a different one.
+    if (inspectorSelectionRef.current?.id === task.id) {
+      if (discarded.record) closeDetail();
+      else {
+        const refreshed = await db.entities.get(task.id);
+        if (refreshed && inspectorSelectionRef.current?.id === task.id) await inspect(refreshed);
+      }
     }
   }
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
@@ -2308,9 +2464,11 @@ export function useLumiApp() {
     await load();
     const saved = (await db.entities.get(e.id)) || null;
     setSelected((open) => {
-      if (!saved) return null;
+      // The desktop list stays interactive: a save for A must not reopen A or replace B after the
+      // user has moved on while the asynchronous save was in flight.
+      if (!saved || !open || open.id !== saved.id) return open;
       const typedSince = seq !== undefined && titleEditSeq.current !== seq;
-      return open && open.id === saved.id && typedSince ? { ...saved, title: open.title } : saved;
+      return typedSince ? { ...saved, title: open.title } : saved;
     });
   }
   async function remove(e: Entity) {
@@ -2327,7 +2485,7 @@ export function useLumiApp() {
     setUndo(e);
     setUndoRelations(linkedRelations);
     await syncToServer();
-    closeDetail();
+    if (inspectorSelectionRef.current?.id === e.id) closeDetail();
     load();
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed") {
@@ -2348,7 +2506,8 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(project.id)) || null);
+    const saved = (await db.entities.get(project.id)) || null;
+    setSelected((open) => open?.id === project.id ? saved : open);
   }
   async function restore() {
     if (!undo) return;
@@ -2402,8 +2561,11 @@ export function useLumiApp() {
     // panel keeps its own title.
     // A title that differs from the one the save started with is being typed and is kept; otherwise
     // the saved title is shown (it may have been changed on another device).
-    if (onlyIfOpen) setSelected((open) => (open && saved && open.id === e.id ? { ...saved, title: open.title !== e.title ? open.title : saved.title } : open));
-    else setSelected(saved);
+    // The inspector is non-modal on desktop. Preserve a different selection (and a closed panel)
+    // when an older save completes; only the record still open may be refreshed.
+    setSelected((open) => (open && saved && open.id === e.id
+      ? { ...saved, title: open.title !== e.title ? open.title : saved.title }
+      : open));
   }
   // Notes are typed into a draft and saved when the field is left. Saving on every key press put
   // the stored value back into the field while the save was running, so typed characters were
@@ -2883,7 +3045,8 @@ export function useLumiApp() {
     });
     localDataVersion.current += 1;
     await syncToServer();
-    closeDetail();
+    // Completing task A must not close task B that was opened while syncing A.
+    if (inspectorSelectionRef.current?.id === id) closeDetail();
     load();
   }
   async function reopenTask(task: Entity) {
@@ -2901,7 +3064,8 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(task.id)) || null);
+    const saved = (await db.entities.get(task.id)) || null;
+    setSelected((open) => open?.id === task.id ? saved : open);
   }
   const type: EntityType =
     view === "Projects"
@@ -3450,6 +3614,7 @@ export function useLumiApp() {
     targets,
     taskDraftCaptureText,
     tasks,
+    triageInbox,
     testAppBadge,
     testNotification,
     text,

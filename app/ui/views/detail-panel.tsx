@@ -6,6 +6,7 @@ import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
+import { InboxTriage } from "./inbox-triage";
 import { heldBackReason } from "./held-back";
 import { useEffect, useRef, useState } from "react";
 
@@ -112,20 +113,39 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     tasks,
     today,
     tr,
+    view,
     workSession,
     workSessionAction,
     workSessionBusy,
   } = app;
+  const inspectorRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  // Opening with the keyboard moves focus into the inspector; closing returns it to the
+  // row that opened it. Pointer-driven selection is left alone.
+  useEffect(() => {
+    if (selected) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.matches(".taskRowOpen")) {
+        returnFocusRef.current = active;
+        inspectorRef.current?.focus();
+      }
+    } else if (returnFocusRef.current) {
+      if (returnFocusRef.current.isConnected) returnFocusRef.current.focus();
+      returnFocusRef.current = null;
+    }
+  }, [selected?.id]);
   return (
     <>
       {selected && (
-        <div className="backdrop" onClick={closeDetail}>
-          <aside className="detail" onClick={(e) => e.stopPropagation()}>
+        <div className="backdrop inspectorBackdrop" onClick={closeDetail}>
+          <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
             <button
-              className="close"
+              className="close inspectorClose"
+              type="button"
               onClick={closeDetail}
             >
-              ×
+              <span className="inspectorCloseIcon"><span aria-hidden="true">×</span><span className="inspectorCloseAccessible">{tr("close")}</span></span>
+              <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
@@ -363,6 +383,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               </div>
             )}
             {selected.type === "note" && <NoteEditor key={selected.id} app={app} />}
+            {selected.type === "task" && selected.status === "open" && selected.properties.inbox === true && view === "Inbox" &&
+              <InboxTriage key={selected.id} app={app} task={selected} />}
             {selected.type === "task" && (
               <div className="fields">
                 <label>
