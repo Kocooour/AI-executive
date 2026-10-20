@@ -106,6 +106,7 @@ test("external tool excludes pending, confidential, stale, expired and archived 
   assert.equal(JSON.stringify(result).includes(archived0.literal.value), false);
   assert.equal(JSON.stringify(result).includes(teamNormal.literal.value), false);
   assert.equal("total" in result, false);
+  assert.equal("partial" in result, false, "external callers must not infer protected candidate counts");
 });
 
 test("a protected evidence source blocks an otherwise approved claim from the external search", () => {
