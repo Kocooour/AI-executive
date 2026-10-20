@@ -63,7 +63,10 @@ const [a, b] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf
 if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
   throw new Error("Integrita produkcni databaze selhala");
 const ignored = new Set([
-  "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries"
+  "ai_proposals", "passkey_challenges", "calendar_events", "notification_deliveries",
+  // PR #79: a derived invalidation queue, not canonical user data. Its bounded
+  // trigger legitimately replaces >1000 events with one global rebuild marker.
+  "semantic_index_outbox"
 ]);
 for (const [table, count] of Object.entries(a.tables)) {
   if (ignored.has(table)) continue;
