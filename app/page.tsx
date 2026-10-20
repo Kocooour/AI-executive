@@ -78,7 +78,7 @@ export default function App() {
               <TodayAgenda app={app} />
             </section>
           )}
-          {view === "Today" && <DayPlanCard app={app} />
+          {view === "Today" && <DayPlanCard app={app} />}
           <SearchResults app={app} />
           <ContextView app={app} />
           <AgentsView app={app} />
