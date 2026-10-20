@@ -92,6 +92,85 @@ test("a protected source forces a claim's derived sensitivity to the strictest l
   assert.notEqual(next.policy_fingerprint, row.policy_fingerprint);
 });
 
+test("claim policy fingerprint tracks source linkage even when sensitivity does not change", () => {
+  const now = Date.now();
+  canonical.prepare(`INSERT INTO context_claims(id, workspace_id, subject_id, predicate, review_status, freshness,
+    sensitivity, provenance, revision, recorded_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("claim-lineage", "personal", "canonical:workspace:personal", "about",
+      "confirmed", "current", "normal", "owner", 1, now, now);
+  const insertSource = canonical.prepare(`INSERT INTO context_sources
+    (id, workspace_id, revision, sensitivity, provider, account, created_at, updated_at)
+    VALUES (?, 'personal', 1, 'normal', ?, ?, ?, ?)`);
+  insertSource.run("lineage-source-a", "provider-one", "account-one", now, now);
+  insertSource.run("lineage-source-b", "provider-two", "account-two", now, now);
+  canonical.prepare(`INSERT INTO context_evidence(id, workspace_id, revision, claim_id, source_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run("lineage-evidence", "personal", 1, "claim-lineage", "lineage-source-a", now, now);
+  semantic.reconcileSemanticManifest();
+  const read = () => manifest(
+    "SELECT sensitivity, policy_fingerprint FROM semantic_entries WHERE object_id = 'claim-lineage'")[0];
+  const initial = read();
+  assert.equal(initial.sensitivity, "normal");
+
+  canonical.prepare("UPDATE context_evidence SET source_id = ?, revision = 2 WHERE id = ?")
+    .run("lineage-source-b", "lineage-evidence");
+  semantic.reconcileSemanticManifest();
+  const changedSource = read();
+  assert.equal(changedSource.sensitivity, "normal");
+  assert.notEqual(changedSource.policy_fingerprint, initial.policy_fingerprint,
+    "replacing a source with the same sensitivity must change provenance policy");
+
+  canonical.prepare("UPDATE context_sources SET provider = ?, revision = 2 WHERE id = ?")
+    .run("provider-updated", "lineage-source-b");
+  semantic.reconcileSemanticManifest();
+  const changedPolicy = read();
+  assert.equal(changedPolicy.sensitivity, "normal");
+  assert.notEqual(changedPolicy.policy_fingerprint, changedSource.policy_fingerprint,
+    "source policy/revision changes must alter the fingerprint");
+
+  canonical.prepare("DELETE FROM context_evidence WHERE id = 'lineage-evidence'").run();
+  semantic.reconcileSemanticManifest();
+  const unlinked = read();
+  assert.equal(unlinked.sensitivity, "normal");
+  assert.notEqual(unlinked.policy_fingerprint, changedPolicy.policy_fingerprint,
+    "removing a source link must invalidate the fingerprint");
+});
+
+test("ordinary full-snapshot save queues only changed entities, not a global rebuild", () => {
+  semantic.reconcileSemanticManifest();
+  const initial = store.readSnapshot();
+  const bulk = Array.from({ length: 550 }, (_, index) =>
+    entity(`snapshot-unchanged-${index}`, "personal", `Bulk item ${index}`));
+  const created = store.replaceSnapshot(initial.revision,
+    [...initial.entities, ...bulk], initial.relations, [], [], initial.restoreGeneration);
+  assert.equal(created.conflict, false);
+  assert.equal(queued(), 550, "initial creation queues each new entity exactly once");
+  semantic.reconcileSemanticManifest();
+  assert.equal(queued(), 0);
+
+  const previous = store.readSnapshot();
+  const changed = previous.entities.map((record) =>
+    record.id === "snapshot-unchanged-0"
+      ? { ...record, title: "One changed record", updatedAt: record.updatedAt + 1000 }
+      : record);
+  const updated = store.replaceSnapshot(previous.revision,
+    changed, previous.relations, [], [], previous.restoreGeneration);
+  assert.equal(updated.conflict, false);
+  assert.deepEqual(canonical.prepare(
+    "SELECT object_type, object_id, workspace_id, operation FROM semantic_index_outbox ORDER BY id"
+  ).all().map((row) => ({ ...row })), [
+    { object_type: "entity", object_id: "snapshot-unchanged-0", workspace_id: "personal", operation: "update" },
+  ]);
+  assert.equal(canonical.prepare("SELECT COUNT(*) AS n FROM semantic_index_outbox WHERE workspace_id = '*'").get().n, 0,
+    "one edit among 550 entries must not compact into a global rebuild");
+  semantic.reconcileSemanticManifest();
+  assert.equal(manifest("SELECT COUNT(*) AS n FROM semantic_entries WHERE object_id LIKE 'snapshot-unchanged-%'")[0].n,
+    550);
+  assert.equal(manifest("SELECT canonical_revision FROM semantic_entries WHERE object_id = 'snapshot-unchanged-0'")[0]
+    .canonical_revision, changed.find((record) => record.id === "snapshot-unchanged-0").updatedAt);
+  assert.equal(queued(), 0);
+});
+
 test("missing entity sensitivity fails closed until a canonical policy is explicitly assigned", () => {
   const record = entity("without-policy", "personal", "No policy");
   delete record.properties.sensitivity;
