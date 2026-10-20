@@ -249,6 +249,60 @@ export const schemaMigrations: SchemaMigration[] = [
         END`);
     },
   },
+
+  {
+    // Follow-up for installations where stage 1 outbox migrations were already applied.
+    // The effective sensitivity of a claim also depends on evidence and source records
+    // *outside* the claim workspace. Queue its canonical workspace for every such change.
+    id: "2026-10-semantic-memory-cross-workspace-invalidation",
+    up(database) {
+      for (const [operation, alias] of [
+        ["insert", "NEW"], ["update", "NEW"], ["delete", "OLD"],
+      ]) {
+        database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_evidence_claim_${operation}
+          AFTER ${operation.toUpperCase()} ON context_evidence
+          BEGIN
+            INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+            SELECT 'claim', c.id, c.workspace_id, 'evidence_${operation}'
+            FROM context_claims c WHERE c.id = ${alias}.claim_id;
+            ${operation === "update" ? `INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+            SELECT 'claim', c.id, c.workspace_id, 'evidence_previous'
+            FROM context_claims c WHERE c.id = OLD.claim_id AND OLD.claim_id != NEW.claim_id;` : ""}
+          END`);
+        database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_source_claim_${operation}
+          AFTER ${operation.toUpperCase()} ON context_sources
+          BEGIN
+            INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+            SELECT DISTINCT 'claim', c.id, c.workspace_id, 'source_${operation}'
+            FROM context_evidence e JOIN context_claims c ON c.id = e.claim_id
+            WHERE e.source_id = ${alias}.id;
+            ${operation === "update" ? `INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+            SELECT DISTINCT 'claim', c.id, c.workspace_id, 'source_previous'
+            FROM context_evidence e JOIN context_claims c ON c.id = e.claim_id
+            WHERE e.source_id = OLD.id AND OLD.id != NEW.id;` : ""}
+          END`);
+      }
+      // No stage-1 worker runs on production. Bound disk growth without dropping
+      // invalidation: atomically replace an overflowing queue with a global rebuild
+      // marker. Subsequent writes stay queued and a future worker must rebuild all
+      // canonical workspaces before acknowledging that marker.
+      database.exec(`CREATE TRIGGER IF NOT EXISTS semantic_outbox_bound_queue
+        AFTER INSERT ON semantic_index_outbox
+        WHEN (SELECT COUNT(*) FROM semantic_index_outbox) > 1000
+        BEGIN
+          DELETE FROM semantic_index_outbox;
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'queue_compacted');
+        END`);
+      // Upgrade safety: cap any rows accumulated before this migration.
+      const queued = (database.prepare("SELECT COUNT(*) AS count FROM semantic_index_outbox").get() as { count: number }).count;
+      if (queued > 1000) {
+        database.exec(`DELETE FROM semantic_index_outbox;
+          INSERT INTO semantic_index_outbox(object_type, object_id, workspace_id, operation)
+          VALUES ('rebuild', '*', '*', 'queue_compacted')`);
+      }
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
