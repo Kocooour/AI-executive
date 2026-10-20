@@ -2067,9 +2067,9 @@ export function useLumiApp() {
     try {
       await syncToServer();
       await load();
-      if (selected) {
-        setSelected((await db.entities.get(selected.id)) || null);
-        setContext(await buildContext(selected.id, 2));
+      if (selected && inspectorSelectionRef.current?.id === selected.id) {
+        const refreshed = await db.entities.get(selected.id);
+        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
       }
     } catch {
       setSyncStatus("offline");
@@ -2412,7 +2412,8 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(project.id)) || null);
+    const saved = (await db.entities.get(project.id)) || null;
+    setSelected((open) => open?.id === project.id ? saved : open);
   }
   async function restore() {
     if (!undo) return;
@@ -2950,7 +2951,8 @@ export function useLumiApp() {
     });
     localDataVersion.current += 1;
     await syncToServer();
-    closeDetail();
+    // Completing task A must not close task B that was opened while syncing A.
+    if (inspectorSelectionRef.current?.id === id) closeDetail();
     load();
   }
   async function reopenTask(task: Entity) {
@@ -2968,7 +2970,8 @@ export function useLumiApp() {
     localDataVersion.current += 1;
     await syncToServer();
     await load();
-    setSelected((await db.entities.get(task.id)) || null);
+    const saved = (await db.entities.get(task.id)) || null;
+    setSelected((open) => open?.id === task.id ? saved : open);
   }
   const type: EntityType =
     view === "Projects"
