@@ -230,6 +230,11 @@ export function useLumiApp() {
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const calendarLoadVersion = useRef(0);
+  // Every newly opened or closed inspector invalidates a context request that is still running.
+  // This prevents a slow request for A from replacing the context after the user opened B.
+  const inspectionVersion = useRef(0);
+  const activeWorkspaceRef = useRef(activeWorkspaceId);
+  activeWorkspaceRef.current = activeWorkspaceId;
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
@@ -303,10 +308,21 @@ export function useLumiApp() {
   }, [authState]);
   const sessionChannel = "ai-executive-session";
   async function inspect(e: Entity) {
+    const version = ++inspectionVersion.current;
     setSelected(e);
-    setContext(await buildContext(e.id, 2));
+    // Context belongs to the inspected record, not to the panel generally; never show A's while B
+    // is selected while the asynchronous lookup for B is in progress.
+    setContext(null);
+    const next = await buildContext(e.id, 2);
+    if (version !== inspectionVersion.current || activeWorkspaceRef.current !== e.workspaceId) return;
+    setSelected((open) => {
+      if (!open || open.id !== e.id || open.workspaceId !== e.workspaceId) return open;
+      setContext(next);
+      return open;
+    });
   }
   function closeDetail() {
+    inspectionVersion.current += 1;
     setSelected(null);
     setContext(null);
   }
@@ -2343,9 +2359,11 @@ export function useLumiApp() {
     await load();
     const saved = (await db.entities.get(e.id)) || null;
     setSelected((open) => {
-      if (!saved) return null;
+      // The desktop list stays interactive: a save for A must not reopen A or replace B after the
+      // user has moved on while the asynchronous save was in flight.
+      if (!saved || !open || open.id !== saved.id) return open;
       const typedSince = seq !== undefined && titleEditSeq.current !== seq;
-      return open && open.id === saved.id && typedSince ? { ...saved, title: open.title } : saved;
+      return typedSince ? { ...saved, title: open.title } : saved;
     });
   }
   async function remove(e: Entity) {
@@ -2437,8 +2455,11 @@ export function useLumiApp() {
     // panel keeps its own title.
     // A title that differs from the one the save started with is being typed and is kept; otherwise
     // the saved title is shown (it may have been changed on another device).
-    if (onlyIfOpen) setSelected((open) => (open && saved && open.id === e.id ? { ...saved, title: open.title !== e.title ? open.title : saved.title } : open));
-    else setSelected(saved);
+    // The inspector is non-modal on desktop. Preserve a different selection (and a closed panel)
+    // when an older save completes; only the record still open may be refreshed.
+    setSelected((open) => (open && saved && open.id === e.id
+      ? { ...saved, title: open.title !== e.title ? open.title : saved.title }
+      : open));
   }
   // Notes are typed into a draft and saved when the field is left. Saving on every key press put
   // the stored value back into the field while the save was running, so typed characters were
