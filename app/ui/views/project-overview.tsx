@@ -20,7 +20,7 @@ const labels = {
     noNextHelp: "V projektu zatím není dostupný otevřený úkol. Samo o sobě to neznamená problém.",
     last: "Poslední aktivita",
     projectChange: "Změna projektu",
-    linkedChange: "Změna navázaného úkolu",
+    linkedChange: "Změna navázané položky",
     risks: "Signály rizika",
     projectOverdue: "Termín projektu uplynul",
     taskOverdue: "Úkoly po termínu",
@@ -44,7 +44,7 @@ const labels = {
     noNextHelp: "No available open task is linked. This is not automatically a problem.",
     last: "Last activity",
     projectChange: "Project changed",
-    linkedChange: "Linked task changed",
+    linkedChange: "Linked item changed",
     risks: "Risk signals",
     projectOverdue: "Project deadline has passed",
     taskOverdue: "Overdue tasks",
@@ -71,11 +71,13 @@ export function ProjectOverview({ app, project }: { app: LumiApp; project: Entit
   const projectTaskIds = new Set(app.sources(project.id, "belongs_to_project"));
   const linkedTasks = app.tasks.filter((task) =>
     task.workspaceId === project.workspaceId && projectTaskIds.has(task.id));
+  const linkedNotes = app.scopedItems.filter((item) => item.type === "note" &&
+    item.workspaceId === project.workspaceId && projectTaskIds.has(item.id));
   const openTasks = linkedTasks.filter((task) => task.status === "open");
   const nextAction = [...openTasks]
     .filter((task) => task.properties.waiting !== true && task.properties.someday !== true)
     .sort(byManualOrder(`task:project:${project.id}`))[0] ?? null;
-  const lastLinked = linkedTasks.reduce<Entity | null>(
+  const lastLinked = [...linkedTasks, ...linkedNotes].reduce<Entity | null>(
     (latest, task) => !latest || task.updatedAt > latest.updatedAt ? task : latest, null);
   const activityFromTask = Boolean(lastLinked && lastLinked.updatedAt > project.updatedAt);
   const lastChanged = activityFromTask ? lastLinked!.updatedAt : project.updatedAt;
