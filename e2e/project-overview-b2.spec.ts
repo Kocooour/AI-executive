@@ -156,8 +156,9 @@ test.describe("B2 project overview", () => {
     await expect(taskRow).toBeVisible();
     await taskRow.click();
     // This is the ordinary relation picker, not the Inbox triage action.
-    await page.locator(".detail label", { hasText: "Projekt" }).locator("select")
-      .selectOption({ label: name });
+    const projectPicker = page.locator(".fields > label", { hasText: "Projekt" }).locator("select");
+    await expect(projectPicker).toHaveCount(1);
+    await projectPicker.selectOption({ label: name });
     await expect.poll(async () => page.evaluate(async ({ taskTitle, projectTitle }) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const task = snapshot.entities.find((entity: { title: string }) => entity.title === taskTitle);
@@ -173,6 +174,40 @@ test.describe("B2 project overview", () => {
     await openProject(page, name);
     await expect(page.locator(".projectOverview").getByText("Není určená")).toBeVisible();
     await expect(page.locator(".projectOverview .projectNextAction")).toHaveCount(0);
+  });
+
+
+  test("a future-scheduled project task is not chosen ahead of an available next action", async ({ page }) => {
+    const name = await createProject(page);
+    await openProject(page, name);
+    const futureTask = "B2 future task " + Date.now();
+    const availableTask = "B2 available task " + Date.now();
+
+    async function addProjectTask(title: string) {
+      await page.locator(".projectDetail").getByRole("button", { name: /Přidat úkol/ }).click();
+      const modal = page.locator(".captureModal");
+      await expect(modal).toBeVisible();
+      await modal.locator("input[aria-label]").first().fill(title);
+      await modal.locator("button[type='submit']").click();
+      await expect(modal).toHaveCount(0);
+    }
+
+    // The earlier project task is deferred far into the future.
+    await addProjectTask(futureTask);
+    await expectOnServer(page, (entity) => entity.title === futureTask && entity.properties?.inbox !== true, true);
+    await page.locator(".projectDetail article", { hasText: futureTask }).click();
+    const when = page.locator(".scheduleField input[type='date']");
+    await expect(when).toHaveCount(1);
+    await when.fill("2099-01-01");
+    await expectOnServer(page, (entity) => entity.title === futureTask && entity.properties?.when === "2099-01-01", true);
+    await page.getByRole("button", { name: "Zavřít", exact: true }).click();
+    await openProject(page, name);
+    await expect(page.locator(".projectOverview").getByText("Není určená")).toBeVisible();
+
+    // Explicit "dnes" in Quick Capture wins over optional AI-suggested scheduling.
+    await addProjectTask(availableTask + " dnes");
+    await expectOnServer(page, (entity) => entity.title === availableTask && entity.properties?.inbox !== true, true);
+    await expect(page.locator(".projectOverview .projectNextAction")).toHaveText(availableTask);
   });
 
 });
