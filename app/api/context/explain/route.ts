@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     return NextResponse.json(result, { headers });
   } catch (error) {
     recordSecurityEvent(request, "context.explain", "failed", { reason: error instanceof ContextCommandError ? error.code : "invalid_request" });
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Explanation unavailable" },
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Context history unavailable" },
       { status: error instanceof ContextCommandError ? error.status : 400, headers });
   }
 }
