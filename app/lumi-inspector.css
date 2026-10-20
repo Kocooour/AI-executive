@@ -71,6 +71,33 @@
   cursor: pointer;
 }
 .inspectorBackLabel { display: none; }
+.inspectorCloseAccessible {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+/* The task title is a native button, separate from completion and drag actions.
+   It preserves the existing row appearance while supporting Tab, Enter and Space. */
+.taskRowOpen {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.taskRowOpen:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
 @media (max-width: 1199px) {
   .inspectorClose {
     float: none;
