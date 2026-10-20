@@ -1,4 +1,5 @@
 import { calendarAvailability, listCalendarEvents } from "./calendar";
+import { searchContext } from "./context-search";
 import { listPACTContext, type ContextScope, type PACTPermission } from "./pact";
 import { readSnapshot } from "./server-store";
 
@@ -9,6 +10,7 @@ export type PACTToolName =
   | "calendar.read"
   | "calendar.free_time"
   | "context.read"
+  | "context.search"
   | "task.propose";
 
 export interface PACTToolDefinition {
@@ -24,6 +26,7 @@ export const pactToolRegistry: Record<PACTToolName, PACTToolDefinition> = {
   "calendar.read": { name: "calendar.read", permission: "read", description: "Read normalized calendar events." },
   "calendar.free_time": { name: "calendar.free_time", permission: "read", description: "Calculate free time from normalized calendar data." },
   "context.read": { name: "context.read", permission: "read", description: "Read explicitly allowed durable context." },
+  "context.search": { name: "context.search", permission: "read", description: "Search confirmed Context Graph claims only, with explicit per-workspace tool opt-in." },
   "task.propose": { name: "task.propose", permission: "propose", description: "Prepare a task mutation through the existing approval boundary." },
 };
 
@@ -47,6 +50,12 @@ export function executePACTReadTool(
     return snapshot.entities
       .filter((entity) => entity.workspaceId === workspaceId && entity.type === type)
       .slice(0, 100);
+  }
+  if (name === "context.search") {
+    return searchContext({ actor: "integration", workspaceId, query: String(input.query || ""),
+      kinds: Array.isArray(input.kinds) ? input.kinds.map(String) : undefined,
+      limit: input.limit === undefined ? undefined : Number(input.limit),
+      cursor: input.cursor == null ? undefined : String(input.cursor) });
   }
   if (name === "context.read") {
     const requested = Array.isArray(input.scopes) ? input.scopes.map(String) : [];
