@@ -35,6 +35,15 @@ Do not treat an implementation as complete before both independent testers have 
 - Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
 - The primary model remains accountable for the delivered result and must not accept agent findings without review.
 
+## CI gate and protected main
+
+- Every change, including documentation and test-only changes, goes through a PR and the `Browser E2E` GitHub Actions workflow. Treat it as a mandatory **human/process merge gate** regardless of whether GitHub technically enforces the check.
+- Before merging, independently verify the PR's current head commit, the current `main` commit, and a successful complete `Browser E2E` run for their integrated code. The required workflow steps are dependency install, `pnpm typecheck`, `pnpm test`, `pnpm build`, Chromium setup, and `pnpm test:e2e`. Do not merge with pending, failed, cancelled, or missing essential checks.
+- If `main` or the PR head changes after the verified test run was started, incorporate the latest `main` into the PR branch (without overwriting unrelated commits), rerun the complete workflow on the combined result, and verify it again. Earlier green checks do not validate newly integrated changes.
+- Never obtain a green result by disabling/skipping failing tests, weakening meaningful assertions, or suppressing failures. Fix the implementation or update obsolete UI selectors while retaining checks of the original behavior, then rerun the full suite. If validation cannot run or fails, keep the PR open and report the blocker.
+- Where the GitHub plan permits enforced branch rules, require a PR, successful `Browser E2E` check and up-to-date branches for `main`, and prevent force pushes and deletions. Explicitly verify that the ruleset is **active and enforced**; a configured but unenforced ruleset is not protection. When enforcement is unavailable (for example, on the current private-repository plan), apply exactly the same checks manually before any merge.
+- Use a compare-and-swap head SHA guard when merging through the API; verify the merged commit afterward. CI uses isolated synthetic data and does not deploy or test against production state.
+
 ## Delivery policy
 
 - Work in a dedicated branch and open a pull request for every change. Do not commit directly to `main`.

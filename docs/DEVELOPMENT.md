@@ -116,7 +116,18 @@ The [Browser E2E workflow](../.github/workflows/browser-e2e.yml) runs on every p
 
 The CI E2E server binds to `127.0.0.1:3100`. The production build is reused through `E2E_SKIP_BUILD=1` only after `pnpm build` succeeds in the same job. Tests execute sequentially because they intentionally share one seeded server; do not enable parallel workers without redesigning fixtures. On failure, inspect the job log and the `lumi-playwright-*` artifact (trace files in `test-results/`); artifacts are retained for seven days. Locally, use the isolated checkout procedure above and run `pnpm test:e2e`.
 
-The CI job is a **verification gate**, not a deploy job. Branch protection / a required `Browser E2E / browser-e2e` check must be configured separately in GitHub repository settings if merging should be technically blocked until it passes. Do not provide real API keys, calendar passwords or production database paths to this job.
+The CI job is a **verification gate**, not a deploy job. Branch protection / the required `Browser E2E` check must be configured separately in GitHub repository settings if merging should be technically blocked until it passes. Do not provide real API keys, calendar passwords or production database paths to this job.
+
+## Required merge gate when branch rules are not enforced
+
+The `Browser E2E` check is mandatory for **every** PR, including documentation-only changes. This is a project policy even if the repository's GitHub plan does not enforce protected branches or rulesets. Do not assume a saved ruleset is active: verify that GitHub reports its enforcement, or apply the following manual gate.
+
+1. Fetch the current `main` SHA and the exact PR head SHA. Confirm that the PR includes the latest `main`; if `main` advanced since the test began, merge/rebase it into the PR branch and re-run CI on the resulting combined code (use an isolated integration branch for multiple interacting PRs).
+2. Inspect the **latest complete** GitHub Actions `Browser E2E` run on that integrated code. Dependency install, typecheck, unit tests, production build and all Playwright tests must pass. An absent, pending, failed or cancelled essential step blocks merge; passing tests for an earlier commit or earlier base is insufficient.
+3. Review any fixed E2E assertions to ensure they still verify the intended behavior. Do not skip, remove or weaken failing tests just to make CI green. If a check is unavailable, stop and report the blocker.
+4. Only then merge with a guard against a changed PR head (for API merges, `expected_head_sha`), verify the merge result and ensure no untested changes entered `main`.
+
+When supported, configure an **enforced** ruleset on `main` requiring pull requests, the GitHub Actions `Browser E2E` check, up-to-date branches, and no force pushes or branch deletion. In this private repository, enforcement may be unavailable under the current GitHub plan; manual verification remains compulsory until enforcement is independently confirmed. GitHub Actions does not deploy Lumi, and load tests must not run against the production SQLite database or application.
 
 ## Review and integration workflow
 
