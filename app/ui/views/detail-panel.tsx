@@ -6,6 +6,7 @@ import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
+import { InboxTriage } from "./inbox-triage";
 import { heldBackReason } from "./held-back";
 import { useEffect, useRef, useState } from "react";
 
@@ -112,6 +113,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     tasks,
     today,
     tr,
+    view,
     workSession,
     workSessionAction,
     workSessionBusy,
@@ -363,6 +365,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               </div>
             )}
             {selected.type === "note" && <NoteEditor key={selected.id} app={app} />}
+            {selected.type === "task" && selected.status === "open" && selected.properties.inbox === true && view === "Inbox" &&
+              <InboxTriage key={selected.id} app={app} task={selected} />}
             {selected.type === "task" && (
               <div className="fields">
                 <label>
