@@ -14,6 +14,7 @@ const readTools = new Set<PACTToolName>([
   "calendar.read",
   "calendar.free_time",
   "context.read",
+  "context.search",
 ]);
 
 export async function POST(request: Request) {
