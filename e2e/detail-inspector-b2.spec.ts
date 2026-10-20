@@ -65,7 +65,7 @@ test.describe("B2 responsive detail inspector", () => {
     await page.goto("/?view=Inbox");
     await waitUntilSynced(page);
     const opener = page.locator(".taskRow", { hasText: seeded.plainTask })
-      .first().getByRole("button", { name: seeded.plainTask });
+      .first().getByRole("button", { name: seeded.plainTask, exact: true });
     await opener.focus();
     await page.keyboard.press("Enter");
     await expect(page.locator("aside.inspectorDetail")).toBeFocused();
