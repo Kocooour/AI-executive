@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const root = process.env.LUMI_TEST_ROOT;
 if (!root || !root.includes("lumi-deploy-test-")) process.exit(92);
-const name = path.basename(process.argv[1]);
+const name = process.env.LUMI_TEST_COMMAND || path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const app = path.join(root, "opt/ai-executive");
 const dbFile = path.join(root, "var/lib/ai-executive/store.sqlite");
