@@ -54,6 +54,66 @@ test.describe("B1 Inbox triage", () => {
     }, title), { timeout: 20_000 }).toEqual({ inbox: false, linked: true });
   });
 
+  test("two tabs triaging one task cannot create duplicate project memberships", async ({ page }) => {
+    const title = await openNewInboxTask(page);
+    const second = await page.context().newPage();
+    try {
+      await second.goto("/?view=Inbox");
+      await waitUntilSynced(second);
+      await second.locator(".taskRow", { hasText: title }).first().click();
+      const firstField = page.locator(".inboxTriage label", { hasText: "Do projektu" });
+      const secondField = second.locator(".inboxTriage label", { hasText: "Do projektu" });
+      await firstField.locator("select").selectOption({ label: seeded.project });
+      await secondField.locator("select").selectOption({ label: seeded.project });
+
+      // Dispatch in two tabs without awaiting either async handler. Both previously
+      // read an empty membership outside the transaction and inserted separate links.
+      await Promise.all([
+        firstField.getByRole("button", { name: "Použít" }).evaluate((button) => (button as HTMLButtonElement).click()),
+        secondField.getByRole("button", { name: "Použít" }).evaluate((button) => (button as HTMLButtonElement).click()),
+      ]);
+      await expect(page.locator(".inboxTriage")).toHaveCount(0, { timeout: 20_000 });
+      await expect(second.locator(".inboxTriage")).toHaveCount(0, { timeout: 20_000 });
+
+      const taskId = (await serverEntities(page)).find((entity) => entity.title === title)?.id;
+      expect(taskId).toBeTruthy();
+      // Inspect IndexedDB directly, not only the server: the race occurs in the
+      // tabs' shared local database, before either sync request completes.
+      await expect.poll(() => page.evaluate((id) => new Promise<{ count: number; inbox: boolean | undefined }>((resolve, reject) => {
+        const opened = indexedDB.open("ai-executive");
+        opened.onerror = () => reject(opened.error);
+        opened.onsuccess = () => {
+          const db = opened.result;
+          const tx = db.transaction(["entities", "relations"], "readonly");
+          const task = tx.objectStore("entities").get(id);
+          const links = tx.objectStore("relations").index("sourceEntityId").getAll(id);
+          tx.oncomplete = () => {
+            resolve({
+              count: links.result.filter((relation: { relationType: string }) =>
+                relation.relationType === "belongs_to_project").length,
+              inbox: task.result?.properties?.inbox,
+            });
+            db.close();
+          };
+          tx.onerror = () => { reject(tx.error); db.close(); };
+        };
+      }), taskId!), { timeout: 20_000 }).toEqual({ count: 1, inbox: false });
+
+      await expect.poll(async () => page.evaluate(async (taskTitle) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+        const task = snapshot.entities.find((entity: { type: string; title: string }) =>
+          entity.type === "task" && entity.title === taskTitle);
+        return {
+          count: snapshot.relations.filter((relation: { sourceEntityId: string; relationType: string }) =>
+            relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_project").length,
+          inbox: task?.properties?.inbox,
+        };
+      }, title), { timeout: 20_000 }).toEqual({ count: 1, inbox: false });
+    } finally {
+      await second.close();
+    }
+  });
+
   test("waiting leaves Inbox and exposes follow-up controls", async ({ page }) => {
     const title = await openNewInboxTask(page);
     await page.locator(".inboxTriage").getByRole("button", { name: "Čeká na" }).click();
