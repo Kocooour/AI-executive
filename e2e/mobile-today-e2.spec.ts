@@ -55,13 +55,13 @@ for (const width of [390, 1280]) {
       await expect(region.locator(".dayPlanBlock")).toContainText(group.title);
     }
     const suggested = plan.locator('[data-plan-group="suggested"]');
-    await expect(suggested.getByRole("button", { name: "Přijmout blok" })).toBeVisible();
-    await expect(plan.locator('[data-plan-group="fixed"] button', { hasText: "Přijmout blok" })).toHaveCount(0);
+    await expect(suggested.getByRole("button", { name: "Přijmout" })).toBeVisible();
+    await expect(plan.locator('[data-plan-group="fixed"] button', { hasText: "Přijmout" })).toHaveCount(0);
     await suggested.locator(".whyNow summary").click();
     await expect(suggested.locator(".whyNow")).toHaveAttribute("open", "");
     await expect(suggested.locator(".whyNow li")).toHaveCount(1);
     if (width === 390) {
-      const minHeight = await suggested.getByRole("button", { name: "Přijmout blok" })
+      const minHeight = await suggested.getByRole("button", { name: "Přijmout" })
         .evaluate((button) => button.getBoundingClientRect().height);
       expect(minHeight).toBeGreaterThanOrEqual(44);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
