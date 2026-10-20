@@ -175,8 +175,10 @@ scenarioCase("outboxcompact: legitimate semantic invalidation compaction does no
   try {
     const rows = db.prepare("SELECT COUNT(*) AS n FROM semantic_index_outbox").get().n;
     assert.equal(rows, 1, "trigger compacts 1001 invalidations to one rebuild marker");
-    assert.deepEqual(db.prepare("SELECT object_type, object_id, operation FROM semantic_index_outbox").get(),
-      { object_type: "rebuild", object_id: "*", operation: "queue_compacted" });
+    const marker = db.prepare("SELECT object_type, object_id, operation FROM semantic_index_outbox").get();
+    assert.equal(marker.object_type, "rebuild");
+    assert.equal(marker.object_id, "*");
+    assert.equal(marker.operation, "queue_compacted");
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM entities").get().n, 2,
       "canonical user rows stay unchanged");
   } finally { db.close(); }
