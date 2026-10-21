@@ -12,6 +12,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     captureProjectId,
     captureAreaId,
     chooseCaptureType,
+    editCaptureDraft,
     discardCaptureDraft,
     captureSuggestion,
     captureSuggestionBusy,
@@ -85,7 +86,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
               autoFocus
               aria-label={captureType === "note" ? tr("noteTitle") : tr("taskTitle")}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => editCaptureDraft(e.target.value)}
               placeholder={
                 captureType === "note" ? tr("noteTitle") : tr("taskPrompt")
               }
