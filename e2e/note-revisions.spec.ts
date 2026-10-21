@@ -137,13 +137,29 @@ test("the note editor fits a phone width and its buttons are large enough", asyn
   await page.getByRole("button", { name: "Náhled" }).click();
   await page.locator(".revisionList li button").first().click();
   await expect(page.locator(".revisionDiff")).toBeVisible();
-  const metrics = await page.evaluate(() => ({
-    page: document.documentElement.scrollWidth - window.innerWidth,
-    detail: (document.querySelector(".detail") as HTMLElement).scrollWidth - (document.querySelector(".detail") as HTMLElement).clientWidth,
-    buttons: [...document.querySelectorAll(".noteModeToggle button, .revisionList button, .revisionRestore")].map((element) => element.getBoundingClientRect().height),
-  }));
+  const metrics = await page.evaluate(() => {
+    const sheet = document.querySelector(".detail") as HTMLElement;
+    const rightEdge = sheet.getBoundingClientRect().right;
+    const offenders = [...sheet.querySelectorAll<HTMLElement>("*")]
+      .filter(element => element.getBoundingClientRect().right > rightEdge + 1)
+      .slice(0, 12)
+      .map(element => ({
+        tag: element.tagName, className: String(element.className).slice(0, 100),
+        right: Math.round(element.getBoundingClientRect().right),
+        width: Math.round(element.getBoundingClientRect().width),
+      }));
+    const project = sheet.querySelector("select") as HTMLSelectElement | null;
+    return {
+      page: document.documentElement.scrollWidth - window.innerWidth,
+      detail: sheet.scrollWidth - sheet.clientWidth,
+      projectFits: !project || project.getBoundingClientRect().right <= rightEdge + 1,
+      offenders,
+      buttons: [...document.querySelectorAll(".noteModeToggle button, .revisionList button, .revisionRestore")].map((element) => element.getBoundingClientRect().height),
+    };
+  });
   expect(metrics.page).toBeLessThanOrEqual(0);
-  expect(metrics.detail).toBeLessThanOrEqual(0);
+  expect(metrics.projectFits, "Project select must stay inside the mobile inspector").toBe(true);
+  expect(metrics.detail, `Overflowing mobile detail elements: ${JSON.stringify(metrics.offenders)}`).toBeLessThanOrEqual(0);
   for (const height of metrics.buttons) expect(height).toBeGreaterThanOrEqual(44);
 });
 
