@@ -2579,7 +2579,7 @@ export function useLumiApp() {
     assignment: { projectId?: string; areaId?: string } = {},
   ) {
     const workspaceId = activeWorkspaceRef.current;
-    if (isAdopting() || workspaceId === "all" || workspaceId !== writeWorkspaceId ||
+    if (signedOut.current || isAdopting() || workspaceId === "all" || workspaceId !== writeWorkspaceId ||
         view !== "Inbox" || selection.length === 0 || selection.length > 50 ||
         new Set(selection.map((task) => task.id)).size !== selection.length ||
         selection.some((task) => task.workspaceId !== workspaceId)) {
@@ -3294,7 +3294,7 @@ export function useLumiApp() {
   const collection = ["Projects", "Areas", "Notes"].includes(view)
     ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
     : visible;
-  const batchAllowed = view === "Inbox" && authState === "ready" &&
+  const batchAllowed = view === "Inbox" && (authState === "ready" || offlineView) &&
     activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
   const batchCandidates = batchAllowed ? collection.filter((task) =>
     task.type === "task" && task.status === "open" && task.workspaceId === activeWorkspaceId &&
