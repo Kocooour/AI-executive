@@ -365,6 +365,15 @@ export const schemaMigrations: SchemaMigration[] = [
       `);
     },
   },
+  {
+    // Keep an OAuth claim visible until token exchange finishes: disconnect can revoke
+    // both unclaimed and in-flight authorizations without relying on in-memory locks.
+    id: "2026-10-mail-oauth-claim-through-completion",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_oauth_pending)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("claimed_at")) database.exec("ALTER TABLE mail_oauth_pending ADD COLUMN claimed_at INTEGER");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
