@@ -42,6 +42,9 @@ export function useLumiApp() {
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
+    // B5 selections belong to exactly one workspace and never survive a navigation
+    // or authentication change. IDs are re-filtered against live Inbox rows below.
+    [batchSelection, setBatchSelection] = useState<{ workspaceId: string; ids: string[] }>({ workspaceId: "", ids: [] }),
     [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     // The body of the open note while it is being typed, and the note whose last save failed locally.
     // `base`: the note text the draft was started from, kept in memory too so the conflict check does not depend on storage.
@@ -2567,6 +2570,90 @@ export function useLumiApp() {
       }
     }
   }
+  // B5: preview data is a snapshot. Revalidate ALL selected rows and both target
+  // entities within a single cross-tab IndexedDB transaction before ANY mutation.
+  // A stale selection aborts the WHOLE batch, leaving every item untouched.
+  async function triageInboxBatch(
+    selection: readonly { id: string; workspaceId: string; updatedAt: number }[],
+    destination: "today" | "tomorrow" | "someday" | "waiting" | "organize",
+    assignment: { projectId?: string; areaId?: string } = {},
+  ) {
+    const workspaceId = activeWorkspaceRef.current;
+    if (isAdopting() || workspaceId === "all" || workspaceId !== writeWorkspaceId ||
+        view !== "Inbox" || selection.length === 0 || selection.length > 50 ||
+        new Set(selection.map((task) => task.id)).size !== selection.length ||
+        selection.some((task) => task.workspaceId !== workspaceId)) {
+      throw new Error("Inbox batch requires 1–50 distinct tasks in an explicit writable workspace");
+    }
+    const requested = destination === "organize"
+      ? [
+          { id: assignment.projectId || "", type: "project", relationType: "belongs_to_project" },
+          { id: assignment.areaId || "", type: "area", relationType: "belongs_to_area" },
+        ].filter((target) => target.id)
+      : [];
+    if (destination === "organize" && !requested.length) {
+      throw new Error("Select a project or area before filing an Inbox batch");
+    }
+    const timestamp = writeTime();
+    const currentDay = ymd();
+    const tomorrow = ymd(addLocalDays(new Date(), 1));
+    localDataVersion.current += 1;
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        const latest = await db.entities.bulkGet(selection.map((task) => task.id));
+        if (activeWorkspaceRef.current !== workspaceId || latest.some((task, index) =>
+            !task || task.type !== "task" || task.status !== "open" ||
+            task.workspaceId !== workspaceId || task.properties.inbox !== true ||
+            task.updatedAt !== selection[index].updatedAt ||
+            !isSendable(task) || entityConflicts(task).length > 0)) {
+          throw new Error("Inbox batch changed; review the current selection again");
+        }
+        const targets = await Promise.all(requested.map(async (target) => {
+          const current = await db.entities.get(target.id);
+          if (!current || current.workspaceId !== workspaceId || current.type !== target.type ||
+              current.status !== "active" || !isSendable(current)) {
+            throw new Error("Inbox batch destination changed or is not writable");
+          }
+          return target;
+        }));
+        for (const task of latest as Entity[]) {
+          for (const target of targets) {
+            const old = await db.relations.where("sourceEntityId").equals(task.id)
+              .filter((relation) => relation.relationType === target.relationType).toArray();
+            await db.relations.bulkDelete(old.map((relation) => relation.id));
+            await db.relations.add({
+              id: crypto.randomUUID(), workspaceId,
+              sourceEntityId: task.id, targetEntityId: target.id,
+              relationType: target.relationType, createdAt: timestamp,
+            });
+          }
+          const when = destination === "today" ? currentDay : destination === "tomorrow" ? tomorrow : "";
+          const fields: Record<string, unknown> =
+            destination === "today" || destination === "tomorrow" || destination === "someday"
+              ? { when, today: destination === "today", someday: destination === "someday" }
+              : destination === "waiting"
+                ? { waiting: true, waitingSince: timestamp, waitingFor: "", followUpDate: "" }
+                : { relationsUpdatedAt: timestamp };
+          const activity = Array.isArray(task.properties.activity) ? task.properties.activity : [];
+          await db.entities.update(task.id, {
+            properties: {
+              ...task.properties, ...fields, inbox: false,
+              activity: [...activity, { at: timestamp, action: "inbox triaged: batch " + destination }].slice(-50),
+            },
+            updatedAt: timestamp,
+          });
+        }
+      });
+    } finally {
+      localDataVersion.current += 1;
+    }
+    // Like individual Inbox triage, local writes are durable even if uploading is
+    // offline. The existing status/unsent badges tell the truth about server sync.
+    await syncToServer();
+    await load();
+    setBatchSelection({ workspaceId: "", ids: [] });
+  }
+
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
   // was typed meanwhile, the open detail keeps what is being typed.
   async function rename(e: Entity, title: string, seq?: number) {
@@ -3207,6 +3294,21 @@ export function useLumiApp() {
   const collection = ["Projects", "Areas", "Notes"].includes(view)
     ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
     : visible;
+  const batchAllowed = view === "Inbox" && authState === "ready" &&
+    activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
+  const batchCandidates = batchAllowed ? collection.filter((task) =>
+    task.type === "task" && task.status === "open" && task.workspaceId === activeWorkspaceId &&
+    task.properties.inbox === true && !heldReasons.has(task.id) &&
+    entityConflicts(task).length === 0) : [];
+  const batchCandidateIds = new Set(batchCandidates.map((task) => task.id));
+  const batchIds = batchAllowed && batchSelection.workspaceId === activeWorkspaceId
+    ? batchSelection.ids.filter((id) => batchCandidateIds.has(id)) : [];
+  function setBatchIds(ids: string[]) {
+    setBatchSelection({
+      workspaceId: activeWorkspaceId,
+      ids: [...new Set(ids)].filter((id) => batchCandidateIds.has(id)).slice(0, 50),
+    });
+  }
   const draggedEntity = items.find((entity) => entity.id === draggingId);
   const draggableSectionNames = ["Inbox", "Today", "Anytime", "Someday", "Completed"];
 
@@ -3747,6 +3849,11 @@ export function useLumiApp() {
     taskDraftCaptureText,
     tasks,
     triageInbox,
+    triageInboxBatch,
+    batchAllowed,
+    batchCandidates,
+    batchIds,
+    setBatchIds,
     testAppBadge,
     testNotification,
     text,
