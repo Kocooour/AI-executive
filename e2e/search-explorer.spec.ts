@@ -17,7 +17,13 @@ for (const width of [390, 1280]) {
       });
       const workspace = { ...entity(`workspace:${other}`, "workspace", "E2E oddělený prostor", other),
         properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } };
-      const task = entity(`task:${token}`, "task", `Objednat diagnostiku ${token}`);
+      const task = {
+        ...entity(`task:${token}`, "task", `Objednat diagnostiku ${token}`),
+        // The conflict is present in a canonical server record; this exercises
+        // the real RecordMarks and its screen-reader announcement after reload.
+        properties: { syncConflicts: [{ id: `conflict:${token}`, field: "title",
+          lostValue: "Původní název", at: now }] },
+      };
       const project = entity(`project:${token}`, "project", `Servisní projekt ${token}`);
       const note = entity(`note:${token}`, "note", `Poznámka ${token}`, "personal", "Záruka na zařízení");
       const hidden = entity(`other:${token}`, "note", `Servisní tajemství ${token}`, other);
@@ -60,7 +66,15 @@ for (const width of [390, 1280]) {
     await page.getByRole("button", { name: "Zobrazit všechny typy" }).click();
     await expect(results.locator("article")).toHaveCount(2);
 
-    await results.getByRole("button", { name: `Otevřít ${fixture.task}` }).click();
+    const relatedTask = results.getByRole("button", {
+      name: `Otevřít ${fixture.task} · Úkol · Shoda v související položce · Změněno i na jiném zařízení`,
+      exact: true,
+    });
+    await expect(relatedTask).toHaveAccessibleName(
+      `Otevřít ${fixture.task} · Úkol · Shoda v související položce · Změněno i na jiném zařízení`);
+    await expect(results.locator('[data-match-source="related"] .conflictMark'))
+      .toHaveAttribute("aria-label", "Změněno i na jiném zařízení");
+    await relatedTask.click();
     await expect(page.locator(".detail")).toBeVisible();
     if (width === 390) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
