@@ -1,0 +1,28 @@
+/* B4 Mobile Inbox: the existing inspector is the only decision sheet.
+   Labels always describe what an action does; colors are supplemental. */
+.inboxTriageHeader { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; }
+.inboxTriageHeader h3 { margin: 0; }
+.inboxTriageWorkspace { margin: 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.inboxTriage .inboxOriginal { padding: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.inboxTriage .inboxOriginal span { white-space: pre-wrap; line-height: 1.5; }
+.inboxTriageSync { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: .82rem; line-height: 1.4; }
+.inboxTriageSync .conflictMark, .inboxTriageSync .unsentMark, .inboxTriageSync .heldBackMark { font-size: 1rem; }
+.inboxTriage .inboxTriageScope { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
+.inboxTriageGroup { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.inboxTriageGroup h4 { margin: 0; font-size: .9rem; font-weight: 700; }
+.inboxTriageGroup label { display: grid; gap: 6px; min-width: 0; }
+.inboxTriage .inboxTriageHint { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.inboxTriage .inboxTriagePreview { margin: 0; font-size: .82rem; font-weight: 600; overflow-wrap: anywhere; }
+.inboxTriage .inboxTriageField { min-width: 0; }
+.inboxTriage .inboxTriageField select, .inboxTriage .inboxTriageField input { min-height: 44px; }
+.inboxTriage .inboxTriageField button { min-height: 44px; padding-inline: 12px; }
+.inboxTriage .inboxTriageActions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.inboxTriage .inboxTriageActions button { min-height: 44px; padding: 10px 8px; white-space: normal; text-align: center; }
+.inboxTriage button:focus-visible, .inboxTriage input:focus-visible, .inboxTriage select:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+@media (max-width: 700px) {
+  .inboxTriage { margin: 12px 0; padding: 12px; gap: 10px; }
+  .inboxTriageGroup { padding: 11px; }
+  .inboxTriage .inboxDiscard { justify-self: stretch; }
+}
