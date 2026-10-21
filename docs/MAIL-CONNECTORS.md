@@ -43,3 +43,8 @@ seven days; account reconnection is then required.
 ## Next slices
 Incremental history sync and content index with retention/privacy controls, richer message details, iCloud Mail via
 IMAP with an app-specific password, and Proton Mail Bridge. All integrations remain disabled until separately configured.
+
+## Mail v3 — conversation summaries
+- User-initiated read-only Gmail thread view: fetches thread metadata (headers and snippets) on demand, displaying the last 30 messages in original order. An omitted count indicates older messages.
+- Opening an individual message is a separate explicit action through the existing bounded message-detail API. Thread responses never include full message bodies, HTML markup or attachments, and are not stored locally or server-side.
+- The new owner-session-only, restore-fenced, same-origin POST validates the concrete workspace, account and hexadecimal Gmail thread ID. It rechecks restore generation and account access after network I/O, and caps the response and request duration. No changes to Google OAuth scopes or Gmail write access.

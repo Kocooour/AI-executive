@@ -468,3 +468,64 @@ test("empty or whitespace-only plain MIME alternative falls back to inert HTML t
     assert.equal(result.truncated, false);
   } finally { globalThis.fetch = oldFetch; }
 });
+
+
+test("Gmail conversation shows bounded metadata in chronological order and refuses other workspaces", async () => {
+  const id = "55555555-5555-4555-8555-555555555555";
+  database.prepare("INSERT OR REPLACE INTO mail_accounts (id, provider, workspace_id, email, encrypted_refresh_token, created_at, updated_at) VALUES (?, 'gmail', 'personal', 'thread-test@example.com', ?, 1, 1)")
+    .run(id, mail.sealMail("TEST-THREAD-REFRESH"));
+  await assert.rejects(mail.readGmailThread({ workspaceId: team, accountId: id, threadId: "abcdef123456" }), { status: 404 });
+  await assert.rejects(mail.readGmailThread({ workspaceId: "personal", accountId: id, threadId: "../steal" }), { status: 400 });
+  const requests = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (target, options = {}) => {
+    const url = new URL(String(target));
+    requests.push({ url, options });
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/threads/abcdef123456") {
+      assert.equal(url.searchParams.get("format"), "metadata");
+      assert.deepEqual(url.searchParams.getAll("metadataHeaders"), ["Subject", "From", "To", "Date"]);
+      return Response.json({ id: "abcdef123456", messages: Array.from({ length: 32 }, (_, i) => ({
+        id: (i + 4096).toString(16).padStart(6, "0"),
+        threadId: "abcdef123456", snippet: "Preview " + i,
+        payload: { headers: [{ name: "Subject", value: "Letter " + i }, { name: "From", value: "reader@example.com" }] },
+        labelIds: i === 31 ? ["UNREAD"] : [],
+        body: { data: "SECRET_MESSAGE_BODY_SHOULD_NOT_BE_INCLUDED" },
+      })) });
+    }
+    throw new Error("Unexpected Google endpoint " + String(target));
+  };
+  try {
+    const thread = await mail.readGmailThread({ workspaceId: "personal", accountId: id, threadId: "abcdef123456" });
+    assert.equal(thread.total, 32);
+    assert.equal(thread.omitted, 2);
+    assert.equal(thread.messages.length, 30);
+    assert.equal(thread.messages[0].subject, "Letter 2");
+    assert.equal(thread.messages.at(-1).subject, "Letter 31");
+    assert.equal(thread.messages.at(-1).unread, true);
+    assert.equal(thread.messages.at(-1).threadId, "abcdef123456");
+    assert(!JSON.stringify(thread).includes("SECRET_MESSAGE_BODY_SHOULD_NOT_BE_INCLUDED"));
+    assert(requests.every((r) => ["oauth2.googleapis.com", "gmail.googleapis.com"].includes(r.url.hostname)));
+    assert(!requests.some((r) => r.url.pathname.includes("/messages/")));
+  } finally { globalThis.fetch = original; }
+});
+
+test("Gmail thread fetch refuses a vanished thread, wrong thread ID and invalid response without saving data", async () => {
+  const id = "55555555-5555-4555-8555-555555555555";
+  const previous = globalThis.fetch;
+  let status = 404;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname.startsWith("/gmail/v1/users/me/threads/"))
+      return status === 404 ? Response.json({ error: "not found" }, { status: 404 })
+        : Response.json({ id: "different-thread", messages: [] });
+    throw new Error("Unexpected Google endpoint " + String(target));
+  };
+  try {
+    await assert.rejects(mail.readGmailThread({ workspaceId: "personal", accountId: id, threadId: "abcdef123456" }), { status: 404 });
+    status = 200;
+    await assert.rejects(mail.readGmailThread({ workspaceId: "personal", accountId: id, threadId: "abcdef123456" }), { status: 502 });
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='mail_threads'").get().n, 0);
+  } finally { globalThis.fetch = previous; }
+});
