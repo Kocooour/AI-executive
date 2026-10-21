@@ -18,7 +18,7 @@ archive, deletion, labeling, AI ingestion, automatic task creation, background s
 
 ## Security and lifecycle
 Accounts are bound to a concrete existing workspace. `All my work` cannot read/connect/disconnect a mailbox.
-The OAuth callback requires the same signed owner session as the start request, a consumed one-time state, a matching
+The OAuth callback completes through a first-party same-origin POST because Lumi's SameSite=Strict owner session is deliberately never sent on Google's cross-site GET redirect. It requires the same signed owner session as the start request, a consumed one-time state, a matching
 restore generation and a server-registered redirect URI. Only Google endpoints are contacted; redirects from those
 endpoints are refused, responses are bounded, and secrets are never returned to the browser or security event logs.
 OAuth pending state is cleared on restore and excluded from backups. Mail accounts and their encrypted refresh tokens
