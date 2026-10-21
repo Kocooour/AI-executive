@@ -3686,7 +3686,25 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .offlineStart button:disabled { opacity: .6; cursor: default; }
 
 /* Note text and version history */
-.noteEditor { display: grid; gap: 10px; margin-top: 22px; min-width: 0; }
+/* The inspector's Project select has long option labels. Grid's default
+   auto/min-content column can grow beyond a 390px detail sheet even when the
+   NoteEditor and Markdown diff themselves are correctly constrained. */
+.detail .fields {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+}
+.detail .fields label {
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+.detail .fields select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.noteEditor { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 22px; min-width: 0; max-width: 100%; }
 .noteEditorHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; font-weight: 600; }
 .noteModeToggle { display: inline-flex; gap: 6px; }
 .noteModeToggle button, .revisionList button, .revisionRestore {
@@ -3723,16 +3741,19 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 @media (max-width: 700px) {
   /* The sticky close button floats over the top right corner while the panel is scrolled. */
   .noteEditor {
-    /* Note diffs with long unbroken code lines must not enlarge the detail
-       panel; also leave room for the floating sticky close control. */
-    width: calc(100% - 4px);
-    max-width: calc(100% - 4px);
+    /* Reserve space for the sticky close control without shrinking the entire
+       editor based on a guessed overflow: only its content column may scroll. */
+    width: 100%;
+    max-width: 100%;
     min-width: 0;
     padding-right: 44px;
   }
   .noteEditor > *, .noteHistory, .revisionDetail, .revisionDiff {
     min-width: 0;
     max-width: 100%;
+  }
+  .noteHistory, .revisionDetail, .revisionList {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
