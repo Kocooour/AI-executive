@@ -133,3 +133,23 @@ test("disconnect is workspace-scoped and removes encrypted account credentials",
   mail.disconnectMailAccount("personal", account.id);
   assert.equal(mail.listMailAccounts("personal").length, 0);
 });
+
+test("full backup restores encrypted credentials and discards obsolete OAuth state", () => {
+  const accountId = "33333333-3333-4333-8333-333333333333";
+  const encryptedToken = mail.sealMail("RESTORED-REFRESH-TOKEN");
+  const db = store.getDatabase();
+  db.prepare("INSERT INTO mail_accounts(id, provider, workspace_id, email, encrypted_refresh_token, created_at, updated_at) VALUES (?, 'gmail', 'personal', 'restore@example.com', ?, 1, 1)")
+    .run(accountId, encryptedToken);
+  mail.startGmailAuthorization("personal", "fresh-session");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending").get().n, 1);
+  const backup = store.createBackup("manual");
+  db.prepare("DELETE FROM mail_accounts WHERE id=?").run(accountId);
+  db.prepare("DELETE FROM mail_oauth_pending").run();
+  store.restoreBackup(backup.name);
+  const restored = store.getDatabase();
+  const account = restored.prepare("SELECT * FROM mail_accounts WHERE id=?").get(accountId);
+  assert.ok(account, "mail account survives an actual restore");
+  assert.equal(account.encrypted_refresh_token, encryptedToken);
+  assert.equal(mail.openMail(account.encrypted_refresh_token), "RESTORED-REFRESH-TOKEN");
+  assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending").get().n, 0);
+});
