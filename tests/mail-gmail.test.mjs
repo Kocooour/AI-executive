@@ -316,3 +316,88 @@ test("message preview still fails on Gmail errors other than missing individual 
       (error) => error instanceof mail.MailError && error.status === 502);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+
+test("full Gmail read is on-demand, source-scoped, text-only and skips attached text", async () => {
+  const account = mail.listMailAccounts("personal").find((row) => row.email === "restore@example.com");
+  assert.ok(account);
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  const encode = (text) => Buffer.from(text, "utf8").toString("base64url");
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), method: options.method || "GET" });
+    if (String(url) === "https://oauth2.googleapis.com/token")
+      return Response.json({ access_token: "READ-ONLY-TEMP" });
+    if (String(url).startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/abcdef123456?"))
+      return Response.json({ threadId: "abcdef654321", payload: {
+        mimeType: "multipart/mixed",
+        headers: [
+          { name: "Subject", value: "Review the draft" }, { name: "From", value: "sender@example.com" },
+          { name: "To", value: "restore@example.com" }, { name: "Date", value: "Wed, 21 Oct 2026 15:00:00 +0200" },
+        ],
+        parts: [
+          { mimeType: "text/plain", body: { data: encode("Please review by Friday.\nSecond line.") } },
+          { mimeType: "text/plain", filename: "private.txt", body: { data: encode("ATTACHMENT SECRET") } },
+          { mimeType: "text/html", body: { data: encode("<script>alert(1)</script><p>HTML alternative</p>") } },
+        ],
+      } });
+    throw new Error("Unexpected Google endpoint");
+  };
+  try {
+    await assert.rejects(mail.readGmailMessage({ workspaceId: team, accountId: account.id, messageId: "abcdef123456" }), { status: 404 });
+    await assert.rejects(mail.readGmailMessage({ workspaceId: "personal", accountId: account.id, messageId: "../wrong" }), { status: 400 });
+    const result = await mail.readGmailMessage({ workspaceId: "personal", accountId: account.id, messageId: "abcdef123456" });
+    assert.equal(result.subject, "Review the draft");
+    assert.equal(result.from, "sender@example.com");
+    assert.equal(result.text, "Please review by Friday.\nSecond line.");
+    assert.equal(result.truncated, false);
+    assert(!JSON.stringify(result).includes("ATTACHMENT SECRET"));
+    assert(!JSON.stringify(result).includes("READ-ONLY-TEMP"));
+    assert(calls.some((call) => call.url.includes("format=full")));
+    assert(calls.every((call) => call.url.startsWith("https://oauth2.googleapis.com/") ||
+      call.url.startsWith("https://gmail.googleapis.com/")));
+    assert(!calls.some((call) => /\/send|\/modify|\/trash|\/attachments/.test(call.url)));
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("HTML-only Gmail messages are inert readable text, and oversized text is marked truncated", async () => {
+  const account = mail.listMailAccounts("personal").find((row) => row.email === "restore@example.com");
+  assert.ok(account);
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token")
+      return Response.json({ access_token: "TEMP" });
+    return Response.json({ threadId: "abcdef654321", payload: {
+      mimeType: "text/html", headers: [], body: { data: Buffer.from(
+        "<style>.hidden{color:red}</style><script>steal()</script><p>Visible &amp; safe</p>" + "Z".repeat(35_000),
+      ).toString("base64url") },
+    } });
+  };
+  try {
+    const result = await mail.readGmailMessage({ workspaceId: "personal", accountId: account.id, messageId: "abcdef123456" });
+    assert(result.text.includes("Visible & safe"));
+    assert(!result.text.includes("<script>"));
+    assert(!result.text.includes("steal()"));
+    assert(!result.text.includes(".hidden"));
+    assert.equal(result.text.length, 32_000);
+    assert.equal(result.truncated, true);
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("Gmail detail endpoint never serves anonymous callers or accepts cross-workspace access", async () => {
+  const route = await import("../app/api/mail/gmail/message/route.ts");
+  const oldAuth = process.env.AI_EXECUTIVE_AUTH_ENABLED;
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "true";
+  try {
+    const response = await route.POST(new Request("https://lumi.example/api/mail/gmail/message", {
+      method: "POST",
+      headers: { origin: "https://lumi.example", "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: "personal", accountId: "33333333-3333-4333-8333-333333333333", messageId: "abcdef123456" }),
+    }));
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  } finally {
+    if (oldAuth === undefined) delete process.env.AI_EXECUTIVE_AUTH_ENABLED;
+    else process.env.AI_EXECUTIVE_AUTH_ENABLED = oldAuth;
+  }
+});
