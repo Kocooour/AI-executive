@@ -6,6 +6,8 @@ export const gmailScope = "https://www.googleapis.com/auth/gmail.readonly";
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const apiBase = "https://gmail.googleapis.com/gmail/v1/users/me";
 const MAX_REPLY = 256 * 1024;
+const MAX_MESSAGE_REPLY = 1024 * 1024;
+const MAX_MESSAGE_TEXT = 32_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 const MESSAGE_PREVIEW_DEADLINE_MS = 25_000;
 const MESSAGE_DETAIL_CONCURRENCY = 5;
@@ -126,7 +128,7 @@ function gmailE2EEndpoint(value: string) {
   return new URL(original.pathname + original.search, raw).toString();
 }
 
-async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number): Promise<Record<string, unknown>> {
+async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number, maxBytes = MAX_REPLY): Promise<Record<string, unknown>> {
   const remaining = deadlineAt === undefined ? REQUEST_TIMEOUT_MS : Math.min(REQUEST_TIMEOUT_MS, deadlineAt - Date.now());
   if (remaining <= 0) throw new MailError("Gmail request timed out", 502);
   let response: Response;
@@ -147,7 +149,7 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > MAX_REPLY) throw new MailError("Gmail response is too large", 502);
+      if (bytes > maxBytes) throw new MailError("Gmail response is too large", 502);
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -308,4 +310,92 @@ export async function readGmailMessages(input: { workspaceId: string; accountId:
     for (const message of batch) if (message) messages.push(message);
   }
   return { messages };
+}
+
+
+export type GmailMessageDetail = {
+  id: string; threadId: string; subject: string; from: string; to: string; date: string;
+  text: string; truncated: boolean;
+};
+
+type GmailPart = {
+  mimeType?: unknown;
+  filename?: unknown;
+  headers?: unknown;
+  body?: { data?: unknown; attachmentId?: unknown } | null;
+  parts?: unknown;
+};
+
+function gmailHeader(part: GmailPart, name: string): string {
+  const headers = Array.isArray(part.headers) ? part.headers : [];
+  const found = headers.find((entry) => entry && typeof entry === "object" &&
+    String((entry as Record<string, unknown>).name || "").toLowerCase() === name.toLowerCase()) as
+    Record<string, unknown> | undefined;
+  return typeof found?.value === "string" ? found.value.slice(0, 500) : "";
+}
+
+function gmailBodyText(payload: GmailPart): { text: string; truncated: boolean } {
+  const plain: string[] = [];
+  const html: string[] = [];
+  let visited = 0;
+  // Do not fetch Gmail attachment IDs or retain MIME bodies in storage. Ignore
+  // attachments even when their declared MIME type is text/plain or text/html.
+  function walk(part: GmailPart, depth: number) {
+    if (++visited > 80 || depth > 10 || typeof part !== "object" || part === null) return;
+    if (typeof part.filename === "string" && part.filename !== "") return;
+    if (/attachment/i.test(gmailHeader(part, "content-disposition"))) return;
+    const mime = String(part.mimeType || "").toLowerCase();
+    const data = part.body?.data;
+    if ((mime === "text/plain" || mime === "text/html") && typeof data === "string" &&
+        data.length < MAX_MESSAGE_REPLY && /^[A-Za-z0-9_-]+={0,2}$/.test(data)) {
+      const value = Buffer.from(data, "base64url").toString("utf8");
+      (mime === "text/plain" ? plain : html).push(value);
+    }
+    if (Array.isArray(part.parts)) {
+      for (const child of part.parts) {
+        if (child && typeof child === "object" && visited <= 80) walk(child as GmailPart, depth + 1);
+      }
+    }
+  }
+  walk(payload, 0);
+  // HTML-only messages are displayed as inert text. Never send HTML to the
+  // browser for insertion as markup or load remote images/tracking pixels.
+  const htmlToText = (value: string) => value
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/<\s*br\s*\/?>|<\s*\/(?:p|div|li)\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(?:amp|lt|gt|quot|apos|nbsp|#39);/gi, (entity) => ({
+      "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
+      "&apos;": "'", "&nbsp;": " ", "&#39;": "'",
+    }[entity.toLowerCase()] || entity));
+  const combined = (plain.length ? plain : html.map(htmlToText)).join("\n\n");
+  return { text: combined.slice(0, MAX_MESSAGE_TEXT), truncated: combined.length > MAX_MESSAGE_TEXT };
+}
+
+// A single message is fetched only after an explicit owner action. Bodies,
+// attachments and access tokens never enter canonical SQLite or backups.
+export async function readGmailMessage(input: { workspaceId: string; accountId: string; messageId: string }): Promise<GmailMessageDetail> {
+  if (!/^[0-9a-f]{5,64}$/i.test(input.messageId)) throw new MailError("Message identifier is invalid", 400);
+  const refresh = accountCredentials(input.workspaceId, input.accountId);
+  const generation = currentRestoreGeneration();
+  const deadlineAt = Date.now() + MESSAGE_PREVIEW_DEADLINE_MS;
+  const accessToken = await freshAccessToken(refresh, deadlineAt);
+  const url = new URL(apiBase + "/messages/" + input.messageId);
+  url.searchParams.set("format", "full");
+  const data = await googleJson(url.toString(), { headers: { authorization: "Bearer " + accessToken } }, deadlineAt, MAX_MESSAGE_REPLY);
+  if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
+  // An account revoked while the request is in flight must not deliver content.
+  accountCredentials(input.workspaceId, input.accountId);
+  const payload = data.payload && typeof data.payload === "object" && !Array.isArray(data.payload)
+    ? data.payload as GmailPart : {};
+  const body = gmailBodyText(payload);
+  return {
+    id: input.messageId,
+    threadId: typeof data.threadId === "string" ? data.threadId.slice(0, 128) : "",
+    subject: gmailHeader(payload, "Subject"),
+    from: gmailHeader(payload, "From"),
+    to: gmailHeader(payload, "To"),
+    date: gmailHeader(payload, "Date"),
+    ...body,
+  };
 }
