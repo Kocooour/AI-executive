@@ -122,7 +122,7 @@ test("B5 rejects a stale task without partially moving any selected item", async
     });
   }, data.oneId);
   await panel.getByRole("button", { name: "Potvrdit všechny změny" }).click();
-  await expect(panel.getByRole("alert")).toContainText("Hromadná změna nebyla provedena");
+  await expect(panel.getByRole("alert")).toContainText("Hromadnou změnu se nepodařilo potvrdit");
   await expect.poll(async () => page.evaluate(async ({ oneId, twoId }) => {
     const data = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
     return [oneId, twoId].map(id => data.entities.find((e: { id: string }) => e.id === id)?.properties?.inbox);
