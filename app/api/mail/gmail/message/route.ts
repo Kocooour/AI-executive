@@ -22,6 +22,10 @@ export async function POST(request: Request) {
     const limited = enforceRateLimit(request, "gmail-message-detail", 40, 10 * 60_000);
     if (limited) return json({ error: limited.error }, limited.status);
     const input = await readJsonBody<Record<string, unknown>>(request, 2048);
+    // A restore may finish while the request body is being read. Check the
+    // client's generation again before using any account or message reference.
+    const fencedAgain = fenceRestoredClient(request);
+    if (fencedAgain) return fencedAgain;
     const workspaceId = typeof input.workspaceId === "string" ? input.workspaceId : "";
     const accountId = typeof input.accountId === "string" ? input.accountId : "";
     const messageId = typeof input.messageId === "string" ? input.messageId : "";
