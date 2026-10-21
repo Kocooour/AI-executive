@@ -225,10 +225,14 @@ export function useLumiApp() {
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
   const captureAreaTouched = useRef(false);
-  // B3: unsaved input is only in memory, scoped by workspace and capture type.
-  // No raw draft is written to localStorage or uploaded before confirmation.
+  // B3: volatile, workspace/type/project-scoped drafts. Draft text is not
+  // persisted as an entity before Save; task suggestions DO send text to our
+  // server while typing (see the UI notice and /api/task-suggestions).
   const captureDrafts = useRef(new Map<string, string>());
   const captureDraftKey = useRef("task:personal:");
+  // A save can finish after another capture has opened. Only clear the exact
+  // generation that was actually committed locally, never a newer edit.
+  const captureDraftRevisions = useRef(new Map<string, number>());
   const draggingIdRef = useRef("");
   const dragScopeRef = useRef("");
   const dragTargetRef = useRef("");
@@ -1760,6 +1764,14 @@ export function useLumiApp() {
     captureDraftKey.current = key;
     setDraft(captureDrafts.current.get(key) || "");
   }
+  function editCaptureDraft(value: string) {
+    const key = captureDraftKey.current;
+    captureDraftRevisions.current.set(key, (captureDraftRevisions.current.get(key) ?? 0) + 1);
+    // Store on input, not in a later effect: an old save may finish between
+    // the change event and React's next effect flush.
+    captureDrafts.current.set(key, value);
+    setDraft(value);
+  }
   function chooseCaptureType(type: "task" | "note") {
     if (type === captureType || captureProjectId) return;
     replaceCaptureScope(type, writeWorkspaceId);
@@ -1771,7 +1783,9 @@ export function useLumiApp() {
     setCaptureProjectAction("none");
   }
   function discardCaptureDraft() {
-    captureDrafts.current.delete(captureDraftKey.current);
+    const key = captureDraftKey.current;
+    captureDraftRevisions.current.set(key, (captureDraftRevisions.current.get(key) ?? 0) + 1);
+    captureDrafts.current.delete(key);
     setDraft("");
     setCaptureSuggestion(null);
     setCaptureSuggestionError("");
@@ -2007,6 +2021,7 @@ export function useLumiApp() {
     type: EntityType,
     title: string,
     extra: Record<string, unknown> = {},
+    onLocalCommit?: () => void,
   ) {
     if (!title.trim()) return;
     const now = writeTime(),
@@ -2137,7 +2152,8 @@ export function useLumiApp() {
     }
     if (!created) return id;
     setText("");
-    setDraft("");
+    if (onLocalCommit) onLocalCommit();
+    else setDraft("");
     // The IndexedDB transaction above is the local-first commit boundary. Once it
     // succeeds, a network or refresh failure must not reopen Quick Capture and let
     // a retry duplicate the task/project pair. syncToServer keeps pendingKey set
@@ -2174,6 +2190,18 @@ export function useLumiApp() {
   async function submitCapture() {
     const title = draft.trim();
     if (!title) return;
+    const submittedDraft = draft;
+    const submittedKey = captureDraftKey.current;
+    const submittedRevision = captureDraftRevisions.current.get(submittedKey) ?? 0;
+    // Commit boundary is local IndexedDB, not network sync. Late completions
+    // must not clear a new capture (even if it reuses the same scope key).
+    const clearCommittedDraft = () => {
+      if ((captureDraftRevisions.current.get(submittedKey) ?? 0) !== submittedRevision) return;
+      captureDrafts.current.delete(submittedKey);
+      if (captureDraftKey.current === submittedKey) {
+        setDraft((current) => current === submittedDraft ? "" : current);
+      }
+    };
     const parsed = parseCapture(title);
     const suggestion = captureType === "task" && useCaptureSuggestion ? captureSuggestion : null;
     if (suggestion?.newProjectSuggestion && (
@@ -2226,12 +2254,16 @@ export function useLumiApp() {
               } : {}),
             }
           : {}),
-      });
-      // The local-first commit already succeeded; do not revive a duplicate
-      // capture merely because the following server sync is delayed.
-      captureDrafts.current.delete(captureDraftKey.current);
+      }, clearCommittedDraft);
     } catch (error) {
       console.error(error);
+      // A failed earlier submission may not reopen the sheet or replace the
+      // text and suggestion state of another draft the user is now editing.
+      if (captureDraftKey.current !== submittedKey ||
+          (captureDraftRevisions.current.get(submittedKey) ?? 0) !== submittedRevision) {
+        setSyncStatus("offline");
+        return;
+      }
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
         const workspaceId = writeWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
@@ -3466,6 +3498,7 @@ export function useLumiApp() {
     captureAreaId,
     chooseCaptureArea,
     chooseCaptureType,
+    editCaptureDraft,
     discardCaptureDraft,
     captureSuggestion,
     captureSuggestionBusy,
