@@ -331,6 +331,40 @@ export const schemaMigrations: SchemaMigration[] = [
       `);
     },
   },
+  {
+    // A removed or repurposed workspace must not leave a decryptable Gmail refresh
+    // token or pending authorization behind. Full-snapshot writes update 'entities'
+    // inside the same transaction; delete/update triggers join that transaction.
+    id: "2026-10-mail-account-workspace-lifecycle",
+    up(database) {
+      database.exec(`
+        CREATE TRIGGER IF NOT EXISTS mail_workspace_deleted
+        AFTER DELETE ON entities
+        WHEN json_extract(OLD.payload, '$.type') = 'workspace'
+        BEGIN
+          DELETE FROM mail_accounts WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+          DELETE FROM mail_oauth_pending WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+        END;
+        CREATE TRIGGER IF NOT EXISTS mail_workspace_identity_changed
+        AFTER UPDATE OF payload ON entities
+        WHEN json_extract(OLD.payload, '$.type') = 'workspace'
+          AND (json_extract(NEW.payload, '$.type') != 'workspace'
+            OR json_extract(NEW.payload, '$.workspaceId') != json_extract(OLD.payload, '$.workspaceId'))
+        BEGIN
+          DELETE FROM mail_accounts WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+          DELETE FROM mail_oauth_pending WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+        END;
+        DELETE FROM mail_accounts
+        WHERE NOT EXISTS (SELECT 1 FROM entities e
+          WHERE json_extract(e.payload, '$.type') = 'workspace'
+          AND json_extract(e.payload, '$.workspaceId') = mail_accounts.workspace_id);
+        DELETE FROM mail_oauth_pending
+        WHERE NOT EXISTS (SELECT 1 FROM entities e
+          WHERE json_extract(e.payload, '$.type') = 'workspace'
+          AND json_extract(e.payload, '$.workspaceId') = mail_oauth_pending.workspace_id);
+      `);
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

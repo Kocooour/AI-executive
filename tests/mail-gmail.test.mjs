@@ -173,3 +173,50 @@ test("OAuth landing permits only its first-party completion script and API call"
   assert.ok(html.includes("mail-oauth-finish.js"));
   assert(!html.includes("SECRET-REFRESH"));
 });
+
+test("deleting a workspace erases stored Gmail credentials and pending OAuth state in the same database transaction", () => {
+  const db = store.getDatabase();
+  const encrypted = mail.sealMail("WORKSPACE-CREDENTIAL");
+  db.prepare("INSERT INTO mail_accounts (id, provider, workspace_id, email, encrypted_refresh_token, created_at, updated_at) VALUES (?, 'gmail', ?, ?, ?, 1, 1)")
+    .run("66666666-6666-4666-8666-666666666666", team, "orphan@example.com", encrypted);
+  mail.startGmailAuthorization(team, "session-delete");
+  assert.equal(mail.listMailAccounts(team).length, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending WHERE workspace_id=?").get(team).n, 1);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = db.prepare("DELETE FROM entities WHERE id = ?").run("workspace:" + team);
+    assert.equal(result.changes, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_accounts WHERE workspace_id=?").get(team).n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending WHERE workspace_id=?").get(team).n, 0);
+    db.exec("ROLLBACK");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  assert.equal(mail.listMailAccounts(team).length, 1, "rollback preserves the credentials");
+  db.prepare("DELETE FROM entities WHERE id = ?").run("workspace:" + team);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_accounts WHERE workspace_id=?").get(team).n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending WHERE workspace_id=?").get(team).n, 0);
+  assert.deepEqual(mail.listMailAccounts("personal").map((a) => a.email), ["restore@example.com"]);
+});
+
+test("OAuth callback never exchanges a code on public GET or unauthenticated POST", async () => {
+  const callback = await import("../app/api/mail/gmail/callback/route.ts");
+  let requests = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { requests++; throw new Error("unexpected Google request"); };
+  try {
+    const state = "B".repeat(43);
+    const landing = await callback.GET(new Request(
+      "https://lumi.example/api/mail/gmail/callback?state=" + state + "&code=PUBLIC-CODE",
+    ));
+    assert.equal(landing.status, 200);
+    const response = await callback.POST(new Request(
+      "https://lumi.example/api/mail/gmail/callback", {
+        method: "POST", headers: { origin: "https://lumi.example", "content-type": "application/json" },
+        body: JSON.stringify({ state, code: "PUBLIC-CODE" }),
+      },
+    ));
+    // The test harness deliberately disables owner auth outside production;
+    // an invalid state still fails before any Google exchange.
+    assert.notEqual(response.status, 200);
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = original; }
+});
