@@ -25,6 +25,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const [taskTitle, setTaskTitle] = useState("");
   const [createdTaskId, setCreatedTaskId] = useState("");
   const detailVersion = useRef(0);
+  const taskCreateInFlight = useRef(false);
   const label = (cs: string, en: string) => language === "cs" ? cs : en;
 
   async function json(url: string, body?: Record<string, unknown>) {
@@ -59,7 +60,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   async function disconnect(account: Account) {
-    if (busy || !workspaceId) return;
+    if (busy || taskCreateInFlight.current || !workspaceId) return;
     if (!(await app.askConfirm({ title: tr("mailDisconnectTitle"), message: tr("mailDisconnectConfirm"),
       confirmLabel: tr("disconnect"), danger: true }))) return;
     setBusy(true); setError("");
@@ -75,7 +76,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   async function openFolder(account: Account, nextFolder: Folder) {
-    if (busy || !workspaceId) return;
+    if (busy || taskCreateInFlight.current || !workspaceId) return;
     detailVersion.current++;
     setBusy(true); setError(""); setMessages([]); setDetail(null); setCreatedTaskId("");
     setSelected(account.id); setFolder(nextFolder);
@@ -89,6 +90,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   async function openDetail(account: Account, messageId: string) {
+    if (taskCreateInFlight.current) return;
     const version = ++detailVersion.current;
     setDetail(null); setCreatedTaskId(""); setTaskTitle(""); setDetailBusy(true); setError("");
     try {
@@ -105,9 +107,10 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   async function createMailTask() {
-    if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskBusy) return;
+    if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskCreateInFlight.current || createdTaskId) return;
     const account = accounts.find((item) => item.id === selected);
     if (!account) return;
+    taskCreateInFlight.current = true;
     setTaskBusy(true); setError("");
     try {
       // A deliberate user click is the only write. Persist source identifiers,
@@ -120,7 +123,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       if (id) setCreatedTaskId(id);
     } catch {
       setError(label("Úkol se nepodařilo vytvořit.", "The task could not be created."));
-    } finally { setTaskBusy(false); }
+    } finally { taskCreateInFlight.current = false; setTaskBusy(false); }
   }
 
   return (
@@ -168,7 +171,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                     <strong>{message.subject || tr("untitledItem")}{message.unread ? " · ●" : ""}</strong>
                     <small>{folder === "inbox" ? message.from : message.to} · {message.date}</small>
                     <small>{message.snippet}</small>
-                    <button type="button" disabled={busy || detailBusy} onClick={() => {
+                    <button type="button" disabled={busy || detailBusy || taskBusy} onClick={() => {
                       const account = accounts.find((row) => row.id === selected);
                       if (account) void openDetail(account, message.id);
                     }}>{label("Přečíst zprávu", "Read message")}</button>
@@ -182,7 +185,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
             <section aria-label={label("Detail e-mailu", "Email detail")} className="icloudForm">
               <div className="sectionHeading">
                 <h3>{detail.subject || tr("untitledItem")}</h3>
-                <button type="button" onClick={() => { detailVersion.current++; setDetail(null); setCreatedTaskId(""); }}>
+                <button type="button" disabled={taskBusy} onClick={() => { detailVersion.current++; setDetail(null); setCreatedTaskId(""); }}>
                   {label("Zavřít", "Close")}
                 </button>
               </div>
