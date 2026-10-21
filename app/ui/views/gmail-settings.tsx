@@ -110,6 +110,16 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     }
   }
 
+  function closeMailDetail() {
+    // Closing the detail invalidates any in-flight conversation lookup. Its
+    // finally block deliberately ignores stale versions, so release the busy
+    // state here rather than leaving the spinner locked on indefinitely.
+    detailVersion.current++;
+    setDetail(null);
+    setCreatedTaskId("");
+    setThreadBusy(false);
+  }
+
   async function openThread(account: Account, threadId: string) {
     if (taskCreateInFlight.current || busy || threadBusy || !/^[0-9a-f]{5,64}$/i.test(threadId)) return;
     const version = ++detailVersion.current;
@@ -249,7 +259,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
             <section aria-label={label("Detail e-mailu", "Email detail")} className="icloudForm">
               <div className="sectionHeading">
                 <h3>{detail.subject || tr("untitledItem")}</h3>
-                <button type="button" disabled={taskBusy} onClick={() => { detailVersion.current++; setDetail(null); setCreatedTaskId(""); }}>
+                <button type="button" disabled={taskBusy} onClick={closeMailDetail}>
                   {label("Zavřít", "Close")}
                 </button>
               </div>
