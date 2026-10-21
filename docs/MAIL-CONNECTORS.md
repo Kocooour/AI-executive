@@ -45,6 +45,6 @@ Incremental history sync and content index with retention/privacy controls, rich
 IMAP with an app-specific password, and Proton Mail Bridge. All integrations remain disabled until separately configured.
 
 ## Mail v3 — conversation summaries
-- User-initiated read-only Gmail thread view: fetches thread metadata (headers and snippets) on demand, displaying the last 30 messages in original order. An omitted count indicates older messages.
+- User-initiated read-only Gmail thread view: first fetches a minimal thread index containing only message IDs using Gmail's partial-response `fields`, then fetches only the latest 30 messages' metadata (headers and snippets) in concurrent batches of up to five. This avoids fetching large historical headers/snippets when the conversation contains hundreds of messages. The selected messages keep Gmail's original order; an omitted count indicates older messages. Messages that disappear between the index and detail read are skipped.
 - Opening an individual message is a separate explicit action through the existing bounded message-detail API. Thread responses never include full message bodies, HTML markup or attachments, and are not stored locally or server-side.
 - The new owner-session-only, restore-fenced, same-origin POST validates the concrete workspace, account and hexadecimal Gmail thread ID. It rechecks restore generation and account access after network I/O, and caps the response and request duration. No changes to Google OAuth scopes or Gmail write access.
