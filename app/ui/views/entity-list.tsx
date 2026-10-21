@@ -5,11 +5,16 @@ import { openTaskCountsByProject } from "../open-task-counts";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
+import { InboxBatchTriage } from "./inbox-batch-triage";
 
 export function EntityList({ app }: { app: LumiApp }) {
   const {
     acceptNativeDrop,
     activeWorkspaceId,
+    batchAllowed,
+    batchCandidates,
+    batchIds,
+    setBatchIds,
     areas,
     collection,
     createFromRow,
@@ -43,6 +48,7 @@ export function EntityList({ app }: { app: LumiApp }) {
   } = app;
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
+  const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
   const openTasksByProject = view === "Projects"
     ? openTaskCountsByProject(items, projects, scopedRelations)
     : new Map<string, number>();
@@ -120,6 +126,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                     ))}
                 </div>
               )}
+              <InboxBatchTriage app={app} />
               <div
                 className={
                   "list taskRowList " +
@@ -143,6 +150,17 @@ export function EntityList({ app }: { app: LumiApp }) {
                       onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
                       onClick={() => inspect(x)}
                     >
+                      {view === "Inbox" && batchAllowed && x.type === "task" && (
+                        <label className="batchRowSelect" title={!batchEligibleIds.has(x.id) ? tr("batchUnavailable") : undefined}
+                          onClick={event => event.stopPropagation()}>
+                          <input type="checkbox"
+                            aria-label={tr("batchSelectItem").replace("{title}", x.title || tr("untitledItem"))}
+                            disabled={!batchEligibleIds.has(x.id) || (!batchIds.includes(x.id) && batchIds.length >= 50)}
+                            checked={batchIds.includes(x.id)}
+                            onChange={event => setBatchIds(event.target.checked
+                              ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
+                        </label>
+                      )}
                       {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
                       {x.type === "task" ? (
                         <button
