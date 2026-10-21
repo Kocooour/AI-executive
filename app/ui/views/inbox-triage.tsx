@@ -36,6 +36,8 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
     : syncStatus === "syncing" ? tr("syncing")
     : tr("synced");
   const workspace = workspaces.find((item) => item.workspaceId === task.workspaceId);
+  const workspaceLabel = workspace?.workspaceId === "personal" && workspace.title === "Personal"
+    ? tr("personalWorkspace") : workspace?.title || task.workspaceId;
   const original = typeof task.properties.originalCaptureText === "string"
     ? task.properties.originalCaptureText : task.title;
 
@@ -66,7 +68,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
     <header className="inboxTriageHeader">
       <h3>{tr("triageTitle")}</h3>
       <p className="inboxTriageWorkspace">
-        {tr("workspace")}: {workspace?.title || task.workspaceId}
+        {tr("workspace")}: {workspaceLabel}
       </p>
     </header>
     <p className="inboxOriginal">
