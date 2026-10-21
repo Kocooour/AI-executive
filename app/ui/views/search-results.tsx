@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
-import { searchWorkspaceItems, type SearchKind } from "../../../lib/search-views";
+import { searchWorkspaceItems, type SearchHit, type SearchKind } from "../../../lib/search-views";
 import type { LumiApp } from "../use-lumi-app";
-import { RecordMarks } from "./held-back";
+import { RecordMarks, recordMarkState } from "./held-back";
 
 const kinds: SearchKind[] = ["all", "task", "project", "area", "note"];
 const labels: Record<SearchKind, string> = {
@@ -18,6 +18,19 @@ export function SearchResults({ app }: { app: LumiApp }) {
   const results = kind === "all" ? hits : hits.filter(hit => hit.entity.type === kind);
   const count = (value: SearchKind) => value === "all"
     ? hits.length : hits.filter(hit => hit.entity.type === value).length;
+  const accessibleResultName = ({ entity, match }: SearchHit) => {
+    // A custom aria-label replaces every child's accessible text. Include
+    // everything the visible row conveys, especially RecordMarks, which can
+    // indicate a local-only record or a conflict requiring owner attention.
+    const marks = recordMarkState(app, entity);
+    return [
+      tr("searchOpenItem").replace("{title}", entity.title || tr("untitledItem")),
+      tr(entity.type),
+      ...(match === "title" ? [] : [tr(match === "content" ? "searchMatchContent" : "searchMatchRelated")]),
+      ...(marks.conflict ? [tr("conflictBadge")] : []),
+      ...(marks.heldBack ? [tr("heldBackBadge")] : marks.unsent ? [tr("unsentBadge")] : []),
+    ].join(" · ");
+  };
   return (
     <section className="searchExplorer" aria-label={tr("searchResultsLabel")} data-search-scope={activeWorkspaceId}>
       {!term ? (
@@ -37,10 +50,12 @@ export function SearchResults({ app }: { app: LumiApp }) {
           </div>
           {results.length ? (
             <div className="searchResults" role="list">
-              {results.map(({ entity, match }) => (
+              {results.map((hit) => {
+                const { entity, match } = hit;
+                return (
                 <article role="listitem" key={entity.id} data-result-type={entity.type} data-match-source={match}>
                   <button type="button" className="searchResultOpen" onClick={() => void inspect(entity)}
-                    aria-label={tr("searchOpenItem").replace("{title}", entity.title || tr("untitledItem"))}>
+                    aria-label={accessibleResultName(hit)}>
                     <span className="searchResultText">
                       <strong>{entity.title || tr("untitledItem")}<RecordMarks app={app} entity={entity}/></strong>
                       <small>{tr(entity.type)}{match !== "title" && ` · ${tr(match === "content" ? "searchMatchContent" : "searchMatchRelated")}`}</small>
@@ -48,7 +63,8 @@ export function SearchResults({ app }: { app: LumiApp }) {
                     <span className="searchResultArrow" aria-hidden="true">→</span>
                   </button>
                 </article>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="searchState" role="status">
