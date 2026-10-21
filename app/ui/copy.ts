@@ -2,6 +2,8 @@ import { type Language } from "./types";
 
 export const copy: Record<Language, Record<string, string>> = {
   en: {
+    settingsMail: "Mail", mailInfo: "Connect personal Gmail accounts per workspace. Only read access is requested.", mailChooseWorkspace: "Select a specific workspace first; All my work cannot access mail.", mailConnectGmail: "Connect Gmail", mailNoAccounts: "No Gmail accounts connected.", mailInbox: "Inbox", mailSent: "Sent", mailSearch: "Search Gmail", mailNoMessages: "No messages in this preview.", mailLoadFailed: "Could not load connected mail accounts.", mailConnectFailed: "Gmail connection could not be started. Check server OAuth configuration.", mailReadFailed: "Could not read Gmail. Check authorization and connection.", mailDisconnectTitle: "Disconnect Gmail?", mailDisconnectConfirm: "Remove this Gmail account and its stored access token from Lumi?", mailDisconnectFailed: "Could not disconnect Gmail.",
+
     Home: "Home", Inbox: "Inbox", Today: "Today", Overdue: "Overdue",
     Upcoming: "Upcoming", Anytime: "Anytime", Someday: "Someday",
     Completed: "Completed", Projects: "Projects", Areas: "Areas",
@@ -720,6 +722,8 @@ export const copy: Record<Language, Record<string, string>> = {
     invalidBackup: "Invalid backup",
   },
   cs: {
+    settingsMail: "Pošta", mailInfo: "Připojení osobních účtů Gmail v jednotlivých prostorech. Pouze oprávnění ke čtení.", mailChooseWorkspace: "Nejprve vyber konkrétní prostor. Pohled Všechny nemá přístup k poště.", mailConnectGmail: "Připojit Gmail", mailNoAccounts: "Žádný Gmail není připojený.", mailInbox: "Doručené", mailSent: "Odeslané", mailSearch: "Hledat v Gmailu", mailNoMessages: "V náhledu nejsou žádné zprávy.", mailLoadFailed: "Nepodařilo se načíst účty.", mailConnectFailed: "Připojení Gmailu nelze zahájit. Ověř nastavení OAuth na serveru.", mailReadFailed: "Gmail nelze načíst. Ověř přístup a připojení.", mailDisconnectTitle: "Odpojit Gmail?", mailDisconnectConfirm: "Odebrat tento Gmail a jeho uložený přístupový token z Lumi?", mailDisconnectFailed: "Gmail se nepodařilo odpojit.",
+
     Home: "Domů", Inbox: "Doručené", Today: "Dnes", Overdue: "Po termínu",
     Upcoming: "Nadcházející", Anytime: "Kdykoli", Someday: "Někdy",
     Completed: "Dokončené", Projects: "Projekty", Areas: "Oblasti",

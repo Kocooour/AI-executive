@@ -6,10 +6,11 @@ import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
 import { pluralText } from "../../../lib/plural";
 import { ICloudCalendarSettings } from "./icloud-calendar-settings";
+import { GmailSettings } from "./gmail-settings";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
-  calendar: "settingsCalendar", data: "settingsData", context: "settingsContext",
+  calendar: "settingsCalendar", mail: "settingsMail", data: "settingsData", context: "settingsContext",
 };
 
 export function SettingsView({ app }: { app: LumiApp }) {
@@ -100,6 +101,12 @@ export function SettingsView({ app }: { app: LumiApp }) {
     writeWorkspace,
     writeWorkspaceId,
   } = app;
+  useEffect(() => {
+    if (view === "Settings" && new URLSearchParams(window.location.search).get("gmail") === "connected") {
+      setSettingsSection("mail");
+      window.history.replaceState(null, "", "/?view=Settings");
+    }
+  }, [view, setSettingsSection]);
   // Access exists only with sign-in enabled; never leave the page without a visible section.
   // Started offline the access check has not answered yet; the section stays, so that signing out
   // is offered (and refused with an explanation while there is no connection).
@@ -127,7 +134,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
           {view === "Settings" && (
             <div className="settingsPanel">
               <div className="settingsTabs" role="navigation" aria-label={tr("settingsSections")} ref={tabsRef}>
-                {(["general", "workspace", ...(accessShown ? ["access"] : []), "notifications", "calendar", "data", "context"] as const).map((name) => (
+                {(["general", "workspace", ...(accessShown ? ["access"] : []), "notifications", "calendar", "mail", "data", "context"] as const).map((name) => (
                   <button key={name} type="button" aria-current={settingsSection === name ? "page" : undefined} onClick={() => setSettingsSection(name)}>
                     {tr(settingsTabLabels[name])}
                   </button>
@@ -502,6 +509,9 @@ export function SettingsView({ app }: { app: LumiApp }) {
                   ))}
                 </div>
                 {calendarStatus && <p role="status">{calendarStatus}</p>}
+              </section>
+              <section hidden={settingsSection !== "mail"}>
+                {settingsSection === "mail" && <GmailSettings app={app} />}
               </section>
               <section hidden={settingsSection !== "data"}>
                 <h2>{tr("dataAi")}</h2>
