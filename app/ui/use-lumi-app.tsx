@@ -2463,8 +2463,8 @@ export function useLumiApp() {
   // competing kinds of triage (Today vs Waiting, project vs Discard) across tabs.
   async function triageInbox(
     task: Entity,
-    destination: "today" | "someday" | "waiting" | "plan" | "project" | "discard",
-    value = "",
+    destination: "today" | "someday" | "waiting" | "plan" | "project" | "organize" | "discard",
+    value: string | { projectId?: string; areaId?: string } = "",
   ) {
     if (activeWorkspaceRef.current === "all" || activeWorkspaceRef.current !== task.workspaceId ||
         writeWorkspaceId !== task.workspaceId) {
@@ -2490,28 +2490,43 @@ export function useLumiApp() {
           discarded.relations = linked;
           return;
         }
-        if (destination === "project") {
-          const project = await db.entities.get(value);
-          if (!project || project.type !== "project" || project.status !== "active" ||
-              project.workspaceId !== latest.workspaceId) {
-            throw new Error("Inbox project is no longer available in this workspace");
+        if (destination === "project" || destination === "organize") {
+          // B4 combines project and area into one single-use decision: both
+          // memberships and Inbox exit commit in the *same* transaction.
+          // An empty selection preserves the unrelated relation type.
+          const chosen = destination === "project"
+            ? { projectId: typeof value === "string" ? value : "" }
+            : typeof value === "object" ? value : {};
+          const assignments = [
+            { id: chosen.projectId || "", type: "project", relation: "belongs_to_project" },
+            { id: "areaId" in chosen ? chosen.areaId || "" : "", type: "area", relation: "belongs_to_area" },
+          ].filter((assignment) => assignment.id);
+          if (!assignments.length) throw new Error("Inbox triage needs a project or an area");
+          // Validate all targets before deleting *any* pre-existing relations.
+          const targets = await Promise.all(assignments.map(async ({ id, type, relation }) => {
+            const target = await db.entities.get(id);
+            if (!target || target.type !== type || target.status !== "active" ||
+                target.workspaceId !== latest.workspaceId) {
+              throw new Error("Inbox triage target is unavailable in this workspace");
+            }
+            return { id, relation };
+          }));
+          for (const target of targets) {
+            const previous = await db.relations.where("sourceEntityId").equals(task.id)
+              .filter((relation) => relation.relationType === target.relation).toArray();
+            await db.relations.bulkDelete(previous.map((relation) => relation.id));
+            await db.relations.add({
+              id: crypto.randomUUID(), workspaceId: latest.workspaceId,
+              sourceEntityId: task.id, targetEntityId: target.id,
+              relationType: target.relation, createdAt: timestamp,
+            });
           }
-          const previous = await db.relations.where("sourceEntityId").equals(task.id)
-            .filter((relation) => relation.relationType === "belongs_to_project").toArray();
-          await db.relations.bulkDelete(previous.map((relation) => relation.id));
-          await db.relations.add({
-            id: crypto.randomUUID(),
-            workspaceId: latest.workspaceId,
-            sourceEntityId: task.id,
-            targetEntityId: project.id,
-            relationType: "belongs_to_project",
-            createdAt: timestamp,
-          });
         }
-        if (destination === "plan" && !/^20\d{2}-\d{2}-\d{2}$/.test(value)) {
+        if (destination === "plan" && (typeof value !== "string" || !/^20\d{2}-\d{2}-\d{2}$/.test(value))) {
           throw new Error("Invalid Inbox scheduling date");
         }
-        const when = destination === "today" ? ymd() : destination === "plan" ? value : "";
+        const when = destination === "today" ? ymd()
+          : destination === "plan" && typeof value === "string" ? value : "";
         const actionProperties: Record<string, unknown> =
           destination === "today" || destination === "someday" || destination === "plan"
             ? {
@@ -2521,7 +2536,7 @@ export function useLumiApp() {
               }
             : destination === "waiting"
               ? { waiting: true, waitingSince: Date.now(), waitingFor: "", followUpDate: "" }
-              : destination === "project" ? { relationsUpdatedAt: timestamp } : {};
+              : destination === "project" || destination === "organize" ? { relationsUpdatedAt: timestamp } : {};
         const activity = Array.isArray(latest.properties.activity) ? latest.properties.activity : [];
         await db.entities.update(task.id, {
           properties: {
