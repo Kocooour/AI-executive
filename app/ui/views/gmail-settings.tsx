@@ -8,11 +8,14 @@ type Message = { id: string; subject: string; from: string; to: string; date: st
 type Folder = "inbox" | "sent";
 type Detail = { id: string; threadId: string; subject: string; from: string; to: string; date: string; text: string; truncated: boolean };
 type Thread = { id: string; total: number; omitted: number; messages: Message[] };
+type SyncState = { accountId: string; workspaceId: string; enabled: boolean; retentionDays: number; lastSyncedAt: number | null; indexedCount: number };
 
 export function GmailSettings({ app }: { app: LumiApp }) {
   const { language, tr } = app;
   const workspaceId = app.activeWorkspaceId === "all" ? "" : app.activeWorkspaceId;
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [syncStates, setSyncStates] = useState<SyncState[]>([]);
+  const [retentions, setRetentions] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState("");
   const [folder, setFolder] = useState<Folder>("inbox");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -41,11 +44,17 @@ export function GmailSettings({ app }: { app: LumiApp }) {
 
   useEffect(() => {
     detailVersion.current++;
-    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
+    setAccounts([]); setSyncStates([]); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
-    void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
-      .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
+    void Promise.all([
+      json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId)),
+      json("/api/mail/gmail/sync", { action: "status", workspaceId }),
+    ]).then(([data, sync]) => { if (live) {
+      setAccounts(data.accounts as Account[]);
+      setSyncStates(sync.accounts as SyncState[]);
+      setLoaded(true);
+    } })
       .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoaded(true); } });
     return () => { live = false; };
     // app object changes every render; the workspace is the only API scoping dependency.
@@ -70,12 +79,38 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     try {
       await json("/api/mail/gmail", { action: "disconnect", workspaceId, accountId: account.id });
       setAccounts((prior) => prior.filter((row) => row.id !== account.id));
+      setSyncStates((prior) => prior.filter((row) => row.accountId !== account.id));
       if (selected === account.id) {
         detailVersion.current++;
         setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setCreatedTaskId("");
       }
     } catch { setError(tr("mailDisconnectFailed")); }
     finally { setBusy(false); }
+  }
+
+  async function changeSync(account: Account, action: "enable" | "disable" | "sync") {
+    if (!workspaceId || busy || taskCreateInFlight.current) return;
+    if (action === "disable" && !(await app.askConfirm({
+      title: label("Vypnout synchronizaci Gmailu?", "Disable Gmail sync?"),
+      message: label("Smažou se všechna uložená metadata tohoto účtu. Připojení Gmailu zůstane zachováno.",
+        "All indexed metadata for this account will be deleted. The Gmail connection is kept."),
+      confirmLabel: label("Vypnout a smazat", "Disable and delete"), danger: true,
+    }))) return;
+    setBusy(true); setError("");
+    try {
+      const data = await json("/api/mail/gmail/sync", {
+        action, workspaceId, accountId: account.id,
+        ...(action === "enable" ? { retentionDays: retentions[account.id] || 30 } : {}),
+      });
+      if (action === "sync") {
+        const status = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
+        setSyncStates(status.accounts as SyncState[]);
+      } else {
+        setSyncStates(data.accounts as SyncState[]);
+      }
+    } catch {
+      setError(label("Synchronizace Gmailu se nezdařila.", "Gmail sync operation failed."));
+    } finally { setBusy(false); }
   }
 
   async function openFolder(account: Account, nextFolder: Folder) {
@@ -200,6 +235,47 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                   <button disabled={busy} onClick={() => void openFolder(account, "sent")}>{tr("mailSent")}</button>
                   <button disabled={busy} onClick={() => void disconnect(account)}>{tr("disconnect")}</button>
                 </div>
+                <div className="icloudForm">
+                  <h4>{label("Synchronizace metadat", "Metadata sync")}</h4>
+                  {(() => {
+                    const state = syncStates.find((row) => row.accountId === account.id);
+                    const days = retentions[account.id] ?? state?.retentionDays ?? 30;
+                    return (
+                      <>
+                        <p className="settingsHint">{label(
+                          "Volitelné. Ukládají se jen identifikátory zpráv, předmět, odesílatel, datum a stav Doručené/Odeslané. Nikdy těla ani přílohy. Automatické kontroly zatím nejsou zapnuté.",
+                          "Optional. Stores only message identifiers, subject, sender, date and Inbox/Sent state. Never bodies or attachments. Automatic checks are not enabled yet.",
+                        )}</p>
+                        <label>{label("Uchovávání", "Retention")}
+                          <select value={days} disabled={busy} onChange={(event) =>
+                            setRetentions((old) => ({ ...old, [account.id]: Number(event.target.value) }))}>
+                            <option value={7}>{label("7 dní", "7 days")}</option>
+                            <option value={30}>{label("30 dní", "30 days")}</option>
+                            <option value={90}>{label("90 dní", "90 days")}</option>
+                          </select>
+                        </label>
+                        <p role="status">{state
+                          ? label("Synchronizace zapnutá", "Sync enabled") + " · " +
+                            state.indexedCount + " " + label("záznamů", "records") +
+                            (state.lastSyncedAt ? " · " + new Date(state.lastSyncedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB") : "")
+                          : label("Synchronizace vypnutá", "Sync disabled")}</p>
+                        <div className="notificationActions">
+                          <button disabled={busy} onClick={() => void changeSync(account, "enable")}>
+                            {state ? label("Uložit uchovávání", "Save retention") : label("Zapnout synchronizaci", "Enable sync")}
+                          </button>
+                          {state && <>
+                            <button disabled={busy} onClick={() => void changeSync(account, "sync")}>
+                              {label("Synchronizovat nyní", "Sync now")}
+                            </button>
+                            <button disabled={busy} onClick={() => void changeSync(account, "disable")}>
+                              {label("Vypnout a smazat metadata", "Disable and delete metadata")}
+                            </button>
+                          </>}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
             ))}
           </div>
@@ -301,8 +377,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
         </>
       )}
       <p className="settingsHint">{language === "cs"
-        ? "Zprávy se načítají až na vyžádání. Lumi je zatím neukládá ani automaticky neposílá AI."
-        : "Messages are loaded only on request. Lumi does not yet store them or send them to AI."}</p>
+        ? "Obsah e-mailů se načítá jen na vyžádání a nikdy se neukládá. Metadata se ukládají pouze po výslovném zapnutí synchronizace. Nic se automaticky neposílá do AI."
+        : "Email bodies are fetched only on request and never stored. Metadata is saved only after explicitly enabling sync. Nothing is automatically sent to AI."}</p>
     </>
   );
 }
