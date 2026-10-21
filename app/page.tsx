@@ -75,7 +75,7 @@ export default function App() {
             <section className="todayCalendarCommitments" aria-labelledby="today-calendar-title">
               <h2 id="today-calendar-title">{tr("todayGroupCalendar")}</h2>
               {!app.calendarFresh && <p role="status">{tr("dayPlanStale")}</p>}
-              <TodayAgenda app={app} events={app.calendarDayEvents} />
+              <TodayAgenda app={app} events={app.calendarDayEvents} day={app.calendarToday} />
             </section>
           )}
           {view === "Today" && <DayPlanCard app={app} />}
