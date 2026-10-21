@@ -2494,12 +2494,12 @@ export function useLumiApp() {
           // B4 combines project and area into one single-use decision: both
           // memberships and Inbox exit commit in the *same* transaction.
           // An empty selection preserves the unrelated relation type.
-          const chosen = destination === "project"
+          const chosen: { projectId?: string; areaId?: string } = destination === "project"
             ? { projectId: typeof value === "string" ? value : "" }
             : typeof value === "object" ? value : {};
           const assignments = [
             { id: chosen.projectId || "", type: "project", relation: "belongs_to_project" },
-            { id: "areaId" in chosen ? chosen.areaId || "" : "", type: "area", relation: "belongs_to_area" },
+            { id: chosen.areaId || "", type: "area", relation: "belongs_to_area" },
           ].filter((assignment) => assignment.id);
           if (!assignments.length) throw new Error("Inbox triage needs a project or an area");
           // Validate all targets before deleting *any* pre-existing relations.
