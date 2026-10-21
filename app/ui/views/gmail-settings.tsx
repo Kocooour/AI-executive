@@ -134,7 +134,9 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       // A deliberate user click is the only write. Persist source identifiers,
       // never the original mail body, access token or remote HTML.
       const id = await app.create("task", taskTitle.trim(), {
-        workspaceId, inbox: true,
+        // This is a literal, user-approved email-derived title; never reinterpret
+        // words or date/priority markers as Quick Capture commands.
+        workspaceId, inbox: true, today: false, literalTaskTitle: true,
         originalCaptureText: taskTitle.trim().slice(0, 1000),
         mailSource: { provider: "gmail", accountId: account.id, messageId: detail.id, threadId: detail.threadId },
       });
