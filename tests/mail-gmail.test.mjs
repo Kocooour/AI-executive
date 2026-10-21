@@ -685,6 +685,8 @@ test("Mail v4 opt-in, bounded initial and incremental History sync, metadata pri
       [ids[1]]);
     mail.enableMailSync(workspaceId, accountId, 30);
     assert.equal(mail.listMailSyncStates(workspaceId)[0].retentionDays, 30);
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, null,
+      "changed retention invalidates the previous snapshot cursor");
     mail.disableMailSync(workspaceId, accountId);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
     assert.deepEqual(mail.listMailSyncStates(workspaceId), []);
