@@ -106,6 +106,24 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     }
   }
 
+  useEffect(() => {
+    const source = app.mailSourceToOpen;
+    if (!source || !loaded || source.workspaceId !== workspaceId) return;
+    // Consume before requesting the detail to prevent duplicate fetches on
+    // unrelated React renders. Nothing is written to device storage or the URL.
+    app.setMailSourceToOpen(null);
+    const account = accounts.find((row) => row.id === source.accountId);
+    if (!account) {
+      setError(label("Zdrojový Gmail účet již není připojen.", "The source Gmail account is no longer connected."));
+      return;
+    }
+    setSelected(account.id);
+    setMessages([]);
+    void openDetail(account, source.messageId);
+    // app and the helper are recreated each render; these primitives capture the intent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.mailSourceToOpen, accounts, loaded, workspaceId]);
+
   async function createMailTask() {
     if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskCreateInFlight.current || createdTaskId) return;
     const account = accounts.find((item) => item.id === selected);
