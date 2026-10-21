@@ -20,7 +20,7 @@ const team = "test-mail-team";
 database.prepare("INSERT INTO entities(id, payload, updated_at) VALUES(?, ?, ?)").run(
   "workspace:" + team, JSON.stringify({
     id: "workspace:" + team, type: "workspace", workspaceId: team, title: "Test Team",
-    status: "active", properties: { role: "owner" }, createdAt: 1, updatedAt: 1,
+    status: "active", properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: 1, updatedAt: 1,
   }), 1,
 );
 
@@ -170,6 +170,6 @@ test("OAuth landing permits only its first-party completion script and API call"
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
   assert.equal(response.headers.get("cache-control"), "no-store");
   const html = await response.text();
-  assert.match(html, /mail-oauth-finish\\.js/);
+  assert.ok(html.includes("mail-oauth-finish.js"));
   assert(!html.includes("SECRET-REFRESH"));
 });
