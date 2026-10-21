@@ -67,6 +67,14 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
     provider: "gmail", accountId: expect.any(String), messageId: "abc123def456", threadId: "thread-e2e",
   });
   expect(saved?.propertiesText).not.toContain("E2E zpráva pro vytvoření úkolu.");
+  const taskRow = page.locator(".taskRow", { hasText: "Vyřešit testovací požadavek z Gmailu" }).first();
+  await taskRow.locator(".taskRowOpen").click();
+  const inspector = page.locator(".inspectorDetail");
+  await expect(inspector.getByRole("region", { name: "Zdrojový e-mail" })).toContainText("Gmail");
+  await inspector.getByRole("button", { name: "Otevřít zdrojovou zprávu" }).click();
+  await expect(page).toHaveURL(/view=Settings/);
+  const reopened = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(reopened.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
   const data = await page.evaluate(async () => JSON.stringify({
     local: { ...localStorage }, session: { ...sessionStorage },
     account: await fetch("/api/mail/gmail?workspaceId=personal", { cache: "no-store" }).then((r) => r.json()),
