@@ -34,6 +34,15 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Gmail OAuth E2E");
   await expect(section).toContainText("Zpráva z lokálního mocku");
+  await section.getByRole("button", { name: "Přečíst zprávu" }).click();
+  await expect(section.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
+  await expect(section.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Gmail OAuth E2E");
+  // A task is a separate, explicit local-first write. The Gmail scope remains read-only.
+  await section.getByLabel("Název úkolu").fill("Vyřešit testovací požadavek z Gmailu");
+  await section.getByRole("button", { name: "Potvrdit a vytvořit úkol" }).click();
+  await expect(section).toContainText("Úkol byl vytvořen v Inboxu.");
+  await section.getByRole("button", { name: "Přejít do Inboxu" }).click();
+  await expect(page.getByText("Vyřešit testovací požadavek z Gmailu", { exact: true }).first()).toBeVisible();
   const data = await page.evaluate(async () => JSON.stringify({
     local: { ...localStorage }, session: { ...sessionStorage },
     account: await fetch("/api/mail/gmail?workspaceId=personal", { cache: "no-store" }).then((r) => r.json()),
@@ -42,5 +51,6 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   expect(data).not.toContain(mockGmailAccess);
   expect(google.requests.some((r) => r.path === "/token" && r.body.includes("grant_type=authorization_code"))).toBe(true);
   expect(google.requests.some((r) => r.path.includes("/gmail/v1/users/me/messages"))).toBe(true);
+  expect(google.requests.some((r) => r.path.includes("format=full"))).toBe(true);
   expect(google.requests.some((r) => /\/send|\/modify|\/trash/.test(r.path))).toBe(false);
 });
