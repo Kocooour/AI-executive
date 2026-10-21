@@ -153,3 +153,23 @@ test("full backup restores encrypted credentials and discards obsolete OAuth sta
   assert.equal(mail.openMail(account.encrypted_refresh_token), "RESTORED-REFRESH-TOKEN");
   assert.equal(restored.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending").get().n, 0);
 });
+
+test("OAuth landing permits only its first-party completion script and API call", async () => {
+  const callback = await import("../app/api/mail/gmail/callback/route.ts");
+  const state = "A".repeat(43);
+  const response = await callback.GET(new Request(
+    "https://lumi.example/api/mail/gmail/callback?state=" + state + "&code=TEMP-CODE",
+  ));
+  assert.equal(response.status, 200);
+  const policy = response.headers.get("content-security-policy") || "";
+  assert.match(policy, /default-src 'none'/);
+  assert.match(policy, /script-src 'self'/);
+  assert.match(policy, /connect-src 'self'/);
+  assert.match(policy, /form-action 'self'/);
+  assert.match(policy, /frame-ancestors 'none'/);
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const html = await response.text();
+  assert.match(html, /mail-oauth-finish\\.js/);
+  assert(!html.includes("SECRET-REFRESH"));
+});
