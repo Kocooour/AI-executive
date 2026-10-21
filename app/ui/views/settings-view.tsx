@@ -511,7 +511,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 {calendarStatus && <p role="status">{calendarStatus}</p>}
               </section>
               <section hidden={settingsSection !== "mail"}>
-                {settingsSection === "mail" && <GmailSettings app={app} />}
+                {settingsSection === "mail" && <GmailSettings key={`${activeWorkspaceId}:${app.offlineView}`} app={app} />}
               </section>
               <section hidden={settingsSection !== "data"}>
                 <h2>{tr("dataAi")}</h2>
