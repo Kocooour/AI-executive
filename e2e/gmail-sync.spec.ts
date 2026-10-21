@@ -42,7 +42,7 @@ for (const width of [390, 1280]) {
     const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
     await expect(section.getByText("synced@example.com")).toBeVisible();
     await expect(section.getByText("Synchronizace vypnutá")).toBeVisible();
-    expect(calls).toEqual(["status"], "nothing is synchronized automatically");
+    expect(calls, "nothing is synchronized automatically").toEqual(["status"]);
     await section.getByLabel("Uchovávání").selectOption("7");
     await section.getByRole("button", { name: "Zapnout synchronizaci" }).click();
     await expect(section.getByText(/Synchronizace zapnutá/)).toBeVisible();
