@@ -3266,8 +3266,12 @@ h3 {
 
   .mobileWorkspaceMenu {
     top: calc(62px + env(safe-area-inset-top));
-    max-height: calc(100dvh - 92px - env(safe-area-inset-top));
+    /* Keep the last workspace option ABOVE the persistent bottom navigation.
+       Otherwise Playwright (and real touch users) hit the nav instead of the
+       visible menu button after scrolling to the last item. */
+    max-height: calc(100dvh - 154px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .content {
@@ -3718,7 +3722,18 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .revisionDiff .diff-skipped { color: var(--muted); font-style: italic; }
 @media (max-width: 700px) {
   /* The sticky close button floats over the top right corner while the panel is scrolled. */
-  .noteEditor { padding-right: 44px; }
+  .noteEditor {
+    /* Note diffs with long unbroken code lines must not enlarge the detail
+       panel; also leave room for the floating sticky close control. */
+    width: calc(100% - 4px);
+    max-width: calc(100% - 4px);
+    min-width: 0;
+    padding-right: 44px;
+  }
+  .noteEditor > *, .noteHistory, .revisionDetail, .revisionDiff {
+    min-width: 0;
+    max-width: 100%;
+  }
 }
 
 
