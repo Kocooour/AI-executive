@@ -34,6 +34,54 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Gmail OAuth E2E");
   await expect(section).toContainText("Zpráva z lokálního mocku");
+  await section.getByRole("button", { name: "Přečíst zprávu" }).click();
+  await expect(section.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
+  await expect(section.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Gmail OAuth E2E");
+  // A task is a separate, explicit local-first write. The Gmail scope remains read-only.
+  await section.getByLabel("Název úkolu").fill("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high");
+  await section.getByRole("button", { name: "Potvrdit a vytvořit úkol" }).click();
+  await expect(section).toContainText("Úkol byl vytvořen v Inboxu.");
+  await section.getByRole("button", { name: "Přejít do Inboxu" }).click();
+  await expect(page.getByText("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high", { exact: true }).first()).toBeVisible();
+  // Assert the task's source is stable canonical metadata, not copied email
+  // content; the browser's local-first record is eventually synced to SQLite.
+  const saved = await page.evaluate(async () => {
+    const opened = indexedDB.open("ai-executive");
+    return new Promise<{ mailSource: unknown; propertiesText: string } | null>((resolve, reject) => {
+      opened.onerror = () => reject(opened.error);
+      opened.onsuccess = () => {
+        const database = opened.result;
+        const request = database.transaction("entities", "readonly").objectStore("entities").getAll();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const task = (request.result as Array<{ title: string; type: string; properties: Record<string, unknown> }>).find(
+            (row) => row.type === "task" && row.title === "Vyřešit testovací požadavek z Gmailu zítra 25.10. #high",
+          );
+          resolve(task ? { mailSource: task.properties.mailSource, propertiesText: JSON.stringify(task.properties) } : null);
+          database.close();
+        };
+      };
+    });
+  });
+  expect(saved?.mailSource).toEqual({
+    provider: "gmail", accountId: expect.any(String), messageId: "abc123def456", threadId: "thread-e2e",
+  });
+  // Mail titles are literal, even when their wording resembles Quick Capture
+  // commands. The default inbox placement must not turn into a due date.
+  expect(saved?.propertiesText).toContain('"inbox":true');
+  expect(saved?.propertiesText).toContain('"today":false');
+  expect(saved?.propertiesText).not.toContain('"when":');
+  expect(saved?.propertiesText).not.toContain('"priority":');
+  expect(saved?.propertiesText).not.toContain('"literalTaskTitle":');
+  expect(saved?.propertiesText).not.toContain("E2E zpráva pro vytvoření úkolu.");
+  const taskRow = page.locator(".taskRow", { hasText: "Vyřešit testovací požadavek z Gmailu zítra 25.10. #high" }).first();
+  await taskRow.locator(".taskRowOpen").click();
+  const inspector = page.locator(".inspectorDetail");
+  await expect(inspector.getByRole("region", { name: "Zdrojový e-mail" })).toContainText("Gmail");
+  await inspector.getByRole("button", { name: "Otevřít zdrojovou zprávu" }).click();
+  await expect(page).toHaveURL(/view=Settings/);
+  const reopened = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(reopened.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
   const data = await page.evaluate(async () => JSON.stringify({
     local: { ...localStorage }, session: { ...sessionStorage },
     account: await fetch("/api/mail/gmail?workspaceId=personal", { cache: "no-store" }).then((r) => r.json()),
@@ -42,5 +90,6 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   expect(data).not.toContain(mockGmailAccess);
   expect(google.requests.some((r) => r.path === "/token" && r.body.includes("grant_type=authorization_code"))).toBe(true);
   expect(google.requests.some((r) => r.path.includes("/gmail/v1/users/me/messages"))).toBe(true);
+  expect(google.requests.some((r) => r.path.includes("format=full"))).toBe(true);
   expect(google.requests.some((r) => /\/send|\/modify|\/trash/.test(r.path))).toBe(false);
 });

@@ -38,6 +38,9 @@ import { workspaceTone } from "./workspace-tone";
 // All client state, effects and handlers of the Lumi app shell, moved verbatim from app/page.tsx.
 // Views receive the returned object as `app` and destructure what they render.
 export function useLumiApp() {
+  // In-memory only: tasks can navigate to a Gmail source without putting
+  // message IDs into URLs, localStorage or persisted navigation state.
+  const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
   const [view, setView] = useState("Home"),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
@@ -2033,8 +2036,11 @@ export function useLumiApp() {
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
       newProjectTitle = typeof extra.newProjectTitle === "string" ? extra.newProjectTitle.trim() : "",
       properties = { ...extra },
+      // A user-approved title imported from another source is literal, not
+      // Quick Capture syntax. E.g. "Podklady zítra 25.10. #high" is a subject
+      // line, not an instruction to change the title, due date or priority.
       parsed =
-        type === "task"
+        type === "task" && extra.literalTaskTitle !== true
           ? parseCapture(title)
           : { title: title.trim(), when: "", priority: "none" };
     const linkedProject = projectId ? await db.entities.get(projectId) : null;
@@ -2077,6 +2083,8 @@ export function useLumiApp() {
     delete properties.entityId;
     delete properties.workspaceId;
     delete properties.newProjectTitle;
+    // A creation-time control flag must not become canonical task metadata.
+    delete properties.literalTaskTitle;
     localDataVersion.current += 1;
     let created = false;
     try {
@@ -3542,6 +3550,8 @@ export function useLumiApp() {
     </button>
   );
   return {
+    mailSourceToOpen,
+    setMailSourceToOpen,
     ...attentionState,
     ...evidenceState,
     claimEffectivePredicate,

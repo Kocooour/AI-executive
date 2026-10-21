@@ -69,6 +69,14 @@ function WaitingForInput({ value, placeholder, onSave }: { value: string; placeh
   );
 }
 
+function gmailSource(value: unknown): { accountId: string; messageId: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  if (item.provider !== "gmail" || typeof item.accountId !== "string" || typeof item.messageId !== "string" ||
+      !/^[0-9a-f-]{36}$/i.test(item.accountId) || !/^[0-9a-f]{5,64}$/i.test(item.messageId)) return null;
+  return { accountId: item.accountId, messageId: item.messageId };
+}
+
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
@@ -119,6 +127,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     workSessionAction,
     workSessionBusy,
   } = app;
+  const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
   const inspectorRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Opening with the keyboard moves focus into the inspector; closing returns it to the
@@ -388,6 +397,19 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             {selected.type === "note" && <NoteEditor key={selected.id} app={app} />}
             {selected.type === "task" && selected.status === "open" && selected.properties.inbox === true && view === "Inbox" &&
               <InboxTriage key={selected.id} app={app} task={selected} />}
+            {selected.type === "task" && source && (
+              <section className="detailKnowledge" aria-label={language === "cs" ? "Zdrojový e-mail" : "Source email"}>
+                <h3>{language === "cs" ? "Zdrojový e-mail" : "Source email"}</h3>
+                <p>Gmail · {language === "cs" ? "Odkaz na původní zprávu" : "Reference to the original message"}</p>
+                <button type="button" onClick={() => {
+                  app.setMailSourceToOpen({ workspaceId: selected.workspaceId, accountId: source.accountId, messageId: source.messageId });
+                  closeDetail();
+                  app.selectWorkspace(selected.workspaceId);
+                  app.setSettingsSection("mail");
+                  app.setView("Settings");
+                }}>{language === "cs" ? "Otevřít zdrojovou zprávu" : "Open source message"}</button>
+              </section>
+            )}
             {selected.type === "task" && (
               <div className="fields">
                 <label>

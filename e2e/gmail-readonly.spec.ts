@@ -33,6 +33,20 @@ for (const width of [390, 1280]) {
     await expect(section).toContainText("alice@example.com");
     await expect(section).toContainText("Jen náhled, bez ukládání");
     await expect(section.getByRole("button", { name: "Odeslané" })).toBeVisible();
+    await page.route("**/api/mail/gmail/message", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body).toEqual({ workspaceId: "personal", accountId: account.id, messageId: "ab123456789" });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: {
+        id: "ab123456789", threadId: "thread-x", subject: "Ukázka zprávy",
+        from: "alice@example.com", to: account.email, date: "21. října",
+        text: "Bezpečný text zprávy <img src=x onerror=alert(1)>",
+        truncated: false,
+      } }) });
+    });
+    await section.getByRole("button", { name: "Přečíst zprávu" }).click();
+    await expect(section.getByRole("region", { name: "Detail e-mailu" })).toContainText("Bezpečný text zprávy");
+    await expect(section.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Ukázka zprávy");
+    expect(await page.locator("img[src='x']").count()).toBe(0);
     if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 
     // Another workspace cannot reuse the old Gmail account, even for one render.
@@ -42,6 +56,7 @@ for (const width of [390, 1280]) {
     await expect(section).toContainText("Nejprve vyber konkrétní prostor");
     await expect(section).not.toContainText("Ukázka zprávy");
     await expect(section).not.toContainText("preview@example.com");
+    await expect(section).not.toContainText("Bezpečný text zprávy");
     await expect(section.getByRole("button", { name: "Připojit Gmail" })).toHaveCount(0);
   });
 }
