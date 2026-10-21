@@ -42,6 +42,18 @@ export async function startGmailMock(port: number): Promise<GmailMock> {
         return respond(200, { emailAddress: mockGmailAddress });
       if (request.method === "GET" && path.startsWith("/gmail/v1/users/me/messages?"))
         return respond(200, { messages: [{ id: "abc123def456" }] });
+      if (request.method === "GET" && path.startsWith("/gmail/v1/users/me/messages/abc123def456?") &&
+          new URL(path, "http://127.0.0.1").searchParams.get("format") === "full")
+        return respond(200, { threadId: "thread-e2e", payload: {
+          mimeType: "text/plain",
+          headers: [
+            { name: "Subject", value: "Gmail OAuth E2E" },
+            { name: "From", value: "tester@example.com" },
+            { name: "To", value: mockGmailAddress },
+            { name: "Date", value: "Wed, 21 Oct 2026 10:00:00 +0200" },
+          ],
+          body: { data: Buffer.from("E2E zpráva pro vytvoření úkolu.").toString("base64url") },
+        } });
       if (request.method === "GET" && path.startsWith("/gmail/v1/users/me/messages/abc123def456?"))
         return respond(200, { threadId: "thread-e2e", snippet: "Zpráva z lokálního mocku",
           labelIds: ["INBOX", "UNREAD"], payload: { headers: [
