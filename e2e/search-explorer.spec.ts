@@ -82,3 +82,28 @@ for (const width of [390, 1280]) {
     }
   });
 }
+
+test("Search announces a local-only task when saving is unavailable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `E2E lokálně čekající úkol ${Date.now()}`;
+  // Let Quick Capture persist locally but never acknowledge a server write.
+  await page.route("**/api/task-suggestions", route => route.fulfill({
+    status: 503, contentType: "application/json", body: '{"error":"unavailable"}',
+  }));
+  await page.route("**/api/store", route =>
+    route.request().method() === "PUT" ? route.abort("failed") : route.continue());
+  await page.locator(".mobileCaptureButton").click();
+  const capture = page.locator(".captureModal");
+  await capture.getByRole("textbox", { name: "Název úkolu" }).fill(title);
+  await expect(capture.locator(".captureSuggestionState.error")).toBeVisible();
+  await capture.getByRole("button", { name: "Přidat úkol" }).click();
+  await expect(capture).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Hledat ve všem" }).fill(title);
+  const pending = page.locator(".searchExplorer").getByRole("button", {
+    name: `Otevřít ${title} · Úkol · Čeká na uložení`, exact: true,
+  });
+  await expect(pending).toHaveAccessibleName(`Otevřít ${title} · Úkol · Čeká na uložení`);
+  await expect(pending.locator(".unsentMark")).toHaveAttribute("aria-label", "Čeká na uložení");
+});
