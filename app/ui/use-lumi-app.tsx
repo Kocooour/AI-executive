@@ -2570,87 +2570,59 @@ export function useLumiApp() {
       }
     }
   }
-  // B5: preview data is a snapshot. Revalidate ALL selected rows and both target
-  // entities within a single cross-tab IndexedDB transaction before ANY mutation.
-  // A stale selection aborts the WHOLE batch, leaving every item untouched.
+  // A batch is committed by one authoritative server transaction. A normal
+  // local-first snapshot merge could silently drop one remotely deleted member
+  // and still apply the rest of the batch, violating the review guarantee.
   async function triageInboxBatch(
     selection: readonly { id: string; workspaceId: string; updatedAt: number }[],
     destination: "today" | "tomorrow" | "someday" | "waiting" | "organize",
-    assignment: { projectId?: string; areaId?: string } = {},
+    assignment: { projectId?: string; areaId?: string; projectRevision?: number; areaRevision?: number;
+                  projectTitle?: string; areaTitle?: string } = {},
   ) {
     const workspaceId = activeWorkspaceRef.current;
-    if (signedOut.current || isAdopting() || workspaceId === "all" || workspaceId !== writeWorkspaceId ||
-        view !== "Inbox" || selection.length === 0 || selection.length > 50 ||
-        new Set(selection.map((task) => task.id)).size !== selection.length ||
-        selection.some((task) => task.workspaceId !== workspaceId)) {
-      throw new Error("Inbox batch requires 1–50 distinct tasks in an explicit writable workspace");
+    if (signedOut.current || isAdopting() || authStateRef.current !== "ready" ||
+        workspaceId === "all" || workspaceId !== writeWorkspaceId ||
+        view !== "Inbox" || selection.length < 1 || selection.length > 50 ||
+        new Set(selection.map(task => task.id)).size !== selection.length ||
+        selection.some(task => task.workspaceId !== workspaceId)) {
+      throw new Error("Inbox batch requires online access and an explicit writable workspace");
     }
-    const requested = destination === "organize"
-      ? [
-          { id: assignment.projectId || "", type: "project", relationType: "belongs_to_project" },
-          { id: assignment.areaId || "", type: "area", relationType: "belongs_to_area" },
-        ].filter((target) => target.id)
-      : [];
-    if (destination === "organize" && !requested.length) {
-      throw new Error("Select a project or area before filing an Inbox batch");
+    // Do not bypass pending local edits with an independent server write.
+    // They have their own sync protocol and must settle before the CAS call.
+    await syncQueue.current;
+    if (localStorage.getItem(pendingKey) === "1" || syncStatus !== "synced") {
+      throw new Error("Sync pending; retry Inbox batch once the device is synced");
     }
-    const timestamp = writeTime();
-    const currentDay = ymd();
-    const tomorrow = ymd(addLocalDays(new Date(), 1));
-    localDataVersion.current += 1;
-    try {
-      await db.transaction("rw", db.entities, db.relations, async () => {
-        const latest = await db.entities.bulkGet(selection.map((task) => task.id));
-        if (activeWorkspaceRef.current !== workspaceId || latest.some((task, index) =>
-            !task || task.type !== "task" || task.status !== "open" ||
-            task.workspaceId !== workspaceId || task.properties.inbox !== true ||
-            task.updatedAt !== selection[index].updatedAt ||
-            !isSendable(task) || entityConflicts(task).length > 0)) {
-          throw new Error("Inbox batch changed; review the current selection again");
-        }
-        const targets = await Promise.all(requested.map(async (target) => {
-          const current = await db.entities.get(target.id);
-          if (!current || current.workspaceId !== workspaceId || current.type !== target.type ||
-              current.status !== "active" || !isSendable(current)) {
-            throw new Error("Inbox batch destination changed or is not writable");
-          }
-          return target;
-        }));
-        for (const task of latest as Entity[]) {
-          for (const target of targets) {
-            const old = await db.relations.where("sourceEntityId").equals(task.id)
-              .filter((relation) => relation.relationType === target.relationType).toArray();
-            await db.relations.bulkDelete(old.map((relation) => relation.id));
-            await db.relations.add({
-              id: crypto.randomUUID(), workspaceId,
-              sourceEntityId: task.id, targetEntityId: target.id,
-              relationType: target.relationType, createdAt: timestamp,
-            });
-          }
-          const when = destination === "today" ? currentDay : destination === "tomorrow" ? tomorrow : "";
-          const fields: Record<string, unknown> =
-            destination === "today" || destination === "tomorrow" || destination === "someday"
-              ? { when, today: destination === "today", someday: destination === "someday" }
-              : destination === "waiting"
-                ? { waiting: true, waitingSince: timestamp, waitingFor: "", followUpDate: "" }
-                : { relationsUpdatedAt: timestamp };
-          const activity = Array.isArray(task.properties.activity) ? task.properties.activity : [];
-          await db.entities.update(task.id, {
-            properties: {
-              ...task.properties, ...fields, inbox: false,
-              activity: [...activity, { at: timestamp, action: "inbox triaged: batch " + destination }].slice(-50),
-            },
-            updatedAt: timestamp,
-          });
-        }
-      });
-    } finally {
-      localDataVersion.current += 1;
+    const targets = destination === "organize" ? [
+      ...(assignment.projectId ? [{ id: assignment.projectId, type: "project" as const,
+        updatedAt: assignment.projectRevision, title: assignment.projectTitle }] : []),
+      ...(assignment.areaId ? [{ id: assignment.areaId, type: "area" as const,
+        updatedAt: assignment.areaRevision, title: assignment.areaTitle }] : []),
+    ] : [];
+    if (destination === "organize" && targets.length === 0) throw new Error("Select a project or area");
+    const response = await fetch("/api/inbox/batch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId,
+        restoreGeneration: restoreGeneration.current ?? 0,
+        selection: selection.map(task => ({ id: task.id, updatedAt: task.updatedAt })),
+        action: destination,
+        ...(destination === "today" || destination === "tomorrow"
+          ? { date: ymd(addLocalDays(new Date(), destination === "today" ? 0 : 1)) } : {}),
+        targets,
+      }),
+    });
+    if (!response.ok) {
+      // Refresh after a canonical 409 so the user can see the changed task or
+      // destination before selecting a fresh batch. No local batch was written.
+      if (response.status === 409) await pullFromServer().catch(() => undefined);
+      throw new Error("Inbox batch was not applied on the server; review again");
     }
-    // Like individual Inbox triage, local writes are durable even if uploading is
-    // offline. The existing status/unsent badges tell the truth about server sync.
-    await syncToServer();
-    await load();
+    // Another tab may be viewing the same IndexedDB. Pull the authoritative
+    // revision before notifying it, and never call snapshot PUT for this batch.
+    await pullFromServer();
+    postToTabs({ type: "changed", from: tabId.current });
     setBatchSelection({ workspaceId: "", ids: [] });
   }
 
@@ -3294,7 +3266,7 @@ export function useLumiApp() {
   const collection = ["Projects", "Areas", "Notes"].includes(view)
     ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
     : visible;
-  const batchAllowed = view === "Inbox" && (authState === "ready" || offlineView) &&
+  const batchAllowed = view === "Inbox" && authState === "ready" && syncStatus === "synced" &&
     activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
   const batchCandidates = batchAllowed ? collection.filter((task) =>
     task.type === "task" && task.status === "open" && task.workspaceId === activeWorkspaceId &&
