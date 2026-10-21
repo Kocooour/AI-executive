@@ -224,3 +224,95 @@ test("OAuth callback never exchanges a code on public GET or unauthenticated POS
     else process.env.AI_EXECUTIVE_AUTH_ENABLED = previousAuth;
   }
 });
+
+test("disconnect cancels unclaimed and already exchanging OAuth, without resurrecting credentials", async () => {
+  const db = store.getDatabase();
+  const workspaceId = "personal";
+  const accountId = "77777777-7777-4777-8777-777777777777";
+  db.prepare("INSERT INTO mail_accounts (id, provider, workspace_id, email, encrypted_refresh_token, created_at, updated_at) VALUES (?, 'gmail', ?, ?, ?, 1, 1)")
+    .run(accountId, workspaceId, "disconnect-race@example.com", mail.sealMail("OLD-REFRESH"));
+
+  const session = "disconnect-race-owner";
+  const inFlightState = new URL(mail.startGmailAuthorization(workspaceId, session)).searchParams.get("state");
+  const unclaimedState = new URL(mail.startGmailAuthorization(workspaceId, session)).searchParams.get("state");
+  let unblockToken;
+  const tokenGate = new Promise((resolve) => { unblockToken = resolve; });
+  let tokenStarted;
+  const started = new Promise((resolve) => { tokenStarted = resolve; });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url) === "https://oauth2.googleapis.com/token") {
+      tokenStarted();
+      await tokenGate;
+      return Response.json({ access_token: "NEW-ACCESS", refresh_token: "NEW-REFRESH", scope: mail.gmailScope });
+    }
+    if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/profile")
+      return Response.json({ emailAddress: "disconnect-race@example.com" });
+    throw new Error("Unexpected Gmail URL");
+  };
+  try {
+    const completing = mail.finishGmailAuthorization(inFlightState, "fake-code", session);
+    await started;
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending WHERE workspace_id=? AND claimed_at IS NOT NULL").get(workspaceId).n, 1);
+    mail.disconnectMailAccount(workspaceId, accountId);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_oauth_pending WHERE workspace_id=?").get(workspaceId).n, 0);
+    unblockToken();
+    await assert.rejects(completing, (error) => error instanceof mail.MailError && error.status === 409);
+    await assert.rejects(mail.finishGmailAuthorization(unclaimedState, "fake-code", session), { status: 400 });
+    assert(!db.prepare("SELECT 1 FROM mail_accounts WHERE id=?").get(accountId), "disconnected account was not recreated");
+    assert.equal(mail.listMailAccounts(workspaceId).some((account) => account.email === "disconnect-race@example.com"), false);
+  } finally {
+    unblockToken();
+    globalThis.fetch = originalFetch;
+    db.prepare("DELETE FROM mail_accounts WHERE id=?").run(accountId);
+  }
+});
+
+test("message preview skips vanished items, retains list order and limits concurrent detail reads", async () => {
+  const account = mail.listMailAccounts("personal").find((item) => item.email === "restore@example.com");
+  assert.ok(account);
+  const originalFetch = globalThis.fetch;
+  const ids = Array.from({ length: 7 }, (_, i) => (i + 100).toString(16).padStart(12, "0"));
+  let inFlight = 0;
+  let peak = 0;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com")
+      return Response.json({ access_token: "TEMP-ACCESS" });
+    if (url.pathname.endsWith("/messages"))
+      return Response.json({ messages: ids.map((id) => ({ id })) });
+    const id = url.pathname.split("/").at(-1);
+    if (url.pathname.includes("/messages/") && ids.includes(id)) {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      if (id === ids[2]) return Response.json({ error: { code: 404 } }, { status: 404 });
+      return Response.json({ threadId: id, snippet: "preview", payload: { headers: [{ name: "Subject", value: id }] } });
+    }
+    throw new Error("Unexpected Gmail URL: " + url);
+  };
+  try {
+    const result = await mail.readGmailMessages({ workspaceId: "personal", accountId: account.id, folder: "inbox" });
+    assert.deepEqual(result.messages.map((message) => message.id), ids.filter((id) => id !== ids[2]));
+    assert(peak >= 2, "detail fetches run concurrently");
+    assert(peak <= 5, "never exceeds five concurrent detail fetches");
+    assert.equal(inFlight, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("message preview still fails on Gmail errors other than missing individual messages", async () => {
+  const account = mail.listMailAccounts("personal").find((item) => item.email === "restore@example.com");
+  assert.ok(account);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEMP-ACCESS" });
+    if (url.pathname.endsWith("/messages")) return Response.json({ messages: [{ id: "abc123def456" }] });
+    return Response.json({ error: "unavailable" }, { status: 503 });
+  };
+  try {
+    await assert.rejects(mail.readGmailMessages({ workspaceId: "personal", accountId: account.id, folder: "inbox" }),
+      (error) => error instanceof mail.MailError && error.status === 502);
+  } finally { globalThis.fetch = originalFetch; }
+});
