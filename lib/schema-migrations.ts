@@ -303,6 +303,77 @@ export const schemaMigrations: SchemaMigration[] = [
       }
     },
   },
+  {
+    // Mail: owner-scoped encrypted OAuth credentials; no mail content is cached.
+    id: "2026-10-mail-gmail-readonly-v1",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS mail_accounts (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          email TEXT NOT NULL,
+          encrypted_refresh_token TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(workspace_id, provider, email)
+        );
+        CREATE INDEX IF NOT EXISTS mail_accounts_workspace_idx ON mail_accounts(workspace_id, provider);
+        CREATE TABLE IF NOT EXISTS mail_oauth_pending (
+          state_hash TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          session_binding TEXT NOT NULL,
+          encrypted_verifier TEXT NOT NULL,
+          restore_generation INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS mail_oauth_pending_expiry_idx ON mail_oauth_pending(expires_at);
+      `);
+    },
+  },
+  {
+    // A removed or repurposed workspace must not leave a decryptable Gmail refresh
+    // token or pending authorization behind. Full-snapshot writes update 'entities'
+    // inside the same transaction; delete/update triggers join that transaction.
+    id: "2026-10-mail-account-workspace-lifecycle",
+    up(database) {
+      database.exec(`
+        CREATE TRIGGER IF NOT EXISTS mail_workspace_deleted
+        AFTER DELETE ON entities
+        WHEN json_extract(OLD.payload, '$.type') = 'workspace'
+        BEGIN
+          DELETE FROM mail_accounts WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+          DELETE FROM mail_oauth_pending WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+        END;
+        CREATE TRIGGER IF NOT EXISTS mail_workspace_identity_changed
+        AFTER UPDATE OF payload ON entities
+        WHEN json_extract(OLD.payload, '$.type') = 'workspace'
+          AND (json_extract(NEW.payload, '$.type') != 'workspace'
+            OR json_extract(NEW.payload, '$.workspaceId') != json_extract(OLD.payload, '$.workspaceId'))
+        BEGIN
+          DELETE FROM mail_accounts WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+          DELETE FROM mail_oauth_pending WHERE workspace_id = json_extract(OLD.payload, '$.workspaceId');
+        END;
+        DELETE FROM mail_accounts
+        WHERE NOT EXISTS (SELECT 1 FROM entities e
+          WHERE json_extract(e.payload, '$.type') = 'workspace'
+          AND json_extract(e.payload, '$.workspaceId') = mail_accounts.workspace_id);
+        DELETE FROM mail_oauth_pending
+        WHERE NOT EXISTS (SELECT 1 FROM entities e
+          WHERE json_extract(e.payload, '$.type') = 'workspace'
+          AND json_extract(e.payload, '$.workspaceId') = mail_oauth_pending.workspace_id);
+      `);
+    },
+  },
+  {
+    // Keep an OAuth claim visible until token exchange finishes: disconnect can revoke
+    // both unclaimed and in-flight authorizations without relying on in-memory locks.
+    id: "2026-10-mail-oauth-claim-through-completion",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_oauth_pending)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("claimed_at")) database.exec("ALTER TABLE mail_oauth_pending ADD COLUMN claimed_at INTEGER");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

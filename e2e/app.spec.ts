@@ -482,7 +482,7 @@ test("a workspace name being edited survives a language change", async ({ page }
 test("Settings shows one section at a time", async ({ page }) => {
   await page.goto("/?view=Settings");
   const tabs = settingsSections(page);
-  await expect(tabs).toHaveText(["Obecné", "Workspace", "Přístup", "Oznámení", "Kalendář", "Data a zálohy", "Kontext"]);
+  await expect(tabs).toHaveText(["Obecné", "Workspace", "Přístup", "Oznámení", "Kalendář", "Pošta", "Data a zálohy", "Kontext"]);
   const visibleHeadings = page.locator(".settingsPanel section:not([hidden]) h2");
   await expect(visibleHeadings).toHaveText(["Obecné", "Instalace aplikace"]);
   await tabs.filter({ hasText: "Oznámení" }).click();

@@ -83,6 +83,9 @@ const exempt = {
   "DELETE /api/auth/passkeys": "authentication (passkeys are excluded from backups)",
   "POST /api/integrations/aifred": "integration API token, no client copy",
   "POST /api/integrations/aifred/tools": "integration API token, no client copy",
+  "POST /api/mail/gmail/callback": "OAuth completion page has no client generation; one-use state is tied to restore generation and checked before and after Google exchange",
+  "POST /api/mail/gmail/messages": "read-only same-origin search with no persisted mutation; POST avoids search strings in URL logs",
+
 };
 
 function routeFiles(directory) {
