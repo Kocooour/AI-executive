@@ -303,6 +303,34 @@ export const schemaMigrations: SchemaMigration[] = [
       }
     },
   },
+  {
+    // Mail: owner-scoped encrypted OAuth credentials; no mail content is cached.
+    id: "2026-10-mail-gmail-readonly-v1",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS mail_accounts (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          email TEXT NOT NULL,
+          encrypted_refresh_token TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(workspace_id, provider, email)
+        );
+        CREATE INDEX IF NOT EXISTS mail_accounts_workspace_idx ON mail_accounts(workspace_id, provider);
+        CREATE TABLE IF NOT EXISTS mail_oauth_pending (
+          state_hash TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          session_binding TEXT NOT NULL,
+          encrypted_verifier TEXT NOT NULL,
+          restore_generation INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS mail_oauth_pending_expiry_idx ON mail_oauth_pending(expires_at);
+      `);
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
