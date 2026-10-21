@@ -91,7 +91,7 @@ for (const width of [390, 1280]) {
       event("early", "Morning meeting outside work hours", on(today, "07:00"), on(today, "07:30"), true),
       event("midday", "Open midday calendar slot", on(today, "12:00"), on(today, "12:30"), false),
       event("late", "Evening meeting outside work hours", on(today, "19:00"), on(today, "20:00"), true),
-      event("all-day", "All-day birthday", on(today, "00:00"), on(tomorrow, "00:00"), true, true),
+      event("all-day", "All-day birthday", `${today}T00:00:00.000Z`, `${tomorrow}T00:00:00.000Z`, true, true),
       event("overnight", "Previous evening crossing midnight", on(yesterday, "23:30"), on(today, "00:30"), true),
       event("tomorrow", "Tomorrow must not appear", on(tomorrow, "09:00"), on(tomorrow, "10:00"), true),
     ];
@@ -123,7 +123,15 @@ for (const width of [390, 1280]) {
     await expect(agenda).not.toContainText("Tomorrow must not appear");
     await expect(agenda.locator(".free", { hasText: "Open midday calendar slot" }))
       .toContainText("volný čas");
-    await expect(agenda.locator("div", { hasText: "All-day birthday" })).toContainText("Celý den");
+    const allDayEvent = agenda.locator(":scope > div", { hasText: "All-day birthday" });
+    await expect(allDayEvent.locator("span")).toHaveText("Celý den");
+
+    // Today displays only the portion after local midnight, not yesterday's 23:30 start.
+    const overnightEvent = agenda.locator(":scope > div", { hasText: "Previous evening crossing midnight" });
+    await expect(overnightEvent.locator("span")).toHaveText(/^0?0:00–0?0:30$/);
+    await expect(overnightEvent.locator("small")).toContainText("Pokračuje z předchozího dne");
+    const morningEvent = agenda.locator(":scope > div", { hasText: "Morning meeting outside work hours" });
+    await expect(morningEvent.locator("span")).toHaveText(/^0?7:00–0?7:30$/);
 
     // This repair must not change the existing Home workday-only agenda.
     await page.goto("/?view=Home");
