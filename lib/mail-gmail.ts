@@ -420,3 +420,46 @@ export async function readGmailMessage(input: { workspaceId: string; accountId: 
     ...body,
   };
 }
+
+
+// A conversation view fetches only metadata: no remote image loads, full HTML,
+// attachment fetches, background sync, or persistence. The most recent 30
+// message summaries retain Gmail's chronological ordering.
+export type GmailThreadSummary = {
+  id: string; total: number; omitted: number; messages: GmailMessageSummary[];
+};
+
+export async function readGmailThread(input: { workspaceId: string; accountId: string; threadId: string }): Promise<GmailThreadSummary> {
+  if (!/^[0-9a-f]{5,64}$/i.test(input.threadId)) throw new MailError("Thread identifier is invalid", 400);
+  const refresh = accountCredentials(input.workspaceId, input.accountId);
+  const generation = currentRestoreGeneration();
+  const deadlineAt = Date.now() + MESSAGE_PREVIEW_DEADLINE_MS;
+  const token = await freshAccessToken(refresh, deadlineAt);
+  const url = new URL(apiBase + "/threads/" + input.threadId);
+  url.searchParams.set("format", "metadata");
+  for (const name of ["Subject", "From", "To", "Date"]) url.searchParams.append("metadataHeaders", name);
+  const data = await googleJson(url.toString(), { headers: { authorization: "Bearer " + token } }, deadlineAt, MAX_MESSAGE_REPLY);
+  if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
+  // An account disconnected while Gmail was responding cannot return content.
+  accountCredentials(input.workspaceId, input.accountId);
+  if (data.id !== input.threadId || !Array.isArray(data.messages)) throw new MailError("Gmail thread is invalid", 502);
+  const all = data.messages;
+  const limited = all.slice(-30);
+  const messages: GmailMessageSummary[] = [];
+  for (const item of limited) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== "string" || !/^[0-9a-f]{5,64}$/i.test(record.id) ||
+        (record.threadId !== undefined && record.threadId !== input.threadId)) continue;
+    const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? record.payload as GmailPart : {};
+    messages.push({
+      id: record.id, threadId: input.threadId,
+      subject: gmailHeader(payload, "Subject"), from: gmailHeader(payload, "From"),
+      to: gmailHeader(payload, "To"), date: gmailHeader(payload, "Date"),
+      snippet: typeof record.snippet === "string" ? record.snippet.slice(0, 500) : "",
+      unread: Array.isArray(record.labelIds) && record.labelIds.includes("UNREAD"),
+    });
+  }
+  return { id: input.threadId, total: all.length, omitted: all.length - limited.length, messages };
+}
