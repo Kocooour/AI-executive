@@ -41,6 +41,7 @@ const publicHandlers: Record<string, { statuses: number[]; reason: string; conte
   // Probed with a body of the wrong type: a well-formed report would be recorded, and the run fails on recorded reports.
   "POST /api/client-errors": { statuses: [415, 429], reason: "a browser reports an error, also from the sign-in screen; bounded and rate limited", contentType: "text/plain" },
   "GET /api/integrations/aifred/openapi": { statuses: [200], reason: "the public description of the integration API; no data" },
+  "GET /api/mail/gmail/callback": { statuses: [400], reason: "public OAuth landing receives a Google cross-site GET without the Strict owner cookie; empty request is rejected before rendering and secrets are never stored here" },
 };
 // Handlers that authenticate with the integration bearer token instead of the session cookie.
 const bearerHandlers = new Set(["POST /api/integrations/aifred", "POST /api/integrations/aifred/tools"]);
