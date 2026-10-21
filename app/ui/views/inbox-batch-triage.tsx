@@ -11,6 +11,10 @@ interface Review {
   action: BatchDecision;
   projectId: string;
   areaId: string;
+  projectRevision?: number;
+  areaRevision?: number;
+  projectTitle?: string;
+  areaTitle?: string;
   summary: string;
 }
 
@@ -60,6 +64,8 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
         id: item.id, workspaceId: item.workspaceId, updatedAt: item.updatedAt, title: item.title,
       })),
       action, projectId: project?.id || "", areaId: area?.id || "",
+      projectRevision: project?.updatedAt, areaRevision: area?.updatedAt,
+      projectTitle: project?.title, areaTitle: area?.title,
       summary: [actionLabel, ...(action === "organize" ? [project?.title, area?.title] : [])]
         .filter(Boolean).join(" · "),
     });
@@ -72,6 +78,8 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
     try {
       await triageInboxBatch(validReview.selection, validReview.action, {
         projectId: validReview.projectId, areaId: validReview.areaId,
+        projectRevision: validReview.projectRevision, areaRevision: validReview.areaRevision,
+        projectTitle: validReview.projectTitle, areaTitle: validReview.areaTitle,
       });
       setReview(null);
       setBatchIds([]);
