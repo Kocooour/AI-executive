@@ -42,6 +42,9 @@ export function useLumiApp() {
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
+    // B5 selections belong to exactly one workspace and never survive a navigation
+    // or authentication change. IDs are re-filtered against live Inbox rows below.
+    [batchSelection, setBatchSelection] = useState<{ workspaceId: string; ids: string[] }>({ workspaceId: "", ids: [] }),
     [notesDraft, setNotesDraft] = useState<{ id: string; text: string } | null>(null),
     // The body of the open note while it is being typed, and the note whose last save failed locally.
     // `base`: the note text the draft was started from, kept in memory too so the conflict check does not depend on storage.
@@ -2567,6 +2570,84 @@ export function useLumiApp() {
       }
     }
   }
+  // A batch is committed by one authoritative server transaction. A normal
+  // local-first snapshot merge could silently drop one remotely deleted member
+  // and still apply the rest of the batch, violating the review guarantee.
+  async function triageInboxBatch(
+    selection: readonly { id: string; workspaceId: string; updatedAt: number }[],
+    destination: "today" | "tomorrow" | "someday" | "waiting" | "organize",
+    assignment: { projectId?: string; areaId?: string; projectRevision?: number; areaRevision?: number;
+                  projectTitle?: string; areaTitle?: string } = {},
+  ) {
+    const workspaceId = activeWorkspaceRef.current;
+    if (signedOut.current || isAdopting() || authStateRef.current !== "ready" ||
+        workspaceId === "all" || workspaceId !== writeWorkspaceId ||
+        view !== "Inbox" || selection.length < 1 || selection.length > 50 ||
+        new Set(selection.map(task => task.id)).size !== selection.length ||
+        selection.some(task => task.workspaceId !== workspaceId)) {
+      throw new Error("Inbox batch requires online access and an explicit writable workspace");
+    }
+    // Do not bypass pending local edits with an independent server write.
+    // They have their own sync protocol and must settle before the CAS call.
+    await syncQueue.current;
+    if (localStorage.getItem(pendingKey) === "1" || syncStatus !== "synced") {
+      throw new Error("Sync pending; retry Inbox batch once the device is synced");
+    }
+    const targets = destination === "organize" ? [
+      ...(assignment.projectId ? [{ id: assignment.projectId, type: "project" as const,
+        updatedAt: assignment.projectRevision, title: assignment.projectTitle }] : []),
+      ...(assignment.areaId ? [{ id: assignment.areaId, type: "area" as const,
+        updatedAt: assignment.areaRevision, title: assignment.areaTitle }] : []),
+    ] : [];
+    if (destination === "organize" && targets.length === 0) throw new Error("Select a project or area");
+    // Also protect against changes in a second tab of *this browser* before
+    // reaching the server. Canonical CAS alone would not notice these while
+    // their local snapshot is still waiting to sync.
+    await db.transaction("r", db.entities, async () => {
+      const latest = await db.entities.bulkGet(selection.map(item => item.id));
+      if (activeWorkspaceRef.current !== workspaceId || latest.some((task, index) =>
+          !task || task.type !== "task" || task.status !== "open" ||
+          task.workspaceId !== workspaceId || task.properties.inbox !== true ||
+          task.updatedAt !== selection[index].updatedAt ||
+          !isSendable(task) || entityConflicts(task).length > 0)) {
+        throw new Error("Inbox batch changed locally; review again");
+      }
+      for (const target of targets) {
+        const entity = await db.entities.get(target.id);
+        if (!entity || entity.workspaceId !== workspaceId || entity.type !== target.type ||
+            entity.status !== "active" || entity.updatedAt !== target.updatedAt ||
+            entity.title !== target.title || !isSendable(entity)) {
+          throw new Error("Inbox batch destination changed locally; review again");
+        }
+      }
+    });
+    if (localStorage.getItem(pendingKey) === "1") throw new Error("Local edits are pending sync");
+    const response = await fetch("/api/inbox/batch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        workspaceId,
+        restoreGeneration: restoreGeneration.current ?? 0,
+        selection: selection.map(task => ({ id: task.id, updatedAt: task.updatedAt })),
+        action: destination,
+        ...(destination === "today" || destination === "tomorrow"
+          ? { date: ymd(addLocalDays(new Date(), destination === "today" ? 0 : 1)) } : {}),
+        targets,
+      }),
+    });
+    if (!response.ok) {
+      // Refresh after a canonical 409 so the user can see the changed task or
+      // destination before selecting a fresh batch. No local batch was written.
+      if (response.status === 409) await pullFromServer().catch(() => undefined);
+      throw new Error("Inbox batch was not applied on the server; review again");
+    }
+    // Another tab may be viewing the same IndexedDB. Pull the authoritative
+    // revision before notifying it, and never call snapshot PUT for this batch.
+    await pullFromServer();
+    postToTabs({ type: "changed", from: tabId.current });
+    setBatchSelection({ workspaceId: "", ids: [] });
+  }
+
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
   // was typed meanwhile, the open detail keeps what is being typed.
   async function rename(e: Entity, title: string, seq?: number) {
@@ -3207,6 +3288,26 @@ export function useLumiApp() {
   const collection = ["Projects", "Areas", "Notes"].includes(view)
     ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
     : visible;
+  const batchAllowed = view === "Inbox" && authState === "ready" && syncStatus === "synced" &&
+    activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
+  const batchCandidates = batchAllowed ? collection.filter((task) =>
+    task.type === "task" && task.status === "open" && task.workspaceId === activeWorkspaceId &&
+    task.properties.inbox === true && !heldReasons.has(task.id) &&
+    entityConflicts(task).length === 0) : [];
+  const batchCandidateIds = new Set(batchCandidates.map((task) => task.id));
+  const batchIds = batchAllowed && batchSelection.workspaceId === activeWorkspaceId
+    ? batchSelection.ids.filter((id) => batchCandidateIds.has(id)) : [];
+  // Prevent a remembered selection from reappearing after a workspace switch,
+  // navigation away from Inbox, or sign-out.
+  useEffect(() => {
+    setBatchSelection({ workspaceId: "", ids: [] });
+  }, [activeWorkspaceId, view, authState]);
+  function setBatchIds(ids: string[]) {
+    setBatchSelection({
+      workspaceId: activeWorkspaceId,
+      ids: [...new Set(ids)].filter((id) => batchCandidateIds.has(id)).slice(0, 50),
+    });
+  }
   const draggedEntity = items.find((entity) => entity.id === draggingId);
   const draggableSectionNames = ["Inbox", "Today", "Anytime", "Someday", "Completed"];
 
@@ -3747,6 +3848,11 @@ export function useLumiApp() {
     taskDraftCaptureText,
     tasks,
     triageInbox,
+    triageInboxBatch,
+    batchAllowed,
+    batchCandidates,
+    batchIds,
+    setBatchIds,
     testAppBadge,
     testNotification,
     text,

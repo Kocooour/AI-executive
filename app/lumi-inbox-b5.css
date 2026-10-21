@@ -1,0 +1,59 @@
+/* B5: bulk selection is part of the canonical Inbox rows, never a second task list. */
+.batchTriage {
+  display: grid; gap: 12px; min-width: 0; padding: 14px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface-subtle);
+  margin: 14px 0;
+}
+.batchTriageHeading, .batchTriageToolbar, .batchTriageConfirm {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+  justify-content: space-between;
+}
+.batchTriageHeading h2 { margin: 0; font-size: 1rem; }
+.batchTriageHeading > span, .batchTriageSync { font-size: .82rem; color: var(--muted); }
+.batchTriageToolbar small { color: var(--muted); font-size: .78rem; }
+.batchTriageControls { display: grid; gap: 10px; min-width: 0; }
+.batchTriageControls > label, .batchTriageDestinations label { display: grid; gap: 6px; min-width: 0; font-size: .86rem; }
+.batchTriageDestinations { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.batchTriage select {
+  width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); background: var(--input-bg, var(--surface));
+}
+.batchTriage button {
+  min-height: 44px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); color: var(--text); padding: 9px 13px;
+  cursor: pointer;
+}
+.batchTriage button:disabled { opacity: .55; cursor: not-allowed; }
+.batchTriage button.batchReview, .batchTriage button.batchApply {
+  background: var(--accent-soft, var(--surface)); border-color: var(--accent); font-weight: 700;
+}
+.batchTriage .batchReview { justify-self: stretch; }
+.batchTriage :is(button,select):focus-visible, .batchRowSelect input:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+.batchTriageReview { display: grid; gap: 10px; min-width: 0; }
+.batchTriageReview h3 { margin: 0; font-size: .94rem; }
+.batchTriageReview p { margin: 0; font-size: .86rem; overflow-wrap: anywhere; }
+.batchTriageReview ul {
+  display: grid; gap: 8px; list-style: none; margin: 0;
+  padding: 6px 0; max-height: 310px; overflow-y: auto;
+}
+.batchTriageReview li { display: grid; gap: 3px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; overflow-wrap: anywhere; }
+.batchTriageReview li small { color: var(--muted); }
+.batchTriageHint { color: var(--muted); line-height: 1.45; }
+.batchTriageError { margin: 0; color: var(--danger); }
+.batchTriageReadOnly { padding: 10px 12px; margin: 0 0 12px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); }
+.appShell .taskRowList .batchRowSelect {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 44px; width: 44px; height: 44px; cursor: pointer;
+}
+.appShell .taskRowList .batchRowSelect input { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
+.appShell .taskRowList .batchRowSelect input:disabled { opacity: .4; cursor: not-allowed; }
+@media (max-width: 700px) {
+  .batchTriage { padding: 12px; gap: 10px; }
+  .batchTriageDestinations { grid-template-columns: 1fr; }
+  .batchTriageConfirm button { flex: 1 1 130px; }
+  .appShell .taskRowList .taskRow .batchRowSelect { flex-basis: 44px; }
+}
