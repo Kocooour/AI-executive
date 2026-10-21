@@ -422,9 +422,10 @@ export async function readGmailMessage(input: { workspaceId: string; accountId: 
 }
 
 
-// A conversation view fetches only metadata: no remote image loads, full HTML,
-// attachment fetches, background sync, or persistence. The most recent 30
-// message summaries retain Gmail's chronological ordering.
+// Gmail threads.get has no pagination or maxResults. First request the
+// minimal thread index (only IDs via partial-response fields), then fetch
+// metadata for at most the last 30 messages in bounded concurrent batches.
+// This avoids downloading every historical header/snippet for long threads.
 export type GmailThreadSummary = {
   id: string; total: number; omitted: number; messages: GmailMessageSummary[];
 };
@@ -435,31 +436,61 @@ export async function readGmailThread(input: { workspaceId: string; accountId: s
   const generation = currentRestoreGeneration();
   const deadlineAt = Date.now() + MESSAGE_PREVIEW_DEADLINE_MS;
   const token = await freshAccessToken(refresh, deadlineAt);
-  const url = new URL(apiBase + "/threads/" + input.threadId);
-  url.searchParams.set("format", "metadata");
-  for (const name of ["Subject", "From", "To", "Date"]) url.searchParams.append("metadataHeaders", name);
-  const data = await googleJson(url.toString(), { headers: { authorization: "Bearer " + token } }, deadlineAt, MAX_MESSAGE_REPLY);
+  const headers = { authorization: "Bearer " + token };
+
+  // Gmail's minimal format omits headers and body; fields further excludes
+  // labels/snippets to keep even hundreds of historical messages lightweight.
+  const indexUrl = new URL(apiBase + "/threads/" + input.threadId);
+  indexUrl.searchParams.set("format", "minimal");
+  indexUrl.searchParams.set("fields", "id,messages(id,threadId)");
+  const data = await googleJson(indexUrl.toString(), { headers }, deadlineAt, MAX_MESSAGE_REPLY);
   if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
-  // An account disconnected while Gmail was responding cannot return content.
   accountCredentials(input.workspaceId, input.accountId);
   if (data.id !== input.threadId || !Array.isArray(data.messages)) throw new MailError("Gmail thread is invalid", 502);
+
   const all = data.messages;
-  const limited = all.slice(-30);
+  const last = all.slice(-30);
   const messages: GmailMessageSummary[] = [];
-  for (const item of limited) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    if (typeof record.id !== "string" || !/^[0-9a-f]{5,64}$/i.test(record.id) ||
-        (record.threadId !== undefined && record.threadId !== input.threadId)) continue;
-    const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
-      ? record.payload as GmailPart : {};
-    messages.push({
-      id: record.id, threadId: input.threadId,
-      subject: gmailHeader(payload, "Subject"), from: gmailHeader(payload, "From"),
-      to: gmailHeader(payload, "To"), date: gmailHeader(payload, "Date"),
-      snippet: typeof record.snippet === "string" ? record.snippet.slice(0, 500) : "",
-      unread: Array.isArray(record.labelIds) && record.labelIds.includes("UNREAD"),
-    });
+
+  for (let index = 0; index < last.length; index += MESSAGE_DETAIL_CONCURRENCY) {
+    // A restore or disconnect invalidates the source even between batches.
+    if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
+    accountCredentials(input.workspaceId, input.accountId);
+    const batch = await Promise.all(last.slice(index, index + MESSAGE_DETAIL_CONCURRENCY).map(
+      async (item): Promise<GmailMessageSummary | null> => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const record = item as Record<string, unknown>;
+        if (typeof record.id !== "string" || !/^[0-9a-f]{5,64}$/i.test(record.id) ||
+            (record.threadId !== undefined && record.threadId !== input.threadId)) return null;
+        const url = new URL(apiBase + "/messages/" + record.id);
+        url.searchParams.set("format", "metadata");
+        for (const name of ["Subject", "From", "To", "Date"]) url.searchParams.append("metadataHeaders", name);
+        url.searchParams.set("fields", "id,threadId,snippet,labelIds,payload/headers");
+        let detail: Record<string, unknown>;
+        try {
+          detail = await googleJson(url.toString(), { headers }, deadlineAt);
+        } catch (error) {
+          // A single message can disappear between thread and message reads.
+          if (error instanceof MailError && error.status === 404) return null;
+          throw error;
+        }
+        if (detail.id !== record.id || detail.threadId !== input.threadId)
+          throw new MailError("Gmail message is not part of the requested thread", 502);
+        const payload = detail.payload && typeof detail.payload === "object" && !Array.isArray(detail.payload)
+          ? detail.payload as GmailPart : {};
+        return {
+          id: record.id, threadId: input.threadId,
+          subject: gmailHeader(payload, "Subject"), from: gmailHeader(payload, "From"),
+          to: gmailHeader(payload, "To"), date: gmailHeader(payload, "Date"),
+          snippet: typeof detail.snippet === "string" ? detail.snippet.slice(0, 500) : "",
+          unread: Array.isArray(detail.labelIds) && detail.labelIds.includes("UNREAD"),
+        };
+      },
+    ));
+    for (const message of batch) if (message) messages.push(message);
   }
-  return { id: input.threadId, total: all.length, omitted: all.length - limited.length, messages };
+  // Never return mailbox data after a disconnect or restoration while fetching.
+  if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
+  accountCredentials(input.workspaceId, input.accountId);
+  return { id: input.threadId, total: all.length, omitted: all.length - last.length, messages };
 }
