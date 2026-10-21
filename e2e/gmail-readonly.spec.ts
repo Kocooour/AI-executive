@@ -107,3 +107,80 @@ test("OAuth completion uses the first-party session, removes the code from histo
   expect(posted).toHaveLength(2);
   expect(posted[1].code).toBe("REPLAYED-AUTH-CODE");
 });
+
+
+// Thread navigation never retrieves full bodies until an explicit message click.
+// Exercise both mobile and desktop against deterministic mock Gmail responses.
+for (const width of [390, 1280]) {
+  test("Gmail conversation metadata can open an individual message at " + width + "px", async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const accountId = "11111111-1111-4111-8111-111111111111";
+    const threadId = "abcddcba";
+    const firstId = "aabbcc11", replyId = "aabbcc22";
+    let detailRequests = 0;
+    await page.route("**/api/mail/gmail?*", async (route) => {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+        accounts: [{ id: accountId, workspaceId: "personal", email: "reader@example.com" }],
+      }) });
+    });
+    await page.route("**/api/mail/gmail/messages", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.workspaceId).toBe("personal");
+      expect(body.accountId).toBe(accountId);
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ messages: [{
+        id: firstId, threadId, subject: "Původní zpráva",
+        from: "sender@example.com", to: "reader@example.com", date: "21. října",
+        snippet: "Zobrazit konverzaci", unread: false,
+      }] }) });
+    });
+    await page.route("**/api/mail/gmail/message", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body).toEqual({ workspaceId: "personal", accountId, messageId: body.messageId });
+      expect([firstId, replyId]).toContain(body.messageId);
+      detailRequests++;
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: {
+        id: body.messageId, threadId, subject: body.messageId === firstId ? "Původní zpráva" : "Odpověď",
+        from: "sender@example.com", to: "reader@example.com", date: "21. října",
+        text: body.messageId === firstId ? "První text zprávy" : "Druhý text zprávy",
+        truncated: false,
+      } }) });
+    });
+    await page.route("**/api/mail/gmail/thread", async (route) => {
+      expect(route.request().method()).toBe("POST");
+      const body = route.request().postDataJSON();
+      expect(body).toEqual({ workspaceId: "personal", accountId, threadId });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ thread: {
+        id: threadId, total: 2, omitted: 0,
+        messages: [
+          { id: firstId, threadId, subject: "Původní zpráva", from: "sender@example.com",
+            date: "21. října", to: "reader@example.com", snippet: "První náhled", unread: false },
+          { id: replyId, threadId, subject: "Odpověď", from: "reader@example.com",
+            date: "21. října", to: "sender@example.com",
+            snippet: "<img src=x onerror=alert(1)>", unread: true },
+        ],
+      } }) });
+    });
+    await page.goto("/?view=Settings");
+    await waitUntilSynced(page);
+    await settingsSections(page).filter({ hasText: "Pošta" }).click();
+    const panel = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+    await panel.getByRole("button", { name: "Doručené" }).click();
+    await panel.getByRole("button", { name: "Přečíst zprávu" }).click();
+    await expect(page.getByRole("region", { name: "Detail e-mailu" })).toContainText("První text zprávy");
+    await panel.getByRole("button", { name: "Zobrazit konverzaci" }).click();
+    const thread = page.getByRole("region", { name: "Konverzace Gmail" });
+    await expect(thread).toContainText("Konverzace (2)");
+    await expect(thread.getByRole("button", { name: "Přečíst v konverzaci" })).toHaveCount(2);
+    expect(detailRequests).toBe(1, "metadata-only conversation did not fetch full messages");
+    expect(await page.locator("img[src='x']").count()).toBe(0);
+    await thread.getByRole("button", { name: "Přečíst v konverzaci" }).nth(1).click();
+    await expect(page.getByRole("region", { name: "Detail e-mailu" })).toContainText("Druhý text zprávy");
+    expect(detailRequests).toBe(2);
+    if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await settingsSections(page).filter({ hasText: "Workspace" }).click();
+    await page.getByLabel("Aktuální pohled").selectOption("all");
+    await settingsSections(page).filter({ hasText: "Pošta" }).click();
+    await expect(page.getByRole("region", { name: "Konverzace Gmail" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Detail e-mailu" })).toHaveCount(0);
+  });
+}
