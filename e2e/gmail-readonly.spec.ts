@@ -36,7 +36,7 @@ for (const width of [390, 1280]) {
     if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 
     // Another workspace cannot reuse the old Gmail account, even for one render.
-    await settingsSections(page).filter({ hasText: "Prostor" }).click();
+    await settingsSections(page).filter({ hasText: "Workspace" }).click();
     await page.getByLabel("Aktuální pohled").selectOption("all");
     await settingsSections(page).filter({ hasText: "Pošta" }).click();
     await expect(section).toContainText("Nejprve vyber konkrétní prostor");
