@@ -2600,6 +2600,28 @@ export function useLumiApp() {
         updatedAt: assignment.areaRevision, title: assignment.areaTitle }] : []),
     ] : [];
     if (destination === "organize" && targets.length === 0) throw new Error("Select a project or area");
+    // Also protect against changes in a second tab of *this browser* before
+    // reaching the server. Canonical CAS alone would not notice these while
+    // their local snapshot is still waiting to sync.
+    await db.transaction("r", db.entities, async () => {
+      const latest = await db.entities.bulkGet(selection.map(item => item.id));
+      if (activeWorkspaceRef.current !== workspaceId || latest.some((task, index) =>
+          !task || task.type !== "task" || task.status !== "open" ||
+          task.workspaceId !== workspaceId || task.properties.inbox !== true ||
+          task.updatedAt !== selection[index].updatedAt ||
+          !isSendable(task) || entityConflicts(task).length > 0)) {
+        throw new Error("Inbox batch changed locally; review again");
+      }
+      for (const target of targets) {
+        const entity = await db.entities.get(target.id);
+        if (!entity || entity.workspaceId !== workspaceId || entity.type !== target.type ||
+            entity.status !== "active" || entity.updatedAt !== target.updatedAt ||
+            entity.title !== target.title || !isSendable(entity)) {
+          throw new Error("Inbox batch destination changed locally; review again");
+        }
+      }
+    });
+    if (localStorage.getItem(pendingKey) === "1") throw new Error("Local edits are pending sync");
     const response = await fetch("/api/inbox/batch", {
       method: "POST",
       headers: { "content-type": "application/json" },
