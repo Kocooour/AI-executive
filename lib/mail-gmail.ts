@@ -535,9 +535,9 @@ function trimMailIndex(accountId: string, retentionDays: number, now: number) {
   const db = getDatabase();
   db.prepare("DELETE FROM mail_sync_messages WHERE account_id = ? AND received_at < ?")
     .run(accountId, now - retentionDays * 86_400_000);
-  db.prepare(\`DELETE FROM mail_sync_messages WHERE account_id = ? AND message_id NOT IN
+  db.prepare(`DELETE FROM mail_sync_messages WHERE account_id = ? AND message_id NOT IN
     (SELECT message_id FROM mail_sync_messages WHERE account_id = ?
-     ORDER BY received_at DESC, message_id DESC LIMIT ?)\`)
+     ORDER BY received_at DESC, message_id DESC LIMIT ?)`)
     .run(accountId, accountId, SYNC_KEEP_ITEMS);
 }
 
@@ -554,10 +554,10 @@ export function listMailSyncStates(workspaceId: string): MailSyncState[] {
       trimMailIndex(row.account_id, row.retention_days, now);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
-  return (db.prepare(\`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
+  return (db.prepare(`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
       (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id) AS indexed_count
     FROM mail_accounts a JOIN mail_sync_accounts s ON s.account_id=a.id AND s.workspace_id=a.workspace_id
-    WHERE a.provider='gmail' AND a.workspace_id=? ORDER BY a.email\`).all(workspaceId) as Array<{
+    WHERE a.provider='gmail' AND a.workspace_id=? ORDER BY a.email`).all(workspaceId) as Array<{
       account_id: string; workspace_id: string; retention_days: number;
       last_synced_at: number | null; indexed_count: number;
     }>).map((r) => ({
@@ -575,11 +575,11 @@ export function enableMailSync(workspaceId: string, accountId: string, retention
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare(\`INSERT INTO mail_sync_accounts
+    db.prepare(`INSERT INTO mail_sync_accounts
       (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
       VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
       ON CONFLICT(account_id) DO UPDATE SET retention_days=excluded.retention_days,
-        updated_at=excluded.updated_at\`)
+        updated_at=excluded.updated_at`)
       .run(accountId, workspaceId, randomUUID(), retentionDays, Date.now(), Date.now());
     trimMailIndex(accountId, retentionDays, Date.now());
     db.exec("COMMIT");
@@ -724,9 +724,9 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
       for (const id of new Set([...changes, ...deleted])) clear.run(accountId, id);
     }
-    const insert = db.prepare(\`INSERT INTO mail_sync_messages
+    const insert = db.prepare(`INSERT INTO mail_sync_messages
       (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
       entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
     trimMailIndex(accountId, currentRow.retention_days, Date.now());
