@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   return new Response(html, { headers: {
     ...noStore, "content-type": "text/html; charset=utf-8",
     "x-content-type-options": "nosniff", "x-frame-options": "DENY",
-    "content-security-policy": "default-src 'none'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   } });
 }
 
