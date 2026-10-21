@@ -290,4 +290,87 @@ test.describe("B1 Inbox triage", () => {
     await expect(dialog).not.toBeVisible();
     await expect.poll(async () => (await serverEntities(page)).some((entity) => entity.title === title)).toBe(true);
   });
+
+  test("B4 mobile sheet gives quick decisions with a truthful workspace and sync state", async ({ page }) => {
+    const title = await openNewInboxTask(page);
+    const triage = page.locator(".inboxTriage");
+    await expect(triage.locator(".inboxOriginal")).toContainText(title);
+    await expect(triage.locator(".inboxTriageWorkspace")).toContainText("Osobní");
+    await expect(triage.locator(".inboxTriageSync")).toContainText("Synchronizováno");
+    await expect(triage.getByRole("heading", { name: "Rychlá rozhodnutí" })).toBeVisible();
+    await expect(triage.getByRole("button", { name: "Zítra" })).toBeVisible();
+    await expect(triage.getByRole("button", { name: "Dnes", exact: true })).toBeEnabled();
+    await expect(triage.getByRole("button", { name: "Zahodit" })).toBeEnabled();
+    const minTouch = await triage.getByRole("button", { name: "Zítra" })
+      .evaluate((button) => button.getBoundingClientRect().height);
+    expect(minTouch).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  });
+
+  test("B4 Tomorrow schedules one canonical task and clears Inbox", async ({ page }) => {
+    const title = await openNewInboxTask(page);
+    const nextDay = await page.evaluate(() => {
+      const next = new Date();
+      next.setDate(next.getDate() + 1);
+      return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+    });
+    await page.locator(".inboxTriage").getByRole("button", { name: "Zítra" }).click();
+    await expect.poll(async () => {
+      const task = (await serverEntities(page)).find((entity) => entity.title === title);
+      return { inbox: task?.properties?.inbox, when: task?.properties?.when };
+    }, { timeout: 20_000 }).toEqual({ inbox: false, when: nextDay });
+  });
+
+  test("B4 assigns project and area in the same Inbox decision without leaking other workspaces", async ({ page }) => {
+    await page.goto("/?view=Inbox");
+    await waitUntilSynced(page);
+    const names = await page.evaluate(async () => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const stamp = Date.now();
+      const token = `e2e-b4-${stamp}-${Math.random().toString(36).slice(2, 8)}`;
+      const otherWorkspace = `${token}-other`;
+      const entity = (id: string, type: string, title: string, workspaceId: string) =>
+        ({ id, type, title, status: "active", workspaceId, properties: {},
+          createdAt: stamp, updatedAt: stamp });
+      const project = entity(`project:${token}`, "project", `B4 Projekt ${token}`, "personal");
+      const area = entity(`area:${token}`, "area", `B4 Oblast ${token}`, "personal");
+      const hidden = entity(`hidden:${token}`, "area", `Cizí oblast ${token}`, otherWorkspace);
+      const workspace = { ...entity(`workspace:${otherWorkspace}`, "workspace", "Cizí prostor", otherWorkspace),
+        properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] } };
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+          entities: [...snapshot.entities, project, area, workspace, hidden],
+          relations: snapshot.relations, deletedIds: [], revivedIds: [],
+        }) });
+      if (!response.ok) throw new Error(`B4 setup failed: ${response.status}`);
+      return { project: project.title, projectId: project.id, area: area.title, areaId: area.id, hidden: hidden.title };
+    });
+    await page.reload();
+    await waitUntilSynced(page);
+    const title = await openNewInboxTask(page);
+    const triage = page.locator(".inboxTriage");
+    const projectField = triage.locator("label", { hasText: "Do projektu" });
+    const areaField = triage.locator("label", { hasText: "Do oblasti" });
+    await expect(areaField.locator("select")).toBeVisible();
+    await expect(areaField.locator("select")).not.toContainText(names.hidden);
+    await projectField.locator("select").selectOption(names.projectId);
+    await areaField.locator("select").selectOption(names.areaId);
+    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.project);
+    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.area);
+    await projectField.getByRole("button", { name: "Použít" }).click();
+    await expect.poll(async () => page.evaluate(async ({ title, projectId, areaId }) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const task = snapshot.entities.find((item: { title: string; type: string }) => item.type === "task" && item.title === title);
+      const links = snapshot.relations.filter((relation: { sourceEntityId: string }) => relation.sourceEntityId === task?.id);
+      return {
+        inbox: task?.properties?.inbox,
+        projectLinks: links.filter((link: { targetEntityId: string; relationType: string }) =>
+          link.relationType === "belongs_to_project" && link.targetEntityId === projectId).length,
+        areaLinks: links.filter((link: { targetEntityId: string; relationType: string }) =>
+          link.relationType === "belongs_to_area" && link.targetEntityId === areaId).length,
+      };
+    }, { title, projectId: names.projectId, areaId: names.areaId }), { timeout: 20_000 })
+      .toEqual({ inbox: false, projectLinks: 1, areaLinks: 1 });
+  });
 });
