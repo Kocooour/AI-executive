@@ -2036,8 +2036,11 @@ export function useLumiApp() {
       areaId = typeof extra.areaId === "string" ? extra.areaId : "",
       newProjectTitle = typeof extra.newProjectTitle === "string" ? extra.newProjectTitle.trim() : "",
       properties = { ...extra },
+      // A user-approved title imported from another source is literal, not
+      // Quick Capture syntax. E.g. "Podklady zítra 25.10. #high" is a subject
+      // line, not an instruction to change the title, due date or priority.
       parsed =
-        type === "task"
+        type === "task" && extra.literalTaskTitle !== true
           ? parseCapture(title)
           : { title: title.trim(), when: "", priority: "none" };
     const linkedProject = projectId ? await db.entities.get(projectId) : null;
@@ -2080,6 +2083,8 @@ export function useLumiApp() {
     delete properties.entityId;
     delete properties.workspaceId;
     delete properties.newProjectTitle;
+    // A creation-time control flag must not become canonical task metadata.
+    delete properties.literalTaskTitle;
     localDataVersion.current += 1;
     let created = false;
     try {
