@@ -71,6 +71,9 @@ test.describe("B3 mobile Quick Capture", () => {
       await modal.getByRole("textbox", { name: "Název poznámky" }).fill(noteText);
       releaseFirstPut?.();
       await expectOnServer(page, (entity) => entity.title === title && entity.type === "task", true);
+      // Confirm the previous submit's async continuation ran before testing
+      // the new unsaved note's survival after closing/reopening.
+      await waitUntilSynced(page);
       await expect(modal.getByRole("textbox", { name: "Název poznámky" })).toHaveValue(noteText);
       await modal.getByRole("button", { name: "Zrušit" }).click();
       await page.locator(".mobileCaptureButton").click();
@@ -106,6 +109,7 @@ test.describe("B3 mobile Quick Capture", () => {
       await modal.getByRole("textbox", { name: "Název úkolu" }).fill(second);
       releaseFirstPut?.();
       await expectOnServer(page, (entity) => entity.title === first && entity.type === "task", true);
+      await waitUntilSynced(page);
       await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue(second);
       await modal.getByRole("button", { name: "Zrušit" }).click();
       await page.locator(".mobileCaptureButton").click();
