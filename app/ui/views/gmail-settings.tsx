@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LumiApp } from "../use-lumi-app";
 
 type Account = { id: string; email: string; workspaceId: string };
 type Message = { id: string; subject: string; from: string; to: string; date: string; snippet: string; unread: boolean };
 type Folder = "inbox" | "sent";
+type Detail = { id: string; threadId: string; subject: string; from: string; to: string; date: string; text: string; truncated: boolean };
 
 export function GmailSettings({ app }: { app: LumiApp }) {
   const { language, tr } = app;
@@ -18,6 +19,13 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [createdTaskId, setCreatedTaskId] = useState("");
+  const detailVersion = useRef(0);
+  const label = (cs: string, en: string) => language === "cs" ? cs : en;
 
   async function json(url: string, body?: Record<string, unknown>) {
     const response = await fetch(url, body ? { method: "POST", headers: { "content-type": "application/json" },
@@ -28,7 +36,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   useEffect(() => {
-    setAccounts([]); setSelected(""); setMessages([]); setError(""); setLoaded(false);
+    detailVersion.current++;
+    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
     void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
@@ -57,14 +66,18 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     try {
       await json("/api/mail/gmail", { action: "disconnect", workspaceId, accountId: account.id });
       setAccounts((prior) => prior.filter((row) => row.id !== account.id));
-      if (selected === account.id) { setSelected(""); setMessages([]); }
+      if (selected === account.id) {
+        detailVersion.current++;
+        setSelected(""); setMessages([]); setDetail(null); setCreatedTaskId("");
+      }
     } catch { setError(tr("mailDisconnectFailed")); }
     finally { setBusy(false); }
   }
 
   async function openFolder(account: Account, nextFolder: Folder) {
     if (busy || !workspaceId) return;
-    setBusy(true); setError(""); setMessages([]);
+    detailVersion.current++;
+    setBusy(true); setError(""); setMessages([]); setDetail(null); setCreatedTaskId("");
     setSelected(account.id); setFolder(nextFolder);
     try {
       const data = await json("/api/mail/gmail/messages", {
@@ -73,6 +86,41 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       setMessages(data.messages as Message[]);
     } catch { setError(tr("mailReadFailed")); }
     finally { setBusy(false); }
+  }
+
+  async function openDetail(account: Account, messageId: string) {
+    const version = ++detailVersion.current;
+    setDetail(null); setCreatedTaskId(""); setTaskTitle(""); setDetailBusy(true); setError("");
+    try {
+      const data = await json("/api/mail/gmail/message", { workspaceId, accountId: account.id, messageId });
+      if (detailVersion.current !== version) return;
+      const message = data.message as Detail;
+      setDetail(message);
+      setTaskTitle((message.subject ? label("Vyřídit: ", "Handle: ") + message.subject : label("Vyřídit e-mail", "Handle email")).slice(0, 200));
+    } catch {
+      if (detailVersion.current === version) setError(label("Zprávu se nepodařilo načíst.", "The message could not be loaded."));
+    } finally {
+      if (detailVersion.current === version) setDetailBusy(false);
+    }
+  }
+
+  async function createMailTask() {
+    if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskBusy) return;
+    const account = accounts.find((item) => item.id === selected);
+    if (!account) return;
+    setTaskBusy(true); setError("");
+    try {
+      // A deliberate user click is the only write. Persist source identifiers,
+      // never the original mail body, access token or remote HTML.
+      const id = await app.create("task", taskTitle.trim(), {
+        workspaceId, inbox: true,
+        originalCaptureText: taskTitle.trim().slice(0, 1000),
+        mailSource: { provider: "gmail", accountId: account.id, messageId: detail.id, threadId: detail.threadId },
+      });
+      if (id) setCreatedTaskId(id);
+    } catch {
+      setError(label("Úkol se nepodařilo vytvořit.", "The task could not be created."));
+    } finally { setTaskBusy(false); }
   }
 
   return (
@@ -120,11 +168,51 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                     <strong>{message.subject || tr("untitledItem")}{message.unread ? " · ●" : ""}</strong>
                     <small>{folder === "inbox" ? message.from : message.to} · {message.date}</small>
                     <small>{message.snippet}</small>
+                    <button type="button" disabled={busy || detailBusy} onClick={() => {
+                      const account = accounts.find((row) => row.id === selected);
+                      if (account) void openDetail(account, message.id);
+                    }}>{label("Přečíst zprávu", "Read message")}</button>
                   </span>
                 </div>
               ))}
             </div>
           </div>}
+          {detailBusy && <p role="status">{label("Načítám zprávu…", "Loading message…")}</p>}
+          {detail && !detailBusy && (
+            <section aria-label={label("Detail e-mailu", "Email detail")} className="icloudForm">
+              <div className="sectionHeading">
+                <h3>{detail.subject || tr("untitledItem")}</h3>
+                <button type="button" onClick={() => { detailVersion.current++; setDetail(null); setCreatedTaskId(""); }}>
+                  {label("Zavřít", "Close")}
+                </button>
+              </div>
+              <p><strong>{label("Od", "From")}:</strong> {detail.from}</p>
+              <p><strong>{label("Komu", "To")}:</strong> {detail.to}</p>
+              <p><strong>{label("Datum", "Date")}:</strong> {detail.date}</p>
+              <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "24rem", overflowY: "auto" }}>{detail.text || label("Textová část zprávy není dostupná.", "No readable text part is available.")}</pre>
+              {detail.truncated && <p role="status">{label("Zobrazuje se pouze prvních 32 000 znaků zprávy.", "Only the first 32,000 characters are shown.")}</p>}
+              <div className="icloudForm">
+                <h3>{label("Vytvořit úkol z e-mailu", "Create a task from email")}</h3>
+                <p className="settingsHint">{label(
+                  "Uprav název úkolu. Uloží se pouze název a odkaz na zdrojovou zprávu, nikoliv její obsah. Úkol vznikne až po potvrzení.",
+                  "Edit the task title. Only the title and source message reference will be stored, not the email body. Nothing is created until you confirm.",
+                )}</p>
+                <label>{label("Název úkolu", "Task title")}
+                  <input value={taskTitle} maxLength={200} disabled={taskBusy || Boolean(createdTaskId)}
+                    onChange={(event) => setTaskTitle(event.target.value)} />
+                </label>
+                {!createdTaskId
+                  ? <button type="button" className="primaryAction" disabled={!taskTitle.trim() || taskBusy} onClick={() => void createMailTask()}>
+                      {taskBusy ? label("Ukládám…", "Saving…") : label("Potvrdit a vytvořit úkol", "Confirm and create task")}
+                    </button>
+                  : <p role="status">
+                      {label("Úkol byl vytvořen v Inboxu.", "The task was created in Inbox.")}
+                      {" "}
+                      <button type="button" onClick={() => app.setView("Inbox")}>{label("Přejít do Inboxu", "Open Inbox")}</button>
+                    </p>}
+              </div>
+            </section>
+          )}
           {busy && <p role="status">{tr("syncing")}</p>}
           {error && <p role="alert" className="formError">{error}</p>}
         </>
