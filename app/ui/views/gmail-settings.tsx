@@ -7,6 +7,7 @@ type Account = { id: string; email: string; workspaceId: string };
 type Message = { id: string; subject: string; from: string; to: string; date: string; snippet: string; unread: boolean };
 type Folder = "inbox" | "sent";
 type Detail = { id: string; threadId: string; subject: string; from: string; to: string; date: string; text: string; truncated: boolean };
+type Thread = { id: string; total: number; omitted: number; messages: Message[] };
 
 export function GmailSettings({ app }: { app: LumiApp }) {
   const { language, tr } = app;
@@ -21,6 +22,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const [loaded, setLoaded] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
+  const [thread, setThread] = useState<Thread | null>(null);
+  const [threadBusy, setThreadBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
   const [createdTaskId, setCreatedTaskId] = useState("");
@@ -38,7 +41,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
 
   useEffect(() => {
     detailVersion.current++;
-    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setError(""); setLoaded(false);
+    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
     void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
@@ -69,7 +72,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       setAccounts((prior) => prior.filter((row) => row.id !== account.id));
       if (selected === account.id) {
         detailVersion.current++;
-        setSelected(""); setMessages([]); setDetail(null); setCreatedTaskId("");
+        setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setCreatedTaskId("");
       }
     } catch { setError(tr("mailDisconnectFailed")); }
     finally { setBusy(false); }
@@ -78,7 +81,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   async function openFolder(account: Account, nextFolder: Folder) {
     if (busy || taskCreateInFlight.current || !workspaceId) return;
     detailVersion.current++;
-    setBusy(true); setError(""); setMessages([]); setDetail(null); setCreatedTaskId("");
+    setBusy(true); setError(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setCreatedTaskId("");
     setSelected(account.id); setFolder(nextFolder);
     try {
       const data = await json("/api/mail/gmail/messages", {
@@ -89,10 +92,11 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     finally { setBusy(false); }
   }
 
-  async function openDetail(account: Account, messageId: string) {
+  async function openDetail(account: Account, messageId: string, preserveThread = false) {
     if (taskCreateInFlight.current) return;
     const version = ++detailVersion.current;
-    setDetail(null); setCreatedTaskId(""); setTaskTitle(""); setDetailBusy(true); setError("");
+    setDetail(null); if (!preserveThread) { setThread(null); setThreadBusy(false); }
+    setCreatedTaskId(""); setTaskTitle(""); setDetailBusy(true); setError("");
     try {
       const data = await json("/api/mail/gmail/message", { workspaceId, accountId: account.id, messageId });
       if (detailVersion.current !== version) return;
@@ -103,6 +107,21 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       if (detailVersion.current === version) setError(label("Zprávu se nepodařilo načíst.", "The message could not be loaded."));
     } finally {
       if (detailVersion.current === version) setDetailBusy(false);
+    }
+  }
+
+  async function openThread(account: Account, threadId: string) {
+    if (taskCreateInFlight.current || busy || threadBusy || !/^[0-9a-f]{5,64}$/i.test(threadId)) return;
+    const version = ++detailVersion.current;
+    setThreadBusy(true); setThread(null); setError("");
+    try {
+      const data = await json("/api/mail/gmail/thread", { workspaceId, accountId: account.id, threadId });
+      if (detailVersion.current === version) setThread(data.thread as Thread);
+    } catch {
+      if (detailVersion.current === version)
+        setError(label("Konverzaci se nepodařilo načíst.", "The conversation could not be loaded."));
+    } finally {
+      if (detailVersion.current === version) setThreadBusy(false);
     }
   }
 
@@ -200,6 +219,31 @@ export function GmailSettings({ app }: { app: LumiApp }) {
               ))}
             </div>
           </div>}
+          {threadBusy && <p role="status">{label("Načítám konverzaci…", "Loading conversation…")}</p>}
+          {thread && !threadBusy && (
+            <section aria-label={label("Konverzace Gmail", "Gmail conversation")} className="icloudForm">
+              <div className="sectionHeading">
+                <h3>{label("Konverzace", "Conversation")} ({thread.total})</h3>
+                <button type="button" onClick={() => setThread(null)}>{label("Zavřít konverzaci", "Close conversation")}</button>
+              </div>
+              {thread.omitted > 0 && <p role="status">{label("Starších zpráv nezobrazeno: ", "Older messages not shown: ")}{thread.omitted}</p>}
+              <div className="calendarSources">
+                {thread.messages.map((message) => (
+                  <div key={message.id}>
+                    <span>
+                      <strong>{message.subject || tr("untitledItem")}{message.unread ? " · ●" : ""}</strong>
+                      <small>{message.from} · {message.date}</small>
+                      <small>{message.snippet}</small>
+                      <button type="button" disabled={detailBusy || taskBusy} onClick={() => {
+                        const account = accounts.find((row) => row.id === selected);
+                        if (account) void openDetail(account, message.id, true);
+                      }}>{label("Přečíst v konverzaci", "Read in conversation")}</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
           {detailBusy && <p role="status">{label("Načítám zprávu…", "Loading message…")}</p>}
           {detail && !detailBusy && (
             <section aria-label={label("Detail e-mailu", "Email detail")} className="icloudForm">
@@ -212,6 +256,12 @@ export function GmailSettings({ app }: { app: LumiApp }) {
               <p><strong>{label("Od", "From")}:</strong> {detail.from}</p>
               <p><strong>{label("Komu", "To")}:</strong> {detail.to}</p>
               <p><strong>{label("Datum", "Date")}:</strong> {detail.date}</p>
+              {/^[0-9a-f]{5,64}$/i.test(detail.threadId) && (
+                <button type="button" disabled={threadBusy || taskBusy} onClick={() => {
+                  const account = accounts.find((row) => row.id === selected);
+                  if (account) void openThread(account, detail.threadId);
+                }}>{label("Zobrazit konverzaci", "Show conversation")}</button>
+              )}
               <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "24rem", overflowY: "auto" }}>{detail.text || label("Textová část zprávy není dostupná.", "No readable text part is available.")}</pre>
               {detail.truncated && <p role="status">{label("Zobrazuje se pouze prvních 32 000 znaků zprávy.", "Only the first 32,000 characters are shown.")}</p>}
               <div className="icloudForm">
