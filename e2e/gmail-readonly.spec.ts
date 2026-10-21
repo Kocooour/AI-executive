@@ -184,3 +184,87 @@ for (const width of [390, 1280]) {
     await expect(page.getByRole("region", { name: "Detail e-mailu" })).toHaveCount(0);
   });
 }
+
+
+// A user can dismiss the email detail while the thread request is still
+// pending. The obsolete result must neither resurrect the thread nor leave
+// a permanently disabled "Show conversation" button.
+for (const width of [390, 1280]) {
+  test("closing mail detail cancels pending conversation UI at " + width + "px", async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const accountId = "11111111-1111-4111-8111-111111111111";
+    const threadId = "abcdef12";
+    const messageId = "fedcba12";
+    let firstSeen!: () => void;
+    let releaseFirst!: () => void;
+    const firstArrived = new Promise<void>((resolve) => { firstSeen = resolve; });
+    const firstHold = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let threadReads = 0;
+
+    await page.route("**/api/mail/gmail?*", async (route) => {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+        accounts: [{ id: accountId, workspaceId: "personal", email: "reader@example.com" }],
+      }) });
+    });
+    await page.route("**/api/mail/gmail/messages", async (route) => {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ messages: [{
+        id: messageId, threadId, subject: "Původní zpráva", from: "sender@example.com",
+        to: "reader@example.com", date: "21. října", snippet: "První náhled", unread: false,
+      }] }) });
+    });
+    await page.route("**/api/mail/gmail/message", async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ workspaceId: "personal", accountId, messageId });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: {
+        id: messageId, threadId, subject: "Původní zpráva", from: "sender@example.com",
+        to: "reader@example.com", date: "21. října", text: "Čitelný obsah", truncated: false,
+      } }) });
+    });
+    await page.route("**/api/mail/gmail/thread", async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ workspaceId: "personal", accountId, threadId });
+      threadReads++;
+      if (threadReads === 1) {
+        firstSeen();
+        await firstHold;
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ thread: {
+        id: threadId, total: 1, omitted: 0, messages: [{
+          id: messageId, threadId, subject: "Původní zpráva", from: "sender@example.com",
+          to: "reader@example.com", date: "21. října", snippet: "První náhled", unread: false,
+        }],
+      } }) });
+    });
+
+    try {
+      await page.goto("/?view=Settings");
+      await waitUntilSynced(page);
+      await settingsSections(page).filter({ hasText: "Pošta" }).click();
+      const panel = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+      await panel.getByRole("button", { name: "Doručené" }).click();
+      await panel.getByRole("button", { name: "Přečíst zprávu" }).click();
+      const detail = panel.getByRole("region", { name: "Detail e-mailu" });
+      await expect(detail).toContainText("Čitelný obsah");
+      await detail.getByRole("button", { name: "Zobrazit konverzaci" }).click();
+      await firstArrived;
+      await expect(panel.getByText("Načítám konverzaci…")).toBeVisible();
+
+      // Previously this incremented detailVersion without resetting threadBusy.
+      await detail.getByRole("button", { name: "Zavřít" }).click();
+      await expect(panel.getByText("Načítám konverzaci…")).toHaveCount(0);
+      const obsoleteResponse = page.waitForResponse((resp) =>
+        resp.url().includes("/api/mail/gmail/thread") && resp.request().method() === "POST",
+      );
+      releaseFirst();
+      await obsoleteResponse;
+      await expect(panel.getByRole("region", { name: "Konverzace Gmail" })).toHaveCount(0);
+
+      // The old request cannot re-open the thread, and a fresh request works.
+      await panel.getByRole("button", { name: "Přečíst zprávu" }).click();
+      await expect(panel.getByRole("region", { name: "Detail e-mailu" })).toBeVisible();
+      await panel.getByRole("button", { name: "Zobrazit konverzaci" }).click();
+      await expect(panel.getByRole("region", { name: "Konverzace Gmail" })).toContainText("Konverzace (1)");
+      expect(threadReads).toBe(2);
+    } finally {
+      releaseFirst();
+    }
+  });
+}
