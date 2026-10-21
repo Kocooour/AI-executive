@@ -38,11 +38,11 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await expect(section.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
   await expect(section.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Gmail OAuth E2E");
   // A task is a separate, explicit local-first write. The Gmail scope remains read-only.
-  await section.getByLabel("Název úkolu").fill("Vyřešit testovací požadavek z Gmailu");
+  await section.getByLabel("Název úkolu").fill("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high");
   await section.getByRole("button", { name: "Potvrdit a vytvořit úkol" }).click();
   await expect(section).toContainText("Úkol byl vytvořen v Inboxu.");
   await section.getByRole("button", { name: "Přejít do Inboxu" }).click();
-  await expect(page.getByText("Vyřešit testovací požadavek z Gmailu", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high", { exact: true }).first()).toBeVisible();
   // Assert the task's source is stable canonical metadata, not copied email
   // content; the browser's local-first record is eventually synced to SQLite.
   const saved = await page.evaluate(async () => {
@@ -55,7 +55,7 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
           const task = (request.result as Array<{ title: string; type: string; properties: Record<string, unknown> }>).find(
-            (row) => row.type === "task" && row.title === "Vyřešit testovací požadavek z Gmailu",
+            (row) => row.type === "task" && row.title === "Vyřešit testovací požadavek z Gmailu zítra 25.10. #high",
           );
           resolve(task ? { mailSource: task.properties.mailSource, propertiesText: JSON.stringify(task.properties) } : null);
           database.close();
@@ -66,8 +66,15 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   expect(saved?.mailSource).toEqual({
     provider: "gmail", accountId: expect.any(String), messageId: "abc123def456", threadId: "thread-e2e",
   });
+  // Mail titles are literal, even when their wording resembles Quick Capture
+  // commands. The default inbox placement must not turn into a due date.
+  expect(saved?.propertiesText).toContain('"inbox":true');
+  expect(saved?.propertiesText).toContain('"today":false');
+  expect(saved?.propertiesText).not.toContain('"when":');
+  expect(saved?.propertiesText).not.toContain('"priority":');
+  expect(saved?.propertiesText).not.toContain('"literalTaskTitle":');
   expect(saved?.propertiesText).not.toContain("E2E zpráva pro vytvoření úkolu.");
-  const taskRow = page.locator(".taskRow", { hasText: "Vyřešit testovací požadavek z Gmailu" }).first();
+  const taskRow = page.locator(".taskRow", { hasText: "Vyřešit testovací požadavek z Gmailu zítra 25.10. #high" }).first();
   await taskRow.locator(".taskRowOpen").click();
   const inspector = page.locator(".inspectorDetail");
   await expect(inspector.getByRole("region", { name: "Zdrojový e-mail" })).toContainText("Gmail");
