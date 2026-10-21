@@ -31,6 +31,14 @@ Google classifies gmail.readonly as a restricted scope. Its use and any broader 
 OAuth app review, testing limits and restricted-scope data requirements. A testing-mode refresh token may expire after
 seven days; account reconnection is then required.
 
+## Mail v2 — first delivery slice (message detail → explicit task)
+- A signed-in owner may explicitly open a single Gmail message from an existing workspace-scoped account; a same-origin no-store POST retrieves its full Gmail MIME payload on demand.
+- The server extracts bounded plain text (HTML-only is converted to inert text, never inserted as HTML); attachment IDs are never fetched. The message response is bounded to 1 MiB, with a maximum 32,000 characters displayed and an explicit truncation notice.
+- The detail page offers an editable task title. **Only the owner's explicit Confirm and create task action** uses Lumi's existing local-first task creation flow; the task lands in the same workspace's Inbox.
+- Created tasks record structured source IDs in `properties.mailSource`: `provider: gmail`, `accountId`, `messageId`, `threadId`. These identifiers are workspace-scoped. Email bodies, attachments, Gmail access tokens and refresh tokens are **not** copied into tasks.
+- There is no automatic message analysis, LLM transfer, mail write, background sync or silent task creation. Gmail API consent remains read-only; task writes occur only in Lumi after confirmation.
+- This slice intentionally does not yet support browsing entire threads, attachment previews, automated follow-up detection, or the provider-independent source inspector UI.
+
 ## Next slices
 Incremental history sync and content index with retention/privacy controls, richer message details, iCloud Mail via
 IMAP with an app-specific password, and Proton Mail Bridge. All integrations remain disabled until separately configured.
