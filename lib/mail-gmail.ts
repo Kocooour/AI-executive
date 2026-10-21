@@ -334,6 +334,23 @@ function gmailHeader(part: GmailPart, name: string): string {
   return typeof found?.value === "string" ? found.value.slice(0, 500) : "";
 }
 
+// Gmail MIME part bodies are base64url-encoded bytes, not necessarily UTF-8.
+// Accept only bounded, syntactically valid charset labels; TextDecoder's built-in
+// registry rejects unsupported names, which safely fall back to UTF-8.
+function decodeGmailPart(data: string, part: GmailPart): string {
+  const contentType = gmailHeader(part, "Content-Type");
+  const match = contentType.match(/(?:^|;)\s*charset\s*=\s*(?:"([^"]{1,40})"|'([^']{1,40})'|([A-Za-z][A-Za-z0-9._-]{0,39}))/i);
+  const declared = match?.[1] || match?.[2] || match?.[3] || "";
+  const charset = /^[A-Za-z0-9._-]{1,40}$/.test(declared) ? declared : "utf-8";
+  let decoder: TextDecoder;
+  try {
+    decoder = new TextDecoder(charset);
+  } catch {
+    decoder = new TextDecoder("utf-8");
+  }
+  return decoder.decode(Buffer.from(data, "base64url"));
+}
+
 function gmailBodyText(payload: GmailPart): { text: string; truncated: boolean } {
   const plain: string[] = [];
   const html: string[] = [];
@@ -348,7 +365,7 @@ function gmailBodyText(payload: GmailPart): { text: string; truncated: boolean }
     const data = part.body?.data;
     if ((mime === "text/plain" || mime === "text/html") && typeof data === "string" &&
         data.length < MAX_MESSAGE_REPLY && /^[A-Za-z0-9_-]+={0,2}$/.test(data)) {
-      const value = Buffer.from(data, "base64url").toString("utf8");
+      const value = decodeGmailPart(data, part);
       (mime === "text/plain" ? plain : html).push(value);
     }
     if (Array.isArray(part.parts)) {
@@ -368,7 +385,11 @@ function gmailBodyText(payload: GmailPart): { text: string; truncated: boolean }
       "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
       "&apos;": "'", "&nbsp;": " ", "&#39;": "'",
     }[entity.toLowerCase()] || entity));
-  const combined = (plain.length ? plain : html.map(htmlToText)).join("\n\n");
+  // A blank text/plain placeholder is not a useful alternative. Prefer real
+  // plain text but fall back to readable HTML text when it is empty/whitespace.
+  const readablePlain = plain.filter((value) => value.trim().length > 0);
+  const readableHtml = html.map(htmlToText).filter((value) => value.trim().length > 0);
+  const combined = (readablePlain.length ? readablePlain : readableHtml).join("\n\n");
   return { text: combined.slice(0, MAX_MESSAGE_TEXT), truncated: combined.length > MAX_MESSAGE_TEXT };
 }
 
