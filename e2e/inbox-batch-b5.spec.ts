@@ -70,7 +70,10 @@ for (const width of [390, 1280]) {
       const hit = await first.locator("..").evaluate(el => el.getBoundingClientRect().height);
       expect(hit).toBeGreaterThanOrEqual(44);
     }
+    const accepted = page.waitForResponse(response => response.url().includes("/api/inbox/batch") &&
+      response.request().method() === "POST");
     await review.getByRole("button", { name: "Potvrdit všechny změny" }).click();
+    expect((await accepted).status()).toBe(200);
     await expect.poll(async () => page.evaluate(async ({ oneId, twoId, projectId, areaId, hiddenId }) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then(res => res.json());
       const rows = [oneId, twoId].map(id => snapshot.entities.find((e: { id: string }) => e.id === id));
@@ -149,7 +152,10 @@ test("B5 canonical CAS refuses the entire batch after another device deletes one
     });
     if (!response.ok) throw new Error("remote deletion failed " + response.status);
   }, data.oneId);
+  const refused = page.waitForResponse(response => response.url().includes("/api/inbox/batch") &&
+    response.request().method() === "POST");
   await panel.getByRole("button", { name: "Potvrdit všechny změny" }).click();
+  expect((await refused).status()).toBe(409);
   await expect.poll(async () => page.evaluate(async ({ oneId, twoId }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
     return {
@@ -182,7 +188,10 @@ test("B5 canonical CAS refuses a changed project after review and leaves every t
     });
     if (!result.ok) throw new Error("remote project rename failed " + result.status);
   }, data.projectId);
+  const refused = page.waitForResponse(response => response.url().includes("/api/inbox/batch") &&
+    response.request().method() === "POST");
   await panel.getByRole("button", { name: "Potvrdit všechny změny" }).click();
+  expect((await refused).status()).toBe(409);
   await expect.poll(async () => page.evaluate(async ({ oneId, twoId, projectId }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
     return {
