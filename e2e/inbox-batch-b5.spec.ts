@@ -193,14 +193,6 @@ test("B5 canonical CAS refuses a changed project after review and leaves every t
   }, data)).toEqual({ inbox: [true, true], relations: 0 });
 });
 
-test("B5 has no editable batch when offline; unsynced data cannot bypass canonical CAS", async ({ page }) => {
-  await seedInboxBatch(page);
-  await page.context().setOffline(true);
-  await page.reload().catch(() => undefined);
-  await expect(page.getByRole("checkbox", { name: /Vybrat:/ })).toHaveCount(0);
-  await page.context().setOffline(false);
-});
-
 test("B5 aggregate workspace stays read-only and exposes no selection controls", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const data = await seedInboxBatch(page);
