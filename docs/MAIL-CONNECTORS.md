@@ -24,6 +24,8 @@ endpoints are refused, responses are bounded, and secrets are never returned to 
 OAuth pending state is cleared on restore and excluded from backups. Mail accounts and their encrypted refresh tokens
 are included in full backups, like iCloud calendar account secrets; preserve the encryption key for restores.
 Changing the mail encryption key makes stored tokens unreadable until you reconnect.
+Disconnecting a Gmail account also cancels outstanding OAuth connection attempts for that workspace (including an exchange already in flight), so an older callback cannot reconnect a removed account. A later explicit connection starts a new authorization.
+Gmail previews fetch up to 15 message summaries in bounded batches of five, with a 25-second overall deadline. Messages that disappear between list and metadata fetch are skipped rather than causing the whole preview to fail; other Gmail errors still surface.
 
 Google classifies gmail.readonly as a restricted scope. Its use and any broader deployment must comply with Google's
 OAuth app review, testing limits and restricted-scope data requirements. A testing-mode refresh token may expire after
