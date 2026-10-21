@@ -43,6 +43,30 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await expect(section).toContainText("Úkol byl vytvořen v Inboxu.");
   await section.getByRole("button", { name: "Přejít do Inboxu" }).click();
   await expect(page.getByText("Vyřešit testovací požadavek z Gmailu", { exact: true }).first()).toBeVisible();
+  // Assert the task's source is stable canonical metadata, not copied email
+  // content; the browser's local-first record is eventually synced to SQLite.
+  const saved = await page.evaluate(async () => {
+    const opened = indexedDB.open("ai-executive");
+    return new Promise<{ mailSource: unknown; propertiesText: string } | null>((resolve, reject) => {
+      opened.onerror = () => reject(opened.error);
+      opened.onsuccess = () => {
+        const database = opened.result;
+        const request = database.transaction("entities", "readonly").objectStore("entities").getAll();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const task = (request.result as Array<{ title: string; type: string; properties: Record<string, unknown> }>).find(
+            (row) => row.type === "task" && row.title === "Vyřešit testovací požadavek z Gmailu",
+          );
+          resolve(task ? { mailSource: task.properties.mailSource, propertiesText: JSON.stringify(task.properties) } : null);
+          database.close();
+        };
+      };
+    });
+  });
+  expect(saved?.mailSource).toEqual({
+    provider: "gmail", accountId: expect.any(String), messageId: "abc123def456", threadId: "thread-e2e",
+  });
+  expect(saved?.propertiesText).not.toContain("E2E zpráva pro vytvoření úkolu.");
   const data = await page.evaluate(async () => JSON.stringify({
     local: { ...localStorage }, session: { ...sessionStorage },
     account: await fetch("/api/mail/gmail?workspaceId=personal", { cache: "no-store" }).then((r) => r.json()),
