@@ -401,3 +401,70 @@ test("Gmail detail endpoint never serves anonymous callers or accepts cross-work
     else process.env.AI_EXECUTIVE_AUTH_ENABLED = oldAuth;
   }
 });
+
+
+test("Windows-1250 and ISO-8859-2 MIME bodies retain Czech diacritics; unknown charsets use UTF-8", async () => {
+  const account = mail.listMailAccounts("personal").find((row) => row.email === "restore@example.com");
+  assert.ok(account);
+  const expected = "Příliš žluťoučký kůň úpěl ďábelské ódy.";
+  const fixtures = [
+    {
+      charset: 'text/plain; charset="windows-1250"',
+      bytes: Buffer.from("50f8ed6c699a209e6c759d6f75e86bfd206bf9f220fa70ec6c20efe162656c736be920f364792e", "hex"),
+    },
+    {
+      charset: "text/plain; charset=ISO-8859-2",
+      bytes: Buffer.from("50f8ed6c69b920be6c75bb6f75e86bfd206bf9f220fa70ec6c20efe162656c736be920f364792e", "hex"),
+    },
+    {
+      charset: "text/plain; charset=not-a-supported-charset",
+      bytes: Buffer.from(expected, "utf8"),
+    },
+  ];
+  const oldFetch = globalThis.fetch;
+  try {
+    for (const fixture of fixtures) {
+      globalThis.fetch = async (target) => {
+        if (String(target) === "https://oauth2.googleapis.com/token")
+          return Response.json({ access_token: "TEMP-ACCESS" });
+        if (String(target).includes("/gmail/v1/users/me/messages/abcdef123456?"))
+          return Response.json({ threadId: "abcdef654321", payload: {
+            mimeType: "text/plain",
+            headers: [{ name: "CONTENT-TYPE", value: fixture.charset }],
+            body: { data: fixture.bytes.toString("base64url") },
+          } });
+        throw new Error("Unexpected Google endpoint " + String(target));
+      };
+      const message = await mail.readGmailMessage({ workspaceId: "personal", accountId: account.id, messageId: "abcdef123456" });
+      assert.equal(message.text, expected, fixture.charset);
+      assert.equal(message.truncated, false);
+    }
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("empty or whitespace-only plain MIME alternative falls back to inert HTML text", async () => {
+  const account = mail.listMailAccounts("personal").find((row) => row.email === "restore@example.com");
+  assert.ok(account);
+  const oldFetch = globalThis.fetch;
+  const encode = (text) => Buffer.from(text).toString("base64url");
+  globalThis.fetch = async (target) => {
+    if (String(target) === "https://oauth2.googleapis.com/token")
+      return Response.json({ access_token: "TEMP-ACCESS" });
+    if (String(target).includes("/gmail/v1/users/me/messages/abcdef123456?"))
+      return Response.json({ threadId: "abcdef654321", payload: {
+        mimeType: "multipart/alternative",
+        parts: [
+          { mimeType: "text/plain", body: { data: encode(" \n\t ") } },
+          { mimeType: "text/html", body: { data: encode("<script>steal()</script><p>Skutečný obsah &amp; text</p>") } },
+        ],
+      } });
+    throw new Error("Unexpected Gmail URL");
+  };
+  try {
+    const result = await mail.readGmailMessage({ workspaceId: "personal", accountId: account.id, messageId: "abcdef123456" });
+    assert.match(result.text, /Skutečný obsah & text/);
+    assert(!result.text.includes("steal()"));
+    assert(!result.text.includes("<script>"));
+    assert.equal(result.truncated, false);
+  } finally { globalThis.fetch = oldFetch; }
+});
