@@ -494,3 +494,246 @@ export async function readGmailThread(input: { workspaceId: string; accountId: s
   accountCredentials(input.workspaceId, input.accountId);
   return { id: input.threadId, total: all.length, omitted: all.length - last.length, messages };
 }
+
+
+// Mail v4: opt-in Gmail History synchronizer. Only bounded metadata is kept;
+// snippets, MIME content, attachments, HTML, tokens and Google search queries
+// are never persisted. Network reads happen outside the SQLite write lock.
+const SYNC_DEADLINE_MS = 45_000;
+const SYNC_MAX_ITEMS = 120;
+const SYNC_KEEP_ITEMS = 250;
+const SYNC_RETAIN_DAYS = [7, 30, 90] as const;
+const gmailId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{5,64}$/i.test(value);
+const historyId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9]{1,30}$/.test(value);
+type SyncRow = {
+  account_id: string; workspace_id: string; consent_id: string;
+  history_id: string | null; retention_days: number; last_synced_at: number | null;
+};
+type SyncMessage = {
+  id: string; thread: string; subject: string; sender: string; received: number;
+  unread: number; inbox: number; sent: number;
+};
+export type MailSyncState = {
+  accountId: string; workspaceId: string; enabled: boolean;
+  retentionDays: number; lastSyncedAt: number | null; indexedCount: number;
+};
+
+function syncRow(workspaceId: string, accountId: string): SyncRow | undefined {
+  return getDatabase().prepare("SELECT * FROM mail_sync_accounts WHERE workspace_id=? AND account_id=?")
+    .get(workspaceId, accountId) as SyncRow | undefined;
+}
+
+function requireSyncAccount(workspaceId: string, accountId: string) {
+  const row = syncRow(workspaceId, accountId);
+  if (!row) throw new MailError("Gmail sync is not enabled", 404);
+  return row;
+}
+
+function trimMailIndex(accountId: string, retentionDays: number, now: number) {
+  const db = getDatabase();
+  db.prepare("DELETE FROM mail_sync_messages WHERE account_id = ? AND received_at < ?")
+    .run(accountId, now - retentionDays * 86_400_000);
+  db.prepare(\`DELETE FROM mail_sync_messages WHERE account_id = ? AND message_id NOT IN
+    (SELECT message_id FROM mail_sync_messages WHERE account_id = ?
+     ORDER BY received_at DESC, message_id DESC LIMIT ?)\`)
+    .run(accountId, accountId, SYNC_KEEP_ITEMS);
+}
+
+export function listMailSyncStates(workspaceId: string): MailSyncState[] {
+  requireMailWorkspace(workspaceId);
+  const db = getDatabase();
+  const now = Date.now();
+  // Enforce the configured retention bound when the status is inspected,
+  // even if a sync has not been requested since the last visit.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const row of db.prepare("SELECT account_id, retention_days FROM mail_sync_accounts WHERE workspace_id=?")
+      .all(workspaceId) as Array<{ account_id: string; retention_days: number }>)
+      trimMailIndex(row.account_id, row.retention_days, now);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  return (db.prepare(\`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
+      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id) AS indexed_count
+    FROM mail_accounts a JOIN mail_sync_accounts s ON s.account_id=a.id AND s.workspace_id=a.workspace_id
+    WHERE a.provider='gmail' AND a.workspace_id=? ORDER BY a.email\`).all(workspaceId) as Array<{
+      account_id: string; workspace_id: string; retention_days: number;
+      last_synced_at: number | null; indexed_count: number;
+    }>).map((r) => ({
+      accountId: r.account_id, workspaceId: r.workspace_id, enabled: true,
+      retentionDays: r.retention_days, lastSyncedAt: r.last_synced_at,
+      indexedCount: r.indexed_count,
+    }));
+}
+
+export function enableMailSync(workspaceId: string, accountId: string, retentionDays: number): void {
+  if (!SYNC_RETAIN_DAYS.includes(retentionDays as 7 | 30 | 90))
+    throw new MailError("Mail retention must be 7, 30 or 90 days", 400);
+  accountCredentials(workspaceId, accountId);
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(\`INSERT INTO mail_sync_accounts
+      (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET retention_days=excluded.retention_days,
+        updated_at=excluded.updated_at\`)
+      .run(accountId, workspaceId, randomUUID(), retentionDays, Date.now(), Date.now());
+    trimMailIndex(accountId, retentionDays, Date.now());
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+export function disableMailSync(workspaceId: string, accountId: string) {
+  accountCredentials(workspaceId, accountId);
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM mail_sync_accounts WHERE workspace_id=? AND account_id=?")
+      .run(workspaceId, accountId);
+    // Triggers clear every indexed message, even if the sync was active.
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+function parseMailSyncMessage(raw: Record<string, unknown>, retentionDays: number, now: number): SyncMessage | null {
+  if (!gmailId(raw.id) || !gmailId(raw.threadId)) return null;
+  const labels = Array.isArray(raw.labelIds) ? raw.labelIds : [];
+  if (!labels.includes("INBOX") && !labels.includes("SENT")) return null;
+  if (["SPAM", "TRASH", "DRAFT"].some((x) => labels.includes(x))) return null;
+  const stamp = typeof raw.internalDate === "string" && /^[0-9]{1,16}$/.test(raw.internalDate)
+    ? Number(raw.internalDate) : NaN;
+  if (!Number.isSafeInteger(stamp) || stamp < now - retentionDays * 86_400_000 || stamp > now + 86_400_000) return null;
+  const payload = raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+    ? raw.payload as GmailPart : {};
+  return {
+    id: raw.id, thread: raw.threadId,
+    subject: gmailHeader(payload, "Subject").slice(0, 240),
+    sender: gmailHeader(payload, "From").slice(0, 240),
+    received: stamp, unread: Number(labels.includes("UNREAD")),
+    inbox: Number(labels.includes("INBOX")), sent: Number(labels.includes("SENT")),
+  };
+}
+
+export async function syncMailAccount(workspaceId: string, accountId: string) {
+  const settings = requireSyncAccount(workspaceId, accountId);
+  const refresh = accountCredentials(workspaceId, accountId);
+  const generation = currentRestoreGeneration();
+  const deadline = Date.now() + SYNC_DEADLINE_MS;
+  const token = await freshAccessToken(refresh, deadline);
+  const headers = { authorization: "Bearer " + token };
+  const current = Date.now();
+  let full = !settings.history_id;
+  let nextHistory: string | null = null;
+  const changes = new Set<string>();
+  const deleted = new Set<string>();
+  if (!full) {
+    try {
+      let pageToken = "";
+      let page = 0;
+      while (true) {
+        if (++page > 5) { full = true; break; }
+        const url = new URL(apiBase + "/history");
+        url.searchParams.set("startHistoryId", settings.history_id!);
+        url.searchParams.set("maxResults", "100");
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        for (const type of ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"])
+          url.searchParams.append("historyTypes", type);
+        const response = await googleJson(url.toString(), { headers }, deadline);
+        if (!historyId(response.historyId)) throw new MailError("Invalid Gmail history cursor", 502);
+        nextHistory = response.historyId;
+        const entries = Array.isArray(response.history) ? response.history : [];
+        for (const event of entries) {
+          if (!event || typeof event !== "object") continue;
+          const obj = event as Record<string, unknown>;
+          for (const [name, target] of [["messagesAdded", changes], ["messagesDeleted", deleted],
+            ["labelsAdded", changes], ["labelsRemoved", changes]] as const) {
+            const set = Array.isArray(obj[name]) ? obj[name] : [];
+            for (const record of set) {
+              const message = record && typeof record === "object" ? (record as Record<string, unknown>).message : null;
+              const id = message && typeof message === "object" ? (message as Record<string, unknown>).id : null;
+              if (gmailId(id)) target.add(id);
+            }
+          }
+        }
+        if (changes.size + deleted.size > SYNC_MAX_ITEMS) { full = true; break; }
+        if (!response.nextPageToken) break;
+        if (typeof response.nextPageToken !== "string" || response.nextPageToken.length > 512)
+          throw new MailError("Invalid Gmail history page", 502);
+        pageToken = response.nextPageToken;
+      }
+    } catch (error) {
+      // Gmail expires old history IDs. Rebuild from a recent bounded snapshot,
+      // never advance the cursor past data we failed to read.
+      if (error instanceof MailError && error.status === 404) full = true;
+      else throw error;
+    }
+  }
+  if (full) {
+    changes.clear(); deleted.clear();
+    const profile = await googleJson(apiBase + "/profile", { headers }, deadline);
+    if (!historyId(profile.historyId)) throw new MailError("Gmail profile history is invalid", 502);
+    nextHistory = profile.historyId;
+    for (const folder of ["INBOX", "SENT"]) {
+      const url = new URL(apiBase + "/messages");
+      url.searchParams.set("maxResults", "25");
+      url.searchParams.set("labelIds", folder);
+      const result = await googleJson(url.toString(), { headers }, deadline);
+      for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
+        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id))
+          changes.add((item as Record<string, string>).id);
+      }
+    }
+  }
+  if (!nextHistory) throw new MailError("Gmail did not return a history cursor", 502);
+  const fetched: SyncMessage[] = [];
+  // Bounded and concurrent, metadata format never requests MIME bodies.
+  const ids = [...changes].filter((id) => !deleted.has(id));
+  for (let i = 0; i < ids.length; i += MESSAGE_DETAIL_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(i, i + MESSAGE_DETAIL_CONCURRENCY).map(async (id) => {
+      const url = new URL(apiBase + "/messages/" + id);
+      url.searchParams.set("format", "metadata");
+      for (const name of ["Subject", "From"]) url.searchParams.append("metadataHeaders", name);
+      try {
+        const data = await googleJson(url.toString(), { headers }, deadline);
+        if (data.id !== id) throw new MailError("Gmail message identity changed", 502);
+        return parseMailSyncMessage(data, settings.retention_days, current);
+      } catch (error) {
+        if (error instanceof MailError && error.status === 404) return null;
+        throw error;
+      }
+    }));
+    for (const message of batch) if (message) fetched.push(message);
+  }
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const currentRow = requireSyncAccount(workspaceId, accountId);
+    // Consent and cursor compare prevent stale or overlapping sync commits.
+    // A disable/re-enable gets a new consent_id, defeating ABA races.
+    if (generation !== currentRestoreGeneration() ||
+        currentRow.consent_id !== settings.consent_id || currentRow.history_id !== settings.history_id)
+      throw new MailError("Gmail sync configuration changed; retry", 409);
+    accountCredentials(workspaceId, accountId);
+    if (full) db.prepare("DELETE FROM mail_sync_messages WHERE account_id=?").run(accountId);
+    else {
+      const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
+      for (const id of new Set([...changes, ...deleted])) clear.run(accountId, id);
+    }
+    const insert = db.prepare(\`INSERT INTO mail_sync_messages
+      (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`);
+    for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
+      entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
+    trimMailIndex(accountId, currentRow.retention_days, Date.now());
+    db.prepare("UPDATE mail_sync_accounts SET history_id=?, last_synced_at=?, updated_at=? WHERE account_id=? AND consent_id=?")
+      .run(nextHistory, Date.now(), Date.now(), accountId, settings.consent_id);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  return { full, updated: fetched.length, historyId: nextHistory,
+    state: listMailSyncStates(workspaceId).find((s) => s.accountId === accountId) };
+}
