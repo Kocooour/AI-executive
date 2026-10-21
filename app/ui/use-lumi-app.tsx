@@ -3303,6 +3303,11 @@ export function useLumiApp() {
   const batchCandidateIds = new Set(batchCandidates.map((task) => task.id));
   const batchIds = batchAllowed && batchSelection.workspaceId === activeWorkspaceId
     ? batchSelection.ids.filter((id) => batchCandidateIds.has(id)) : [];
+  // Prevent a remembered selection from reappearing after a workspace switch,
+  // navigation away from Inbox, or sign-out.
+  useEffect(() => {
+    setBatchSelection({ workspaceId: "", ids: [] });
+  }, [activeWorkspaceId, view, authState]);
   function setBatchIds(ids: string[]) {
     setBatchSelection({
       workspaceId: activeWorkspaceId,
