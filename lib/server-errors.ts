@@ -177,6 +177,11 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Unknown temporary file kind",
   "Context classification is invalid",
   "Context identifier is invalid",
+  // Malformed batch requests are programmer/API errors, not normal UI errors.
+  "Invalid Inbox batch",
+  "Invalid Inbox batch date",
+  "Invalid Inbox batch targets",
+  "Invalid Inbox batch destination",
   "Cross-origin request rejected",
   "Entity not found",
   "Exactly one literal or target is required",
