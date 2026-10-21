@@ -65,6 +65,11 @@ for (const width of [390, 1280]) {
     await expect(review).toContainText(data.project);
     await expect(review).toContainText(data.area);
     await expect(review.locator("li")).toHaveCount(2);
+    if (width === 390) {
+      // Check the touch target while its Inbox row still exists.
+      const hit = await first.locator("..").evaluate(el => el.getBoundingClientRect().height);
+      expect(hit).toBeGreaterThanOrEqual(44);
+    }
     await review.getByRole("button", { name: "Potvrdit všechny změny" }).click();
     await expect.poll(async () => page.evaluate(async ({ oneId, twoId, projectId, areaId, hiddenId }) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then(res => res.json());
@@ -82,8 +87,6 @@ for (const width of [390, 1280]) {
       inbox: [false, false], project: [true, true], area: [true, true], other: true,
     });
     if (width === 390) {
-      const hit = await first.locator("..").evaluate(el => el.getBoundingClientRect().height);
-      expect(hit).toBeGreaterThanOrEqual(44);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
   });
@@ -121,6 +124,81 @@ test("B5 rejects a stale task without partially moving any selected item", async
     const data = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
     return [oneId, twoId].map(id => data.entities.find((e: { id: string }) => e.id === id)?.properties?.inbox);
   }, data)).toEqual([true, true]);
+});
+
+test("B5 canonical CAS refuses the entire batch after another device deletes one selected task", async ({ page }) => {
+  const data = await seedInboxBatch(page);
+  await page.getByRole("checkbox", { name: `Vybrat: ${data.one}` }).check();
+  await page.getByRole("checkbox", { name: `Vybrat: ${data.two}` }).check();
+  const panel = page.getByRole("region", { name: "Hromadné třídění" });
+  await panel.getByRole("button", { name: "Zkontrolovat změny" }).click();
+  await expect(panel.getByRole("group", { name: "Kontrola před uložením" })).toBeVisible();
+  // A second device wrote directly to the canonical server; this tab's IndexedDB
+  // still contains its old selection and would pass a local-only transaction.
+  await page.evaluate(async id => {
+    const current = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+    const response = await fetch("/api/store", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+        entities: current.entities.filter((item: { id: string }) => item.id !== id),
+        relations: current.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) =>
+          link.sourceEntityId !== id && link.targetEntityId !== id),
+        deletedIds: [id], revivedIds: [],
+      }),
+    });
+    if (!response.ok) throw new Error("remote deletion failed " + response.status);
+  }, data.oneId);
+  await panel.getByRole("button", { name: "Potvrdit všechny změny" }).click();
+  await expect.poll(async () => page.evaluate(async ({ oneId, twoId }) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+    return {
+      deleted: !snapshot.entities.some((task: { id: string }) => task.id === oneId),
+      secondInbox: snapshot.entities.find((task: { id: string }) => task.id === twoId)?.properties.inbox,
+    };
+  }, data)).toEqual({ deleted: true, secondInbox: true });
+});
+
+test("B5 canonical CAS refuses a changed project after review and leaves every task in Inbox", async ({ page }) => {
+  const data = await seedInboxBatch(page);
+  const panel = page.getByRole("region", { name: "Hromadné třídění" });
+  await page.getByRole("checkbox", { name: `Vybrat: ${data.one}` }).check();
+  await page.getByRole("checkbox", { name: `Vybrat: ${data.two}` }).check();
+  await panel.getByLabel("Hromadná akce").selectOption("organize");
+  await panel.getByLabel("Do projektu").selectOption(data.projectId);
+  await panel.getByLabel("Do oblasti").selectOption(data.areaId);
+  await panel.getByRole("button", { name: "Zkontrolovat změny" }).click();
+  await expect(panel.getByRole("group", { name: "Kontrola před uložením" })).toContainText(data.project);
+  await page.evaluate(async id => {
+    const current = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+    const result = await fetch("/api/store", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision: current.revision, restoreGeneration: current.restoreGeneration,
+        entities: current.entities.map((item: { id: string; title: string; updatedAt: number }) =>
+          item.id === id ? { ...item, title: item.title + " renamed", updatedAt: item.updatedAt + 1000 } : item),
+        relations: current.relations, deletedIds: [], revivedIds: [],
+      }),
+    });
+    if (!result.ok) throw new Error("remote project rename failed " + result.status);
+  }, data.projectId);
+  await panel.getByRole("button", { name: "Potvrdit všechny změny" }).click();
+  await expect.poll(async () => page.evaluate(async ({ oneId, twoId, projectId }) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then(r => r.json());
+    return {
+      inbox: [oneId, twoId].map(id => snapshot.entities.find((item: { id: string }) => item.id === id)?.properties.inbox),
+      relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) =>
+        [oneId, twoId].includes(link.sourceEntityId) && link.targetEntityId === projectId).length,
+    };
+  }, data)).toEqual({ inbox: [true, true], relations: 0 });
+});
+
+test("B5 has no editable batch when offline; unsynced data cannot bypass canonical CAS", async ({ page }) => {
+  await seedInboxBatch(page);
+  await page.context().setOffline(true);
+  await page.reload().catch(() => undefined);
+  await expect(page.getByRole("checkbox", { name: /Vybrat:/ })).toHaveCount(0);
+  await page.context().setOffline(false);
 });
 
 test("B5 aggregate workspace stays read-only and exposes no selection controls", async ({ page }) => {
