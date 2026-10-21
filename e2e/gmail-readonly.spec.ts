@@ -171,7 +171,7 @@ for (const width of [390, 1280]) {
     const thread = page.getByRole("region", { name: "Konverzace Gmail" });
     await expect(thread).toContainText("Konverzace (2)");
     await expect(thread.getByRole("button", { name: "Přečíst v konverzaci" })).toHaveCount(2);
-    expect(detailRequests).toBe(1, "metadata-only conversation did not fetch full messages");
+    expect(detailRequests, "metadata-only conversation did not fetch full messages").toBe(1);
     expect(await page.locator("img[src='x']").count()).toBe(0);
     await thread.getByRole("button", { name: "Přečíst v konverzaci" }).nth(1).click();
     await expect(page.getByRole("region", { name: "Detail e-mailu" })).toContainText("Druhý text zprávy");
