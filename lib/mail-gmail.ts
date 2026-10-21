@@ -104,10 +104,25 @@ function consumeOAuthState(state: string, sessionBinding: string) {
   return { workspaceId: pending.workspace_id, verifier, restoreGeneration: pending.restore_generation };
 }
 
+// Only the isolated browser-test instance can redirect Gmail calls to its loopback
+// mock. A fake test OAuth client id AND explicit e2e flags are mandatory; real
+// account tokens can never use this override, even if E2E was set by mistake.
+function gmailE2EEndpoint(value: string) {
+  if (process.env.AI_EXECUTIVE_E2E !== "true" ||
+      process.env.AI_EXECUTIVE_GMAIL_CLIENT_ID !== "lumi-e2e-only" ||
+      !(process.env.AI_EXECUTIVE_GMAIL_REDIRECT_URI || "").startsWith("http://localhost:")) return value;
+  const raw = process.env.AI_EXECUTIVE_E2E_GMAIL_URL || "";
+  if (!/^http:\/\/127\.0\.0\.1:\d{4,5}\/$/.test(raw)) return value;
+  const original = new URL(value);
+  if (original.origin !== "https://oauth2.googleapis.com" &&
+      original.origin !== "https://gmail.googleapis.com") throw new MailError("Gmail test origin refused", 502);
+  return new URL(original.pathname + original.search, raw).toString();
+}
+
 async function googleJson(url: string, options: RequestInit = {}): Promise<Record<string, unknown>> {
   let response: Response;
   try {
-    response = await fetch(url, { ...options, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    response = await fetch(gmailE2EEndpoint(url), { ...options, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch { throw new MailError("Gmail is temporarily unavailable", 502); }
   if (!response.ok) {
     if (response.status === 400 || response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);

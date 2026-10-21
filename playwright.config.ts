@@ -25,6 +25,7 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // The previous 40000–59999 range could collide with an outgoing socket during the
   // long E2E run, making the CalDAV mock fail before its first test (EADDRINUSE).
   process.env.LUMI_E2E_CALDAV_PORT = String(20_000 + randomInt(10_000));
+  process.env.LUMI_E2E_GMAIL_PORT = String(30_000 + randomInt(2_000));
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;
@@ -33,6 +34,7 @@ if (!passwordHash?.startsWith("scrypt:") || !sessionSecret) throw new Error("The
 export const sessionFile = path.join(runDir, "session.json");
 export const integrationToken = process.env.LUMI_E2E_INTEGRATION_TOKEN || "";
 export const caldavMockPort = Number(process.env.LUMI_E2E_CALDAV_PORT);
+export const gmailMockPort = Number(process.env.LUMI_E2E_GMAIL_PORT);
 
 // A sandbox may ship its own Chromium; elsewhere `pnpm exec playwright install chromium` provides it.
 const systemChromium = process.env.E2E_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined);
@@ -82,6 +84,12 @@ export default defineConfig({
       // address only with both settings and only for an http:// loopback address (lib/caldav.ts, calDavTestOverride).
       AI_EXECUTIVE_E2E: "true",
       AI_EXECUTIVE_E2E_CALDAV_URL: `http://127.0.0.1:${process.env.LUMI_E2E_CALDAV_PORT}/`,
+      AI_EXECUTIVE_E2E_GMAIL_URL: `http://127.0.0.1:${process.env.LUMI_E2E_GMAIL_PORT}/`,
+      AI_EXECUTIVE_GMAIL_CLIENT_ID: "lumi-e2e-only",
+      AI_EXECUTIVE_GMAIL_CLIENT_SECRET: "test-only-not-google",
+      AI_EXECUTIVE_GMAIL_REDIRECT_URI: `http://localhost:${port}/api/mail/gmail/callback`,
+      AI_EXECUTIVE_MAIL_SECRET: "e2e-only-mail-encryption-key-0123456789",
+
     },
   },
 });

@@ -1,0 +1,46 @@
+import { expect, test } from "./fixtures";
+import { gmailMockPort } from "../playwright.config";
+import { startGmailMock, mockGmailAddress, mockGmailRefresh, mockGmailAccess, type GmailMock } from "./gmail-mock";
+import { settingsSections, waitUntilSynced } from "./helpers";
+
+// The application runs a production build against the on-loopback E2E Google stub.
+// No live Gmail is contacted. Test both OAuth page and the actual first-party POST
+// carrying Lumi's SameSite=Strict owner session.
+let google: GmailMock;
+test.beforeAll(async () => { google = await startGmailMock(gmailMockPort); });
+test.afterAll(async () => { await google?.close(); });
+
+test("Gmail authorization from Settings exchanges a one-use code and reads mailbox with owner session", async ({ page }) => {
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  await expect(page.getByRole("button", { name: "Připojit Gmail" })).toBeVisible();
+  await page.route("https://accounts.google.com/o/oauth2/v2/auth**", async (route) => {
+    const url = new URL(route.request().url());
+    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/gmail.readonly");
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    const state = url.searchParams.get("state");
+    expect(state).toMatch(/^[A-Za-z0-9_-]{40,60}$/);
+    const redirect = new URL(url.searchParams.get("redirect_uri")!);
+    redirect.searchParams.set("state", state!);
+    redirect.searchParams.set("code", "E2E-FAKE-CODE");
+    await route.fulfill({ status: 302, headers: { location: redirect.toString(), "cache-control": "no-store" }, body: "" });
+  });
+  await page.getByRole("button", { name: "Připojit Gmail" }).click();
+  await expect(page).toHaveURL(/gmail=connected/, { timeout: 25_000 });
+  await expect(page.getByText(mockGmailAddress, { exact: true })).toBeVisible({ timeout: 20_000 });
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await section.getByRole("button", { name: "Doručené" }).click();
+  await expect(section).toContainText("Gmail OAuth E2E");
+  await expect(section).toContainText("Zpráva z lokálního mocku");
+  const data = await page.evaluate(async () => JSON.stringify({
+    local: { ...localStorage }, session: { ...sessionStorage },
+    account: await fetch("/api/mail/gmail?workspaceId=personal", { cache: "no-store" }).then((r) => r.json()),
+  }));
+  expect(data).not.toContain(mockGmailRefresh);
+  expect(data).not.toContain(mockGmailAccess);
+  expect(google.requests.some((r) => r.path === "/token" && r.body.includes("grant_type=authorization_code"))).toBe(true);
+  expect(google.requests.some((r) => r.path.includes("/gmail/v1/users/me/messages"))).toBe(true);
+  expect(google.requests.some((r) => /\/send|\/modify|\/trash/.test(r.path))).toBe(false);
+});

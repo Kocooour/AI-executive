@@ -202,6 +202,8 @@ test("OAuth callback never exchanges a code on public GET or unauthenticated POS
   let requests = 0;
   const original = globalThis.fetch;
   globalThis.fetch = async () => { requests++; throw new Error("unexpected Google request"); };
+  const previousAuth = process.env.AI_EXECUTIVE_AUTH_ENABLED;
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "true";
   try {
     const state = "B".repeat(43);
     const landing = await callback.GET(new Request(
@@ -214,9 +216,11 @@ test("OAuth callback never exchanges a code on public GET or unauthenticated POS
         body: JSON.stringify({ state, code: "PUBLIC-CODE" }),
       },
     ));
-    // The test harness deliberately disables owner auth outside production;
-    // an invalid state still fails before any Google exchange.
-    assert.notEqual(response.status, 200);
+    assert.equal(response.status, 401, "public callback POST requires owner login even with a valid-looking state");
     assert.equal(requests, 0);
-  } finally { globalThis.fetch = original; }
+  } finally {
+    globalThis.fetch = original;
+    if (previousAuth === undefined) delete process.env.AI_EXECUTIVE_AUTH_ENABLED;
+    else process.env.AI_EXECUTIVE_AUTH_ENABLED = previousAuth;
+  }
 });
