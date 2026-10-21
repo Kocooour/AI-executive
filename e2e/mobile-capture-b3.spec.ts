@@ -45,6 +45,9 @@ test.describe("B3 mobile Quick Capture", () => {
   });
 
   test("a late task sync cannot erase a newer note draft", async ({ page }) => {
+    // Keep suggestion timing and project recommendations out of this sync-race test.
+    await page.route("**/api/task-suggestions", (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
     let releaseFirstPut: (() => void) | undefined;
     let firstPutBlocked: () => void = () => undefined;
     const blocked = new Promise<void>((resolve) => { firstPutBlocked = resolve; });
@@ -86,6 +89,9 @@ test.describe("B3 mobile Quick Capture", () => {
   });
 
   test("editing the same draft scope during an older save keeps the newer generation", async ({ page }) => {
+    // Keep suggestion timing and project recommendations out of this sync-race test.
+    await page.route("**/api/task-suggestions", (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
     let releaseFirstPut: (() => void) | undefined;
     let signal: () => void = () => undefined;
     const blocked = new Promise<void>((resolve) => { signal = resolve; });
