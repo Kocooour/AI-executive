@@ -1,5 +1,14 @@
 /* B3: lightweight mode picker and explicit draft controls.
    Unfinished text exists only in this tab's React state, never in persistent storage. */
+@media (min-width: 701px) {
+  /* Suggestions can expand after entering a task. Without an internal scroll
+     area the dialog outgrows the desktop viewport and Save becomes unclickable. */
+  .captureModal {
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
 .captureModal > .captureKind {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
