@@ -31,6 +31,12 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
   if (app.view !== "Inbox") return null;
   if (!batchAllowed) return <p className="batchTriageReadOnly" role="status">{tr("batchReadOnly")}</p>;
 
+  // Effects run after render; guard against old workspace content *during* the
+  // first render following a scope change, before the review-reset effect runs.
+  const validReview = review && review.workspaceId === activeWorkspaceId &&
+    review.selection.length === batchIds.length &&
+    review.selection.every(item => item.workspaceId === activeWorkspaceId && batchIds.includes(item.id))
+    ? review : null;
   const projectChoices = projects.filter(x => x.workspaceId === activeWorkspaceId && x.status === "active");
   const areaChoices = areas.filter(x => x.workspaceId === activeWorkspaceId && x.status === "active");
   const project = projectChoices.find(x => x.id === projectId);
@@ -60,14 +66,12 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
   }
 
   async function apply() {
-    if (!review || busy || review.workspaceId !== activeWorkspaceId ||
-        review.selection.length !== batchIds.length ||
-        review.selection.some(item => !batchIds.includes(item.id))) return;
+    if (!validReview || busy) return;
     setBusy(true);
     setError("");
     try {
-      await triageInboxBatch(review.selection, review.action, {
-        projectId: review.projectId, areaId: review.areaId,
+      await triageInboxBatch(validReview.selection, validReview.action, {
+        projectId: validReview.projectId, areaId: validReview.areaId,
       });
       setReview(null);
       setBatchIds([]);
@@ -96,7 +100,7 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
       {batchCandidates.length > 50 && <small>{tr("batchMaxItems")}</small>}
       <span className="batchTriageSync" role="status">{tr(syncStatus === "offline" ? "offline" : syncStatus === "syncing" ? "syncing" : syncStatus === "synced" ? "synced" : "connecting")}</span>
     </div>
-    {!review ? (
+    {!validReview ? (
       <div className="batchTriageControls">
         <label>{tr("batchAction")}
           <select aria-label={tr("batchAction")} value={action} disabled={busy}
@@ -130,10 +134,10 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
     ) : <div className="batchTriageReview" role="group" aria-label={tr("batchReviewTitle")}>
       <h3>{tr("batchReviewTitle")}</h3>
       <p>{tr("batchReviewScope")}: <strong>{app.workspaceName}</strong></p>
-      <p>{tr("batchReviewImpact").replace("{count}", String(review.selection.length))} — <strong>{review.summary}</strong></p>
-      <ul>{review.selection.map(item =>
+      <p>{tr("batchReviewImpact").replace("{count}", String(validReview.selection.length))} — <strong>{validReview.summary}</strong></p>
+      <ul>{validReview.selection.map(item =>
         <li key={item.id}><span>{item.title || tr("untitledItem")}</span>
-          <small>{tr("Inbox")} → {review.summary}</small></li>)}</ul>
+          <small>{tr("Inbox")} → {validReview.summary}</small></li>)}</ul>
       <p className="batchTriageHint">{tr("batchAtomicNotice")}</p>
       <div className="batchTriageConfirm">
         <button type="button" onClick={() => setReview(null)} disabled={busy}>{tr("cancel")}</button>
