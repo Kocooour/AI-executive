@@ -275,6 +275,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <label>
                   {tr("area")}
                   <select
+                    aria-label={tr("area")}
                     value={String(
                       targets(selected.id, "belongs_to_area")[0] || "",
                     )}
@@ -472,6 +473,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <label>
                   {tr("area")}
                   <select
+                    aria-label={tr("area")}
                     value={String(
                       targets(selected.id, "belongs_to_area")[0] || "",
                     )}

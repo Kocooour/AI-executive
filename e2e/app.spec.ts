@@ -70,8 +70,8 @@ test("a task keeps its selected area and can change it after capture", async ({ 
   await page.goto("/?view=Inbox");
   const row = page.locator("article", { hasText: title }).first();
   await row.click();
-  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.first);
-  await page.locator("aside.detail").getByLabel("Oblast").selectOption(ids.second);
+  await expect(page.locator("aside.detail").getByLabel("Oblast", { exact: true })).toHaveValue(ids.first);
+  await page.locator("aside.detail").getByLabel("Oblast", { exact: true }).selectOption(ids.second);
   const duration = page.locator("aside.detail").getByLabel("Odhadovaná náročnost");
   await duration.fill("4");
   await expectOnServer(page, (entity) => entity.title === title && entity.properties?.estimatedMinutes === 4, true);
@@ -82,7 +82,7 @@ test("a task keeps its selected area and can change it after capture", async ({ 
   }, title)).toBe(ids.second);
   await page.reload();
   await page.locator("article", { hasText: title }).first().click();
-  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.second);
+  await expect(page.locator("aside.detail").getByLabel("Oblast", { exact: true })).toHaveValue(ids.second);
   await expect(page.locator("aside.detail").getByLabel("Odhadovaná náročnost")).toHaveValue("4");
 });
 
@@ -136,7 +136,7 @@ test("capture switches destination and area to the selected workspace", async ({
   }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.targetAreaId });
   await expect(page.locator(".workspaceButton")).toContainText("Rodina sdílená");
   await page.locator("article", { hasText: title }).first().click();
-  await expect(page.locator("aside.detail").getByLabel("Oblast")).toHaveValue(ids.targetAreaId);
+  await expect(page.locator("aside.detail").getByLabel("Oblast", { exact: true })).toHaveValue(ids.targetAreaId);
 });
 
 test("a task added from a project in another workspace offers that workspace's areas", async ({ page }) => {
