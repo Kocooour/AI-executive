@@ -1,0 +1,47 @@
+/* Search UI iteration: clear type filters, status and fully keyboard-accessible rows.
+   Scoping and relation checks are handled by lib/search-views.ts. */
+.searchExplorer { min-width: 0; display: grid; gap: 14px; }
+.searchExplorer .searchSummary { font-size: .9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.searchExplorer .searchKindFilters { display: flex; flex-wrap: wrap; gap: 8px; }
+.searchExplorer .searchKindFilters button {
+  min-height: 44px; display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--surface); color: var(--text);
+  font: inherit; font-size: .875rem; cursor: pointer;
+}
+.searchExplorer .searchKindFilters button[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--surface-subtle);
+  font-weight: 700;
+}
+.searchExplorer .searchKindFilters button span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.searchExplorer .searchResults { display: grid; min-width: 0; }
+.searchExplorer .searchResults article { padding: 0; min-width: 0; }
+.searchExplorer .searchResultOpen {
+  width: 100%; min-width: 0; min-height: 56px;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 8px; border: 0; background: transparent;
+  color: var(--text); text-align: left; cursor: pointer;
+}
+.searchExplorer .searchResultOpen:hover { background: var(--hover); }
+.searchExplorer .searchResultOpen:focus-visible,
+.searchExplorer .searchKindFilters button:focus-visible,
+.searchExplorer .searchState button:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: -2px;
+}
+.searchExplorer .searchResultText { display: grid; gap: 4px; min-width: 0; }
+.searchExplorer .searchResultText strong { overflow-wrap: anywhere; font-size: .925rem; }
+.searchExplorer .searchResultText small { color: var(--muted); }
+.searchExplorer .searchResultArrow { color: var(--muted); font-size: 1.15rem; }
+.searchExplorer .searchState { padding: 18px; color: var(--muted); border: 1px dashed var(--line); border-radius: 12px; }
+.searchExplorer .searchState p { margin: 0 0 9px; }
+.searchExplorer .searchState button {
+  min-height: 44px; padding: 9px 14px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer;
+}
+@media (max-width: 700px) {
+  .searchExplorer { gap: 12px; }
+  .searchExplorer .searchKindFilters { gap: 6px; }
+  .searchExplorer .searchKindFilters button { font-size: .825rem; padding: 8px 11px; }
+  .searchExplorer .searchResultOpen { min-height: 56px; }
+  .searchExplorer .searchState { padding: 14px; }
+}
