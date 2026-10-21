@@ -9,7 +9,8 @@ const MAX_REPLY = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 export class MailError extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  status: number;
+  constructor(message: string, status = 400) { super(message); this.status = status; }
 }
 
 export function mailKey() {
@@ -128,7 +129,7 @@ async function googleJson(url: string, options: RequestInit = {}): Promise<Recor
   const body = Buffer.concat(chunks.map((part) => Buffer.from(part))).toString("utf8");
   try {
     const json: unknown = JSON.parse(body);
-    if (!json || typeof json !== "object" || Array.isArray(json)) throw new Error("invalid");
+    if (!json || typeof json !== "object" || Array.isArray(json)) throw new MailError("Gmail response is invalid", 502);
     return json as Record<string, unknown>;
   } catch { throw new MailError("Gmail response is invalid", 502); }
 }

@@ -145,6 +145,10 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  "Gmail connection failed", // Sanitized generic OAuth failure, not provider error text.
+  "Gmail request failed", // Generic API failure without third-party details.
+  "Mail request failed", // Sanitized unexpected owner route failure.
+
   // Security-log reasons and alert text, never sent to the interface.
   "failed",
   "internal-error",
