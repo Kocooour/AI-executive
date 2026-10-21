@@ -21,8 +21,10 @@ if (!process.env.LUMI_E2E_RUN_DIR) {
   // The integration API token of the test instance (listens on loopback only); the data-boundary scenarios present it to
   // endpoints that must refuse it.
   process.env.LUMI_E2E_INTEGRATION_TOKEN = randomBytes(32).toString("hex");
-  // The port of the mock iCloud CalDAV server that e2e/icloud-calendar.spec.ts starts on the loopback interface.
-  process.env.LUMI_E2E_CALDAV_PORT = String(40_000 + randomInt(20_000));
+  // Use an unprivileged port below the usual Linux ephemeral-client range (32768–60999).
+  // The previous 40000–59999 range could collide with an outgoing socket during the
+  // long E2E run, making the CalDAV mock fail before its first test (EADDRINUSE).
+  process.env.LUMI_E2E_CALDAV_PORT = String(20_000 + randomInt(10_000));
 }
 const runDir = process.env.LUMI_E2E_RUN_DIR;
 const passwordHash = process.env.LUMI_E2E_PASSWORD_HASH;

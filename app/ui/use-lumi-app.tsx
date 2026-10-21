@@ -225,6 +225,14 @@ export function useLumiApp() {
   const captureModalRef = useRef<HTMLFormElement | null>(null);
   const captureSuggestionVersion = useRef(0);
   const captureAreaTouched = useRef(false);
+  // B3: volatile, workspace/type/project-scoped drafts. Draft text is not
+  // persisted as an entity before Save; task suggestions DO send text to our
+  // server while typing (see the UI notice and /api/task-suggestions).
+  const captureDrafts = useRef(new Map<string, string>());
+  const captureDraftKey = useRef("task:personal:");
+  // A save can finish after another capture has opened. Only clear the exact
+  // generation that was actually committed locally, never a newer edit.
+  const captureDraftRevisions = useRef(new Map<string, number>());
   const draggingIdRef = useRef("");
   const dragScopeRef = useRef("");
   const dragTargetRef = useRef("");
@@ -1585,6 +1593,12 @@ export function useLumiApp() {
     }
   }, [activeWorkspaceId, items, writeWorkspaceId, language]);
 
+  // Closing the sheet preserves a typed draft until the app is reloaded. Sign-out
+  // discards all in-memory drafts together with the rest of the session.
+  useEffect(() => {
+    if (capture) captureDrafts.current.set(captureDraftKey.current, draft);
+  }, [capture, draft]);
+
   // The suggestion for Quick Capture depends on the text and where the task goes, not on every
   // reload of the local copy: a reload (a save, another tab, another device) must not restart it,
   // which would disable the add button for a moment and could swallow a click on it.
@@ -1741,7 +1755,45 @@ export function useLumiApp() {
     captureAreaTouched.current = true;
     setCaptureAreaId(areaId);
   }
+  function captureKey(type: "task" | "note", workspaceId: string, projectId = "") {
+    return `${type}:${workspaceId}:${projectId}`;
+  }
+  function replaceCaptureScope(type: "task" | "note", workspaceId: string, projectId = "") {
+    if (capture) captureDrafts.current.set(captureDraftKey.current, draft);
+    const key = captureKey(type, workspaceId, projectId);
+    captureDraftKey.current = key;
+    setDraft(captureDrafts.current.get(key) || "");
+  }
+  function editCaptureDraft(value: string) {
+    const key = captureDraftKey.current;
+    captureDraftRevisions.current.set(key, (captureDraftRevisions.current.get(key) ?? 0) + 1);
+    // Store on input, not in a later effect: an old save may finish between
+    // the change event and React's next effect flush.
+    captureDrafts.current.set(key, value);
+    setDraft(value);
+  }
+  function chooseCaptureType(type: "task" | "note") {
+    if (type === captureType || captureProjectId) return;
+    replaceCaptureScope(type, writeWorkspaceId);
+    setCaptureType(type);
+    setCaptureAreaId("");
+    captureAreaTouched.current = false;
+    setCaptureSuggestion(null);
+    setCaptureSuggestionError("");
+    setCaptureProjectAction("none");
+  }
+  function discardCaptureDraft() {
+    const key = captureDraftKey.current;
+    captureDraftRevisions.current.set(key, (captureDraftRevisions.current.get(key) ?? 0) + 1);
+    captureDrafts.current.delete(key);
+    setDraft("");
+    setCaptureSuggestion(null);
+    setCaptureSuggestionError("");
+    setCaptureProjectAction(captureProjectId ? "existing" : "none");
+  }
   function selectCaptureWriteWorkspace(workspaceId: string) {
+    if (workspaceId === writeWorkspaceId) return;
+    replaceCaptureScope(captureType, workspaceId);
     // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
     setCaptureAreaId("");
     captureAreaTouched.current = false;
@@ -1969,6 +2021,7 @@ export function useLumiApp() {
     type: EntityType,
     title: string,
     extra: Record<string, unknown> = {},
+    onLocalCommit?: () => void,
   ) {
     if (!title.trim()) return;
     const now = writeTime(),
@@ -2099,7 +2152,8 @@ export function useLumiApp() {
     }
     if (!created) return id;
     setText("");
-    setDraft("");
+    if (onLocalCommit) onLocalCommit();
+    else setDraft("");
     // The IndexedDB transaction above is the local-first commit boundary. Once it
     // succeeds, a network or refresh failure must not reopen Quick Capture and let
     // a retry duplicate the task/project pair. syncToServer keeps pendingKey set
@@ -2120,11 +2174,12 @@ export function useLumiApp() {
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
     captureOpener.current = document.activeElement as HTMLElement | null;
+    const workspaceId = (projectId && items.find((item) => item.id === projectId)?.workspaceId) || writeWorkspaceId;
+    replaceCaptureScope(type, workspaceId, projectId);
     setCaptureType(type);
     setCaptureProjectId(projectId);
     setCaptureAreaId("");
     captureAreaTouched.current = false;
-    setDraft("");
     setCaptureSuggestion(null);
     setCaptureSuggestionError("");
     setCaptureSuggestionBusy(false);
@@ -2135,6 +2190,18 @@ export function useLumiApp() {
   async function submitCapture() {
     const title = draft.trim();
     if (!title) return;
+    const submittedDraft = draft;
+    const submittedKey = captureDraftKey.current;
+    const submittedRevision = captureDraftRevisions.current.get(submittedKey) ?? 0;
+    // Commit boundary is local IndexedDB, not network sync. Late completions
+    // must not clear a new capture (even if it reuses the same scope key).
+    const clearCommittedDraft = () => {
+      if ((captureDraftRevisions.current.get(submittedKey) ?? 0) !== submittedRevision) return;
+      captureDrafts.current.delete(submittedKey);
+      if (captureDraftKey.current === submittedKey) {
+        setDraft((current) => current === submittedDraft ? "" : current);
+      }
+    };
     const parsed = parseCapture(title);
     const suggestion = captureType === "task" && useCaptureSuggestion ? captureSuggestion : null;
     if (suggestion?.newProjectSuggestion && (
@@ -2187,9 +2254,16 @@ export function useLumiApp() {
               } : {}),
             }
           : {}),
-      });
+      }, clearCommittedDraft);
     } catch (error) {
       console.error(error);
+      // A failed earlier submission may not reopen the sheet or replace the
+      // text and suggestion state of another draft the user is now editing.
+      if (captureDraftKey.current !== submittedKey ||
+          (captureDraftRevisions.current.get(submittedKey) ?? 0) !== submittedRevision) {
+        setSyncStatus("offline");
+        return;
+      }
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
         const workspaceId = writeWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
@@ -3423,6 +3497,9 @@ export function useLumiApp() {
     captureProjectId,
     captureAreaId,
     chooseCaptureArea,
+    chooseCaptureType,
+    editCaptureDraft,
+    discardCaptureDraft,
     captureSuggestion,
     captureSuggestionBusy,
     captureSuggestionError,

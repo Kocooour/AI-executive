@@ -19,16 +19,28 @@ export function heldBackReason(app: Pick<LumiApp, "heldReasons" | "tr">, entity:
   return app.tr(reasonKeys[app.heldReasons.get(entity.id) || "invalid"]);
 }
 
+// Keep the visual marks and accessible search descriptions in sync: a record can
+// have a conflict alongside one of the two mutually exclusive upload states.
+export function recordMarkState(app: Pick<LumiApp, "heldReasons" | "unsent">, entity: Entity) {
+  const heldBack = app.heldReasons.has(entity.id);
+  return {
+    conflict: entityConflicts(entity).length > 0,
+    heldBack,
+    unsent: !heldBack && app.unsent.has(entity.id),
+  };
+}
+
 // The state of a record next to its title: not on the server yet, held back, or changed on
 // another device at the same time.
 export function RecordMarks({ app, entity, hideSync = false }: { app: LumiApp; entity: Entity; hideSync?: boolean }) {
-  const { heldReasons, unsent, tr } = app;
+  const { tr } = app;
+  const marks = recordMarkState(app, entity);
   return (
     <>
-      {entityConflicts(entity).length > 0 && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}
-      {!hideSync && (heldReasons.has(entity.id)
+      {marks.conflict && <span className="conflictMark" role="img" aria-label={tr("conflictBadge")} title={tr("conflictBadge")}> ⇄</span>}
+      {!hideSync && (marks.heldBack
         ? <span className="heldBackMark" role="img" aria-label={tr("heldBackBadge")} title={tr("heldBackBadge")}> ⚠</span>
-        : unsent.has(entity.id) && <span className="unsentMark" role="img" aria-label={tr("unsentBadge")} title={tr("unsentBadge")}> ↑</span>)}
+        : marks.unsent && <span className="unsentMark" role="img" aria-label={tr("unsentBadge")} title={tr("unsentBadge")}> ↑</span>)}
     </>
   );
 }

@@ -26,6 +26,13 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
     workSessionAction,
     workSessionBusy,
   } = app;
+  // Preserve time ordering inside each group, but never mix accepted plans with
+  // proposals that still require confirmation (LUMI-UX-012).
+  const planGroups = [
+    { key: "fixed", label: "dayPlanGroupFixed", blocks: dayPlanTimeline.filter((item) => item.existing && item.planningSource !== "albert-day-plan") },
+    { key: "approved", label: "dayPlanGroupApproved", blocks: dayPlanTimeline.filter((item) => item.existing && item.planningSource === "albert-day-plan") },
+    { key: "suggested", label: "dayPlanGroupSuggested", blocks: dayPlanTimeline.filter((item) => !item.existing) },
+  ].filter((group) => group.blocks.length > 0);
   return (
             <section className="dayPlanCard" aria-labelledby="day-plan-title">
               <div className="sectionHeading">
@@ -46,7 +53,11 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
                 {dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date && <button disabled={dayPlanBusy} onClick={undoDayPlanBlock}>{tr("dayPlanUndo")}</button>}
                 {visibleDayPlan.existingBlocks.length + visibleDayPlan.planBlocks.length + visibleDayPlan.unscheduled.length === 0 && <p>{tr("dayPlanEmpty")}</p>}
                 <div className="dayPlanTimeline">
-                  {dayPlanTimeline.map((item) => (
+                  {planGroups.map((group) => (
+                    <section key={group.key} className="dayPlanGroup" data-plan-group={group.key} aria-label={tr(group.label)}>
+                      <div className="dayPlanGroupHeader"><h3>{tr(group.label)}</h3><span aria-hidden="true">{group.blocks.length}</span></div>
+                      <div className="dayPlanGroupItems">
+                        {group.blocks.map((item) => (
                     <article className={`dayPlanBlock ${item.existing ? "existing" : "proposed"}`} key={`${item.taskId}:${item.start}`}>
                       <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.start!))}–{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { timeZone: visibleDayPlan.timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.end!))}</time>
                       <div><strong>{item.title}</strong><small>{tr(item.existing ? item.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed")} · {tr(`dayPlanReason${item.reason[0].toUpperCase()}${item.reason.slice(1)}`)} · {item.estimatedMinutes} min · {tr(item.estimateSource === "actual" ? "dayPlanActualEstimate" : item.estimateSource === "learned" ? "dayPlanLearnedEstimate" : item.estimateSource === "explicit" ? "dayPlanExplicitEstimate" : "dayPlanDefaultEstimate")}{item.estimateSource === "learned" || item.estimateSource === "actual" ? ` (${item.estimateSamples})` : ""}{item.preferredMinute !== null && item.preferredMinute !== undefined ? ` · ${tr("dayPlanPreferredTime")} (${item.timeSamples})` : ""}</small>{item.whyNow?.length > 0 && <details className="whyNow"><summary>{tr("whyNow")}</summary><ul>{item.whyNow.map((reason) => <li key={reason}>{dayPlanWhy(reason)}</li>)}</ul></details>}
@@ -61,7 +72,13 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
                         </div>
                       </div>
                     </article>
+                        ))}
+                      </div>
+                    </section>
                   ))}
+                  {visibleDayPlan.unscheduled.length > 0 && <section className="dayPlanGroup" data-plan-group="unscheduled" aria-label={tr("dayPlanGroupUnscheduled")}>
+                    <div className="dayPlanGroupHeader"><h3>{tr("dayPlanGroupUnscheduled")}</h3><span aria-hidden="true">{visibleDayPlan.unscheduled.length}</span></div>
+                    <div className="dayPlanGroupItems">
                   {visibleDayPlan.unscheduled.map((item) => (
                     <article className="dayPlanBlock unscheduled" key={item.taskId}>
                       <span>{tr("dayPlanUnscheduled")}</span>
@@ -74,6 +91,8 @@ export function DayPlanCard({ app }: { app: LumiApp }) {
                       </div>
                     </article>
                   ))}
+                    </div>
+                  </section>}
                 </div>
               </> : !dayPlanStatus && <p>{tr("checking")}</p>}
             </section>

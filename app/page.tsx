@@ -7,6 +7,7 @@ import { CalendarView } from "./ui/views/calendar-view";
 import { HomeView } from "./ui/views/home-view";
 import { WorkNowCard } from "./ui/views/work-now-card";
 import { DayPlanCard } from "./ui/views/day-plan-card";
+import { TodayAgenda } from "./ui/views/today-agenda";
 import { SearchResults } from "./ui/views/search-results";
 import { ContextView } from "./ui/views/context-view";
 import { AgentsView } from "./ui/views/agents-view";
@@ -70,6 +71,13 @@ export default function App() {
           <CalendarView app={app} />
           <HomeView app={app} />
           {view === "Today" && <WorkNowCard app={app} />}
+          {view === "Today" && app.calendarDayEvents.length > 0 && (
+            <section className="todayCalendarCommitments" aria-labelledby="today-calendar-title">
+              <h2 id="today-calendar-title">{tr("todayGroupCalendar")}</h2>
+              {!app.calendarFresh && <p role="status">{tr("dayPlanStale")}</p>}
+              <TodayAgenda app={app} events={app.calendarDayEvents} day={app.calendarToday} />
+            </section>
+          )}
           {view === "Today" && <DayPlanCard app={app} />}
           <SearchResults app={app} />
           <ContextView app={app} />

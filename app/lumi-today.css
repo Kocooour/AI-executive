@@ -1,0 +1,89 @@
+/* Today E2: distinguish commitments, owner-approved work and editable proposals.
+   The status is written out in headings and row labels, never conveyed by color alone. */
+.view-today .todayCalendarCommitments,
+.view-today .dayPlanCard {
+  margin: 20px 0 24px;
+}
+.view-today .todayCalendarCommitments h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.view-today .todayCalendarCommitments > p[role="status"] {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.view-today .dayPlanTimeline {
+  display: grid;
+  gap: 20px;
+}
+.view-today .dayPlanGroup {
+  min-width: 0;
+}
+.view-today .dayPlanGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.view-today .dayPlanGroupHeader h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.view-today .dayPlanGroupHeader span {
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.view-today .dayPlanGroupItems {
+  display: grid;
+  gap: 9px;
+}
+.view-today .dayPlanBlock {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.view-today .dayPlanBlock small {
+  line-height: 1.5;
+}
+.view-today .dayPlanBlock .whyNow {
+  margin-top: 8px;
+}
+.view-today .dayPlanGroup[data-plan-group="suggested"] .dayPlanBlock {
+  border-left-color: var(--accent);
+}
+.view-today .dayPlanGroup[data-plan-group="unscheduled"] .dayPlanBlock {
+  border-left-color: var(--muted);
+}
+@media (max-width: 700px) {
+  .view-today .dayPlanCard {
+    padding: 14px;
+    border-radius: 14px;
+  }
+  .view-today .dayPlanBlock {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 6px;
+  }
+  .view-today .dayPlanActions button {
+    min-height: 44px;
+    flex: 1 1 44%;
+    white-space: normal;
+  }
+  .view-today .todayCalendarCommitments .calendarAgenda > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .view-today .dayPlanGroupHeader {
+    margin-bottom: 8px;
+  }
+}
