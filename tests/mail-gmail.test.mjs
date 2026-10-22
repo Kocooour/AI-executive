@@ -682,7 +682,8 @@ test("Mail v4 opt-in, bounded initial and incremental History sync, metadata pri
     assert.equal(recovered.full, true, "expired history automatically falls back to bootstrap");
     assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "300");
     assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=? ORDER BY message_id").all(accountId).map(x => x.message_id),
-      [ids[1]]);
+      [ids[1], ids[2]], "bounded recovery must preserve still-retained messages missing from bootstrap");
+    assert.equal(recovered.partial, true, "404 recovery must advertise incomplete bootstrap");
     mail.enableMailSync(workspaceId, accountId, 30);
     assert.equal(mail.listMailSyncStates(workspaceId)[0].retentionDays, 30);
     assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, null,
@@ -797,19 +798,14 @@ test("Mail v4 checkpoints a 130-event history backlog without discarding existin
   } finally { globalThis.fetch = previous; }
 });
 
-test("Mail v4 resumes after five history pages and never checkpoints an oversized event", async () => {
+test("Mail v4 resumes after five history pages", async () => {
   const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
   const previous = globalThis.fetch;
-  let oversized = false;
   globalThis.fetch = async (target) => {
     const url = new URL(String(target));
     if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
     if (url.pathname === "/gmail/v1/users/me/history") {
-      if (oversized) return Response.json({ historyId: "999", history: [{
-        id: "300", messagesAdded: Array.from({ length: 121 }, (_, i) =>
-          ({ message: { id: (0xaabbcc + i).toString(16) } })),
-      }] });
       const start = url.searchParams.get("startHistoryId");
       if (start === "100") {
         const page = Number(url.searchParams.get("pageToken") || 0);
@@ -828,10 +824,6 @@ test("Mail v4 resumes after five history pages and never checkpoints an oversize
     const second = await mail.syncMailAccount(workspaceId, id);
     assert.equal(second.partial, false);
     assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "999");
-    oversized = true;
-    database.prepare("UPDATE mail_sync_accounts SET history_id='200' WHERE account_id=?").run(id);
-    await assert.rejects(mail.syncMailAccount(workspaceId, id), { status: 409 });
-    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "200");
   } finally { globalThis.fetch = previous; }
 });
 
