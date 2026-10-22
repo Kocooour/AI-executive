@@ -1086,3 +1086,107 @@ test("Mail v4 pagination failure cannot advance recovery cursors or silently los
     assert.deepEqual(after, before, "a failed page may not falsely complete discovery");
   } finally { globalThis.fetch = priorFetch; }
 });
+
+
+test("Mail v4 restarts a stale Gmail discovery token after HTTP 400 without losing cached metadata", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000005";
+  const now = Date.now();
+  const ids = Array.from({ length: 30 }, (_, n) => (0xe20000 + n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "stale-pagination@example.com", mail.sealMail("STALE-PAGE-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='500', recovery_inbox_page_token='expired-p25' WHERE account_id=?")
+    .run(accountId);
+  const oldMessage = "abcdef012345";
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcdef012345','old cached subject','existing@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, oldMessage, now);
+  const original = globalThis.fetch;
+  const listPages = [];
+  const historyCursors = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      historyCursors.push(url.searchParams.get("startHistoryId"));
+      return Response.json({ historyId: "501", history: [] });
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      assert.equal(url.searchParams.get("labelIds"), "INBOX");
+      const token = url.searchParams.get("pageToken");
+      listPages.push(token);
+      if (token === "expired-p25") return Response.json({ error: "page token expired" }, { status: 400 });
+      if (token === null) return Response.json({
+        messages: ids.slice(0, 25).map(id => ({ id })), nextPageToken: "fresh-p25",
+      });
+      if (token === "fresh-p25") return Response.json({ messages: ids.slice(25).map(id => ({ id })) });
+      throw new Error("Unexpected page token: " + token);
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      assert(ids.includes(messageId));
+      return Response.json({ id: messageId, threadId: "abcabcabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "New " + messageId }] } });
+    }
+    throw new Error("Unexpected Gmail call " + url);
+  };
+  try {
+    const restarted = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(restarted.full, false);
+    assert.equal(restarted.partial, true);
+    assert.equal(restarted.updated, 25);
+    assert.equal(restarted.state.discoveryPending, true);
+    assert.equal(database.prepare("SELECT recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId).recovery_inbox_page_token, "fresh-p25");
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id=?")
+      .get(accountId, oldMessage).subject, "old cached subject", "old metadata must be preserved");
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM mail_sync_messages WHERE account_id=?")
+      .get(accountId).total, 26);
+    const completed = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(completed.partial, false);
+    assert.equal(completed.state.discoveryPending, false);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM mail_sync_messages WHERE account_id=?")
+      .get(accountId).total, 31);
+    assert.deepEqual(listPages, ["expired-p25", null, "fresh-p25"]);
+    assert.deepEqual(historyCursors, ["500", "501"]);
+  } finally { globalThis.fetch = original; }
+});
+
+test("Mail v4 does not reset discovery cursors on Gmail 401 or a bad first page", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000005";
+  const baseline = () => database.prepare(
+    "SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?",
+  ).get(accountId);
+  const before = baseline();
+  database.prepare("UPDATE mail_sync_accounts SET recovery_inbox_page_token='expired-p25' WHERE account_id=?").run(accountId);
+  const blocked = baseline();
+  const original = globalThis.fetch;
+  let mode = "unauthorized";
+  const listCalls = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({ historyId: "502", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      const token = url.searchParams.get("pageToken");
+      listCalls.push(token);
+      return Response.json({ error: mode }, { status: mode === "unauthorized" ? 401 : 400 });
+    }
+    throw new Error("Unexpected Gmail call " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 401 });
+    assert.deepEqual(listCalls, ["expired-p25"], "401 must not retry without an OAuth credential check");
+    assert.deepEqual(baseline(), blocked);
+    mode = "bad first page";
+    listCalls.length = 0;
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 400 });
+    assert.deepEqual(listCalls, ["expired-p25", null], "only 400 on the saved token gets one fresh first-page attempt");
+    assert.deepEqual(baseline(), blocked, "failed restart may not persist an advanced History cursor or discard metadata");
+  } finally {
+    globalThis.fetch = original;
+    database.prepare("UPDATE mail_sync_accounts SET recovery_inbox_page_token=? WHERE account_id=?")
+      .run(before.recovery_inbox_page_token, accountId);
+  }
+});
