@@ -283,5 +283,5 @@ test("Mail v4 committed sync uses its returned status without an extra status re
   await expect(section.getByText("3 záznamů", { exact: false })).toBeVisible();
   await expect(section).not.toContainText("Synchronizace Gmailu se nezdařila.");
   expect(syncCalls).toBe(1);
-  expect(statusCalls).toBe(1, "no follow-up status request after a successful sync");
+  expect(statusCalls, "no follow-up status request after a successful sync").toBe(1);
 });
