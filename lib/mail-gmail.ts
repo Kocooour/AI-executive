@@ -23,6 +23,9 @@ export class MailError extends Error {
 class MailHistoryCheckpointError extends MailError {
   constructor(message: string) { super(message, 409); }
 }
+class MailReplyTooLargeError extends MailError {
+  constructor() { super("Gmail response is too large", 502); }
+}
 
 export function mailKey() {
   const secret = process.env.AI_EXECUTIVE_MAIL_SECRET || "";
@@ -135,7 +138,8 @@ function gmailE2EEndpoint(value: string) {
   return new URL(original.pathname + original.search, raw).toString();
 }
 
-async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number, maxBytes = MAX_REPLY): Promise<Record<string, unknown>> {
+async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number,
+  maxBytes = MAX_REPLY, allowSyncBadRequest = false): Promise<Record<string, unknown>> {
   const remaining = deadlineAt === undefined ? REQUEST_TIMEOUT_MS : Math.min(REQUEST_TIMEOUT_MS, deadlineAt - Date.now());
   if (remaining <= 0) throw new MailError("Gmail request timed out", 502);
   let response: Response;
@@ -149,7 +153,8 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
       // The OAuth token endpoint uses HTTP 400 for invalid_grant (expired or
       // revoked refresh tokens); this *is* an authorization problem. Gmail's
       // messages.list HTTP 400 must stay distinct for pagination recovery.
-      if (url === tokenUrl) throw new MailError("Gmail authorization was refused or expired", 401);
+      if (url === tokenUrl || !allowSyncBadRequest)
+        throw new MailError("Gmail authorization was refused or expired", 401);
       throw new MailError("Gmail request was invalid", 400);
     }
     if (response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
@@ -165,7 +170,7 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > maxBytes) throw new MailError("Gmail response is too large", 502);
+      if (bytes > maxBytes) throw new MailReplyTooLargeError();
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -617,7 +622,12 @@ export function enableMailSync(workspaceId: string, accountId: string, retention
 }
 
 export function disableMailSync(workspaceId: string, accountId: string) {
-  accountCredentials(workspaceId, accountId);
+  // Erasing local metadata must work without reading or decrypting credentials.
+  requireMailWorkspace(workspaceId);
+  const account = getDatabase().prepare(
+    "SELECT id FROM mail_accounts WHERE id=? AND workspace_id=? AND provider='gmail'"
+  ).get(accountId, workspaceId);
+  if (!account) throw new MailError("Mail account not found", 404);
   ensureDailyBackup();
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
@@ -698,10 +708,12 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         for (const count of [100, 10, 1]) {
           url.searchParams.set("maxResults", String(count));
           try {
-            response = await googleJson(url.toString(), { headers }, deadline);
+            response = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
             break;
           } catch (error) {
-            if (!(error instanceof MailError && error.message === "Gmail response is too large")) throw error;
+            if (error instanceof MailError && error.status === 400 && pageToken && count !== 100)
+              throw new MailHistoryCheckpointError("Gmail History page token invalid after smaller reply retry");
+            if (!(error instanceof MailReplyTooLargeError)) throw error;
             if (count === 1) throw error;
           }
         }
@@ -785,7 +797,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       // Gmail expires old history IDs. Rebuild from a recent bounded snapshot,
       // never advance the cursor past data we failed to read.
       if (error instanceof MailHistoryCheckpointError ||
-          (error instanceof MailError && (error.status === 404 || error.message === "Gmail response is too large"))) {
+          (error instanceof MailError && error.status === 404) || error instanceof MailReplyTooLargeError) {
         // History is unavailable or a single record is larger than our safe
         // reply bound. Never advance it without discovering and revalidating
         // the mailbox metadata that the skipped event could have changed.
@@ -809,7 +821,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       url.searchParams.set("maxResults", "25");
       url.searchParams.set("labelIds", folder);
       url.searchParams.set("q", "after:" + recoverySinceSeconds);
-      const result = await googleJson(url.toString(), { headers }, deadline);
+      const result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
       for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
         if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
           const id = (item as Record<string, string>).id;
@@ -840,7 +852,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       url.searchParams.set("pageToken", oldToken);
       let result: Record<string, unknown>;
       try {
-        result = await googleJson(url.toString(), { headers }, deadline);
+        result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
       } catch (error) {
         // An opaque Gmail list-page cursor can expire independently of the
         // History cursor and credentials. Restart only this folder from page
@@ -848,7 +860,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         // or a bad first-page request still fails closed with no DB changes.
         if (!(error instanceof MailError && error.status === 400)) throw error;
         url.searchParams.delete("pageToken");
-        result = await googleJson(url.toString(), { headers }, deadline);
+        result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
       }
       for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
         if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
