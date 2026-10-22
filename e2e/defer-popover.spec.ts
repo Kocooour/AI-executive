@@ -143,7 +143,7 @@ test("after a passed deadline Today is offered without a warning and Lumi says t
   await page.goto("/?view=Today");
   await waitUntilSynced(page);
   await row(page, title).locator("button.check").click();
-  await expectOnServer(page, (entity) => entity.id === id && entity.status === "completed", true);
+  await expectOnServer(page, (entity) => entity.id === id && Boolean(entity.properties?.completedAt), true);
 });
 
 test("Lumi keeps a task with a deadline tomorrow in Today instead of suggesting a deferral", async ({ page }) => {
