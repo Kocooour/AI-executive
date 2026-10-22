@@ -5,10 +5,10 @@ test.describe("mobile More sheet (E3)", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
   test("groups views, hides the capture FAB and highlights only More while open", async ({ page }) => {
-    await page.goto("/?view=Calendar");
+    await page.goto("/?view=Projects");
     await waitUntilSynced(page);
     const nav = page.locator(".mobileNav");
-    await expect(nav.locator('button[data-nav-view="Calendar"]')).toHaveClass(/active/);
+    await expect(nav.locator('button[data-nav-view="Projects"]')).toHaveClass(/active/);
     await nav.locator('button[data-nav-view="More"]').click();
     const sheet = page.getByRole("dialog", { name: "Více" });
     await expect(sheet).toBeVisible();
@@ -20,8 +20,8 @@ test.describe("mobile More sheet (E3)", () => {
     await expect(page.locator(".mobileCaptureButton")).toHaveCount(0);
     await expect(nav.locator("button.active")).toHaveCount(1);
     await expect(nav.locator('button[data-nav-view="More"]')).toHaveClass(/active/);
-    await expect(nav.locator('button[data-nav-view="Calendar"]')).not.toHaveClass(/active/);
-    const calendarRect = await nav.locator('button[data-nav-view="Calendar"]').boundingBox();
+    await expect(nav.locator('button[data-nav-view="Projects"]')).not.toHaveClass(/active/);
+    const calendarRect = await nav.locator('button[data-nav-view="Projects"]').boundingBox();
     expect(calendarRect).not.toBeNull();
     await expect.poll(() => page.evaluate(({ x, y }) =>
       Boolean(document.elementFromPoint(x, y)?.closest(".mobileMoreBackdrop")),
@@ -33,6 +33,27 @@ test.describe("mobile More sheet (E3)", () => {
     await expect(sheet).toHaveCount(0);
     await expect(page.locator(".mobileCaptureButton")).toBeVisible();
     await expect(nav.locator('button[data-nav-view="More"]')).toHaveClass(/active/);
+  });
+
+  test("bottom bar is Home, Inbox, Today, Projects, More; the More sheet holds the rest in order", async ({ page }) => {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    const nav = page.locator(".mobileNav");
+    await expect(nav.locator("button")).toHaveCount(5);
+    expect(await nav.locator("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-nav-view")))).toEqual(["Home", "Inbox", "Today", "Projects", "More"]);
+    await nav.locator('button[data-nav-view="More"]').click();
+    const sheet = page.getByRole("dialog", { name: "Více" });
+    const groups = sheet.locator(".mobileMoreGroup");
+    const itemsOf = (index: number) => groups.nth(index).locator("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-nav-view")));
+    expect(await itemsOf(0)).toEqual(["Calendar", "Upcoming", "Areas", "Notes", "Search"]);
+    expect(await itemsOf(1)).toEqual(["Overdue", "Anytime", "Someday", "Completed"]);
+    expect(await itemsOf(2)).toEqual(["Context", "Agents", "Settings"]);
+    // A view that lives in the sheet highlights More, since the bar has no entry of its own for it.
+    await sheet.locator('.mobileMoreItem[data-nav-view="Calendar"]').click();
+    await expect(sheet).toHaveCount(0);
+    await expect(nav.locator("button.active")).toHaveCount(1);
+    await expect(nav.locator('button[data-nav-view="More"]')).toHaveClass(/active/);
+    await expect(page.getByRole("heading", { level: 1, name: "Kalendář" })).toBeVisible();
   });
 
   test("Escape closes, returns focus, and Tab stays in the open dialog", async ({ page }) => {

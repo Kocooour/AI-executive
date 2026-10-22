@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { settingsSections, waitUntilSynced } from "./helpers";
+import { openMailReader, openSettings, settingsSections, waitUntilSynced } from "./helpers";
 
 // The server retains credentials; browser tests intercept mail requests instead of
 // connecting to a real Google account. No OAuth secrets or mail content enter fixtures.
@@ -28,11 +28,18 @@ for (const width of [390, 1280]) {
     const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
     await expect(section.getByText("preview@example.com")).toBeVisible();
     await expect(section.getByRole("button", { name: "Připojit Gmail" })).toBeVisible();
-    await section.getByRole("button", { name: "Doručené" }).click();
-    await expect(section).toContainText("Ukázka zprávy");
-    await expect(section).toContainText("alice@example.com");
-    await expect(section).toContainText("Jen náhled, bez ukládání");
-    await expect(section.getByRole("button", { name: "Odeslané" })).toBeVisible();
+    // Settings -> Mail keeps the accounts and their sync controls; reading mail moved to Inbox -> "Z pošty".
+    await expect(section.getByRole("button", { name: "Doručené" })).toHaveCount(0);
+    await expect(section.getByRole("button", { name: "Přečíst zprávu" })).toHaveCount(0);
+    await section.getByRole("button", { name: "Číst poštu v Doručených" }).click();
+    await expect(page.locator('[data-inbox-tab="mail"]')).toHaveAttribute("aria-pressed", "true");
+    const reader = page.locator(".mailReader");
+    await expect(reader.getByText("preview@example.com")).toBeVisible();
+    await reader.getByRole("button", { name: "Doručené" }).click();
+    await expect(reader).toContainText("Ukázka zprávy");
+    await expect(reader).toContainText("alice@example.com");
+    await expect(reader).toContainText("Jen náhled, bez ukládání");
+    await expect(reader.getByRole("button", { name: "Odeslané" })).toBeVisible();
     await page.route("**/api/mail/gmail/message", async (route) => {
       const body = route.request().postDataJSON();
       expect(body).toEqual({ workspaceId: "personal", accountId: account.id, messageId: "ab123456789" });
@@ -43,13 +50,14 @@ for (const width of [390, 1280]) {
         truncated: false,
       } }) });
     });
-    await section.getByRole("button", { name: "Přečíst zprávu" }).click();
-    await expect(section.getByRole("region", { name: "Detail e-mailu" })).toContainText("Bezpečný text zprávy");
-    await expect(section.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Ukázka zprávy");
+    await reader.getByRole("button", { name: "Přečíst zprávu" }).click();
+    await expect(reader.getByRole("region", { name: "Detail e-mailu" })).toContainText("Bezpečný text zprávy");
+    await expect(reader.getByLabel("Název úkolu")).toHaveValue("Vyřídit: Ukázka zprávy");
     expect(await page.locator("img[src='x']").count()).toBe(0);
     if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 
     // Another workspace cannot reuse the old Gmail account, even for one render.
+    await openSettings(page);
     await settingsSections(page).filter({ hasText: "Workspace" }).click();
     await page.getByLabel("Aktuální pohled").selectOption("all");
     await settingsSections(page).filter({ hasText: "Pošta" }).click();
@@ -58,6 +66,13 @@ for (const width of [390, 1280]) {
     await expect(section).not.toContainText("preview@example.com");
     await expect(section).not.toContainText("Bezpečný text zprávy");
     await expect(section.getByRole("button", { name: "Připojit Gmail" })).toHaveCount(0);
+    // The reader in Inbox obeys the same boundary: All my work cannot read mail.
+    const aggregateReader = await openMailReader(page);
+    await expect(aggregateReader).toContainText("nemůže");
+    await expect(aggregateReader).not.toContainText("Ukázka zprávy");
+    await expect(aggregateReader).not.toContainText("preview@example.com");
+    await expect(aggregateReader).not.toContainText("Bezpečný text zprávy");
+    await expect(aggregateReader.getByRole("button", { name: "Doručené" })).toHaveCount(0);
   });
 }
 
@@ -164,10 +179,9 @@ for (const width of [390, 1280]) {
         ],
       } }) });
     });
-    await page.goto("/?view=Settings");
+    await page.goto("/?view=Inbox");
     await waitUntilSynced(page);
-    await settingsSections(page).filter({ hasText: "Pošta" }).click();
-    const panel = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+    const panel = await openMailReader(page);
     await panel.getByRole("button", { name: "Doručené" }).click();
     await panel.getByRole("button", { name: "Přečíst zprávu" }).click();
     await expect(page.getByRole("region", { name: "Detail e-mailu" })).toContainText("První text zprávy");
@@ -181,9 +195,10 @@ for (const width of [390, 1280]) {
     await expect(page.getByRole("region", { name: "Detail e-mailu" })).toContainText("Druhý text zprávy");
     expect(detailRequests).toBe(2);
     if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await openSettings(page);
     await settingsSections(page).filter({ hasText: "Workspace" }).click();
     await page.getByLabel("Aktuální pohled").selectOption("all");
-    await settingsSections(page).filter({ hasText: "Pošta" }).click();
+    await openMailReader(page);
     await expect(page.getByRole("region", { name: "Konverzace Gmail" })).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Detail e-mailu" })).toHaveCount(0);
   });
@@ -239,10 +254,9 @@ for (const width of [390, 1280]) {
     });
 
     try {
-      await page.goto("/?view=Settings");
+      await page.goto("/?view=Inbox");
       await waitUntilSynced(page);
-      await settingsSections(page).filter({ hasText: "Pošta" }).click();
-      const panel = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+      const panel = await openMailReader(page);
       await panel.getByRole("button", { name: "Doručené" }).click();
       await panel.getByRole("button", { name: "Přečíst zprávu" }).click();
       const detail = panel.getByRole("region", { name: "Detail e-mailu" });

@@ -6,7 +6,7 @@ import type { LumiApp } from "../use-lumi-app";
 import { localizeServerError } from "../../../lib/server-errors";
 import { pluralText } from "../../../lib/plural";
 import { ICloudCalendarSettings } from "./icloud-calendar-settings";
-import { GmailSettings } from "./gmail-settings";
+import { GmailAccountsSettings } from "./gmail-settings";
 
 const settingsTabLabels: Record<string, string> = {
   general: "settingsGeneral", workspace: "workspace", access: "access", notifications: "settingsNotifications",
@@ -511,7 +511,7 @@ export function SettingsView({ app }: { app: LumiApp }) {
                 {calendarStatus && <p role="status">{calendarStatus}</p>}
               </section>
               <section hidden={settingsSection !== "mail"}>
-                {settingsSection === "mail" && <GmailSettings key={`${activeWorkspaceId}:${app.offlineView}`} app={app} />}
+                {settingsSection === "mail" && <GmailAccountsSettings key={`${activeWorkspaceId}:${app.offlineView}`} app={app} />}
               </section>
               <section hidden={settingsSection !== "data"}>
                 <h2>{tr("dataAi")}</h2>

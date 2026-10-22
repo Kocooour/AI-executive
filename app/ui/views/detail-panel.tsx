@@ -405,8 +405,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   app.setMailSourceToOpen({ workspaceId: selected.workspaceId, accountId: source.accountId, messageId: source.messageId });
                   closeDetail();
                   app.selectWorkspace(selected.workspaceId);
-                  app.setSettingsSection("mail");
-                  app.setView("Settings");
+                  app.setInboxTab("mail");
+                  app.setView("Inbox");
                 }}>{language === "cs" ? "Otevřít zdrojovou zprávu" : "Open source message"}</button>
               </section>
             )}

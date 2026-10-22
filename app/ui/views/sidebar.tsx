@@ -1,7 +1,7 @@
 "use client";
 import { primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
-import { ViewIcon } from "./project-icon";
+import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
 export function Sidebar({ app }: { app: LumiApp }) {
@@ -12,6 +12,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
     activeWorkspaceTone,
     closeDetail,
     dragTarget,
+    inspect,
+    projectsAttention,
+    sidebarProjects,
     draggableSectionNames,
     language,
     openCapture,
@@ -102,12 +105,36 @@ export function Sidebar({ app }: { app: LumiApp }) {
               key={x}
             >
               <span className="navLabel"><span aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
-              {sidebarCounts[x] !== undefined ? (
+              {x === "Inbox" || x === "Today" ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
+              ) : null}
+              {x === "Projects" && projectsAttention ? (
+                <><span className="navDot" data-nav-attention="Projects" aria-hidden="true" /><span className="srOnly">{tr("projectsNeedAttention")}</span></>
               ) : null}
             </button>
           ))}
         </nav>
+        {/* The aggregate shows no project list: projects of several workspaces would be confusing. */}
+        {sidebarProjects.length > 0 && (
+          <section className="sidebarProjects" aria-label={tr("sidebarProjects")}>
+            {sidebarProjects.map((project) => (
+              <button
+                type="button"
+                key={project.id}
+                className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                data-sidebar-project={project.id}
+                data-drop-entity={project.id}
+                onDragEnter={() => setActiveDragTarget(`entity:${project.id}`)}
+                onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
+                onClick={() => void inspect(project)}
+              >
+                <span aria-hidden="true"><ProjectIcon /></span>
+                <span className="sidebarProjectTitle">{project.title || tr("untitledItem")}</span>
+              </button>
+            ))}
+          </section>
+        )}
         <footer className="sidebarActions">
           <button onClick={() => openCapture()} aria-label={tr("addTask")}>
             ＋ {tr("new")}
