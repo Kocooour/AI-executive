@@ -14,6 +14,9 @@ BACKUP=""
 STOPPED=0
 CHANGED=0
 BACKUP_VALIDATED=0
+# An integrity mismatch while the service was stopped is a known data incident.
+# Rolling back code must not claim the affected Gmail consent/index survived.
+MAIL_PRESTART_INTEGRITY_FAILED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -218,6 +221,10 @@ on_exit() {
   trap - EXIT INT TERM HUP
   if [ "$rc" -eq 0 ]; then return 0; fi
   echo "NASAZENI SELHALO (kod $rc), zaloha: ${BACKUP:-nevytvorena}" >&2
+  if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
+    echo "KRITICKA CHYBA: Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe." >&2
+    echo "Rollback vraci jen kod, NIKOLI databazi. Porovnej $BACKUP/before-mail.json a o obnove dat rozhoduje vlastnik." >&2
+  fi
   if [ "$STOPPED" != 1 ]; then exit "$rc"; fi
   set +e
   # Never strand the old service with its disk filled by a partial copy.
@@ -257,7 +264,12 @@ on_exit() {
          verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json" \
            "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json" \
            "$BACKUP/before-mail.json" "$BACKUP/rollback-mail.json"; then
-        echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+        if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
+          echo "KRITICKA CHYBA: puvodni verze kodu dostupna, ale zachovani Gmail souhlasu/metadat NENI potvrzeno." >&2
+          echo "Porovnej $BACKUP/before-mail.json a $BACKUP/rollback-mail.json. Obnova dat vyzaduje rozhodnuti vlastnika." >&2
+        else
+          echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+        fi
       else
         echo "KRITICKA CHYBA: rollback neobnovil pocet zaznamu, data nemenit naslepo." >&2
         echo "Porovnej $BACKUP/before.json a $BACKUP/rollback.json; o obnove rozhoduje vlastnik." >&2
@@ -409,8 +421,14 @@ test -z "$(git status --porcelain)"
 
 # Deployment/code-build work cannot silently alter consent or indexed mail
 # while the service remains stopped. Snapshot before any user traffic resumes.
-snapshot_mail_sync > "$BACKUP/prestart-mail.json"
-verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"
+if ! snapshot_mail_sync > "$BACKUP/prestart-mail.json"; then
+  MAIL_PRESTART_INTEGRITY_FAILED=1
+  die "nelze nacist Gmail sync snapshot pred startem nove verze"
+fi
+if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"; then
+  MAIL_PRESTART_INTEGRITY_FAILED=1
+  die "Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe"
+fi
 
 echo "=== START A PROVOZNI KONTROLY ==="
 systemctl start "$SERVICE"
