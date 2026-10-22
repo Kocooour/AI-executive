@@ -1375,3 +1375,57 @@ test("Mail v4 discovers only the retention window and freezes its query across G
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n,30);
   } finally { globalThis.fetch=previous; }
 });
+
+test("Mail v4 status remains a read-only operation inside an existing SQLite transaction", () => {
+  database.exec("BEGIN");
+  try { assert(Array.isArray(mail.listMailSyncStates("mail-v4-fixture"))); }
+  finally { database.exec("ROLLBACK"); }
+});
+
+test("Mail v4 safely rebuilds if a saved History event disappears or its offset becomes invalid", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000a";
+  const now = Date.now();
+  const messageId = "ccddeeff";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bad-checkpoint@example.com", mail.sealMail("BAD-CHECKPOINT-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','cached','reader@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, messageId, now);
+  let mode = "missing";
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    urls.push(url.pathname);
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({
+      historyId: "300", history: mode === "missing" ? [{ id: "201", messagesAdded: [] }]
+        : [{ id: "200", messagesAdded: [{ message: { id: messageId } }] }],
+    });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [{ id: messageId }] });
+    if (url.pathname === "/gmail/v1/users/me/messages/" + messageId) return Response.json({
+      id: messageId, threadId: "abcabcabc", internalDate: String(now),
+      labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "recovered" }] },
+    });
+    throw new Error("Unexpected URL " + String(target));
+  };
+  try {
+    for (const [reason, offset] of [["missing", 0], ["offset", 3]]) {
+      mode = reason;
+      database.prepare("UPDATE mail_sync_accounts SET history_id='100', pending_event_id='200', pending_event_offset=?, history_backlog_pending=1 WHERE account_id=?")
+        .run(offset, accountId);
+      const result = await mail.syncMailAccount(workspaceId, accountId);
+      assert.equal(result.full, true, "inconsistent pending History checkpoints should rebuild");
+      assert.equal(result.recovery, true);
+      assert.equal(result.state.indexedCount, 1, "existing metadata was retained");
+      assert.equal(result.partial, true, "recovery must disclose an incomplete history replay");
+      const row = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+      assert.equal(row.history_id, "500");
+      assert.equal(row.pending_event_id, null);
+      assert.equal(row.pending_event_offset, 0);
+    }
+    assert.equal(urls.filter(v => v.endsWith("/profile")).length, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
