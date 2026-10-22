@@ -100,3 +100,33 @@ test("Mail v4 status API outage does not hide connected Gmail accounts", async (
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Mailbox still readable");
 });
+
+
+test("Mail v4 persistently shows incomplete metadata reconciliation across page reload", async ({ page }) => {
+  await page.route("**/api/mail/gmail?*", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      accounts: [{ id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal", email: "reconcile@example.com" }],
+    }) });
+  });
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    const body = route.request().postDataJSON();
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(
+      body.action === "status" ? { accounts: [{
+        accountId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: "personal", enabled: true, retentionDays: 7, indexedCount: 180,
+        reconciliationPending: 60, lastSyncedAt: Date.now(),
+      }] } : { error: "unexpected action" },
+    ) });
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("reconcile@example.com")).toBeVisible();
+  await expect(section.getByText(/Nevyřízené ověření dřívějších metadat: 60/)).toBeVisible();
+  await expect(section.getByLabel("Uchovávání")).toHaveValue("7");
+  await page.reload();
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  await expect(section.getByText(/Nevyřízené ověření dřívějších metadat: 60/)).toBeVisible();
+});
