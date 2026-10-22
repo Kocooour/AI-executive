@@ -10,7 +10,7 @@ export interface DayPlanItem {
   taskId: string;
   title: string;
   estimatedMinutes: number;
-  reason: "overdue" | "today" | "deadline" | "priority" | "context";
+  reason: "overdue" | "planned" | "today" | "deadline" | "priority" | "context";
   start?: string;
   end?: string;
   estimateSource?: LearnedPlanning["estimateSource"];
@@ -132,8 +132,11 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const deadline = typeof task.properties.deadline === "string" ? task.properties.deadline.slice(0, 10) : "";
     const feedback = task.properties.planningFeedback as { date?: string; decision?: string } | undefined;
     if (feedback?.date === date && (feedback.decision === "dismissed" || feedback.decision === "tomorrow")) return [];
-    const overdue = Boolean(when && when < date || deadline && deadline < date);
-    const dueToday = when === date || deadline === date || task.properties.today === true && !when && date === today;
+    const deadlinePassed = Boolean(deadline && deadline < date);
+    const plannedPassed = Boolean(when && when < date) && !deadlinePassed;
+    const overdue = deadlinePassed || plannedPassed;
+    const deadlineToday = deadline === date;
+    const dueToday = when === date || deadlineToday || task.properties.today === true && !when && date === today;
     const dueSoon = Boolean(deadline && deadline > date && deadline <= addDays(date, 2));
     const priority = String(task.properties.priority || "none");
     const projectId = String(task.properties.projectId || projects.get(task.id) || "");
@@ -142,11 +145,12 @@ export function buildDayPlan(workspaceId: string, date: string, now = Date.now()
     const importance = claims.some((claim) => claim.predicate === "importance" && /critical|high|krit|vysok/i.test(String(claim.literal?.value || "")));
     const waiting = claims.some((claim) => claim.predicate === "waiting_for" || claim.predicate === "stakeholder");
     if (!overdue && !dueToday && !dueSoon && priority !== "high" && !importance && !waiting) return [];
-    const reason: DayPlanItem["reason"] = overdue ? "overdue" : dueToday ? "today" : dueSoon ? "deadline" : priority === "high" ? "priority" : "context";
+    // A deadline fact outranks a passed planned day in the label; the score below is unchanged.
+    const reason: DayPlanItem["reason"] = deadlinePassed ? "overdue" : deadlineToday ? "today" : plannedPassed ? "planned" : dueToday ? "today" : dueSoon ? "deadline" : priority === "high" ? "priority" : "context";
     const score = (overdue ? 100 : 0) + (dueToday ? 70 : 0) + (dueSoon ? 25 : 0) + ({ high: 30, medium: 20, low: 10 }[priority] || 0) + (importance ? 20 : 0) + (waiting ? 15 : 0);
-    const primaryReason = overdue ? "overdue" : dueToday ? "due_today" : dueSoon ? "deadline_close"
+    const primaryReason = deadlinePassed ? "overdue" : deadlineToday ? "due_today" : plannedPassed ? "planned_passed" : when === date ? "planned_today" : dueToday ? "flagged_today" : dueSoon ? "deadline_close"
       : priority === "high" ? "high_priority" : importance ? "context_importance" : "context_waiting";
-    const whyNow = [...new Set([primaryReason, importance ? "context_importance" : "", waiting ? "context_waiting" : ""].filter(Boolean))];
+    const whyNow = [...new Set([primaryReason, dueSoon ? "deadline_close" : "", importance ? "context_importance" : "", waiting ? "context_waiting" : ""].filter(Boolean))];
     return [{ task, score, reason, whyNow, earliest: [when, deadline].filter(Boolean).sort()[0] || "" }];
   }).sort((a, b) => b.score - a.score || a.earliest.localeCompare(b.earliest) || a.task.createdAt - b.task.createdAt || a.task.id.localeCompare(b.task.id));
   const requiredMinutes = ranked.reduce((total, item) => total + estimate(item.task, allTasks, timezone).estimatedMinutes, 0);

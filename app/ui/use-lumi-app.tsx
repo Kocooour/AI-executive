@@ -17,7 +17,7 @@ import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
-import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
+import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
@@ -2015,7 +2015,7 @@ export function useLumiApp() {
           return (priorityRank[String(a.properties.priority || "none")] ?? 3) -
             (priorityRank[String(b.properties.priority || "none")] ?? 3);
         }
-        return String(a.properties.when || "9999-12-31").localeCompare(String(b.properties.when || "9999-12-31"));
+        return taskDateSortKey(a, view).localeCompare(taskDateSortKey(b, view));
       });
     },
     [tasks, view, today, sortBy, priorityFilter],

@@ -38,15 +38,16 @@ export function taskRowValue(
   }
   if (entity.type !== "task") return empty;
 
-  // Use the earliest real date; an overdue date must not be hidden by a later deadline.
+  // A passed deadline is shown in red and wins, and a deadline due today or tomorrow is shown rather
+  // than an earlier planned day; otherwise the earliest real date, without alarm: a planned day that
+  // has passed is not overdue.
+  const deadline = validYmd(entity.properties.deadline) ? entity.properties.deadline : "";
+  if (entity.status === "open" && deadline && deadline < today) return { text: friendlyDate(deadline, language), kind: "date", tone: "danger" };
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (entity.status === "open" && deadline && deadline <= tomorrow.toISOString().slice(0, 10)) return { text: friendlyDate(deadline, language), kind: "date", tone: "default" };
   const due = [entity.properties.when, entity.properties.deadline].filter(validYmd).sort()[0];
-  if (due) {
-    return {
-      text: friendlyDate(due, language),
-      kind: "date",
-      tone: entity.status === "open" && due < today ? "danger" : "default",
-    };
-  }
+  if (due) return { text: friendlyDate(due, language), kind: "date", tone: "default" };
   if (entity.properties.waiting === true) return { text: copy[language].waitingShort, kind: "state", tone: "default" };
   const estimate = entity.properties.estimatedMinutes;
   if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {

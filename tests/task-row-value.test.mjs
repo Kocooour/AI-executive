@@ -15,7 +15,14 @@ test("pending and held-back states replace ordinary metadata", () => {
 });
 test("overdue and future dates outrank estimates, with red only for overdue", () => {
   assert.equal(value(record("task", { when: "2026-10-21", deadline: "2026-10-10", estimatedMinutes: 50 })).tone, "danger");
+  assert.equal(value(record("task", { when: "2026-10-21", deadline: "2026-10-10", estimatedMinutes: 50 })).text, value(record("task", { deadline: "2026-10-10" })).text);
   assert.equal(value(record("task", { when: "2026-10-21", estimatedMinutes: 50 })).kind, "date");
+  assert.equal(value(record("task", { when: "2026-10-12" })).tone, "default");
+  // An old planned day must not hide a deadline due tomorrow (today is 2026-10-18).
+  assert.equal(value(record("task", { when: "2026-10-01", deadline: "2026-10-19" })).text, value(record("task", { deadline: "2026-10-19" })).text);
+  assert.equal(value(record("task", { when: "2026-10-01", deadline: "2026-10-18" })).text, value(record("task", { deadline: "2026-10-18" })).text);
+  assert.equal(value(record("task", { when: "2026-10-01", deadline: "2026-10-25" })).text, value(record("task", { when: "2026-10-01" })).text);
+  assert.equal(value(record("task", { when: "2026-10-12", deadline: "2026-10-25" })).tone, "default");
   assert.equal(value(record("task", { estimatedMinutes: 50 })).text, "50 min");
   assert.equal(value(record("task", { deadline: "2026-10-01" }, { status: "completed" })).tone, "default");
   assert.equal(value(record("task", { waiting: true, estimatedMinutes: 50 })).kind, "state");
