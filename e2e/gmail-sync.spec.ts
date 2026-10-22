@@ -92,6 +92,10 @@ test("Mail v4 status API outage does not hide connected Gmail accounts", async (
   const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
   await expect(section.getByText("survives@example.com")).toBeVisible();
   await expect(section.getByText("Stav synchronizace není dostupný.", { exact: false })).toBeVisible();
+  await expect(section.getByText("Stav neznámý", { exact: true })).toBeVisible();
+  await expect(section.getByRole("button", { name: "Zapnout synchronizaci" })).toBeDisabled();
+  await expect(section.getByLabel("Uchovávání")).toBeDisabled();
+  await expect(section).not.toContainText("Synchronizace vypnutá");
   await expect(section.getByRole("button", { name: "Odpojit" })).toBeVisible();
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Mailbox still readable");
