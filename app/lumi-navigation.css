@@ -357,12 +357,32 @@
   padding: 4px 0;
   border-top: 1px solid var(--line);
 }
-.appShell > aside .secondaryNav button { text-align: left; }
+.appShell > aside .secondaryNav button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.appShell > aside .secondaryNav button:hover { background: var(--hover); color: var(--text); }
+.appShell > aside .secondaryNav button.active { background: var(--hover); color: var(--text); font-weight: 600; }
+.appShell > aside .secondaryNav button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .appShell > aside .secondaryNav button { min-height: 44px; }
+}
 .appShell > aside .secondaryNavToggle { color: var(--muted); text-align: left; }
 .inboxTabs {
   display: inline-flex;
   gap: 2px;
-  margin: 0 0 var(--space-3, 12px);
+  margin: 0 0 var(--space-4, 16px);
   padding: 2px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -403,3 +423,7 @@
 @media (max-width: 700px) {
   .appShell .mobileNav button[data-nav-view="Projects"] .mobileNavIcon { color: var(--icon-projects); }
 }
+
+/* The list controls sit tucked under the page title; below the Inbox tabs they need their own space. */
+.inboxTabs + .listControls,
+.inboxTabs ~ .listControls { margin-top: 0; }
