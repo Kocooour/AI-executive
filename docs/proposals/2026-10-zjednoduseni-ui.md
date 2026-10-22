@@ -93,7 +93,7 @@ Na každém řádku úkolu (Dnes, Nadcházející, Doručené, projekt, Domů) j
 ```
 
 - Jeden klik na volbu **okamžitě uloží** `when` a zavře popover. Pod seznamem se objeví toast „Přesunuto na zítra · Zpět“ (Undo stejnou cestou jako dnes).
-- „Příští týden“ = pondělí příštího týdne (podle `timezone` vlastníka; nastavitelný začátek týdne až později), „Tento víkend“ = nejbližší sobota, „Dnes večer“ = `when` dnes + `properties.evening = true` (nová skupina v Dnes, jako v Things).
+- „Příští týden“ = pondělí příštího týdne (podle `timezone` vlastníka), „Tento víkend“ = nejbližší sobota, „Dnes večer“ = `when` dnes + `properties.evening = true` (nová skupina v Dnes, jako v Things). *(Rozhodnutí vlastníka 22. 10. 2026: „Příští týden“ je pondělí, skupina „Dnes večer“ ano.)*
 - Popover vždy ukazuje **termín (deadline) jen pro čtení**. Odložení nikdy nemění termín, a když vybrané datum termín přesahuje, volba je označená „po termínu 30. 10.“ a vyžaduje druhé potvrzení.
 - Totéž menu je v kontextovém menu řádku, v hromadném výběru (Doručené B5) a v detailu úkolu, kde nahradí dvojici „Seznam“ + „Kdy“ (§5.4).
 - Mobil: popover se otevře jako spodní sheet, volby mají ≥ 44 px, návrh Lumi je nahoře.
@@ -340,5 +340,5 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 1. ~~**C (pošta → model):** Souhlasíte s variantou C1? Který poskytovatel?~~ **Rozhodnuto 22. 10.:** C1 povoleno, Hermes, pokud analýzu zvládne (§6.4).
 2. ~~**B:** Smí Lumi navrhovat text kontextu projektu?~~ **Rozhodnuto 22. 10.:** ano, vždy přes schválení.
 3. ~~**Navigace:** Poznámky a Hledání mimo hlavní sidebar, Projekty místo Kalendáře na mobilu?~~ **Rozhodnuto 22. 10.:** ano.
-4. **Odklad:** Má „Příští týden“ znamenat pondělí, nebo chcete volitelný den (např. neděli pro týdenní review)? Chcete skupinu „Dnes večer“?
+4. ~~**Odklad:** „Příští týden“ = pondělí? Skupina „Dnes večer“?~~ **Rozhodnuto 22. 10.:** pondělí, „Dnes večer“ ano.
 5. Mám začít PR 1 (opravy E1–E4, bez produktového rozhodnutí) hned?
