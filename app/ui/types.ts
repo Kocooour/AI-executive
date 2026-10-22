@@ -55,7 +55,7 @@ export interface DayPlanItem {
   taskId: string;
   title: string;
   estimatedMinutes: number;
-  reason: "overdue" | "today" | "deadline" | "priority" | "context";
+  reason: "overdue" | "planned" | "today" | "deadline" | "priority" | "context";
   start?: string;
   end?: string;
   estimateSource?: "explicit" | "actual" | "learned" | "default";

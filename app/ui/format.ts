@@ -59,15 +59,15 @@ export const friendlyDate = (value: unknown, language: Language, timezone?: stri
       : "numeric",
   });
 };
-export const taskDueSummary = (entity: Entity, todayValue: string, language: Language) => {
-  const dueDates = [entity.properties.when, entity.properties.deadline]
-    .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value))
-    .sort();
-  const overdueDate = dueDates.find((due) => due < todayValue);
-  if (overdueDate) return `${copy[language].Overdue} · ${friendlyDate(overdueDate, language)}`;
-  const tomorrowValue = ymd(addLocalDays(new Date(), 1));
-  const soonDate = dueDates.find((due) => due <= tomorrowValue);
-  return soonDate ? `${copy[language].dueSoon} · ${friendlyDate(soonDate, language)}` : "";
+// The deadline and the planned day are different facts: only a deadline is "overdue" or "due soon".
+export const taskDueSummary = (entity: Entity, todayValue: string, language: Language, now = new Date()) => {
+  const day = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+  const deadline = day(entity.properties.deadline);
+  const when = day(entity.properties.when);
+  if (deadline && deadline < todayValue) return `${copy[language].Overdue} · ${friendlyDate(deadline, language)}`;
+  if (deadline && deadline <= ymd(addLocalDays(now, 1))) return `${copy[language].dueSoon} · ${friendlyDate(deadline, language)}`;
+  if (when && when < todayValue) return copy[language].plannedEarlier.replace("{date}", friendlyDate(when, language));
+  return "";
 };
 export const urlBase64ToUint8Array = (base64: string) => {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);

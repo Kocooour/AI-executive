@@ -19,12 +19,11 @@ export const byManualOrder = (scope?: string) => (a: Entity, b: Entity) =>
   manualOrder(a, scope) - manualOrder(b, scope) || a.createdAt - b.createdAt || a.id.localeCompare(b.id);
 export const taskDueTone = (entity: Entity, todayValue: string, now = new Date()) => {
   if (entity.type !== "task" || entity.status !== "open") return "";
-  const dueDates = [entity.properties.when, entity.properties.deadline]
-    .filter((value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value));
-  if (dueDates.some((due) => due < todayValue)) return "dueOverdue";
-  const tomorrowValue = ymd(addLocalDays(now, 1));
-  if (dueDates.some((due) => due >= todayValue && due <= tomorrowValue)) return "dueSoon";
-  return "";
+  // Only a deadline is alarming; a planned day that passed or arrives today has no tone.
+  const deadline = entity.properties.deadline;
+  if (typeof deadline !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return "";
+  if (deadline < todayValue) return "dueOverdue";
+  return deadline <= ymd(addLocalDays(now, 1)) ? "dueSoon" : "";
 };
 export const taskMatchesView = (task: Entity, targetView: string, todayValue: string) => {
   if (targetView === "Completed") return task.status === "completed";
@@ -37,7 +36,9 @@ export const taskMatchesView = (task: Entity, targetView: string, todayValue: st
     return properties.today === true || (when !== "" && when <= todayValue);
   }
   if (targetView === "Overdue") {
-    return when !== "" && when < todayValue;
+    // Overdue means a passed deadline, not a planned day that has passed.
+    const deadline = typeof properties.deadline === "string" ? properties.deadline.slice(0, 10) : "";
+    return deadline !== "" && deadline < todayValue;
   }
   if (targetView === "Upcoming") {
     return when > todayValue;

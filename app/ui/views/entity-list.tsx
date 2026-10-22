@@ -53,6 +53,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     ? openTaskCountsByProject(items, projects, scopedRelations)
     : new Map<string, number>();
 
+  // The Calendar page shows its own planned work; it does not repeat every open task as a list.
+  if (view === "Calendar") return null;
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
