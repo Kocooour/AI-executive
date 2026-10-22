@@ -22,7 +22,7 @@ Navrhuji tři principy a pět změn:
 |---|---|---|---|
 | A | Odložení úkolu ve stylu Things (kalendář v řádku + návrh Lumi) | UI + lehká logika | ne |
 | B | Kontext projektu (proč je důležitý, hlavní cíle, hotovo když) a stránka projektu | UI + datový model | **rozhodnuto 22. 10.:** Lumi smí navrhovat kontext (přes schválení) |
-| C | Lumi z e-mailů navrhne nový projekt s kroky | logika + konektor + UI | **rozhodnuto 22. 10.:** C1 povoleno, model Hermes (§6.1) |
+| C | Lumi z e-mailů navrhne nový projekt s kroky | logika + konektor + UI | **rozhodnuto 22. 10.:** C1 povoleno, primárně Hermes, při nedostupnosti jiný dostupný model (§6.1) |
 | D | Zjednodušení navigace, Domů, Dnes a detailu úkolu | UI | ne |
 | E | Opravy logiky nalezené při revizi | logika | ne |
 
@@ -246,7 +246,7 @@ Všechny dnešní funkce zůstávají: filtry Po termínu, Kdykoli, Někdy, Hoto
 
 ## 6. Změna C: Lumi z e-mailů navrhne nový projekt s kroky
 
-> **Rozhodnutí vlastníka 22. 10. 2026:** varianta **C1 je povolena**. Analýzu e-mailů provádí **Hermes** (lokální bridge), pokud ji zvládne (viz §6.4 vyhodnocení). Varianta C2 (průběžná analýza) povolená není a vyžaduje samostatné rozhodnutí.
+> **Rozhodnutí vlastníka 22. 10. 2026:** varianta **C1 je povolena**. Analýzu e-mailů provádí **Hermes** (lokální bridge), pokud ji zvládne (viz §6.4 vyhodnocení). **Doplnění téhož dne:** když je Hermes nedostupný, analýza se pošle **dostupnému modelu** (dnes OpenAI). Varianta C2 (průběžná analýza) povolená není a vyžaduje samostatné rozhodnutí.
 
 ### 6.1 Proč to bylo rozhodnutí
 [MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md) dnes říká: *žádné AI zpracování, žádný LLM přenos, žádné automatické vytváření úkolů, žádná synchronizace na pozadí.* Analýza e-mailů modelem tento kontrakt mění. Navrhuji to udělat ve dvou krocích, aby se dal každý schválit zvlášť:
@@ -256,7 +256,9 @@ Všechny dnešní funkce zůstávají: filtry Po termínu, Kdykoli, Někdy, Hoto
 | **C1: na vyžádání** | jedno vlákno, které vlastník otevře a klikne „✦ Navrhnout projekt“ | jen po kliknutí | nízké: vědomý přenos jednoho vlákna, stejné jako dnešní „Vytvořit úkol“ | **začít tímto** |
 | **C2: průběžná analýza** | metadata + texty nových zpráv v Inboxu za posledních N dní | plánovač, max. 1× denně | vyšší: obsah pošty pravidelně jde modelu, potřebuje retenci a privacy gate (PRODUCT.md fáze 4) | až po C1 a samostatném schválení |
 
-Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh v Doručených. Text e-mailu se neukládá (ukládají se jen ID zdroje jako dnes v `mailSource`). Model dostane jen nezbytný výřez (předmět, odesílatelé, text bez příloh, max. ~8 000 znaků). **Poskytovatel: jen Hermes.** Obsah e-mailů nepoužije obecnou cestu `completeServerAI`, která při chybě Hermesu přepadá na OpenAI (`lib/server-ai-provider.ts`). Volání půjde přes samostatnou funkci, která zkusí pouze Hermes. Když Hermes není zapnutý (`HERMES_AI_ENABLED`), neodpoví nebo vrátí nevalidní výstup, tlačítko vysvětlí, že návrh teď není dostupný, a nic se nikam jinam neodešle. OpenAI pro obsah pošty by vyžadovalo nové rozhodnutí vlastníka.
+Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh v Doručených. Text e-mailu se neukládá (ukládají se jen ID zdroje jako dnes v `mailSource`). Model dostane jen nezbytný výřez (předmět, odesílatelé, text bez příloh, max. ~8 000 znaků). **Poskytovatel: Hermes, při nedostupnosti další dostupný model.** Pořadí je pro poštu pevné, vždy nejdřív Hermes, nezávisle na `AI_PROVIDER` (`lib/server-ai-provider.ts` dnes pořadí podle `AI_PROVIDER` mění). Hermes je „nedostupný“, když není zapnutý (`HERMES_AI_ENABLED`, token), neodpoví do časového limitu, vrátí chybu, nebo dvakrát po sobě vrátí výstup, který neprojde validací §6.3. Pak se tentýž výřez pošle dalšímu nakonfigurovanému modelu (dnes OpenAI, `OPENAI_API_KEY`). Pokud není dostupný žádný, tlačítko vysvětlí, že návrh teď nejde připravit, a nic nevznikne.
+- Návrh vždy ukáže, který model ho připravil („připraveno Hermesem“ / „připraveno OpenAI, Hermes byl nedostupný“), a audit zaznamená poskytovatele bez obsahu e-mailu.
+- U OpenAI obsah vlákna opouští server Lumi. Proto se i při fallbacku posílá jen minimální výřez a nikdy zdroje označené jako citlivé/confidential. Ty se v takovém případě nepošlou nikam mimo Hermes a návrh není dostupný.
 
 ### 6.2 Tok (C1)
 1. Doručené → Z pošty → vlákno „Re: Nabídka na nový e-shop“ → **✦ Navrhnout projekt**.
@@ -283,17 +285,17 @@ Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh 
 - Citlivé/confidential zdroje se modelu nepošlou (dnešní pravidla citlivosti).
 
 ### 6.4 Vyhodnocení, zda to Hermes zvládne
-Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntetických** českých a smíšených vláknech (min. 20 vláken: nabídka, organizace akce, reklamace, interní úkolování, newsletter jako negativní případ). Hermes analýzu „zvládne“, když:
+Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntetických** českých a smíšených vláknech (min. 20 vláken: nabídka, organizace akce, reklamace, interní úkolování, newsletter jako negativní případ). Vyhodnocuje se Hermes i záložní model na stejné sadě. Model analýzu „zvládne“, když:
 - ≥ 95 % odpovědí je validní JSON podle schématu §6.3 (po jednom opakování),
 - ≥ 90 % navržených kroků má citaci, která v textu vlákna doslova existuje, a žádný krok nemá vymyšlený termín,
 - u negativních případů (newsletter, notifikace) navrhne „žádný projekt“ v ≥ 90 %,
 - odpověď do 60 s na vlákno do 8 000 znaků.
 
-Výsledky se zapíšou do PR. Pokud Hermes prahy nesplní, funkce zůstane vypnutá a vlastník dostane výsledky a návrh dalšího postupu (úprava promptu, menší výřez, nebo jiný poskytovatel k rozhodnutí).
+Výsledky se zapíšou do PR. Pokud prahy nesplní Hermes, ale splní je záložní model, bude záložní model pro poštu primární a Hermes se zkusí znovu po úpravě promptu nebo výřezu. Pokud je nesplní žádný model, funkce zůstane vypnutá a vlastník dostane výsledky.
 
 ### 6.5 Akceptační kritéria
 1. Bez kliknutí vlastníka se žádný e-mail modelu neodešle (C1). Test to ověří na mocku Gmailu a poskytovatele.
-2. Při nedostupném Hermesu se obsah e-mailu neodešle žádnému jinému poskytovateli (test s nastaveným `OPENAI_API_KEY` ověří, že OpenAI nedostane žádný požadavek).
+2. Při dostupném Hermesu dostane požadavek jen Hermes. Při nedostupném Hermesu (vypnutý, chyba, timeout, dvakrát nevalidní výstup) dostane tentýž výřez záložní model a návrh to uvede. Citlivý zdroj se záložnímu modelu nepošle nikdy (testy s mockem Hermesu i OpenAI).
 3. Zahození návrhu nic nevytvoří. Potvrzení vytvoří přesně vybrané kroky v jednom workspace. Druhé potvrzení téhož návrhu skončí konfliktem bez duplicit.
 4. Krok bez citace z e-mailu se nenavrhne. Navržený termín je označen jako „z e-mailu, ověřte“.
 5. Odpojený účet nebo vypnutý model = srozumitelná hláška, žádný částečný stav.
@@ -330,14 +332,14 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 | 5 | D3: detail úkolu (čipy, sbalené sekce, zrušení „Seznam“) | 2 | e2e detail-inspector, task-row |
 | 6 | B: `context` projektu, migrace `goal`, stránka projektu, skupiny podle oblastí | rozhodnuto (B) | unit migrace, e2e project-overview, backup-restore |
 | 7 | B+: „✦ Lumi navrhne“ kontext přes proposal | 6 | e2e approval/Undo |
-| 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, volání jen přes Hermes, vyhodnocení §6.4 | rozhodnuto (C1, Hermes), 6 | unit validace výstupu, e2e s Gmail + Hermes mockem, test „žádný fallback na OpenAI“, data-boundary |
+| 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, pořadí Hermes → dostupný model, vyhodnocení §6.4 | rozhodnuto (C1, Hermes + fallback), 6 | unit validace výstupu a pořadí poskytovatelů, e2e s Gmail + Hermes/OpenAI mockem, data-boundary |
 | 9 | C2: průběžná analýza | ⚑ C2, 8 | privacy/retence, plánovač, dedup |
 
 ---
 
 ## 9. Otázky pro vlastníka
 
-1. ~~**C (pošta → model):** Souhlasíte s variantou C1? Který poskytovatel?~~ **Rozhodnuto 22. 10.:** C1 povoleno, Hermes, pokud analýzu zvládne (§6.4).
+1. ~~**C (pošta → model):** Souhlasíte s variantou C1? Který poskytovatel?~~ **Rozhodnuto 22. 10.:** C1 povoleno, primárně Hermes, pokud analýzu zvládne (§6.4); při jeho nedostupnosti dostupný model.
 2. ~~**B:** Smí Lumi navrhovat text kontextu projektu?~~ **Rozhodnuto 22. 10.:** ano, vždy přes schválení.
 3. ~~**Navigace:** Poznámky a Hledání mimo hlavní sidebar, Projekty místo Kalendáře na mobilu?~~ **Rozhodnuto 22. 10.:** ano.
 4. ~~**Odklad:** „Příští týden“ = pondělí? Skupina „Dnes večer“?~~ **Rozhodnuto 22. 10.:** pondělí, „Dnes večer“ ano.
