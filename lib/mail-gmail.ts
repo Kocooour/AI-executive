@@ -519,6 +519,7 @@ type SyncMessage = {
 export type MailSyncState = {
   accountId: string; workspaceId: string; enabled: boolean;
   retentionDays: number; lastSyncedAt: number | null; indexedCount: number;
+  reconciliationPending: number;
 };
 
 function syncRow(workspaceId: string, accountId: string): SyncRow | undefined {
@@ -556,15 +557,16 @@ export function listMailSyncStates(workspaceId: string): MailSyncState[] {
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
   return (db.prepare(`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
-      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id) AS indexed_count
+      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id) AS indexed_count,
+      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id AND m.needs_reconcile=1) AS reconciliation_pending
     FROM mail_accounts a JOIN mail_sync_accounts s ON s.account_id=a.id AND s.workspace_id=a.workspace_id
     WHERE a.provider='gmail' AND a.workspace_id=? ORDER BY a.email`).all(workspaceId) as Array<{
       account_id: string; workspace_id: string; retention_days: number;
-      last_synced_at: number | null; indexed_count: number;
+      last_synced_at: number | null; indexed_count: number; reconciliation_pending: number;
     }>).map((r) => ({
       accountId: r.account_id, workspaceId: r.workspace_id, enabled: true,
       retentionDays: r.retention_days, lastSyncedAt: r.last_synced_at,
-      indexedCount: r.indexed_count,
+      indexedCount: r.indexed_count, reconciliationPending: r.reconciliation_pending,
     }));
 }
 
@@ -754,8 +756,21 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   }
   if (!nextHistory) throw new MailError("Gmail did not return a history cursor", 502);
   const fetched: SyncMessage[] = [];
-  // Bounded and concurrent, metadata format never requests MIME bodies.
-  const ids = [...changes].filter((id) => !deleted.has(id));
+  // Revalidate previously indexed messages missed by a bounded rebootstrap.
+  // The saved history cursor still processes new changes first. Rechecks are
+  // bounded by the same request limit and survive a restart or a failed read.
+  const changedIds = [...changes].filter((id) => !deleted.has(id));
+  const reconcileBudget = Math.max(0, SYNC_MAX_ITEMS - changedIds.length);
+  const staleIds = !full && reconcileBudget > 0
+    ? (getDatabase().prepare(`SELECT message_id FROM mail_sync_messages
+        WHERE account_id=? AND workspace_id=? AND needs_reconcile=1
+        ORDER BY received_at DESC, message_id DESC LIMIT ?`
+      ).all(accountId, workspaceId, reconcileBudget) as Array<{ message_id: string }>)
+        .map((row) => row.message_id)
+        .filter((id) => !changes.has(id) && !deleted.has(id))
+    : [];
+  // No body or attachment requests, including when revalidating old entries.
+  const ids = [...changedIds, ...staleIds];
   for (let i = 0; i < ids.length; i += MESSAGE_DETAIL_CONCURRENCY) {
     const batch = await Promise.all(ids.slice(i, i + MESSAGE_DETAIL_CONCURRENCY).map(async (id) => {
       const url = new URL(apiBase + "/messages/" + id);
@@ -784,21 +799,23 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         currentRow.pending_event_id !== settings.pending_event_id || currentRow.pending_event_offset !== settings.pending_event_offset)
       throw new MailError("Gmail sync configuration changed; retry", 409);
     accountCredentials(workspaceId, accountId);
+    const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
     if (full) {
-      // A bounded 25+25 bootstrap is not an exhaustive snapshot. Preserve
-      // other still-retained metadata after an expired history cursor.
-    }
-    else {
-      const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
-      for (const id of new Set([...changes, ...deleted])) clear.run(accountId, id);
+      // Profile + 25 Inbox + 25 Sent is not a complete mailbox snapshot.
+      // Mark existing records as unverified until each metadata ID is read.
+      db.prepare("UPDATE mail_sync_messages SET needs_reconcile=1 WHERE account_id=? AND workspace_id=?")
+        .run(accountId, workspaceId);
+    } else {
+      for (const id of new Set([...changes, ...deleted, ...staleIds])) clear.run(accountId, id);
     }
     const insert = db.prepare(`INSERT INTO mail_sync_messages
-      (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent, needs_reconcile)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
       ON CONFLICT(account_id, message_id) DO UPDATE SET
         thread_id=excluded.thread_id, subject=excluded.subject,
         sender=excluded.sender, received_at=excluded.received_at,
-        unread=excluded.unread, in_inbox=excluded.in_inbox, in_sent=excluded.in_sent`);
+        unread=excluded.unread, in_inbox=excluded.in_inbox, in_sent=excluded.in_sent,
+        needs_reconcile=0`);
     for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
       entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
     trimMailIndex(accountId, currentRow.retention_days, Date.now());
@@ -806,6 +823,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       .run(nextHistory, pendingEventId, pendingOffset, Date.now(), Date.now(), accountId, settings.consent_id);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
+  const state = listMailSyncStates(workspaceId).find((s) => s.accountId === accountId);
   return { full, recovery, updated: fetched.length, historyId: nextHistory,
-    partial, state: listMailSyncStates(workspaceId).find((s) => s.accountId === accountId) };
+    partial: partial || Boolean(state?.reconciliationPending), state };
 }
