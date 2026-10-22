@@ -17,6 +17,7 @@ BACKUP_VALIDATED=0
 # An integrity mismatch while the service was stopped is a known data incident.
 # Rolling back code must not claim the affected Gmail consent/index survived.
 MAIL_PRESTART_INTEGRITY_FAILED=0
+MAIL_PRESTART_SNAPSHOT_FAILED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -224,6 +225,8 @@ on_exit() {
   if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
     echo "KRITICKA CHYBA: Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe." >&2
     echo "Rollback vraci jen kod, NIKOLI databazi. Porovnej $BACKUP/before-mail.json a o obnove dat rozhoduje vlastnik." >&2
+  elif [ "$MAIL_PRESTART_SNAPSHOT_FAILED" = 1 ]; then
+    echo "UPOZORNENI: predstartovni Gmail snapshot neslo precist; nejde o potvrzenou ztratu dat." >&2
   fi
   if [ "$STOPPED" != 1 ]; then exit "$rc"; fi
   set +e
@@ -267,6 +270,8 @@ on_exit() {
         if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
           echo "KRITICKA CHYBA: puvodni verze kodu dostupna, ale zachovani Gmail souhlasu/metadat NENI potvrzeno." >&2
           echo "Porovnej $BACKUP/before-mail.json a $BACKUP/rollback-mail.json. Obnova dat vyzaduje rozhodnuti vlastnika." >&2
+        elif [ "$MAIL_PRESTART_SNAPSHOT_FAILED" = 1 ]; then
+          echo "Rollback: puvodni verze kodu dostupna; predstartovni Gmail snapshot neslo precist. Data v tomto kroku nebyla overena." >&2
         else
           echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
         fi
@@ -422,7 +427,7 @@ test -z "$(git status --porcelain)"
 # Deployment/code-build work cannot silently alter consent or indexed mail
 # while the service remains stopped. Snapshot before any user traffic resumes.
 if ! snapshot_mail_sync > "$BACKUP/prestart-mail.json"; then
-  MAIL_PRESTART_INTEGRITY_FAILED=1
+  MAIL_PRESTART_SNAPSHOT_FAILED=1
   die "nelze nacist Gmail sync snapshot pred startem nove verze"
 fi
 if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"; then
