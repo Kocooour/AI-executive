@@ -246,7 +246,7 @@ Všechny dnešní funkce zůstávají: filtry Po termínu, Kdykoli, Někdy, Hoto
 
 ## 6. Změna C: Lumi z e-mailů navrhne nový projekt s kroky
 
-> **Rozhodnutí vlastníka 22. 10. 2026:** varianta **C1 je povolena**. Analýzu e-mailů provádí **Hermes** (lokální bridge), pokud ji zvládne (viz §6.4 vyhodnocení). **Doplnění téhož dne:** když je Hermes nedostupný, analýza se pošle **dostupnému modelu** (dnes OpenAI). Varianta C2 (průběžná analýza) povolená není a vyžaduje samostatné rozhodnutí.
+> **Rozhodnutí vlastníka 22. 10. 2026:** varianta **C1 je povolena**. Analýzu e-mailů provádí **Hermes** (lokální bridge), pokud ji zvládne (viz §6.4 vyhodnocení). **Doplnění téhož dne:** když je Hermes nedostupný, analýza se pošle **dostupnému modelu** (dnes OpenAI). Po review téhož dne platí pro cloudový přenos souhlasová brána, fail-closed klasifikace a nulová retence obsahu z §6.6. Varianta C2 (průběžná analýza) povolená není a vyžaduje samostatné rozhodnutí.
 
 ### 6.1 Proč to bylo rozhodnutí
 [MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md) dnes říká: *žádné AI zpracování, žádný LLM přenos, žádné automatické vytváření úkolů, žádná synchronizace na pozadí.* Analýza e-mailů modelem tento kontrakt mění. Navrhuji to udělat ve dvou krocích, aby se dal každý schválit zvlášť:
@@ -256,9 +256,8 @@ Všechny dnešní funkce zůstávají: filtry Po termínu, Kdykoli, Někdy, Hoto
 | **C1: na vyžádání** | jedno vlákno, které vlastník otevře a klikne „✦ Navrhnout projekt“ | jen po kliknutí | nízké: vědomý přenos jednoho vlákna, stejné jako dnešní „Vytvořit úkol“ | **začít tímto** |
 | **C2: průběžná analýza** | metadata + texty nových zpráv v Inboxu za posledních N dní | plánovač, max. 1× denně | vyšší: obsah pošty pravidelně jde modelu, potřebuje retenci a privacy gate (PRODUCT.md fáze 4) | až po C1 a samostatném schválení |
 
-Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh v Doručených. Text e-mailu se neukládá (ukládají se jen ID zdroje jako dnes v `mailSource`). Model dostane jen nezbytný výřez (předmět, odesílatelé, text bez příloh, max. ~8 000 znaků). **Poskytovatel: Hermes, při nedostupnosti další dostupný model.** Pořadí je pro poštu pevné, vždy nejdřív Hermes, nezávisle na `AI_PROVIDER` (`lib/server-ai-provider.ts` dnes pořadí podle `AI_PROVIDER` mění). Hermes je „nedostupný“, když není zapnutý (`HERMES_AI_ENABLED`, token), neodpoví do časového limitu, vrátí chybu, nebo dvakrát po sobě vrátí výstup, který neprojde validací §6.3. Pak se tentýž výřez pošle dalšímu nakonfigurovanému modelu (dnes OpenAI, `OPENAI_API_KEY`). Pokud není dostupný žádný, tlačítko vysvětlí, že návrh teď nejde připravit, a nic nevznikne.
-- Návrh vždy ukáže, který model ho připravil („připraveno Hermesem“ / „připraveno OpenAI, Hermes byl nedostupný“), a audit zaznamená poskytovatele bez obsahu e-mailu.
-- U OpenAI obsah vlákna opouští server Lumi. Proto se i při fallbacku posílá jen minimální výřez a nikdy zdroje označené jako citlivé/confidential. Ty se v takovém případě nepošlou nikam mimo Hermes a návrh není dostupný.
+Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh v Doručených. Tělo e-mailu ani citace z něj se na serveru neukládají (přesný datový model v §6.6). Model dostane jen nezbytný výřez (předmět, odesílatelé, text bez příloh, max. ~8 000 znaků). **Poskytovatel: vždy nejdřív Hermes, cloudový model jen při nedostupnosti Hermesu a jen po výslovném souhlasu vlastníka *před* přenosem** (souhlasová brána §6.6). Pořadí je pro poštu pevné, nezávisle na `AI_PROVIDER` (`lib/server-ai-provider.ts` dnes pořadí podle `AI_PROVIDER` mění). Hermes je „nedostupný“, když není zapnutý (`HERMES_AI_ENABLED`, token), neodpoví do časového limitu, vrátí chybu, nebo dvakrát po sobě vrátí výstup, který neprojde validací §6.3. Pokud není dostupný žádný povolený model, tlačítko vysvětlí, že návrh teď nejde připravit, a nic nevznikne.
+- Návrh vždy ukáže, který model ho připravil („připraveno Hermesem“ / „připraveno OpenAI se souhlasem, Hermes byl nedostupný“), a audit zaznamená poskytovatele a souhlas bez obsahu e-mailu.
 
 ### 6.2 Tok (C1)
 1. Doručené → Z pošty → vlákno „Re: Nabídka na nový e-shop“ → **✦ Navrhnout projekt**.
@@ -282,7 +281,8 @@ Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh 
 ### 6.3 Kontrakt modelu
 - Vstup: výřez vlákna + seznam názvů a kontextů existujících projektů v témže workspace (kvůli deduplikaci). Nic z jiného workspace.
 - Výstup: striktní JSON (`title`, `why`, `goals[]`, `doneWhen`, `steps[{title, when?, deadline?, evidence}]`, `matchProjectId?`), validovaný serverem. Každý krok musí mít `evidence` = citaci z e-mailu, jinak se zahodí. Data se parsují deterministicky (`local-dates.ts`), ne modelem.
-- Citlivé/confidential zdroje jdou jen do Hermesu, nikdy do záložního modelu (potvrzeno vlastníkem 22. 10. 2026).
+- Citlivé/confidential a neklasifikovatelné zdroje se řídí pravidly přenosu v §6.6 (potvrzeno vlastníkem 22. 10. 2026: citlivé jen do Hermesu).
+- `evidence` je jen pro transientní náhled a validaci; do proposalu, auditu, entit ani záloh se neukládá (§6.6).
 
 ### 6.4 Vyhodnocení, zda to Hermes zvládne
 Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntetických** českých a smíšených vláknech (min. 20 vláken: nabídka, organizace akce, reklamace, interní úkolování, newsletter jako negativní případ). Vyhodnocuje se Hermes i záložní model na stejné sadě. Model analýzu „zvládne“, když:
@@ -291,13 +291,32 @@ Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntet
 - u negativních případů (newsletter, notifikace) navrhne „žádný projekt“ v ≥ 90 %,
 - odpověď do 60 s na vlákno do 8 000 znaků.
 
-Výsledky se zapíšou do PR. Pokud prahy nesplní Hermes, ale splní je záložní model, bude záložní model pro poštu primární a Hermes se zkusí znovu po úpravě promptu nebo výřezu (potvrzeno vlastníkem 22. 10. 2026). Pokud je nesplní žádný model, funkce zůstane vypnutá a vlastník dostane výsledky.
+Výsledky se zapíšou do PR. Výchozí a jediný implementovaný režim je **Hermes-first, cloud jen jako fallback přes souhlasovou bránu** (§6.6). Pokud prahy nesplní Hermes, funkce v Hermes cestě zůstane vypnutá a vlastník dostane výsledky. Vlastník 22. 10. 2026 předběžně souhlasil, že v takovém případě může být primární cloudový model, pokud prahy splní. To je ale **samostatný režim `cloud-primary`**, který se zapne až dalším výslovným rozhodnutím vlastníka nad výsledky vyhodnocení (zápis do tohoto dokumentu a MAIL-CONNECTORS). I v něm platí stejná souhlasová brána a stejná pravidla citlivosti jako pro fallback; žádný přenos do cloudu bez souhlasu před odesláním. Pokud prahy nesplní žádný model, funkce zůstane vypnutá.
 
 ### 6.5 Akceptační kritéria
 1. Bez kliknutí vlastníka se žádný e-mail modelu neodešle (C1). Test to ověří na mocku Gmailu a poskytovatele.
-2. Při dostupném Hermesu dostane požadavek jen Hermes. Při nedostupném Hermesu (vypnutý, chyba, timeout, dvakrát nevalidní výstup) dostane tentýž výřez záložní model a návrh to uvede. Citlivý zdroj se záložnímu modelu nepošle nikdy (testy s mockem Hermesu i OpenAI).
+2. Při dostupném Hermesu dostane požadavek jen Hermes. Při nedostupném Hermesu (vypnutý, chyba, timeout, dvakrát nevalidní výstup) se nejdřív zobrazí souhlasová brána; teprve po výslovném „Odeslat do OpenAI“ dostane tentýž výřez záložní model a návrh to uvede. Negativní testy s mocky Hermesu a OpenAI: `Hermes timeout + bez souhlasu ⇒ žádný OpenAI request`, `Hermes timeout + citlivý zdroj ⇒ žádný OpenAI request ani nabídka brány`, `Hermes timeout + neklasifikovatelný zdroj ⇒ žádný OpenAI request`, `souhlas k jinému vláknu/expirovaný souhlas ⇒ žádný OpenAI request`.
 3. Zahození návrhu nic nevytvoří. Potvrzení vytvoří přesně vybrané kroky v jednom workspace. Druhé potvrzení téhož návrhu skončí konfliktem bez duplicit.
 4. Krok bez citace z e-mailu se nenavrhne. Navržený termín je označen jako „z e-mailu, ověřte“.
+6. Po vytvoření i po zahození návrhu test prohledá SQLite (`ai_proposals`, audit, `entities`, `relations`), serverové logy testovací instance a exportovanou zálohu a ověří, že v nich není žádný úsek těla e-mailu ani žádná `evidence` citace (syntetické vlákno s unikátními značkami).
+
+### 6.6 Privacy kontrakt pošty a AI (cílový požadavek)
+Doplněno 22. 10. 2026 na základě review [Kocooour/AI-executive#93](https://github.com/Kocooour/AI-executive/pull/93). Platí pro C1 i budoucí C2 a má přednost před pohodlím fallbacku.
+
+**Klasifikace zdroje (fail-closed).** Gmail dnes citlivost zpráv nenese a Lumi ji nevaliduje. Proto:
+- Každý připojený e-mailový účet dostane v Nastavení → Pošta seznam **citlivých štítků** (Gmail labels, např. „Důvěrné“, „Právní“), výchozí prázdný, a volbu **„Povolit cloudový fallback pro tento účet“**, výchozí **vypnuto**.
+- Vlákno je **citlivé**, pokud kterákoli jeho zpráva nese citlivý štítek nebo Gmail kategorii/štítek, který vlastník označil jako citlivý. Citlivé vlákno jde jen do Hermesu; při nedostupném Hermesu návrh není dostupný a brána se nenabídne.
+- Vlákno je **neklasifikovatelné**, pokud se štítky nepodařilo načíst (chyba Gmail API, částečná odpověď, odpojený účet). Neklasifikovatelné vlákno se do cloudu **neposílá** (fail-closed).
+- Ostatní vlákna jsou **neoznačená**: do cloudu smí jen přes souhlasovou bránu a jen u účtu s povoleným cloudovým fallbackem.
+
+**Souhlasová brána před přenosem.** Když Hermes není dostupný a vlákno je neoznačené na účtu s povoleným fallbackem, Lumi **před** odesláním ukáže dialog: poskytovatel (OpenAI), že obsah opustí server Lumi, přesný rozsah výřezu (počet zpráv, znaků, odesílatelé, bez příloh) a tlačítka **Odeslat do OpenAI** / **Zrušit**. Souhlas je jednorázový: váže se na session vlastníka, workspace, účet, ID vlákna a hash výřezu a vyprší za 5 minut; nepoužije se pro jiné vlákno ani opakovaně. Bez souhlasu server cloudovému poskytovateli nic neodešle (kontrola na serveru, ne jen v UI).
+
+**Retence a datový model.**
+- **Nikdy se neukládá:** tělo e-mailu, výřez poslaný modelu, odpověď modelu v surové podobě, `evidence` citace. Žijí jen v paměti requestu a v no-store odpovědi pro náhled (bez Dexie, bez localStorage, bez service-worker cache).
+- **Ukládá se do proposalu `create_project_bundle` (SQLite `ai_proposals`, TTL = expirace proposalu jako u ostatních návrhů):** názvy, `why`, `goals`, `doneWhen`, kroky (název, datum, termín), workspace, `mailSource` ID (provider, accountId, threadId, messageId), poskytovatel a ID souhlasu. Jsou to odvozené a vlastníkem upravitelné texty, ne citace; před uložením se ověří, že žádné pole neobsahuje doslovný úsek výřezu delší než 80 znaků (jinak se odmítne a vlastník ho musí přeformulovat).
+- **Audit:** operace, cíle, poskytovatel, souhlas ano/ne, počty kroků, výsledek. Žádný text z e-mailu.
+- **Po schválení** zůstávají jen vytvořené entity (stejně jako dnešní „Vytvořit úkol“ z e-mailu) s `mailSource` ID. Zálohy a export obsahují jen to, co je v entitách a proposalech výše; citace v nich být nemohou, protože se nikde neukládají.
+
 5. Odpojený účet nebo vypnutý model = srozumitelná hláška, žádný částečný stav.
 
 ---
@@ -333,7 +352,7 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 | 5 | D3: detail úkolu (čipy, sbalené sekce, zrušení „Seznam“) | 2 | e2e detail-inspector, task-row |
 | 6 | B: `context` projektu, migrace `goal`, stránka projektu, skupiny podle oblastí | rozhodnuto (B) | unit migrace, e2e project-overview, backup-restore |
 | 7 | B+: „✦ Lumi navrhne“ kontext přes proposal | 6 | e2e approval/Undo |
-| 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, pořadí Hermes → dostupný model, vyhodnocení §6.4 | rozhodnuto (C1, Hermes + fallback), 6 | unit validace výstupu a pořadí poskytovatelů, e2e s Gmail + Hermes/OpenAI mockem, data-boundary |
+| 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, pořadí Hermes → cloud jen přes souhlasovou bránu a klasifikaci §6.6, nulová retence citací, vyhodnocení §6.4 | rozhodnuto (C1, Hermes + fallback), 6 | unit validace výstupu a pořadí poskytovatelů, e2e s Gmail + Hermes/OpenAI mockem, data-boundary |
 | 9 | C2: průběžná analýza | ⚑ C2, 8 | privacy/retence, plánovač, dedup |
 
 ---
