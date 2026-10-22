@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 import { currentRestoreGeneration } from "./restore-fence";
+import { pruneExpiredMailAccount } from "./mail-sync-retention";
 
 export const gmailScope = "https://www.googleapis.com/auth/gmail.readonly";
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -554,8 +555,7 @@ function requireSyncAccount(workspaceId: string, accountId: string) {
 
 function trimMailIndex(accountId: string, retentionDays: number, now: number) {
   const db = getDatabase();
-  db.prepare("DELETE FROM mail_sync_messages WHERE account_id = ? AND received_at < ?")
-    .run(accountId, now - retentionDays * 86_400_000);
+  pruneExpiredMailAccount(db, accountId, retentionDays, now);
   db.prepare(`DELETE FROM mail_sync_messages WHERE account_id = ? AND message_id NOT IN
     (SELECT message_id FROM mail_sync_messages WHERE account_id = ?
      ORDER BY received_at DESC, message_id DESC LIMIT ?)`)
