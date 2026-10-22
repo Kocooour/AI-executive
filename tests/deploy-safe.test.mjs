@@ -243,6 +243,16 @@ scenarioCase("mailprestartloss: unauthorized consent removal while stopped fails
   const saved = JSON.parse(readFileSync(path.join(f.backups, r.backups[0], "before-mail.json"), "utf8"));
   assert.equal(saved.accounts.length, 1);
 });
+scenarioCase("mailsnapshoterror: unreadable prestart snapshot does not falsely report lost Gmail consent", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /simulated read-only Gmail snapshot error/);
+  assert.match(r.output, /predstartovni Gmail snapshot neslo precist; nejde o potvrzenou ztratu dat/);
+  assert.doesNotMatch(r.output, /Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe/);
+  assert.doesNotMatch(r.output, /zachovani Gmail souhlasu\/metadat NENI potvrzeno/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("start-b"), false);
+});
 scenarioCase("outboxcompact: legitimate semantic invalidation compaction does not trigger rollback", (r, f) => {
   assert.equal(r.status, 0, r.output);
   assert.match(r.output, /NASAZENI DOKONCENO/);
