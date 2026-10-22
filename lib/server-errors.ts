@@ -148,6 +148,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Gmail connection failed", // Sanitized generic OAuth failure, not provider error text.
   "Gmail request failed", // Generic API failure without third-party details.
   "Mail request failed", // Sanitized unexpected owner route failure.
+  "Mail sync failed", // Sanitized unexpected Gmail sync route failure.
 
   // Security-log reasons and alert text, never sent to the interface.
   "failed",

@@ -37,6 +37,7 @@ const dumpAll = (tables) => Object.fromEntries(tables.map((table) => [table, dum
 const overrides = {
   work_sessions: { state: "completed", running_since: null },
   work_session_intervals: { ended_at: 5 },
+  mail_sync_accounts: { retention_days: 30 },
 };
 // One row for a table, every column filled from the schema, so that a table added later is covered without edits here.
 function seed(table, tag) {
