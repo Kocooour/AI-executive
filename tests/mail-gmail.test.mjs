@@ -1624,6 +1624,76 @@ test("Mail v4 safely recovers if a narrowed oversized History page rejects the o
   } finally { globalThis.fetch = previous; }
 });
 
+test("Mail v4 keeps a narrowed History page size for later page tokens", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000021";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "history-page-size@example.com", mail.sealMail("PAGE-SIZE-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  const records = Array.from({ length: 20 }, (_, event) => ({
+    id: String(101 + event), messagesAdded: [{ message: { id: (0x710000 + event).toString(16) } }],
+  }));
+  const calls = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const token = url.searchParams.get("pageToken");
+      const count = url.searchParams.get("maxResults");
+      calls.push({ token, count });
+      if (!token && count === "100") return Response.json({ historyId: "400", padding: "X".repeat(280000) });
+      // Gmail ties a page token to the list parameters it was issued for.
+      if (token && token !== "p2-size-" + count) return Response.json({ error: "invalid page token" }, { status: 400 });
+      const page = token ? records.slice(10) : records.slice(0, 10);
+      return Response.json({ historyId: "400", history: page, ...(token ? {} : { nextPageToken: "p2-size-" + count }) });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdefabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Narrowed page" }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const result = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(result.full, false, "a valid narrowed page token must not force a rebuild");
+    assert.equal(result.recovery, false);
+    assert.deepEqual(calls, [
+      { token: null, count: "100" }, { token: null, count: "10" }, { token: "p2-size-10", count: "10" },
+    ]);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "400");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 20);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 rebuilds when Gmail rejects the saved History cursor with HTTP 400", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000022";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "history-cursor-400@example.com", mail.sealMail("CURSOR-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return Response.json({ error: "invalid startHistoryId" }, { status: 400 });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const result = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(result.full, true);
+    assert.equal(result.recovery, true);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "500");
+  } finally { globalThis.fetch = previous; }
+});
+
 test("Mail v4 stops paging older discovery when 250 newer indexed messages already occupy the cap", async () => {
   const workspaceId = "mail-v4-fixture";
   const accountId = "eeeeeeee-eeee-4eee-8eee-000000000010";

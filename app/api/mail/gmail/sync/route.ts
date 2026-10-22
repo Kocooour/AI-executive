@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     // including during a burst of other sync requests.
     // Status reads are cheap/read-only; sync still has bounded per-run work.
     const limited = action === "disable" ? null : enforceRateLimit(request, "mail-sync-" + action,
-      action === "sync" ? 120 : action === "status" ? 1200 : 120, 60 * 60_000);
+      action === "status" ? 1200 : 120, 60 * 60_000);
     if (limited) return json({ error: limited.error }, limited.status);
     const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
     if (action === "status") return json({ accounts: listMailSyncStates(workspaceId) });
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       disableMailSync(workspaceId, accountId);
     } else {
       const result = await syncMailAccount(workspaceId, accountId);
-      recordSecurityEvent(request, "mail.gmail.sync.run", "allowed", { provider: "gmail" });
+      recordSecurityEvent(request, "mail.gmail.sync.sync", "allowed", { provider: "gmail" });
       return json(result);
     }
     recordSecurityEvent(request, "mail.gmail.sync." + action, "allowed", { provider: "gmail" });

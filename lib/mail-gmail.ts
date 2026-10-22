@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 import { currentRestoreGeneration } from "./restore-fence";
-import { pruneExpiredMailAccount } from "./mail-sync-retention";
+import { MAIL_RETENTION_DAYS, pruneExpiredMailAccount } from "./mail-sync-retention";
 
 export const gmailScope = "https://www.googleapis.com/auth/gmail.readonly";
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -523,7 +523,6 @@ export async function readGmailThread(input: { workspaceId: string; accountId: s
 const SYNC_DEADLINE_MS = 45_000;
 const SYNC_MAX_ITEMS = 120;
 const SYNC_KEEP_ITEMS = 250;
-const SYNC_RETAIN_DAYS = [7, 30, 90] as const;
 const gmailId = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{5,64}$/i.test(value);
 const historyId = (value: unknown): value is string =>
@@ -594,7 +593,7 @@ export function listMailSyncStates(workspaceId: string): MailSyncState[] {
 }
 
 export function enableMailSync(workspaceId: string, accountId: string, retentionDays: number): void {
-  if (!SYNC_RETAIN_DAYS.includes(retentionDays as 7 | 30 | 90))
+  if (!(MAIL_RETENTION_DAYS as readonly number[]).includes(retentionDays))
     throw new MailError("Mail retention must be 7, 30 or 90 days", 400);
   accountCredentials(workspaceId, accountId);
   ensureDailyBackup();
@@ -696,6 +695,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   if (!full) {
     try {
       let pageToken = "";
+      // A page token stays paired with the page size it was issued for.
+      let pageSize = 100;
       let page = 0;
       let lastAppliedEventId: string | null = null;
       const originalPending = settings.pending_event_id;
@@ -710,14 +711,17 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         // Narrow multi-record replies first; a single oversized record must
         // fall back to non-destructive mailbox discovery/revalidation below.
         let response: Record<string, unknown> | undefined;
-        for (const count of [100, 10, 1]) {
+        for (const count of [100, 10, 1].filter((size) => size <= pageSize)) {
           url.searchParams.set("maxResults", String(count));
           try {
             response = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+            pageSize = count;
             break;
           } catch (error) {
-            if (error instanceof MailError && error.status === 400 && pageToken && count !== 100)
-              throw new MailHistoryCheckpointError("Gmail History page token invalid after smaller reply retry");
+            // Our parameters are fixed, so Bad Request means Gmail rejected the
+            // saved startHistoryId or a page token: rebuild instead of failing forever.
+            if (error instanceof MailError && error.status === 400)
+              throw new MailHistoryCheckpointError("Gmail rejected the History cursor or page token");
             if (!(error instanceof MailReplyTooLargeError)) throw error;
             if (count === 1) throw error;
           }

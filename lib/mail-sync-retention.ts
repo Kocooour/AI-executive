@@ -4,12 +4,14 @@ import type { DatabaseSync } from "node:sqlite";
 // sessions, browser state or AI access. Safe to run at startup and repeatedly.
 export const MAIL_RETENTION_SWEEP_MS = 15 * 60_000;
 const MAIL_DAY_MS = 86_400_000;
+// The only retention choices; the schema CHECK and the settings UI mirror them.
+export const MAIL_RETENTION_DAYS = [7, 30, 90] as const;
 
 // Shared expiry rule for scheduler and transaction-scoped account maintenance.
 // The caller manages its transaction; this helper must never BEGIN/COMMIT.
 export function pruneExpiredMailAccount(database: DatabaseSync, accountId: string,
   retentionDays: number, now = Date.now()): number {
-  if (!Number.isSafeInteger(now) || now < 0 || ![7, 30, 90].includes(retentionDays))
+  if (!Number.isSafeInteger(now) || now < 0 || !(MAIL_RETENTION_DAYS as readonly number[]).includes(retentionDays))
     throw new Error("Invalid mail retention cutoff");
   return Number(database.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND received_at < ?")
     .run(accountId, now - retentionDays * MAIL_DAY_MS).changes);

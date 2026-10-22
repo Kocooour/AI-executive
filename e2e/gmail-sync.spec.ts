@@ -352,3 +352,45 @@ test("Mail v4 ignores a late sync reply after workspace selection changes", asyn
   await expect(section.getByRole("button", { name: "Zapnout synchronizaci" })).toBeDisabled();
   expect(statusCalls).toBeGreaterThanOrEqual(2);
 });
+
+test("Mail v4 ignores a status reply that started before a completed opt-out", async ({ page }) => {
+  const account = { id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal", email: "late-status@example.com" };
+  let releaseStatus: () => void = () => {};
+  const statusHeld = new Promise<void>((resolve) => { releaseStatus = resolve; });
+  let statusReplied = false;
+  await page.route("**/api/mail/gmail?*", async (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) }));
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    const action = route.request().postDataJSON().action;
+    if (action === "disable") {
+      await route.fulfill({ contentType: "application/json", body: '{"accounts":[]}' });
+      return;
+    }
+    expect(action).toBe("status");
+    await statusHeld;
+    // Stale snapshot from before the opt-out committed.
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [
+      { accountId: account.id, workspaceId: "personal", enabled: true, retentionDays: 30,
+        indexedCount: 12, lastSyncedAt: Date.now() },
+    ] }) });
+    statusReplied = true;
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("late-status@example.com")).toBeVisible();
+  await expect(section.getByText("Stav neznámý")).toBeVisible();
+  await section.getByRole("button", { name: "Vypnout a smazat metadata" }).click();
+  await confirmDialog(page).getByRole("button", { name: "Vypnout a smazat" }).click();
+  await expect(section.getByText("Synchronizace vypnutá")).toBeVisible();
+  const lateReply = page.waitForResponse((response) => response.url().endsWith("/api/mail/gmail/sync")
+    && response.request().postDataJSON().action === "status");
+  releaseStatus();
+  await lateReply;
+  expect(statusReplied).toBe(true);
+  // Give React the chance to apply the stale reply before checking it was ignored.
+  await page.waitForTimeout(300);
+  await expect(section.getByText("Synchronizace vypnutá")).toBeVisible();
+  await expect(section).not.toContainText("Synchronizace zapnutá");
+});
