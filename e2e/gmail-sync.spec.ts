@@ -56,7 +56,7 @@ for (const width of [390, 1280]) {
     await confirmDialog(page).getByRole("button", { name: "Vypnout a smazat" }).click();
     await expect(section.getByText("Synchronizace vypnutá")).toBeVisible();
     expect(indexedCount).toBe(0);
-    expect(calls).toEqual(["status", "enable", "sync", "status", "disable"]);
+    expect(calls).toEqual(["status", "enable", "sync", "disable"]);
     await settingsSections(page).filter({ hasText: "Workspace" }).click();
     await page.getByLabel("Aktuální pohled").selectOption("all");
     await settingsSections(page).filter({ hasText: "Pošta" }).click();
@@ -217,4 +217,71 @@ test("Mail v4 retention Save never silently changes an unchanged 7-day policy to
   await expect(select).toHaveValue("7");
   await expect(save).toBeDisabled();
   expect(enableCalls).toEqual([30, 7]);
+});
+
+
+test("Mail v4 sync-status retry recovers without page reload after a transient 503", async ({ page }) => {
+  const account = { id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal", email: "retry@example.com" };
+  let statusCalls = 0;
+  await page.route("**/api/mail/gmail?*", async (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) }));
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.action).toBe("status");
+    statusCalls++;
+    if (statusCalls === 1) await route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"temporary"}' });
+    else await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [
+      { accountId: account.id, workspaceId: "personal", enabled: true, retentionDays: 7,
+        indexedCount: 8, lastSyncedAt: Date.now() },
+    ] }) });
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("retry@example.com")).toBeVisible();
+  await expect(section.getByText("Stav neznámý")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Zapnout synchronizaci" })).toBeDisabled();
+  await section.getByRole("button", { name: "Obnovit stav synchronizace" }).click();
+  await expect(section.getByText("Synchronizace zapnutá", { exact: false })).toBeVisible();
+  await expect(section.getByLabel("Uchovávání")).toHaveValue("7");
+  await expect(section.getByRole("button", { name: "Synchronizovat nyní" })).toBeEnabled();
+  expect(statusCalls).toBe(2);
+});
+
+test("Mail v4 committed sync uses its returned status without an extra status request", async ({ page }) => {
+  const account = { id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal", email: "sync-result@example.com" };
+  let statusCalls = 0, syncCalls = 0;
+  await page.route("**/api/mail/gmail?*", async (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) }));
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "status") {
+      statusCalls++;
+      return route.fulfill({ status: statusCalls === 1 ? 200 : 503,
+        contentType: "application/json", body: statusCalls === 1 ? JSON.stringify({ accounts: [{
+          accountId: account.id, workspaceId: "personal", enabled: true, retentionDays: 7,
+          indexedCount: 1, lastSyncedAt: Date.now(),
+        }] }) : '{"error":"status outage"}' });
+    }
+    expect(body.action).toBe("sync");
+    syncCalls++;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      full: false, partial: false, updated: 2, state: {
+        accountId: account.id, workspaceId: "personal", enabled: true,
+        retentionDays: 7, indexedCount: 3, lastSyncedAt: Date.now(),
+      },
+    }) });
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("sync-result@example.com")).toBeVisible();
+  await expect(section.getByText("1 záznamů", { exact: false })).toBeVisible();
+  await section.getByRole("button", { name: "Synchronizovat nyní" }).click();
+  await expect(section.getByText("3 záznamů", { exact: false })).toBeVisible();
+  await expect(section).not.toContainText("Synchronizace Gmailu se nezdařila.");
+  expect(syncCalls).toBe(1);
+  expect(statusCalls).toBe(1, "no follow-up status request after a successful sync");
 });
