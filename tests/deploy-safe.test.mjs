@@ -206,9 +206,13 @@ scenarioCase("mailretention: expired Gmail metadata cleanup is accepted during s
     assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages ORDER BY message_id").all().map(x => x.message_id), ["current"]);
   } finally { db.close(); }
 });
-scenarioCase("mailloss: unexpired Gmail metadata loss is rejected by deployment guard", (r) => {
-  assert.notEqual(r.status, 0);
-  assert.match(r.output, /KRITICKY UBYTEK: mail_sync_messages/);
+scenarioCase("mailloss: active-service Gmail index deletions warn rather than rollback healthy code", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.output, /UPOZORNENI: 1 mail_sync_messages ubylo po spusteni sluzby/);
+  assert.match(r.output, /NASAZENI DOKONCENO/);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), false);
 });
 scenarioCase("outboxcompact: legitimate semantic invalidation compaction does not trigger rollback", (r, f) => {
   assert.equal(r.status, 0, r.output);
