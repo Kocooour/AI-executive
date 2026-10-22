@@ -12,20 +12,25 @@ import { WorkNowCard } from "./work-now-card";
 // Today is one list. These are the parts around it (the list itself is EntityList): the count and
 // planned time next to the date with the "⋯" options menu, the strip above the list and the footer.
 
-const HIDDEN_KEY = "lumi-today-summary-hidden";
+// Per workspace; the value is the day the suggestion was hidden for.
+const hiddenKey = (workspaceId: string) => `lumi-today-summary-hidden:${workspaceId}`;
 
 const fill = (text: string, values: Record<string, string | number>) =>
   Object.entries(values).reduce((result, [name, value]) => result.replace(`{${name}}`, () => String(value)), text);
 
 export function TodayHeaderMeta({ app }: { app: LumiApp }) {
-  const { calendarToday, calendarWorkspaceSelection, dayPlanBusy, language, loadDayPlan, priorityFilter, setDayPlanNow, setDayPlanStatus,
+  const { calendarToday, calendarWorkspaceSelection, collection, dayPlanBusy, language, loadDayPlan, priorityFilter, setDayPlanNow, setDayPlanStatus,
     setPriorityFilter, setSortBy, sortBy, todayTasks, tr, visibleDayPlan } = app;
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
-  // The planned time is the plan's estimate for the tasks that are in Today; without a plan it is left out.
-  const minutes = planMinutesForTasks(visibleDayPlan, new Set(todayTasks.map((task) => task.id)));
+  // The count and the planned time are those of the rows shown; with a priority filter the count says
+  // how many of all Today tasks. Without a plan the time is left out.
+  const shown = collection.filter((task) => task.type === "task");
+  const minutes = planMinutesForTasks(visibleDayPlan, new Set(shown.map((task) => task.id)));
   const hours = minutes ? roundedPlanHours(minutes) : 0;
   const summary = [
-    pluralText(language, todayTasks.length, tr("todayTaskForms")),
+    priorityFilter !== "all" && shown.length !== todayTasks.length
+      ? fill(tr("todayFilteredCount"), { shown: shown.length, total: todayTasks.length })
+      : pluralText(language, shown.length, tr("todayTaskForms")),
     hours > 0 ? fill(tr("todayApproxHours"), { hours: hours.toLocaleString(locale, { maximumFractionDigits: 1 }) }) : "",
   ].filter(Boolean).join(" · ");
   return (
@@ -69,8 +74,19 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
 // A running work session, today's calendar events (only with a connected calendar) and the plan's
 // status line with Undo.
 export function TodayTop({ app }: { app: LumiApp }) {
-  const { calendarDayEvents, calendarFresh, calendarToday, dayPlanBusy, dayPlanStatus, dayPlanUndo, tr, undoDayPlanBlock, visibleDayPlan } = app;
+  const { calendarDayEvents, calendarFresh, calendarSources, calendarToday, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanUndo, nextDayPlanBlock,
+    tr, undoDayPlanBlock, visibleDayPlan } = app;
   const canUndo = Boolean(visibleDayPlan && dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date);
+  const stripShowsStale = calendarDayEvents.length > 0 && !calendarFresh;
+  // The plan's own calendar state, said once for the whole list (the rows only show their times).
+  // No calendar at all is the single quiet line in the footer.
+  const planState = !visibleDayPlan ? ""
+    : visibleDayPlan.calendar === "non-workday" ? "dayPlanNonWorkday"
+      : visibleDayPlan.calendar === "stale" ? (stripShowsStale ? "" : "dayPlanStale")
+        : visibleDayPlan.calendar === "missing" ? (calendarSources.length === 0 ? "" : "dayPlanMissing") : "";
+  const state = (block: { existing?: boolean; planningSource?: string }) =>
+    tr(block.existing ? block.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed");
+  const overloaded = Boolean(visibleDayPlan && visibleDayPlan.calendar === "ready" && visibleDayPlan.overloaded);
   return (
     <>
       <WorkNowCard app={app} compact />
@@ -80,6 +96,14 @@ export function TodayTop({ app }: { app: LumiApp }) {
           {!calendarFresh && <p role="status">{tr("dayPlanStale")}</p>}
           <TodayAgenda app={app} events={calendarDayEvents} day={calendarToday} />
         </section>
+      )}
+      {(planState || overloaded || currentDayPlanBlock || nextDayPlanBlock) && (
+        <div className="todayPlanState" data-today-plan-state>
+          {planState && <p role="status">{tr(planState)}</p>}
+          {overloaded && visibleDayPlan && <p role="status" className="dayPlanWarning">{tr("dayPlanOverloaded")} ({visibleDayPlan.requiredMinutes} min)</p>}
+          {currentDayPlanBlock && <p data-plan-current><strong>{tr("dayPlanCurrent")}:</strong> {currentDayPlanBlock.title} · {state(currentDayPlanBlock)}</p>}
+          {nextDayPlanBlock && <p data-plan-next><strong>{tr("dayPlanNext")}:</strong> {nextDayPlanBlock.title} · {state(nextDayPlanBlock)}</p>}
+        </div>
       )}
       {(dayPlanStatus || canUndo) && (
         <div className="todayPlanNote">
@@ -92,9 +116,12 @@ export function TodayTop({ app }: { app: LumiApp }) {
 }
 
 export function TodayFooter({ app }: { app: LumiApp }) {
-  const { activeWorkspaceId, calendarDayEvents, calendarFresh, calendarSources, calendarToday, collection, deferBusy, deferTask, items, language,
+  const { activeWorkspaceId, calendarSources, calendarToday, collection, deferBusy, deferTask, items, language,
     setView, today, todayTasks, tr, visibleDayPlan } = app;
-  const [hiddenDay, setHiddenDay] = useState(() => { try { return localStorage.getItem(HIDDEN_KEY) || ""; } catch { return ""; } });
+  // Hidden for the day: kept in this browser per workspace, and in memory when storage is unavailable.
+  const [hiddenHere, setHiddenHere] = useState<string[]>([]);
+  const storedHidden = (() => { try { return localStorage.getItem(hiddenKey(activeWorkspaceId)) || ""; } catch { return ""; } })();
+  const hiddenDay = storedHidden === today || hiddenHere.includes(`${activeWorkspaceId}|${today}`) ? today : "";
   const todayIds = new Set(todayTasks.map((task) => task.id));
 
   // Plan items for tasks that are not planned for today are not rows; one quiet line counts them.
@@ -118,13 +145,12 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     dayCount: picked.suggestion.params.dayCount,
   });
   const hide = () => {
-    setHiddenDay(today);
-    try { localStorage.setItem(HIDDEN_KEY, today); } catch { /* storage unavailable: hidden until reload */ }
+    setHiddenHere((current) => [...current, `${activeWorkspaceId}|${today}`]);
+    try { localStorage.setItem(hiddenKey(activeWorkspaceId), today); } catch { /* storage unavailable: hidden until reload */ }
   };
 
   const noCalendar = calendarSources.length === 0;
-  const staleNote = !noCalendar && !calendarFresh && calendarDayEvents.length === 0;
-  if (outside === 0 && !picked && !noCalendar && !staleNote) return null;
+  if (outside === 0 && !picked && !noCalendar) return null;
   return (
     <footer className="todayFooter">
       {outside > 0 && (
@@ -143,7 +169,6 @@ export function TodayFooter({ app }: { app: LumiApp }) {
         </section>
       )}
       {noCalendar && <p className="homeNotice todayCalendarNote">{tr("calendarDisconnectedNote")} <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
-      {staleNote && <p className="homeNotice todayCalendarNote" role="status">{tr("dayPlanStale")}</p>}
     </footer>
   );
 }

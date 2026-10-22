@@ -18,7 +18,7 @@ export function PopoverMenu({ label, triggerLabel, triggerClassName, triggerCont
 }) {
   const [open, setOpen] = useState(false);
   const [above, setAbove] = useState(false);
-  const rootRef = useRef<HTMLSpanElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -79,7 +79,7 @@ export function PopoverMenu({ label, triggerLabel, triggerClassName, triggerCont
   };
 
   return (
-    <span ref={rootRef} className={`popoverMenu ${className || ""}`.trim()} onClick={(event) => event.stopPropagation()}
+    <div ref={rootRef} className={`popoverMenu ${className || ""}`.trim()} onClick={(event) => event.stopPropagation()}
       onBlur={role === "group" ? (event) => { if (open && event.relatedTarget instanceof Node && !rootRef.current?.contains(event.relatedTarget)) setOpen(false); } : undefined}>
       <button ref={triggerRef} type="button" className={triggerClassName} aria-label={triggerLabel} aria-haspopup={role === "menu" ? "menu" : "true"}
         aria-expanded={open} aria-controls={open ? id : undefined} {...triggerData}
@@ -89,6 +89,6 @@ export function PopoverMenu({ label, triggerLabel, triggerClassName, triggerCont
           {children(close)}
         </div>
       )}
-    </span>
+    </div>
   );
 }

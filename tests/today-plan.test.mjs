@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { planSlotsByTask, planMinutesForTasks, planItemsOutsideToday, roundedPlanHours } = await import("../lib/today-plan.ts");
+const { planSkippedToday, planSlotsByTask, planMinutesForTasks, planItemsOutsideToday, roundedPlanHours } = await import("../lib/today-plan.ts");
 const { pickSummarySuggestion } = await import("../lib/today-summary.ts");
 const { homeTodayList } = await import("../lib/home-today.ts");
 
@@ -110,4 +110,13 @@ test("attention primary action: the date chip for a task with a date reason, Ope
   assert.equal(attentionPrimaryAction({ subjectType: "task", ruleId: "deadline_overdue" }, undefined, true), "open");
   assert.equal(attentionPrimaryAction({ subjectType: "task", ruleId: "deadline_overdue" }, { type: "task", status: "completed" }, true), "open");
   assert.equal(attentionPrimaryAction({ subjectType: "task", ruleId: "deadline_overdue" }, open, false), "open");
+});
+
+test("a task skipped for the plan's day is recognised only for that day and that decision", () => {
+  const skipped = { properties: { planningFeedback: { date: "2026-10-22", decision: "dismissed" } } };
+  assert.equal(planSkippedToday(skipped, "2026-10-22"), true);
+  assert.equal(planSkippedToday(skipped, "2026-10-23"), false);
+  assert.equal(planSkippedToday({ properties: { planningFeedback: { date: "2026-10-22", decision: "tomorrow" } } }, "2026-10-22"), false);
+  assert.equal(planSkippedToday({ properties: {} }, "2026-10-22"), false);
+  assert.equal(planSkippedToday(null, "2026-10-22"), false);
 });

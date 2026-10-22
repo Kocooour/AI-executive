@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { confirmDialog, expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
+import { confirmDialog, expectOnServer, removeTasks, serverEntities, waitUntilSynced } from "./helpers";
 import { expect, test } from "./fixtures";
 
 // The "Kdy" popover on task rows (Things-style deferral). Tasks are added straight to the server
@@ -374,35 +374,40 @@ test("keyboard moves in Today stay inside the regular or the evening group", asy
   const dates = await days(page);
   const base = stamp + 1e9;
   const [a, b, e] = [`Pořadí A ${stamp}`, `Pořadí B ${stamp}`, `Pořadí večer ${stamp}`];
-  await seed(page, a, { when: dates.today, today: true, manualOrder: base });
-  await addTasks(page, [
-    { id: `e2e-order-b-${stamp}`, title: b, properties: { when: dates.today, today: true, manualOrder: base + 1 } },
-    { id: `e2e-order-e-${stamp}`, title: e, properties: { when: dates.today, today: true, evening: true, manualOrder: base + 2 } },
-  ]);
-  await page.goto("/?view=Today");
-  await waitUntilSynced(page);
-  await expect(page.locator(".eveningHeading ~ .taskRow", { hasText: e })).toBeVisible();
-  const handle = (title: string) => row(page, title).locator(".dragHandle");
-  const orders = async () => (await serverEntities(page)).filter((entity) => entity.title.endsWith(String(stamp)) && entity.title.startsWith("Pořadí")).map((entity) => [entity.title, JSON.stringify(entity.properties?.manualOrders ?? null)]);
-  // Down from the last regular task: the next row is in the other group, so nothing is written.
-  await handle(b).focus();
-  await page.keyboard.press("ArrowDown");
-  await waitUntilSynced(page);
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  const idA = await seed(page, a, { when: dates.today, today: true, manualOrder: base });
+  try {
+    await addTasks(page, [
+      { id: `e2e-order-b-${stamp}`, title: b, properties: { when: dates.today, today: true, manualOrder: base + 1 } },
+      { id: `e2e-order-e-${stamp}`, title: e, properties: { when: dates.today, today: true, evening: true, manualOrder: base + 2 } },
+    ]);
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    await expect(page.locator(".eveningHeading ~ .taskRow", { hasText: e })).toBeVisible();
+    const handle = (title: string) => row(page, title).locator(".dragHandle");
+    const orders = async () => (await serverEntities(page)).filter((entity) => entity.title.endsWith(String(stamp)) && entity.title.startsWith("Pořadí")).map((entity) => [entity.title, JSON.stringify(entity.properties?.manualOrders ?? null)]);
+    // Down from the last regular task: the next row is in the other group, so nothing is written.
+    await handle(b).focus();
+    await page.keyboard.press("ArrowDown");
+    await waitUntilSynced(page);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      expect((await orders()).every(([, value]) => value === "null")).toBe(true);
+      await page.waitForTimeout(250);
+    }
+    // Up from the evening task: it is alone in its group.
+    await handle(e).focus();
+    await page.keyboard.press("ArrowUp");
+    await waitUntilSynced(page);
     expect((await orders()).every(([, value]) => value === "null")).toBe(true);
-    await page.waitForTimeout(250);
+    // Within the group a move is written.
+    await handle(b).focus();
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(async () => (await orders()).find(([title]) => title === b)?.[1]).not.toBe("null");
+    const regular = await page.locator(".taskRow:not(.eveningHeading ~ .taskRow)").allTextContents();
+    expect(regular.findIndex((text) => text.includes(b))).toBeLessThan(regular.findIndex((text) => text.includes(a)));
+  } finally {
+    // The evening task would otherwise stay in Today for the scenarios after this one.
+    await removeTasks(page, [idA, `e2e-order-b-${stamp}`, `e2e-order-e-${stamp}`]);
   }
-  // Up from the evening task: it is alone in its group.
-  await handle(e).focus();
-  await page.keyboard.press("ArrowUp");
-  await waitUntilSynced(page);
-  expect((await orders()).every(([, value]) => value === "null")).toBe(true);
-  // Within the group a move is written.
-  await handle(b).focus();
-  await page.keyboard.press("ArrowUp");
-  await expect.poll(async () => (await orders()).find(([title]) => title === b)?.[1]).not.toBe("null");
-  const regular = await page.locator(".taskRow:not(.eveningHeading ~ .taskRow)").allTextContents();
-  expect(regular.findIndex((text) => text.includes(b))).toBeLessThan(regular.findIndex((text) => text.includes(a)));
 });
 
 test("a recurring task completed in the evening group starts its next occurrence without the evening mark or deferral history", async ({ page }) => {

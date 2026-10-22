@@ -19,15 +19,23 @@ const row = (page: Page, title: string) => page.locator(".taskRow", { hasText: t
 
 // The plan the server would compute is replaced by a fixed one for the tasks given (proposed block,
 // unscheduled), so these scenarios do not depend on a calendar.
-async function mockPlan(page: Page, plan: { proposed?: Array<{ id: string; title: string }>; unscheduled?: Array<{ id: string; title: string }> }) {
+async function mockPlan(page: Page, plan: {
+  proposed?: Array<{ id: string; title: string }>;
+  unscheduled?: Array<{ id: string; title: string }>;
+  existing?: Array<{ id: string; title: string; startOffsetMinutes: number; minutes: number }>;
+  calendar?: string;
+  overloaded?: boolean;
+  requiredMinutes?: number;
+}) {
   await page.route("**/api/day-plan?**", async (route) => {
     const request = new URL(route.request().url());
     const date = request.searchParams.get("date") || "";
     const workspaceId = request.searchParams.get("workspaceId") || "personal";
     const shared = { estimatedMinutes: 30, reason: "today", estimateSource: "explicit", estimateSamples: 0, preferredMinute: null, timeSamples: 0, whyNow: ["due_today"] };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-      revision: 1, date, workspaceId, timezone: "Europe/Prague", calendar: "ready", freeMinutes: 600, requiredMinutes: 60, overloaded: false,
-      existingBlocks: [],
+      revision: 1, date, workspaceId, timezone: "Europe/Prague", calendar: plan.calendar || "ready", freeMinutes: 600, requiredMinutes: plan.requiredMinutes ?? 60, overloaded: plan.overloaded ?? false,
+      existingBlocks: (plan.existing || []).map((task) => ({ ...shared, taskId: task.id, title: task.title, planningSource: "manual",
+        start: new Date(Date.now() + task.startOffsetMinutes * 60_000).toISOString(), end: new Date(Date.now() + (task.startOffsetMinutes + task.minutes) * 60_000).toISOString() })),
       planBlocks: (plan.proposed || []).map((task, index) => ({ ...shared, taskId: task.id, title: task.title, start: `${date}T${String(11 + index).padStart(2, "0")}:00:00+02:00`, end: `${date}T${String(11 + index).padStart(2, "0")}:30:00+02:00` })),
       unscheduled: (plan.unscheduled || []).map((task) => ({ ...shared, taskId: task.id, title: task.title })),
     }) });
@@ -75,6 +83,7 @@ test("Today is one list: no plan card, no idle work card, a time cell per planne
     const menu = page.locator(`[data-time-menu="${proposed.id}"]`);
     await expect(menu).toContainText("Proč právě teď");
     await expect(menu.locator(".timeMenuWhy li")).toHaveText(["Úkol má termín dnes."]);
+    await expect(menu.locator("[data-time-estimate]")).toHaveText("30 min · Váš odhad");
     for (const name of ["Přijmout", "Jiný čas", "Zítra", "Neplánovat"]) await expect(menu.getByRole("button", { name })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
@@ -154,9 +163,12 @@ test("Priorita and Řazení are in the ⋯ menu of the Today header; one calenda
     await expect(page.locator(".todayOptionsBody select").nth(1)).toBeVisible();
     await page.locator(".todayOptionsBody select").first().selectOption("high");
     await expect(row(page, plain.title)).toHaveCount(0);
+    // The header counts the rows shown, out of all of Today.
+    await expect(page.locator("[data-today-summary]")).toHaveText(/^1 z \d+ úkolů/);
     await expect(row(page, high.title)).toBeVisible();
     await page.locator(".todayOptionsBody select").first().selectOption("all");
     await expect(row(page, plain.title)).toBeVisible();
+    await expect(page.locator("[data-today-summary]")).not.toContainText(" z ");
     await page.keyboard.press("Escape");
     await expect(page.locator(".todayOptionsBody select").first()).toHaveCount(0);
     await expect(menuButton).toBeFocused();
@@ -174,10 +186,12 @@ test("with more than six tasks Today ends with one Lumi suggestion: Použít mov
   const id = stamp();
   // Last in the manual order, so the suggestion picks the last of these and no task of another scenario.
   const base = 9e15;
-  const tasks = Array.from({ length: 7 }, (_, index) => ({ id: `e2e-d2-full-${id}-${index}`, title: `Plný den ${index + 1} ${id}`, properties: { today: true, manualOrder: base + index } }));
-  const last = tasks[6];
+  // They are evening tasks (the last group of Today), so the evening tasks other scenarios leave behind are not after them.
   await page.goto("/?view=Today");
   await waitUntilSynced(page);
+  const today = await day(page, 0);
+  const tasks = Array.from({ length: 7 }, (_, index) => ({ id: `e2e-d2-full-${id}-${index}`, title: `Plný den ${index + 1} ${id}`, properties: { today: true, when: today, evening: true, manualOrder: base + index } }));
+  const last = tasks[6];
   await seedTasks(page, tasks);
   try {
     await page.goto("/?view=Today");
@@ -201,11 +215,77 @@ test("with more than six tasks Today ends with one Lumi suggestion: Použít mov
     // Skrýt hides it for the rest of the day, also after a reload.
     await page.locator("[data-today-suggestion]").getByRole("button", { name: "Skrýt" }).click();
     await expect(page.locator("[data-today-suggestion]")).toHaveCount(0);
+    // Per workspace, valued with the day.
+    expect(await page.evaluate(() => localStorage.getItem("lumi-today-summary-hidden:personal"))).toBe(today);
     await page.reload();
     await waitUntilSynced(page);
     await expect(row(page, last.title)).toBeVisible();
     await expect(page.locator("[data-today-suggestion]")).toHaveCount(0);
   } finally {
+    await removeTasks(page, tasks.map((task) => task.id));
+  }
+});
+
+test("Neplánovat keeps the row's cell: \"Dnes neplánováno\" with Jiný čas and Zítra, and the plan Undo restores it", async ({ page }) => {
+  const id = stamp();
+  const task = { id: `e2e-d2-skip-${id}`, title: `Přeskočit ${id}` };
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ ...task, properties: { today: true } }]);
+  try {
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    const cell = row(page, task.title).locator("[data-time-cell]");
+    await expect(cell).toHaveAttribute("data-time-kind", "unscheduled");
+    await cell.click();
+    await page.locator(`[data-time-menu="${task.id}"]`).getByRole("button", { name: "Neplánovat" }).click();
+    await confirmDialog(page).getByRole("button", { name: "Neplánovat" }).click();
+    // The row stays in Today and keeps its cell, now saying that it was skipped.
+    await expect(cell).toHaveAttribute("data-time-kind", "skipped");
+    await expect(cell).toHaveAttribute("aria-label", /^Dnes neplánováno/);
+    await cell.click();
+    const menu = page.locator(`[data-time-menu="${task.id}"]`);
+    await expect(menu).toContainText("Dnes neplánováno");
+    await expect(menu.getByRole("button", { name: "Jiný čas" })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Zítra" })).toBeVisible();
+    await expect(menu.getByRole("button", { name: "Neplánovat" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    // The existing plan Undo brings the plan state back.
+    await page.getByRole("button", { name: "Vrátit poslední změnu plánu" }).click();
+    await expect(cell).toHaveAttribute("data-time-kind", "unscheduled");
+  } finally {
+    await removeTasks(page, [task.id]);
+  }
+});
+
+test("Today says the plan's calendar state once, and shows the overload warning and the current and next block", async ({ page }) => {
+  const id = stamp();
+  const now = { id: `e2e-d2-now-${id}`, title: `Teď ${id}` };
+  const next = { id: `e2e-d2-next-${id}`, title: `Potom ${id}` };
+  const tasks = [now, next];
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  await seedTasks(page, tasks.map((task) => ({ ...task, properties: { today: true } })));
+  try {
+    // A day that is not a workday: one sentence at the top; the rows only show their (missing) times.
+    await mockPlan(page, { calendar: "non-workday", unscheduled: tasks });
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    await expect(row(page, now.title)).toBeVisible();
+    await expect(page.locator("[data-today-plan-state]")).toContainText("Dnes není pracovní den; časové bloky nenavrhuji.");
+    await expect(page.getByText("Dnes není pracovní den")).toHaveCount(1);
+    await page.unroute("**/api/day-plan?**");
+    // A calendar that is ready and overloaded: the warning with the minutes, the current block and the next one.
+    await mockPlan(page, { calendar: "ready", overloaded: true, requiredMinutes: 240,
+      existing: [{ ...now, startOffsetMinutes: -10, minutes: 30 }, { ...next, startOffsetMinutes: 60, minutes: 30 }] });
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    const state = page.locator("[data-today-plan-state]");
+    await expect(state).toContainText("Dnešní práce přesahuje dostupnou kapacitu. (240 min)");
+    await expect(state.locator("[data-plan-current]")).toContainText(`Právě teď: ${now.title}`);
+    await expect(state.locator("[data-plan-next]")).toContainText(`Další: ${next.title}`);
+  } finally {
+    await page.unroute("**/api/day-plan?**");
     await removeTasks(page, tasks.map((task) => task.id));
   }
 });
@@ -342,6 +422,43 @@ test.describe("on a 390px phone", () => {
       await page.keyboard.press("Escape");
     } finally {
       await removeTasks(page, [overdue.id, waiting.id]);
+    }
+  });
+
+  test("Today rows give the title priority: compact time cell, the deadline on a second line without overlapping the chip", async ({ page }) => {
+    const id = stamp();
+    const task = { id: `e2e-d2-m-long-${id}`, title: `Schválit grafický návrh homepage ${id.slice(-6)}`.slice(0, 40).padEnd(40, "x") };
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    await seedTasks(page, [{ ...task, properties: { today: true, deadline: await day(page, -1), manualOrder: -Date.now() } }]);
+    try {
+      await mockPlan(page, { proposed: [task] });
+      await page.goto("/?view=Today");
+      await waitUntilSynced(page);
+      const taskRow = row(page, task.title);
+      const cell = taskRow.locator("[data-time-cell]");
+      await expect(cell).toHaveAttribute("data-time-kind", "proposed");
+      const rect = async (locator: ReturnType<Page["locator"]>) => (await locator.boundingBox())!;
+      const rowBox = await rect(taskRow);
+      const title = await rect(taskRow.locator(".taskRowMain strong"));
+      const badge = await rect(taskRow.locator(".deadlineBadge"));
+      const chip = await rect(taskRow.locator(".deferChip"));
+      const cellBox = await rect(cell);
+      // The title keeps at least half of the row (about 24 characters at this size).
+      expect(title.width).toBeGreaterThanOrEqual(rowBox.width * 0.5);
+      expect(cellBox.height).toBeGreaterThanOrEqual(43.5);
+      const overlap = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+        a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+      // The deadline is under the title, not beside the chip, and nothing lies over anything else.
+      expect(badge.y).toBeGreaterThanOrEqual(title.y + title.height - 1);
+      for (const [a, b] of [[badge, chip], [badge, title], [badge, cellBox], [cellBox, title], [cellBox, chip], [title, chip]] as const) expect(overlap(a, b), JSON.stringify({ a, b })).toBe(false);
+      // Not clipped: the deadline text fits in its box and everything is inside the row.
+      expect(await taskRow.locator(".deadlineBadge").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      for (const box of [badge, chip, cellBox]) expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    } finally {
+      await page.unroute("**/api/day-plan?**");
+      await removeTasks(page, [task.id]);
     }
   });
 

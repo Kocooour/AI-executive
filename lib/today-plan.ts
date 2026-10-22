@@ -49,3 +49,10 @@ export function planItemsOutsideToday(plan: PlanLike | null | undefined, taskIds
   for (const taskId of planSlotsByTask(plan).keys()) if (!taskIds.has(taskId) && (!eligible || eligible.has(taskId))) count += 1;
   return count;
 }
+
+// The owner chose "do not schedule" for this task on the plan's day: the plan leaves it out, but its
+// Today row keeps a cell that says so (and offers another day) instead of losing the plan menu.
+export function planSkippedToday(task: { properties?: Record<string, unknown> } | null | undefined, planDate: string): boolean {
+  const feedback = task?.properties?.planningFeedback as { date?: unknown; decision?: unknown } | null | undefined;
+  return Boolean(feedback && typeof feedback === "object" && feedback.date === planDate && feedback.decision === "dismissed");
+}
