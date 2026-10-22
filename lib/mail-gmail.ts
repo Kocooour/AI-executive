@@ -811,8 +811,14 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       url.searchParams.set("q", "after:" + recoverySinceSeconds);
       const result = await googleJson(url.toString(), { headers }, deadline);
       for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
-        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id))
-          changes.add((item as Record<string, string>).id);
+        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
+          const id = (item as Record<string, string>).id;
+          changes.add(id);
+          // Discovery shares the same distinct-ID budget with History. Without
+          // this, both pending folders can each add 25 new message detail reads
+          // after History has already consumed most of the 120-ID allowance.
+          touched.add(id);
+        }
       }
       // Absence of a next page is the ONLY positive indication that this
       // folder's discovery pass has finished. Persist opaque page tokens.
@@ -845,8 +851,14 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         result = await googleJson(url.toString(), { headers }, deadline);
       }
       for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
-        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id))
-          changes.add((item as Record<string, string>).id);
+        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
+          const id = (item as Record<string, string>).id;
+          changes.add(id);
+          // Discovery shares the same distinct-ID budget with History. Without
+          // this, both pending folders can each add 25 new message detail reads
+          // after History has already consumed most of the 120-ID allowance.
+          touched.add(id);
+        }
       }
       const token = nextPage(result.nextPageToken);
       if (folder === "INBOX") inboxPageToken = token;
