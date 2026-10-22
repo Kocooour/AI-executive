@@ -15,6 +15,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const workspaceId = app.activeWorkspaceId === "all" ? "" : app.activeWorkspaceId;
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
+  const [syncStatusKnown, setSyncStatusKnown] = useState(false);
   const [syncWarning, setSyncWarning] = useState("");
   const [syncNotice, setSyncNotice] = useState("");
   const [retentions, setRetentions] = useState<Record<string, number>>({});
@@ -46,7 +47,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
 
   useEffect(() => {
     detailVersion.current++;
-    setAccounts([]); setSyncStates([]); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
+    setAccounts([]); setSyncStates([]); setSyncStatusKnown(false); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
     setSyncWarning(""); setSyncNotice("");
@@ -56,7 +57,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
       .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoaded(true); } });
     void json("/api/mail/gmail/sync", { action: "status", workspaceId })
-      .then((data) => { if (live) setSyncStates(data.accounts as SyncState[]); })
+      .then((data) => { if (live) { setSyncStates(data.accounts as SyncState[]); setSyncStatusKnown(true); setSyncWarning(""); } })
       .catch(() => { if (live) setSyncWarning(label(
         "Stav synchronizace není dostupný. Připojené e-maily lze dál číst.",
         "Sync status is unavailable. Connected email can still be read.",
@@ -94,7 +95,9 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   }
 
   async function changeSync(account: Account, action: "enable" | "disable" | "sync") {
-    if (!workspaceId || busy || taskCreateInFlight.current) return;
+    // Unknown sync state is never equivalent to disabled; otherwise we might
+    // overwrite a 7-day retention policy with the default 30-day value.
+    if (!workspaceId || busy || !syncStatusKnown || taskCreateInFlight.current) return;
     if (action === "disable" && !(await app.askConfirm({
       title: label("Vypnout synchronizaci Gmailu?", "Disable Gmail sync?"),
       message: label("Smažou se všechna uložená metadata tohoto účtu. Připojení Gmailu zůstane zachováno.",
@@ -119,6 +122,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
         setSyncNotice("");
       }
       setSyncWarning("");
+      setSyncStatusKnown(true);
     } catch {
       setError(label("Synchronizace Gmailu se nezdařila.", "Gmail sync operation failed."));
     } finally { setBusy(false); }
@@ -257,28 +261,32 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                           "Volitelné. Ukládají se jen identifikátory zpráv, předmět, odesílatel, datum a stav Doručené/Odeslané. Nikdy těla ani přílohy. Automatické kontroly zatím nejsou zapnuté.",
                           "Optional. Stores only message identifiers, subject, sender, date and Inbox/Sent state. Never bodies or attachments. Automatic checks are not enabled yet.",
                         )}</p>
+                        {!syncStatusKnown && <p role="status">{label(
+                          "Stav synchronizace neznámý – změny nastavení jsou dočasně zakázány.",
+                          "Sync status unknown – changes to sync settings are temporarily disabled.",
+                        )}</p>}
                         <label>{label("Uchovávání", "Retention")}
-                          <select value={days} disabled={busy} onChange={(event) =>
+                          <select value={days} disabled={busy || !syncStatusKnown} onChange={(event) =>
                             setRetentions((old) => ({ ...old, [account.id]: Number(event.target.value) }))}>
                             <option value={7}>{label("7 dní", "7 days")}</option>
                             <option value={30}>{label("30 dní", "30 days")}</option>
                             <option value={90}>{label("90 dní", "90 days")}</option>
                           </select>
                         </label>
-                        <p role="status">{state
+                        <p role="status">{!syncStatusKnown ? label("Stav neznámý", "Unknown status") : state
                           ? label("Synchronizace zapnutá", "Sync enabled") + " · " +
                             state.indexedCount + " " + label("záznamů", "records") +
                             (state.lastSyncedAt ? " · " + new Date(state.lastSyncedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB") : "")
                           : label("Synchronizace vypnutá", "Sync disabled")}</p>
                         <div className="notificationActions">
-                          <button disabled={busy} onClick={() => void changeSync(account, "enable")}>
+                          <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "enable")}>
                             {state ? label("Uložit uchovávání", "Save retention") : label("Zapnout synchronizaci", "Enable sync")}
                           </button>
                           {state && <>
-                            <button disabled={busy} onClick={() => void changeSync(account, "sync")}>
+                            <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "sync")}>
                               {label("Synchronizovat nyní", "Sync now")}
                             </button>
-                            <button disabled={busy} onClick={() => void changeSync(account, "disable")}>
+                            <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "disable")}>
                               {label("Vypnout a smazat metadata", "Disable and delete metadata")}
                             </button>
                           </>}
