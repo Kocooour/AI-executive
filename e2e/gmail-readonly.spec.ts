@@ -80,8 +80,12 @@ test("OAuth completion uses the first-party session, removes the code from histo
     });
   });
 
+  // The app rewrites the address right after it loads, so the redirect is caught as a navigation,
+  // and the rewrite is awaited so it cannot interrupt the next navigation below.
+  const connected = page.waitForURL(/\?view=Settings&gmail=connected/, { waitUntil: "commit" });
   await page.goto("/api/mail/gmail/callback?state=" + state + "&code=ONE-TIME-AUTH-CODE");
-  await expect(page).toHaveURL(/\?view=Settings&gmail=connected/);
+  await connected;
+  await expect(page).toHaveURL(/\/\?view=Settings$/);
   expect(posted).toHaveLength(1);
   expect(posted[0].state).toBe(state);
   expect(posted[0].code).toBe("ONE-TIME-AUTH-CODE");

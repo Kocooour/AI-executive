@@ -601,3 +601,1068 @@ test("Gmail thread fetch refuses vanished threads, invalid indexes and mismatchi
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='mail_threads'").get().n, 0);
   } finally { globalThis.fetch = previous; }
 });
+
+
+test("Mail v4 opt-in, bounded initial and incremental History sync, metadata privacy and deletion", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const db = store.getDatabase();
+  db.prepare("INSERT INTO entities(id,payload,updated_at) VALUES(?,?,?)").run("workspace:" + workspaceId,
+    JSON.stringify({ id: "workspace:" + workspaceId, type: "workspace", workspaceId, title: "Mail v4",
+      status: "active", properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] }, createdAt: 1, updatedAt: 1 }), 1);
+  db.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "sync@example.com", mail.sealMail("SYNC-REFRESH-SECRET"));
+  assert.deepEqual(mail.listMailSyncStates(workspaceId), [], "disabled by default");
+  assert.throws(() => mail.enableMailSync(workspaceId, accountId, 10), { status: 400 });
+  assert.throws(() => mail.enableMailSync("personal", accountId, 30), { status: 404 });
+  mail.enableMailSync(workspaceId, accountId, 7);
+  assert.equal(mail.listMailSyncStates(workspaceId)[0].retentionDays, 7);
+  assert.equal(mail.listMailSyncStates(workspaceId)[0].indexedCount, 0);
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  const now = Date.now();
+  let stage = "initial";
+  const ids = ["abcdef0001", "abcdef0002", "abcdef0003", "abcdef0004"];
+  globalThis.fetch = async (target, opts = {}) => {
+    const url = new URL(String(target));
+    calls.push({ url, opts });
+    if (url.hostname === "oauth2.googleapis.com")
+      return Response.json({ access_token: "SYNC-ACCESS-TOKEN" });
+    assert.equal(opts.headers?.authorization, "Bearer SYNC-ACCESS-TOKEN");
+    if (url.pathname === "/gmail/v1/users/me/profile")
+      return Response.json({ emailAddress: "sync@example.com", historyId: stage === "expired" ? "300" : "100" });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      assert.equal(url.searchParams.get("maxResults"), "25");
+      return Response.json({ messages: url.searchParams.get("labelIds") === "INBOX"
+        ? [{ id: ids[0] }, { id: ids[1] }] : [{ id: ids[1] }] });
+    }
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      assert.equal(url.searchParams.get("startHistoryId"), stage === "history" ? "100" : "200");
+      if (stage === "expired") return Response.json({ error: "history expired" }, { status: 404 });
+      return Response.json({ historyId: "200", history: [
+        { id: "200", messagesAdded: [{ message: { id: ids[2] } }],
+          messagesDeleted: [{ message: { id: ids[0] } }],
+          labelsRemoved: [{ message: { id: ids[1] }, labelIds: ["INBOX"] }] },
+      ] });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      assert.equal(url.searchParams.get("format"), "metadata");
+      assert.deepEqual(url.searchParams.getAll("metadataHeaders"), ["Subject", "From"]);
+      const id = url.pathname.split("/").pop();
+      if (id === ids[0] && stage === "expired") return Response.json({ error: "gone" }, { status: 404 });
+      const labelIds = id === ids[1] ? ["SENT"] : ["INBOX", "UNREAD"];
+      return Response.json({ id, threadId: "abcdef123456", internalDate: String(now),
+        snippet: "NEVER_STORE_SNIPPET", payload: { headers: [
+          { name: "Subject", value: "Topic " + id }, { name: "From", value: "friend@example.com" },
+        ], body: { data: "NEVER_STORE_BODY" } }, labelIds });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const initial = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(initial.full, true);
+    assert.equal(initial.updated, 2);
+    assert.equal(mail.listMailSyncStates(workspaceId)[0].indexedCount, 2);
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "100");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 2);
+    const stored = JSON.stringify(db.prepare("SELECT * FROM mail_sync_messages WHERE account_id=?").all(accountId));
+    assert(!stored.includes("NEVER_STORE_SNIPPET"));
+    assert(!stored.includes("NEVER_STORE_BODY"));
+    assert(!stored.includes("SYNC-ACCESS-TOKEN"));
+    assert(!stored.includes("SYNC-REFRESH-SECRET"));
+    assert(calls.every((x) => x.url.hostname === "oauth2.googleapis.com" || x.url.hostname === "gmail.googleapis.com"));
+    stage = "history";
+    const incremental = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(incremental.full, false);
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "200");
+    assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=? ORDER BY message_id").all(accountId).map(x => x.message_id),
+      [ids[1], ids[2]]);
+    stage = "expired";
+    const recovered = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(recovered.full, true, "expired history automatically falls back to bootstrap");
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "300");
+    assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=? ORDER BY message_id").all(accountId).map(x => x.message_id),
+      [ids[1], ids[2]], "bounded recovery must preserve still-retained messages missing from bootstrap");
+    assert.equal(recovered.partial, true, "404 recovery must advertise incomplete bootstrap");
+    mail.enableMailSync(workspaceId, accountId, 30);
+    assert.equal(mail.listMailSyncStates(workspaceId)[0].retentionDays, 30);
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, null,
+      "changed retention invalidates the previous snapshot cursor");
+    mail.disableMailSync(workspaceId, accountId);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+    assert.deepEqual(mail.listMailSyncStates(workspaceId), []);
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 404 });
+    assert.equal(mail.listMailAccounts(workspaceId).length, 1, "disabling sync keeps the Gmail connection");
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("Mail v4 retention change invalidates in-flight sync even before first cursor", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  mail.enableMailSync(workspaceId, accountId, 7);
+  const before = database.prepare("SELECT consent_id,history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+  assert.equal(before.history_id, null);
+  const oldFetch = globalThis.fetch;
+  let changed = false;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "SYNC-TEMP" });
+    if (url.pathname === "/gmail/v1/users/me/profile") {
+      mail.enableMailSync(workspaceId, accountId, 90);
+      changed = true;
+      return Response.json({ historyId: "700" });
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    throw new Error("Unexpected test endpoint " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 409 });
+    assert.equal(changed, true);
+    const after = database.prepare("SELECT consent_id,history_id,retention_days FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+    assert.notEqual(after.consent_id, before.consent_id);
+    assert.equal(after.history_id, null);
+    assert.equal(after.retention_days, 90);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("Mail v4 concurrent disable-and-reenable cannot commit stale network results", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const db = store.getDatabase();
+  mail.enableMailSync(workspaceId, accountId, 30);
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "SYNC-ACCESS-TOKEN" });
+    if (url.pathname === "/gmail/v1/users/me/profile") {
+      mail.disableMailSync(workspaceId, accountId);
+      mail.enableMailSync(workspaceId, accountId, 30);
+      return Response.json({ historyId: "400" });
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    throw new Error("Unexpected Google URL " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 409 });
+    assert.equal(db.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, null);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+  } finally { globalThis.fetch = oldFetch; }
+  db.prepare("DELETE FROM mail_accounts WHERE id=?").run(accountId);
+  assert.deepEqual(mail.listMailSyncStates(workspaceId), []);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+});
+
+
+test("Mail v4 checkpoints a 130-event history backlog without discarding existing indexed mail", async () => {
+  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "history@example.com", mail.sealMail("HISTORY-TEST-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const history = Array.from({ length: 130 }, (_, i) => ({
+    id: String(i + 101), messagesAdded: [{ message: { id: (0xabcdef + i).toString(16) } }],
+  }));
+  const previous = globalThis.fetch, starts = [];
+  const now = Date.now();
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const start = url.searchParams.get("startHistoryId");
+      starts.push(start);
+      return Response.json({ historyId: "999", history: history.filter(e => BigInt(e.id) > BigInt(start)) });
+    }
+    if (url.pathname === "/gmail/v1/users/me/profile")
+      throw new Error("A bounded history overflow must not reset the index");
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdefabcdef", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "History message" }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.full, false);
+    assert.equal(first.updated, 120);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "220");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 120);
+    const second = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(second.partial, false);
+    assert.equal(second.updated, 10);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "999");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 130);
+    assert.deepEqual(starts, ["100", "220"]);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 resumes after five history pages", async () => {
+  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const start = url.searchParams.get("startHistoryId");
+      if (start === "100") {
+        const page = Number(url.searchParams.get("pageToken") || 0);
+        return Response.json({ historyId: "999", history: [{ id: String(101 + page) }],
+          ...(page < 5 ? { nextPageToken: String(page + 1) } : {}) });
+      }
+      return Response.json({ historyId: "999", history: [{ id: "106" }] });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.updated, 0);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "105");
+    const second = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(second.partial, false);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "999");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 automatically prunes expired metadata independent of sync and UI", async () => {
+  const { pruneExpiredMailMetadata, MAIL_RETENTION_SWEEP_MS } = await import("../lib/mail-sync-retention.ts");
+  assert.equal(MAIL_RETENTION_SWEEP_MS, 15 * 60_000);
+  const workspaceId = "mail-v4-fixture", id = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  // Do not reuse the 130 indexed entries from the history pagination fixture.
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "retention@example.com", mail.sealMail("RETENTION-TEST-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 7);
+  const now = Date.now();
+  const insert = database.prepare("INSERT OR REPLACE INTO mail_sync_messages (account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES (?,? ,?,'abcdefabcdef','No body','sender@example.com',?,0,1,0)");
+  insert.run(id, workspaceId, "aa001111", now - 8 * 86_400_000);
+  insert.run(id, workspaceId, "aa002222", now - 6 * 86_400_000);
+  assert.equal(pruneExpiredMailMetadata(database, now), 1);
+  assert.deepEqual(database.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=?").all(id).map(r => r.message_id), ["aa002222"]);
+  assert.equal(pruneExpiredMailMetadata(database, now), 0);
+  assert.equal(pruneExpiredMailMetadata(database, now + 2 * 86_400_000), 1);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 0);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE account_id=?").get(id).n, 1);
+});
+
+
+test("Mail v4 resumes a single 125-message history record across two user-triggered batches", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000001";
+  const now = Date.now();
+  const ids = Array.from({ length: 125 }, (_, n) => (0xbff000 + n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "largeevent@example.com", mail.sealMail("LARGE-EVENT-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const previous = globalThis.fetch;
+  const seenStarts = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      seenStarts.push(url.searchParams.get("startHistoryId"));
+      return Response.json({ historyId: "300", history: [{
+        id: "200", messagesAdded: ids.map(x => ({ message: { id: x } })),
+      }] });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdeabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Large event" }] } });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.updated, 120);
+    assert.equal(first.state.historyPending, true);
+    assert.equal(mail.listMailSyncStates(workspaceId).find(x => x.accountId === id).historyPending, true,
+      "the remaining large history event survives a settings reload");
+    const pending = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(id);
+    assert.equal(pending.history_id, "100");
+    assert.equal(pending.pending_event_id, "200");
+    assert.equal(pending.pending_event_offset, 120);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 120);
+    const next = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(next.partial, false);
+    assert.equal(next.state.historyPending, false);
+    assert.equal(next.updated, 5);
+    const done = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(id);
+    assert.equal(done.history_id, "300");
+    assert.equal(done.pending_event_id, null);
+    assert.equal(done.pending_event_offset, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 125);
+    assert.deepEqual(seenStarts, ["100", "100"], "the pending event must be replayed from the last committed history cursor");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 expired history revalidates cached messages rather than claiming false completion", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000002";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "expired@example.com", mail.sealMail("EXPIRED-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','old subject','old sender',?,0,1,0)");
+  for (let n = 0; n < 100; n++) insert.run(id, workspaceId, (0xcffff0 + n).toString(16), now - n * 1000);
+  let expired = true;
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return expired ? Response.json({ error: "history expired" }, { status: 404 })
+        : Response.json({ historyId: "501", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [{ id: "cffff0" }] });
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      if (messageId === "cffff1") return Response.json({ error: "deleted" }, { status: 404 });
+      const labels = messageId === "cffff2" ? ["IMPORTANT"] : ["INBOX"];
+      return Response.json({ id: messageId, threadId: "abcabcabc", internalDate: String(now),
+        labelIds: labels, payload: { headers: [{ name: "Subject", value: "revalidated " + messageId }] } });
+    }
+    throw new Error("Unexpected " + url);
+  };
+  try {
+    const recovered = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(recovered.full, true);
+    assert.equal(recovered.recovery, true);
+    assert.equal(recovered.partial, true, "bounded recovery cannot validate the entire saved index");
+    assert.equal(recovered.state.reconciliationPending, 99);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "500");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 100);
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id='cffff0'").get(id).subject, "revalidated cffff0");
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id='cffff1'").get(id).subject, "old subject");
+    assert.equal(mail.listMailSyncStates(workspaceId).find(x => x.accountId === id).reconciliationPending, 99,
+      "recovery status must survive a page reload");
+    expired = false;
+    const reconciled = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(reconciled.full, false);
+    assert.equal(reconciled.partial, false, "reconciliation is actually finished");
+    assert.equal(reconciled.state.reconciliationPending, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 98);
+    assert.equal(database.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=? AND message_id IN ('cffff1','cffff2')").all(id).length, 0,
+      "deleted and no-longer-Inbox messages must be reconciled away");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 large recovery stays partial until every retained ID has been reconciled", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000003";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "backlog@example.com", mail.sealMail("BACKLOG-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','old subject','old sender',?,0,1,0)");
+  for (let n = 0; n < 180; n++) insert.run(id, workspaceId, (0xdd0000 + n).toString(16), now - n * 1000);
+  let expired = true;
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return expired ? Response.json({ error: "expired" }, { status: 404 })
+        : Response.json({ historyId: "501", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcabcabc", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: messageId }] } });
+    }
+    throw new Error("Unexpected " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.state.reconciliationPending, 180);
+    expired = false;
+    const second = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(second.partial, true, "empty Gmail history must not hide a remaining reconciliation backlog");
+    assert.equal(second.state.reconciliationPending, 60);
+    const third = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(third.partial, false);
+    assert.equal(third.state.reconciliationPending, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 180);
+  } finally { globalThis.fetch = priorFetch; }
+});
+
+
+test("Mail v4 recovers all 80 new Inbox messages across durable Gmail list pages after History 404", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000004";
+  const now = Date.now();
+  const newIds = Array.from({ length: 80 }, (_, n) => (0xe10000 + n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "paged-recovery@example.com", mail.sealMail("PAGED-RECOVERY-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const priorFetch = globalThis.fetch;
+  const listPages = [];
+  let expired = true;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const since = url.searchParams.get("startHistoryId");
+      assert(expired ? since === "100" : since === "500" || since === "501",
+        "history replay advances independently of recovery page traversal");
+      return expired ? Response.json({ error: "expired" }, { status: 404 })
+        : Response.json({ historyId: "501", history: [] });
+    }
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      assert.equal(url.searchParams.get("maxResults"), "25");
+      const folder = url.searchParams.get("labelIds");
+      const token = url.searchParams.get("pageToken");
+      if (folder === "SENT") return Response.json({ messages: [] });
+      assert.equal(folder, "INBOX");
+      const offset = token === null ? 0 : Number(token.slice(1));
+      if (token !== null) assert.equal(token, "p" + offset);
+      listPages.push(offset);
+      return Response.json({ messages: newIds.slice(offset, offset + 25).map(messageId => ({ id: messageId })),
+        ...(offset + 25 < newIds.length ? { nextPageToken: "p" + (offset + 25) } : {}) });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      assert(newIds.includes(messageId));
+      return Response.json({ id: messageId, threadId: "abcabcabcd", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "New " + messageId }] } });
+    }
+    throw new Error("Unexpected Gmail call " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.full, true);
+    assert.equal(first.recovery, true);
+    assert.equal(first.updated, 25);
+    assert.equal(first.partial, true);
+    assert.equal(first.state.discoveryPending, true);
+    assert.equal(first.state.historyPending, false);
+    assert.equal(database.prepare("SELECT recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(id).recovery_inbox_page_token, "p25");
+    assert.equal(mail.listMailSyncStates(workspaceId).find(x => x.accountId === id).discoveryPending, true,
+      "a page reload cannot hide undiscovered Inbox messages");
+    expired = false;
+    for (const [offset, count, pending] of [[25, 50, true], [50, 75, true], [75, 80, false]]) {
+      const next = await mail.syncMailAccount(workspaceId, id);
+      assert.equal(next.full, false);
+      assert.equal(next.partial, pending);
+      assert.equal(next.state.discoveryPending, pending);
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?")
+        .get(id).n, count);
+      assert.equal(database.prepare("SELECT recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+        .get(id).recovery_inbox_page_token, pending ? "p" + (offset + 25) : null);
+    }
+    assert.deepEqual(listPages, [0, 25, 50, 75]);
+    assert.deepEqual(database.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=? ORDER BY message_id")
+      .all(id).map(x => x.message_id), [...newIds].sort());
+  } finally { globalThis.fetch = priorFetch; }
+});
+
+test("Mail v4 pagination failure cannot advance recovery cursors or silently lose messages", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000004";
+  database.prepare("UPDATE mail_sync_accounts SET recovery_inbox_page_token='invalid-token' WHERE account_id=?").run(id);
+  const before = database.prepare("SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?").get(id);
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({ historyId: "600", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ error: "invalid page" }, { status: 502 });
+    throw new Error("Unexpected Gmail endpoint " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, id), { status: 502 });
+    const after = database.prepare("SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?").get(id);
+    assert.deepEqual(after, before, "a failed page may not falsely complete discovery");
+  } finally { globalThis.fetch = priorFetch; }
+});
+
+
+test("Mail v4 restarts a stale Gmail discovery token after HTTP 400 without losing cached metadata", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000005";
+  const now = Date.now();
+  const ids = Array.from({ length: 30 }, (_, n) => (0xe20000 + n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "stale-pagination@example.com", mail.sealMail("STALE-PAGE-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='500', recovery_inbox_page_token='expired-p25' WHERE account_id=?")
+    .run(accountId);
+  const oldMessage = "abcdef012345";
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcdef012345','old cached subject','existing@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, oldMessage, now);
+  const original = globalThis.fetch;
+  const listPages = [];
+  const historyCursors = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      historyCursors.push(url.searchParams.get("startHistoryId"));
+      return Response.json({ historyId: "501", history: [] });
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      assert.equal(url.searchParams.get("labelIds"), "INBOX");
+      const token = url.searchParams.get("pageToken");
+      listPages.push(token);
+      if (token === "expired-p25") return Response.json({ error: "page token expired" }, { status: 400 });
+      if (token === null) return Response.json({
+        messages: ids.slice(0, 25).map(id => ({ id })), nextPageToken: "fresh-p25",
+      });
+      if (token === "fresh-p25") return Response.json({ messages: ids.slice(25).map(id => ({ id })) });
+      throw new Error("Unexpected page token: " + token);
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      assert(ids.includes(messageId));
+      return Response.json({ id: messageId, threadId: "abcabcabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "New " + messageId }] } });
+    }
+    throw new Error("Unexpected Gmail call " + url);
+  };
+  try {
+    const restarted = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(restarted.full, false);
+    assert.equal(restarted.partial, true);
+    assert.equal(restarted.updated, 25);
+    assert.equal(restarted.state.discoveryPending, true);
+    assert.equal(database.prepare("SELECT recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId).recovery_inbox_page_token, "fresh-p25");
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id=?")
+      .get(accountId, oldMessage).subject, "old cached subject", "old metadata must be preserved");
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM mail_sync_messages WHERE account_id=?")
+      .get(accountId).total, 26);
+    const completed = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(completed.partial, false);
+    assert.equal(completed.state.discoveryPending, false);
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM mail_sync_messages WHERE account_id=?")
+      .get(accountId).total, 31);
+    assert.deepEqual(listPages, ["expired-p25", null, "fresh-p25"]);
+    assert.deepEqual(historyCursors, ["500", "501"]);
+  } finally { globalThis.fetch = original; }
+});
+
+test("Mail v4 does not reset discovery cursors on Gmail 401 or a bad first page", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000005";
+  const baseline = () => database.prepare(
+    "SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?",
+  ).get(accountId);
+  const before = baseline();
+  database.prepare("UPDATE mail_sync_accounts SET recovery_inbox_page_token='expired-p25' WHERE account_id=?").run(accountId);
+  const blocked = baseline();
+  const original = globalThis.fetch;
+  let mode = "unauthorized";
+  const listCalls = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({ historyId: "502", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      const token = url.searchParams.get("pageToken");
+      listCalls.push(token);
+      return Response.json({ error: mode }, { status: mode === "unauthorized" ? 401 : 400 });
+    }
+    throw new Error("Unexpected Gmail call " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 401 });
+    assert.deepEqual(listCalls, ["expired-p25"], "401 must not retry without an OAuth credential check");
+    assert.deepEqual(baseline(), blocked);
+    mode = "bad first page";
+    listCalls.length = 0;
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 400 });
+    assert.deepEqual(listCalls, ["expired-p25", null], "only 400 on the saved token gets one fresh first-page attempt");
+    assert.deepEqual(baseline(), blocked, "failed restart may not persist an advanced History cursor or discard metadata");
+  } finally {
+    globalThis.fetch = original;
+    database.prepare("UPDATE mail_sync_accounts SET recovery_inbox_page_token=? WHERE account_id=?")
+      .run(before.recovery_inbox_page_token, accountId);
+  }
+});
+
+
+test("Mail v4 preserves OAuth invalid_grant semantics when distinguishing Gmail HTTP 400", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000006";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "oauth-expired@example.com", mail.sealMail("OAUTH-EXPIRED-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    calls++;
+    assert.equal(url.hostname, "oauth2.googleapis.com");
+    assert.equal(url.pathname, "/token");
+    return Response.json({ error: "invalid_grant" }, { status: 400 });
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), {
+      status: 401,
+      message: "Gmail authorization was refused or expired",
+    });
+    assert.equal(calls, 1);
+    const state = database.prepare("SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId);
+    assert.equal(state.history_id, null);
+    assert.equal(state.recovery_inbox_page_token, null);
+  } finally { globalThis.fetch = original; }
+});
+
+
+test("Mail v4 retries a too-large multi-record History page with fewer records instead of losing the cursor", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000007";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "history-page-too-large@example.com", mail.sealMail("HISTORY-PAGE-OVERSIZE"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  // Gmail maxResults caps records, not changes inside each record. The 100
+  // records together exceed 256KiB while a 10-record page is within it.
+  const records = Array.from({ length: 100 }, (_, event) => {
+    const ids = Array.from({ length: 35 }, (_, n) => (0x700000 + event * 35 + n).toString(16));
+    return {
+      id: String(101 + event),
+      messagesAdded: ids.map(id => ({ message: { id } })),
+      labelsAdded: ids.map(id => ({ message: { id } })),
+      labelsRemoved: ids.map(id => ({ message: { id } })),
+    };
+  });
+  assert(Buffer.byteLength(JSON.stringify({historyId:"500",history:records})) > 256*1024);
+  assert(Buffer.byteLength(JSON.stringify({historyId:"500",history:records.slice(0,10)})) < 256*1024);
+  const requests = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const size = Number(url.searchParams.get("maxResults"));
+      requests.push(size);
+      const offset = Number(url.searchParams.get("pageToken") || "0");
+      return Response.json({ historyId: "500", history: records.slice(offset, offset + size),
+        ...(offset + size < records.length ? { nextPageToken: String(offset + size) } : {}) });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdefabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Adaptive replay" }] } });
+    }
+    throw new Error("Unexpected Google URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.full, false, "multi-record overflow must not trigger rebootstrap");
+    assert.equal(first.recovery, false);
+    assert.equal(first.partial, true);
+    assert.equal(first.updated, 120);
+    assert.deepEqual(requests.slice(0, 2), [100, 10]);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "103");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 120);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 recovers non-destructively when even a single Gmail History record exceeds reply budget", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000008";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "history-event-too-large@example.com", mail.sealMail("HISTORY-EVENT-OVERSIZE"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','cached','sender@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, "abcdef789", now);
+  const hugeIds = Array.from({length: 4400}, (_,n) => (0xb00000+n).toString(16).padStart(64,"a"));
+  const huge = {historyId:"300",history:[{id:"200",messagesAdded:hugeIds.map(id=>({message:{id}}))}]};
+  assert(Buffer.byteLength(JSON.stringify(huge)) > 256*1024);
+  const requestedSizes = [];
+  let expired = true;
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      requestedSizes.push(Number(url.searchParams.get("maxResults")));
+      return expired ? Response.json(huge) : Response.json({historyId:"301",history:[]});
+    }
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({historyId:"300"});
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      assert.match(url.searchParams.get("q") || "", /^after:\d+$/);
+      return Response.json({messages:[]});
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages/abcdef789") {
+      return Response.json({id:"abcdef789",threadId:"abcabcabc",internalDate:String(now),
+        labelIds:["INBOX"],payload:{headers:[{name:"Subject",value:"reconciled"}]}});
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.deepEqual(requestedSizes, [100, 10, 1]);
+    assert.equal(first.full, true);
+    assert.equal(first.recovery, true);
+    assert.equal(first.partial, true);
+    assert.equal(first.state.reconciliationPending, 1);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "300");
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=?").get(accountId).subject, "cached");
+    expired = false;
+    const second = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(second.partial, false);
+    assert.equal(second.state.reconciliationPending, 0);
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=?").get(accountId).subject, "reconciled");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 discovers only the retention window and freezes its query across Gmail page tokens", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000009";
+  const now = Date.now();
+  const recentIds = Array.from({length:30},(_,n)=>(0xd20000+n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "long-mailbox@example.com", mail.sealMail("LONG-MAILBOX-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 7);
+  const queries = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({historyId:"500"});
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({historyId:"501",history:[]});
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      const folder = url.searchParams.get("labelIds");
+      const q = url.searchParams.get("q");
+      assert.match(q || "", /^after:\d+$/, "never scan unrestricted Gmail history");
+      queries.push({folder,q,token:url.searchParams.get("pageToken")});
+      const seconds = Number(q.split(":")[1]);
+      assert(seconds >= Math.floor((now - 9*86_400_000)/1000) && seconds <= Math.floor((now-7*86_400_000)/1000));
+      // A mailbox with many years of older mail. Gmail server-side q excludes
+      // them so only these 30 recent entries require indexing.
+      if (folder === "SENT") return Response.json({messages:[]});
+      const token = url.searchParams.get("pageToken");
+      return token ? Response.json({messages:recentIds.slice(25).map(id=>({id}))})
+        : Response.json({messages:recentIds.slice(0,25).map(id=>({id})),nextPageToken:"next25"});
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({id:messageId,threadId:"abcabcabc",internalDate:String(now),
+        labelIds:["INBOX"],payload:{headers:[{name:"Subject",value:"Recent"}]}});
+    }
+    throw new Error("Unexpected " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.partial,true);
+    assert.equal(first.state.discoveryPending,true);
+    const saved = database.prepare("SELECT recovery_since_seconds,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+    assert.equal(saved.recovery_inbox_page_token,"next25");
+    assert.equal(queries[0].q,"after:"+saved.recovery_since_seconds);
+    const next = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(next.partial,false);
+    assert.equal(next.state.discoveryPending,false);
+    assert.equal(database.prepare("SELECT recovery_since_seconds FROM mail_sync_accounts WHERE account_id=?").get(accountId).recovery_since_seconds,null);
+    assert.deepEqual(queries.map(r=>r.q),["after:"+saved.recovery_since_seconds,"after:"+saved.recovery_since_seconds,"after:"+saved.recovery_since_seconds]);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n,30);
+  } finally { globalThis.fetch=previous; }
+});
+
+test("Mail v4 status remains a read-only operation inside an existing SQLite transaction", () => {
+  database.exec("BEGIN");
+  try { assert(Array.isArray(mail.listMailSyncStates("mail-v4-fixture"))); }
+  finally { database.exec("ROLLBACK"); }
+});
+
+test("Mail v4 safely rebuilds if a saved History event disappears or its offset becomes invalid", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000a";
+  const now = Date.now();
+  const messageId = "ccddeeff";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bad-checkpoint@example.com", mail.sealMail("BAD-CHECKPOINT-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','cached','reader@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, messageId, now);
+  let mode = "missing";
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    urls.push(url.pathname);
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({
+      historyId: "300", history: mode === "missing" ? [{ id: "201", messagesAdded: [] }]
+        : [{ id: "200", messagesAdded: [{ message: { id: messageId } }] }],
+    });
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [{ id: messageId }] });
+    if (url.pathname === "/gmail/v1/users/me/messages/" + messageId) return Response.json({
+      id: messageId, threadId: "abcabcabc", internalDate: String(now),
+      labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "recovered" }] },
+    });
+    throw new Error("Unexpected URL " + String(target));
+  };
+  try {
+    for (const [reason, offset] of [["missing", 0], ["offset", 3]]) {
+      mode = reason;
+      database.prepare("UPDATE mail_sync_accounts SET history_id='100', pending_event_id='200', pending_event_offset=?, history_backlog_pending=1 WHERE account_id=?")
+        .run(offset, accountId);
+      const result = await mail.syncMailAccount(workspaceId, accountId);
+      assert.equal(result.full, true, "inconsistent pending History checkpoints should rebuild");
+      assert.equal(result.recovery, true);
+      assert.equal(result.state.indexedCount, 1, "existing metadata was retained");
+      assert.equal(result.partial, true, "recovery must disclose an incomplete history replay");
+      const row = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+      assert.equal(row.history_id, "500");
+      assert.equal(row.pending_event_id, null);
+      assert.equal(row.pending_event_offset, 0);
+    }
+    assert.equal(urls.filter(v => v.endsWith("/profile")).length, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Mail v4 shares the 120-message budget across History and pending Inbox/Sent discovery", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000b";
+  const now = Date.now();
+  const historyIds = Array.from({ length: 95 }, (_, i) => (0xb10000 + i).toString(16));
+  const inboxIds = Array.from({ length: 25 }, (_, i) => (0xb20000 + i).toString(16));
+  const sentIds = Array.from({ length: 25 }, (_, i) => (0xb30000 + i).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bounded-two-folders@example.com", mail.sealMail("BOUNDED-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100', recovery_inbox_page_token='inbox2', recovery_sent_page_token='sent2', recovery_since_seconds=? WHERE account_id=?")
+    .run(Math.floor((now - 31 * 86400000) / 1000), accountId);
+  let pass = 1;
+  const fetchedIds = [];
+  const visitedFolders = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return Response.json(pass === 1
+        ? { historyId: "300", history: [{ id: "250", messagesAdded: historyIds.map(id => ({ message: { id } })) }] }
+        : { historyId: "301", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      const folder = url.searchParams.get("labelIds");
+      const token = url.searchParams.get("pageToken");
+      visitedFolders.push({ pass, folder, token });
+      assert.equal(token, folder === "INBOX" ? "inbox2" : "sent2");
+      return Response.json({ messages: (folder === "INBOX" ? inboxIds : sentIds).map(id => ({ id })) });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const id = url.pathname.split("/").at(-1);
+      fetchedIds.push({ pass, id });
+      assert([...historyIds, ...inboxIds, ...sentIds].includes(id));
+      return Response.json({ id, threadId: "abcdefcdef", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Bounded " + id }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.updated, 120, "95 History and only 25 Inbox messages must be fetched");
+    assert.equal(first.partial, true);
+    assert.equal(first.state.discoveryPending, true);
+    assert.equal(fetchedIds.filter(x => x.pass === 1).length, 120);
+    assert.deepEqual(visitedFolders, [{ pass: 1, folder: "INBOX", token: "inbox2" }],
+      "Sent page must remain unvisited while its entire 25-ID reservation does not fit");
+    let state = database.prepare("SELECT recovery_inbox_page_token, recovery_sent_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId);
+    assert.equal(state.recovery_inbox_page_token, null);
+    assert.equal(state.recovery_sent_page_token, "sent2", "the skipped folder must retain its exact page token");
+    pass = 2;
+    const second = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(second.updated, 25);
+    assert.equal(second.state.discoveryPending, false);
+    assert.equal(second.partial, false);
+    assert.deepEqual(visitedFolders, [
+      { pass: 1, folder: "INBOX", token: "inbox2" },
+      { pass: 2, folder: "SENT", token: "sent2" },
+    ]);
+    assert.equal(new Set(fetchedIds.map(x => x.id)).size, 145);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 145);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Mail v4 reserves deleted History IDs before reconciling 120 older metadata rows", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000c";
+  const now = Date.now();
+  const deletedIds = Array.from({ length: 120 }, (_, i) => (0xc10000 + i).toString(16));
+  const staleIds = Array.from({ length: 120 }, (_, i) => (0xc20000 + i).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bounded-reconcile@example.com", mail.sealMail("RECONCILE-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent,needs_reconcile) VALUES(?,?,?,'abcabcabc','cached','reader@example.com',?,0,1,0,1)");
+  for (const [i, id] of staleIds.entries()) insert.run(accountId, workspaceId, id, now - i * 1000);
+  let pass = 1;
+  const details = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return Response.json(pass === 1
+        ? { historyId: "250", history: [{ id: "200",
+          messagesDeleted: deletedIds.map(id => ({ message: { id } })) }] }
+        : { historyId: "300", history: [] });
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const id = url.pathname.split("/").at(-1);
+      details.push({ pass, id });
+      assert(staleIds.includes(id), "deleted IDs must never require metadata re-fetch");
+      return Response.json({ id, threadId: "abcabcabc", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "reconciled" }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.full, false);
+    assert.equal(first.updated, 0, "120 deleted History IDs exhaust the distinct-ID budget");
+    assert.equal(first.partial, true, "the 120 stale indexed messages still require verification");
+    assert.equal(first.state.reconciliationPending, 120);
+    assert.equal(details.length, 0, "no stale metadata may be fetched after 120 deletes");
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "250");
+    pass = 2;
+    const second = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(second.updated, 120);
+    assert.equal(second.partial, false);
+    assert.equal(second.state.reconciliationPending, 0);
+    assert.equal(details.filter(x => x.pass === 2).length, 120);
+    assert.equal(new Set(details.map(x => x.id)).size, 120);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 120);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "300");
+  } finally { globalThis.fetch = oldFetch; }
+});
+
+test("Mail v4 opt-out deletes metadata even when the Gmail encryption secret is unavailable", () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000d";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "no-secret@example.com", mail.sealMail("ENCRYPTED-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','sensitive','sender@example.com',?,0,1,0)")
+    .run(accountId, workspaceId, "e0e0e0", Date.now());
+  const secret = process.env.AI_EXECUTIVE_MAIL_SECRET;
+  try {
+    delete process.env.AI_EXECUTIVE_MAIL_SECRET;
+    assert.throws(() => mail.disableMailSync("personal", accountId), { status: 404 },
+      "another workspace cannot opt out of this account");
+    mail.disableMailSync(workspaceId, accountId);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE account_id=?").get(accountId).n, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+    assert.equal(mail.listMailAccounts(workspaceId).some(row => row.id === accountId), true,
+      "disconnect is separate from metadata opt-out");
+  } finally { process.env.AI_EXECUTIVE_MAIL_SECRET = secret; }
+});
+
+test("Gmail reader retains 401 reconnect semantics for API 400 while sync can handle bad page tokens", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000e";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "old-reader@example.com", mail.sealMail("READER-REFRESH"));
+  const original = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/messages")
+      return Response.json({ error: "bad request" }, { status: 400 });
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    await assert.rejects(mail.readGmailMessages({ workspaceId, accountId, folder: "inbox" }),
+      { status: 401, message: "Gmail authorization was refused or expired" });
+  } finally { globalThis.fetch = original; }
+});
+
+test("Mail v4 safely recovers if a narrowed oversized History page rejects the old page token", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000f";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "history-token@example.com", mail.sealMail("TOKEN-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  const calls = [];
+  const previous = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const token = url.searchParams.get("pageToken");
+      const count = url.searchParams.get("maxResults");
+      calls.push({ token, count });
+      if (!token) return Response.json({ historyId: "400", history: [], nextPageToken: "p2" });
+      return count === "100"
+        ? Response.json({ historyId: "400", padding: "X".repeat(280000) })
+        : Response.json({ error: "old token invalid after page size change" }, { status: 400 });
+    }
+    if (url.pathname === "/gmail/v1/users/me/profile") return Response.json({ historyId: "500" });
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const result = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(result.full, true);
+    assert.equal(result.recovery, true);
+    assert.equal(result.partial, true);
+    assert.deepEqual(calls, [
+      { token: null, count: "100" }, { token: "p2", count: "100" }, { token: "p2", count: "10" },
+    ]);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "500");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 stops paging older discovery when 250 newer indexed messages already occupy the cap", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000010";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "old-pages@example.com", mail.sealMail("DISCOVERY-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 90);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100',recovery_inbox_page_token='older2',recovery_since_seconds=? WHERE account_id=?")
+    .run(Math.floor((now - 91 * 86400000) / 1000), accountId);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','newer','sender@example.com',?,0,1,0)");
+  for (let i = 0; i < 250; i++) insert.run(accountId, workspaceId, (0xd10000 + i).toString(16), now - i * 1000);
+  const oldIds = Array.from({ length: 25 }, (_, i) => (0xd20000 + i).toString(16));
+  const original = globalThis.fetch;
+  let pages = 0;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") return Response.json({ historyId: "200", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      pages++;
+      assert.equal(url.searchParams.get("pageToken"), "older2");
+      return Response.json({ messages: oldIds.map(id => ({ id })), nextPageToken: "older3" });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const id = url.pathname.split("/").at(-1);
+      assert(oldIds.includes(id));
+      return Response.json({ id, threadId: "abcabcabc", internalDate: String(now - 24 * 3600000),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "old" }] } });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const result = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(result.partial, false, "nothing older can fit the retained 250-row index");
+    assert.equal(result.state.discoveryPending, false);
+    assert.equal(pages, 1);
+    assert.equal(database.prepare("SELECT recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?").get(accountId).recovery_inbox_page_token, null);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 250);
+    await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(pages, 1, "later syncs must not repeatedly fetch older irrelevant pages");
+  } finally { globalThis.fetch = original; }
+});

@@ -108,6 +108,20 @@ switch (name) {
         set("compacted", "1");
         log("outbox-compacted");
       }
+      if (["mailretention", "mailloss", "maildisable"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("mail-pruned"))) {
+        const db = new DatabaseSync(dbFile);
+        try {
+          if (scenario === "maildisable")
+            db.prepare("DELETE FROM mail_sync_accounts WHERE account_id='acct'").run();
+          else {
+            db.prepare("DELETE FROM mail_sync_messages WHERE message_id='expired'").run();
+            if (scenario === "mailloss")
+              db.prepare("DELETE FROM mail_sync_messages WHERE message_id='current'").run();
+          }
+        } finally { db.close(); }
+        set("mail-pruned", "1");
+      }
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
     process.exit(8);
@@ -129,6 +143,16 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "mailprestartloss" && get("head") === target &&
+          !fs.existsSync(stateFile("mail-consent-deleted"))) {
+        // Fault injection: code/build work corrupts owner sync consent while
+        // the service is stopped; deployment must detect it before startup.
+        const db = new DatabaseSync(dbFile);
+        try { db.prepare("DELETE FROM mail_sync_accounts WHERE account_id='acct'").run(); }
+        finally { db.close(); }
+        set("mail-consent-deleted", "1");
+        log("mail-prestart-consent-loss");
+      }
       if (scenario === "buildfail" && get("head") === before) {
         // The old-version rebuild runs from the EXIT trap, not from the mainline.
         // Probe with an independent flock FD; it MUST NOT be able to acquire it.
@@ -155,6 +179,11 @@ switch (name) {
   case "runuser": {
     if (args[0] !== "-u" || args[1] !== "ai-executive" || args[2] !== "--") process.exit(8);
     const exec = args[3], rest = args.slice(4);
+    if (scenario === "mailsnapshoterror" && get("head") === target &&
+        rest[0] === "-" && rest[1] === dbFile) {
+      console.error("simulated read-only Gmail snapshot error");
+      process.exit(29);
+    }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];
       const perm = fs.statSync(file).mode & 0o777;

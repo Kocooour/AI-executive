@@ -14,6 +14,10 @@ BACKUP=""
 STOPPED=0
 CHANGED=0
 BACKUP_VALIDATED=0
+# An integrity mismatch while the service was stopped is a known data incident.
+# Rolling back code must not claim the affected Gmail consent/index survived.
+MAIL_PRESTART_INTEGRITY_FAILED=0
+MAIL_PRESTART_SNAPSHOT_FAILED=0
 
 die() { echo "STOP: $*" >&2; exit 1; }
 
@@ -80,15 +84,54 @@ try {
 NODE
 }
 
+# Capture only mail-sync IDs, timestamps and retention settings for deployment
+# integrity verification; no message subjects, senders or account secrets.
+snapshot_mail_sync() {
+  runuser -u ai-executive -- /usr/bin/node - "$DATA/store.sqlite" <<'NODE'
+const { DatabaseSync } = require("node:sqlite");
+const database = new DatabaseSync(process.argv[2], { readOnly: true });
+try {
+  database.exec("BEGIN");
+  const names = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  const hasSync = names.has("mail_sync_accounts") && names.has("mail_sync_messages");
+  const snapshot = {
+    accounts: hasSync ? database.prepare(
+      "SELECT account_id, workspace_id, consent_id, retention_days FROM mail_sync_accounts ORDER BY account_id").all() : [],
+    messages: hasSync ? database.prepare(
+      "SELECT account_id, workspace_id, message_id, received_at FROM mail_sync_messages ORDER BY account_id, message_id").all() : [],
+  };
+  database.exec("COMMIT");
+  console.log(JSON.stringify(snapshot));
+} finally { database.close(); }
+NODE
+}
+
+# While the service is STOPPED, no owner request can alter a Gmail sync
+# consent or index. Detect data loss from build/pre-start maintenance strictly
+# before the application begins serving traffic. After start these records can
+# change legitimately (opt-out, Gmail deletion, retention and index cap).
+verify_mail_sync_prestart() {
+  local before="$1" prestart="$2"
+  /usr/bin/node - "$before" "$prestart" <<'NODE'
+const fs = require("node:fs");
+const [before, after] = process.argv.slice(2).map(file => JSON.parse(fs.readFileSync(file, "utf8")));
+if (JSON.stringify(before.accounts) !== JSON.stringify(after.accounts))
+  throw new Error("KRITICKY UBYTEK/ZMENA: mail_sync_accounts pri zastavene sluzbe");
+if (JSON.stringify(before.messages) !== JSON.stringify(after.messages))
+  throw new Error("KRITICKY UBYTEK/ZMENA: mail_sync_messages pri zastavene sluzbe");
+console.log("Gmail sync consent a metadata pred spustenim: bez zmen");
+NODE
+}
+
 # Verify all non-retained owner tables monotonically, and validate session retention
 # by exact IDs rather than row counts. Finishing a session legitimately removes
 # the oldest completed session beyond 1000 and all of its intervals.
 # This verifier runs on both deployment and code rollback.
 verify_row_counts() {
-  local before="$1" after="$2" before_sessions="$3" after_sessions="$4"
-  /usr/bin/node - "$before" "$after" "$before_sessions" "$after_sessions" <<'NODE'
+  local before="$1" after="$2" before_sessions="$3" after_sessions="$4" before_mail="$5" after_mail="$6"
+  /usr/bin/node - "$before" "$after" "$before_sessions" "$after_sessions" "$before_mail" "$after_mail" <<'NODE'
 const fs = require("node:fs");
-const [a, b, oldSessions, newSessions] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
+const [a, b, oldSessions, newSessions, oldMail, newMail] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
 if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
   throw new Error("Integrita produkcni databaze selhala");
 const ignored = new Set([
@@ -96,13 +139,52 @@ const ignored = new Set([
   // A bounded invalidation queue: 1001 records legitimately compact into 1 marker.
   "semantic_index_outbox"
 ]);
-const retentionTables = new Set(["work_sessions", "work_session_intervals"]);
+// Both mail tables can legitimately change after service startup. The
+// strict off-line snapshot above checks their integrity before traffic resumes.
+const retentionTables = new Set(["work_sessions", "work_session_intervals", "mail_sync_messages", "mail_sync_accounts"]);
 for (const [table, count] of Object.entries(a.tables)) {
   if (ignored.has(table) || retentionTables.has(table)) continue;
   const after = b.tables[table];
   if (!Number.isSafeInteger(after) || after < count)
     throw new Error("KRITICKY UBYTEK zaznamu: " + table + " (" + count + " -> " + after + ")");
 }
+// The post-start snapshot is taken while the app serves owners again.
+// Mail sync metadata is a rebuildable Gmail-derived index: a user may
+// legitimately disable the index, Gmail may report deletions, or the
+// 250-row cap may evict unexpired entries during this time window.
+// Warn on unverifiable loss, but never roll back healthy code *after* the
+// service is accepting requests. All canonical owner tables above and work
+// session rows below retain their strict loss guards; full pre-start backup
+// remains available for investigation.
+const mailKey = r => r.account_id + ":" + r.message_id;
+const beforeConsent = new Map(oldMail.accounts.map(r => [r.account_id, r]));
+const afterConsent = new Map(newMail.accounts.map(r => [r.account_id, r]));
+const changedConsent = oldMail.accounts.filter(old => {
+  const current = afterConsent.get(old.account_id);
+  return !current || current.workspace_id !== old.workspace_id ||
+    current.consent_id !== old.consent_id ||
+    current.retention_days !== old.retention_days;
+});
+if (changedConsent.length) console.warn("UPOZORNENI: " + changedConsent.length +
+  " mail_sync_accounts se po spusteni sluzby zmenilo/smazalo; overte explicitni souhlas v auditu. Predstartovni kontrola byla bez zmen.");
+const afterMessageIds = new Set(newMail.messages.map(mailKey));
+const removedMail = oldMail.messages.filter(r => !afterMessageIds.has(mailKey(r)));
+let expired = 0;
+let other = 0;
+const cutoffNow = Date.now();
+for (const row of removedMail) {
+  const old = beforeConsent.get(row.account_id);
+  const current = afterConsent.get(row.account_id);
+  if (old && current && old.workspace_id === row.workspace_id &&
+      current.workspace_id === old.workspace_id && current.consent_id === old.consent_id &&
+      Number.isSafeInteger(old.retention_days) && old.retention_days === current.retention_days &&
+      Number.isSafeInteger(row.received_at) &&
+      row.received_at < cutoffNow - old.retention_days * 86_400_000) expired++;
+  else other++;
+}
+if (expired) console.log("Retence mail metadat overena: " + expired + " expirovanych zaznamu.");
+if (other) console.warn("UPOZORNENI: " + other +
+  " mail_sync_messages ubylo po spusteni sluzby (mohlo jit o sync, odpojeni nebo omezeni indexu); overte podle auditu. Kanonicka data jsou dale chranena.");
 if (oldSessions.hasSessions && !newSessions.hasSessions)
   throw new Error("KRITICKY UBYTEK: zmizelo schema pracovnich relaci");
 if (oldSessions.hasSessions) {
@@ -140,6 +222,12 @@ on_exit() {
   trap - EXIT INT TERM HUP
   if [ "$rc" -eq 0 ]; then return 0; fi
   echo "NASAZENI SELHALO (kod $rc), zaloha: ${BACKUP:-nevytvorena}" >&2
+  if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
+    echo "KRITICKA CHYBA: Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe." >&2
+    echo "Rollback vraci jen kod, NIKOLI databazi. Porovnej $BACKUP/before-mail.json a o obnove dat rozhoduje vlastnik." >&2
+  elif [ "$MAIL_PRESTART_SNAPSHOT_FAILED" = 1 ]; then
+    echo "UPOZORNENI: predstartovni Gmail snapshot neslo precist; nejde o potvrzenou ztratu dat." >&2
+  fi
   if [ "$STOPPED" != 1 ]; then exit "$rc"; fi
   set +e
   # Never strand the old service with its disk filled by a partial copy.
@@ -175,9 +263,18 @@ on_exit() {
       if runuser -u ai-executive -- /usr/bin/node \
            "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
          snapshot_work_sessions > "$BACKUP/rollback-sessions.json" &&
+         snapshot_mail_sync > "$BACKUP/rollback-mail.json" &&
          verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json" \
-           "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json"; then
-        echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+           "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json" \
+           "$BACKUP/before-mail.json" "$BACKUP/rollback-mail.json"; then
+        if [ "$MAIL_PRESTART_INTEGRITY_FAILED" = 1 ]; then
+          echo "KRITICKA CHYBA: puvodni verze kodu dostupna, ale zachovani Gmail souhlasu/metadat NENI potvrzeno." >&2
+          echo "Porovnej $BACKUP/before-mail.json a $BACKUP/rollback-mail.json. Obnova dat vyzaduje rozhodnuti vlastnika." >&2
+        elif [ "$MAIL_PRESTART_SNAPSHOT_FAILED" = 1 ]; then
+          echo "Rollback: puvodni verze kodu dostupna; predstartovni Gmail snapshot neslo precist. Data v tomto kroku nebyla overena." >&2
+        else
+          echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
+        fi
       else
         echo "KRITICKA CHYBA: rollback neobnovil pocet zaznamu, data nemenit naslepo." >&2
         echo "Porovnej $BACKUP/before.json a $BACKUP/rollback.json; o obnove rozhoduje vlastnik." >&2
@@ -292,6 +389,7 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
 snapshot_work_sessions > "$BACKUP/before-sessions.json"
+snapshot_mail_sync > "$BACKUP/before-mail.json"
 /usr/bin/node "$APP/scripts/check-data.mjs" \
   "$BACKUP/data/store.sqlite" > "$BACKUP/copy.json"
 
@@ -326,15 +424,28 @@ pnpm build
 fix_build_permissions
 test -z "$(git status --porcelain)"
 
+# Deployment/code-build work cannot silently alter consent or indexed mail
+# while the service remains stopped. Snapshot before any user traffic resumes.
+if ! snapshot_mail_sync > "$BACKUP/prestart-mail.json"; then
+  MAIL_PRESTART_SNAPSHOT_FAILED=1
+  die "nelze nacist Gmail sync snapshot pred startem nove verze"
+fi
+if ! verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"; then
+  MAIL_PRESTART_INTEGRITY_FAILED=1
+  die "Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe"
+fi
+
 echo "=== START A PROVOZNI KONTROLY ==="
 systemctl start "$SERVICE"
 verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/after.json"
 snapshot_work_sessions > "$BACKUP/after-sessions.json"
+snapshot_mail_sync > "$BACKUP/after-mail.json"
 
 verify_row_counts "$BACKUP/before.json" "$BACKUP/after.json" \
-  "$BACKUP/before-sessions.json" "$BACKUP/after-sessions.json"
+  "$BACKUP/before-sessions.json" "$BACKUP/after-sessions.json" \
+  "$BACKUP/before-mail.json" "$BACKUP/after-mail.json"
 systemctl is-active --quiet "$SERVICE"
 STOPPED=0
 echo "======================================"

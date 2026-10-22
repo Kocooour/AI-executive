@@ -70,6 +70,16 @@ function sandbox(scenario) {
         sqlite.exec("COMMIT");
       } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
     }
+    if (["mailretention", "mailloss", "maildisable", "mailprestartloss"].includes(scenario)) {
+      sqlite.exec("CREATE TABLE mail_sync_accounts(account_id TEXT PRIMARY KEY, workspace_id TEXT, consent_id TEXT, retention_days INTEGER)");
+      sqlite.exec("CREATE TABLE mail_sync_messages(account_id TEXT, workspace_id TEXT, message_id TEXT, received_at INTEGER)");
+      sqlite.exec(`CREATE TRIGGER mail_sync_consent_removed AFTER DELETE ON mail_sync_accounts BEGIN
+        DELETE FROM mail_sync_messages WHERE account_id = OLD.account_id; END;`);
+      sqlite.prepare("INSERT INTO mail_sync_accounts VALUES('acct','personal','consent',7)").run();
+      const add = sqlite.prepare("INSERT INTO mail_sync_messages VALUES('acct','personal',?,?)");
+      add.run("expired", Date.now() - 8 * 86_400_000);
+      add.run("current", Date.now() - 2 * 86_400_000);
+    }
     if (scenario === "outboxcompact") {
       // Match the bounded queue trigger shipped in PR #79. The queue is
       // deliberately transient: compaction is not a loss of canonical data.
@@ -188,6 +198,60 @@ scenarioCase("buildfail: rollback rebuilds original code and keeps verified back
   assert.equal(existsSync(path.join(f.backups, r.backups[0], "SHA256SUMS")), true);
   assert.ok(statSync(path.join(f.app, ".next/BUILD_ID")).mode & 0o040,
     "rollback must restore group-readable BUILD_ID");
+});
+scenarioCase("mailretention: expired Gmail metadata cleanup is accepted during startup", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.match(r.output, /Retence mail metadat overena: 1/);
+  const db = new DatabaseSync(path.join(f.data, "store.sqlite"));
+  try {
+    assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages ORDER BY message_id").all().map(x => x.message_id), ["current"]);
+  } finally { db.close(); }
+});
+scenarioCase("mailloss: active-service Gmail index deletions warn rather than rollback healthy code", (r) => {
+  assert.equal(r.status, 0, r.output);
+  assert.match(r.output, /UPOZORNENI: 1 mail_sync_messages ubylo po spusteni sluzby/);
+  assert.match(r.output, /NASAZENI DOKONCENO/);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), false);
+});
+scenarioCase("maildisable: owner opt-out deletes consent and index after startup without false rollback", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("reset"), false);
+  assert.match(r.output, /Gmail sync consent a metadata pred spustenim: bez zmen/);
+  assert.match(r.output, /UPOZORNENI: 1 mail_sync_accounts se po spusteni sluzby zmenilo\/smazalo/);
+  const db = new DatabaseSync(path.join(f.data, "store.sqlite"));
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages").get().n, 0);
+  } finally { db.close(); }
+});
+scenarioCase("mailprestartloss: unauthorized consent removal while stopped fails closed", (r, f) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /KRITICKY UBYTEK\/ZMENA: mail_sync_accounts pri zastavene sluzbe/);
+  assert.match(r.output, /KRITICKA CHYBA: Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe/);
+  assert.match(r.output, /zachovani Gmail souhlasu\/metadat NENI potvrzeno/);
+  assert.doesNotMatch(r.output, /Rollback: puvodni verze dostupna a zaznamy zachovany/,
+    "code-only rollback must never certify known lost Gmail consent or indexed messages");
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("start-b"), false, "new code must never serve after offline consent loss");
+  assert.equal(r.backups.length, 1, "validated backup is preserved for owner recovery");
+  const saved = JSON.parse(readFileSync(path.join(f.backups, r.backups[0], "before-mail.json"), "utf8"));
+  assert.equal(saved.accounts.length, 1);
+});
+scenarioCase("mailsnapshoterror: unreadable prestart snapshot does not falsely report lost Gmail consent", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /simulated read-only Gmail snapshot error/);
+  assert.match(r.output, /predstartovni Gmail snapshot neslo precist; nejde o potvrzenou ztratu dat/);
+  assert.doesNotMatch(r.output, /Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe/);
+  assert.doesNotMatch(r.output, /zachovani Gmail souhlasu\/metadat NENI potvrzeno/);
+  assert.equal(r.head, oldSha);
+  assert.equal(r.service, "active");
+  assert.equal(r.events.includes("start-b"), false);
 });
 scenarioCase("outboxcompact: legitimate semantic invalidation compaction does not trigger rollback", (r, f) => {
   assert.equal(r.status, 0, r.output);
