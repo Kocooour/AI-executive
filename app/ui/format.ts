@@ -76,7 +76,7 @@ export const urlBase64ToUint8Array = (base64: string) => {
 };
 
 // A date inside a sentence: "today", "yesterday" and "tomorrow" are not capitalised there.
-function inSentenceDate(value: string, language: Language, timezone?: string) {
+export function inSentenceDate(value: string, language: Language, timezone?: string) {
   const text = friendlyDate(value, language, timezone);
   return [copy[language].Today, copy[language].yesterday, copy[language].tomorrow].includes(text) ? text.toLocaleLowerCase(language) : text;
 }

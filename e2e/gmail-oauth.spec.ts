@@ -27,8 +27,11 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
     redirect.searchParams.set("code", "E2E-FAKE-CODE");
     await route.fulfill({ status: 302, headers: { location: redirect.toString(), "cache-control": "no-store" }, body: "" });
   });
+  // The app rewrites the address right after it loads, so the redirect is caught as a navigation,
+  // not by polling the address afterwards.
+  const connected = page.waitForURL(/gmail=connected/, { waitUntil: "commit", timeout: 25_000 });
   await page.getByRole("button", { name: "Připojit Gmail" }).click();
-  await expect(page).toHaveURL(/gmail=connected/, { timeout: 25_000 });
+  await connected;
   await expect(page.getByText(mockGmailAddress, { exact: true })).toBeVisible({ timeout: 20_000 });
   const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
   await section.getByRole("button", { name: "Doručené" }).click();
