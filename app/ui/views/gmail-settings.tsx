@@ -69,6 +69,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   useEffect(() => {
     syncStatusVersion.current++;
     detailVersion.current++;
+    setBusy(false); // In-flight actions from the previous workspace no longer own this panel.
     setAccounts([]); setSyncStates([]); setSyncStatusKnown(false); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
@@ -114,7 +115,9 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   async function changeSync(account: Account, action: "enable" | "disable" | "sync") {
     // Unknown sync state is never equivalent to disabled; otherwise we might
     // overwrite a 7-day retention policy with the default 30-day value.
-    if (!workspaceId || busy || !syncStatusKnown || taskCreateInFlight.current) return;
+    // Opt-out must remain available even when the status endpoint fails.
+    if (!workspaceId || busy || (action !== "disable" && !syncStatusKnown) || taskCreateInFlight.current) return;
+    const version = syncStatusVersion.current;
     const saved = syncStates.find((state) => state.accountId === account.id);
     const retentionDays = retentions[account.id] ?? saved?.retentionDays ?? 30;
     // Re-submitting an unchanged policy must not modify consent or its cursor.
@@ -125,12 +128,14 @@ export function GmailSettings({ app }: { app: LumiApp }) {
         "All indexed metadata for this account will be deleted. The Gmail connection is kept."),
       confirmLabel: label("Vypnout a smazat", "Disable and delete"), danger: true,
     }))) return;
+    if (version !== syncStatusVersion.current) return; // Workspace changed during confirmation.
     setBusy(true); setError("");
     try {
       const data = await json("/api/mail/gmail/sync", {
         action, workspaceId, accountId: account.id,
         ...(action === "enable" ? { retentionDays } : {}),
       });
+      if (version !== syncStatusVersion.current) return;
       if (action === "sync") {
         // The successful sync response already carries its final account state.
         // A failed follow-up status refresh must never re-label a committed
@@ -150,8 +155,11 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       setSyncWarning("");
       setSyncStatusKnown(true);
     } catch {
-      setError(label("Synchronizace Gmailu se nezdařila.", "Gmail sync operation failed."));
-    } finally { setBusy(false); }
+      if (version === syncStatusVersion.current)
+        setError(label("Synchronizace Gmailu se nezdařila.", "Gmail sync operation failed."));
+    } finally {
+      if (version === syncStatusVersion.current) setBusy(false);
+    }
   }
 
   async function openFolder(account: Account, nextFolder: Folder) {
@@ -289,8 +297,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                         )}</p>
                         {!syncStatusKnown && <>
                           <p role="status">{label(
-                            "Stav synchronizace neznámý – změny nastavení jsou dočasně zakázány.",
-                            "Sync status unknown – changes to sync settings are temporarily disabled.",
+                            "Stav synchronizace neznámý – zapnutí a úpravy nastavení jsou dočasně zakázány; smazání dat je stále dostupné.",
+                            "Sync status unknown – enabling and editing are disabled; deleting stored metadata is still available.",
                           )}</p>
                           <button disabled={busy} onClick={() => void reloadSyncStatus()}>
                             {label("Obnovit stav synchronizace", "Retry sync status")}
@@ -333,10 +341,13 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                             <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "sync")}>
                               {label("Synchronizovat nyní", "Sync now")}
                             </button>
-                            <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "disable")}>
+                            <button disabled={busy} onClick={() => void changeSync(account, "disable")}>
                               {label("Vypnout a smazat metadata", "Disable and delete metadata")}
                             </button>
                           </>}
+                          {!syncStatusKnown && <button disabled={busy} onClick={() => void changeSync(account, "disable")}>
+                            {label("Vypnout a smazat metadata", "Disable and delete metadata")}
+                          </button>}
                         </div>
                       </>
                     );
