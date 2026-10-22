@@ -14,6 +14,7 @@ import "./lumi-today.css";
 import "./lumi-search.css";
 import "./lumi-inbox-b4.css";
 import "./lumi-inbox-b5.css";
+import "./lumi-defer.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {

@@ -227,3 +227,20 @@ test("two moves to the same place are not a conflict, however the fields are wri
   assert.equal(merged.properties.today, true);
   assert.equal(merged.properties.when, "2026-10-09");
 });
+
+test("the evening mark merges with the placement it belongs to", () => {
+  const base = task({}, { when: "2026-10-22", today: true });
+  // Device A: this evening. Device B: next week. The newer placement wins whole, without a stray evening mark.
+  const local = task({ updatedAt: 20 }, { when: "2026-10-22", today: true, evening: true });
+  const server = task({ updatedAt: 30 }, { when: "2026-10-26", today: false, evening: false });
+  const merged = mergeEntity(base, local, server, 100);
+  assert.deepEqual({ when: merged.properties.when, today: merged.properties.today, evening: merged.properties.evening },
+    { when: "2026-10-26", today: false, evening: false });
+  const [conflict] = entityConflicts(merged);
+  assert.equal(conflict.field, "properties.placement");
+  assert.equal(conflict.lostValue.evening, true);
+  // Evening changed on one side only is taken, with the rest of the placement.
+  const only = mergeEntity(base, local, task({ updatedAt: 30 }, { when: "2026-10-22", today: true, priority: "high" }), 100);
+  assert.equal(only.properties.evening, true);
+  assert.deepEqual(entityConflicts(only), []);
+});

@@ -25,6 +25,9 @@ export const taskDueTone = (entity: Entity, todayValue: string, now = new Date()
   if (deadline < todayValue) return "dueOverdue";
   return deadline <= ymd(addLocalDays(now, 1)) ? "dueSoon" : "";
 };
+// "This evening" group of Today: planned for today and marked as evening work. Membership of Today itself is unchanged.
+export const isEveningTask = (task: Entity, todayValue: string) =>
+  task.type === "task" && task.properties.evening === true && task.properties.when === todayValue;
 // The date a list sorts by: Overdue is about deadlines, every other view about the planned day.
 export const taskDateSortKey = (task: Entity, targetView: string) => {
   const value = targetView === "Overdue" ? task.properties.deadline : task.properties.when;

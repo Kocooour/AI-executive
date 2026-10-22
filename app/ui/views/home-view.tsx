@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { taskDueTone, taskMatchesView } from "../../../lib/task-views";
 import { attentionReason, taskDueSummary } from "../format";
 import type { LumiApp } from "../use-lumi-app";
+import { DeferChip } from "./defer-popover";
 import { RecordMarks } from "./held-back";
 import { TodayAgenda } from "./today-agenda";
 import { WorkNowCard } from "./work-now-card";
@@ -179,6 +180,7 @@ export function HomeView({ app }: { app: LumiApp }) {
               {dragHandle(task, "task:Today")}
               <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
               <div><strong>{task.title || tr("untitledItem")}<RecordMarks app={app} entity={task} /></strong><small>{taskDueSummary(task, today, language) || (task.properties.priority && task.properties.priority !== "none" ? tr(String(task.properties.priority)) : tr("Today"))}</small></div>
+              {activeWorkspaceId !== "all" && <DeferChip app={app} task={task} />}
             </article>
           ))}
           {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}

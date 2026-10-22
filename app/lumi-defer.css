@@ -1,0 +1,244 @@
+/* Things-style deferral: the date chip on task rows and the "When" popover / bottom sheet.
+   Colours come from the design tokens, which switch with the theme, so there is no separate dark block. */
+.deferGroup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+.appShell .taskRowList .taskRowMeta.deferChip,
+.homeTaskList .deferChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 32px;
+  margin-left: 0;
+  max-width: none;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.appShell .taskRowList .taskRowMeta.deferChip:hover,
+.homeTaskList .deferChip:hover,
+.deferChip[aria-expanded="true"] { background: var(--selected); border-color: var(--control-border); color: var(--selected-text); }
+.deferChip:focus-visible,
+.deferPopover button:focus-visible,
+.deferDay:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.deadlineBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.deadlineBadge.isSoon { color: var(--warning); }
+.deadlineBadge.isPassed { color: var(--danger); font-weight: 600; }
+.deferVisuallyHidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.deferChipIcon { flex: none; }
+.deferChip.noDate { color: var(--muted); }
+@media (pointer: coarse), (max-width: 700px) {
+  .appShell .taskRowList .taskRowMeta.deferChip,
+  .homeTaskList .deferChip { min-height: 44px; min-width: 44px; justify-content: center; }
+  .deferMonthBar button { width: 44px; height: 44px; }
+}
+
+/* "This evening" group of Today */
+.eveningHeading {
+  margin: 18px 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Popover */
+.deferPopover {
+  position: fixed;
+  z-index: 45;
+  box-sizing: border-box;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+  font-size: 14px;
+}
+.deferPopover * { box-sizing: border-box; }
+.deferPopover button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.deferHead { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 6px; }
+.deferHeadTitle { font-weight: 700; }
+.deferClose {
+  width: 32px; height: 32px;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  color: var(--muted) !important;
+  font-size: 20px; line-height: 1;
+}
+.deferClose:hover { background: var(--hover); }
+
+.deferSuggestion {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
+}
+.deferSuggestionText { margin: 0; line-height: 1.4; }
+.deferLumi { font-weight: 700; }
+.deferApply {
+  justify-self: end;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent) !important;
+  font-weight: 650;
+}
+.deferApply:hover { filter: brightness(1.08); }
+
+.deferChoices { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.deferChoice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  text-align: left;
+}
+.deferChoice:hover { background: var(--hover); }
+.deferChoiceIcon { flex: none; width: 18px; text-align: center; color: var(--muted); }
+.deferChoiceText { display: grid; min-width: 0; line-height: 1.25; }
+.deferChoiceText small { color: var(--muted); font-size: 11px; }
+
+.deferCalendar { margin-top: 10px; }
+.deferMonthBar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.deferMonthBar button {
+  width: 36px; height: 36px;
+  border: 0; border-radius: 50%;
+  background: transparent;
+  font-size: 18px;
+}
+.deferMonthBar button:hover { background: var(--hover); }
+.deferMonthLabel { font-weight: 650; text-transform: capitalize; }
+.deferGrid { display: grid; gap: 2px; }
+.deferWeek { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; }
+.deferWeek > [role="gridcell"] { display: block; min-width: 0; }
+.deferWeekdays > span { padding: 2px 0; color: var(--muted); font-size: 11px; font-weight: 650; text-align: center; }
+.deferDay {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.deferDay:hover { background: var(--hover); }
+.deferDay.isOutside { color: var(--muted-light) !important; }
+.deferDay.isPast { opacity: 0.6; }
+.deferDay.isToday { border-color: var(--accent); font-weight: 700; }
+.deferDay.isSelected { background: var(--selected); color: var(--selected-text) !important; font-weight: 700; }
+.deferDay.isDeadline::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: 3px;
+  width: 14px; height: 3px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: var(--danger);
+}
+.deferDay.isLate:not(.isDeadline) { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+
+.deferFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.deferDeadline { color: var(--muted); }
+.deferClear {
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.deferClear:hover { background: var(--hover); }
+
+/* Bottom sheet on a narrow screen */
+.deferBackdrop { position: fixed; inset: 0; z-index: 44; background: var(--overlay); }
+.deferPopover.isSheet {
+  inset: auto 0 0 0;
+  z-index: 45;
+  width: 100%;
+  max-height: 88vh;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  border-width: 1px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+.deferPopover.isSheet .deferChoice { min-height: 48px; }
+.deferPopover.isSheet .deferDay { min-height: 44px; }
+.deferPopover.isSheet .deferApply,
+.deferPopover.isSheet .deferClear { min-height: 44px; }
+.deferPopover.isSheet .deferClose { width: 44px; height: 44px; }
+
+.deferDay[aria-disabled="true"] { cursor: default; opacity: 0.4; }
+.deferDay[aria-disabled="true"]:hover { background: transparent; }
+.deferError {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+.deferPopover button:disabled { opacity: 0.55; cursor: default; }
