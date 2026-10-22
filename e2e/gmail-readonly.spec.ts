@@ -286,3 +286,48 @@ for (const width of [390, 1280]) {
     }
   });
 }
+
+test("switching folders while a message is still loading keeps the reader usable", async ({ page }) => {
+  const account = { id: "33333333-3333-4333-8333-333333333333", workspaceId: "personal", email: "folders@example.com" };
+  const listed = (id: string, subject: string) => ({ id, threadId: `t${id}`, subject, from: "sender@example.com",
+    to: account.email, date: "21. října", snippet: "Náhled", unread: false });
+  let releaseDetail!: () => void;
+  const detailHold = new Promise<void>((resolve) => { releaseDetail = resolve; });
+  let detailSeen!: () => void;
+  const detailArrived = new Promise<void>((resolve) => { detailSeen = resolve; });
+  let detailReads = 0;
+  await page.route("**/api/mail/gmail?*", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) }));
+  await page.route("**/api/mail/gmail/messages", (route) => {
+    const folder = route.request().postDataJSON().folder;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      messages: [folder === "sent" ? listed("bb200000001", "Odeslaná zpráva") : listed("aa100000001", "Došlá zpráva")] }) });
+  });
+  await page.route("**/api/mail/gmail/message", async (route) => {
+    detailReads++;
+    const { messageId } = route.request().postDataJSON();
+    if (detailReads === 1) { detailSeen(); await detailHold; }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: {
+      ...listed(messageId, messageId === "bb200000001" ? "Odeslaná zpráva" : "Došlá zpráva"), text: "Obsah zprávy", truncated: false } }) });
+  });
+  try {
+    await page.goto("/?view=Inbox");
+    await waitUntilSynced(page);
+    const reader = await openMailReader(page);
+    await reader.getByRole("button", { name: "Doručené" }).click();
+    await reader.getByRole("button", { name: "Přečíst zprávu" }).click();
+    await detailArrived;
+    // The first message is still loading when the owner switches to Sent.
+    await reader.getByRole("button", { name: "Odeslané" }).click();
+    await expect(reader).toContainText("Odeslaná zpráva");
+    releaseDetail();
+    // The stale answer neither shows nor keeps the reader busy: the next message can be opened.
+    const read = reader.getByRole("button", { name: "Přečíst zprávu" });
+    await expect(read).toBeEnabled();
+    await read.click();
+    const detail = reader.getByRole("region", { name: "Detail e-mailu" });
+    await expect(detail).toContainText("Odeslaná zpráva");
+    await expect(detail).not.toContainText("Došlá zpráva");
+  } finally {
+    releaseDetail();
+  }
+});
