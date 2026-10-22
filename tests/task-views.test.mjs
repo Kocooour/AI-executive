@@ -190,3 +190,13 @@ test("ordinary punctuation and the edges of the year", () => {
   assert.equal(parseCaptureText("x 1. 1.", "2026-12-31", newYearsEve).when, "2027-01-01");
   assert.equal(parseCaptureText("x 31. 12.", "2026-12-31", newYearsEve).when, "2026-12-31");
 });
+
+test("the Overdue list sorts by deadline; other lists by planned day", async () => {
+  const { taskDateSortKey } = await import("../lib/task-views.ts");
+  const a = task({ properties: { deadline: "2026-10-05" } });
+  const b = task({ properties: { deadline: "2026-10-01", when: "2026-10-20" } });
+  const c = task({ properties: { when: "2026-10-02" } });
+  const sorted = (view) => [a, b, c].sort((x, y) => taskDateSortKey(x, view).localeCompare(taskDateSortKey(y, view)));
+  assert.deepEqual(sorted("Overdue"), [b, a, c]);
+  assert.deepEqual(sorted("Today"), [c, b, a]);
+});

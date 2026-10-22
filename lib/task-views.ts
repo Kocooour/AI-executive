@@ -28,6 +28,11 @@ export const taskDueTone = (entity: Entity, todayValue: string, now = new Date()
 // "This evening" group of Today: planned for today and marked as evening work. Membership of Today itself is unchanged.
 export const isEveningTask = (task: Entity, todayValue: string) =>
   task.type === "task" && task.properties.evening === true && task.properties.when === todayValue;
+// The date a list sorts by: Overdue is about deadlines, every other view about the planned day.
+export const taskDateSortKey = (task: Entity, targetView: string) => {
+  const value = targetView === "Overdue" ? task.properties.deadline : task.properties.when;
+  return typeof value === "string" && value ? value : "9999-12-31";
+};
 export const taskMatchesView = (task: Entity, targetView: string, todayValue: string) => {
   if (targetView === "Completed") return task.status === "completed";
   if (task.status !== "open") return false;
@@ -93,7 +98,7 @@ export function parseCaptureText(raw: string, today: string, now = new Date()) {
 
 // Where a newly created task lands. A date typed into the title wins; otherwise the task follows the
 // view it was added from. A task added to Today gets today's date as well as the flag, the same as
-// dragging it there or choosing Today in the detail panel, so it becomes overdue tomorrow like any dated task.
+// dragging it there or choosing Today in the detail panel, so tomorrow it stays in Today as a planned day that has passed, like any dated task.
 // A task typed into the row of Someday is marked for someday, and one typed into the row of
 // Upcoming gets tomorrow's date: it would otherwise land in Anytime and vanish from the list it
 // was typed into. This applies only when the caller leaves the placement to the view; the capture
