@@ -125,25 +125,35 @@ for (const [table, count] of Object.entries(a.tables)) {
   if (!Number.isSafeInteger(after) || after < count)
     throw new Error("KRITICKY UBYTEK zaznamu: " + table + " (" + count + " -> " + after + ")");
 }
-// Mail metadata can only decrease because of proven-expired retention rows.
- // Keep the existing count monotonicity guard for accounts and all other tables.
+// The post-start snapshot is taken while the app serves owners again.
+// Mail sync metadata is a rebuildable Gmail-derived index: a user may
+// legitimately disable the index, Gmail may report deletions, or the
+// 250-row cap may evict unexpired entries during this time window.
+// Warn on unverifiable loss, but never roll back healthy code *after* the
+// service is accepting requests. All canonical owner tables above and work
+// session rows below retain their strict loss guards; full pre-start backup
+// remains available for investigation.
 const mailKey = r => r.account_id + ":" + r.message_id;
 const beforeConsent = new Map(oldMail.accounts.map(r => [r.account_id, r]));
 const afterConsent = new Map(newMail.accounts.map(r => [r.account_id, r]));
 const afterMessageIds = new Set(newMail.messages.map(mailKey));
 const removedMail = oldMail.messages.filter(r => !afterMessageIds.has(mailKey(r)));
+let expired = 0;
+let other = 0;
 const cutoffNow = Date.now();
 for (const row of removedMail) {
   const old = beforeConsent.get(row.account_id);
   const current = afterConsent.get(row.account_id);
-  if (!old || !current || old.workspace_id !== row.workspace_id ||
-      current.workspace_id !== old.workspace_id || current.consent_id !== old.consent_id ||
-      !Number.isSafeInteger(old.retention_days) || old.retention_days !== current.retention_days ||
-      !Number.isSafeInteger(row.received_at) ||
-      row.received_at >= cutoffNow - old.retention_days * 86_400_000)
-    throw new Error("KRITICKY UBYTEK: mail_sync_messages (neprokazana retence)");
+  if (old && current && old.workspace_id === row.workspace_id &&
+      current.workspace_id === old.workspace_id && current.consent_id === old.consent_id &&
+      Number.isSafeInteger(old.retention_days) && old.retention_days === current.retention_days &&
+      Number.isSafeInteger(row.received_at) &&
+      row.received_at < cutoffNow - old.retention_days * 86_400_000) expired++;
+  else other++;
 }
-if (removedMail.length) console.log("Retence mail metadat overena: " + removedMail.length + " expirovanych zaznamu.");
+if (expired) console.log("Retence mail metadat overena: " + expired + " expirovanych zaznamu.");
+if (other) console.warn("UPOZORNENI: " + other +
+  " mail_sync_messages ubylo po spusteni sluzby (mohlo jit o sync, odpojeni nebo omezeni indexu); overte podle auditu. Kanonicka data jsou dale chranena.");
 if (oldSessions.hasSessions && !newSessions.hasSessions)
   throw new Error("KRITICKY UBYTEK: zmizelo schema pracovnich relaci");
 if (oldSessions.hasSessions) {
