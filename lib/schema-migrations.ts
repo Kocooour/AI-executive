@@ -430,6 +430,17 @@ export const schemaMigrations: SchemaMigration[] = [
       `);
     },
   },
+  {
+    // A single Gmail history record may contain more than the per-request
+    // sync budget. Persist the record ID and the already-consumed offset so
+    // its remaining message IDs can be replayed without losing the cursor.
+    id: "2026-10-mail-v4-partial-event-checkpoint",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("pending_event_id")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN pending_event_id TEXT");
+      if (!columns.has("pending_event_offset")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN pending_event_offset INTEGER NOT NULL DEFAULT 0 CHECK (pending_event_offset >= 0)");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
