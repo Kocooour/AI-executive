@@ -74,9 +74,16 @@ test("Mail v4 status API outage does not hide connected Gmail accounts", async (
       accounts: [{ id: accountId, workspaceId: "personal", email: "survives@example.com" }],
     }) });
   });
+  let optOutCalls = 0;
   await page.route("**/api/mail/gmail/sync", async (route) => {
-    await route.fulfill({ status: 503, contentType: "application/json",
-      body: '{"error":"Mail sync failed"}' });
+    const action = route.request().postDataJSON().action;
+    if (action === "disable") {
+      optOutCalls++;
+      await route.fulfill({ contentType: "application/json", body: '{"accounts":[]}' });
+    } else {
+      await route.fulfill({ status: 503, contentType: "application/json",
+        body: '{"error":"Mail sync failed"}' });
+    }
   });
   await page.route("**/api/mail/gmail/messages", async (route) => {
     expect(route.request().postDataJSON().accountId).toBe(accountId);
@@ -99,6 +106,13 @@ test("Mail v4 status API outage does not hide connected Gmail accounts", async (
   await expect(section.getByRole("button", { name: "Odpojit" })).toBeVisible();
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Mailbox still readable");
+  // Owner must be able to erase indexed subjects/senders even if status is down.
+  const optOut = section.getByRole("button", { name: "Vypnout a smazat metadata" });
+  await expect(optOut).toBeEnabled();
+  await optOut.click();
+  await confirmDialog(page).getByRole("button", { name: "Vypnout a smazat" }).click();
+  await expect(section.getByText("Synchronizace vypnutá")).toBeVisible();
+  expect(optOutCalls).toBe(1);
 });
 
 
