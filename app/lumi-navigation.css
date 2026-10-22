@@ -210,7 +210,7 @@
 @media (pointer: coarse) {
   .appShell > aside > nav button,
   .appShell > aside .sidebarActions button,
-  .appShell > aside .secondaryNav summary,
+  .appShell > aside .secondaryNavToggle,
   .appShell > aside .secondaryNav button {
     min-height: 44px;
   }
@@ -277,3 +277,153 @@
     border-radius: var(--radius-xl);
   }
 }
+
+/* D1 (owner decision 2026-10-22): active projects under the primary list, the attention dot of
+   Projects, the Inbox source switch and the area groups of the Projects view. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.appShell .navDot {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0 6px;
+  border-radius: 50%;
+  background: var(--danger, #c0392b);
+}
+/* Everything between the primary list and the footer scrolls as one area; the primary list and
+   the footer (New, More views, Settings) never shrink. The scrollbar stays visible. */
+.appShell > aside > nav { flex: none; overflow: visible; }
+.appShell > aside > .sidebarScroll {
+  flex: 1 1 auto;
+  min-height: 96px;
+  margin: 0 -8px 0 -4px;
+  padding: 0 4px 0 4px;
+  border-top: 1px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-light) transparent;
+}
+.appShell > aside > .sidebarScroll:empty { display: none; }
+.appShell > aside .sidebarProjects {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding: 8px 0 4px;
+}
+.appShell > aside .sidebarProjects button {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.appShell > aside .sidebarProjects button:hover { background: var(--hover); }
+.appShell > aside .sidebarProjects button.dropActive { background: var(--workspace-soft); }
+.appShell > aside .sidebarProjects button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.appShell > aside .sidebarProjects button > span:first-child { display: inline-grid; place-items: center; flex: none; width: 18px; color: var(--icon-projects); }
+.appShell > aside .sidebarProjects .sidebarProjectTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (pointer: coarse) {
+  .appShell > aside .sidebarProjects button { min-height: 44px; }
+}
+.appShell > aside .secondaryNav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+.appShell > aside .secondaryNav button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.appShell > aside .secondaryNav button:hover { background: var(--hover); color: var(--text); }
+.appShell > aside .secondaryNav button.active { background: var(--hover); color: var(--text); font-weight: 600; }
+.appShell > aside .secondaryNav button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .appShell > aside .secondaryNav button { min-height: 44px; }
+}
+.appShell > aside .secondaryNavToggle { color: var(--muted); text-align: left; }
+.inboxTabs {
+  display: inline-flex;
+  gap: 2px;
+  margin: 0 0 var(--space-4, 16px);
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-subtle, transparent);
+}
+.inboxTabs button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inboxTabs button:hover { color: var(--text); }
+.inboxTabs button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.inboxTabs button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.mailReader { display: grid; gap: var(--space-3, 12px); min-width: 0; }
+.mailReader pre { max-width: 100%; }
+.mailTabEmpty { display: grid; gap: 8px; justify-items: start; text-align: left; }
+.mailReaderMoved { margin: 8px 0; }
+.linkButton { padding: 0; border: 0; background: transparent; color: var(--accent-text, var(--text)); font: inherit; font-weight: 650; text-decoration: underline; cursor: pointer; min-height: 44px; }
+.linkButton:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.projectGroups { display: grid; gap: var(--space-4, 20px); }
+.projectGroupHeading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+}
+@media (max-width: 700px) {
+  .appShell .mobileNav button[data-nav-view="Projects"] .mobileNavIcon { color: var(--icon-projects); }
+}
+
+/* The list controls sit tucked under the page title; below the Inbox tabs they need their own space. */
+.inboxTabs + .listControls,
+.inboxTabs ~ .listControls { margin-top: 0; }

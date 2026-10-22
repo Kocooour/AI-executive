@@ -3,11 +3,13 @@ import { Fragment } from "react";
 import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
 import { openTaskCountsByProject } from "../open-task-counts";
+import type { Entity } from "../../../lib/db";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { InboxBatchTriage } from "./inbox-batch-triage";
 import { DeferChip } from "./defer-popover";
+import { GmailReader } from "./gmail-reader";
 
 export function EntityList({ app }: { app: LumiApp }) {
   const {
@@ -31,6 +33,10 @@ export function EntityList({ app }: { app: LumiApp }) {
     inspect,
     items,
     heldReasons,
+    inboxTab,
+    setInboxTab,
+    closeDetail,
+    projectGroups,
     unsent,
     language,
     priorityFilter,
@@ -55,12 +61,96 @@ export function EntityList({ app }: { app: LumiApp }) {
     ? openTaskCountsByProject(items, projects, scopedRelations)
     : new Map<string, number>();
 
+  const renderRow = (x: Entity, index: number, rows: Entity[]) => {
+      const meta = taskRowValue(x, language, today, {
+        held: heldReasons.has(x.id),
+        unsent: unsent.has(x.id),
+        openTaskCount: openTasksByProject.get(x.id) || 0,
+      });
+      // Today lists evening tasks last, under their own heading (the collection is already ordered that way).
+      const startsEvening = view === "Today" && isEveningTask(x, today) && (index === 0 || !isEveningTask(rows[index - 1], today));
+      return (
+        <Fragment key={x.id}>
+        {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
+        <article
+          className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
+          data-drop-entity={x.id}
+          data-entity-type={x.type}
+          onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
+          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+          onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
+          onClick={() => inspect(x)}
+        >
+          {view === "Inbox" && batchAllowed && x.type === "task" && (
+            <label className="batchRowSelect" title={!batchEligibleIds.has(x.id) ? tr("batchUnavailable") : undefined}
+              onClick={event => event.stopPropagation()}>
+              <input type="checkbox"
+                aria-label={tr("batchSelectItem").replace("{title}", x.title || tr("untitledItem"))}
+                disabled={!batchEligibleIds.has(x.id) || (!batchIds.includes(x.id) && batchIds.length >= 50)}
+                checked={batchIds.includes(x.id)}
+                onChange={event => setBatchIds(event.target.checked
+                  ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
+            </label>
+          )}
+          {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
+          {x.type === "task" ? (
+            <button
+              type="button"
+              className="check"
+              aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                done(x.id);
+              }}
+            >○</button>
+          ) : (
+            <span className={`entityIcon ${x.type}Icon`} aria-hidden="true">
+              {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : <ViewIcon name="Notes" />}
+            </span>
+          )}
+          <div className="taskRowMain">
+            <strong><button
+              type="button"
+              className="taskRowOpen"
+              onClick={(event) => { event.stopPropagation(); void inspect(x); }}
+            >{x.title || tr("untitledItem")}</button></strong>
+            <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
+            {activeWorkspaceId === "all" && (
+              <span className="workspaceBadge">
+                {workspaces.find((workspace) => workspace.workspaceId === x.workspaceId)?.title || x.workspaceId}
+              </span>
+            )}
+          </div>
+          {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
+            <DeferChip app={app} task={x} />
+          ) : meta.text && (
+            <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
+              {meta.kind === "sync" && <span aria-hidden="true">{heldReasons.has(x.id) ? "⚠ " : "↻ "}</span>}{meta.text}
+            </span>
+          )}
+        </article>
+        </Fragment>
+      );
+  };
+
   // The Calendar page shows its own planned work; it does not repeat every open task as a list.
   if (view === "Calendar") return null;
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
             <>
+              {view === "Inbox" && (
+                <div className="inboxTabs" role="group" aria-label={tr("inboxSource")}>
+                  {(["tasks", "mail"] as const).map((tab) => (
+                    <button key={tab} type="button" data-inbox-tab={tab} aria-pressed={inboxTab === tab}
+                      onClick={() => { if (inboxTab !== tab) { closeDetail(); setInboxTab(tab); } }}>
+                      {tr(tab === "tasks" ? "inboxTabTasks" : "inboxTabMail")}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {view === "Inbox" && inboxTab === "mail" ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}`} app={app} /> : (
+              <>
               {!["Home", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
                   <label>
@@ -137,77 +227,24 @@ export function EntityList({ app }: { app: LumiApp }) {
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {collection.map((x, index) => {
-                  const meta = taskRowValue(x, language, today, {
-                    held: heldReasons.has(x.id),
-                    unsent: unsent.has(x.id),
-                    openTaskCount: openTasksByProject.get(x.id) || 0,
-                  });
-                  // Today lists evening tasks last, under their own heading (the collection is already ordered that way).
-                  const startsEvening = view === "Today" && isEveningTask(x, today) && (index === 0 || !isEveningTask(collection[index - 1], today));
-                  return (
-                    <Fragment key={x.id}>
-                    {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
-                    <article
-                      className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
-                      data-drop-entity={x.id}
-                      data-entity-type={x.type}
-                      onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
-                      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-                      onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
-                      onClick={() => inspect(x)}
-                    >
-                      {view === "Inbox" && batchAllowed && x.type === "task" && (
-                        <label className="batchRowSelect" title={!batchEligibleIds.has(x.id) ? tr("batchUnavailable") : undefined}
-                          onClick={event => event.stopPropagation()}>
-                          <input type="checkbox"
-                            aria-label={tr("batchSelectItem").replace("{title}", x.title || tr("untitledItem"))}
-                            disabled={!batchEligibleIds.has(x.id) || (!batchIds.includes(x.id) && batchIds.length >= 50)}
-                            checked={batchIds.includes(x.id)}
-                            onChange={event => setBatchIds(event.target.checked
-                              ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
-                        </label>
-                      )}
-                      {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
-                      {x.type === "task" ? (
-                        <button
-                          type="button"
-                          className="check"
-                          aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            done(x.id);
-                          }}
-                        >○</button>
-                      ) : (
-                        <span className={`entityIcon ${x.type}Icon`} aria-hidden="true">
-                          {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : <ViewIcon name="Notes" />}
-                        </span>
-                      )}
-                      <div className="taskRowMain">
-                        <strong><button
-                          type="button"
-                          className="taskRowOpen"
-                          onClick={(event) => { event.stopPropagation(); void inspect(x); }}
-                        >{x.title || tr("untitledItem")}</button></strong>
-                        <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
-                        {activeWorkspaceId === "all" && (
-                          <span className="workspaceBadge">
-                            {workspaces.find((workspace) => workspace.workspaceId === x.workspaceId)?.title || x.workspaceId}
-                          </span>
-                        )}
-                      </div>
-                      {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
-                        <DeferChip app={app} task={x} />
-                      ) : meta.text && (
-                        <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
-                          {meta.kind === "sync" && <span aria-hidden="true">{heldReasons.has(x.id) ? "⚠ " : "↻ "}</span>}{meta.text}
-                        </span>
-                      )}
-                    </article>
-                    </Fragment>
-                  );
-                })}
+                {view === "Projects" ? null : collection.map((x, index) => renderRow(x, index, collection))}
+                {view === "Projects" && projectGroups.length > 0 && (
+                  <div className="projectGroups" aria-label={tr("projectsByArea")}>
+                    {projectGroups.map((group) => (
+                      <section key={group.key} className="projectGroup" data-project-group={group.area ? group.area.id : "none"} aria-labelledby={`project-group-${group.key}`}>
+                        <h2 id={`project-group-${group.key}`} className="projectGroupHeading">
+                          {group.area ? (group.area.title || tr("untitledItem")) : tr("noAreaGroup")}
+                          {activeWorkspaceId === "all" && group.area && (
+                            <span className="workspaceBadge">{workspaces.find((workspace) => workspace.workspaceId === group.area?.workspaceId)?.title || group.area.workspaceId}</span>
+                          )}
+                        </h2>
+                        <div className="list taskRowList">
+                          {group.projects.map((project, index) => renderRow(project, index, group.projects))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                )}
                 {collection.length === 0 && view !== "Home" && view !== "Search" && (
                   <div className="empty">{tr("nothingHere")}</div>
                 )}
@@ -223,6 +260,8 @@ export function EntityList({ app }: { app: LumiApp }) {
                   <button onClick={() => createFromRow(type, text)}>{tr("add")}</button>
                   {rowError && <small role="alert" className="captureRowError">{tr("addFailed")}</small>}
                 </div>
+              )}
+              </>
               )}
             </>
           )}

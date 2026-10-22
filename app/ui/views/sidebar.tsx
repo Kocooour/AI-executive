@@ -1,17 +1,22 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import { primaryViews, secondaryViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
-import { ViewIcon } from "./project-icon";
+import { ProjectIcon, ViewIcon } from "./project-icon";
 import { WorkspaceTile, workspaceTone } from "../workspace-appearance";
 
 export function Sidebar({ app }: { app: LumiApp }) {
   const {
     setSettingsSection,
+    setInboxTab,
     acceptNativeDrop,
     activeWorkspaceId,
     activeWorkspaceTone,
     closeDetail,
     dragTarget,
+    inspect,
+    projectsAttention,
+    sidebarProjects,
     draggableSectionNames,
     language,
     openCapture,
@@ -26,6 +31,12 @@ export function Sidebar({ app }: { app: LumiApp }) {
     workspaceName,
     workspaces,
   } = app;
+  // "More views" opens a list in the scrolling area under the projects; its toggle stays in the footer.
+  const [secondaryOpen, setSecondaryOpen] = useState(false);
+  const secondaryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (secondaryOpen) secondaryRef.current?.scrollIntoView({ block: "nearest" });
+  }, [secondaryOpen]);
   return (
     <>
       <aside>
@@ -96,26 +107,60 @@ export function Sidebar({ app }: { app: LumiApp }) {
               }}
               onDrop={(event) => acceptNativeDrop(event, `section:${x}`)}
               onClick={() => {
+                // The Inbox entry always opens the task list, also while the mail tab is shown.
+                if (x === "Inbox") setInboxTab("tasks");
                 setView(x);
                 closeDetail();
               }}
               key={x}
             >
               <span className="navLabel"><span aria-hidden="true"><ViewIcon name={x} /></span>{tr(x)}</span>
-              {sidebarCounts[x] !== undefined ? (
+              {x === "Inbox" || x === "Today" ? (
                 <span className="navCount">{sidebarCounts[x]}</span>
+              ) : null}
+              {x === "Projects" && projectsAttention ? (
+                <><span className="navDot" data-nav-attention="Projects" aria-hidden="true" /><span className="srOnly">{tr("projectsNeedAttention")}</span></>
               ) : null}
             </button>
           ))}
         </nav>
+        {/* The aggregate shows no project list: projects of several workspaces would be confusing. */}
+        {/* Projects and the "More views" list scroll as one area; the primary list above and the footer below stay put. */}
+        <div className="sidebarScroll">
+        {sidebarProjects.length > 0 && (
+          <section className="sidebarProjects" aria-label={tr("sidebarProjects")}>
+            {sidebarProjects.map((project) => (
+              <button
+                type="button"
+                key={project.id}
+                className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                data-sidebar-project={project.id}
+                title={project.title || tr("untitledItem")}
+                data-drop-entity={project.id}
+                onDragEnter={() => setActiveDragTarget(`entity:${project.id}`)}
+                onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+                onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
+                onClick={() => void inspect(project)}
+              >
+                <span aria-hidden="true"><ProjectIcon /></span>
+                <span className="sidebarProjectTitle">{project.title || tr("untitledItem")}</span>
+              </button>
+            ))}
+          </section>
+        )}
+        {secondaryOpen && (
+          <div className="secondaryNav" id="sidebar-secondary-views" ref={secondaryRef}>
+            {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
+          </div>
+        )}
+        </div>
         <footer className="sidebarActions">
           <button onClick={() => openCapture()} aria-label={tr("addTask")}>
             ＋ {tr("new")}
           </button>
-          <details className="secondaryNav">
-            <summary>{tr("moreViews")}</summary>
-            {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
-          </details>
+          <button type="button" className="secondaryNavToggle" aria-expanded={secondaryOpen} aria-controls="sidebar-secondary-views" onClick={() => setSecondaryOpen((open) => !open)}>
+            <span aria-hidden="true">{secondaryOpen ? "▾" : "▸"}</span> {tr("moreViews")}
+          </button>
           <button
             className={view === "Settings" ? "active" : ""}
             onClick={() => {

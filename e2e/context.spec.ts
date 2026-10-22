@@ -552,8 +552,8 @@ for (const transition of ["view", "workspace"] as const) {
       if (transition === "view") {
         await page.locator('aside [data-nav-view="Home"]').click();
         await expect(page.locator("main.appShell")).toHaveClass(/view-home/);
-        await page.locator("aside details.secondaryNav summary").click();
-        await page.locator("aside details.secondaryNav button").filter({ hasText: /Kontext|Context/ }).click();
+        await page.locator("aside .secondaryNavToggle").click();
+        await page.locator("aside .secondaryNav button").filter({ hasText: /Kontext|Context/ }).click();
         await expect(page.getByRole("heading", { name: "Co Lumi ví" })).toBeVisible();
       } else {
         await page.locator("aside .workspaceButton").click();

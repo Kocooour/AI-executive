@@ -105,8 +105,8 @@ test.describe("touch screen with the sidebar", () => {
     await page.goto("/");
     await waitUntilSynced(page);
     expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
-    await page.locator("aside .secondaryNav summary").click();
-    const controls = page.locator("aside nav button, aside .sidebarActions button, aside .secondaryNav summary, aside .secondaryNav button");
+    await page.locator("aside .secondaryNavToggle").click();
+    const controls = page.locator("aside nav button, aside .sidebarActions button, aside .secondaryNavToggle, aside .secondaryNav button");
     expect(await controls.count()).toBeGreaterThan(5);
     for (const control of await controls.all()) {
       if (!(await control.isVisible())) continue;
@@ -120,7 +120,7 @@ test.describe("touch screen with the sidebar", () => {
       await page.setViewportSize({ width: 1024, height });
       await page.goto("/");
       await waitUntilSynced(page);
-      if (open) await page.locator("aside .secondaryNav summary").click();
+      if (open) await page.locator("aside .secondaryNavToggle").click();
       const settings = page.locator("aside .sidebarActions > button").last();
       const box = await settings.boundingBox();
       expect(box!.y + box!.height).toBeLessThanOrEqual(height);

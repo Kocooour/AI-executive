@@ -19,6 +19,31 @@ export function sidebarView(page: Page, label: string) {
   return page.locator("button:has(.navLabel)", { hasText: label }).first();
 }
 
+// A primary navigation entry on either layout: the sidebar on desktop, the bottom bar on a phone.
+export function navView(page: Page, view: string) {
+  return page.locator(`[data-nav-view="${view}"]:visible`).first();
+}
+
+// Settings from anywhere, without reloading the page: the footer button of the sidebar, or More on a phone.
+export async function openSettings(page: Page) {
+  const more = page.locator('.mobileNav button[data-nav-view="More"]');
+  if (await more.isVisible()) {
+    await more.click();
+    await page.locator('.mobileMoreItem[data-nav-view="Settings"]').click();
+  } else {
+    await page.locator("aside .sidebarActions > button").last().click();
+  }
+}
+
+// Inbox -> "Z pošty": the mail reader of the connected Gmail accounts (it moved there from Settings).
+export async function openMailReader(page: Page) {
+  await navView(page, "Inbox").click();
+  await page.locator('[data-inbox-tab="mail"]').click();
+  const reader = page.locator(".mailReader");
+  await expect(reader).toBeVisible();
+  return reader;
+}
+
 export function heading(page: Page) {
   return page.getByRole("heading", { level: 1 });
 }

@@ -18,6 +18,7 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { deferTargets } from "../../lib/defer-suggestion";
+import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
@@ -43,6 +44,9 @@ export function useLumiApp() {
   // In-memory only: tasks can navigate to a Gmail source without putting
   // message IDs into URLs, localStorage or persisted navigation state.
   const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
+  // The Inbox shows its tasks or the mail of the connected Gmail accounts. UI state only: the address
+  // carries the view and nothing else (lib/view-url.ts), so a mail message is never put into it.
+  const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
   const [view, setView] = useState("Home"),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
@@ -1894,6 +1898,14 @@ export function useLumiApp() {
     Areas: areas.length,
     Notes: scopedItems.filter((entity) => entity.type === "note").length,
   };
+  // The sidebar shows counts for Inbox and Today only; Projects gets a dot when a project needs attention.
+  const projectsAttention = projectsNeedAttention(scopedItems, projects, scopedRelations, today);
+  const sidebarProjects = activeSidebarProjects(projects, activeWorkspaceId);
+  // Leaving the Inbox returns it to its tasks, so the sidebar entry always opens the task list.
+  useEffect(() => { if (view !== "Inbox") setInboxTab("tasks"); }, [view]);
+  // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
+  useEffect(() => { if (view !== "Inbox" || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab]);
+  const projectGroups = view === "Projects" ? groupProjectsByArea(projects, areas, scopedRelations) : [];
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
     testNotification, saveNotificationSettings } = useNotifications({ tr, language });
   const calendarTimezone = notificationState?.preferences.timezone || "Europe/Prague";
@@ -3387,7 +3399,7 @@ export function useLumiApp() {
   // navigation away from Inbox, or sign-out.
   useEffect(() => {
     setBatchSelection({ workspaceId: "", ids: [] });
-  }, [activeWorkspaceId, view, authState]);
+  }, [activeWorkspaceId, view, authState, inboxTab]);
   function setBatchIds(ids: string[]) {
     setBatchSelection({
       workspaceId: activeWorkspaceId,
@@ -3514,6 +3526,12 @@ export function useLumiApp() {
     await load();
   }
 
+  // Projects are reordered inside their area group only (no write across groups).
+  function projectGroupPeers(project: Entity) {
+    const group = groupProjectsByArea(projects, areas, scopedRelations).find((candidate) => candidate.projects.some((row) => row.id === project.id));
+    return group ? group.projects.filter((row) => row.workspaceId === project.workspaceId) : [];
+  }
+
   function peersForScope(scope: string, workspaceId: string) {
     const [entityType, kind, ...rest] = scope.split(":");
     const id = rest.join(":");
@@ -3537,7 +3555,7 @@ export function useLumiApp() {
     const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
-      let peers = peersForScope(scope, source.workspaceId);
+      let peers = source.type === "project" && scope === "project:all" ? projectGroupPeers(source) : peersForScope(scope, source.workspaceId);
       // Dropping onto a row of the other Today group (regular / evening) is not a reorder.
       if (view === "Today" && scope === "task:Today" && source.type === "task") {
         const evening = isEveningTask(source, today);
@@ -3599,7 +3617,8 @@ export function useLumiApp() {
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
     let peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
         : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
-          : peersForScope(scope, entity.workspaceId);
+          : entity.type === "project" && scope === "project:all" ? projectGroupPeers(entity)
+            : peersForScope(scope, entity.workspaceId);
     // Today shows its evening tasks as a group of their own: a task moves within its own group only.
     if (view === "Today" && scope === "task:Today") {
       const evening = isEveningTask(entity, today);
@@ -3641,6 +3660,11 @@ export function useLumiApp() {
   );
   return {
     mailSourceToOpen,
+    inboxTab,
+    setInboxTab,
+    projectsAttention,
+    sidebarProjects,
+    projectGroups,
     setMailSourceToOpen,
     ...attentionState,
     ...evidenceState,

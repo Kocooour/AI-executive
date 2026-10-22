@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import { confirmDialog, settingsSections, waitUntilSynced } from "./helpers";
+import { confirmDialog, openMailReader, settingsSections, waitUntilSynced } from "./helpers";
 
 // All responses are synthetic; no real Google account is used.
 for (const width of [390, 1280]) {
@@ -104,8 +104,13 @@ test("Mail v4 status API outage does not hide connected Gmail accounts", async (
   await expect(section.getByLabel("Uchovávání")).toBeDisabled();
   await expect(section).not.toContainText("Synchronizace vypnutá");
   await expect(section.getByRole("button", { name: "Odpojit" })).toBeVisible();
-  await section.getByRole("button", { name: "Doručené" }).click();
-  await expect(section).toContainText("Mailbox still readable");
+  // The mailbox stays readable (in Inbox -> "Z pošty") while the sync status is unavailable.
+  const reader = await openMailReader(page);
+  await reader.getByRole("button", { name: "Doručené" }).click();
+  await expect(reader).toContainText("Mailbox still readable");
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
   // Owner must be able to erase indexed subjects/senders even if status is down.
   const optOut = section.getByRole("button", { name: "Vypnout a smazat metadata" });
   await expect(optOut).toBeEnabled();

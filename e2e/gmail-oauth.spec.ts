@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures";
 import { gmailMockPort } from "../playwright.config";
 import { startGmailMock, mockGmailAddress, mockGmailRefresh, mockGmailAccess, type GmailMock } from "./gmail-mock";
-import { settingsSections, waitUntilSynced } from "./helpers";
+import { openMailReader, settingsSections, waitUntilSynced } from "./helpers";
 
 // The application runs a production build against the on-loopback E2E Google stub.
 // No live Gmail is contacted. Test both OAuth page and the actual first-party POST
@@ -33,7 +33,9 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await page.getByRole("button", { name: "Připojit Gmail" }).click();
   await connected;
   await expect(page.getByText(mockGmailAddress, { exact: true })).toBeVisible({ timeout: 20_000 });
-  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  const settings = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(settings.getByRole("button", { name: "Doručené" })).toHaveCount(0);
+  const section = await openMailReader(page);
   await section.getByRole("button", { name: "Doručené" }).click();
   await expect(section).toContainText("Gmail OAuth E2E");
   await expect(section).toContainText("Zpráva z lokálního mocku");
@@ -44,7 +46,7 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   await section.getByLabel("Název úkolu").fill("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high");
   await section.getByRole("button", { name: "Potvrdit a vytvořit úkol" }).click();
   await expect(section).toContainText("Úkol byl vytvořen v Inboxu.");
-  await section.getByRole("button", { name: "Přejít do Inboxu" }).click();
+  await page.locator('[data-inbox-tab="tasks"]').click();
   await expect(page.getByText("Vyřešit testovací požadavek z Gmailu zítra 25.10. #high", { exact: true }).first()).toBeVisible();
   // Assert the task's source is stable canonical metadata, not copied email
   // content; the browser's local-first record is eventually synced to SQLite.
@@ -82,8 +84,9 @@ test("Gmail authorization from Settings exchanges a one-use code and reads mailb
   const inspector = page.locator(".inspectorDetail");
   await expect(inspector.getByRole("region", { name: "Zdrojový e-mail" })).toContainText("Gmail");
   await inspector.getByRole("button", { name: "Otevřít zdrojovou zprávu" }).click();
-  await expect(page).toHaveURL(/view=Settings/);
-  const reopened = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(page).toHaveURL(/view=Inbox/);
+  await expect(page.locator('[data-inbox-tab="mail"]')).toHaveAttribute("aria-pressed", "true");
+  const reopened = page.locator(".mailReader");
   await expect(reopened.getByRole("region", { name: "Detail e-mailu" })).toContainText("E2E zpráva pro vytvoření úkolu.");
   const data = await page.evaluate(async () => JSON.stringify({
     local: { ...localStorage }, session: { ...sessionStorage },
