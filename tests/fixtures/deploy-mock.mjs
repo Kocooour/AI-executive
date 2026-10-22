@@ -179,6 +179,11 @@ switch (name) {
   case "runuser": {
     if (args[0] !== "-u" || args[1] !== "ai-executive" || args[2] !== "--") process.exit(8);
     const exec = args[3], rest = args.slice(4);
+    if (scenario === "mailsnapshoterror" && get("head") === target &&
+        rest[0] === "-" && rest[1] === dbFile) {
+      console.error("simulated read-only Gmail snapshot error");
+      process.exit(29);
+    }
     if (exec === "test") {
       const file = rest[1], mode = rest[0];
       const perm = fs.statSync(file).mode & 0o777;
