@@ -441,6 +441,17 @@ export const schemaMigrations: SchemaMigration[] = [
       if (!columns.has("pending_event_offset")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN pending_event_offset INTEGER NOT NULL DEFAULT 0 CHECK (pending_event_offset >= 0)");
     },
   },
+  {
+    // A non-exhaustive Gmail recovery must not claim that stale entries have
+    // been validated just because the incremental history cursor advanced.
+    id: "2026-10-mail-v4-reconciliation-status",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_messages)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("needs_reconcile"))
+        database.exec("ALTER TABLE mail_sync_messages ADD COLUMN needs_reconcile INTEGER NOT NULL DEFAULT 0 CHECK(needs_reconcile IN (0, 1))");
+      database.exec("CREATE INDEX IF NOT EXISTS mail_sync_reconciliation_idx ON mail_sync_messages(account_id, needs_reconcile, received_at DESC)");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
