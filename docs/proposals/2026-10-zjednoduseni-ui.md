@@ -1,0 +1,374 @@
+# Návrh: zjednodušení UI a revize logiky Lumi
+
+> **Stav: návrh k rozhodnutí vlastníka, nic z toho není implementováno.** Vychází ze stavu `main` k 22. 10. 2026 (po PR #91), z [PRODUCT.md](../PRODUCT.md), [UX-UI.md](../UX-UI.md), [ARCHITECTURE.md](../ARCHITECTURE.md) a [MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md). Body označené **⚑ rozhodnutí** mění dosavadní kontrakt a před implementací vyžadují souhlas vlastníka (AGENTS.md → Scope control).
+
+Revize proběhla na produkčním buildu se syntetickými daty (3 projekty, 2 oblasti, 11 úkolů, 1 poznámka) na desktopu 1440 × 900 a na iPhonu 390 × 844.
+
+---
+
+## 1. Shrnutí
+
+Lumi má silný základ: kanonický model, workspaces, attention s důvody, plán dne, schvalování s Undo, Gmail jen pro čtení. Uživatel ale vidí **stejné úkoly třikrát až čtyřikrát na jedné obrazovce**, metadata a zdůvodnění má u každé položky rozbalená a dvakrát klikne tam, kde by stačilo jednou. Z UI je cítit, jak se postupně stavěl (B2, B3, B4…), ne jak se v něm pracuje.
+
+Navrhuji tři principy a pět změn:
+
+| Princip | Co znamená v UI |
+|---|---|
+| **Jedno místo pro jednu věc** | Úkol se na obrazovce objeví jednou. Plán dne je pohled na seznam Dnes, ne druhý seznam. |
+| **Akce u objektu, vysvětlení na vyžádání** | Řádek nese datum, které jde rovnou změnit. Proč, zdroj a čerstvost jsou o klik dál. Nic z toho nemizí, jen to není rozbalené. |
+| **Lumi navrhuje jedním tlačítkem** | Každý návrh Lumi je konkrétní věta s jedním tlačítkem „Použít“ a s Undo. Hromadná schvalovací obrazovka jen tam, kde se mění víc věcí najednou. |
+
+| # | Změna | Rozsah | Rozhodnutí |
+|---|---|---|---|
+| A | Odložení úkolu ve stylu Things (kalendář v řádku + návrh Lumi) | UI + lehká logika | ne |
+| B | Kontext projektu (proč je důležitý, hlavní cíle, hotovo když) a stránka projektu | UI + datový model | **rozhodnuto 22. 10.:** Lumi smí navrhovat kontext (přes schválení) |
+| C | Lumi z e-mailů navrhne nový projekt s kroky | logika + konektor + UI | **rozhodnuto 22. 10.:** C1 povoleno, primárně Hermes, při nedostupnosti jiný dostupný model (§6.1) |
+| D | Zjednodušení navigace, Domů, Dnes a detailu úkolu | UI | ne |
+| E | Opravy logiky nalezené při revizi | logika | ne |
+
+Doporučené pořadí dodání: **E → A → D → B → C** (od nejmenšího rizika, každé jako samostatné PR, viz §8).
+
+---
+
+## 2. Co jsem v aplikaci našel
+
+### 2.1 Navigace
+- Sidebar má 9 hlavních položek, pod nimi „Další pohledy“ (Po termínu, Kdykoli, Někdy, Hotové, Kontext, Agenti) a Nastavení. Dalších 6 pohledů je schovaných, ale Oblasti, Poznámky a Hledání jsou nahoře, přestože hledání je i v topbaru (⌘K).
+- Počty u Projektů (3), Oblastí (2) a Poznámek (1) jen opakují počet položek a nic neříkají o pozornosti.
+- **Pošta je schovaná v Nastavení → Pošta.** Číst e-maily a z nich vytvářet úkoly je pracovní činnost, ne nastavení.
+- Na mobilu je spodní lišta Domů / Doručené / Dnes / Kalendář / Více. Projekty jsou až ve „Více“, přestože jsou podle UX-UI.md P0 (Project detail).
+
+### 2.2 Domů
+- Každá položka pozornosti má větu důvodu, zdroj dat, „vyhodnoceno 22. 10. 08:07“ a rozbalovací „Zdroje“. U čtyř položek se stejný čas vyhodnocení opakuje čtyřikrát.
+- Na mobilu má každá položka čtyři ovladače (Odložit o 24 h, Skrýt, Otevřít, Zdroje), takže první obrazovka ukáže jen dvě až tři položky a plovoucí ＋ zakrývá „Otevřít“.
+- Pod pozorností následuje sekce Dnes se stejnými úkoly a pod ní text „Pro spolehlivé časové bloky připojte kalendář“ a „Úkoly bez časového bloku: 6“, jenže sekce Dnes ukazuje 4 úkoly.
+
+### 2.3 Dnes
+Jedna obrazovka ukazuje tytéž úkoly třikrát:
+1. karta „Lumi · právě teď: Žádný úkol právě neběží“ (velká karta bez akce, když nic neběží),
+2. „Plán dne Lumi“: 6 karet, každá s „Bez vhodného bloku“, odhadem, rozbalovacím „Proč právě teď“ a třemi tlačítky (Jiný čas, Zítra, Neplánovat). To je 18 tlačítek pro 6 úkolů,
+3. klasický seznam Dnes (4 úkoly) s filtry Priorita a Řazení.
+
+Plán obsahuje i úkoly, které v seznamu Dnes nejsou (blížící se termín), takže čísla 6 a 4 vedle sebe působí jako chyba.
+
+### 2.4 Detail úkolu (inspektor)
+Pod sebou je 15 polí: Kontext (počty „úkoly: 2 · poznámky: 0 · projekty: 1 · oblasti: 1“), „Co Lumi ví: zatím žádná tvrzení“, Seznam (select), Kdy (Dnes/Zítra/Někdy/Bez data + date input), termín, Projekt, Oblast, Priorita, Čekání, Odhad, Navržený čas, Připomínka, Poznámky, Kontrolní seznam, Opakování, a nakonec Přesunout na Někdy / Spustit / Dokončit / Smazat.
+- „Seznam“ a „Kdy“ vyjadřují totéž dvakrát (Doručené/Dnes/Kdykoli/Někdy vs. Dnes/Zítra/Někdy/Bez data) a mohou si odporovat.
+- Prázdné bloky (Kontext s nulami, „žádná tvrzení“) zabírají první obrazovku inspektoru.
+- Odložení = najít pole Kdy, kliknout do date inputu a vybrat den. Žádné „příští týden“, „o víkendu“.
+
+### 2.5 Projekty
+- Seznam projektů ukazuje jen název a počet úkolů. Chybí cíl, další krok, stav a riziko, takže se nedá říct, kterému projektu se věnovat.
+- Projekt se otevírá v pravém inspektoru vedle seznamu projektů, ne jako vlastní stránka. Úkoly projektu jsou až pod přehledem, kontextem a poli.
+- Pole „Cíl / výsledek“ je jediný textový popis projektu. Chybí *proč* je projekt důležitý a hlavní cíle. Text „Lumi ho bez schválení nedoplňuje“ je správný, jenže Lumi ho nedoplňuje ani se schválením, protože k tomu nemá žádnou cestu.
+
+### 2.6 Kalendář
+- Bez připojeného kalendáře opakuje obrazovka „Kalendář není připojen“ třikrát a pod tím ukazuje seznam úkolů bez nadpisu, takže není jasné, proč tam je.
+
+### 2.7 Pošta
+- Gmail v2/v3 umí otevřít zprávu a vlákno a vědomě z nich vytvořit úkol (do Doručených, s `mailSource`). [MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md) výslovně vylučuje **AI zpracování e-mailů, LLM přenos a automatické vytváření úkolů**. Požadavek C proto mění kontrakt (§6).
+
+---
+
+## 3. Změna A: odložení úkolu ve stylu Things
+
+### 3.1 Interakce
+Na každém řádku úkolu (Dnes, Nadcházející, Doručené, projekt, Domů) je vpravo **datový čip**: „Dnes“, „Zítra“, „Po 27. 10.“, nebo jen ikona kalendáře, když úkol datum nemá. Klik na čip (nebo klávesa `D` na vybraném řádku, na mobilu klepnutí) otevře popover **Kdy**:
+
+```
+┌ Kdy ──────────────────────────────────────┐
+│ ✦ Lumi: Přesunout na pondělí 26. 10.       │
+│   Tento týden máte 3 úkoly s termínem      │
+│   a tenhle žádný nemá.      [Použít]       │
+├───────────────────────────────────────────┤
+│ ★ Dnes          ☾ Dnes večer               │
+│ → Zítra         ▣ Tento víkend             │
+│ ⇥ Příští týden  ☁ Někdy                    │
+│ ┌ říjen 2026 ───────────────────────────┐  │
+│ │ Po Út St Čt Pá So Ne                  │  │
+│ │ …  mini-kalendář, klik = datum        │  │
+│ └───────────────────────────────────────┘  │
+│ Termín: 30. 10. (nemění se)   ✕ Bez data   │
+└───────────────────────────────────────────┘
+```
+
+- Jeden klik na volbu **okamžitě uloží** `when` a zavře popover. Pod seznamem se objeví toast „Přesunuto na zítra · Zpět“ (Undo stejnou cestou jako dnes).
+- „Příští týden“ = pondělí příštího týdne (podle `timezone` vlastníka), „Tento víkend“ = nejbližší sobota, „Dnes večer“ = `when` dnes + `properties.evening = true` (nová skupina v Dnes, jako v Things). *(Rozhodnutí vlastníka 22. 10. 2026: „Příští týden“ je pondělí, skupina „Dnes večer“ ano.)*
+- Popover vždy ukazuje **termín (deadline) jen pro čtení**. Odložení nikdy nemění termín, a když vybrané datum termín přesahuje, volba je označená „po termínu 30. 10.“ a vyžaduje druhé potvrzení.
+- Totéž menu je v kontextovém menu řádku, v hromadném výběru (Doručené B5) a v detailu úkolu, kde nahradí dvojici „Seznam“ + „Kdy“ (§5.4).
+- Mobil: popover se otevře jako spodní sheet, volby mají ≥ 44 px, návrh Lumi je nahoře.
+
+### 3.2 Návrh Lumi na jedno tlačítko
+Nahoře v popoveru je **nejvýše jeden** návrh: věta s důvodem a tlačítko **Použít**. Návrh je deterministický a vysvětlitelný (PRODUCT.md: model nesmí vymýšlet ani tajně řadit). V první verzi stačí pravidla a model může větu jen přeformulovat.
+
+| Situace (vyhodnocuje se v pořadí) | Návrh | Důvod, který Lumi ukáže |
+|---|---|---|
+| Úkol má termín do 48 h | **Nenavrhuje odklad**, ale „Nechat na dnes“ | „Termín je zítra; odklad by ho ohrozil.“ |
+| Dnes je přetíženo: součet odhadů úkolů na dnes > volná kapacita (jen s čerstvým kalendářem), nebo > 6 úkolů na dnes bez kalendáře | Nejbližší den s volnou kapacitou před termínem | „Dnes máte 7 úkolů a 2 h volna; ve čtvrtek je volno.“ |
+| Úkol bez termínu a s nízkou/žádnou prioritou, tento týden ≥ 3 úkoly s termínem nebo vysokou prioritou | Pondělí příštího týdne | „Tento týden mají přednost 3 úkoly s termínem; tenhle termín nemá.“ |
+| Úkol byl odložen ≥ 3× (viz §3.3) | **Někdy** nebo „Rozdělit na menší krok“ (otevře detail) | „Odkládáte ho potřetí. Chcete ho dát do Někdy?“ |
+| Úkol čeká na někoho (`waiting`) s `followUpDate` | Den follow-upu | „Čekáte na Petra; připomenu se v den follow-upu.“ |
+| Jinak | Zítra | „Nejbližší volný den.“ |
+
+- Návrh se počítá klientsky z kanonických dat, která už v Dexie jsou (úkoly, termíny, priority, odhady, `dayPlan` a stav kalendáře). Žádné nové API a žádný model nejsou nutné. Logika patří do `lib/defer-suggestion.ts` jako čistá funkce s unit testy (pevný čas a pásmo Europe/Prague).
+- Kalendářová kapacita se použije, jen když je kalendář čerstvý. Jinak Lumi o volném čase nic netvrdí (PRODUCT.md, Calendar-aware planning).
+- Klik na **Použít** je vědomá akce vlastníka nad viditelnou konkrétní změnou (datum před → po). Jde o běžnou lokální editaci s Undo, ne o PACT proposal. Proposal + approval zůstává pro změny, které připraví chat nebo agent bez přímého kliknutí.
+
+### 3.3 Data
+- Beze změny schématu: `properties.when` (YYYY-MM-DD), `properties.someday`, `properties.today`, `properties.inbox`. Nově `properties.evening?: boolean`.
+- Nově `properties.deferHistory?: Array<{ from: string | null; to: string | null; at: number; via: "manual" | "lumi" }>` (posledních 10 záznamů). Slouží pro pravidlo „odloženo ≥ 3×“ a pro učení plánu (`day-plan-learning.ts` už `planningFeedback` sbírá, tohle je jeho doplněk pro odklady mimo plán dne).
+- Attention: přesun `when` je nový výskyt `planned_date_passed` (PRODUCT.md, rozhodnutí 2026-10-09), takže odložení položku pozornosti korektně vyřeší a nevznikne duplicita.
+
+### 3.4 Akceptační kritéria
+1. Z řádku v Dnes se úkol přesune na „Příští týden“ dvěma kliky, zmizí z Dnes, objeví se v Nadcházející pod pondělím a Undo ho vrátí.
+2. Úkol s termínem zítra nikdy nedostane návrh odkladu. Volba data po termínu vyžaduje potvrzení a termín se nezmění.
+3. Bez čerstvého kalendáře návrh netvrdí nic o volném čase.
+4. Popover je ovladatelný klávesnicí (šipky, Enter, Esc) a VoiceOverem. Na mobilu je to sheet bez gest.
+5. Offline se odklad uloží lokálně s viditelným stavem čekání na synchronizaci.
+
+---
+
+## 4. Změna B: kontext projektu a stránka projektu
+
+### 4.1 Obsah kontextu
+Každý projekt dostane krátký slovní kontext, viditelný jako hlavička projektu a jako první řádek v seznamu projektů:
+
+```
+Nový web firmy                                   ● Aktivní · 3/7 kroků
+──────────────────────────────────────────────────────────────────────
+Proč je důležitý
+  Současný web neprodává a brzdí nábor; nový web je podmínkou
+  listopadové kampaně.
+Hlavní cíle
+  • Spustit nový web do 30. 11.
+  • Udržet SEO pozice (migrace bez ztráty návštěvnosti)
+  • Texty a grafika schválené Janou
+Hotovo, když
+  Nový web běží na produkční doméně a kampaň na něj vede.
+                                        [Upravit] [✦ Lumi navrhne]
+```
+
+- **Proč je důležitý**: 1–3 věty. **Hlavní cíle**: 1–5 odrážek. **Hotovo, když**: 1 věta (dnešní pole „Cíl / výsledek“ se do něj převede beze ztráty).
+- V seznamu projektů je pod názvem první věta „Proč“, vpravo průběh (hotové/všechny kroky), další krok a jeden attention štítek (např. „bez dalšího kroku“, „3 po termínu“). Seznam pak ukazuje, kam sáhnout.
+
+### 4.2 Kdo kontext píše
+- Primárně vlastník: inline editace s viditelným stavem ukládání (stejný vzor jako dnešní `ProjectOverview`).
+- **✦ Lumi navrhne**: Lumi z názvu, úkolů, poznámek projektu a navázaných e-mailových zdrojů (pokud je C schváleno) připraví **koncept**. Ukáže se jako diff (před → po) v běžném approval sheetu a uloží se až po potvrzení. U kontextu je pak štítek „navrženo Lumi, potvrzeno 22. 10.“. Neodporuje to textu „Lumi ho bez schválení nedoplňuje“, jen pro to přidává schválenou cestu. **Rozhodnutí vlastníka 22. 10. 2026:** Lumi smí kontext projektu navrhovat, vždy přes PACT proposal a schválení, nikdy přímým zápisem. Nápověda u pole se změní na „Lumi může navrhnout znění, uloží se až po vašem schválení.“
+- Kontext je pro chat a plánování **owner statement** s provenance (Context Graph). Odklad podle §3.2 i řazení plánu ho mohou použít jako potvrzenou důležitost projektu.
+
+### 4.3 Data
+```ts
+properties.context = {
+  why: string,            // "Proč je důležitý"
+  goals: string[],        // "Hlavní cíle", max 5
+  doneWhen: string,       // dříve properties.goal
+  provenance: "owner" | "lumi-approved",
+  proposalId?: string,    // u lumi-approved: odkaz na audit
+  updatedAt: number,
+}
+```
+Migrace v `schema-migrations.ts`: `properties.goal` → `context.doneWhen` a `goal` ponechat pro zpětnou kompatibilitu (čtení) jednu verzi. Zálohy a export: pole je součást entity, takže se nic dalšího neřeší. Sdílený workspace: kontext vidí jen členové daného workspace (beze změny pravidel).
+
+### 4.4 Stránka projektu
+Projekt se otevře jako **hlavní pohled** (jako v Things), ne v inspektoru vedle seznamu projektů:
+1. hlavička: název, stav, průběh, kontext (§4.1),
+2. **úkoly projektu s nadpisy sekcí** (Things „headings“, nové `properties.heading` na úkolu nebo entita `heading`; může přijít později),
+3. poznámky a zdroje (e-maily, schůzky),
+4. sbalená sekce „Podrobnosti“: oblast, termín projektu, poslední aktivita, „Co Lumi ví“ (claims), historie.
+
+Inspektor vpravo slouží jen pro detail úkolu otevřeného ze stránky projektu. **Oblasti** přestanou být samostatná hlavní položka a v seznamu projektů se z nich stanou skupiny (Práce, Domov, Bez oblasti), stejně jako v Things. Pohled Oblasti zůstane dostupný přes „Další pohledy“. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)*
+
+### 4.5 Akceptační kritéria
+1. Nový projekt má po založení prázdný kontext s nápovědou. Seznam projektů bez kontextu ukáže „Doplňte, proč je projekt důležitý“, ne prázdné místo.
+2. Návrh Lumi se nikdy neuloží bez potvrzení. Potvrzení se dá vrátit Undo a je v auditu.
+3. Starý `goal` je po migraci vidět jako „Hotovo, když“ a nic se neztratí. Zálohu před migrací jde obnovit.
+4. V „Vše moje práce“ je kontext jen pro čtení (dnešní pravidlo).
+
+---
+
+## 5. Změna D: zjednodušení navigace, Domů, Dnes a detailu
+
+### 5.1 Navigace
+Desktop sidebar: **Domů · Doručené · Dnes · Nadcházející · Projekty · Kalendář** a pod čarou seznam aktivních projektů (jako v Things, max. 7, s průběhem). Dál:
+- **Poznámky a Hledání** zůstanou dostupné přes ⌘K a přes „Další pohledy“. Hledání v topbaru už existuje. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
+- **Pošta** se přesune z Nastavení do Doručených jako záložka/filtr „Z pošty“ (seznam vláken z připojených účtů, otevření, „Vytvořit úkol“, později „Navrhnout projekt“). Nastavení → Pošta zůstane jen pro připojení účtu. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)*
+- Počty v sidebaru jen tam, kde vyjadřují práci: Doručené (k roztřídění), Dnes (otevřené dnes). U Projektů místo počtu červená tečka, když některý projekt potřebuje pozornost.
+- Mobil: spodní lišta **Domů · Doručené · Dnes · Projekty · Více**. Kalendář se přesune do „Více“ a na Dnes (pás událostí nahoře, viz §5.3). *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
+
+### 5.2 Domů
+- Položka pozornosti má jeden řádek titulku a jeden řádek důvodu („Termín byl včera“). Vpravo je jedna primární akce podle typu položky: u termínu **datový čip** (stejný popover jako §3), u čekání „Připomenout“, u projektu bez kroku „Přidat krok“. Odložit/Skrýt/Zdroje jsou v menu `⋯`. Na mobilu je swipe jako zkratka, ne jediná cesta.
+- „Vyhodnoceno 22. 10. 08:07“ jen jednou v hlavičce sekce („Aktualizováno 8:07 · Obnovit“). Detail zdrojů a čerstvosti zůstává v rozbalení položky a v „Pokrytí a čerstvost“.
+- Sekce Dnes na Domů ukáže **jen úkoly, které nejsou v pozornosti** (bez duplicit), max. 5, plus „Zobrazit vše“.
+- Nepřipojený kalendář = jedna nenápadná věta v patičce, ne tři.
+
+### 5.3 Dnes
+Jeden seznam místo tří vrstev:
+```
+Dnes                                   čt 22. 10. · 4 úkoly · ~3 h
+[ pás událostí z kalendáře, jen když je připojen ]
+▸ Běží: Napsat inzerát  12 min   [Pauza] [Hotovo]   ← jen když něco běží
+──────────────────────────────────────
+○ Schválit grafický návrh homepage     09:00–09:30   Dnes ▾
+○ Napsat inzerát                        —            Dnes ▾
+○ Vybrat obklady        plánováno na 19. 10.          19. 10. ▾
+Dnes večer
+○ Koupit dárek mámě                                  Večer ▾
+──────────────────────────────────────
+✦ Lumi: Na dnes je to ~1 h přes kapacitu. Přesunout „Vybrat obklady“
+  na pondělí?                                     [Použít] [Jiný návrh]
+```
+- Plán dne se stane **sloupcem času** v řádku (navržený blok šedě, přijatý plně) a jedním souhrnným návrhem Lumi dole. Tlačítka Přijmout/Jiný čas/Zítra/Neplánovat přejdou do popoveru času/data na řádku.
+- „Proč právě teď“ je tooltip/rozbalení řádku, ne blok u každé karty.
+- Karta „Žádný úkol právě neběží“ se nezobrazuje, když nic neběží.
+- Úkoly s blížícím se termínem, které nejsou na dnes, se v Dnes neukazují. Jsou na Domů v pozornosti. Počty pak sedí.
+- Filtry Priorita/Řazení přejdou do menu `⋯` v hlavičce.
+
+### 5.4 Detail úkolu
+```
+○ Zkontrolovat SEO migraci                                    ⋯
+[📅 25. 10. ▾] [⚑ Termín —] [▣ Nový web firmy ▾] [! Priorita ▾]
+Poznámky…
+☐ Kontrolní seznam…
+▸ Další: odhad · připomínka · opakování · čekání · navržený čas
+▸ Kontext a zdroje (jen když nějaké jsou)
+──────────────────────────────────────
+[Spustit]                               [Dokončit]   (Smazat v ⋯)
+```
+- „Seznam“ zmizí. Doručené = `inbox`, jinak rozhoduje Kdy (Dnes / datum / Kdykoli = bez data / Někdy). To je model Things a odstraní rozpor dvou selectů.
+- Oblast se dědí z projektu a zobrazí se, jen když úkol nemá projekt.
+- Prázdný „Kontext“ (samé nuly) a „Co Lumi ví: žádná tvrzení“ se nezobrazují. Když něco existuje, je to sbalená sekce s počtem.
+- Smazat je v menu `⋯`, ne vedle Dokončit.
+
+### 5.5 Co se neztratí
+Všechny dnešní funkce zůstávají: filtry Po termínu, Kdykoli, Někdy, Hotové (Další pohledy), Context review, Agenti, hromadné třídění B5, mobilní triage B4, approval/Undo, plán dne s přijetím bloku, workspaces a „Vše moje práce“. Mění se umístění a výchozí rozbalení, ne schopnosti. E2E testy se upraví tak, aby dál ověřovaly stejné chování, jen s novými selektory (AGENTS.md: neoslabovat testy).
+
+---
+
+## 6. Změna C: Lumi z e-mailů navrhne nový projekt s kroky
+
+> **Rozhodnutí vlastníka 22. 10. 2026:** varianta **C1 je povolena**. Analýzu e-mailů provádí **Hermes** (lokální bridge), pokud ji zvládne (viz §6.4 vyhodnocení). **Doplnění téhož dne:** když je Hermes nedostupný, analýza se pošle **dostupnému modelu** (dnes OpenAI). Po review téhož dne platí pro cloudový přenos souhlasová brána, fail-closed klasifikace a nulová retence obsahu z §6.6. Varianta C2 (průběžná analýza) povolená není a vyžaduje samostatné rozhodnutí.
+
+### 6.1 Proč to bylo rozhodnutí
+[MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md) dnes říká: *žádné AI zpracování, žádný LLM přenos, žádné automatické vytváření úkolů, žádná synchronizace na pozadí.* Analýza e-mailů modelem tento kontrakt mění. Navrhuji to udělat ve dvou krocích, aby se dal každý schválit zvlášť:
+
+| Varianta | Co Lumi čte | Kdy | Riziko | Doporučení |
+|---|---|---|---|---|
+| **C1: na vyžádání** | jedno vlákno, které vlastník otevře a klikne „✦ Navrhnout projekt“ | jen po kliknutí | nízké: vědomý přenos jednoho vlákna, stejné jako dnešní „Vytvořit úkol“ | **začít tímto** |
+| **C2: průběžná analýza** | metadata + texty nových zpráv v Inboxu za posledních N dní | plánovač, max. 1× denně | vyšší: obsah pošty pravidelně jde modelu, potřebuje retenci a privacy gate (PRODUCT.md fáze 4) | až po C1 a samostatném schválení |
+
+Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh v Doručených. Tělo e-mailu ani citace z něj se na serveru neukládají (přesný datový model v §6.6). Model dostane jen nezbytný výřez (předmět, odesílatelé, text bez příloh, max. ~8 000 znaků). **Poskytovatel: vždy nejdřív Hermes, cloudový model jen při nedostupnosti Hermesu a jen po výslovném souhlasu vlastníka *před* přenosem** (souhlasová brána §6.6). Pořadí je pro poštu pevné, nezávisle na `AI_PROVIDER` (`lib/server-ai-provider.ts` dnes pořadí podle `AI_PROVIDER` mění). Hermes je „nedostupný“, když není zapnutý (`HERMES_AI_ENABLED`, token), neodpoví do časového limitu, vrátí chybu, nebo dvakrát po sobě vrátí výstup, který neprojde validací §6.3. Pokud není dostupný žádný povolený model, tlačítko vysvětlí, že návrh teď nejde připravit, a nic nevznikne.
+- Návrh vždy ukáže, který model ho připravil („připraveno Hermesem“ / „připraveno OpenAI se souhlasem, Hermes byl nedostupný“), a audit zaznamená poskytovatele a souhlas bez obsahu e-mailu.
+
+### 6.2 Tok (C1)
+1. Doručené → Z pošty → vlákno „Re: Nabídka na nový e-shop“ → **✦ Navrhnout projekt**.
+2. Lumi nejdřív porovná s existujícími projekty (název, kontext, účastníci). Při shodě nabídne: „Vypadá to jako projekt *Nový web firmy*. Přidat kroky tam?“ a jako druhou volbu nový projekt.
+3. Návrhová karta (editovatelná):
+   ```
+   ✦ Návrh projektu z e-mailu (Jana Nováková, 3 zprávy, 20.–22. 10.)
+   Název:  Nový e-shop
+   Proč:   Klient chce spustit prodej online před Vánoci; nabídka platí do 31. 10.
+   Cíle:   • Odsouhlasit nabídku  • Spustit e-shop do 15. 12.
+   Kroky:  ☑ Odpovědět Janě na rozsah            Zítra
+           ☑ Připravit cenovou nabídku            Termín 31. 10.
+           ☑ Domluvit call s klientem              Příští týden
+           ☐ Objednat hosting                      —
+   Oblast: Práce     Workspace: Osobní
+                        [Zahodit]   [Upravit]   [Založit projekt (3 kroky)]
+   ```
+4. **Založit projekt** = jeden PACT proposal nového druhu `create_project_bundle` (projekt + kontext + vybrané úkoly + relace + `mailSource` na projektu i úkolech), proveden atomicky s auditem a Undo (Undo smaže jen to, co vzniklo, a jen pokud to nikdo mezitím neupravil). Využívá existující `ai-actions.ts` (create/update/project). Přibude jen druh operace s více entitami.
+5. Kroky dostanou datum podle pravidel z §3.2 (nikdy za termínem z e-mailu, termíny z e-mailu jsou návrh, ne potvrzený fakt) a štítek „z e-mailu“ s odkazem na zdroj.
+
+### 6.3 Kontrakt modelu
+- Vstup: výřez vlákna + seznam názvů a kontextů existujících projektů v témže workspace (kvůli deduplikaci). Nic z jiného workspace.
+- Výstup: striktní JSON (`title`, `why`, `goals[]`, `doneWhen`, `steps[{title, when?, deadline?, evidence}]`, `matchProjectId?`), validovaný serverem. Každý krok musí mít `evidence` = citaci z e-mailu, jinak se zahodí. Data se parsují deterministicky (`local-dates.ts`), ne modelem.
+- Citlivé/confidential a neklasifikovatelné zdroje se řídí pravidly přenosu v §6.6 (potvrzeno vlastníkem 22. 10. 2026: citlivé jen do Hermesu).
+- `evidence` je jen pro transientní náhled a validaci; do proposalu, auditu, entit ani záloh se neukládá (§6.6).
+
+### 6.4 Vyhodnocení, zda to Hermes zvládne
+Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntetických** českých a smíšených vláknech (min. 20 vláken: nabídka, organizace akce, reklamace, interní úkolování, newsletter jako negativní případ). Vyhodnocuje se Hermes i záložní model na stejné sadě. Model analýzu „zvládne“, když:
+- ≥ 95 % odpovědí je validní JSON podle schématu §6.3 (po jednom opakování),
+- ≥ 90 % navržených kroků má citaci, která v textu vlákna doslova existuje, a žádný krok nemá vymyšlený termín,
+- u negativních případů (newsletter, notifikace) navrhne „žádný projekt“ v ≥ 90 %,
+- odpověď do 60 s na vlákno do 8 000 znaků.
+
+Výsledky se zapíšou do PR. Výchozí a jediný implementovaný režim je **Hermes-first, cloud jen jako fallback přes souhlasovou bránu** (§6.6). Pokud prahy nesplní Hermes, funkce v Hermes cestě zůstane vypnutá a vlastník dostane výsledky. Vlastník 22. 10. 2026 předběžně souhlasil, že v takovém případě může být primární cloudový model, pokud prahy splní. To je ale **samostatný režim `cloud-primary`**, který se zapne až dalším výslovným rozhodnutím vlastníka nad výsledky vyhodnocení (zápis do tohoto dokumentu a MAIL-CONNECTORS). I v něm platí stejná souhlasová brána a stejná pravidla citlivosti jako pro fallback; žádný přenos do cloudu bez souhlasu před odesláním. Pokud prahy nesplní žádný model, funkce zůstane vypnutá.
+
+### 6.5 Akceptační kritéria
+1. Bez kliknutí vlastníka se žádný e-mail modelu neodešle (C1). Test to ověří na mocku Gmailu a poskytovatele.
+2. Při dostupném Hermesu dostane požadavek jen Hermes. Při nedostupném Hermesu (vypnutý, chyba, timeout, dvakrát nevalidní výstup) se nejdřív zobrazí souhlasová brána; teprve po výslovném „Odeslat do <příjemce>“ v dialogu, který jmenuje OpenAI, dostane tentýž výřez záložní model a návrh to uvede. Negativní testy s mocky Hermesu a OpenAI: `Hermes timeout + bez souhlasu ⇒ žádný OpenAI request`, `Hermes timeout + citlivý zdroj ⇒ žádný OpenAI request ani nabídka brány`, `Hermes timeout + neklasifikovatelný zdroj ⇒ žádný OpenAI request`, `souhlas k jinému vláknu/expirovaný souhlas ⇒ žádný OpenAI request`.
+3. Zahození návrhu nic nevytvoří. Potvrzení vytvoří přesně vybrané kroky v jednom workspace. Druhé potvrzení téhož návrhu skončí konfliktem bez duplicit.
+4. Krok bez citace z e-mailu se nenavrhne. Navržený termín je označen jako „z e-mailu, ověřte“.
+5. Odpojený účet nebo vypnutý model = srozumitelná hláška, žádný částečný stav.
+6. Po vytvoření i po zahození návrhu test prohledá SQLite (`ai_proposals`, audit, `entities`, `relations`), serverové logy testovací instance a exportovanou zálohu a ověří, že v nich není tělo e-mailu ani žádná `evidence` citace. Syntetické vlákno nese unikátní značky v textu, který se dostane jen do výřezu a do `evidence` (ne do názvů ani kroků), včetně krátkých značek 10–30 znaků.
+7. Klasifikace a souhlas (§6.6): starší, 31. zpráva vlákna se štítkem confidential ⇒ vlákno je citlivé a nejde do cloudu; vlákno nad limitem zpráv ⇒ žádný cloudový request; změna štítků mezi souhlasem a odesláním ⇒ žádný cloudový request a nový dotaz; Hermes s neznámým nebo externím upstreamem ⇒ citlivé vlákno se mu nepošle a neoznačené jen přes souhlasovou bránu; souhlas udělený pro OpenAI nelze uplatnit pro externí Hermes a naopak; změna endpointu, upstreamu nebo trust režimu po souhlasu ⇒ odeslání odmítnuto a nový dialog.
+
+### 6.6 Privacy kontrakt pošty a AI (cílový požadavek)
+Doplněno 22. 10. 2026 na základě review [Kocooour/AI-executive#93](https://github.com/Kocooour/AI-executive/pull/93). Platí pro C1 i budoucí C2 a má přednost před pohodlím fallbacku.
+
+**Co je „lokální“ poskytovatel.** Hermes je pro poštu lokální jen tehdy, když je to ověřené, ne podle toho, že Lumi volá lokální bridge (`/v1/query`). Hermes bridge spouští Hermes agent CLI a ten může sám volat externí model (docs/ARCHITECTURE.md). Proto:
+- Hermes se smí považovat za **lokální** jen při explicitní serverové konfiguraci `AI_EXECUTIVE_MAIL_HERMES_LOCAL=verified`, kterou vlastník nastaví až po ověření, že Hermes pro tento účel používá lokální inferenci a jeho upstream nemá odchozí přístup mimo server (egress policy nebo síťově izolovaný model). Postup ověření a jeho datum se zapíše do MAIL-CONNECTORS.md.
+- Bez této konfigurace, nebo když bridge hlásí neznámý či externí upstream, je Hermes pro poštu **externí poskytovatel**. Platí pro něj stejná pravidla jako pro cloud níže: citlivé vlákno se mu nepošle vůbec a neoznačené jen přes souhlasovou bránu.
+- Citlivé vlákno tedy smí odejít jen do ověřeně lokálního Hermesu; jinak návrh pro něj není dostupný.
+
+**Klasifikace zdroje (fail-closed).** Gmail dnes citlivost zpráv nenese a Lumi ji nevaliduje. Proto:
+- Každý připojený e-mailový účet dostane v Nastavení → Pošta seznam **citlivých štítků** (Gmail labels, např. „Důvěrné“, „Právní“), výchozí prázdný, a volbu **„Povolit cloudový fallback pro tento účet“**, výchozí **vypnuto**.
+- Vlákno je **citlivé**, pokud kterákoli jeho zpráva nese citlivý štítek nebo Gmail kategorii/štítek, který vlastník označil jako citlivý. Citlivé vlákno jde jen do ověřeně lokálního Hermesu; jinak návrh není dostupný a brána se nenabídne.
+- **Klasifikuje se celé vlákno, ne náhled.** Server před každým přenosem načte štítky *všech* zpráv vlákna (Gmail `threads.get` s minimálním formátem vrací `labelIds` u každé zprávy), nezávisle na limitu 30 zpráv v náhledu Mail v3. Nad limitem 200 zpráv, při stránkování, které nedoběhlo, nebo při jakékoli neúplné odpovědi je vlákno neklasifikovatelné.
+- Vlákno je **neklasifikovatelné**, pokud se štítky všech zpráv nepodařilo načíst (chyba Gmail API, částečná odpověď, limit zpráv, odpojený účet). Neklasifikovatelné vlákno se do cloudu ani do neověřeného Hermesu **neposílá** (fail-closed).
+- Ostatní vlákna jsou **neoznačená**: do cloudu smí jen přes souhlasovou bránu a jen u účtu s povoleným cloudovým fallbackem.
+
+**Souhlasová brána před přenosem.** Když má vlákno odejít externímu poskytovateli (OpenAI při nedostupném Hermesu, nebo Hermes, který není ověřeně lokální) a vlákno je neoznačené na účtu s povoleným externím zpracováním, Lumi **před** odesláním ukáže dialog: konkrétní příjemce (identita poskytovatele a jeho režim, např. „OpenAI (cloud)“ nebo „Hermes – neověřený upstream: <hlášený upstream nebo ‚neznámý‘>“), že obsah opustí server Lumi, přesný rozsah výřezu (počet zpráv, znaků, odesílatelé, bez příloh) a tlačítka **Odeslat do <příjemce>** / **Zrušit**. Text tlačítka se skládá dynamicky ze stejného údaje o příjemci, který server uloží do souhlasu. Souhlas je jednorázový: váže se na session vlastníka, workspace, účet, ID vlákna, hash výřezu, hash množiny štítků všech zpráv a **identitu příjemce** (poskytovatel, jeho endpoint, model/upstream a trust režim `verified-local` / `external`) a vyprší za 5 minut; nepoužije se pro jiné vlákno ani opakovaně. Těsně před odesláním server štítky i identitu příjemce znovu načte; pokud se změnily štítky, přibyla zpráva, vlákno je teď neklasifikovatelné, nebo by požadavek šel jinému poskytovateli, na jiný endpoint či upstream nebo v jiném trust režimu, než jaký byl v dialogu, souhlas propadne, nic se neodešle a vlastník dostane nový dialog s aktuálním příjemcem. Souhlas pro jednoho příjemce nikdy neplatí pro jiného. Bez platného souhlasu server externímu poskytovateli nic neodešle (kontrola na serveru, ne jen v UI).
+
+**Retence a datový model.**
+- **Nikdy se neukládá:** tělo e-mailu, výřez poslaný modelu, odpověď modelu v surové podobě, `evidence` citace. Žijí jen v paměti requestu a v no-store odpovědi pro náhled (bez Dexie, bez localStorage, bez service-worker cache). `evidence` je v kódu samostatný typ náhledu (`MailProposalPreview`), který se nikdy nepředává do `create_project_bundle`; proposal se staví z vlastního typu bez pole pro citace, takže citace do něj nejde ani omylem zapsat.
+- **Ukládá se do proposalu `create_project_bundle` (SQLite `ai_proposals`, TTL = expirace proposalu jako u ostatních návrhů):** názvy, `why`, `goals`, `doneWhen`, kroky (název, datum, termín), workspace, `mailSource` ID (provider, accountId, threadId, messageId), poskytovatel a ID souhlasu. Persistuje se jen tento **allowlist polí**; vše ostatní z výstupu modelu se zahodí. Tyto texty vlastník vidí a schvaluje a mohou obsahovat krátké převzaté formulace z e-mailu (jméno klienta, název zakázky, datum), stejně jako dnes předmět e-mailu převzatý do názvu úkolu. To je vědomě přípustné a není to „nulová retence obsahu“: nulová retence platí pro tělo, výřez, surovou odpověď a `evidence`, ne pro text, který vlastník schválí jako součást projektu. Kontrola doslovných úseků delších než 80 znaků je jen **pojistka** proti nechtěnému přepisu celých odstavců (návrh s takovým polem server odmítne k přeformulování), ne záruka.
+- **Audit:** operace, cíle, poskytovatel, souhlas ano/ne, počty kroků, výsledek. Žádný text z e-mailu.
+- **Po schválení** zůstávají jen vytvořené entity (stejně jako dnešní „Vytvořit úkol“ z e-mailu) s `mailSource` ID. Zálohy a export obsahují jen to, co je v entitách a proposalech výše; citace v nich být nemohou, protože se nikde neukládají.
+
+---
+
+## 7. Změna E: opravy logiky nalezené při revizi
+
+| # | Problém | Kde | Dopad | Oprava |
+|---|---|---|---|---|
+| E1 | `taskDueSummary` míchá **plánovaný den (`when`)** s **termínem (`deadline`)**. Úkol naplánovaný na dnes ukazuje „Termín se blíží“, prošlý plánovaný den ukazuje červeně „Po termínu“. | `app/ui/format.ts:62` | Falešná naléhavost v rozporu s PRODUCT.md (`deadline_overdue` vs. `planned_date_passed`) | Rozlišit: termín → „Termín zítra / Po termínu“, plán → „Plánováno na 19. 10.“ (neutrální barva). Unit test. |
+| E2 | Plán dne říká u úkolu bez termínu „Po termínu“ | `dayPlanReason_overdue` / `day-plan.ts` | dtto | Stejný rozdíl jako E1 v důvodech plánu |
+| E3 | Štítky v Domů → Dnes jsou „Termín Se Blíží“ (CSS `text-transform: capitalize`) | `app/globals.css` (`.homeTaskList small`, `.contextItems small`) | Vzhled | Odstranit capitalize |
+| E4 | „Úkoly bez časového bloku: 6“ vedle seznamu Dnes se 4 úkoly | Home + day plan | Nedůvěra v čísla | Plán dne počítá jen úkoly v Dnes, případně říká „6 včetně 2 s blížícím se termínem“ |
+| E5 | Projekt se otevírá v inspektoru, úkoly projektu jsou až pod přehledem | `detail-panel.tsx` | Projekt nejde rozumně spravovat | §4.4 |
+| E6 | Pole „Seznam“ a „Kdy“ v detailu mohou odporovat (např. Seznam = Někdy, Kdy = 25. 10.) | `detail-panel.tsx` | Úkol na dvou místech nebo nikde | §5.4: jeden model `inbox` + `when`/`someday` |
+| E7 | Pošta jen v Nastavení | `settings-view.tsx` | Funkce se nepoužívá | §5.1 |
+| E8 | Kalendář bez připojení ukazuje nepopsaný seznam úkolů | `calendar-view.tsx` | Nejasné | Nadpis „Úkoly bez času“ nebo odkaz do Dnes |
+| E9 | Filtr „Po termínu“ ukazuje úkoly s prošlým plánovaným dnem, ne s prošlým termínem | `lib/task-views.ts` (`taskMatchesView`, Overdue) | Stejný omyl jako E1 | Filtrovat podle `deadline`. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)* |
+
+E1–E4, E8 a E9 jdou jako první PR, v samostatné větvi mimo tento návrh (rozhodnutí vlastníka 22. 10. 2026).
+
+---
+
+## 8. Plán dodání
+
+Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](../DEVELOPMENT.md), s plným `Browser E2E` a se dvěma nezávislými testery podle AGENTS.md.
+
+| PR | Obsah | Závislost | Nové/upravené testy |
+|---|---|---|---|
+| 1 | E1–E4, E8: oddělení plánu a termínu, štítky, počty | – | unit `format`/`day-plan`, e2e home/today |
+| 2 | A: `lib/defer-suggestion.ts` + popover Kdy na řádku, Undo, `deferHistory`, `evening` | 1 | unit pravidel (pevný čas), e2e odkladu desktop + mobil + offline |
+| 3 | D1: navigace (sidebar, mobilní lišta, Pošta do Doručených) | rozhodnuto (navigace) | e2e design-navigation, mobile-more |
+| 4 | D2: Dnes jako jeden seznam s časovým sloupcem, Domů bez duplicit | 2 | e2e mobile-today, home-quiet, day plan |
+| 5 | D3: detail úkolu (čipy, sbalené sekce, zrušení „Seznam“) | 2 | e2e detail-inspector, task-row |
+| 6 | B: `context` projektu, migrace `goal`, stránka projektu, skupiny podle oblastí | rozhodnuto (B) | unit migrace, e2e project-overview, backup-restore |
+| 7 | B+: „✦ Lumi navrhne“ kontext přes proposal | 6 | e2e approval/Undo |
+| 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, pořadí Hermes → cloud jen přes souhlasovou bránu a klasifikaci §6.6, nulová retence citací, vyhodnocení §6.4 | rozhodnuto (C1, Hermes + fallback), 6 | unit validace výstupu a pořadí poskytovatelů, e2e s Gmail + Hermes/OpenAI mockem, data-boundary |
+| 9 | C2: průběžná analýza | ⚑ C2, 8 | privacy/retence, plánovač, dedup |
+
+---
+
+## 9. Otázky pro vlastníka
+
+1. ~~**C (pošta → model):** Souhlasíte s variantou C1? Který poskytovatel?~~ **Rozhodnuto 22. 10.:** C1 povoleno, primárně Hermes, pokud analýzu zvládne (§6.4); při jeho nedostupnosti dostupný model.
+2. ~~**B:** Smí Lumi navrhovat text kontextu projektu?~~ **Rozhodnuto 22. 10.:** ano, vždy přes schválení.
+3. ~~**Navigace:** Poznámky a Hledání mimo hlavní sidebar, Projekty místo Kalendáře na mobilu?~~ **Rozhodnuto 22. 10.:** ano.
+4. ~~**Odklad:** „Příští týden“ = pondělí? Skupina „Dnes večer“?~~ **Rozhodnuto 22. 10.:** pondělí, „Dnes večer“ ano.
+5. ~~Mám začít PR 1 hned?~~ **Rozhodnuto 22. 10.:** ano, jako samostatné PR včetně E9.
+
+Další rozhodnutí 22. 10.: Oblasti jako skupiny v Projektech (ano), Pošta v Doručených (ano), pravidla pro citlivé e-maily a primární záložní model z §6 (ano).
