@@ -17,6 +17,12 @@ export class MailError extends Error {
   constructor(message: string, status = 400) { super(message); this.status = status; }
 }
 
+// A broken saved History checkpoint requires non-destructive reconciliation,
+// not an ordinary retryable consent/restore conflict.
+class MailHistoryCheckpointError extends MailError {
+  constructor(message: string) { super(message, 409); }
+}
+
 export function mailKey() {
   const secret = process.env.AI_EXECUTIVE_MAIL_SECRET || "";
   if (secret.length < 32) throw new MailError("Mail encryption is not configured", 503);
@@ -559,16 +565,9 @@ function trimMailIndex(accountId: string, retentionDays: number, now: number) {
 export function listMailSyncStates(workspaceId: string): MailSyncState[] {
   requireMailWorkspace(workspaceId);
   const db = getDatabase();
-  const now = Date.now();
-  // Enforce the configured retention bound when the status is inspected,
-  // even if a sync has not been requested since the last visit.
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (const row of db.prepare("SELECT account_id, retention_days FROM mail_sync_accounts WHERE workspace_id=?")
-      .all(workspaceId) as Array<{ account_id: string; retention_days: number }>)
-      trimMailIndex(row.account_id, row.retention_days, now);
-    db.exec("COMMIT");
-  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  // Read-only status: retention is enforced by the independent 15-minute
+  // scheduler, at startup (best effort), and on writes. A status read must not
+  // lock SQLite for writes or fail due to an unrelated retention sweep.
   return (db.prepare(`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
       s.pending_event_id, s.history_backlog_pending,
       s.recovery_inbox_page_token, s.recovery_sent_page_token,
@@ -677,6 +676,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   };
   const changes = new Set<string>();
   const deleted = new Set<string>();
+  // Track distinct touched IDs incrementally rather than rebuilding Sets per event.
+  const touched = new Set<string>();
   if (!full) {
     try {
       let pageToken = "";
@@ -716,7 +717,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
             throw new MailError("Invalid Gmail history event cursor", 502);
           if (!pendingLocated) {
             if (BigInt(obj.id) < BigInt(originalPending!)) continue;
-            if (obj.id !== originalPending) throw new MailError("Pending Gmail history event changed", 409);
+            if (obj.id !== originalPending) throw new MailHistoryCheckpointError("Pending Gmail history event changed");
             pendingLocated = true;
           }
           const updates = new Set<string>();
@@ -736,8 +737,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
           const ids = [...new Set([...updates, ...removals])].sort();
           const offset = obj.id === originalPending ? settings.pending_event_offset : 0;
           if (!Number.isSafeInteger(offset) || offset < 0 || offset > ids.length)
-            throw new MailError("Gmail history event offset is invalid", 409);
-          const remainingBudget = SYNC_MAX_ITEMS - new Set([...changes, ...deleted]).size;
+            throw new MailHistoryCheckpointError("Gmail history event offset is invalid");
+          const remainingBudget = SYNC_MAX_ITEMS - touched.size;
           if (remainingBudget <= 0) {
             partial = true; historyIncomplete = true; reachedBudget = true;
             nextHistory = lastAppliedEventId ?? settings.history_id;
@@ -747,6 +748,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
           for (const id of consumed) {
             if (updates.has(id)) changes.add(id);
             if (removals.has(id)) deleted.add(id);
+            touched.add(id);
           }
           if (offset + consumed.length < ids.length) {
             // Fully consume an event before advancing history_id. A giant
@@ -763,7 +765,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         }
         if (reachedBudget) break;
         if (!response.nextPageToken) {
-          if (!pendingLocated) throw new MailError("Pending Gmail history event disappeared", 409);
+          if (!pendingLocated) throw new MailHistoryCheckpointError("Pending Gmail history event disappeared");
           nextHistory = response.historyId;
           break;
         }
@@ -771,7 +773,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
           throw new MailError("Invalid Gmail history page", 502);
         if (++page >= 5) {
           if (!pendingLocated || !lastAppliedEventId)
-            throw new MailError("Gmail history page exceeds sync budget", 409);
+            throw new MailHistoryCheckpointError("Gmail history page exceeds sync budget");
           nextHistory = lastAppliedEventId;
           partial = true;
           historyIncomplete = true;
@@ -782,7 +784,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     } catch (error) {
       // Gmail expires old history IDs. Rebuild from a recent bounded snapshot,
       // never advance the cursor past data we failed to read.
-      if (error instanceof MailError && (error.status === 404 || error.message === "Gmail response is too large")) {
+      if (error instanceof MailHistoryCheckpointError ||
+          (error instanceof MailError && (error.status === 404 || error.message === "Gmail response is too large"))) {
         // History is unavailable or a single record is larger than our safe
         // reply bound. Never advance it without discovering and revalidating
         // the mailbox metadata that the skipped event could have changed.
@@ -791,7 +794,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     }
   }
   if (full) {
-    changes.clear(); deleted.clear();
+    changes.clear(); deleted.clear(); touched.clear();
     inboxPageToken = null; sentPageToken = null;
     // A one-day overlap prevents timezone/rounding boundary misses. Only
     // actual received_at timestamps decide which entries survive retention.
@@ -823,7 +826,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     // next page only together with the fetched metadata and history cursor.
     for (const folder of ["INBOX", "SENT"] as const) {
       const oldToken = folder === "INBOX" ? inboxPageToken : sentPageToken;
-      if (!oldToken || SYNC_MAX_ITEMS - new Set([...changes, ...deleted]).size < 25) continue;
+      if (!oldToken || SYNC_MAX_ITEMS - touched.size < 25) continue;
       const url = new URL(apiBase + "/messages");
       url.searchParams.set("maxResults", "25");
       url.searchParams.set("labelIds", folder);
