@@ -1,17 +1,23 @@
 name: Browser E2E
+run-name: Browser E2E for ${{ inputs.target_sha }}
 
 # Full browser verification is a manual production-release gate.
 # Run on the exact main SHA intended for deployment; do not run for every PR.
 on:
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Exact 40-character commit SHA to test (the intended deploy target)"
+        required: true
+        type: string
 
 # Manual E2E verification uses isolated synthetic data and no production secrets.
 permissions:
   contents: read
 
 concurrency:
-  group: browser-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: browser-e2e-${{ inputs.target_sha }}
+  cancel-in-progress: false
 
 jobs:
   browser-e2e:
@@ -25,8 +31,30 @@ jobs:
       # pnpm build runs first; Playwright must start that exact production build.
       E2E_SKIP_BUILD: "1"
     steps:
-      - name: Checkout
+      # The dispatch ref selects the workflow definition; this explicit ref selects
+      # the *application commit being tested*, including if main moves meanwhile.
+      - name: Checkout exact target SHA
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Verify exact E2E target SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid target SHA"; exit 1; }
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA" || { echo "Checkout SHA mismatch"; exit 1; }
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            git fetch --no-tags origin main
+            git merge-base --is-ancestor "$TARGET_SHA" FETCH_HEAD || {
+              echo "Release SHA is not reachable from main"; exit 1;
+            }
+          fi
+          echo "VERIFIED_E2E_TARGET_SHA=$TARGET_SHA"
+          echo "### Exact browser E2E target" >> "$GITHUB_STEP_SUMMARY"
+          echo "`$TARGET_SHA`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
