@@ -27,8 +27,11 @@ export async function POST(request: Request) {
     if (typeof body.action !== "string" || !["status", "enable", "disable", "sync"].includes(body.action))
       throw new MailError("Unknown mail sync action", 400);
     action = body.action as string;
-    const limited = enforceRateLimit(request, "mail-sync-" + action,
-      action === "sync" ? 12 : 60, 60 * 60_000);
+    // Owners must always be able to revoke consent and delete metadata,
+    // including during a burst of other sync requests.
+    // Status reads are cheap/read-only; sync still has bounded per-run work.
+    const limited = action === "disable" ? null : enforceRateLimit(request, "mail-sync-" + action,
+      action === "sync" ? 120 : action === "status" ? 1200 : 120, 60 * 60_000);
     if (limited) return json({ error: limited.error }, limited.status);
     const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : "";
     if (action === "status") return json({ accounts: listMailSyncStates(workspaceId) });
