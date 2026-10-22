@@ -805,80 +805,60 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       } else throw error;
     }
   }
+  // One implementation for bootstrap and resumed discovery ensures consistent
+  // pagination error handling, ID validation, retention and budget accounting.
+  const discoveredPages: Array<{ folder: "INBOX" | "SENT"; ids: string[] }> = [];
+  async function discoverFolder(folder: "INBOX" | "SENT", token: string | null, since: number | null) {
+    const url = new URL(apiBase + "/messages");
+    url.searchParams.set("maxResults", "25");
+    url.searchParams.set("labelIds", folder);
+    if (since !== null) url.searchParams.set("q", "after:" + since);
+    if (token) url.searchParams.set("pageToken", token);
+    let result: Record<string, unknown>;
+    try {
+      result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+    } catch (error) {
+      // A stale opaque token can be restarted from the first page; auth and
+      // server failures (or a bad first page) still fail without DB changes.
+      if (!token || !(error instanceof MailError && error.status === 400)) throw error;
+      url.searchParams.delete("pageToken");
+      result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+    }
+    const pageIds = new Set<string>();
+    for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
+      const id = item && typeof item === "object" ? (item as Record<string, unknown>).id : null;
+      if (!gmailId(id)) continue;
+      changes.add(id);
+      touched.add(id);
+      pageIds.add(id);
+    }
+    discoveredPages.push({ folder, ids: [...pageIds] });
+    return nextPage(result.nextPageToken);
+  }
   if (full) {
     changes.clear(); deleted.clear(); touched.clear();
     inboxPageToken = null; sentPageToken = null;
-    // A one-day overlap prevents timezone/rounding boundary misses. Only
-    // actual received_at timestamps decide which entries survive retention.
+    // Freeze the query's cutoff until discovery finishes.
     recoverySinceSeconds = Math.max(0, Math.floor((current - (settings.retention_days + 1) * 86_400_000) / 1000));
     const profile = await googleJson(apiBase + "/profile", { headers }, deadline);
     if (!historyId(profile.historyId)) throw new MailError("Gmail profile history is invalid", 502);
-    // Start the History replay *before* listing messages, so changes that
-    // occur while crawling cannot silently disappear between pages.
+    // Snapshot the History cursor BEFORE listing pages.
     nextHistory = profile.historyId;
     for (const folder of ["INBOX", "SENT"] as const) {
-      const url = new URL(apiBase + "/messages");
-      url.searchParams.set("maxResults", "25");
-      url.searchParams.set("labelIds", folder);
-      url.searchParams.set("q", "after:" + recoverySinceSeconds);
-      const result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
-      for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
-        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
-          const id = (item as Record<string, string>).id;
-          changes.add(id);
-          // Discovery shares the same distinct-ID budget with History. Without
-          // this, both pending folders can each add 25 new message detail reads
-          // after History has already consumed most of the 120-ID allowance.
-          touched.add(id);
-        }
-      }
-      // Absence of a next page is the ONLY positive indication that this
-      // folder's discovery pass has finished. Persist opaque page tokens.
-      const token = nextPage(result.nextPageToken);
+      const token = await discoverFolder(folder, null, recoverySinceSeconds);
       if (folder === "INBOX") inboxPageToken = token;
       else sentPageToken = token;
     }
   } else {
-    // History always takes precedence. Use spare capacity to traverse up to
-    // one page per unfinished folder on each explicit sync, persisting the
-    // next page only together with the fetched metadata and history cursor.
+    // Keep History first; reserve a full 25-ID discovery page before visiting it.
     for (const folder of ["INBOX", "SENT"] as const) {
       const oldToken = folder === "INBOX" ? inboxPageToken : sentPageToken;
       if (!oldToken || SYNC_MAX_ITEMS - touched.size < 25) continue;
-      const url = new URL(apiBase + "/messages");
-      url.searchParams.set("maxResults", "25");
-      url.searchParams.set("labelIds", folder);
-      if (recoverySinceSeconds !== null) url.searchParams.set("q", "after:" + recoverySinceSeconds);
-      url.searchParams.set("pageToken", oldToken);
-      let result: Record<string, unknown>;
-      try {
-        result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
-      } catch (error) {
-        // An opaque Gmail list-page cursor can expire independently of the
-        // History cursor and credentials. Restart only this folder from page
-        // one, without deleting any previously indexed metadata. A 401, 5xx,
-        // or a bad first-page request still fails closed with no DB changes.
-        if (!(error instanceof MailError && error.status === 400)) throw error;
-        url.searchParams.delete("pageToken");
-        result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
-      }
-      for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
-        if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id)) {
-          const id = (item as Record<string, string>).id;
-          changes.add(id);
-          // Discovery shares the same distinct-ID budget with History. Without
-          // this, both pending folders can each add 25 new message detail reads
-          // after History has already consumed most of the 120-ID allowance.
-          touched.add(id);
-        }
-      }
-      const token = nextPage(result.nextPageToken);
+      const token = await discoverFolder(folder, oldToken, recoverySinceSeconds);
       if (folder === "INBOX") inboxPageToken = token;
       else sentPageToken = token;
     }
   }
-  // Once both folders are exhausted the frozen discovery cutoff is unused.
-  if (!inboxPageToken && !sentPageToken) recoverySinceSeconds = null;
   if (!nextHistory) throw new MailError("Gmail did not return a history cursor", 502);
   const fetched: SyncMessage[] = [];
   // Revalidate previously indexed messages missed by a bounded rebootstrap.
@@ -952,6 +932,26 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
       entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
     trimMailIndex(accountId, currentRow.retention_days, Date.now());
+    // Gmail lists newest messages first. Once 250 newer eligible rows are
+    // retained and an entire newly fetched page predates the oldest kept row,
+    // paging further into that folder cannot add anything to this bounded index.
+    // Require dates for ALL page IDs; uncertain/missing metadata stays pending.
+    const boundary = db.prepare(
+      "SELECT COUNT(*) AS total, MIN(received_at) AS oldest FROM mail_sync_messages WHERE account_id=?"
+    ).get(accountId) as { total: number; oldest: number | null };
+    if (boundary.total >= SYNC_KEEP_ITEMS && boundary.oldest !== null) {
+      const fetchedById = new Map(fetched.map((item) => [item.id, item]));
+      for (const page of discoveredPages) {
+        if (page.ids.length > 0 && page.ids.every((id) => {
+          const item = fetchedById.get(id);
+          return item !== undefined && item.received < boundary.oldest!;
+        })) {
+          if (page.folder === "INBOX") inboxPageToken = null;
+          else sentPageToken = null;
+        }
+      }
+    }
+    if (!inboxPageToken && !sentPageToken) recoverySinceSeconds = null;
     db.prepare(`UPDATE mail_sync_accounts SET history_id=?, pending_event_id=?, pending_event_offset=?,
       history_backlog_pending=?, recovery_inbox_page_token=?, recovery_sent_page_token=?,
       recovery_since_seconds=?, last_synced_at=?, updated_at=? WHERE account_id=? AND consent_id=?`)
