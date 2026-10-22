@@ -23,9 +23,10 @@ export async function POST(request: Request) {
     const body = await readJsonBody<Record<string, unknown>>(request, 4096);
     const fencedAgain = fenceRestoredClient(request);
     if (fencedAgain) return fencedAgain;
-    action = typeof body.action === "string" ? body.action : "unknown";
-    if (!["status", "enable", "disable", "sync"].includes(action))
+    // Never copy untrusted request text into security event names.
+    if (!["status", "enable", "disable", "sync"].includes(body.action))
       throw new MailError("Unknown mail sync action", 400);
+    action = body.action as string;
     const limited = enforceRateLimit(request, "mail-sync-" + action,
       action === "sync" ? 12 : 60, 60 * 60_000);
     if (limited) return json({ error: limited.error }, limited.status);
