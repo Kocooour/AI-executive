@@ -838,7 +838,10 @@ test("Mail v4 resumes after five history pages and never checkpoints an oversize
 test("Mail v4 automatically prunes expired metadata independent of sync and UI", async () => {
   const { pruneExpiredMailMetadata, MAIL_RETENTION_SWEEP_MS } = await import("../lib/mail-sync-retention.ts");
   assert.equal(MAIL_RETENTION_SWEEP_MS, 15 * 60_000);
-  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const workspaceId = "mail-v4-fixture", id = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  // Do not reuse the 130 indexed entries from the history pagination fixture.
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "retention@example.com", mail.sealMail("RETENTION-TEST-REFRESH"));
   mail.enableMailSync(workspaceId, id, 7);
   const now = Date.now();
   const insert = database.prepare("INSERT OR REPLACE INTO mail_sync_messages (account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES (?,? ,?,'abcdefabcdef','No body','sender@example.com',?,0,1,0)");
