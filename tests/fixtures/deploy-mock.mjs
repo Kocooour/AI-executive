@@ -108,13 +108,17 @@ switch (name) {
         set("compacted", "1");
         log("outbox-compacted");
       }
-      if (["mailretention", "mailloss"].includes(scenario) &&
+      if (["mailretention", "mailloss", "maildisable"].includes(scenario) &&
           get("head") === target && !fs.existsSync(stateFile("mail-pruned"))) {
         const db = new DatabaseSync(dbFile);
         try {
-          db.prepare("DELETE FROM mail_sync_messages WHERE message_id='expired'").run();
-          if (scenario === "mailloss")
-            db.prepare("DELETE FROM mail_sync_messages WHERE message_id='current'").run();
+          if (scenario === "maildisable")
+            db.prepare("DELETE FROM mail_sync_accounts WHERE account_id='acct'").run();
+          else {
+            db.prepare("DELETE FROM mail_sync_messages WHERE message_id='expired'").run();
+            if (scenario === "mailloss")
+              db.prepare("DELETE FROM mail_sync_messages WHERE message_id='current'").run();
+          }
         } finally { db.close(); }
         set("mail-pruned", "1");
       }
@@ -139,6 +143,16 @@ switch (name) {
     if (args[0] === "install") { log("install"); break; }
     if (args[0] === "build") {
       log("build-" + get("head").slice(0, 1));
+      if (scenario === "mailprestartloss" && get("head") === target &&
+          !fs.existsSync(stateFile("mail-consent-deleted"))) {
+        // Fault injection: code/build work corrupts owner sync consent while
+        // the service is stopped; deployment must detect it before startup.
+        const db = new DatabaseSync(dbFile);
+        try { db.prepare("DELETE FROM mail_sync_accounts WHERE account_id='acct'").run(); }
+        finally { db.close(); }
+        set("mail-consent-deleted", "1");
+        log("mail-prestart-consent-loss");
+      }
       if (scenario === "buildfail" && get("head") === before) {
         // The old-version rebuild runs from the EXIT trap, not from the mainline.
         // Probe with an independent flock FD; it MUST NOT be able to acquire it.
