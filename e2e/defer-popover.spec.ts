@@ -139,6 +139,11 @@ test("after a passed deadline Today is offered without a warning and Lumi says t
   await expect(confirmDialog(page)).toHaveCount(0);
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === dates.today, true);
   expect((await taskOnServer(page, id))?.properties?.deadline).toBe(dates.yesterday);
+  // The scenarios share one instance: complete the overdue task so later Home and attention scenarios do not see it.
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  await row(page, title).locator("button.check").click();
+  await expectOnServer(page, (entity) => entity.id === id && entity.status === "completed", true);
 });
 
 test("Lumi keeps a task with a deadline tomorrow in Today instead of suggesting a deferral", async ({ page }) => {
