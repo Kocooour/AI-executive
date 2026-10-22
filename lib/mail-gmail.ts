@@ -510,6 +510,7 @@ const historyId = (value: unknown): value is string =>
 type SyncRow = {
   account_id: string; workspace_id: string; consent_id: string;
   history_id: string | null; retention_days: number; last_synced_at: number | null;
+  pending_event_id: string | null; pending_event_offset: number;
 };
 type SyncMessage = {
   id: string; thread: string; subject: string; sender: string; received: number;
@@ -582,6 +583,8 @@ export function enableMailSync(workspaceId: string, accountId: string, retention
         consent_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN excluded.consent_id ELSE mail_sync_accounts.consent_id END,
         history_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.history_id END,
         last_synced_at=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.last_synced_at END,
+        pending_event_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.pending_event_id END,
+        pending_event_offset=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN 0 ELSE mail_sync_accounts.pending_event_offset END,
         retention_days=excluded.retention_days, updated_at=excluded.updated_at`)
       .run(accountId, workspaceId, randomUUID(), retentionDays, Date.now(), Date.now());
     trimMailIndex(accountId, retentionDays, Date.now());
@@ -632,6 +635,9 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   let full = !settings.history_id;
   let nextHistory: string | null = null;
   let partial = false;
+  let recovery = false;
+  let pendingEventId: string | null = null;
+  let pendingOffset = 0;
   const changes = new Set<string>();
   const deleted = new Set<string>();
   if (!full) {
@@ -639,6 +645,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       let pageToken = "";
       let page = 0;
       let lastAppliedEventId: string | null = null;
+      const originalPending = settings.pending_event_id;
+      let pendingLocated = originalPending === null;
       while (true) {
         const url = new URL(apiBase + "/history");
         url.searchParams.set("startHistoryId", settings.history_id!);
@@ -649,48 +657,71 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         const response = await googleJson(url.toString(), { headers }, deadline);
         if (!historyId(response.historyId)) throw new MailError("Invalid Gmail history cursor", 502);
         const entries = Array.isArray(response.history) ? response.history : [];
-        let atCapacity = false;
+        let reachedBudget = false;
         for (const event of entries) {
           if (!event || typeof event !== "object") throw new MailError("Invalid Gmail history event", 502);
           const obj = event as Record<string, unknown>;
           if (!historyId(obj.id) ||
               (lastAppliedEventId !== null && BigInt(obj.id) <= BigInt(lastAppliedEventId)))
             throw new MailError("Invalid Gmail history event cursor", 502);
+          if (!pendingLocated) {
+            if (BigInt(obj.id) < BigInt(originalPending!)) continue;
+            if (obj.id !== originalPending) throw new MailError("Pending Gmail history event changed", 409);
+            pendingLocated = true;
+          }
           const updates = new Set<string>();
           const removals = new Set<string>();
           for (const [name, target] of [["messagesAdded", updates], ["messagesDeleted", removals],
             ["labelsAdded", updates], ["labelsRemoved", updates]] as const) {
-            const events = Array.isArray(obj[name]) ? obj[name] : [];
-            for (const record of events) {
+            const records = Array.isArray(obj[name]) ? obj[name] : [];
+            for (const record of records) {
               const message = record && typeof record === "object" ? (record as Record<string, unknown>).message : null;
               const id = message && typeof message === "object" ? (message as Record<string, unknown>).id : null;
               if (gmailId(id)) target.add(id);
             }
           }
-          // Check the cost BEFORE admitting an entire event. A checkpoint can
-          // only point at a fully consumed event, never partway through one.
-          const projected = new Set([...changes, ...deleted, ...updates, ...removals]).size;
-          if (projected > SYNC_MAX_ITEMS) { atCapacity = true; break; }
-          for (const id of updates) changes.add(id);
-          for (const id of removals) deleted.add(id);
+          // The sorted list is deterministic across retries and Gmail pages.
+          // An incomplete event is always requested again from the *previous*
+          // committed history cursor and resumed at the saved offset.
+          const ids = [...new Set([...updates, ...removals])].sort();
+          const offset = obj.id === originalPending ? settings.pending_event_offset : 0;
+          if (!Number.isSafeInteger(offset) || offset < 0 || offset > ids.length)
+            throw new MailError("Gmail history event offset is invalid", 409);
+          const remainingBudget = SYNC_MAX_ITEMS - new Set([...changes, ...deleted]).size;
+          if (remainingBudget <= 0) {
+            partial = true; reachedBudget = true;
+            nextHistory = lastAppliedEventId ?? settings.history_id;
+            break;
+          }
+          const consumed = ids.slice(offset, offset + remainingBudget);
+          for (const id of consumed) {
+            if (updates.has(id)) changes.add(id);
+            if (removals.has(id)) deleted.add(id);
+          }
+          if (offset + consumed.length < ids.length) {
+            // Fully consume an event before advancing history_id. A giant
+            // single record (121+ IDs) can take multiple manual syncs.
+            pendingEventId = obj.id;
+            pendingOffset = offset + consumed.length;
+            nextHistory = lastAppliedEventId ?? settings.history_id;
+            partial = true; reachedBudget = true;
+            break;
+          }
           lastAppliedEventId = obj.id;
+          pendingEventId = null;
+          pendingOffset = 0;
         }
-        // A backlog is replayed over subsequent explicit sync requests. Never
-        // discard the existing index or checkpoint beyond events not processed.
-        if (atCapacity) {
-          if (!lastAppliedEventId) throw new MailError("Gmail history event exceeds sync budget; retry later", 409);
-          nextHistory = lastAppliedEventId;
-          partial = true;
-          break;
-        }
+        if (reachedBudget) break;
         if (!response.nextPageToken) {
+          if (!pendingLocated) throw new MailError("Pending Gmail history event disappeared", 409);
           nextHistory = response.historyId;
           break;
         }
         if (typeof response.nextPageToken !== "string" || response.nextPageToken.length > 512)
           throw new MailError("Invalid Gmail history page", 502);
         if (++page >= 5) {
-          if (!lastAppliedEventId) throw new MailError("Gmail history page exceeds sync budget", 409);
+          if (!pendingLocated || !lastAppliedEventId)
+            throw new MailError("Gmail history page exceeds sync budget", 409);
           nextHistory = lastAppliedEventId;
           partial = true;
           break;
@@ -700,7 +731,8 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     } catch (error) {
       // Gmail expires old history IDs. Rebuild from a recent bounded snapshot,
       // never advance the cursor past data we failed to read.
-      if (error instanceof MailError && error.status === 404) full = true;
+      if (error instanceof MailError && error.status === 404) { full = true; recovery = true; partial = true; }
+      
       else throw error;
     }
   }
@@ -748,24 +780,32 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     // Consent and cursor compare prevent stale or overlapping sync commits.
     // A disable/re-enable gets a new consent_id, defeating ABA races.
     if (generation !== currentRestoreGeneration() ||
-        currentRow.consent_id !== settings.consent_id || currentRow.history_id !== settings.history_id)
+        currentRow.consent_id !== settings.consent_id || currentRow.history_id !== settings.history_id ||
+        currentRow.pending_event_id !== settings.pending_event_id || currentRow.pending_event_offset !== settings.pending_event_offset)
       throw new MailError("Gmail sync configuration changed; retry", 409);
     accountCredentials(workspaceId, accountId);
-    if (full) db.prepare("DELETE FROM mail_sync_messages WHERE account_id=?").run(accountId);
+    if (full) {
+      // A bounded 25+25 bootstrap is not an exhaustive snapshot. Preserve
+      // other still-retained metadata after an expired history cursor.
+    }
     else {
       const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
       for (const id of new Set([...changes, ...deleted])) clear.run(accountId, id);
     }
     const insert = db.prepare(`INSERT INTO mail_sync_messages
       (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, message_id) DO UPDATE SET
+        thread_id=excluded.thread_id, subject=excluded.subject,
+        sender=excluded.sender, received_at=excluded.received_at,
+        unread=excluded.unread, in_inbox=excluded.in_inbox, in_sent=excluded.in_sent`);
     for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
       entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
     trimMailIndex(accountId, currentRow.retention_days, Date.now());
-    db.prepare("UPDATE mail_sync_accounts SET history_id=?, last_synced_at=?, updated_at=? WHERE account_id=? AND consent_id=?")
-      .run(nextHistory, Date.now(), Date.now(), accountId, settings.consent_id);
+    db.prepare("UPDATE mail_sync_accounts SET history_id=?, pending_event_id=?, pending_event_offset=?, last_synced_at=?, updated_at=? WHERE account_id=? AND consent_id=?")
+      .run(nextHistory, pendingEventId, pendingOffset, Date.now(), Date.now(), accountId, settings.consent_id);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
-  return { full, updated: fetched.length, historyId: nextHistory,
+  return { full, recovery, updated: fetched.length, historyId: nextHistory,
     partial, state: listMailSyncStates(workspaceId).find((s) => s.accountId === accountId) };
 }
