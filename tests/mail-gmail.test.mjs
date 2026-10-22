@@ -1011,7 +1011,9 @@ test("Mail v4 recovers all 80 new Inbox messages across durable Gmail list pages
     const url = new URL(String(target));
     if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
     if (url.pathname === "/gmail/v1/users/me/history") {
-      assert.equal(url.searchParams.get("startHistoryId"), expired ? "100" : "500");
+      const since = url.searchParams.get("startHistoryId");
+      assert(expired ? since === "100" : since === "500" || since === "501",
+        "history replay advances independently of recovery page traversal");
       return expired ? Response.json({ error: "expired" }, { status: 404 })
         : Response.json({ historyId: "501", history: [] });
     }
