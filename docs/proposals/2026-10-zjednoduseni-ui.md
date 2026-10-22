@@ -176,7 +176,7 @@ Projekt se otevře jako **hlavní pohled** (jako v Things), ne v inspektoru vedl
 3. poznámky a zdroje (e-maily, schůzky),
 4. sbalená sekce „Podrobnosti“: oblast, termín projektu, poslední aktivita, „Co Lumi ví“ (claims), historie.
 
-Inspektor vpravo slouží jen pro detail úkolu otevřeného ze stránky projektu. **Oblasti** přestanou být samostatná hlavní položka a v seznamu projektů se z nich stanou skupiny (Práce, Domov, Bez oblasti), stejně jako v Things. Pohled Oblasti zůstane dostupný přes „Další pohledy“.
+Inspektor vpravo slouží jen pro detail úkolu otevřeného ze stránky projektu. **Oblasti** přestanou být samostatná hlavní položka a v seznamu projektů se z nich stanou skupiny (Práce, Domov, Bez oblasti), stejně jako v Things. Pohled Oblasti zůstane dostupný přes „Další pohledy“. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)*
 
 ### 4.5 Akceptační kritéria
 1. Nový projekt má po založení prázdný kontext s nápovědou. Seznam projektů bez kontextu ukáže „Doplňte, proč je projekt důležitý“, ne prázdné místo.
@@ -191,7 +191,7 @@ Inspektor vpravo slouží jen pro detail úkolu otevřeného ze stránky projekt
 ### 5.1 Navigace
 Desktop sidebar: **Domů · Doručené · Dnes · Nadcházející · Projekty · Kalendář** a pod čarou seznam aktivních projektů (jako v Things, max. 7, s průběhem). Dál:
 - **Poznámky a Hledání** zůstanou dostupné přes ⌘K a přes „Další pohledy“. Hledání v topbaru už existuje. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
-- **Pošta** se přesune z Nastavení do Doručených jako záložka/filtr „Z pošty“ (seznam vláken z připojených účtů, otevření, „Vytvořit úkol“, později „Navrhnout projekt“). Nastavení → Pošta zůstane jen pro připojení účtu.
+- **Pošta** se přesune z Nastavení do Doručených jako záložka/filtr „Z pošty“ (seznam vláken z připojených účtů, otevření, „Vytvořit úkol“, později „Navrhnout projekt“). Nastavení → Pošta zůstane jen pro připojení účtu. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)*
 - Počty v sidebaru jen tam, kde vyjadřují práci: Doručené (k roztřídění), Dnes (otevřené dnes). U Projektů místo počtu červená tečka, když některý projekt potřebuje pozornost.
 - Mobil: spodní lišta **Domů · Doručené · Dnes · Projekty · Více**. Kalendář se přesune do „Více“ a na Dnes (pás událostí nahoře, viz §5.3). *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
 
@@ -282,7 +282,7 @@ Obě varianty: **nic se nevytvoří bez potvrzení**. Výstupem je vždy návrh 
 ### 6.3 Kontrakt modelu
 - Vstup: výřez vlákna + seznam názvů a kontextů existujících projektů v témže workspace (kvůli deduplikaci). Nic z jiného workspace.
 - Výstup: striktní JSON (`title`, `why`, `goals[]`, `doneWhen`, `steps[{title, when?, deadline?, evidence}]`, `matchProjectId?`), validovaný serverem. Každý krok musí mít `evidence` = citaci z e-mailu, jinak se zahodí. Data se parsují deterministicky (`local-dates.ts`), ne modelem.
-- Citlivé/confidential zdroje se modelu nepošlou (dnešní pravidla citlivosti).
+- Citlivé/confidential zdroje jdou jen do Hermesu, nikdy do záložního modelu (potvrzeno vlastníkem 22. 10. 2026).
 
 ### 6.4 Vyhodnocení, zda to Hermes zvládne
 Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntetických** českých a smíšených vláknech (min. 20 vláken: nabídka, organizace akce, reklamace, interní úkolování, newsletter jako negativní případ). Vyhodnocuje se Hermes i záložní model na stejné sadě. Model analýzu „zvládne“, když:
@@ -291,7 +291,7 @@ Před zapnutím funkce pro vlastníka proběhne offline vyhodnocení na **syntet
 - u negativních případů (newsletter, notifikace) navrhne „žádný projekt“ v ≥ 90 %,
 - odpověď do 60 s na vlákno do 8 000 znaků.
 
-Výsledky se zapíšou do PR. Pokud prahy nesplní Hermes, ale splní je záložní model, bude záložní model pro poštu primární a Hermes se zkusí znovu po úpravě promptu nebo výřezu. Pokud je nesplní žádný model, funkce zůstane vypnutá a vlastník dostane výsledky.
+Výsledky se zapíšou do PR. Pokud prahy nesplní Hermes, ale splní je záložní model, bude záložní model pro poštu primární a Hermes se zkusí znovu po úpravě promptu nebo výřezu (potvrzeno vlastníkem 22. 10. 2026). Pokud je nesplní žádný model, funkce zůstane vypnutá a vlastník dostane výsledky.
 
 ### 6.5 Akceptační kritéria
 1. Bez kliknutí vlastníka se žádný e-mail modelu neodešle (C1). Test to ověří na mocku Gmailu a poskytovatele.
@@ -314,8 +314,9 @@ Výsledky se zapíšou do PR. Pokud prahy nesplní Hermes, ale splní je zálož
 | E6 | Pole „Seznam“ a „Kdy“ v detailu mohou odporovat (např. Seznam = Někdy, Kdy = 25. 10.) | `detail-panel.tsx` | Úkol na dvou místech nebo nikde | §5.4: jeden model `inbox` + `when`/`someday` |
 | E7 | Pošta jen v Nastavení | `settings-view.tsx` | Funkce se nepoužívá | §5.1 |
 | E8 | Kalendář bez připojení ukazuje nepopsaný seznam úkolů | `calendar-view.tsx` | Nejasné | Nadpis „Úkoly bez času“ nebo odkaz do Dnes |
+| E9 | Filtr „Po termínu“ ukazuje úkoly s prošlým plánovaným dnem, ne s prošlým termínem | `lib/task-views.ts` (`taskMatchesView`, Overdue) | Stejný omyl jako E1 | Filtrovat podle `deadline`. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno.)* |
 
-E1–E4 jsou malé a bezpečné opravy. Doporučuji je jako první PR, protože nepotřebují žádné produktové rozhodnutí.
+E1–E4, E8 a E9 jdou jako první PR, v samostatné větvi mimo tento návrh (rozhodnutí vlastníka 22. 10. 2026).
 
 ---
 
@@ -343,4 +344,6 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 2. ~~**B:** Smí Lumi navrhovat text kontextu projektu?~~ **Rozhodnuto 22. 10.:** ano, vždy přes schválení.
 3. ~~**Navigace:** Poznámky a Hledání mimo hlavní sidebar, Projekty místo Kalendáře na mobilu?~~ **Rozhodnuto 22. 10.:** ano.
 4. ~~**Odklad:** „Příští týden“ = pondělí? Skupina „Dnes večer“?~~ **Rozhodnuto 22. 10.:** pondělí, „Dnes večer“ ano.
-5. Mám začít PR 1 (opravy E1–E4, bez produktového rozhodnutí) hned?
+5. ~~Mám začít PR 1 hned?~~ **Rozhodnuto 22. 10.:** ano, jako samostatné PR včetně E9.
+
+Další rozhodnutí 22. 10.: Oblasti jako skupiny v Projektech (ano), Pošta v Doručených (ano), pravidla pro citlivé e-maily a primární záložní model z §6 (ano).
