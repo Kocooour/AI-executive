@@ -631,14 +631,15 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   const current = Date.now();
   let full = !settings.history_id;
   let nextHistory: string | null = null;
+  let partial = false;
   const changes = new Set<string>();
   const deleted = new Set<string>();
   if (!full) {
     try {
       let pageToken = "";
       let page = 0;
+      let lastAppliedEventId: string | null = null;
       while (true) {
-        if (++page > 5) { full = true; break; }
         const url = new URL(apiBase + "/history");
         url.searchParams.set("startHistoryId", settings.history_id!);
         url.searchParams.set("maxResults", "100");
@@ -647,25 +648,52 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
           url.searchParams.append("historyTypes", type);
         const response = await googleJson(url.toString(), { headers }, deadline);
         if (!historyId(response.historyId)) throw new MailError("Invalid Gmail history cursor", 502);
-        nextHistory = response.historyId;
         const entries = Array.isArray(response.history) ? response.history : [];
+        let atCapacity = false;
         for (const event of entries) {
-          if (!event || typeof event !== "object") continue;
+          if (!event || typeof event !== "object") throw new MailError("Invalid Gmail history event", 502);
           const obj = event as Record<string, unknown>;
-          for (const [name, target] of [["messagesAdded", changes], ["messagesDeleted", deleted],
-            ["labelsAdded", changes], ["labelsRemoved", changes]] as const) {
-            const set = Array.isArray(obj[name]) ? obj[name] : [];
-            for (const record of set) {
+          if (!historyId(obj.id) ||
+              (lastAppliedEventId !== null && BigInt(obj.id) <= BigInt(lastAppliedEventId)))
+            throw new MailError("Invalid Gmail history event cursor", 502);
+          const updates = new Set<string>();
+          const removals = new Set<string>();
+          for (const [name, target] of [["messagesAdded", updates], ["messagesDeleted", removals],
+            ["labelsAdded", updates], ["labelsRemoved", updates]] as const) {
+            const events = Array.isArray(obj[name]) ? obj[name] : [];
+            for (const record of events) {
               const message = record && typeof record === "object" ? (record as Record<string, unknown>).message : null;
               const id = message && typeof message === "object" ? (message as Record<string, unknown>).id : null;
               if (gmailId(id)) target.add(id);
             }
           }
+          // Check the cost BEFORE admitting an entire event. A checkpoint can
+          // only point at a fully consumed event, never partway through one.
+          const projected = new Set([...changes, ...deleted, ...updates, ...removals]).size;
+          if (projected > SYNC_MAX_ITEMS) { atCapacity = true; break; }
+          for (const id of updates) changes.add(id);
+          for (const id of removals) deleted.add(id);
+          lastAppliedEventId = obj.id;
         }
-        if (changes.size + deleted.size > SYNC_MAX_ITEMS) { full = true; break; }
-        if (!response.nextPageToken) break;
+        // A backlog is replayed over subsequent explicit sync requests. Never
+        // discard the existing index or checkpoint beyond events not processed.
+        if (atCapacity) {
+          if (!lastAppliedEventId) throw new MailError("Gmail history event exceeds sync budget; retry later", 409);
+          nextHistory = lastAppliedEventId;
+          partial = true;
+          break;
+        }
+        if (!response.nextPageToken) {
+          nextHistory = response.historyId;
+          break;
+        }
         if (typeof response.nextPageToken !== "string" || response.nextPageToken.length > 512)
           throw new MailError("Invalid Gmail history page", 502);
+        if (++page >= 5) {
+          if (!lastAppliedEventId) throw new MailError("Gmail history page exceeds sync budget", 409);
+          nextHistory = lastAppliedEventId;
+          break;
+        }
         pageToken = response.nextPageToken;
       }
     } catch (error) {
@@ -738,5 +766,5 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
   return { full, updated: fetched.length, historyId: nextHistory,
-    state: listMailSyncStates(workspaceId).find((s) => s.accountId === accountId) };
+    partial, state: listMailSyncStates(workspaceId).find((s) => s.accountId === accountId) };
 }
