@@ -82,7 +82,7 @@ test("Today is one list: no plan card, no idle work card, a time cell per planne
     // "Jiný čas" opens the task detail.
     await proposedCell.click();
     await page.locator(`[data-time-menu="${proposed.id}"]`).getByRole("button", { name: "Jiný čas" }).click();
-    await expect(page.locator("aside.detail")).toContainText(proposed.title);
+    await expect(page.locator("aside.detail")).toHaveAttribute("aria-label", `Úkol: ${proposed.title}`);
     await page.locator("aside.detail button.close").click();
     // An unscheduled task has no "Přijmout".
     await row(page, unscheduled.title).locator("[data-time-cell]").click();
@@ -147,18 +147,18 @@ test("Priorita and Řazení are in the ⋯ menu of the Today header; one calenda
     await waitUntilSynced(page);
     await expect(row(page, plain.title)).toBeVisible();
     // Not on the page until the menu is opened.
-    await expect(page.getByLabel("Priorita")).toHaveCount(0);
+    await expect(page.locator(".todayOptionsBody select").first()).toHaveCount(0);
     const menuButton = page.locator("[data-today-menu]");
     await expect(menuButton).toHaveAccessibleName("Filtry a řazení");
     await menuButton.click();
-    await expect(page.getByLabel("Řazení")).toBeVisible();
-    await page.getByLabel("Priorita").selectOption("high");
+    await expect(page.locator(".todayOptionsBody select").nth(1)).toBeVisible();
+    await page.locator(".todayOptionsBody select").first().selectOption("high");
     await expect(row(page, plain.title)).toHaveCount(0);
     await expect(row(page, high.title)).toBeVisible();
-    await page.getByLabel("Priorita").selectOption("all");
+    await page.locator(".todayOptionsBody select").first().selectOption("all");
     await expect(row(page, plain.title)).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByLabel("Priorita")).toHaveCount(0);
+    await expect(page.locator(".todayOptionsBody select").first()).toHaveCount(0);
     await expect(menuButton).toBeFocused();
     // The test instance has no calendar: one quiet sentence with one link, not three mentions.
     await expect(page.locator(".content").getByText("Kalendář není připojen")).toHaveCount(1);
@@ -173,7 +173,7 @@ test("Priorita and Řazení are in the ⋯ menu of the Today header; one calenda
 test("with more than six tasks Today ends with one Lumi suggestion: Použít moves the task with Undo, Skrýt hides it for the day", async ({ page }) => {
   const id = stamp();
   // Last in the manual order, so the suggestion picks the last of these and no task of another scenario.
-  const base = Date.now() + 1e12;
+  const base = 9e15;
   const tasks = Array.from({ length: 7 }, (_, index) => ({ id: `e2e-d2-full-${id}-${index}`, title: `Plný den ${index + 1} ${id}`, properties: { today: true, manualOrder: base + index } }));
   const last = tasks[6];
   await page.goto("/?view=Today");
@@ -212,7 +212,7 @@ test("with more than six tasks Today ends with one Lumi suggestion: Použít mov
 
 test("Home: one primary action per attention item, the rest in the ⋯ menu, the evaluation time once, Dnes without attention subjects", async ({ page }) => {
   const id = stamp();
-  const overdue = { id: `e2e-d2-over-${id}`, title: `Po termínu ${id}` };
+  const overdue = { id: `e2e-d2-over-${id}`, title: `Prošlý termín ${id}` };
   const waiting = { id: `e2e-d2-wait-${id}`, title: `Čeká ${id}` };
   const dueToday = { id: `e2e-d2-both-${id}`, title: `Dnes i po termínu ${id}` };
   const plainToday = { id: `e2e-d2-only-${id}`, title: `Jen dnes ${id}` };
@@ -259,7 +259,7 @@ test("Home: one primary action per attention item, the rest in the ⋯ menu, the
 
     // The title opens the subject.
     await item(waiting.title).locator(".attentionTitleButton").click();
-    await expect(page.locator("aside.detail")).toContainText(waiting.title);
+    await expect(page.locator("aside.detail")).toHaveAttribute("aria-label", `Úkol: ${waiting.title}`);
     await page.locator("aside.detail button.close").click();
 
     // Home's Dnes leaves out the task that attention already shows, and counts the same set.
@@ -302,7 +302,7 @@ test.describe("on a 390px phone", () => {
 
   test("Home items keep 44px targets, the + button never covers an action and nothing scrolls sideways", async ({ page }) => {
     const id = stamp();
-    const overdue = { id: `e2e-d2-m-over-${id}`, title: `Mobil po termínu ${id}` };
+    const overdue = { id: `e2e-d2-m-over-${id}`, title: `Mobil prošlý termín ${id}` };
     const waiting = { id: `e2e-d2-m-wait-${id}`, title: `Mobil čeká ${id}` };
     await page.goto("/");
     await waitUntilSynced(page);

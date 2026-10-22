@@ -20,8 +20,9 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
   await page.goto("/");
   await waitUntilSynced(page);
   // Sources are in the item's "⋯" menu.
-  await page.locator(".attentionItem").first().getByRole("button", { name: /^Další akce/ }).click();
-  await page.locator(".attentionItem").first().getByRole("menuitem", { name: "Zdroje" }).click();
+  // By class and position, so that the walk works in both interface languages (Sources is the last entry).
+  await page.locator(".attentionItem").first().locator(".attentionMenuButton").click();
+  await page.locator(".attentionItem").first().getByRole("menuitem").last().click();
   await page.locator(".attentionLimits summary").first().click();
   await record("Home, attention details");
   await page.goto("/?view=Settings");
