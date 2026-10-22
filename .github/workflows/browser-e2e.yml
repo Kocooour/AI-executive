@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       approval_reference:
-        description: "Non-main only: link to the project owner\u0027s explicit prior approval"
+        description: "Non-main only: link to the owner's explicit prior approval"
         required: false
         type: string
 
