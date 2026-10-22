@@ -64,3 +64,35 @@ for (const width of [390, 1280]) {
     if (width === 390) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   });
 }
+
+
+test("Mail v4 status API outage does not hide connected Gmail accounts", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const accountId = "11111111-1111-4111-8111-111111111111";
+  await page.route("**/api/mail/gmail?*", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      accounts: [{ id: accountId, workspaceId: "personal", email: "survives@example.com" }],
+    }) });
+  });
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json",
+      body: '{"error":"Mail sync failed"}' });
+  });
+  await page.route("**/api/mail/gmail/messages", async (route) => {
+    expect(route.request().postDataJSON().accountId).toBe(accountId);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ messages: [{
+      id: "abcdef1234", threadId: "abcdef1234", subject: "Mailbox still readable",
+      from: "sender@example.com", to: "survives@example.com", date: "today",
+      snippet: "No sync status required", unread: false,
+    }] }) });
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("survives@example.com")).toBeVisible();
+  await expect(section.getByText("Stav synchronizace není dostupný.", { exact: false })).toBeVisible();
+  await expect(section.getByRole("button", { name: "Odpojit" })).toBeVisible();
+  await section.getByRole("button", { name: "Doručené" }).click();
+  await expect(section).toContainText("Mailbox still readable");
+});
