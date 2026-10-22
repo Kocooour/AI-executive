@@ -81,8 +81,11 @@ export function getDatabase() {
     initialiseDatabase(database);
     removeLeftoverTemporaryFiles();
     repairBackupsDirectory();
-    // Do not defer privacy retention until a user visits the Mail settings.
-    pruneExpiredMailMetadata(database);
+    // Retention is best-effort at startup. A transient SQLITE_BUSY from a
+    // maintenance writer must not take the entire application offline; the
+    // independent 15-minute scheduler retries this privacy cleanup.
+    try { pruneExpiredMailMetadata(database); }
+    catch (error) { console.error("Mail retention startup sweep failed:", error instanceof Error ? error.name : "unknown"); }
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
