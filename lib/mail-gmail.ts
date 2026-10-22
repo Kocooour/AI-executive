@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 import { currentRestoreGeneration } from "./restore-fence";
+import { pruneExpiredMailAccount } from "./mail-sync-retention";
 
 export const gmailScope = "https://www.googleapis.com/auth/gmail.readonly";
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -15,6 +16,15 @@ const MESSAGE_DETAIL_CONCURRENCY = 5;
 export class MailError extends Error {
   status: number;
   constructor(message: string, status = 400) { super(message); this.status = status; }
+}
+
+// A broken saved History checkpoint requires non-destructive reconciliation,
+// not an ordinary retryable consent/restore conflict.
+class MailHistoryCheckpointError extends MailError {
+  constructor(message: string) { super(message, 409); }
+}
+class MailReplyTooLargeError extends MailError {
+  constructor() { super("Gmail response is too large", 502); }
 }
 
 export function mailKey() {
@@ -128,7 +138,8 @@ function gmailE2EEndpoint(value: string) {
   return new URL(original.pathname + original.search, raw).toString();
 }
 
-async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number, maxBytes = MAX_REPLY): Promise<Record<string, unknown>> {
+async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: number,
+  maxBytes = MAX_REPLY, allowSyncBadRequest = false): Promise<Record<string, unknown>> {
   const remaining = deadlineAt === undefined ? REQUEST_TIMEOUT_MS : Math.min(REQUEST_TIMEOUT_MS, deadlineAt - Date.now());
   if (remaining <= 0) throw new MailError("Gmail request timed out", 502);
   let response: Response;
@@ -136,7 +147,17 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
     response = await fetch(gmailE2EEndpoint(url), { ...options, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(remaining) });
   } catch { throw new MailError("Gmail is temporarily unavailable", 502); }
   if (!response.ok) {
-    if (response.status === 400 || response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
+    // Bad Request can mean an expired messages.list page token, not expired
+    // OAuth credentials. Preserve that distinction for safe discovery recovery.
+    if (response.status === 400) {
+      // The OAuth token endpoint uses HTTP 400 for invalid_grant (expired or
+      // revoked refresh tokens); this *is* an authorization problem. Gmail's
+      // messages.list HTTP 400 must stay distinct for pagination recovery.
+      if (url === tokenUrl || !allowSyncBadRequest)
+        throw new MailError("Gmail authorization was refused or expired", 401);
+      throw new MailError("Gmail request was invalid", 400);
+    }
+    if (response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
     if (response.status === 404) throw new MailError("Gmail item no longer exists", 404);
     throw new MailError("Gmail request failed", 502);
   }
@@ -149,7 +170,7 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > maxBytes) throw new MailError("Gmail response is too large", 502);
+      if (bytes > maxBytes) throw new MailReplyTooLargeError();
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -493,4 +514,457 @@ export async function readGmailThread(input: { workspaceId: string; accountId: s
   if (generation !== currentRestoreGeneration()) throw new MailError("Data was restored; retry Gmail", 409);
   accountCredentials(input.workspaceId, input.accountId);
   return { id: input.threadId, total: all.length, omitted: all.length - last.length, messages };
+}
+
+
+// Mail v4: opt-in Gmail History synchronizer. Only bounded metadata is kept;
+// snippets, MIME content, attachments, HTML, tokens and Google search queries
+// are never persisted. Network reads happen outside the SQLite write lock.
+const SYNC_DEADLINE_MS = 45_000;
+const SYNC_MAX_ITEMS = 120;
+const SYNC_KEEP_ITEMS = 250;
+const SYNC_RETAIN_DAYS = [7, 30, 90] as const;
+const gmailId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{5,64}$/i.test(value);
+const historyId = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9]{1,30}$/.test(value);
+type SyncRow = {
+  account_id: string; workspace_id: string; consent_id: string;
+  history_id: string | null; retention_days: number; last_synced_at: number | null;
+  pending_event_id: string | null; pending_event_offset: number;
+  history_backlog_pending: number;
+  recovery_inbox_page_token: string | null; recovery_sent_page_token: string | null;
+  recovery_since_seconds: number | null;
+};
+type SyncMessage = {
+  id: string; thread: string; subject: string; sender: string; received: number;
+  unread: number; inbox: number; sent: number;
+};
+export type MailSyncState = {
+  accountId: string; workspaceId: string; enabled: boolean;
+  retentionDays: number; lastSyncedAt: number | null; indexedCount: number;
+  reconciliationPending: number;
+  historyPending: boolean; discoveryPending: boolean;
+};
+
+function syncRow(workspaceId: string, accountId: string): SyncRow | undefined {
+  return getDatabase().prepare("SELECT * FROM mail_sync_accounts WHERE workspace_id=? AND account_id=?")
+    .get(workspaceId, accountId) as SyncRow | undefined;
+}
+
+function requireSyncAccount(workspaceId: string, accountId: string) {
+  const row = syncRow(workspaceId, accountId);
+  if (!row) throw new MailError("Gmail sync is not enabled", 404);
+  return row;
+}
+
+function trimMailIndex(accountId: string, retentionDays: number, now: number) {
+  const db = getDatabase();
+  pruneExpiredMailAccount(db, accountId, retentionDays, now);
+  db.prepare(`DELETE FROM mail_sync_messages WHERE account_id = ? AND message_id NOT IN
+    (SELECT message_id FROM mail_sync_messages WHERE account_id = ?
+     ORDER BY received_at DESC, message_id DESC LIMIT ?)`)
+    .run(accountId, accountId, SYNC_KEEP_ITEMS);
+}
+
+export function listMailSyncStates(workspaceId: string): MailSyncState[] {
+  requireMailWorkspace(workspaceId);
+  const db = getDatabase();
+  // Read-only status: retention is enforced by the independent 15-minute
+  // scheduler, at startup (best effort), and on writes. A status read must not
+  // lock SQLite for writes or fail due to an unrelated retention sweep.
+  return (db.prepare(`SELECT a.id AS account_id, a.workspace_id, s.retention_days, s.last_synced_at,
+      s.pending_event_id, s.history_backlog_pending,
+      s.recovery_inbox_page_token, s.recovery_sent_page_token,
+      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id) AS indexed_count,
+      (SELECT COUNT(*) FROM mail_sync_messages m WHERE m.account_id=a.id AND m.needs_reconcile=1) AS reconciliation_pending
+    FROM mail_accounts a JOIN mail_sync_accounts s ON s.account_id=a.id AND s.workspace_id=a.workspace_id
+    WHERE a.provider='gmail' AND a.workspace_id=? ORDER BY a.email`).all(workspaceId) as Array<{
+      account_id: string; workspace_id: string; retention_days: number;
+      last_synced_at: number | null; indexed_count: number; reconciliation_pending: number;
+      pending_event_id: string | null; history_backlog_pending: number;
+      recovery_inbox_page_token: string | null; recovery_sent_page_token: string | null;
+    }>).map((r) => ({
+      accountId: r.account_id, workspaceId: r.workspace_id, enabled: true,
+      retentionDays: r.retention_days, lastSyncedAt: r.last_synced_at,
+      indexedCount: r.indexed_count, reconciliationPending: r.reconciliation_pending,
+      historyPending: r.pending_event_id !== null || r.history_backlog_pending !== 0,
+      discoveryPending: r.recovery_inbox_page_token !== null || r.recovery_sent_page_token !== null,
+    }));
+}
+
+export function enableMailSync(workspaceId: string, accountId: string, retentionDays: number): void {
+  if (!SYNC_RETAIN_DAYS.includes(retentionDays as 7 | 30 | 90))
+    throw new MailError("Mail retention must be 7, 30 or 90 days", 400);
+  accountCredentials(workspaceId, accountId);
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = syncRow(workspaceId, accountId);
+    const now = Date.now();
+    if (!existing) {
+      db.prepare(`INSERT INTO mail_sync_accounts
+        (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`)
+        .run(accountId, workspaceId, randomUUID(), retentionDays, now, now);
+    } else if (existing.retention_days !== retentionDays) {
+      // One explicit reset of ALL checkpoints when owner changes retention.
+      // Keep indexed metadata for non-destructive revalidation on next sync.
+      db.prepare(`UPDATE mail_sync_accounts SET
+        consent_id=?, history_id=NULL, last_synced_at=NULL,
+        pending_event_id=NULL, pending_event_offset=0,
+        history_backlog_pending=0,
+        recovery_inbox_page_token=NULL, recovery_sent_page_token=NULL,
+        recovery_since_seconds=NULL,
+        retention_days=?, updated_at=?
+        WHERE account_id=? AND workspace_id=?`)
+        .run(randomUUID(), retentionDays, now, accountId, workspaceId);
+    }
+    trimMailIndex(accountId, retentionDays, Date.now());
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+export function disableMailSync(workspaceId: string, accountId: string) {
+  // Erasing local metadata must work without reading or decrypting credentials.
+  requireMailWorkspace(workspaceId);
+  const account = getDatabase().prepare(
+    "SELECT id FROM mail_accounts WHERE id=? AND workspace_id=? AND provider='gmail'"
+  ).get(accountId, workspaceId);
+  if (!account) throw new MailError("Mail account not found", 404);
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM mail_sync_accounts WHERE workspace_id=? AND account_id=?")
+      .run(workspaceId, accountId);
+    // Triggers clear every indexed message, even if the sync was active.
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+}
+
+function parseMailSyncMessage(raw: Record<string, unknown>, retentionDays: number, now: number): SyncMessage | null {
+  if (!gmailId(raw.id) || !gmailId(raw.threadId)) return null;
+  const labels = Array.isArray(raw.labelIds) ? raw.labelIds : [];
+  if (!labels.includes("INBOX") && !labels.includes("SENT")) return null;
+  if (["SPAM", "TRASH", "DRAFT"].some((x) => labels.includes(x))) return null;
+  const stamp = typeof raw.internalDate === "string" && /^[0-9]{1,16}$/.test(raw.internalDate)
+    ? Number(raw.internalDate) : NaN;
+  if (!Number.isSafeInteger(stamp) || stamp < now - retentionDays * 86_400_000 || stamp > now + 86_400_000) return null;
+  const payload = raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+    ? raw.payload as GmailPart : {};
+  return {
+    id: raw.id, thread: raw.threadId,
+    subject: gmailHeader(payload, "Subject").slice(0, 240),
+    sender: gmailHeader(payload, "From").slice(0, 240),
+    received: stamp, unread: Number(labels.includes("UNREAD")),
+    inbox: Number(labels.includes("INBOX")), sent: Number(labels.includes("SENT")),
+  };
+}
+
+export async function syncMailAccount(workspaceId: string, accountId: string) {
+  const settings = requireSyncAccount(workspaceId, accountId);
+  const refresh = accountCredentials(workspaceId, accountId);
+  const generation = currentRestoreGeneration();
+  const deadline = Date.now() + SYNC_DEADLINE_MS;
+  const token = await freshAccessToken(refresh, deadline);
+  const headers = { authorization: "Bearer " + token };
+  const current = Date.now();
+  let full = !settings.history_id;
+  let nextHistory: string | null = null;
+  let partial = false;
+  let recovery = false;
+  let historyIncomplete = false;
+  let pendingEventId: string | null = null;
+  let pendingOffset = 0;
+  let inboxPageToken: string | null = settings.recovery_inbox_page_token;
+  let sentPageToken: string | null = settings.recovery_sent_page_token;
+  // Opaque Gmail page tokens are tied to their original list parameters.
+  // Keep this cutoff fixed across manually triggered continuation requests.
+  let recoverySinceSeconds: number | null = settings.recovery_since_seconds;
+  const nextPage = (value: unknown): string | null => {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "string" || value.length === 0 || value.length > 512)
+      throw new MailError("Invalid Gmail message page token", 502);
+    return value;
+  };
+  const changes = new Set<string>();
+  const deleted = new Set<string>();
+  // Track distinct touched IDs incrementally rather than rebuilding Sets per event.
+  const touched = new Set<string>();
+  if (!full) {
+    try {
+      let pageToken = "";
+      let page = 0;
+      let lastAppliedEventId: string | null = null;
+      const originalPending = settings.pending_event_id;
+      let pendingLocated = originalPending === null;
+      while (true) {
+        const url = new URL(apiBase + "/history");
+        url.searchParams.set("startHistoryId", settings.history_id!);
+        if (pageToken) url.searchParams.set("pageToken", pageToken);
+        for (const type of ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"])
+          url.searchParams.append("historyTypes", type);
+        // A History page can contain thousands of IDs even at maxResults=1.
+        // Narrow multi-record replies first; a single oversized record must
+        // fall back to non-destructive mailbox discovery/revalidation below.
+        let response: Record<string, unknown> | undefined;
+        for (const count of [100, 10, 1]) {
+          url.searchParams.set("maxResults", String(count));
+          try {
+            response = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+            break;
+          } catch (error) {
+            if (error instanceof MailError && error.status === 400 && pageToken && count !== 100)
+              throw new MailHistoryCheckpointError("Gmail History page token invalid after smaller reply retry");
+            if (!(error instanceof MailReplyTooLargeError)) throw error;
+            if (count === 1) throw error;
+          }
+        }
+        if (!response) throw new MailError("Gmail history response is unavailable", 502);
+        if (!historyId(response.historyId)) throw new MailError("Invalid Gmail history cursor", 502);
+        const entries = Array.isArray(response.history) ? response.history : [];
+        let reachedBudget = false;
+        for (const event of entries) {
+          if (!event || typeof event !== "object") throw new MailError("Invalid Gmail history event", 502);
+          const obj = event as Record<string, unknown>;
+          if (!historyId(obj.id) ||
+              (lastAppliedEventId !== null && BigInt(obj.id) <= BigInt(lastAppliedEventId)))
+            throw new MailError("Invalid Gmail history event cursor", 502);
+          if (!pendingLocated) {
+            if (BigInt(obj.id) < BigInt(originalPending!)) continue;
+            if (obj.id !== originalPending) throw new MailHistoryCheckpointError("Pending Gmail history event changed");
+            pendingLocated = true;
+          }
+          const updates = new Set<string>();
+          const removals = new Set<string>();
+          for (const [name, target] of [["messagesAdded", updates], ["messagesDeleted", removals],
+            ["labelsAdded", updates], ["labelsRemoved", updates]] as const) {
+            const records = Array.isArray(obj[name]) ? obj[name] : [];
+            for (const record of records) {
+              const message = record && typeof record === "object" ? (record as Record<string, unknown>).message : null;
+              const id = message && typeof message === "object" ? (message as Record<string, unknown>).id : null;
+              if (gmailId(id)) target.add(id);
+            }
+          }
+          // The sorted list is deterministic across retries and Gmail pages.
+          // An incomplete event is always requested again from the *previous*
+          // committed history cursor and resumed at the saved offset.
+          const ids = [...new Set([...updates, ...removals])].sort();
+          const offset = obj.id === originalPending ? settings.pending_event_offset : 0;
+          if (!Number.isSafeInteger(offset) || offset < 0 || offset > ids.length)
+            throw new MailHistoryCheckpointError("Gmail history event offset is invalid");
+          const remainingBudget = SYNC_MAX_ITEMS - touched.size;
+          if (remainingBudget <= 0) {
+            partial = true; historyIncomplete = true; reachedBudget = true;
+            nextHistory = lastAppliedEventId ?? settings.history_id;
+            break;
+          }
+          const consumed = ids.slice(offset, offset + remainingBudget);
+          for (const id of consumed) {
+            if (updates.has(id)) changes.add(id);
+            if (removals.has(id)) deleted.add(id);
+            touched.add(id);
+          }
+          if (offset + consumed.length < ids.length) {
+            // Fully consume an event before advancing history_id. A giant
+            // single record (121+ IDs) can take multiple manual syncs.
+            pendingEventId = obj.id;
+            pendingOffset = offset + consumed.length;
+            nextHistory = lastAppliedEventId ?? settings.history_id;
+            partial = true; historyIncomplete = true; reachedBudget = true;
+            break;
+          }
+          lastAppliedEventId = obj.id;
+          pendingEventId = null;
+          pendingOffset = 0;
+        }
+        if (reachedBudget) break;
+        if (!response.nextPageToken) {
+          if (!pendingLocated) throw new MailHistoryCheckpointError("Pending Gmail history event disappeared");
+          nextHistory = response.historyId;
+          break;
+        }
+        if (typeof response.nextPageToken !== "string" || response.nextPageToken.length > 512)
+          throw new MailError("Invalid Gmail history page", 502);
+        if (++page >= 5) {
+          if (!pendingLocated || !lastAppliedEventId)
+            throw new MailHistoryCheckpointError("Gmail history page exceeds sync budget");
+          nextHistory = lastAppliedEventId;
+          partial = true;
+          historyIncomplete = true;
+          break;
+        }
+        pageToken = response.nextPageToken;
+      }
+    } catch (error) {
+      // Gmail expires old history IDs. Rebuild from a recent bounded snapshot,
+      // never advance the cursor past data we failed to read.
+      if (error instanceof MailHistoryCheckpointError ||
+          (error instanceof MailError && error.status === 404) || error instanceof MailReplyTooLargeError) {
+        // History is unavailable or a single record is larger than our safe
+        // reply bound. Never advance it without discovering and revalidating
+        // the mailbox metadata that the skipped event could have changed.
+        full = true; recovery = true; partial = true;
+      } else throw error;
+    }
+  }
+  // One implementation for bootstrap and resumed discovery ensures consistent
+  // pagination error handling, ID validation, retention and budget accounting.
+  const discoveredPages: Array<{ folder: "INBOX" | "SENT"; ids: string[] }> = [];
+  async function discoverFolder(folder: "INBOX" | "SENT", token: string | null, since: number | null) {
+    const url = new URL(apiBase + "/messages");
+    url.searchParams.set("maxResults", "25");
+    url.searchParams.set("labelIds", folder);
+    if (since !== null) url.searchParams.set("q", "after:" + since);
+    if (token) url.searchParams.set("pageToken", token);
+    let result: Record<string, unknown>;
+    try {
+      result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+    } catch (error) {
+      // A stale opaque token can be restarted from the first page; auth and
+      // server failures (or a bad first page) still fail without DB changes.
+      if (!token || !(error instanceof MailError && error.status === 400)) throw error;
+      url.searchParams.delete("pageToken");
+      result = await googleJson(url.toString(), { headers }, deadline, MAX_REPLY, true);
+    }
+    const pageIds = new Set<string>();
+    for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
+      const id = item && typeof item === "object" ? (item as Record<string, unknown>).id : null;
+      if (!gmailId(id)) continue;
+      changes.add(id);
+      touched.add(id);
+      pageIds.add(id);
+    }
+    discoveredPages.push({ folder, ids: [...pageIds] });
+    return nextPage(result.nextPageToken);
+  }
+  if (full) {
+    changes.clear(); deleted.clear(); touched.clear();
+    inboxPageToken = null; sentPageToken = null;
+    // Freeze the query's cutoff until discovery finishes.
+    recoverySinceSeconds = Math.max(0, Math.floor((current - (settings.retention_days + 1) * 86_400_000) / 1000));
+    const profile = await googleJson(apiBase + "/profile", { headers }, deadline);
+    if (!historyId(profile.historyId)) throw new MailError("Gmail profile history is invalid", 502);
+    // Snapshot the History cursor BEFORE listing pages.
+    nextHistory = profile.historyId;
+    for (const folder of ["INBOX", "SENT"] as const) {
+      const token = await discoverFolder(folder, null, recoverySinceSeconds);
+      if (folder === "INBOX") inboxPageToken = token;
+      else sentPageToken = token;
+    }
+  } else {
+    // Keep History first; reserve a full 25-ID discovery page before visiting it.
+    for (const folder of ["INBOX", "SENT"] as const) {
+      const oldToken = folder === "INBOX" ? inboxPageToken : sentPageToken;
+      if (!oldToken || SYNC_MAX_ITEMS - touched.size < 25) continue;
+      const token = await discoverFolder(folder, oldToken, recoverySinceSeconds);
+      if (folder === "INBOX") inboxPageToken = token;
+      else sentPageToken = token;
+    }
+  }
+  if (!nextHistory) throw new MailError("Gmail did not return a history cursor", 502);
+  const fetched: SyncMessage[] = [];
+  // Revalidate previously indexed messages missed by a bounded rebootstrap.
+  // The saved history cursor still processes new changes first. Rechecks are
+  // bounded by the same request limit and survive a restart or a failed read.
+  const changedIds = [...changes].filter((id) => !deleted.has(id));
+  // Deleted History IDs and discovered messages consume the same per-sync
+  // distinct-ID budget as metadata reconciliation. Otherwise 120 deletions
+  // could be followed by 120 more stale-message detail requests in one run.
+  const reconcileBudget = Math.max(0, SYNC_MAX_ITEMS - touched.size);
+  const staleIds = !full && reconcileBudget > 0
+    ? (getDatabase().prepare(`SELECT message_id FROM mail_sync_messages
+        WHERE account_id=? AND workspace_id=? AND needs_reconcile=1
+        ORDER BY received_at DESC, message_id DESC LIMIT ?`
+      ).all(accountId, workspaceId, reconcileBudget) as Array<{ message_id: string }>)
+        .map((row) => row.message_id)
+        .filter((id) => !touched.has(id))
+    : [];
+  for (const id of staleIds) touched.add(id);
+  // No body or attachment requests, including when revalidating old entries.
+  const ids = [...changedIds, ...staleIds];
+  for (let i = 0; i < ids.length; i += MESSAGE_DETAIL_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(i, i + MESSAGE_DETAIL_CONCURRENCY).map(async (id) => {
+      const url = new URL(apiBase + "/messages/" + id);
+      url.searchParams.set("format", "metadata");
+      for (const name of ["Subject", "From"]) url.searchParams.append("metadataHeaders", name);
+      try {
+        const data = await googleJson(url.toString(), { headers }, deadline);
+        if (data.id !== id) throw new MailError("Gmail message identity changed", 502);
+        return parseMailSyncMessage(data, settings.retention_days, current);
+      } catch (error) {
+        if (error instanceof MailError && error.status === 404) return null;
+        throw error;
+      }
+    }));
+    for (const message of batch) if (message) fetched.push(message);
+  }
+  ensureDailyBackup();
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const currentRow = requireSyncAccount(workspaceId, accountId);
+    // Consent and cursor compare prevent stale or overlapping sync commits.
+    // A disable/re-enable gets a new consent_id, defeating ABA races.
+    if (generation !== currentRestoreGeneration() ||
+        currentRow.consent_id !== settings.consent_id || currentRow.history_id !== settings.history_id ||
+        currentRow.pending_event_id !== settings.pending_event_id || currentRow.pending_event_offset !== settings.pending_event_offset ||
+        currentRow.history_backlog_pending !== settings.history_backlog_pending ||
+        currentRow.recovery_inbox_page_token !== settings.recovery_inbox_page_token ||
+        currentRow.recovery_sent_page_token !== settings.recovery_sent_page_token ||
+        currentRow.recovery_since_seconds !== settings.recovery_since_seconds)
+      throw new MailError("Gmail sync configuration changed; retry", 409);
+    accountCredentials(workspaceId, accountId);
+    const clear = db.prepare("DELETE FROM mail_sync_messages WHERE account_id=? AND message_id=?");
+    if (full) {
+      // Profile + 25 Inbox + 25 Sent is not a complete mailbox snapshot.
+      // Mark existing records as unverified until each metadata ID is read.
+      db.prepare("UPDATE mail_sync_messages SET needs_reconcile=1 WHERE account_id=? AND workspace_id=?")
+        .run(accountId, workspaceId);
+    } else {
+      for (const id of new Set([...changes, ...deleted, ...staleIds])) clear.run(accountId, id);
+    }
+    const insert = db.prepare(`INSERT INTO mail_sync_messages
+      (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent, needs_reconcile)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(account_id, message_id) DO UPDATE SET
+        thread_id=excluded.thread_id, subject=excluded.subject,
+        sender=excluded.sender, received_at=excluded.received_at,
+        unread=excluded.unread, in_inbox=excluded.in_inbox, in_sent=excluded.in_sent,
+        needs_reconcile=0`);
+    for (const entry of fetched) insert.run(accountId, workspaceId, entry.id, entry.thread,
+      entry.subject, entry.sender, entry.received, entry.unread, entry.inbox, entry.sent);
+    trimMailIndex(accountId, currentRow.retention_days, Date.now());
+    // Gmail lists newest messages first. Once 250 newer eligible rows are
+    // retained and an entire newly fetched page predates the oldest kept row,
+    // paging further into that folder cannot add anything to this bounded index.
+    // Require dates for ALL page IDs; uncertain/missing metadata stays pending.
+    const boundary = db.prepare(
+      "SELECT COUNT(*) AS total, MIN(received_at) AS oldest FROM mail_sync_messages WHERE account_id=?"
+    ).get(accountId) as { total: number; oldest: number | null };
+    if (boundary.total >= SYNC_KEEP_ITEMS && boundary.oldest !== null) {
+      const fetchedById = new Map(fetched.map((item) => [item.id, item]));
+      for (const page of discoveredPages) {
+        if (page.ids.length > 0 && page.ids.every((id) => {
+          const item = fetchedById.get(id);
+          return item !== undefined && item.received < boundary.oldest!;
+        })) {
+          if (page.folder === "INBOX") inboxPageToken = null;
+          else sentPageToken = null;
+        }
+      }
+    }
+    if (!inboxPageToken && !sentPageToken) recoverySinceSeconds = null;
+    db.prepare(`UPDATE mail_sync_accounts SET history_id=?, pending_event_id=?, pending_event_offset=?,
+      history_backlog_pending=?, recovery_inbox_page_token=?, recovery_sent_page_token=?,
+      recovery_since_seconds=?, last_synced_at=?, updated_at=? WHERE account_id=? AND consent_id=?`)
+      .run(nextHistory, pendingEventId, pendingOffset, Number(historyIncomplete),
+        inboxPageToken, sentPageToken, recoverySinceSeconds, Date.now(), Date.now(), accountId, settings.consent_id);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  const state = listMailSyncStates(workspaceId).find((s) => s.accountId === accountId);
+  return { full, recovery, updated: fetched.length, historyId: nextHistory,
+    partial: partial || Boolean(state?.reconciliationPending || state?.historyPending || state?.discoveryPending), state };
 }

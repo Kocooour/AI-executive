@@ -374,6 +374,106 @@ export const schemaMigrations: SchemaMigration[] = [
       if (!columns.has("claimed_at")) database.exec("ALTER TABLE mail_oauth_pending ADD COLUMN claimed_at INTEGER");
     },
   },
+  {
+    // Mail v4: explicit per-account consent, a durable Gmail history cursor,
+    // and bounded metadata only (no snippets, bodies, HTML or attachments).
+    id: "2026-10-mail-v4-optin-metadata-sync",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS mail_sync_accounts (
+          account_id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          consent_id TEXT NOT NULL,
+          history_id TEXT,
+          last_synced_at INTEGER,
+          retention_days INTEGER NOT NULL DEFAULT 30 CHECK(retention_days IN (7, 30, 90)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS mail_sync_accounts_workspace_idx
+          ON mail_sync_accounts(workspace_id);
+        CREATE TABLE IF NOT EXISTS mail_sync_messages (
+          account_id TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          sender TEXT NOT NULL,
+          received_at INTEGER NOT NULL,
+          unread INTEGER NOT NULL,
+          in_inbox INTEGER NOT NULL,
+          in_sent INTEGER NOT NULL,
+          PRIMARY KEY(account_id, message_id)
+        );
+        CREATE INDEX IF NOT EXISTS mail_sync_messages_recent_idx
+          ON mail_sync_messages(account_id, received_at DESC);
+        CREATE TRIGGER IF NOT EXISTS mail_sync_disconnected
+        AFTER DELETE ON mail_accounts
+        BEGIN
+          DELETE FROM mail_sync_accounts WHERE account_id = OLD.id;
+          DELETE FROM mail_sync_messages WHERE account_id = OLD.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS mail_sync_consent_removed
+        AFTER DELETE ON mail_sync_accounts
+        BEGIN
+          DELETE FROM mail_sync_messages WHERE account_id = OLD.account_id;
+        END;
+        -- A backward-compatible database upgrade removes any stale scope rows.
+        DELETE FROM mail_sync_accounts WHERE NOT EXISTS
+          (SELECT 1 FROM mail_accounts a
+            WHERE a.id = mail_sync_accounts.account_id
+            AND a.workspace_id = mail_sync_accounts.workspace_id);
+        DELETE FROM mail_sync_messages WHERE NOT EXISTS
+          (SELECT 1 FROM mail_sync_accounts s
+            WHERE s.account_id = mail_sync_messages.account_id
+            AND s.workspace_id = mail_sync_messages.workspace_id);
+      `);
+    },
+  },
+  {
+    // A single Gmail history record may contain more than the per-request
+    // sync budget. Persist the record ID and the already-consumed offset so
+    // its remaining message IDs can be replayed without losing the cursor.
+    id: "2026-10-mail-v4-partial-event-checkpoint",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("pending_event_id")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN pending_event_id TEXT");
+      if (!columns.has("pending_event_offset")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN pending_event_offset INTEGER NOT NULL DEFAULT 0 CHECK (pending_event_offset >= 0)");
+    },
+  },
+  {
+    // A non-exhaustive Gmail recovery must not claim that stale entries have
+    // been validated just because the incremental history cursor advanced.
+    id: "2026-10-mail-v4-reconciliation-status",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_messages)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("needs_reconcile"))
+        database.exec("ALTER TABLE mail_sync_messages ADD COLUMN needs_reconcile INTEGER NOT NULL DEFAULT 0 CHECK(needs_reconcile IN (0, 1))");
+      database.exec("CREATE INDEX IF NOT EXISTS mail_sync_reconciliation_idx ON mail_sync_messages(account_id, needs_reconcile, received_at DESC)");
+    },
+  },
+  {
+    // Gmail messages.list pages are opaque continuation tokens. Retaining
+    // them prevents silent loss when an expired History cursor requires
+    // rebuilding more than the first 25 Inbox / Sent message IDs.
+    id: "2026-10-mail-v4-discovery-checkpoints",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("recovery_inbox_page_token")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_inbox_page_token TEXT");
+      if (!columns.has("recovery_sent_page_token")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_sent_page_token TEXT");
+      if (!columns.has("history_backlog_pending")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN history_backlog_pending INTEGER NOT NULL DEFAULT 0 CHECK(history_backlog_pending IN (0, 1))");
+    },
+  },
+  {
+    // Discovery page tokens are valid only with the same Gmail list query.
+    // The retention cutoff is frozen until both Inbox/Sent are exhausted.
+    id: "2026-10-mail-v4-fixed-discovery-cutoff",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("recovery_since_seconds"))
+        database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_since_seconds INTEGER");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

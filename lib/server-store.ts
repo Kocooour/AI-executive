@@ -13,6 +13,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations, schemaMigrations } from "./schema-migrations";
+import { pruneExpiredMailMetadata } from "./mail-sync-retention";
 import {
   backupFormatVersion, describeFile, prepareRestoreCopy, publish as publishFile, removeIfExists,
   replaceTablesFromAttached, writeCleanCopy, type BackupMeta,
@@ -54,7 +55,6 @@ const backupDirectory = path.join(dataDirectory, "backups");
 const databasePath = path.join(dataDirectory, "store.sqlite");
 const legacyStorePath = path.join(dataDirectory, "store.json");
 let databaseInstance: DatabaseSync | null = null;
-
 // Work that needs the Context modules (which themselves read through getDatabase) and so cannot be imported here: a module
 // registers it, and it runs once the database is initialised (at once if that already happened).
 const readyHooks: Array<() => void> = [];
@@ -81,6 +81,11 @@ export function getDatabase() {
     initialiseDatabase(database);
     removeLeftoverTemporaryFiles();
     repairBackupsDirectory();
+    // Retention is best-effort at startup. A transient SQLITE_BUSY from a
+    // maintenance writer must not take the entire application offline; the
+    // independent 15-minute scheduler retries this privacy cleanup.
+    try { pruneExpiredMailMetadata(database); }
+    catch (error) { console.error("Mail retention startup sweep failed:", error instanceof Error ? error.name : "unknown"); }
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
