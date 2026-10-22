@@ -751,3 +751,103 @@ test("Mail v4 concurrent disable-and-reenable cannot commit stale network result
   assert.deepEqual(mail.listMailSyncStates(workspaceId), []);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
 });
+
+
+test("Mail v4 checkpoints a 130-event history backlog without discarding existing indexed mail", async () => {
+  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "history@example.com", mail.sealMail("HISTORY-TEST-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const history = Array.from({ length: 130 }, (_, i) => ({
+    id: String(i + 101), messagesAdded: [{ message: { id: (0xabcdef + i).toString(16) } }],
+  }));
+  const previous = globalThis.fetch, starts = [];
+  const now = Date.now();
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      const start = url.searchParams.get("startHistoryId");
+      starts.push(start);
+      return Response.json({ historyId: "999", history: history.filter(e => BigInt(e.id) > BigInt(start)) });
+    }
+    if (url.pathname === "/gmail/v1/users/me/profile")
+      throw new Error("A bounded history overflow must not reset the index");
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdefabcdef", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "History message" }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.full, false);
+    assert.equal(first.updated, 120);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "220");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 120);
+    const second = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(second.partial, false);
+    assert.equal(second.updated, 10);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "999");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 130);
+    assert.deepEqual(starts, ["100", "220"]);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 resumes after five history pages and never checkpoints an oversized event", async () => {
+  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const previous = globalThis.fetch;
+  let oversized = false;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      if (oversized) return Response.json({ historyId: "999", history: [{
+        id: "300", messagesAdded: Array.from({ length: 121 }, (_, i) =>
+          ({ message: { id: (0xaabbcc + i).toString(16) } })),
+      }] });
+      const start = url.searchParams.get("startHistoryId");
+      if (start === "100") {
+        const page = Number(url.searchParams.get("pageToken") || 0);
+        return Response.json({ historyId: "999", history: [{ id: String(101 + page) }],
+          ...(page < 5 ? { nextPageToken: String(page + 1) } : {}) });
+      }
+      return Response.json({ historyId: "999", history: [{ id: "106" }] });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.updated, 0);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "105");
+    const second = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(second.partial, false);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "999");
+    oversized = true;
+    database.prepare("UPDATE mail_sync_accounts SET history_id='200' WHERE account_id=?").run(id);
+    await assert.rejects(mail.syncMailAccount(workspaceId, id), { status: 409 });
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id, "200");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 automatically prunes expired metadata independent of sync and UI", async () => {
+  const { pruneExpiredMailMetadata, MAIL_RETENTION_SWEEP_MS } = await import("../lib/mail-sync-retention.ts");
+  assert.equal(MAIL_RETENTION_SWEEP_MS, 15 * 60_000);
+  const workspaceId = "mail-v4-fixture", id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  mail.enableMailSync(workspaceId, id, 7);
+  const now = Date.now();
+  const insert = database.prepare("INSERT OR REPLACE INTO mail_sync_messages (account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES (?,? ,?,'abcdefabcdef','No body','sender@example.com',?,0,1,0)");
+  insert.run(id, workspaceId, "aa001111", now - 8 * 86_400_000);
+  insert.run(id, workspaceId, "aa002222", now - 6 * 86_400_000);
+  assert.equal(pruneExpiredMailMetadata(database, now), 1);
+  assert.deepEqual(database.prepare("SELECT message_id FROM mail_sync_messages WHERE account_id=?").all(id).map(r => r.message_id), ["aa002222"]);
+  assert.equal(pruneExpiredMailMetadata(database, now), 0);
+  assert.equal(pruneExpiredMailMetadata(database, now + 2 * 86_400_000), 1);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 0);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE account_id=?").get(id).n, 1);
+});
