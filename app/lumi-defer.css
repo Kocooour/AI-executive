@@ -1,5 +1,14 @@
 /* Things-style deferral: the date chip on task rows and the "When" popover / bottom sheet.
    Colours come from the design tokens, which switch with the theme, so there is no separate dark block. */
+.deferGroup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
 .appShell .taskRowList .taskRowMeta.deferChip,
 .homeTaskList .deferChip {
   display: inline-flex;
@@ -8,33 +17,55 @@
   gap: 5px;
   flex: 0 0 auto;
   min-height: 32px;
-  margin-left: auto;
-  padding: 3px 8px;
-  border: 1px solid transparent;
+  margin-left: 0;
+  max-width: none;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--muted);
+  background: var(--surface-subtle);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   line-height: 1.3;
+  white-space: nowrap;
   cursor: pointer;
 }
-.homeTaskList .deferChip { max-width: 40%; text-align: right; }
 .appShell .taskRowList .taskRowMeta.deferChip:hover,
 .homeTaskList .deferChip:hover,
-.deferChip[aria-expanded="true"] { background: var(--selected); border-color: var(--line); color: var(--text); }
-.appShell .taskRowList .taskRowMeta.deferChip.danger,
-.homeTaskList .deferChip.danger { color: var(--danger) !important; }
+.deferChip[aria-expanded="true"] { background: var(--selected); border-color: var(--control-border); color: var(--selected-text); }
 .deferChip:focus-visible,
-.deferPopover button:focus-visible {
+.deferPopover button:focus-visible,
+.deferDay:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
+.deadlineBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.deadlineBadge.isSoon { color: var(--warning); }
+.deadlineBadge.isPassed { color: var(--danger); font-weight: 600; }
+.deferVisuallyHidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 .deferChipIcon { flex: none; }
-.deferChip.noDate:not(:hover):not(:focus-visible):not([aria-expanded="true"]) { opacity: 0.65; }
+.deferChip.noDate { color: var(--muted); }
 @media (pointer: coarse), (max-width: 700px) {
   .appShell .taskRowList .taskRowMeta.deferChip,
-  .homeTaskList .deferChip { min-height: 44px; min-width: 44px; }
+  .homeTaskList .deferChip { min-height: 44px; min-width: 44px; justify-content: center; }
+  .deferMonthBar button { width: 44px; height: 44px; }
 }
 
 /* "This evening" group of Today */
@@ -199,3 +230,15 @@
 .deferPopover.isSheet .deferApply,
 .deferPopover.isSheet .deferClear { min-height: 44px; }
 .deferPopover.isSheet .deferClose { width: 44px; height: 44px; }
+
+.deferDay[aria-disabled="true"] { cursor: default; opacity: 0.4; }
+.deferDay[aria-disabled="true"]:hover { background: transparent; }
+.deferError {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+}
+.deferPopover button:disabled { opacity: 0.55; cursor: default; }

@@ -3,9 +3,10 @@ import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, u
 import type { Entity } from "../../../lib/db";
 import { addDays, deferTargets, suggestDeferral } from "../../../lib/defer-suggestion";
 import { ymd } from "../../../lib/local-dates";
-import { taskMatchesView } from "../../../lib/task-views";
-import { inSentenceDate } from "../format";
-import type { TaskRowValue } from "../task-row-value";
+import { pluralText } from "../../../lib/plural";
+import { isEveningTask, taskDueTone, taskMatchesView } from "../../../lib/task-views";
+import { friendlyDate, inSentenceDate } from "../format";
+import { taskRowValue } from "../task-row-value";
 import type { LumiApp } from "../use-lumi-app";
 
 // The "When" control of a task row (Things-style deferral): a date chip on the row and one popover
@@ -25,30 +26,55 @@ export function CalendarIcon() {
   );
 }
 
-// The chip replaces the plain date of an open task row (rows with a sync/held state keep that state instead).
-export function DeferChip({ app, task, meta }: { app: LumiApp; task: Entity; meta: TaskRowValue }) {
-  const { deferOpen, setDeferOpen, tr } = app;
-  const dated = meta.kind === "date";
-  const value = dated ? meta.text : tr("deferNoDate");
-  const label = tr("deferChipLabel").replace("{value}", () => value + (!dated && meta.text ? `, ${meta.text}` : ""));
+// The chip is the "When" control: it always shows the planned day. The deadline, which this control
+// never changes, is a separate badge next to it. Rows with a sync/held state keep that state instead
+// (the caller decides).
+export function DeferChip({ app, task }: { app: LumiApp; task: Entity }) {
+  const { deferOpen, language, setDeferError, setDeferOpen, today, tr } = app;
+  const props = task.properties;
+  const when = typeof props.when === "string" && DAY.test(props.when) ? props.when : "";
+  const deadline = typeof props.deadline === "string" && DAY.test(props.deadline.slice(0, 10)) ? props.deadline.slice(0, 10) : "";
+  const planned = isEveningTask(task, today) ? tr("deferEveningShort")
+    : props.someday === true ? tr("scheduleSomeday")
+      : when ? friendlyDate(when, language)
+        : props.today === true ? tr("Today") : "";
+  // Without a planned day the chip may still carry the waiting / estimate state the row used to show.
+  const fallback = planned ? null : taskRowValue({ ...task, properties: { ...props, when: undefined, deadline: undefined } }, language, today,
+    { held: false, unsent: false, openTaskCount: 0 });
+  const extra = fallback && fallback.kind !== "none" ? fallback : null;
+  const text = planned || extra?.text || "";
+  const label = tr("deferChipLabel").replace("{value}", () => (planned || tr("deferNoDate")) + (extra ? `, ${extra.text}` : ""));
   const open = deferOpen?.taskId === task.id;
+  const tone = taskDueTone(task, today);
+  const deadlineTone = deadline && deadline < today ? "isPassed" : tone === "dueSoon" ? "isSoon" : "";
   return (
-    <button
-      type="button"
-      className={`taskRowMeta deferChip ${meta.tone === "danger" ? "danger" : ""} ${!dated && !meta.text ? "noDate" : ""}`.trim()}
-      data-meta-kind={meta.kind}
-      data-defer-chip={task.id}
-      aria-label={label}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      onClick={(event) => {
-        event.stopPropagation();
-        setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget });
-      }}
-    >
-      {!dated && <CalendarIcon />}
-      {meta.text}
-    </button>
+    <span className="deferGroup">
+      {deadline && (
+        <span className={`deadlineBadge ${deadlineTone}`.trim()} data-deadline={deadline}>
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+            <path d="M3.5 14V2.5M3.5 3h8.5l-2 3 2 3H3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="deferVisuallyHidden">{tr("deferDeadlineLabel")} </span>{friendlyDate(deadline, language)}
+        </span>
+      )}
+      <button
+        type="button"
+        className={`taskRowMeta deferChip ${!text ? "noDate" : ""}`.trim()}
+        data-meta-kind={planned ? "date" : extra ? extra.kind : "none"}
+        data-defer-chip={task.id}
+        aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          setDeferError(false);
+          setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget });
+        }}
+      >
+        {!planned && <CalendarIcon />}
+        {text}
+      </button>
+    </span>
   );
 }
 
@@ -61,7 +87,7 @@ export function DeferPopover({ app }: { app: LumiApp }) {
 }
 
 function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor: HTMLElement }) {
-  const { calendarToday, deferTask, items, language, setDeferOpen, today, tr, visibleDayPlan } = app;
+  const { calendarToday, deferBusy, deferError, deferTask, items, language, setDeferOpen, today, tr, visibleDayPlan } = app;
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const popRef = useRef<HTMLDivElement>(null);
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
@@ -71,9 +97,11 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   const rawDeadline = typeof task.properties.deadline === "string" ? task.properties.deadline.slice(0, 10) : "";
   const deadline = DAY.test(rawDeadline) ? rawDeadline : "";
   const targets = deferTargets(today);
-  const month0 = (when || today).slice(0, 7);
+  // A planned day that has passed is not offered; the calendar starts at today then.
+  const start0 = when && when >= today ? when : today;
+  const month0 = start0.slice(0, 7);
   const [month, setMonth] = useState({ year: Number(month0.slice(0, 4)), month: Number(month0.slice(5, 7)) - 1 });
-  const [focusDay, setFocusDay] = useState(when || today);
+  const [focusDay, setFocusDay] = useState(start0);
   const [refocus, setRefocus] = useState(false);
 
   const close = (returnFocus: boolean) => {
@@ -120,10 +148,13 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   // The row may disappear (another view, a sync); then there is nothing to hang the popover on.
   useEffect(() => { if (!anchor.isConnected) setDeferOpen(null); }, [items, anchor, setDeferOpen]);
 
+  // Focus moves in once the popover is placed and visible (a hidden element cannot take focus).
+  const focused = useRef(false);
   useEffect(() => {
-    const target = popRef.current?.querySelector<HTMLElement>(".deferApply, .deferChoice");
-    target?.focus();
-  }, []);
+    if (focused.current || (!mobile && !position)) return;
+    focused.current = true;
+    popRef.current?.querySelector<HTMLElement>(".deferApply, .deferChoice")?.focus();
+  }, [mobile, position]);
 
   useEffect(() => {
     const inConfirm = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest("dialog.confirmDialog"));
@@ -149,20 +180,23 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   }, [refocus, focusDay]);
 
   async function choose(choice: string, via: "manual" | "lumi" = "manual") {
+    if (deferBusy) return;
     if (await deferTask(task, choice, via)) close(true);
   }
 
   const longDate = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "numeric" });
   const shortDate = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "numeric" });
   const fullDate = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const afterDeadline = (day: string) => Boolean(deadline) && day > deadline;
+  // Once the deadline has passed, today is the earliest possible day and is not flagged.
+  const afterDeadline = (day: string) => Boolean(deadline) && day > deadline && day > today;
 
   // Lumi's sentence: the reason key with its parameters; dates read as words ("tomorrow") where they can.
   const sentence = suggestion && Object.entries(suggestion.params).reduce((text, [name, value]) => {
     const shown = name === "date" ? inSentenceDate(String(value), language)
-      : name === "who" ? String(value) || tr("deferWaitingSomeone") : String(value);
+      : name === "who" ? String(value) || tr("deferWaitingSomeone")
+        : name === "n" && suggestion.reason === "deferBusyWeek" ? pluralText(language, Number(value), tr("deferTaskForms")) : String(value);
     return text.replace(`{${name}}`, () => shown);
-  }, tr(suggestion.reason));
+  }, tr(suggestion.reason === "deferKeepDeadline" && String(suggestion.params.date) < today ? "deferKeepOverdue" : suggestion.reason));
   const keep = suggestion?.reason === "deferKeepDeadline";
   const applySuggestion = () => {
     if (!suggestion) return;
@@ -228,15 +262,15 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
           <section className="deferSuggestion" aria-label={tr("deferSuggestion")}>
             <p className="deferSuggestionText">
               <span className="deferLumi"><span aria-hidden="true">✦ </span>{tr("deferLumi")}:</span>{" "}
-              {!keep && <b>{suggestion.target === "someday" ? tr("deferSuggestSomeday") : tr("deferSuggestTo").replace("{date}", () => longDate(suggestion.target))}. </b>}
+              {!keep && <b>{sentenceEnd(suggestion.target === "someday" ? tr("deferSuggestSomeday") : tr("deferSuggestTo").replace("{date}", () => longDate(suggestion.target)))} </b>}
               {sentence}
             </p>
-            <button type="button" className="deferApply" onClick={applySuggestion}>{tr(keep ? "deferKeepToday" : "deferApply")}</button>
+            <button type="button" className="deferApply" disabled={deferBusy} onClick={applySuggestion}>{tr(keep ? "deferKeepToday" : "deferApply")}</button>
           </section>
         )}
         <div className="deferChoices">
           {quick.map((choice) => (
-            <button key={choice.key} type="button" className="deferChoice" data-defer-choice={choice.key} onClick={() => void choose(choice.key)}>
+            <button key={choice.key} type="button" className="deferChoice" data-defer-choice={choice.key} disabled={deferBusy} onClick={() => void choose(choice.key)}>
               <span className="deferChoiceIcon" aria-hidden="true">{choice.icon}</span>
               <span className="deferChoiceText">
                 <span>{choice.label}</span>
@@ -260,7 +294,8 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
                 {cells.slice(week * 7, week * 7 + 7).map((day) => {
                   const selected = day === when;
                   const late = afterDeadline(day);
-                  const notes = [selected ? tr("deferSelectedDay") : "", day === deadline ? tr("deferDeadlineDay") : "", late ? tr("deferPastDeadline") : ""].filter(Boolean);
+                  const past = day < today;
+                  const notes = [past ? tr("deferPastDay") : "", selected ? tr("deferSelectedDay") : "", day === deadline ? tr("deferDeadlineDay") : "", late ? tr("deferPastDeadline") : ""].filter(Boolean);
                   return (
                     <span role="gridcell" key={day}>
                       <button
@@ -271,10 +306,11 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
                         tabIndex={day === tabDay ? 0 : -1}
                         aria-label={`${fullDate(day)}${notes.length ? `, ${notes.join(", ")}` : ""}`}
                         aria-pressed={selected}
+                        aria-disabled={past || deferBusy ? true : undefined}
                         aria-current={day === today ? "date" : undefined}
                         onFocus={() => setFocusDay(day)}
                         onKeyDown={(event) => onDayKey(event, day)}
-                        onClick={() => void choose(day)}
+                        onClick={() => { if (!past) void choose(day); }}
                       >{Number(day.slice(8))}</button>
                     </span>
                   );
@@ -283,14 +319,18 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
             ))}
           </div>
         </div>
+        {deferError && <p role="alert" className="deferError">{tr("deferError")}</p>}
         <div className="deferFooter">
           {deadline ? <span className="deferDeadline">{tr("deferDeadlineNote").replace("{date}", () => fullDateShort(deadline, locale))}</span> : <span />}
-          <button type="button" className="deferClear" data-defer-choice="clear" onClick={() => void choose("clear")}>{tr("scheduleClear")}</button>
+          <button type="button" className="deferClear" data-defer-choice="clear" disabled={deferBusy} onClick={() => void choose("clear")}>{tr("scheduleClear")}</button>
         </div>
       </div>
     </>
   );
 }
+
+// Ends a clause with a full stop unless it already ends with one (a Czech date does: "23. 10.").
+const sentenceEnd = (text: string) => (text.endsWith(".") ? text : `${text}.`);
 
 const fullDateShort = (day: string, locale: string) =>
   new Date(`${day}T12:00:00`).toLocaleDateString(locale, { day: "numeric", month: "numeric", year: "numeric" });

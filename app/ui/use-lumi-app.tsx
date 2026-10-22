@@ -19,7 +19,7 @@ import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToI
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { deferTargets } from "../../lib/defer-suggestion";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
-import { friendlyDate } from "./format";
+import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
@@ -72,6 +72,8 @@ export function useLumiApp() {
     [undo, setUndo] = useState<Entity | null>(null),
     // The task whose "When" popover is open and the control it hangs from (one popover for the whole app).
     [deferOpen, setDeferOpen] = useState<{ taskId: string; anchor: HTMLElement } | null>(null),
+    [deferBusy, setDeferBusy] = useState(false),
+    [deferError, setDeferError] = useState(false),
     [undoRelations, setUndoRelations] = useState<Relation[]>([]),
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
@@ -325,6 +327,7 @@ export function useLumiApp() {
   const offlineViewRef = useRef(false);
   // The first request for the server copy, while it is still waiting for an answer.
   const startupStoreRequest = useRef<AbortController | null>(null);
+  const deferInFlight = useRef(false);
   function askConfirm(request: ConfirmRequest) {
     confirmResolver.current?.(false);
     // The dialog lives in the app screen; without it a question could never be answered.
@@ -3203,43 +3206,62 @@ export function useLumiApp() {
     choice: "today" | "evening" | "tomorrow" | "weekend" | "nextWeek" | "someday" | "clear" | string,
     via: "manual" | "lumi",
   ): Promise<boolean> {
-    if (activeWorkspaceId === "all" || isAdopting()) return false;
-    const stored = (await db.entities.get(task.id)) || task;
-    if (stored.type !== "task" || stored.status !== "open") return false;
-    const targets = deferTargets(ymd());
-    const when = choice === "today" || choice === "evening" ? targets.today
-      : choice === "tomorrow" ? targets.tomorrow
-        : choice === "weekend" ? targets.weekend
-          : choice === "nextWeek" ? targets.nextWeek
-            : choice === "someday" || choice === "clear" ? ""
-              : /^\d{4}-\d{2}-\d{2}$/.test(choice) ? choice : null;
-    if (when === null) return false;
-    const deadline = typeof stored.properties.deadline === "string" ? stored.properties.deadline.slice(0, 10) : "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(deadline) && when && when > deadline) {
-      const confirmed = await askConfirm({
-        title: tr("deferAfterDeadlineTitle"),
-        message: tr("deferAfterDeadline").replace("{date}", () => friendlyDate(deadline, language)),
-        confirmLabel: tr("deferAfterDeadlineConfirm"),
-      });
-      if (!confirmed) return false;
+    if (activeWorkspaceId === "all" || isAdopting() || deferInFlight.current) return false;
+    // One choice at a time: a second one while the first is being saved would replace its Undo snapshot.
+    deferInFlight.current = true;
+    setDeferBusy(true);
+    setDeferError(false);
+    try {
+      const stored = (await db.entities.get(task.id)) || task;
+      if (stored.type !== "task" || stored.status !== "open") return false;
+      const targets = deferTargets(ymd());
+      const when = choice === "today" || choice === "evening" ? targets.today
+        : choice === "tomorrow" ? targets.tomorrow
+          : choice === "weekend" ? targets.weekend
+            : choice === "nextWeek" ? targets.nextWeek
+              : choice === "someday" || choice === "clear" ? ""
+                : /^\d{4}-\d{2}-\d{2}$/.test(choice) ? choice : null;
+      if (when === null) return false;
+      const deadline = typeof stored.properties.deadline === "string" ? stored.properties.deadline.slice(0, 10) : "";
+      // After a passed deadline today is the earliest day possible, so it needs no confirmation.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(deadline) && when && when > deadline && when > targets.today) {
+        const confirmed = await askConfirm({
+          title: tr("deferAfterDeadlineTitle"),
+          message: tr("deferAfterDeadline").replace("{date}", () => inSentenceDate(deadline, language)),
+          confirmLabel: tr("deferAfterDeadlineConfirm"),
+        });
+        if (!confirmed) return false;
+        // The task may have been completed or deleted (here or on another device) while the question was open.
+        const again = await db.entities.get(task.id);
+        if (!again || again.type !== "task" || again.status !== "open") return false;
+      }
+      await patch(stored, (current) => {
+        const previous = typeof current.when === "string" && current.when ? current.when : current.someday === true ? "someday" : null;
+        const next = when || (choice === "someday" ? "someday" : null);
+        const history = Array.isArray(current.deferHistory) ? current.deferHistory : [];
+        return {
+          when,
+          today: when === ymd(),
+          someday: choice === "someday",
+          inbox: false,
+          evening: choice === "evening",
+          ...(previous !== next ? { deferHistory: [...history, { from: previous, to: next, at: Date.now(), via }].slice(-10) } : {}),
+        };
+      }, `deferred ${choice}`);
+      // The previous state becomes the Undo step only once the change is written.
+      setUndo(stored);
+      setUndoRelations([]);
+      return true;
+    } catch {
+      setDeferError(true);
+      return false;
+    } finally {
+      deferInFlight.current = false;
+      setDeferBusy(false);
     }
-    setUndo(stored);
-    setUndoRelations([]);
-    await patch(stored, (current) => {
-      const previous = typeof current.when === "string" && current.when ? current.when : current.someday === true ? "someday" : null;
-      const next = when || (choice === "someday" ? "someday" : null);
-      const history = Array.isArray(current.deferHistory) ? current.deferHistory : [];
-      return {
-        when,
-        today: when === ymd(),
-        someday: choice === "someday",
-        inbox: false,
-        evening: choice === "evening",
-        ...(previous !== next ? { deferHistory: [...history, { from: previous, to: next, at: Date.now(), via }].slice(-10) } : {}),
-      };
-    }, `deferred ${choice}`);
-    return true;
   }
+  // The popover belongs to the list it was opened on.
+  useEffect(() => { setDeferOpen(null); setDeferError(false); }, [view, activeWorkspaceId]);
   async function done(id: string) {
     if (workSession?.taskId === id) { await workSessionAction("finish"); return; }
     const t = await db.entities.get(id);
@@ -3295,6 +3317,9 @@ export function useLumiApp() {
         waitingFor: "",
         waitingSince: null,
         followUpDate: "",
+        // Neither the evening mark nor the deferral history belongs to the next occurrence.
+        evening: false,
+        deferHistory: [],
       });
     }
     if (t) { setUndo(t); setUndoRelations([]); }
@@ -3467,6 +3492,7 @@ export function useLumiApp() {
     properties.inbox = section === "Inbox";
     properties.today = section === "Today";
     properties.someday = section === "Someday";
+    properties.evening = false;
     if (section === "Today") properties.when = today;
     const peers = tasks.filter((candidate) => {
       if (candidate.id === task.id || candidate.status !== "open" || candidate.workspaceId !== task.workspaceId) return false;
@@ -3511,7 +3537,13 @@ export function useLumiApp() {
     const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
-      const peers = peersForScope(scope, source.workspaceId);
+      let peers = peersForScope(scope, source.workspaceId);
+      // Dropping onto a row of the other Today group (regular / evening) is not a reorder.
+      if (view === "Today" && scope === "task:Today" && source.type === "task") {
+        const evening = isEveningTask(source, today);
+        if (isEveningTask(targetEntity, today) !== evening) return;
+        peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening);
+      }
       const sourceIndex = peers.findIndex((entity) => entity.id === source.id);
       const targetIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       if (sourceIndex < 0 || targetIndex < 0) return;
@@ -3565,9 +3597,14 @@ export function useLumiApp() {
   }
 
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
-    const peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
+    let peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
         : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
           : peersForScope(scope, entity.workspaceId);
+    // Today shows its evening tasks as a group of their own: a task moves within its own group only.
+    if (view === "Today" && scope === "task:Today") {
+      const evening = isEveningTask(entity, today);
+      peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening);
+    }
     const index = peers.findIndex((candidate) => candidate.id === entity.id);
     const target = peers[index + direction];
     if (index < 0 || !target) return;
@@ -3828,6 +3865,9 @@ export function useLumiApp() {
     deferTask,
     deferOpen,
     setDeferOpen,
+    deferBusy,
+    deferError,
+    setDeferError,
     scopedItems,
     scopedRelations,
     selectWorkspace,

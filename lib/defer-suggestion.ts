@@ -6,7 +6,14 @@ import { addLocalDays, ymd } from "./local-dates";
 import { taskMatchesView } from "./task-views";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const dayOf = (value: unknown) => (typeof value === "string" && DAY.test(value.slice(0, 10)) ? value.slice(0, 10) : "");
+// A real calendar day (2026-02-30 is not one), or "".
+const validDay = (value: string) => {
+  if (!DAY.test(value)) return false;
+  const [year, month, date] = value.split("-").map(Number);
+  const check = new Date(Date.UTC(year, month - 1, date));
+  return check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === date;
+};
+const dayOf = (value: unknown) => (typeof value === "string" && validDay(value.slice(0, 10)) ? value.slice(0, 10) : "");
 // Noon avoids a daylight-saving shift moving the date.
 const toDate = (day: string) => {
   const [year, month, date] = day.split("-").map(Number);
@@ -48,20 +55,31 @@ export const BUSY_WEEK_TASKS = 3;
 
 // Postponements only: to Someday, to a later day, or a dated task given no date. Pulling a task
 // earlier is not a deferral.
-export const deferralCount = (task: Entity) =>
-  (Array.isArray(task.properties.deferHistory) ? task.properties.deferHistory : []).filter((entry) => {
-    const { from, to } = (entry || {}) as { from?: unknown; to?: unknown };
+export const deferralCount = (task: Entity) => {
+  const history = task?.properties?.deferHistory;
+  return (Array.isArray(history) ? history : []).filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const { from, to } = entry as { from?: unknown; to?: unknown };
+    const validTo = to === "someday" || to === null || dayOf(to) === to;
+    if (!validTo) return false;
     if (to === "someday") return from !== "someday";
-    if (typeof from === "string" && DAY.test(from)) return to === null || (typeof to === "string" && to > from);
+    if (typeof from === "string" && dayOf(from) === from) return to === null || (typeof to === "string" && to > from);
     return false;
   }).length;
+};
+// Records without a properties object are read as having none; null and non-record entries are dropped.
+const withProperties = (entity: Entity): Entity =>
+  entity.properties && typeof entity.properties === "object" ? entity : { ...entity, properties: {} };
 
-export function suggestDeferral({ task, openTasks, today, calendarOverloaded = false }: DeferSuggestionInput): DeferSuggestion | null {
-  if (task.type !== "task" || task.status !== "open") return null;
+export function suggestDeferral({ task: given, openTasks, today, calendarOverloaded = false }: DeferSuggestionInput): DeferSuggestion | null {
+  if (!given || given.type !== "task" || given.status !== "open") return null;
+  const task = withProperties(given);
   const { tomorrow, nextWeek } = deferTargets(today);
   const properties = task.properties;
   const deadline = dayOf(properties.deadline);
-  const open = openTasks.filter((candidate) => candidate.type === "task" && candidate.status === "open");
+  const open = (Array.isArray(openTasks) ? openTasks : [])
+    .filter((candidate) => candidate && typeof candidate === "object" && candidate.type === "task" && candidate.status === "open")
+    .map(withProperties);
 
   // 1. A close or passed deadline: never defer, keep it today.
   if (deadline && deadline <= tomorrow) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { deferTargets, suggestDeferral, addDays } = await import("../lib/defer-suggestion.ts");
+const { deferTargets, suggestDeferral, addDays, deferralCount } = await import("../lib/defer-suggestion.ts");
 
 // 2026-10-22 is a Thursday; Sat 24th, Sun 25th, Mon 26th.
 const TODAY = "2026-10-22";
@@ -173,4 +173,36 @@ test("only open tasks get a suggestion, and the answer does not depend on the cl
   // Another day pinned: a Saturday.
   const saturday = suggestDeferral({ task: task({}), openTasks: [], today: "2026-10-24" });
   assert.equal(saturday.target, "2026-10-25");
+});
+
+test("impossible dates are not dates", () => {
+  // A deadline of 2026-02-30 is ignored, so the task is not "kept today" by rule 1.
+  assert.equal(suggest(task({ deadline: "2026-02-30" })).reason, "deferDefault");
+  assert.equal(suggest(task({ deadline: "2026-13-01" })).reason, "deferDefault");
+  assert.equal(suggest(task({ waiting: true, followUpDate: "2026-11-31" })).reason, "deferDefault");
+  // A leap day is one.
+  assert.equal(suggest(task({ deadline: "2028-02-29" })).reason, "deferDefault");
+  assert.equal(deferralCount(task({ deferHistory: [{ from: "2026-02-30", to: "someday" }] })), 1);
+});
+
+test("deferralCount counts only valid postponements", () => {
+  const entry = (from, to) => ({ from, to, at: 1, via: "manual" });
+  assert.equal(deferralCount(task({ deferHistory: [entry("2026-10-22", "2026-10-23"), entry("2026-10-23", "someday"), entry("2026-10-22", null)] })), 3);
+  // Invalid targets, earlier days, and junk entries do not count.
+  assert.equal(deferralCount(task({ deferHistory: [entry("2026-10-22", "2026-02-30"), entry("2026-10-22", "tomorrow"), entry("2026-10-22", 5),
+    entry("2026-10-22", "2026-10-21"), null, "x", 7, entry("someday", "someday")] })), 0);
+  assert.equal(deferralCount({ id: "x" }), 0);
+});
+
+test("malformed input does not throw", () => {
+  const subject = task({ when: TODAY });
+  const bad = [null, undefined, 5, "x", { id: "n", type: "task", status: "open" }, { id: "m", type: "task", status: "open", properties: null }];
+  assert.doesNotThrow(() => suggestDeferral({ task: subject, openTasks: bad, today: TODAY }));
+  assert.equal(suggestDeferral({ task: subject, openTasks: bad, today: TODAY }).reason, "deferDefault");
+  assert.doesNotThrow(() => suggestDeferral({ task: subject, openTasks: null, today: TODAY }));
+  assert.doesNotThrow(() => suggestDeferral({ task: { id: "p", type: "task", status: "open" }, openTasks: [], today: TODAY }));
+  assert.equal(suggestDeferral({ task: null, openTasks: [], today: TODAY }), null);
+  // Propertiless open tasks still count toward the overload.
+  const crowd = Array.from({ length: 6 }, (_, index) => ({ id: `c${index}`, type: "task", status: "open", properties: { today: true } }));
+  assert.equal(suggest(task({ today: true }), [...crowd, ...bad]).reason, "deferOverloaded");
 });

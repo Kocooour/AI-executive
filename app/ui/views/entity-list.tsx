@@ -198,7 +198,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                         )}
                       </div>
                       {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
-                        <DeferChip app={app} task={x} meta={meta} />
+                        <DeferChip app={app} task={x} />
                       ) : meta.text && (
                         <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
                           {meta.kind === "sync" && <span aria-hidden="true">{heldReasons.has(x.id) ? "⚠ " : "↻ "}</span>}{meta.text}

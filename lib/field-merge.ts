@@ -53,7 +53,7 @@ const unreported = new Set([
   `properties.${conflictsKey}`,
 ]);
 // Fields that together say where a task sits; see mergeEntity.
-export const placementFields = ["when", "today", "someday", "inbox"] as const;
+export const placementFields = ["when", "today", "someday", "inbox", "evening"] as const;
 // Logs that only grow: entries from both sides are kept.
 const logFields = new Set(["activity", "planningHistory"]);
 const topLevelFields = ["title", "content", "status", "workspaceId", "type"] as const;
