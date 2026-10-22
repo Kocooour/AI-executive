@@ -854,3 +854,85 @@ test("Mail v4 automatically prunes expired metadata independent of sync and UI",
   assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 0);
   assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_accounts WHERE account_id=?").get(id).n, 1);
 });
+
+
+test("Mail v4 resumes a single 125-message history record across two user-triggered batches", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000001";
+  const now = Date.now();
+  const ids = Array.from({ length: 125 }, (_, n) => (0xbff000 + n).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "largeevent@example.com", mail.sealMail("LARGE-EVENT-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const previous = globalThis.fetch;
+  const seenStarts = [];
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "TEST-ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history") {
+      seenStarts.push(url.searchParams.get("startHistoryId"));
+      return Response.json({ historyId: "300", history: [{
+        id: "200", messagesAdded: ids.map(x => ({ message: { id: x } })),
+      }] });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const messageId = url.pathname.split("/").at(-1);
+      return Response.json({ id: messageId, threadId: "abcdeabcde", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Large event" }] } });
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(first.partial, true);
+    assert.equal(first.updated, 120);
+    const pending = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(id);
+    assert.equal(pending.history_id, "100");
+    assert.equal(pending.pending_event_id, "200");
+    assert.equal(pending.pending_event_offset, 120);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 120);
+    const next = await mail.syncMailAccount(workspaceId, id);
+    assert.equal(next.partial, false);
+    assert.equal(next.updated, 5);
+    const done = database.prepare("SELECT history_id,pending_event_id,pending_event_offset FROM mail_sync_accounts WHERE account_id=?").get(id);
+    assert.equal(done.history_id, "300");
+    assert.equal(done.pending_event_id, null);
+    assert.equal(done.pending_event_offset, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n, 125);
+    assert.deepEqual(seenStarts, ["100", "100"], "the pending event must be replayed from the last committed history cursor");
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Mail v4 expired history preserves valid cached metadata outside a bounded rebootstrap", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const id = "eeeeeeee-eeee-4eee-8eee-000000000002";
+  const now = Date.now();
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(id, workspaceId, "expired@example.com", mail.sealMail("EXPIRED-REFRESH"));
+  mail.enableMailSync(workspaceId, id, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(id);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent) VALUES(?,?,?,'abcabcabc','old subject','old sender',?,0,1,0)");
+  for (let n=0;n<100;n++) insert.run(id,workspaceId,(0xcffff0+n).toString(16),now-n*1000);
+  const previous=globalThis.fetch;
+  globalThis.fetch=async (target)=>{
+    const url=new URL(String(target));
+    if(url.hostname==="oauth2.googleapis.com")return Response.json({access_token:"TEST-ACCESS"});
+    if(url.pathname==="/gmail/v1/users/me/history")return Response.json({error:"history expired"},{status:404});
+    if(url.pathname==="/gmail/v1/users/me/profile")return Response.json({historyId:"500"});
+    if(url.pathname==="/gmail/v1/users/me/messages")return Response.json({messages: [{id:"cffff0"}]});
+    if(url.pathname==="/gmail/v1/users/me/messages/cffff0")
+      return Response.json({id:"cffff0",threadId:"abcabcabc",internalDate:String(now),labelIds:["INBOX"],payload:{headers:[{name:"Subject",value:"revalidated subject"}]}});
+    throw new Error("Unexpected " + url);
+  };
+  try{
+    const result=await mail.syncMailAccount(workspaceId,id);
+    assert.equal(result.full,true);
+    assert.equal(result.recovery,true);
+    assert.equal(result.partial,true,"a bounded recovery is explicitly incomplete");
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(id).history_id,"500");
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(id).n,100);
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id='cffff0'").get(id).subject,"revalidated subject");
+    assert.equal(database.prepare("SELECT subject FROM mail_sync_messages WHERE account_id=? AND message_id='cffff1'").get(id).subject,"old subject");
+  }finally{globalThis.fetch=previous;}
+});
