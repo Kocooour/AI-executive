@@ -1,5 +1,5 @@
 name: Browser E2E
-run-name: Browser E2E for ${{ inputs.target_sha }}
+run-name: Browser E2E for ${{ inputs.target_sha || github.sha }}
 
 # Full browser verification is a manual production-release gate.
 # Run on the exact main SHA intended for deployment; do not run for every PR.
@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Exact 40-character commit SHA to test (the intended deploy target)"
-        required: true
+        description: "Exact 40-character commit SHA (required for main releases; optional for transition PR checks)"
+        required: false
         type: string
 
 # Manual E2E verification uses isolated synthetic data and no production secrets.
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: browser-e2e-${{ inputs.target_sha }}
+  group: browser-e2e-${{ inputs.target_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -36,17 +36,20 @@ jobs:
       - name: Checkout exact target SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_sha }}
+          ref: ${{ inputs.target_sha || github.sha }}
           fetch-depth: 0
 
       - name: Verify exact E2E target SHA
         shell: bash
         env:
-          TARGET_SHA: ${{ inputs.target_sha }}
+          TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+          PROVIDED_SHA: ${{ inputs.target_sha }}
         run: |
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid target SHA"; exit 1; }
           test "$(git rev-parse HEAD)" = "$TARGET_SHA" || { echo "Checkout SHA mismatch"; exit 1; }
           if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            # Releases must specify the SHA; only the transition PR may fall back to its branch tip.
+            test -n "$PROVIDED_SHA" || { echo "Explicit target_sha required for main release"; exit 1; }
             git fetch --no-tags origin main
             git merge-base --is-ancestor "$TARGET_SHA" FETCH_HEAD || {
               echo "Release SHA is not reachable from main"; exit 1;
