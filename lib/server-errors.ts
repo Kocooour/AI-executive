@@ -152,6 +152,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Mail sync failed", // Sanitized unexpected Gmail sync route failure.
   "Invalid Gmail message page token", // Server-only malformed Gmail pagination response.
   "Invalid retention clock", // Programmer-only guard for a non-finite maintenance timestamp.
+  "Invalid mail retention cutoff", // Programmer-only guard for a non-finite clock or corrupt consent retention.
 
   // Security-log reasons and alert text, never sent to the interface.
   "failed",
