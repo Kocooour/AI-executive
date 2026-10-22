@@ -18,6 +18,7 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { deferTargets } from "../../lib/defer-suggestion";
+import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { inSentenceDate } from "./format";
@@ -2017,10 +2018,15 @@ export function useLumiApp() {
     scopedRelations
       .filter((r) => r.targetEntityId === targetId && r.relationType === type)
       .map((r) => r.sourceEntityId);
-  const homeTodayTasks = tasks
-    .filter((task) => taskMatchesView(task, "Today", today))
-    .sort(byManualOrder("task:Today"))
-    .slice(0, 5);
+  // Home's Today lists only tasks that are not the subject of an attention item shown above it
+  // (the first five, or all when the list is expanded); its counts come from the same set.
+  const todayTasks = tasks.filter((task) => taskMatchesView(task, "Today", today)).sort(byManualOrder("task:Today"));
+  const homeToday = homeTodayList({
+    todayTasks,
+    attentionItems: (attentionState.visibleAttention?.items ?? []).slice(0, attentionState.showAllAttention ? undefined : 5),
+    limit: 5,
+  });
+  const homeTodayTasks = homeToday.shown;
   const visible = useMemo(
     () => {
       const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
@@ -3821,6 +3827,8 @@ export function useLumiApp() {
     freeHours,
     freeWindows,
     homeTodayTasks,
+    homeToday,
+    todayTasks,
     inspect,
     items,
     unsent,

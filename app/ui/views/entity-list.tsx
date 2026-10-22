@@ -9,6 +9,8 @@ import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { InboxBatchTriage } from "./inbox-batch-triage";
 import { DeferChip } from "./defer-popover";
+import { TodayTimeCell } from "./today-time-cell";
+import { planSlotsByTask } from "../../../lib/today-plan";
 import { GmailReader } from "./gmail-reader";
 
 export function EntityList({ app }: { app: LumiApp }) {
@@ -38,6 +40,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     closeDetail,
     projectGroups,
     unsent,
+    visibleDayPlan,
     language,
     priorityFilter,
     projects,
@@ -61,6 +64,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     ? openTaskCountsByProject(items, projects, scopedRelations)
     : new Map<string, number>();
 
+  // Today folds the day plan into its rows: a time cell per task instead of a separate plan list.
+  const planSlots = view === "Today" ? planSlotsByTask(visibleDayPlan) : null;
   const renderRow = (x: Entity, index: number, rows: Entity[]) => {
       const meta = taskRowValue(x, language, today, {
         held: heldReasons.has(x.id),
@@ -121,6 +126,7 @@ export function EntityList({ app }: { app: LumiApp }) {
               </span>
             )}
           </div>
+          {planSlots && x.type === "task" && <TodayTimeCell app={app} task={x} slot={planSlots.get(x.id)} />}
           {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
             <DeferChip app={app} task={x} />
           ) : meta.text && (
@@ -151,7 +157,7 @@ export function EntityList({ app }: { app: LumiApp }) {
               )}
               {view === "Inbox" && inboxTab === "mail" ? <GmailReader key={`${activeWorkspaceId}:${app.offlineView}`} app={app} /> : (
               <>
-              {!["Home", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
+              {!["Home", "Today", "Calendar", "Search", "Projects", "Areas", "Notes"].includes(view) && (
                 <div className="listControls">
                   <label>
                     {tr("priority")}

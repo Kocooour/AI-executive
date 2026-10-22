@@ -1,71 +1,111 @@
 import { test, expect } from "./fixtures";
-import { waitUntilSynced } from "./helpers";
+import { removeTasks, seedTasks, waitUntilSynced } from "./helpers";
 import { zonedDateTimeToIso } from "../lib/local-dates";
 
-// Preview-only route fixture: no write requests or synthetic task IDs are sent to the
-// canonical store. The server's day-plan response is the UI's trusted read model.
+// The server's day-plan response is the UI's trusted read model; the fixture below replaces it for
+// four tasks that exist in the store (seeded with unique titles and removed again at the end). Since
+// D2 the plan is not a separate card: each Today row has a time cell (docs/proposals §5.3).
 for (const width of [390, 1280]) {
   test(`Today separates existing, approved, proposed and unscheduled work at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
-    await page.route("**/api/day-plan?**", async (route) => {
-      const request = new URL(route.request().url());
-      const date = request.searchParams.get("date") || "2026-10-20";
-      const workspaceId = request.searchParams.get("workspaceId") || "personal";
-      const at = (time: string) => `${date}T${time}:00+02:00`;
-      const shared = { estimatedMinutes: 30, reason: "today", estimateSource: "explicit",
-        estimateSamples: 0, preferredMinute: null, timeSamples: 0, whyNow: ["due_today"] };
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          revision: 1, date, workspaceId, timezone: "Europe/Prague",
-          calendar: "ready", freeMinutes: 120, requiredMinutes: 120, overloaded: false,
-          existingBlocks: [
-            { ...shared, taskId: "today-fixed", title: "Existing fixed commitment",
-              start: at("09:00"), end: at("09:30"), planningSource: "manual" },
-            { ...shared, taskId: "today-approved", title: "Approved work",
-              start: at("10:00"), end: at("10:30"), planningSource: "albert-day-plan" },
-          ],
-          planBlocks: [
-            { ...shared, taskId: "today-suggested", title: "Pending owner approval",
-              start: at("11:00"), end: at("11:30") },
-          ],
-          unscheduled: [
-            { ...shared, taskId: "today-unscheduled", title: "No suitable time" },
-          ],
-        }),
-      });
-    });
-
+    const stamp = `${Date.now()}-${width}`;
+    const tasks = {
+      fixed: { id: `e2e-e2-fixed-${stamp}`, title: `Existing fixed commitment ${stamp}` },
+      approved: { id: `e2e-e2-approved-${stamp}`, title: `Approved work ${stamp}` },
+      suggested: { id: `e2e-e2-suggested-${stamp}`, title: `Pending owner approval ${stamp}` },
+      unscheduled: { id: `e2e-e2-unscheduled-${stamp}`, title: `No suitable time ${stamp}` },
+    };
     await page.goto("/?view=Today");
     await waitUntilSynced(page);
-    await expect(page.getByRole("heading", { name: "Dnes", level: 1 })).toBeVisible();
-    const plan = page.locator(".dayPlanCard");
-    await expect(plan.locator(".dayPlanGroup")).toHaveCount(4);
-    const expected = [
-      { kind: "fixed", heading: "Pevně naplánováno", title: "Existing fixed commitment" },
-      { kind: "approved", heading: "Schválené pracovní bloky", title: "Approved work" },
-      { kind: "suggested", heading: "Návrhy ke schválení", title: "Pending owner approval" },
-      { kind: "unscheduled", heading: "Úkoly bez času", title: "No suitable time" },
-    ];
-    for (const group of expected) {
-      const region = plan.locator(`.dayPlanGroup[data-plan-group="${group.kind}"]`);
-      await expect(region).toHaveAttribute("aria-label", group.heading);
-      await expect(region.getByRole("heading", { name: group.heading, level: 3 })).toBeVisible();
-      await expect(region.locator(".dayPlanBlock")).toHaveCount(1);
-      await expect(region.locator(".dayPlanBlock")).toContainText(group.title);
-    }
-    const suggested = plan.locator('[data-plan-group="suggested"]');
-    await expect(suggested.getByRole("button", { name: "Přijmout" })).toBeVisible();
-    await expect(plan.locator('[data-plan-group="fixed"] button', { hasText: "Přijmout" })).toHaveCount(0);
-    await suggested.locator(".whyNow summary").click();
-    await expect(suggested.locator(".whyNow")).toHaveAttribute("open", "");
-    await expect(suggested.locator(".whyNow li")).toHaveCount(1);
-    if (width === 390) {
-      const minHeight = await suggested.getByRole("button", { name: "Přijmout" })
-        .evaluate((button) => button.getBoundingClientRect().height);
-      expect(minHeight).toBeGreaterThanOrEqual(44);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await seedTasks(page, Object.values(tasks).map((task) => ({ ...task, properties: { today: true } })));
+    try {
+      await page.route("**/api/day-plan?**", async (route) => {
+        const request = new URL(route.request().url());
+        const date = request.searchParams.get("date") || "2026-10-20";
+        const workspaceId = request.searchParams.get("workspaceId") || "personal";
+        const at = (time: string) => `${date}T${time}:00+02:00`;
+        const shared = { estimatedMinutes: 30, reason: "today", estimateSource: "explicit",
+          estimateSamples: 0, preferredMinute: null, timeSamples: 0, whyNow: ["due_today"] };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            revision: 1, date, workspaceId, timezone: "Europe/Prague",
+            calendar: "ready", freeMinutes: 120, requiredMinutes: 120, overloaded: false,
+            existingBlocks: [
+              { ...shared, taskId: tasks.fixed.id, title: tasks.fixed.title,
+                start: at("09:00"), end: at("09:30"), planningSource: "manual" },
+              { ...shared, taskId: tasks.approved.id, title: tasks.approved.title,
+                start: at("10:00"), end: at("10:30"), planningSource: "albert-day-plan" },
+            ],
+            planBlocks: [
+              { ...shared, taskId: tasks.suggested.id, title: tasks.suggested.title,
+                start: at("11:00"), end: at("11:30") },
+            ],
+            unscheduled: [
+              { ...shared, taskId: tasks.unscheduled.id, title: tasks.unscheduled.title },
+            ],
+          }),
+        });
+      });
+
+      await page.goto("/?view=Today");
+      await waitUntilSynced(page);
+      await expect(page.getByRole("heading", { name: "Dnes", level: 1 })).toBeVisible();
+      // No separate plan list: the plan is the time cell of each row.
+      await expect(page.locator(".dayPlanCard, .dayPlanGroup")).toHaveCount(0);
+      const row = (task: { title: string }) => page.locator(".taskRow", { hasText: task.title });
+      const cell = (task: { title: string }) => row(task).locator("[data-time-cell]");
+      const range = /^\d{2}:\d{2}–\d{2}:\d{2}$/;
+      const expected = [
+        { task: tasks.fixed, kind: "existing", state: "Již naplánováno" },
+        { task: tasks.approved, kind: "existing", state: "Schválený blok" },
+        { task: tasks.suggested, kind: "proposed", state: "Navržený blok" },
+        { task: tasks.unscheduled, kind: "unscheduled", state: "Bez vhodného bloku" },
+      ];
+      for (const group of expected) {
+        await expect(row(group.task)).toHaveCount(1);
+        await expect(cell(group.task)).toHaveAttribute("data-time-kind", group.kind);
+        if (group.kind === "unscheduled") await expect(cell(group.task)).toHaveText("—");
+        else await expect(cell(group.task)).toHaveText(range);
+        // The status is written out (in the label of the cell and in its menu), not only styled.
+        await expect(cell(group.task)).toHaveAttribute("aria-label", new RegExp(`^${group.state}`));
+      }
+      // A proposal is muted with a dotted underline; accepted blocks are plain text.
+      await expect(cell(tasks.suggested)).toHaveCSS("text-decoration-style", "dotted");
+      await expect(cell(tasks.fixed)).not.toHaveCSS("text-decoration-style", "dotted");
+
+      // Menus: Přijmout only for the proposal; the reasons are listed.
+      await cell(tasks.fixed).click();
+      let menu = page.locator(`[data-time-menu="${tasks.fixed.id}"]`);
+      await expect(menu).toContainText("Již naplánováno");
+      await expect(menu.getByRole("button", { name: "Přijmout" })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(menu).toHaveCount(0);
+      await cell(tasks.suggested).click();
+      menu = page.locator(`[data-time-menu="${tasks.suggested.id}"]`);
+      await expect(menu).toContainText("Navržený blok");
+      const accept = menu.getByRole("button", { name: "Přijmout" });
+      await expect(accept).toBeVisible();
+      await expect(menu.getByRole("button", { name: "Jiný čas" })).toBeVisible();
+      await expect(menu.getByRole("button", { name: "Zítra" })).toBeVisible();
+      await expect(menu.getByRole("button", { name: "Neplánovat" })).toBeVisible();
+      await expect(menu.locator(".timeMenuWhy li")).toHaveCount(1);
+      if (width === 390) {
+        const minHeight = await accept.evaluate((button) => button.getBoundingClientRect().height);
+        expect(minHeight).toBeGreaterThanOrEqual(44);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      }
+      await page.keyboard.press("Escape");
+      await expect(cell(tasks.suggested)).toBeFocused();
+      await cell(tasks.unscheduled).click();
+      menu = page.locator(`[data-time-menu="${tasks.unscheduled.id}"]`);
+      await expect(menu).toContainText("Bez vhodného bloku");
+      await expect(menu.getByRole("button", { name: "Přijmout" })).toHaveCount(0);
+      await expect(menu.getByRole("button", { name: "Zítra" })).toBeVisible();
+    } finally {
+      await page.unroute("**/api/day-plan?**");
+      await removeTasks(page, Object.values(tasks).map((task) => task.id));
     }
   });
 

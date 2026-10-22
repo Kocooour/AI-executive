@@ -62,8 +62,8 @@ test("the last attention evaluation is shown out of date when the server cannot 
   await waitUntilSynced(page);
   await expect(page.locator(".attentionStale")).toBeVisible();
   await expect(page.locator(".attentionItem", { hasText: title }).first()).toBeVisible();
-  await page.locator(".attentionItem").first().locator("summary").click();
-  await expect(page.locator(".attentionItem").first().getByRole("button", { name: "Skrýt" })).toBeDisabled();
+  await page.locator(".attentionItem").first().getByRole("button", { name: /^Další akce/ }).click();
+  await expect(page.locator(".attentionItem").first().getByRole("menuitem", { name: /^Skrýt/ })).toBeDisabled();
   await page.unroute("**/api/attention**");
   await page.getByRole("button", { name: "Obnovit" }).first().click();
   await expect(page.locator(".attentionStale")).toHaveCount(0);

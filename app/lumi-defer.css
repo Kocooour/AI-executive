@@ -10,7 +10,8 @@
   margin-left: auto;
 }
 .appShell .taskRowList .taskRowMeta.deferChip,
-.homeTaskList .deferChip {
+.homeTaskList .deferChip,
+.appShell .attentionRowActions .deferChip {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -32,6 +33,7 @@
 }
 .appShell .taskRowList .taskRowMeta.deferChip:hover,
 .homeTaskList .deferChip:hover,
+.appShell .attentionRowActions .deferChip:hover,
 .deferChip[aria-expanded="true"] { background: var(--selected); border-color: var(--control-border); color: var(--selected-text); }
 .deferChip:focus-visible,
 .deferPopover button:focus-visible,
@@ -64,7 +66,8 @@
 .deferChip.noDate { color: var(--muted); }
 @media (pointer: coarse), (max-width: 700px) {
   .appShell .taskRowList .taskRowMeta.deferChip,
-  .homeTaskList .deferChip { min-height: 44px; min-width: 44px; justify-content: center; }
+  .homeTaskList .deferChip,
+  .appShell .attentionRowActions .deferChip { min-height: 44px; min-width: 44px; justify-content: center; }
   .deferMonthBar button { width: 44px; height: 44px; }
 }
 
