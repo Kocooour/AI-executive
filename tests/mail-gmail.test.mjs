@@ -1190,3 +1190,32 @@ test("Mail v4 does not reset discovery cursors on Gmail 401 or a bad first page"
       .run(before.recovery_inbox_page_token, accountId);
   }
 });
+
+
+test("Mail v4 preserves OAuth invalid_grant semantics when distinguishing Gmail HTTP 400", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-000000000006";
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "oauth-expired@example.com", mail.sealMail("OAUTH-EXPIRED-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    calls++;
+    assert.equal(url.hostname, "oauth2.googleapis.com");
+    assert.equal(url.pathname, "/token");
+    return Response.json({ error: "invalid_grant" }, { status: 400 });
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), {
+      status: 401,
+      message: "Gmail authorization was refused or expired",
+    });
+    assert.equal(calls, 1);
+    const state = database.prepare("SELECT history_id,recovery_inbox_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId);
+    assert.equal(state.history_id, null);
+    assert.equal(state.recovery_inbox_page_token, null);
+  } finally { globalThis.fetch = original; }
+});
