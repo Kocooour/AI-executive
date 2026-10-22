@@ -464,6 +464,16 @@ export const schemaMigrations: SchemaMigration[] = [
       if (!columns.has("history_backlog_pending")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN history_backlog_pending INTEGER NOT NULL DEFAULT 0 CHECK(history_backlog_pending IN (0, 1))");
     },
   },
+  {
+    // Discovery page tokens are valid only with the same Gmail list query.
+    // The retention cutoff is frozen until both Inbox/Sent are exhausted.
+    id: "2026-10-mail-v4-fixed-discovery-cutoff",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("recovery_since_seconds"))
+        database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_since_seconds INTEGER");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {
