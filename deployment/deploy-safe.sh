@@ -80,15 +80,37 @@ try {
 NODE
 }
 
+# Capture only mail-sync IDs, timestamps and retention settings for deployment
+# integrity verification; no message subjects, senders or account secrets.
+snapshot_mail_sync() {
+  runuser -u ai-executive -- /usr/bin/node - "$DATA/store.sqlite" <<'NODE'
+const { DatabaseSync } = require("node:sqlite");
+const database = new DatabaseSync(process.argv[2], { readOnly: true });
+try {
+  database.exec("BEGIN");
+  const names = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name));
+  const hasSync = names.has("mail_sync_accounts") && names.has("mail_sync_messages");
+  const snapshot = {
+    accounts: hasSync ? database.prepare(
+      "SELECT account_id, workspace_id, consent_id, retention_days FROM mail_sync_accounts ORDER BY account_id").all() : [],
+    messages: hasSync ? database.prepare(
+      "SELECT account_id, workspace_id, message_id, received_at FROM mail_sync_messages ORDER BY account_id, message_id").all() : [],
+  };
+  database.exec("COMMIT");
+  console.log(JSON.stringify(snapshot));
+} finally { database.close(); }
+NODE
+}
+
 # Verify all non-retained owner tables monotonically, and validate session retention
 # by exact IDs rather than row counts. Finishing a session legitimately removes
 # the oldest completed session beyond 1000 and all of its intervals.
 # This verifier runs on both deployment and code rollback.
 verify_row_counts() {
-  local before="$1" after="$2" before_sessions="$3" after_sessions="$4"
-  /usr/bin/node - "$before" "$after" "$before_sessions" "$after_sessions" <<'NODE'
+  local before="$1" after="$2" before_sessions="$3" after_sessions="$4" before_mail="$5" after_mail="$6"
+  /usr/bin/node - "$before" "$after" "$before_sessions" "$after_sessions" "$before_mail" "$after_mail" <<'NODE'
 const fs = require("node:fs");
-const [a, b, oldSessions, newSessions] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
+const [a, b, oldSessions, newSessions, oldMail, newMail] = process.argv.slice(2).map(f => JSON.parse(fs.readFileSync(f, "utf8")));
 if (b.integrity !== "ok" || b.foreignKeyViolations !== 0)
   throw new Error("Integrita produkcni databaze selhala");
 const ignored = new Set([
@@ -96,13 +118,32 @@ const ignored = new Set([
   // A bounded invalidation queue: 1001 records legitimately compact into 1 marker.
   "semantic_index_outbox"
 ]);
-const retentionTables = new Set(["work_sessions", "work_session_intervals"]);
+const retentionTables = new Set(["work_sessions", "work_session_intervals", "mail_sync_messages"]);
 for (const [table, count] of Object.entries(a.tables)) {
   if (ignored.has(table) || retentionTables.has(table)) continue;
   const after = b.tables[table];
   if (!Number.isSafeInteger(after) || after < count)
     throw new Error("KRITICKY UBYTEK zaznamu: " + table + " (" + count + " -> " + after + ")");
 }
+// Mail metadata can only decrease because of proven-expired retention rows.
+ // Keep the existing count monotonicity guard for accounts and all other tables.
+const mailKey = r => r.account_id + ":" + r.message_id;
+const beforeConsent = new Map(oldMail.accounts.map(r => [r.account_id, r]));
+const afterConsent = new Map(newMail.accounts.map(r => [r.account_id, r]));
+const afterMessageIds = new Set(newMail.messages.map(mailKey));
+const removedMail = oldMail.messages.filter(r => !afterMessageIds.has(mailKey(r)));
+const cutoffNow = Date.now();
+for (const row of removedMail) {
+  const old = beforeConsent.get(row.account_id);
+  const current = afterConsent.get(row.account_id);
+  if (!old || !current || old.workspace_id !== row.workspace_id ||
+      current.workspace_id !== old.workspace_id || current.consent_id !== old.consent_id ||
+      !Number.isSafeInteger(old.retention_days) || old.retention_days !== current.retention_days ||
+      !Number.isSafeInteger(row.received_at) ||
+      row.received_at >= cutoffNow - old.retention_days * 86_400_000)
+    throw new Error("KRITICKY UBYTEK: mail_sync_messages (neprokazana retence)");
+}
+if (removedMail.length) console.log("Retence mail metadat overena: " + removedMail.length + " expirovanych zaznamu.");
 if (oldSessions.hasSessions && !newSessions.hasSessions)
   throw new Error("KRITICKY UBYTEK: zmizelo schema pracovnich relaci");
 if (oldSessions.hasSessions) {
@@ -175,8 +216,10 @@ on_exit() {
       if runuser -u ai-executive -- /usr/bin/node \
            "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/rollback.json" &&
          snapshot_work_sessions > "$BACKUP/rollback-sessions.json" &&
+         snapshot_mail_sync > "$BACKUP/rollback-mail.json" &&
          verify_row_counts "$BACKUP/before.json" "$BACKUP/rollback.json" \
-           "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json"; then
+           "$BACKUP/before-sessions.json" "$BACKUP/rollback-sessions.json" \
+           "$BACKUP/before-mail.json" "$BACKUP/rollback-mail.json"; then
         echo "Rollback: puvodni verze dostupna a zaznamy zachovany." >&2
       else
         echo "KRITICKA CHYBA: rollback neobnovil pocet zaznamu, data nemenit naslepo." >&2
@@ -292,6 +335,7 @@ diff -qr --exclude=store.sqlite-shm -- "$DATA" "$BACKUP/data" ||
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/before.json"
 snapshot_work_sessions > "$BACKUP/before-sessions.json"
+snapshot_mail_sync > "$BACKUP/before-mail.json"
 /usr/bin/node "$APP/scripts/check-data.mjs" \
   "$BACKUP/data/store.sqlite" > "$BACKUP/copy.json"
 
@@ -332,9 +376,11 @@ verify_service || die "sluzba nebo lokalni/HTTPS API nejsou dostupne"
 runuser -u ai-executive -- /usr/bin/node \
   "$APP/scripts/check-data.mjs" "$DATA/store.sqlite" > "$BACKUP/after.json"
 snapshot_work_sessions > "$BACKUP/after-sessions.json"
+snapshot_mail_sync > "$BACKUP/after-mail.json"
 
 verify_row_counts "$BACKUP/before.json" "$BACKUP/after.json" \
-  "$BACKUP/before-sessions.json" "$BACKUP/after-sessions.json"
+  "$BACKUP/before-sessions.json" "$BACKUP/after-sessions.json" \
+  "$BACKUP/before-mail.json" "$BACKUP/after-mail.json"
 systemctl is-active --quiet "$SERVICE"
 STOPPED=0
 echo "======================================"
