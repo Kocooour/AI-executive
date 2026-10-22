@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { taskDueTone } from "../../../lib/task-views";
+import { taskDueTone, taskMatchesView } from "../../../lib/task-views";
 import { attentionReason, taskDueSummary } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
@@ -86,6 +86,11 @@ export function HomeView({ app }: { app: LumiApp }) {
   const moreToday = (sidebarCounts.Today ?? homeTodayTasks.length) - homeTodayTasks.length;
   const proposedBlocks = visibleDayPlan ? visibleDayPlan.planBlocks.length : 0;
   const unscheduledTasks = visibleDayPlan ? visibleDayPlan.unscheduled.length : 0;
+  // The plan also takes tasks that are not in Today (a close deadline, high priority).
+  const unscheduledOutsideToday = visibleDayPlan ? visibleDayPlan.unscheduled.filter((planned) => {
+    const task = items.find((item) => item.id === planned.taskId);
+    return !task || !taskMatchesView(task, "Today", today);
+  }).length : 0;
   // Calendar and day plan belong to one workspace; name it when Home shows the read-only aggregate.
   const scopeNote = activeWorkspaceId === "all" && writeWorkspace ? ` (${writeWorkspace.title})` : "";
 
@@ -191,7 +196,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           {currentDayPlanBlock && <p><strong>{tr("dayPlanCurrent")}:</strong> {currentDayPlanBlock.title} · {planBlockState(currentDayPlanBlock)}</p>}
           {nextDayPlanBlock && <p><strong>{tr("dayPlanNext")}:</strong> {nextDayPlanBlock.title} · {planBlockState(nextDayPlanBlock)}</p>}
           {proposedBlocks > 0 && <p>{fill("homePlanProposed", { n: proposedBlocks })}</p>}
-          {unscheduledTasks > 0 && <p>{fill("homePlanUnscheduled", { n: unscheduledTasks })}</p>}
+          {unscheduledTasks > 0 && <p>{unscheduledOutsideToday > 0 ? fill("homePlanUnscheduledExtra", { n: unscheduledTasks, m: unscheduledOutsideToday }) : fill("homePlanUnscheduled", { n: unscheduledTasks })}</p>}
           <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("homePlanOpen")} →</button>
         </div> : dayPlanStatus ? <p className="attentionEmpty" role="status">{dayPlanStatus}</p> : null}
       </section>

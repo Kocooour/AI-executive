@@ -1876,7 +1876,6 @@ article {
 .homeTaskList small {
   margin-top: 3px;
   font-size: 11px;
-  text-transform: capitalize;
 }
 .calmEmpty {
   min-height: 160px;

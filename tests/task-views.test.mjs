@@ -15,7 +15,8 @@ test("view membership follows the documented working views", () => {
   const inbox = task({ properties: { inbox: true } });
   const flaggedToday = task({ properties: { today: true } });
   const dueToday = task({ properties: { when: TODAY } });
-  const overdue = task({ properties: { when: "2026-10-01" } });
+  const overdue = task({ properties: { deadline: "2026-10-01" } });
+  const plannedEarlier = task({ properties: { when: "2026-10-01" } });
   const upcoming = task({ properties: { when: "2026-10-20" } });
   const anytime = task();
   const someday = task({ properties: { someday: true } });
@@ -26,7 +27,8 @@ test("view membership follows the documented working views", () => {
   assert.deepEqual(membership(inbox), ["Inbox"]);
   assert.deepEqual(membership(flaggedToday), ["Today"]);
   assert.deepEqual(membership(dueToday), ["Today"]);
-  assert.deepEqual(membership(overdue), ["Today", "Overdue"]);
+  assert.deepEqual(membership(overdue), ["Overdue", "Anytime"]);
+  assert.deepEqual(membership(plannedEarlier), ["Today"]);
   assert.deepEqual(membership(upcoming), ["Upcoming"]);
   assert.deepEqual(membership(anytime), ["Anytime"]);
   assert.deepEqual(membership(someday), ["Someday"]);
@@ -57,9 +59,12 @@ test("manual sort is stable across equal positions", () => {
 });
 
 test("due tone marks overdue before soon and ignores closed or non-task records", () => {
-  assert.equal(taskDueTone(task({ properties: { when: "2026-10-06" } }), TODAY, NOW), "dueOverdue");
+  assert.equal(taskDueTone(task({ properties: { deadline: "2026-10-06" } }), TODAY, NOW), "dueOverdue");
   assert.equal(taskDueTone(task({ properties: { when: "2026-10-20", deadline: "2026-10-01" } }), TODAY, NOW), "dueOverdue");
-  assert.equal(taskDueTone(task({ properties: { when: TODAY } }), TODAY, NOW), "dueSoon");
+  // A planned day is not a deadline: neither a passed nor today's planned day is alarming.
+  assert.equal(taskDueTone(task({ properties: { when: "2026-10-06" } }), TODAY, NOW), "");
+  assert.equal(taskDueTone(task({ properties: { when: TODAY } }), TODAY, NOW), "");
+  assert.equal(taskDueTone(task({ properties: { when: "2026-10-01", deadline: "2026-10-30" } }), TODAY, NOW), "");
   assert.equal(taskDueTone(task({ properties: { deadline: "2026-10-08" } }), TODAY, NOW), "dueSoon");
   assert.equal(taskDueTone(task({ properties: { when: "2026-10-09" } }), TODAY, NOW), "");
   assert.equal(taskDueTone(task({ properties: { when: "soon" } }), TODAY, NOW), "");
@@ -95,7 +100,8 @@ test("a task added in Today gets today's date as well as the flag", () => {
   assert.deepEqual(newTaskPlacement("", {}, options), { inbox: false, today: true, when: TODAY });
   const created = task({ properties: newTaskPlacement("", {}, options) });
   assert.deepEqual(["Today", "Anytime", "Overdue"].filter((view) => taskMatchesView(created, view, TODAY)), ["Today"]);
-  assert.deepEqual(["Today", "Anytime", "Overdue"].filter((view) => taskMatchesView(created, view, "2026-10-08")), ["Today", "Overdue"]);
+  // A day later it is still in Today; a planned day that passed is not overdue (only a deadline is).
+  assert.deepEqual(["Today", "Anytime", "Overdue"].filter((view) => taskMatchesView(created, view, "2026-10-08")), ["Today"]);
 });
 
 test("new task placement follows a typed date, then explicit values, then the view", () => {
@@ -183,4 +189,14 @@ test("ordinary punctuation and the edges of the year", () => {
   const newYearsEve = new Date(2026, 11, 31, 23, 59);
   assert.equal(parseCaptureText("x 1. 1.", "2026-12-31", newYearsEve).when, "2027-01-01");
   assert.equal(parseCaptureText("x 31. 12.", "2026-12-31", newYearsEve).when, "2026-12-31");
+});
+
+test("the Overdue list sorts by deadline; other lists by planned day", async () => {
+  const { taskDateSortKey } = await import("../lib/task-views.ts");
+  const a = task({ properties: { deadline: "2026-10-05" } });
+  const b = task({ properties: { deadline: "2026-10-01", when: "2026-10-20" } });
+  const c = task({ properties: { when: "2026-10-02" } });
+  const sorted = (view) => [a, b, c].sort((x, y) => taskDateSortKey(x, view).localeCompare(taskDateSortKey(y, view)));
+  assert.deepEqual(sorted("Overdue"), [b, a, c]);
+  assert.deepEqual(sorted("Today"), [c, b, a]);
 });
