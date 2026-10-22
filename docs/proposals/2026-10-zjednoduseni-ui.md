@@ -21,7 +21,7 @@ Navrhuji tři principy a pět změn:
 | # | Změna | Rozsah | Rozhodnutí |
 |---|---|---|---|
 | A | Odložení úkolu ve stylu Things (kalendář v řádku + návrh Lumi) | UI + lehká logika | ne |
-| B | Kontext projektu (proč je důležitý, hlavní cíle, hotovo když) a stránka projektu | UI + datový model | drobné ⚑ |
+| B | Kontext projektu (proč je důležitý, hlavní cíle, hotovo když) a stránka projektu | UI + datový model | **rozhodnuto 22. 10.:** Lumi smí navrhovat kontext (přes schválení) |
 | C | Lumi z e-mailů navrhne nový projekt s kroky | logika + konektor + UI | **rozhodnuto 22. 10.:** C1 povoleno, model Hermes (§6.1) |
 | D | Zjednodušení navigace, Domů, Dnes a detailu úkolu | UI | ne |
 | E | Opravy logiky nalezené při revizi | logika | ne |
@@ -153,7 +153,7 @@ Hotovo, když
 
 ### 4.2 Kdo kontext píše
 - Primárně vlastník: inline editace s viditelným stavem ukládání (stejný vzor jako dnešní `ProjectOverview`).
-- **✦ Lumi navrhne**: Lumi z názvu, úkolů, poznámek projektu a navázaných e-mailových zdrojů (pokud je C schváleno) připraví **koncept**. Ukáže se jako diff (před → po) v běžném approval sheetu a uloží se až po potvrzení. U kontextu je pak štítek „navrženo Lumi, potvrzeno 22. 10.“. Neodporuje to textu „Lumi ho bez schválení nedoplňuje“, jen pro to přidává schválenou cestu. **⚑ drobné rozhodnutí:** souhlasíte, aby Lumi kontext projektu navrhovala (přes PACT proposal, nikdy přímo)?
+- **✦ Lumi navrhne**: Lumi z názvu, úkolů, poznámek projektu a navázaných e-mailových zdrojů (pokud je C schváleno) připraví **koncept**. Ukáže se jako diff (před → po) v běžném approval sheetu a uloží se až po potvrzení. U kontextu je pak štítek „navrženo Lumi, potvrzeno 22. 10.“. Neodporuje to textu „Lumi ho bez schválení nedoplňuje“, jen pro to přidává schválenou cestu. **Rozhodnutí vlastníka 22. 10. 2026:** Lumi smí kontext projektu navrhovat, vždy přes PACT proposal a schválení, nikdy přímým zápisem. Nápověda u pole se změní na „Lumi může navrhnout znění, uloží se až po vašem schválení.“
 - Kontext je pro chat a plánování **owner statement** s provenance (Context Graph). Odklad podle §3.2 i řazení plánu ho mohou použít jako potvrzenou důležitost projektu.
 
 ### 4.3 Data
@@ -190,10 +190,10 @@ Inspektor vpravo slouží jen pro detail úkolu otevřeného ze stránky projekt
 
 ### 5.1 Navigace
 Desktop sidebar: **Domů · Doručené · Dnes · Nadcházející · Projekty · Kalendář** a pod čarou seznam aktivních projektů (jako v Things, max. 7, s průběhem). Dál:
-- **Poznámky a Hledání** zůstanou dostupné přes ⌘K a přes „Další pohledy“. Hledání v topbaru už existuje. *(Odchylka od UX-UI.md IA, kde jsou Notes a Search v primárním sidebaru: **⚑ potvrďte**, případně ponechme Poznámky.)*
+- **Poznámky a Hledání** zůstanou dostupné přes ⌘K a přes „Další pohledy“. Hledání v topbaru už existuje. *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
 - **Pošta** se přesune z Nastavení do Doručených jako záložka/filtr „Z pošty“ (seznam vláken z připojených účtů, otevření, „Vytvořit úkol“, později „Navrhnout projekt“). Nastavení → Pošta zůstane jen pro připojení účtu.
 - Počty v sidebaru jen tam, kde vyjadřují práci: Doručené (k roztřídění), Dnes (otevřené dnes). U Projektů místo počtu červená tečka, když některý projekt potřebuje pozornost.
-- Mobil: spodní lišta **Domů · Doručené · Dnes · Projekty · Více**. Kalendář se přesune do „Více“ a na Dnes (pás událostí nahoře, viz §5.3). *(⚑ potvrďte, UX-UI.md má Calendar v bottom nav.)*
+- Mobil: spodní lišta **Domů · Doručené · Dnes · Projekty · Více**. Kalendář se přesune do „Více“ a na Dnes (pás událostí nahoře, viz §5.3). *(Rozhodnutí vlastníka 22. 10. 2026: schváleno, UX-UI.md je upravené.)*
 
 ### 5.2 Domů
 - Položka pozornosti má jeden řádek titulku a jeden řádek důvodu („Termín byl včera“). Vpravo je jedna primární akce podle typu položky: u termínu **datový čip** (stejný popover jako §3), u čekání „Připomenout“, u projektu bez kroku „Přidat krok“. Odložit/Skrýt/Zdroje jsou v menu `⋯`. Na mobilu je swipe jako zkratka, ne jediná cesta.
@@ -325,10 +325,10 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 |---|---|---|---|
 | 1 | E1–E4, E8: oddělení plánu a termínu, štítky, počty | – | unit `format`/`day-plan`, e2e home/today |
 | 2 | A: `lib/defer-suggestion.ts` + popover Kdy na řádku, Undo, `deferHistory`, `evening` | 1 | unit pravidel (pevný čas), e2e odkladu desktop + mobil + offline |
-| 3 | D1: navigace (sidebar, mobilní lišta, Pošta do Doručených) | ⚑ potvrzení IA | e2e design-navigation, mobile-more |
+| 3 | D1: navigace (sidebar, mobilní lišta, Pošta do Doručených) | rozhodnuto (navigace) | e2e design-navigation, mobile-more |
 | 4 | D2: Dnes jako jeden seznam s časovým sloupcem, Domů bez duplicit | 2 | e2e mobile-today, home-quiet, day plan |
 | 5 | D3: detail úkolu (čipy, sbalené sekce, zrušení „Seznam“) | 2 | e2e detail-inspector, task-row |
-| 6 | B: `context` projektu, migrace `goal`, stránka projektu, skupiny podle oblastí | ⚑ B | unit migrace, e2e project-overview, backup-restore |
+| 6 | B: `context` projektu, migrace `goal`, stránka projektu, skupiny podle oblastí | rozhodnuto (B) | unit migrace, e2e project-overview, backup-restore |
 | 7 | B+: „✦ Lumi navrhne“ kontext přes proposal | 6 | e2e approval/Undo |
 | 8 | C1: „✦ Navrhnout projekt“ z vlákna, `create_project_bundle`, volání jen přes Hermes, vyhodnocení §6.4 | rozhodnuto (C1, Hermes), 6 | unit validace výstupu, e2e s Gmail + Hermes mockem, test „žádný fallback na OpenAI“, data-boundary |
 | 9 | C2: průběžná analýza | ⚑ C2, 8 | privacy/retence, plánovač, dedup |
@@ -338,7 +338,7 @@ Každý řádek = jedno PR s vlastní větví a worktree podle [DEVELOPMENT.md](
 ## 9. Otázky pro vlastníka
 
 1. ~~**C (pošta → model):** Souhlasíte s variantou C1? Který poskytovatel?~~ **Rozhodnuto 22. 10.:** C1 povoleno, Hermes, pokud analýzu zvládne (§6.4).
-2. **B:** Smí Lumi navrhovat text kontextu projektu (vždy přes schválení)?
-3. **Navigace:** Souhlasíte s přesunem Poznámek a Hledání z hlavního sidebaru do ⌘K / Dalších pohledů a s Projekty místo Kalendáře ve spodní liště mobilu?
+2. ~~**B:** Smí Lumi navrhovat text kontextu projektu?~~ **Rozhodnuto 22. 10.:** ano, vždy přes schválení.
+3. ~~**Navigace:** Poznámky a Hledání mimo hlavní sidebar, Projekty místo Kalendáře na mobilu?~~ **Rozhodnuto 22. 10.:** ano.
 4. **Odklad:** Má „Příští týden“ znamenat pondělí, nebo chcete volitelný den (např. neděli pro týdenní review)? Chcete skupinu „Dnes večer“?
 5. Mám začít PR 1 (opravy E1–E4, bez produktového rozhodnutí) hned?
