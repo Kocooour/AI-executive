@@ -161,3 +161,60 @@ test("Mail v4 shows persistent Gmail history and discovery backlogs after reload
   await expect(section.getByText(/Čekají další změny z historie Gmailu/)).toBeVisible();
   await expect(section.getByText(/Probíhá dohledávání dalších zpráv/)).toBeVisible();
 });
+
+
+test("Mail v4 retention Save never silently changes an unchanged 7-day policy to 30 days", async ({ page }) => {
+  const account = { id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal",
+    email: "retention-seven@example.com" };
+  let retentionDays = 7;
+  const enableCalls: number[] = [];
+  await page.route("**/api/mail/gmail?*", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [account] }) });
+  });
+  await page.route("**/api/mail/gmail/sync", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "enable") {
+      enableCalls.push(body.retentionDays);
+      retentionDays = body.retentionDays;
+    }
+    expect(["status", "enable"]).toContain(body.action);
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      accounts: [{ accountId: account.id, workspaceId: "personal", enabled: true, retentionDays,
+        indexedCount: 1, reconciliationPending: 0, lastSyncedAt: Date.now() }],
+    }) });
+  });
+
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({
+    has: page.getByRole("heading", { name: "Pošta" }),
+  });
+  const select = section.getByLabel("Uchovávání");
+  const save = section.getByRole("button", { name: "Uložit uchovávání" });
+  await expect(section.getByText("retention-seven@example.com")).toBeVisible();
+  await expect(select).toHaveValue("7");
+  await expect(save).toBeDisabled();
+  expect(enableCalls).toEqual([]);
+
+  await page.reload();
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  await expect(select).toHaveValue("7");
+  await expect(save).toBeDisabled();
+  expect(enableCalls).toEqual([]);
+
+  await select.selectOption("30");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(select).toHaveValue("30");
+  await expect(save).toBeDisabled();
+  expect(enableCalls).toEqual([30]);
+
+  await select.selectOption("7");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(select).toHaveValue("7");
+  await expect(save).toBeDisabled();
+  expect(enableCalls).toEqual([30, 7]);
+});

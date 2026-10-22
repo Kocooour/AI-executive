@@ -98,6 +98,10 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     // Unknown sync state is never equivalent to disabled; otherwise we might
     // overwrite a 7-day retention policy with the default 30-day value.
     if (!workspaceId || busy || !syncStatusKnown || taskCreateInFlight.current) return;
+    const saved = syncStates.find((state) => state.accountId === account.id);
+    const retentionDays = retentions[account.id] ?? saved?.retentionDays ?? 30;
+    // Re-submitting an unchanged policy must not modify consent or its cursor.
+    if (action === "enable" && saved && retentionDays === saved.retentionDays) return;
     if (action === "disable" && !(await app.askConfirm({
       title: label("Vypnout synchronizaci Gmailu?", "Disable Gmail sync?"),
       message: label("Smažou se všechna uložená metadata tohoto účtu. Připojení Gmailu zůstane zachováno.",
@@ -108,7 +112,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     try {
       const data = await json("/api/mail/gmail/sync", {
         action, workspaceId, accountId: account.id,
-        ...(action === "enable" ? { retentionDays: retentions[account.id] || 30 } : {}),
+        ...(action === "enable" ? { retentionDays } : {}),
       });
       if (action === "sync") {
         const status = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
@@ -294,7 +298,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                             "Previously indexed messages awaiting revalidation: ",
                           )}{state.reconciliationPending}</p>}
                         <div className="notificationActions">
-                          <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "enable")}>
+                          <button disabled={busy || !syncStatusKnown || Boolean(state && days === state.retentionDays)}
+                             onClick={() => void changeSync(account, "enable")}>
                             {state ? label("Uložit uchovávání", "Save retention") : label("Zapnout synchronizaci", "Enable sync")}
                           </button>
                           {state && <>
