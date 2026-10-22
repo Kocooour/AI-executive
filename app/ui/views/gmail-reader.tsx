@@ -33,8 +33,16 @@ export function GmailReader({ app }: { app: LumiApp }) {
     return gmailJson(url, body, tr("mailLoadFailed"));
   }
 
-  useEffect(() => {
+  // Starting a newer lookup makes any message or conversation lookup still running stale: its
+  // finally block then leaves the busy state alone, so it is released here, by whoever invalidates.
+  function invalidateLookups() {
     detailVersion.current++;
+    setDetailBusy(false);
+    setThreadBusy(false);
+  }
+
+  useEffect(() => {
+    invalidateLookups();
     setBusy(false); // In-flight actions from the previous workspace no longer own this panel.
     setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false); setLoadFailed(false);
     if (!workspaceId || app.offlineView) return;
@@ -49,7 +57,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
 
   async function openFolder(account: Account, nextFolder: Folder) {
     if (busy || taskCreateInFlight.current || !workspaceId) return;
-    detailVersion.current++;
+    invalidateLookups();
     setBusy(true); setError(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setCreatedTaskId("");
     setSelected(account.id); setFolder(nextFolder);
     try {
@@ -63,8 +71,9 @@ export function GmailReader({ app }: { app: LumiApp }) {
 
   async function openDetail(account: Account, messageId: string, preserveThread = false) {
     if (taskCreateInFlight.current) return;
-    const version = ++detailVersion.current;
-    setDetail(null); if (!preserveThread) { setThread(null); setThreadBusy(false); }
+    invalidateLookups();
+    const version = detailVersion.current;
+    setDetail(null); if (!preserveThread) setThread(null);
     setCreatedTaskId(""); setTaskTitle(""); setDetailBusy(true); setError("");
     try {
       const data = await json("/api/mail/gmail/message", { workspaceId, accountId: account.id, messageId });
@@ -80,18 +89,15 @@ export function GmailReader({ app }: { app: LumiApp }) {
   }
 
   function closeMailDetail() {
-    // Closing the detail invalidates any in-flight conversation lookup. Its
-    // finally block deliberately ignores stale versions, so release the busy
-    // state here rather than leaving the spinner locked on indefinitely.
-    detailVersion.current++;
+    invalidateLookups();
     setDetail(null);
     setCreatedTaskId("");
-    setThreadBusy(false);
   }
 
   async function openThread(account: Account, threadId: string) {
     if (taskCreateInFlight.current || busy || threadBusy || !/^[0-9a-f]{5,64}$/i.test(threadId)) return;
-    const version = ++detailVersion.current;
+    invalidateLookups();
+    const version = detailVersion.current;
     setThreadBusy(true); setThread(null); setError("");
     try {
       const data = await json("/api/mail/gmail/thread", { workspaceId, accountId: account.id, threadId });
