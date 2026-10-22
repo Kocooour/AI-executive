@@ -452,6 +452,18 @@ export const schemaMigrations: SchemaMigration[] = [
       database.exec("CREATE INDEX IF NOT EXISTS mail_sync_reconciliation_idx ON mail_sync_messages(account_id, needs_reconcile, received_at DESC)");
     },
   },
+  {
+    // Gmail messages.list pages are opaque continuation tokens. Retaining
+    // them prevents silent loss when an expired History cursor requires
+    // rebuilding more than the first 25 Inbox / Sent message IDs.
+    id: "2026-10-mail-v4-discovery-checkpoints",
+    up(database) {
+      const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!columns.has("recovery_inbox_page_token")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_inbox_page_token TEXT");
+      if (!columns.has("recovery_sent_page_token")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_sent_page_token TEXT");
+      if (!columns.has("history_backlog_pending")) database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN history_backlog_pending INTEGER NOT NULL DEFAULT 0 CHECK(history_backlog_pending IN (0, 1))");
+    },
+  },
 ];
 
 export function runSchemaMigrations(database: DatabaseSync, migrations: SchemaMigration[] = schemaMigrations) {

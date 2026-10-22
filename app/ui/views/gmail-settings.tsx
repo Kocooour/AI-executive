@@ -8,7 +8,7 @@ type Message = { id: string; subject: string; from: string; to: string; date: st
 type Folder = "inbox" | "sent";
 type Detail = { id: string; threadId: string; subject: string; from: string; to: string; date: string; text: string; truncated: boolean };
 type Thread = { id: string; total: number; omitted: number; messages: Message[] };
-type SyncState = { accountId: string; workspaceId: string; enabled: boolean; retentionDays: number; lastSyncedAt: number | null; indexedCount: number; reconciliationPending?: number };
+type SyncState = { accountId: string; workspaceId: string; enabled: boolean; retentionDays: number; lastSyncedAt: number | null; indexedCount: number; reconciliationPending?: number; historyPending?: boolean; discoveryPending?: boolean };
 
 export function GmailSettings({ app }: { app: LumiApp }) {
   const { language, tr } = app;
@@ -278,6 +278,16 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                             state.indexedCount + " " + label("záznamů", "records") +
                             (state.lastSyncedAt ? " · " + new Date(state.lastSyncedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB") : "")
                           : label("Synchronizace vypnutá", "Sync disabled")}</p>
+                        {syncStatusKnown && state && state.historyPending &&
+                          <p role="status">{label(
+                            "Čekají další změny z historie Gmailu – synchronizuj znovu.",
+                            "More Gmail history changes are pending – sync again.",
+                          )}</p>}
+                        {syncStatusKnown && state && state.discoveryPending &&
+                          <p role="status">{label(
+                            "Probíhá dohledávání dalších zpráv – synchronizuj znovu.",
+                            "More mailbox messages remain to be discovered – sync again.",
+                          )}</p>}
                         {syncStatusKnown && state && (state.reconciliationPending ?? 0) > 0 &&
                           <p role="status">{label(
                             "Nevyřízené ověření dřívějších metadat: ",
