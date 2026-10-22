@@ -102,6 +102,23 @@ try {
 NODE
 }
 
+# While the service is STOPPED, no owner request can alter a Gmail sync
+# consent or index. Detect data loss from build/pre-start maintenance strictly
+# before the application begins serving traffic. After start these records can
+# change legitimately (opt-out, Gmail deletion, retention and index cap).
+verify_mail_sync_prestart() {
+  local before="$1" prestart="$2"
+  /usr/bin/node - "$before" "$prestart" <<'NODE'
+const fs = require("node:fs");
+const [before, after] = process.argv.slice(2).map(file => JSON.parse(fs.readFileSync(file, "utf8")));
+if (JSON.stringify(before.accounts) !== JSON.stringify(after.accounts))
+  throw new Error("KRITICKY UBYTEK/ZMENA: mail_sync_accounts pri zastavene sluzbe");
+if (JSON.stringify(before.messages) !== JSON.stringify(after.messages))
+  throw new Error("KRITICKY UBYTEK/ZMENA: mail_sync_messages pri zastavene sluzbe");
+console.log("Gmail sync consent a metadata pred spustenim: bez zmen");
+NODE
+}
+
 # Verify all non-retained owner tables monotonically, and validate session retention
 # by exact IDs rather than row counts. Finishing a session legitimately removes
 # the oldest completed session beyond 1000 and all of its intervals.
@@ -118,7 +135,9 @@ const ignored = new Set([
   // A bounded invalidation queue: 1001 records legitimately compact into 1 marker.
   "semantic_index_outbox"
 ]);
-const retentionTables = new Set(["work_sessions", "work_session_intervals", "mail_sync_messages"]);
+// Both mail tables can legitimately change after service startup. The
+// strict off-line snapshot above checks their integrity before traffic resumes.
+const retentionTables = new Set(["work_sessions", "work_session_intervals", "mail_sync_messages", "mail_sync_accounts"]);
 for (const [table, count] of Object.entries(a.tables)) {
   if (ignored.has(table) || retentionTables.has(table)) continue;
   const after = b.tables[table];
@@ -136,6 +155,14 @@ for (const [table, count] of Object.entries(a.tables)) {
 const mailKey = r => r.account_id + ":" + r.message_id;
 const beforeConsent = new Map(oldMail.accounts.map(r => [r.account_id, r]));
 const afterConsent = new Map(newMail.accounts.map(r => [r.account_id, r]));
+const changedConsent = oldMail.accounts.filter(old => {
+  const current = afterConsent.get(old.account_id);
+  return !current || current.workspace_id !== old.workspace_id ||
+    current.consent_id !== old.consent_id ||
+    current.retention_days !== old.retention_days;
+});
+if (changedConsent.length) console.warn("UPOZORNENI: " + changedConsent.length +
+  " mail_sync_accounts se po spusteni sluzby zmenilo/smazalo; overte explicitni souhlas v auditu. Predstartovni kontrola byla bez zmen.");
 const afterMessageIds = new Set(newMail.messages.map(mailKey));
 const removedMail = oldMail.messages.filter(r => !afterMessageIds.has(mailKey(r)));
 let expired = 0;
@@ -379,6 +406,11 @@ pnpm install --frozen-lockfile
 pnpm build
 fix_build_permissions
 test -z "$(git status --porcelain)"
+
+# Deployment/code-build work cannot silently alter consent or indexed mail
+# while the service remains stopped. Snapshot before any user traffic resumes.
+snapshot_mail_sync > "$BACKUP/prestart-mail.json"
+verify_mail_sync_prestart "$BACKUP/before-mail.json" "$BACKUP/prestart-mail.json"
 
 echo "=== START A PROVOZNI KONTROLY ==="
 systemctl start "$SERVICE"
