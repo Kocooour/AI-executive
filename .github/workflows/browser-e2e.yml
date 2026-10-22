@@ -1,13 +1,19 @@
 name: Browser E2E
-run-name: Browser E2E for ${{ inputs.target_sha || github.sha }}
+run-name: Browser E2E for ${{ inputs.target_sha }}
 
-# Full browser verification is a manual production-release gate.
-# Run on the exact main SHA intended for deployment; do not run for every PR.
+# Full browser verification is a manual production-release gate on the exact
+# main SHA. A non-main run requires the repository owner to dispatch it with a
+# reference to their explicit PRIOR approval. The workflow cannot authenticate
+# the approval text; the owner is responsible for verifying that reference.
 on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: "Exact 40-character commit SHA (required for main releases; optional for transition PR checks)"
+        description: "Exact 40-character SHA of the commit to verify (required for every dispatch)"
+        required: true
+        type: string
+      approval_reference:
+        description: "Non-main only: link to the project owner\u0027s explicit prior approval"
         required: false
         type: string
 
@@ -16,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: browser-e2e-${{ inputs.target_sha || github.sha }}
+  group: browser-e2e-${{ inputs.target_sha }}
   cancel-in-progress: false
 
 jobs:
@@ -36,24 +42,42 @@ jobs:
       - name: Checkout exact target SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_sha || github.sha }}
+          ref: ${{ inputs.target_sha }}
           fetch-depth: 0
 
       - name: Verify exact E2E target SHA
         shell: bash
         env:
-          TARGET_SHA: ${{ inputs.target_sha || github.sha }}
-          PROVIDED_SHA: ${{ inputs.target_sha }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
         run: |
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid target SHA"; exit 1; }
           test "$(git rev-parse HEAD)" = "$TARGET_SHA" || { echo "Checkout SHA mismatch"; exit 1; }
           if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            # Releases must specify the SHA; only the transition PR may fall back to its branch tip.
-            test -n "$PROVIDED_SHA" || { echo "Explicit target_sha required for main release"; exit 1; }
+            # The release target must be a commit reachable from main.
             git fetch --no-tags origin main
             git merge-base --is-ancestor "$TARGET_SHA" FETCH_HEAD || {
               echo "Release SHA is not reachable from main"; exit 1;
             }
+          else
+            # Prevent an unapproved PR/reviewer from triggering the complete
+            # suite. The owner must personally dispatch the exception and cite
+            # their prior approval. Only the owner can attest its authenticity.
+            [[ "$GITHUB_REF" == refs/heads/* ]] || {
+              echo "Owner-approved exceptions must use a branch ref"; exit 1;
+            }
+            test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER" || {
+              echo "Only the repository owner may dispatch a full-suite exception"; exit 1;
+            }
+            [[ "$APPROVAL_REFERENCE" =~ [^[:space:]] ]] || {
+              echo "Owner-approved exception requires a prior approval reference"; exit 1;
+            }
+            git fetch --no-tags origin "$GITHUB_REF_NAME"
+            git merge-base --is-ancestor "$TARGET_SHA" FETCH_HEAD || {
+              echo "Exception target SHA is not reachable from dispatch branch"; exit 1;
+            }
+            echo "OWNER_APPROVED_EXCEPTION_BY=$GITHUB_ACTOR"
+            printf 'Owner approval reference: %s\n' "$APPROVAL_REFERENCE" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "VERIFIED_E2E_TARGET_SHA=$TARGET_SHA"
           echo "### Exact browser E2E target" >> "$GITHUB_STEP_SUMMARY"
