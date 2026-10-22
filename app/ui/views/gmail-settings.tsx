@@ -34,6 +34,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const [taskTitle, setTaskTitle] = useState("");
   const [createdTaskId, setCreatedTaskId] = useState("");
   const detailVersion = useRef(0);
+  const syncStatusVersion = useRef(0);
   const taskCreateInFlight = useRef(false);
   const label = (cs: string, en: string) => language === "cs" ? cs : en;
 
@@ -45,7 +46,28 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     return result;
   }
 
+  // Retry can be triggered without reloading the page. The version guard
+  // prevents a late reply from another workspace from overwriting this one.
+  async function reloadSyncStatus() {
+    if (!workspaceId || app.offlineView) return;
+    const version = ++syncStatusVersion.current;
+    try {
+      const data = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
+      if (version !== syncStatusVersion.current) return;
+      setSyncStates(data.accounts as SyncState[]);
+      setSyncStatusKnown(true);
+      setSyncWarning("");
+    } catch {
+      if (version !== syncStatusVersion.current) return;
+      setSyncWarning(label(
+        "Stav synchronizace není dostupný. Připojené e-maily lze dál číst.",
+        "Sync status is unavailable. Connected email can still be read.",
+      ));
+    }
+  }
+
   useEffect(() => {
+    syncStatusVersion.current++;
     detailVersion.current++;
     setAccounts([]); setSyncStates([]); setSyncStatusKnown(false); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
@@ -56,12 +78,7 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
       .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
       .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoaded(true); } });
-    void json("/api/mail/gmail/sync", { action: "status", workspaceId })
-      .then((data) => { if (live) { setSyncStates(data.accounts as SyncState[]); setSyncStatusKnown(true); setSyncWarning(""); } })
-      .catch(() => { if (live) setSyncWarning(label(
-        "Stav synchronizace není dostupný. Připojené e-maily lze dál číst.",
-        "Sync status is unavailable. Connected email can still be read.",
-      )); });
+    void reloadSyncStatus();
     return () => { live = false; };
     // app object changes every render; the workspace is the only API scoping dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,8 +132,13 @@ export function GmailSettings({ app }: { app: LumiApp }) {
         ...(action === "enable" ? { retentionDays } : {}),
       });
       if (action === "sync") {
-        const status = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
-        setSyncStates(status.accounts as SyncState[]);
+        // The successful sync response already carries its final account state.
+        // A failed follow-up status refresh must never re-label a committed
+        // synchronization as failed or induce an unnecessary retry.
+        if (data.state && typeof data.state === "object") {
+          const synced = data.state as SyncState;
+          setSyncStates((prior) => [...prior.filter((item) => item.accountId !== synced.accountId), synced]);
+        }
         setSyncNotice(data.partial === true ? label(
           "Synchronizace není úplná. Spusť ji znovu pro další změny nebo ověření dříve uložených zpráv.",
           "Sync is incomplete. Run it again to process more changes or verify previously indexed messages.",
@@ -265,10 +287,15 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                           "Volitelné. Ukládají se jen identifikátory zpráv, předmět, odesílatel, datum a stav Doručené/Odeslané. Nikdy těla ani přílohy. Automatické kontroly zatím nejsou zapnuté.",
                           "Optional. Stores only message identifiers, subject, sender, date and Inbox/Sent state. Never bodies or attachments. Automatic checks are not enabled yet.",
                         )}</p>
-                        {!syncStatusKnown && <p role="status">{label(
-                          "Stav synchronizace neznámý – změny nastavení jsou dočasně zakázány.",
-                          "Sync status unknown – changes to sync settings are temporarily disabled.",
-                        )}</p>}
+                        {!syncStatusKnown && <>
+                          <p role="status">{label(
+                            "Stav synchronizace neznámý – změny nastavení jsou dočasně zakázány.",
+                            "Sync status unknown – changes to sync settings are temporarily disabled.",
+                          )}</p>
+                          <button disabled={busy} onClick={() => void reloadSyncStatus()}>
+                            {label("Obnovit stav synchronizace", "Retry sync status")}
+                          </button>
+                        </>}
                         <label>{label("Uchovávání", "Retention")}
                           <select value={days} disabled={busy || !syncStatusKnown} onChange={(event) =>
                             setRetentions((old) => ({ ...old, [account.id]: Number(event.target.value) }))}>
