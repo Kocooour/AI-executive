@@ -108,6 +108,16 @@ switch (name) {
         set("compacted", "1");
         log("outbox-compacted");
       }
+      if (["mailretention", "mailloss"].includes(scenario) &&
+          get("head") === target && !fs.existsSync(stateFile("mail-pruned"))) {
+        const db = new DatabaseSync(dbFile);
+        try {
+          db.prepare("DELETE FROM mail_sync_messages WHERE message_id='expired'").run();
+          if (scenario === "mailloss")
+            db.prepare("DELETE FROM mail_sync_messages WHERE message_id='current'").run();
+        } finally { db.close(); }
+        set("mail-pruned", "1");
+      }
       set("service", "active"); log("start-" + get("head").slice(0,1)); break;
     }
     process.exit(8);

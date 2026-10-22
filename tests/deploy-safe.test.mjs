@@ -70,6 +70,14 @@ function sandbox(scenario) {
         sqlite.exec("COMMIT");
       } catch (error) { sqlite.exec("ROLLBACK"); throw error; }
     }
+    if (["mailretention", "mailloss"].includes(scenario)) {
+      sqlite.exec("CREATE TABLE mail_sync_accounts(account_id TEXT PRIMARY KEY, workspace_id TEXT, consent_id TEXT, retention_days INTEGER)");
+      sqlite.exec("CREATE TABLE mail_sync_messages(account_id TEXT, workspace_id TEXT, message_id TEXT, received_at INTEGER)");
+      sqlite.prepare("INSERT INTO mail_sync_accounts VALUES('acct','personal','consent',7)").run();
+      const add = sqlite.prepare("INSERT INTO mail_sync_messages VALUES('acct','personal',?,?)");
+      add.run("expired", Date.now() - 8 * 86_400_000);
+      add.run("current", Date.now() - 2 * 86_400_000);
+    }
     if (scenario === "outboxcompact") {
       // Match the bounded queue trigger shipped in PR #79. The queue is
       // deliberately transient: compaction is not a loss of canonical data.
@@ -188,6 +196,19 @@ scenarioCase("buildfail: rollback rebuilds original code and keeps verified back
   assert.equal(existsSync(path.join(f.backups, r.backups[0], "SHA256SUMS")), true);
   assert.ok(statSync(path.join(f.app, ".next/BUILD_ID")).mode & 0o040,
     "rollback must restore group-readable BUILD_ID");
+});
+scenarioCase("mailretention: expired Gmail metadata cleanup is accepted during startup", (r, f) => {
+  assert.equal(r.status, 0, r.output);
+  assert.equal(r.head, newSha);
+  assert.match(r.output, /Retence mail metadat overena: 1/);
+  const db = new DatabaseSync(path.join(f.data, "store.sqlite"));
+  try {
+    assert.deepEqual(db.prepare("SELECT message_id FROM mail_sync_messages ORDER BY message_id").all().map(x => x.message_id), ["current"]);
+  } finally { db.close(); }
+});
+scenarioCase("mailloss: unexpired Gmail metadata loss is rejected by deployment guard", (r) => {
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /KRITICKY UBYTEK: mail_sync_messages/);
 });
 scenarioCase("outboxcompact: legitimate semantic invalidation compaction does not trigger rollback", (r, f) => {
   assert.equal(r.status, 0, r.output);
