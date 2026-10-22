@@ -232,6 +232,10 @@ scenarioCase("maildisable: owner opt-out deletes consent and index after startup
 scenarioCase("mailprestartloss: unauthorized consent removal while stopped fails closed", (r, f) => {
   assert.notEqual(r.status, 0);
   assert.match(r.output, /KRITICKY UBYTEK\/ZMENA: mail_sync_accounts pri zastavene sluzbe/);
+  assert.match(r.output, /KRITICKA CHYBA: Gmail souhlas nebo metadata se zmenily pri zastavene sluzbe/);
+  assert.match(r.output, /zachovani Gmail souhlasu\/metadat NENI potvrzeno/);
+  assert.doesNotMatch(r.output, /Rollback: puvodni verze dostupna a zaznamy zachovany/,
+    "code-only rollback must never certify known lost Gmail consent or indexed messages");
   assert.equal(r.head, oldSha);
   assert.equal(r.service, "active");
   assert.equal(r.events.includes("start-b"), false, "new code must never serve after offline consent loss");
