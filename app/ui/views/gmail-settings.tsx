@@ -15,6 +15,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
   const workspaceId = app.activeWorkspaceId === "all" ? "" : app.activeWorkspaceId;
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
+  const [syncWarning, setSyncWarning] = useState("");
+  const [syncNotice, setSyncNotice] = useState("");
   const [retentions, setRetentions] = useState<Record<string, number>>({});
   const [selected, setSelected] = useState("");
   const [folder, setFolder] = useState<Folder>("inbox");
@@ -47,15 +49,18 @@ export function GmailSettings({ app }: { app: LumiApp }) {
     setAccounts([]); setSyncStates([]); setRetentions({}); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
-    void Promise.all([
-      json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId)),
-      json("/api/mail/gmail/sync", { action: "status", workspaceId }),
-    ]).then(([data, sync]) => { if (live) {
-      setAccounts(data.accounts as Account[]);
-      setSyncStates(sync.accounts as SyncState[]);
-      setLoaded(true);
-    } })
+    setSyncWarning(""); setSyncNotice("");
+    // Mail v4 is additive: an unavailable sync-status endpoint must never hide
+    // existing read-only Gmail accounts, message previews or Disconnect.
+    void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
+      .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
       .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoaded(true); } });
+    void json("/api/mail/gmail/sync", { action: "status", workspaceId })
+      .then((data) => { if (live) setSyncStates(data.accounts as SyncState[]); })
+      .catch(() => { if (live) setSyncWarning(label(
+        "Stav synchronizace není dostupný. Připojené e-maily lze dál číst.",
+        "Sync status is unavailable. Connected email can still be read.",
+      )); });
     return () => { live = false; };
     // app object changes every render; the workspace is the only API scoping dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,9 +110,15 @@ export function GmailSettings({ app }: { app: LumiApp }) {
       if (action === "sync") {
         const status = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
         setSyncStates(status.accounts as SyncState[]);
+        setSyncNotice(data.partial === true ? label(
+          "Byla zpracována pouze část změn. Pro pokračování spusť synchronizaci znovu.",
+          "Only part of the changes were processed. Run sync again to continue.",
+        ) : "");
       } else {
         setSyncStates(data.accounts as SyncState[]);
+        setSyncNotice("");
       }
+      setSyncWarning("");
     } catch {
       setError(label("Synchronizace Gmailu se nezdařila.", "Gmail sync operation failed."));
     } finally { setBusy(false); }
@@ -372,6 +383,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
               </div>
             </section>
           )}
+          {syncWarning && <p role="alert" className="settingsHint">{syncWarning}</p>}
+          {syncNotice && <p role="status">{syncNotice}</p>}
           {busy && <p role="status">{tr("syncing")}</p>}
           {error && <p role="alert" className="formError">{error}</p>}
         </>

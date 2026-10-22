@@ -692,6 +692,7 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
         if (++page >= 5) {
           if (!lastAppliedEventId) throw new MailError("Gmail history page exceeds sync budget", 409);
           nextHistory = lastAppliedEventId;
+          partial = true;
           break;
         }
         pageToken = response.nextPageToken;
