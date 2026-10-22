@@ -13,7 +13,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations, schemaMigrations } from "./schema-migrations";
-import { MAIL_RETENTION_SWEEP_MS, pruneExpiredMailMetadata } from "./mail-sync-retention";
+import { pruneExpiredMailMetadata } from "./mail-sync-retention";
 import {
   backupFormatVersion, describeFile, prepareRestoreCopy, publish as publishFile, removeIfExists,
   replaceTablesFromAttached, writeCleanCopy, type BackupMeta,
@@ -55,20 +55,6 @@ const backupDirectory = path.join(dataDirectory, "backups");
 const databasePath = path.join(dataDirectory, "store.sqlite");
 const legacyStorePath = path.join(dataDirectory, "store.json");
 let databaseInstance: DatabaseSync | null = null;
-let mailRetentionInterval: ReturnType<typeof setInterval> | null = null;
-function startMailRetentionSweep(database: DatabaseSync) {
-  if (mailRetentionInterval) return;
-  // The service's live DB is repaired periodically even when no one opens
-  // Settings or triggers a Gmail sync. unref lets Node exit normally in tests.
-  mailRetentionInterval = setInterval(() => {
-    if (databaseInstance !== database) return;
-    try { pruneExpiredMailMetadata(database); }
-    catch (error) { console.error("Mail metadata retention sweep failed:", error instanceof Error ? error.message : error); }
-  }, MAIL_RETENTION_SWEEP_MS);
-  mailRetentionInterval.unref();
-}
-
-
 // Work that needs the Context modules (which themselves read through getDatabase) and so cannot be imported here: a module
 // registers it, and it runs once the database is initialised (at once if that already happened).
 const readyHooks: Array<() => void> = [];
@@ -97,7 +83,6 @@ export function getDatabase() {
     repairBackupsDirectory();
     // Do not defer privacy retention until a user visits the Mail settings.
     pruneExpiredMailMetadata(database);
-    startMailRetentionSweep(database);
     runReadyHooks();
   } catch (error) {
     databaseInstance = null;
