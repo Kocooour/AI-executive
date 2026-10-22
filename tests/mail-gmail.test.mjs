@@ -695,6 +695,36 @@ test("Mail v4 opt-in, bounded initial and incremental History sync, metadata pri
   } finally { globalThis.fetch = oldFetch; }
 });
 
+test("Mail v4 retention change invalidates in-flight sync even before first cursor", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  mail.enableMailSync(workspaceId, accountId, 7);
+  const before = database.prepare("SELECT consent_id,history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+  assert.equal(before.history_id, null);
+  const oldFetch = globalThis.fetch;
+  let changed = false;
+  globalThis.fetch = async (target) => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "SYNC-TEMP" });
+    if (url.pathname === "/gmail/v1/users/me/profile") {
+      mail.enableMailSync(workspaceId, accountId, 90);
+      changed = true;
+      return Response.json({ historyId: "700" });
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages") return Response.json({ messages: [] });
+    throw new Error("Unexpected test endpoint " + url);
+  };
+  try {
+    await assert.rejects(mail.syncMailAccount(workspaceId, accountId), { status: 409 });
+    assert.equal(changed, true);
+    const after = database.prepare("SELECT consent_id,history_id,retention_days FROM mail_sync_accounts WHERE account_id=?").get(accountId);
+    assert.notEqual(after.consent_id, before.consent_id);
+    assert.equal(after.history_id, null);
+    assert.equal(after.retention_days, 90);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 0);
+  } finally { globalThis.fetch = oldFetch; }
+});
+
 test("Mail v4 concurrent disable-and-reenable cannot commit stale network results", async () => {
   const workspaceId = "mail-v4-fixture";
   const accountId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";

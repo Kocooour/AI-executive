@@ -579,6 +579,7 @@ export function enableMailSync(workspaceId: string, accountId: string, retention
       (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
       VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
       ON CONFLICT(account_id) DO UPDATE SET
+        consent_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN excluded.consent_id ELSE mail_sync_accounts.consent_id END,
         history_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.history_id END,
         last_synced_at=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.last_synced_at END,
         retention_days=excluded.retention_days, updated_at=excluded.updated_at`)
