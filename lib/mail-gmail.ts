@@ -601,21 +601,26 @@ export function enableMailSync(workspaceId: string, accountId: string, retention
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.prepare(`INSERT INTO mail_sync_accounts
-      (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
-      VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
-      ON CONFLICT(account_id) DO UPDATE SET
-        consent_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN excluded.consent_id ELSE mail_sync_accounts.consent_id END,
-        history_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.history_id END,
-        last_synced_at=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.last_synced_at END,
-        pending_event_id=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.pending_event_id END,
-        pending_event_offset=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN 0 ELSE mail_sync_accounts.pending_event_offset END,
-        history_backlog_pending=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN 0 ELSE mail_sync_accounts.history_backlog_pending END,
-        recovery_inbox_page_token=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.recovery_inbox_page_token END,
-        recovery_sent_page_token=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.recovery_sent_page_token END,
-        recovery_since_seconds=CASE WHEN mail_sync_accounts.retention_days != excluded.retention_days THEN NULL ELSE mail_sync_accounts.recovery_since_seconds END,
-        retention_days=excluded.retention_days, updated_at=excluded.updated_at`)
-      .run(accountId, workspaceId, randomUUID(), retentionDays, Date.now(), Date.now());
+    const existing = syncRow(workspaceId, accountId);
+    const now = Date.now();
+    if (!existing) {
+      db.prepare(`INSERT INTO mail_sync_accounts
+        (account_id, workspace_id, consent_id, history_id, last_synced_at, retention_days, created_at, updated_at)
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`)
+        .run(accountId, workspaceId, randomUUID(), retentionDays, now, now);
+    } else if (existing.retention_days !== retentionDays) {
+      // One explicit reset of ALL checkpoints when owner changes retention.
+      // Keep indexed metadata for non-destructive revalidation on next sync.
+      db.prepare(`UPDATE mail_sync_accounts SET
+        consent_id=?, history_id=NULL, last_synced_at=NULL,
+        pending_event_id=NULL, pending_event_offset=0,
+        history_backlog_pending=0,
+        recovery_inbox_page_token=NULL, recovery_sent_page_token=NULL,
+        recovery_since_seconds=NULL,
+        retention_days=?, updated_at=?
+        WHERE account_id=? AND workspace_id=?`)
+        .run(randomUUID(), retentionDays, now, accountId, workspaceId);
+    }
     trimMailIndex(accountId, retentionDays, Date.now());
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
