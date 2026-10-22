@@ -1,17 +1,16 @@
 name: Browser E2E
 
+# Full browser verification is a manual production-release gate.
+# Run on the exact main SHA intended for deployment; do not run for every PR.
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
-# PR code runs without write permissions or access to production secrets.
+# Manual E2E verification uses isolated synthetic data and no production secrets.
 permissions:
   contents: read
 
 concurrency:
-  group: browser-e2e-${{ github.event.pull_request.number || github.ref }}
+  group: browser-e2e-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
