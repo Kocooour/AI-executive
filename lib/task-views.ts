@@ -95,7 +95,7 @@ export function parseCaptureText(raw: string, today: string, now = new Date()) {
 
 // Where a newly created task lands. A date typed into the title wins; otherwise the task follows the
 // view it was added from. A task added to Today gets today's date as well as the flag, the same as
-// dragging it there or choosing Today in the detail panel, so it becomes overdue tomorrow like any dated task.
+// dragging it there or choosing Today in the detail panel, so tomorrow it stays in Today as a planned day that has passed, like any dated task.
 // A task typed into the row of Someday is marked for someday, and one typed into the row of
 // Upcoming gets tomorrow's date: it would otherwise land in Anytime and vanish from the list it
 // was typed into. This applies only when the caller leaves the placement to the view; the capture
