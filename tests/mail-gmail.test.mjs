@@ -1494,3 +1494,55 @@ test("Mail v4 shares the 120-message budget across History and pending Inbox/Sen
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 145);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Mail v4 reserves deleted History IDs before reconciling 120 older metadata rows", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000c";
+  const now = Date.now();
+  const deletedIds = Array.from({ length: 120 }, (_, i) => (0xc10000 + i).toString(16));
+  const staleIds = Array.from({ length: 120 }, (_, i) => (0xc20000 + i).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bounded-reconcile@example.com", mail.sealMail("RECONCILE-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100' WHERE account_id=?").run(accountId);
+  const insert = database.prepare("INSERT INTO mail_sync_messages(account_id,workspace_id,message_id,thread_id,subject,sender,received_at,unread,in_inbox,in_sent,needs_reconcile) VALUES(?,?,?,'abcabcabc','cached','reader@example.com',?,0,1,0,1)");
+  for (const [i, id] of staleIds.entries()) insert.run(accountId, workspaceId, id, now - i * 1000);
+  let pass = 1;
+  const details = [];
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return Response.json(pass === 1
+        ? { historyId: "250", history: [{ id: "200",
+          messagesDeleted: deletedIds.map(id => ({ message: { id } })) }] }
+        : { historyId: "300", history: [] });
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const id = url.pathname.split("/").at(-1);
+      details.push({ pass, id });
+      assert(staleIds.includes(id), "deleted IDs must never require metadata re-fetch");
+      return Response.json({ id, threadId: "abcabcabc", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "reconciled" }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.full, false);
+    assert.equal(first.updated, 0, "120 deleted History IDs exhaust the distinct-ID budget");
+    assert.equal(first.partial, true, "the 120 stale indexed messages still require verification");
+    assert.equal(first.state.reconciliationPending, 120);
+    assert.equal(details.length, 0, "no stale metadata may be fetched after 120 deletes");
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "250");
+    pass = 2;
+    const second = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(second.updated, 120);
+    assert.equal(second.partial, false);
+    assert.equal(second.state.reconciliationPending, 0);
+    assert.equal(details.filter(x => x.pass === 2).length, 120);
+    assert.equal(new Set(details.map(x => x.id)).size, 120);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 120);
+    assert.equal(database.prepare("SELECT history_id FROM mail_sync_accounts WHERE account_id=?").get(accountId).history_id, "300");
+  } finally { globalThis.fetch = oldFetch; }
+});
