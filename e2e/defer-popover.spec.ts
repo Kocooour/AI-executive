@@ -168,6 +168,22 @@ test("Lumi keeps a task with a deadline tomorrow in Today instead of suggesting 
   await expect(page.locator(".undo")).toHaveCount(0);
 });
 
+test("Keep for today moves a task planned on an earlier day to today", async ({ page }) => {
+  const title = `Včera plánováno ${Date.now()}`;
+  const dates = await days(page);
+  const id = await seed(page, title, { when: dates.yesterday, deadline: dates.tomorrow });
+  await chip(page, title).click();
+  const suggestion = popover(page).getByRole("region", { name: "Návrh Lumi" });
+  await suggestion.getByRole("button", { name: "Nechat na dnes" }).click();
+  await expect(popover(page)).toHaveCount(0);
+  await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === dates.today, true);
+  expect((await taskOnServer(page, id))?.properties?.deadline).toBe(dates.tomorrow);
+  await expect(chip(page, title)).toHaveAttribute("aria-label", "Kdy: Dnes — změnit");
+  // The scenarios share one instance: complete the task so its close deadline does not reach later Home scenarios.
+  await row(page, title).locator("button.check").click();
+  await expectOnServer(page, (entity) => entity.id === id && Boolean(entity.properties?.completedAt), true);
+});
+
 test("a task without a deadline gets a one-click suggestion that can be applied", async ({ page }) => {
   const title = `Návrh Lumi ${Date.now()}`;
   const dates = await days(page);
@@ -222,6 +238,12 @@ test("on a phone the chip opens a bottom sheet and Tomorrow works without horizo
   expect(Math.round(box.y + box.height)).toBeGreaterThanOrEqual(843);
   expect(await noHorizontalScroll(page)).toBe(true);
   for (const choice of await sheet.locator(".deferChoice").all()) expect((await choice.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // The sheet is modal: it says so, and Tab or Shift+Tab never leaves it.
+  await expect(sheet).toHaveAttribute("aria-modal", "true");
+  for (let step = 0; step < 40; step += 1) {
+    await page.keyboard.press(step % 10 === 9 ? "Shift+Tab" : "Tab");
+    expect(await sheet.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  }
   await sheet.getByRole("button", { name: /Zítra/ }).click();
   await expect(sheet).toHaveCount(0);
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === dates.tomorrow, true);

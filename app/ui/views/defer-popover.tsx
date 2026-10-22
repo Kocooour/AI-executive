@@ -4,7 +4,7 @@ import type { Entity } from "../../../lib/db";
 import { addDays, deferTargets, suggestDeferral } from "../../../lib/defer-suggestion";
 import { ymd } from "../../../lib/local-dates";
 import { pluralText } from "../../../lib/plural";
-import { isEveningTask, taskDueTone, taskMatchesView } from "../../../lib/task-views";
+import { isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { friendlyDate, inSentenceDate } from "../format";
 import { taskRowValue } from "../task-row-value";
 import type { LumiApp } from "../use-lumi-app";
@@ -200,8 +200,9 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   const keep = suggestion?.reason === "deferKeepDeadline";
   const applySuggestion = () => {
     if (!suggestion) return;
-    // Keeping the task today changes nothing when it is already there.
-    if (keep && taskMatchesView(task, "Today", today)) { close(true); return; }
+    // Keeping the task today changes nothing only when it is already planned for today (not this
+    // evening, not an older day that merely shows in Today).
+    if (keep && task.properties.when === today && task.properties.evening !== true) { close(true); return; }
     void choose(keep ? "today" : suggestion.target, "lumi");
   };
 
@@ -253,7 +254,16 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   return (
     <>
       {mobile && <div className="deferBackdrop" aria-hidden="true" />}
-      <div ref={popRef} className={`deferPopover ${mobile ? "isSheet" : ""}`.trim()} role="dialog" aria-label={tr("deferTitle")} data-defer-task={task.id} style={style}>
+      {/* On a phone the sheet is modal: Tab stays inside it and the backdrop takes every press outside. */}
+      <div ref={popRef} className={`deferPopover ${mobile ? "isSheet" : ""}`.trim()} role="dialog" aria-modal={mobile ? true : undefined} aria-label={tr("deferTitle")} data-defer-task={task.id} style={style}
+        onKeyDown={mobile ? (event) => {
+          if (event.key !== "Tab" || !popRef.current) return;
+          const focusable = [...popRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), [tabindex]:not([tabindex='-1'])")].filter((element) => element.offsetParent !== null);
+          if (!focusable.length) return;
+          const first = focusable[0], last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        } : undefined}>
         <div className="deferHead">
           <span className="deferHeadTitle">{tr("deferTitle")}</span>
           <button type="button" className="deferClose" aria-label={tr("deferClose")} onClick={() => close(true)}>×</button>
