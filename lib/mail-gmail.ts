@@ -138,7 +138,13 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
   if (!response.ok) {
     // Bad Request can mean an expired messages.list page token, not expired
     // OAuth credentials. Preserve that distinction for safe discovery recovery.
-    if (response.status === 400) throw new MailError("Gmail request was invalid", 400);
+    if (response.status === 400) {
+      // The OAuth token endpoint uses HTTP 400 for invalid_grant (expired or
+      // revoked refresh tokens); this *is* an authorization problem. Gmail's
+      // messages.list HTTP 400 must stay distinct for pagination recovery.
+      if (url === tokenUrl) throw new MailError("Gmail authorization was refused or expired", 401);
+      throw new MailError("Gmail request was invalid", 400);
+    }
     if (response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
     if (response.status === 404) throw new MailError("Gmail item no longer exists", 404);
     throw new MailError("Gmail request failed", 502);
