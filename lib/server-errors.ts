@@ -147,6 +147,7 @@ export const serverErrorKeys: Record<string, string> = {
 export const developerOnly: ReadonlySet<string> = new Set([
   "Gmail connection failed", // Sanitized generic OAuth failure, not provider error text.
   "Gmail request failed", // Generic API failure without third-party details.
+  "Gmail request was invalid", // Generic HTTP 400 from Google; no provider response text.
   "Mail request failed", // Sanitized unexpected owner route failure.
   "Mail sync failed", // Sanitized unexpected Gmail sync route failure.
   "Invalid Gmail message page token", // Server-only malformed Gmail pagination response.

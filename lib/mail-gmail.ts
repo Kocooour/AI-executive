@@ -136,7 +136,10 @@ async function googleJson(url: string, options: RequestInit = {}, deadlineAt?: n
     response = await fetch(gmailE2EEndpoint(url), { ...options, redirect: "error", cache: "no-store", signal: AbortSignal.timeout(remaining) });
   } catch { throw new MailError("Gmail is temporarily unavailable", 502); }
   if (!response.ok) {
-    if (response.status === 400 || response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
+    // Bad Request can mean an expired messages.list page token, not expired
+    // OAuth credentials. Preserve that distinction for safe discovery recovery.
+    if (response.status === 400) throw new MailError("Gmail request was invalid", 400);
+    if (response.status === 401) throw new MailError("Gmail authorization was refused or expired", 401);
     if (response.status === 404) throw new MailError("Gmail item no longer exists", 404);
     throw new MailError("Gmail request failed", 502);
   }
@@ -793,7 +796,18 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
       url.searchParams.set("maxResults", "25");
       url.searchParams.set("labelIds", folder);
       url.searchParams.set("pageToken", oldToken);
-      const result = await googleJson(url.toString(), { headers }, deadline);
+      let result: Record<string, unknown>;
+      try {
+        result = await googleJson(url.toString(), { headers }, deadline);
+      } catch (error) {
+        // An opaque Gmail list-page cursor can expire independently of the
+        // History cursor and credentials. Restart only this folder from page
+        // one, without deleting any previously indexed metadata. A 401, 5xx,
+        // or a bad first-page request still fails closed with no DB changes.
+        if (!(error instanceof MailError && error.status === 400)) throw error;
+        url.searchParams.delete("pageToken");
+        result = await googleJson(url.toString(), { headers }, deadline);
+      }
       for (const item of Array.isArray(result.messages) ? result.messages.slice(0, 25) : []) {
         if (item && typeof item === "object" && gmailId((item as Record<string, unknown>).id))
           changes.add((item as Record<string, string>).id);
