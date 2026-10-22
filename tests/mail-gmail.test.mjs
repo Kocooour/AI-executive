@@ -1429,3 +1429,68 @@ test("Mail v4 safely rebuilds if a saved History event disappears or its offset 
     assert.equal(urls.filter(v => v.endsWith("/profile")).length, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("Mail v4 shares the 120-message budget across History and pending Inbox/Sent discovery", async () => {
+  const workspaceId = "mail-v4-fixture";
+  const accountId = "eeeeeeee-eeee-4eee-8eee-00000000000b";
+  const now = Date.now();
+  const historyIds = Array.from({ length: 95 }, (_, i) => (0xb10000 + i).toString(16));
+  const inboxIds = Array.from({ length: 25 }, (_, i) => (0xb20000 + i).toString(16));
+  const sentIds = Array.from({ length: 25 }, (_, i) => (0xb30000 + i).toString(16));
+  database.prepare("INSERT INTO mail_accounts(id,provider,workspace_id,email,encrypted_refresh_token,created_at,updated_at) VALUES(?,'gmail',?,?,?,1,1)")
+    .run(accountId, workspaceId, "bounded-two-folders@example.com", mail.sealMail("BOUNDED-REFRESH"));
+  mail.enableMailSync(workspaceId, accountId, 30);
+  database.prepare("UPDATE mail_sync_accounts SET history_id='100', recovery_inbox_page_token='inbox2', recovery_sent_page_token='sent2', recovery_since_seconds=? WHERE account_id=?")
+    .run(Math.floor((now - 31 * 86400000) / 1000), accountId);
+  let pass = 1;
+  const fetchedIds = [];
+  const visitedFolders = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async target => {
+    const url = new URL(String(target));
+    if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "ACCESS" });
+    if (url.pathname === "/gmail/v1/users/me/history")
+      return Response.json(pass === 1
+        ? { historyId: "300", history: [{ id: "250", messagesAdded: historyIds.map(id => ({ message: { id } })) }] }
+        : { historyId: "301", history: [] });
+    if (url.pathname === "/gmail/v1/users/me/messages") {
+      const folder = url.searchParams.get("labelIds");
+      const token = url.searchParams.get("pageToken");
+      visitedFolders.push({ pass, folder, token });
+      assert.equal(token, folder === "INBOX" ? "inbox2" : "sent2");
+      return Response.json({ messages: (folder === "INBOX" ? inboxIds : sentIds).map(id => ({ id })) });
+    }
+    if (url.pathname.startsWith("/gmail/v1/users/me/messages/")) {
+      const id = url.pathname.split("/").at(-1);
+      fetchedIds.push({ pass, id });
+      assert([...historyIds, ...inboxIds, ...sentIds].includes(id));
+      return Response.json({ id, threadId: "abcdefcdef", internalDate: String(now),
+        labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Bounded " + id }] } });
+    }
+    throw new Error("Unexpected Gmail URL " + url);
+  };
+  try {
+    const first = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(first.updated, 120, "95 History and only 25 Inbox messages must be fetched");
+    assert.equal(first.partial, true);
+    assert.equal(first.state.discoveryPending, true);
+    assert.equal(fetchedIds.filter(x => x.pass === 1).length, 120);
+    assert.deepEqual(visitedFolders, [{ pass: 1, folder: "INBOX", token: "inbox2" }],
+      "Sent page must remain unvisited while its entire 25-ID reservation does not fit");
+    let state = database.prepare("SELECT recovery_inbox_page_token, recovery_sent_page_token FROM mail_sync_accounts WHERE account_id=?")
+      .get(accountId);
+    assert.equal(state.recovery_inbox_page_token, null);
+    assert.equal(state.recovery_sent_page_token, "sent2", "the skipped folder must retain its exact page token");
+    pass = 2;
+    const second = await mail.syncMailAccount(workspaceId, accountId);
+    assert.equal(second.updated, 25);
+    assert.equal(second.state.discoveryPending, false);
+    assert.equal(second.partial, false);
+    assert.deepEqual(visitedFolders, [
+      { pass: 1, folder: "INBOX", token: "inbox2" },
+      { pass: 2, folder: "SENT", token: "sent2" },
+    ]);
+    assert.equal(new Set(fetchedIds.map(x => x.id)).size, 145);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages WHERE account_id=?").get(accountId).n, 145);
+  } finally { globalThis.fetch = originalFetch; }
+});
