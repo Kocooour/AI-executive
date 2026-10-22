@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     const fencedAgain = fenceRestoredClient(request);
     if (fencedAgain) return fencedAgain;
     // Never copy untrusted request text into security event names.
-    if (!["status", "enable", "disable", "sync"].includes(body.action))
+    if (typeof body.action !== "string" || !["status", "enable", "disable", "sync"].includes(body.action))
       throw new MailError("Unknown mail sync action", 400);
     action = body.action as string;
     const limited = enforceRateLimit(request, "mail-sync-" + action,
