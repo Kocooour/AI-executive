@@ -57,11 +57,11 @@ test("desktop sidebar: primary views in the approved order, counts only on Inbox
 test("More views lists Areas, Notes, Overdue, Anytime, Someday, Completed, Context and Agents; Search stays global", async ({ page }) => {
   await page.goto("/");
   await waitUntilSynced(page);
-  await page.locator("aside details.secondaryNav summary").click();
-  await expect(page.locator("aside details.secondaryNav button")).toHaveText(["Oblasti", "Poznámky", "Po termínu", "Kdykoli", "Někdy", "Dokončené", "Kontext", "Agenti"]);
-  await page.locator("aside details.secondaryNav button", { hasText: "Oblasti" }).click();
+  await page.locator("aside .secondaryNavToggle").click();
+  await expect(page.locator("aside .secondaryNav button")).toHaveText(["Oblasti", "Poznámky", "Po termínu", "Kdykoli", "Někdy", "Dokončené", "Kontext", "Agenti"]);
+  await page.locator("aside .secondaryNav button", { hasText: "Oblasti" }).click();
   await expect(page).toHaveURL(/\?view=Areas$/);
-  await page.locator("aside details.secondaryNav button", { hasText: "Poznámky" }).click();
+  await page.locator("aside .secondaryNav button", { hasText: "Poznámky" }).click();
   await expect(page).toHaveURL(/\?view=Notes$/);
   // Search: the topbar field and Ctrl/Cmd+K still open it from anywhere.
   await sidebarView(page, "Dnes").click();
@@ -189,4 +189,208 @@ test("phone: the mail reader fits at 390px and Projects is in the bottom bar", a
   await page.locator('.mobileNav button[data-nav-view="Projects"]').click();
   await expect(page).toHaveURL(/\?view=Projects$/);
   await expect(page.locator('.mobileNav button[data-nav-view="Projects"]')).toHaveAttribute("aria-current", "page");
+});
+
+// ---- Follow-up fixes after review ----
+
+async function removeByTitle(page: Page, title: string) {
+  await page.evaluate(async (title) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const ids = snapshot.entities.filter((row: { title: string }) => row.title === title).map((row: { id: string }) => row.id);
+    if (!ids.length) return;
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+      entities: snapshot.entities.filter((row: { id: string }) => !ids.includes(row.id)),
+      relations: snapshot.relations, deletedIds: ids, revivedIds: [] }) });
+  }, title);
+}
+
+test("a very long project title is cut with an ellipsis inside the sidebar and keeps its full name", async ({ page }) => {
+  const id = `e2e-d1-long-${Date.now()}`;
+  const title = "Dlouhý název projektu ".repeat(6).slice(0, 120);
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  await seedProject(page, id, title);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    const row = page.locator(`aside [data-sidebar-project="${id}"]`);
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("title", title);
+    const geometry = await page.evaluate((id) => {
+      const aside = document.querySelector("aside")!.getBoundingClientRect();
+      const row = document.querySelector(`aside [data-sidebar-project="${id}"]`)!;
+      const text = row.querySelector(".sidebarProjectTitle")!;
+      const scroll = document.querySelector("aside .sidebarScroll")!;
+      return { rowRight: row.getBoundingClientRect().right, asideRight: aside.right, truncated: text.scrollWidth > text.clientWidth,
+        overflowX: scroll.scrollWidth > scroll.clientWidth, ellipsis: getComputedStyle(text).textOverflow };
+    }, id);
+    expect(geometry.rowRight).toBeLessThanOrEqual(geometry.asideRight);
+    expect(geometry.truncated).toBe(true);
+    expect(geometry.ellipsis).toBe("ellipsis");
+    expect(geometry.overflowX).toBe(false);
+  } finally {
+    await removeProject(page, id);
+  }
+});
+
+for (const [width, height] of [[1280, 720], [1440, 900]] as const) {
+  test(`sidebar at ${width}x${height} with More views open: primary list intact, the rest scrolls, footer reachable`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    const stamp = Date.now();
+    const ids = Array.from({ length: 7 }, (_, index) => `e2e-d1-fill-${stamp}-${index}`);
+    await page.goto("/?view=Today");
+    await waitUntilSynced(page);
+    for (const [index, id] of ids.entries()) await seedProject(page, id, `Projekt D1 výplň ${index}`);
+    try {
+      await page.reload();
+      await waitUntilSynced(page);
+      await page.locator("aside .secondaryNavToggle").click();
+      await expect(page.locator("aside .secondaryNav button")).toHaveCount(8);
+      const aside = page.locator("aside");
+      const asideBox = (await aside.boundingBox())!;
+      // Primary list: every entry fully inside the window and the sidebar.
+      for (const button of await page.locator("aside > nav button").all()) {
+        const box = (await button.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(asideBox.y);
+        expect(box.y + box.height).toBeLessThanOrEqual(Math.min(asideBox.y + asideBox.height, height));
+      }
+      // Nothing overflows the sidebar itself.
+      expect(await aside.evaluate((element) => element.scrollHeight <= element.clientHeight + 1)).toBe(true);
+      // The area under the primary list scrolls and shows a scrollbar when it overflows.
+      const scroll = page.locator("aside .sidebarScroll");
+      // Headless Chromium hides scrollbars, so their width cannot be measured here: the area must be a scroll container
+      // that really overflows when space runs out, with the scrollbar not switched off.
+      const metrics = await scroll.evaluate((element: HTMLElement) => ({ overflowing: element.scrollHeight > element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY, scrollbarWidth: getComputedStyle(element).scrollbarWidth }));
+      expect(["auto", "scroll"]).toContain(metrics.overflowY);
+      expect(metrics.scrollbarWidth).not.toBe("none");
+      if (height <= 720) expect(metrics.overflowing).toBe(true);
+      const scrollBox = (await scroll.boundingBox())!;
+      for (const button of await page.locator("aside .secondaryNav button").all()) {
+        await button.scrollIntoViewIfNeeded();
+        const box = (await button.boundingBox())!;
+        expect(box.y).toBeGreaterThanOrEqual(scrollBox.y - 1);
+        expect(box.y + box.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height + 1);
+      }
+      // Footer: New, the More views toggle and Settings stay on screen.
+      for (const control of await page.locator("aside .sidebarActions button").all()) {
+        const box = (await control.boundingBox())!;
+        expect(box.y + box.height).toBeLessThanOrEqual(height);
+        expect(box.y).toBeGreaterThanOrEqual(scrollBox.y + scrollBox.height - 1);
+      }
+    } finally {
+      for (const id of ids) await removeProject(page, id);
+    }
+  });
+}
+
+test("Doručené in the sidebar or the phone bar returns from 'Z pošty' to the task list", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const tab = (name: string) => page.locator(`[data-inbox-tab="${name}"]`);
+  await tab("mail").click();
+  await expect(tab("mail")).toHaveAttribute("aria-pressed", "true");
+  await navView(page, "Inbox").click();
+  await expect(tab("tasks")).toHaveAttribute("aria-pressed", "true");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await tab("mail").click();
+  await expect(tab("mail")).toHaveAttribute("aria-pressed", "true");
+  await page.locator('.mobileNav button[data-nav-view="Inbox"]').click();
+  await expect(tab("tasks")).toHaveAttribute("aria-pressed", "true");
+});
+
+test("batch selection does not survive switching Inbox tabs", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const box = page.locator(".batchRowSelect input:not([disabled])").first();
+  await expect(box).toBeVisible();
+  await box.check();
+  await expect(box).toBeChecked();
+  await page.locator('[data-inbox-tab="mail"]').click();
+  await page.locator('[data-inbox-tab="tasks"]').click();
+  await expect(page.locator(".batchRowSelect input:checked")).toHaveCount(0);
+});
+
+const mailAccount = { id: "11111111-1111-4111-8111-111111111111", workspaceId: "personal", email: "follow@example.com" };
+const mailMessage = { id: "ab123456789", threadId: "abcdef12", subject: "Zpráva pro úkol D1", from: "alice@example.com", to: mailAccount.email, date: "21. října", snippet: "Náhled", unread: false };
+
+test("after creating a task from a message, 'Zobrazit úkoly' leads back to the task list with the new task", async ({ page }) => {
+  const taskTitle = `Úkol z pošty D1 ${Date.now()}`;
+  await page.route("**/api/mail/gmail?*", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [mailAccount] }) }));
+  await page.route("**/api/mail/gmail/messages", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ messages: [mailMessage] }) }));
+  await page.route("**/api/mail/gmail/message", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: { ...mailMessage, text: "Text zprávy", truncated: false } }) }));
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  try {
+    await page.locator('[data-inbox-tab="mail"]').click();
+    const reader = page.locator(".mailReader");
+    await reader.getByRole("button", { name: "Doručené" }).click();
+    await reader.getByRole("button", { name: "Přečíst zprávu" }).click();
+    await reader.getByLabel("Název úkolu").fill(taskTitle);
+    await reader.getByRole("button", { name: "Potvrdit a vytvořit úkol" }).click();
+    await expect(reader).toContainText("Úkol byl vytvořen v Inboxu.");
+    await reader.getByRole("button", { name: "Zobrazit úkoly" }).click();
+    await expect(page.locator('[data-inbox-tab="tasks"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".mailReader")).toHaveCount(0);
+    await expect(page.getByText(taskTitle, { exact: true }).first()).toBeVisible();
+  } finally {
+    await expect.poll(() => page.evaluate(async (title) => (await fetch("/api/store", { cache: "no-store" }).then((r) => r.json())).entities.some((e: { title: string }) => e.title === title), taskTitle)).toBe(true).catch(() => undefined);
+    await removeByTitle(page, taskTitle);
+  }
+});
+
+test("'Open source message' with accounts that fail to load shows the load error, not 'no longer connected', and opens nothing later", async ({ page }) => {
+  const title = `Úkol se zdrojem D1 ${Date.now()}`;
+  const id = `e2e-d1-source-${Date.now()}`;
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await page.evaluate(async ({ id, title, account }) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const task = { id, type: "task", title, status: "open", workspaceId: "personal", createdAt: now, updatedAt: now,
+      properties: { inbox: true, mailSource: { provider: "gmail", accountId: account, messageId: "ab123456789", threadId: "abcdef12" } } };
+    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, task], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+  }, { id, title, account: mailAccount.id });
+  let accountsWork = false;
+  let detailRequests = 0;
+  await page.route("**/api/mail/gmail?*", (route) => accountsWork
+    ? route.fulfill({ contentType: "application/json", body: JSON.stringify({ accounts: [mailAccount] }) })
+    : route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"down"}' }));
+  await page.route("**/api/mail/gmail/message", (route) => { detailRequests += 1; return route.fulfill({ contentType: "application/json", body: JSON.stringify({ message: { ...mailMessage, text: "Text zprávy", truncated: false } }) }); });
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator("article", { hasText: title }).first().locator(".taskRowOpen").click();
+    await page.locator("aside.detail").getByRole("button", { name: "Otevřít zdrojovou zprávu" }).click();
+    const reader = page.locator(".mailReader");
+    await expect(reader).toContainText("Nepodařilo se načíst účty");
+    await expect(reader).not.toContainText("již není připojen");
+    // Later, with the accounts available again, nothing opens by itself.
+    accountsWork = true;
+    await navView(page, "Inbox").click();
+    await page.locator('[data-inbox-tab="mail"]').click();
+    await expect(page.locator(".mailReader").getByText("follow@example.com")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Detail e-mailu" })).toHaveCount(0);
+    expect(detailRequests).toBe(0);
+  } finally {
+    await removeByTitle(page, title);
+  }
+});
+
+test("a project without an area is listed under 'Bez oblasti'", async ({ page }) => {
+  const id = `e2e-d1-loose-${Date.now()}`;
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  await seedProject(page, id, "Projekt D1 bez oblasti");
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    const loose = page.locator('[data-project-group="none"]');
+    await expect(loose.getByRole("heading", { name: "Bez oblasti" })).toBeVisible();
+    await expect(loose.locator(".taskRowOpen", { hasText: "Projekt D1 bez oblasti" })).toBeVisible();
+  } finally {
+    await removeProject(page, id);
+  }
 });

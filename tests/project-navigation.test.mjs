@@ -70,3 +70,20 @@ test("project groups: areas in manual order, then projects without an area, each
   assert.deepEqual(groupProjectsByArea(projects, areas, relations).map((group) => group.area?.id ?? null), ["home", "work", null]);
   assert.deepEqual(groupProjectsByArea([], areas, relations), []);
 });
+
+test("project groups: a cross-workspace relation cannot shadow a valid area; keys cannot collide with an area id", () => {
+  const areas = [entity("a-first", "area", { createdAt: 10, workspaceId: "work" }), entity("none", "area", { createdAt: 20 })];
+  const projects = [entity("p", "project"), entity("q", "project", { createdAt: 2 })];
+  const relations = [
+    // The lower-ranked area is in another workspace: ignored, so the valid area "none" is used.
+    relation("1", "p", "a-first", "belongs_to_area"),
+    relation("2", "p", "none", "belongs_to_area"),
+    // A relation recorded in another workspace than the project's is ignored too.
+    relation("3", "q", "none", "belongs_to_area", "work"),
+  ];
+  const groups = groupProjectsByArea(projects, areas, relations);
+  assert.deepEqual(groups.map((group) => [group.area?.id ?? null, group.projects.map((project) => project.id)]), [["none", ["p"]], [null, ["q"]]]);
+  assert.equal(new Set(groups.map((group) => group.key)).size, 2);
+  assert.equal(groups[0].key, "area:none");
+  assert.equal(groups[1].key, "loose");
+});

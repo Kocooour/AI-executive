@@ -13,6 +13,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
     moreTriggerRef,
     openCapture,
     setMoreOpen,
+    setInboxTab,
     setView,
     tr,
     view,
@@ -35,6 +36,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               if (x === "More") return setMoreOpen((open) => !open);
               setMoreOpen(false);
               closeDetail();
+              if (x === "Inbox") setInboxTab("tasks");
               setView(x);
             }}
           >

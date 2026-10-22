@@ -1903,6 +1903,8 @@ export function useLumiApp() {
   const sidebarProjects = activeSidebarProjects(projects, activeWorkspaceId);
   // Leaving the Inbox returns it to its tasks, so the sidebar entry always opens the task list.
   useEffect(() => { if (view !== "Inbox") setInboxTab("tasks"); }, [view]);
+  // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
+  useEffect(() => { if (view !== "Inbox" || inboxTab !== "mail") setMailSourceToOpen(null); }, [view, inboxTab]);
   const projectGroups = view === "Projects" ? groupProjectsByArea(projects, areas, scopedRelations) : [];
   const { notificationState, setNotificationState, notificationStatus, enableNotifications, disableNotifications,
     testNotification, saveNotificationSettings } = useNotifications({ tr, language });
@@ -3397,7 +3399,7 @@ export function useLumiApp() {
   // navigation away from Inbox, or sign-out.
   useEffect(() => {
     setBatchSelection({ workspaceId: "", ids: [] });
-  }, [activeWorkspaceId, view, authState]);
+  }, [activeWorkspaceId, view, authState, inboxTab]);
   function setBatchIds(ids: string[]) {
     setBatchSelection({
       workspaceId: activeWorkspaceId,

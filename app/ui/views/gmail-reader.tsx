@@ -17,6 +17,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [thread, setThread] = useState<Thread | null>(null);
@@ -35,12 +36,12 @@ export function GmailReader({ app }: { app: LumiApp }) {
   useEffect(() => {
     detailVersion.current++;
     setBusy(false); // In-flight actions from the previous workspace no longer own this panel.
-    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false);
+    setAccounts([]); setSelected(""); setMessages([]); setDetail(null); setThread(null); setThreadBusy(false); setError(""); setLoaded(false); setLoadFailed(false);
     if (!workspaceId || app.offlineView) return;
     let live = true;
     void json("/api/mail/gmail?workspaceId=" + encodeURIComponent(workspaceId))
       .then((data) => { if (live) { setAccounts(data.accounts as Account[]); setLoaded(true); } })
-      .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoaded(true); } });
+      .catch(() => { if (live) { setError(tr("mailLoadFailed")); setLoadFailed(true); setLoaded(true); } });
     return () => { live = false; };
     // app object changes every render; the workspace is the only API scoping dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,10 +106,16 @@ export function GmailReader({ app }: { app: LumiApp }) {
 
   useEffect(() => {
     const source = app.mailSourceToOpen;
-    if (!source || !loaded || source.workspaceId !== workspaceId) return;
+    if (!source) return;
+    // A message that cannot be applied here (another workspace, the aggregate, offline) is dropped,
+    // so it can never open later without a new click.
+    if (!workspaceId || app.offlineView || source.workspaceId !== workspaceId) { app.setMailSourceToOpen(null); return; }
+    if (!loaded) return;
     // Consume before requesting the detail to prevent duplicate fetches on
     // unrelated React renders. Nothing is written to device storage or the URL.
     app.setMailSourceToOpen(null);
+    // The accounts could not be loaded: the load error is shown; that says nothing about the account.
+    if (loadFailed) return;
     const account = accounts.find((row) => row.id === source.accountId);
     if (!account) {
       setError(label("Zdrojový Gmail účet již není připojen.", "The source Gmail account is no longer connected."));
@@ -119,7 +126,7 @@ export function GmailReader({ app }: { app: LumiApp }) {
     void openDetail(account, source.messageId);
     // app and the helper are recreated each render; these primitives capture the intent.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app.mailSourceToOpen, accounts, loaded, workspaceId]);
+  }, [app.mailSourceToOpen, accounts, loaded, loadFailed, workspaceId]);
 
   async function createMailTask() {
     if (!detail || !taskTitle.trim() || !selected || !workspaceId || taskCreateInFlight.current || createdTaskId) return;

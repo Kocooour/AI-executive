@@ -44,4 +44,5 @@ export const viewIcons: Record<string, string> = {
   Settings: "⚙",
   More: "•••",
 };
+// Owner decision 2026-10-22: the mobile bar swaps Calendar for Projects; Calendar moves to the "More" sheet.
 export const mobileViews = ["Home", "Inbox", "Today", "Projects", "More"];

@@ -210,7 +210,7 @@
 @media (pointer: coarse) {
   .appShell > aside > nav button,
   .appShell > aside .sidebarActions button,
-  .appShell > aside .secondaryNav summary,
+  .appShell > aside .secondaryNavToggle,
   .appShell > aside .secondaryNav button {
     min-height: 44px;
   }
@@ -300,19 +300,29 @@
   border-radius: 50%;
   background: var(--danger, #c0392b);
 }
-.appShell > aside > .sidebarProjects {
-  display: grid;
-  gap: 1px;
-  /* Shrinks (and scrolls) before the primary list does. */
-  flex: 0 8 auto;
-  min-height: 0;
-  margin: 4px -4px 0;
-  padding: 8px 4px 4px;
+/* Everything between the primary list and the footer scrolls as one area; the primary list and
+   the footer (New, More views, Settings) never shrink. The scrollbar stays visible. */
+.appShell > aside > nav { flex: none; overflow: visible; }
+.appShell > aside > .sidebarScroll {
+  flex: 1 1 auto;
+  min-height: 96px;
+  margin: 0 -8px 0 -4px;
+  padding: 0 4px 0 4px;
   border-top: 1px solid var(--line);
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-light) transparent;
 }
-.appShell > aside > .sidebarProjects button {
+.appShell > aside > .sidebarScroll:empty { display: none; }
+.appShell > aside .sidebarProjects {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding: 8px 0 4px;
+}
+.appShell > aside .sidebarProjects button {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -327,25 +337,28 @@
   text-align: left;
   cursor: pointer;
 }
-.appShell > aside > .sidebarProjects button:hover { background: var(--hover); }
-.appShell > aside > .sidebarProjects button.dropActive { background: var(--workspace-soft); }
-.appShell > aside > .sidebarProjects button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.appShell > aside > .sidebarProjects button > span:first-child { display: inline-grid; place-items: center; flex: none; width: 18px; color: var(--icon-projects); }
-.appShell > aside > .sidebarProjects .sidebarProjectTitle {
+.appShell > aside .sidebarProjects button:hover { background: var(--hover); }
+.appShell > aside .sidebarProjects button.dropActive { background: var(--workspace-soft); }
+.appShell > aside .sidebarProjects button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.appShell > aside .sidebarProjects button > span:first-child { display: inline-grid; place-items: center; flex: none; width: 18px; color: var(--icon-projects); }
+.appShell > aside .sidebarProjects .sidebarProjectTitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 @media (pointer: coarse) {
-  .appShell > aside > .sidebarProjects button { min-height: 44px; }
+  .appShell > aside .sidebarProjects button { min-height: 44px; }
 }
-/* Eight more views would push the primary list out of a short window: the list scrolls on its own. */
-.appShell > aside .secondaryNav[open] {
-  max-height: 34vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+.appShell > aside .secondaryNav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
 }
+.appShell > aside .secondaryNav button { text-align: left; }
+.appShell > aside .secondaryNavToggle { color: var(--muted); text-align: left; }
 .inboxTabs {
   display: inline-flex;
   gap: 2px;
