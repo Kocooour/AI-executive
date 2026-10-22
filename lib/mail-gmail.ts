@@ -873,15 +873,19 @@ export async function syncMailAccount(workspaceId: string, accountId: string) {
   // The saved history cursor still processes new changes first. Rechecks are
   // bounded by the same request limit and survive a restart or a failed read.
   const changedIds = [...changes].filter((id) => !deleted.has(id));
-  const reconcileBudget = Math.max(0, SYNC_MAX_ITEMS - changedIds.length);
+  // Deleted History IDs and discovered messages consume the same per-sync
+  // distinct-ID budget as metadata reconciliation. Otherwise 120 deletions
+  // could be followed by 120 more stale-message detail requests in one run.
+  const reconcileBudget = Math.max(0, SYNC_MAX_ITEMS - touched.size);
   const staleIds = !full && reconcileBudget > 0
     ? (getDatabase().prepare(`SELECT message_id FROM mail_sync_messages
         WHERE account_id=? AND workspace_id=? AND needs_reconcile=1
         ORDER BY received_at DESC, message_id DESC LIMIT ?`
       ).all(accountId, workspaceId, reconcileBudget) as Array<{ message_id: string }>)
         .map((row) => row.message_id)
-        .filter((id) => !changes.has(id) && !deleted.has(id))
+        .filter((id) => !touched.has(id))
     : [];
+  for (const id of staleIds) touched.add(id);
   // No body or attachment requests, including when revalidating old entries.
   const ids = [...changedIds, ...staleIds];
   for (let i = 0; i < ids.length; i += MESSAGE_DETAIL_CONCURRENCY) {
