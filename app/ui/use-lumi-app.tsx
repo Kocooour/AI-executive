@@ -17,7 +17,9 @@ import { conflictsKey, entityConflicts, placementFields } from "../../lib/field-
 import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
-import { byManualOrder, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
+import { deferTargets } from "../../lib/defer-suggestion";
+import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskMatchesView } from "../../lib/task-views";
+import { friendlyDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
@@ -68,6 +70,8 @@ export function useLumiApp() {
     [useCaptureSuggestion, setUseCaptureSuggestion] = useState(true),
     [captureProjectAction, setCaptureProjectAction] = useState<CaptureProjectAction>("none"),
     [undo, setUndo] = useState<Entity | null>(null),
+    // The task whose "When" popover is open and the control it hangs from (one popover for the whole app).
+    [deferOpen, setDeferOpen] = useState<{ taskId: string; anchor: HTMLElement } | null>(null),
     [undoRelations, setUndoRelations] = useState<Relation[]>([]),
     [context, setContext] = useState<ContextBundle | null>(null),
     [assistantOpen, setAssistantOpen] = useState(false),
@@ -3188,7 +3192,53 @@ export function useLumiApp() {
       today: destination === "today" || when === ymd(),
       someday: destination === "someday",
       inbox: false,
+      evening: false,
     }, `scheduled ${destination}`);
+  }
+  // The "When" popover: one choice saves at once. Resolves to true when the task was changed; false
+  // when nothing was (read-only aggregate, unknown date, or the owner declined a date after the deadline).
+  // The deadline is never touched; the previous state is the single-step Undo.
+  async function deferTask(
+    task: Entity,
+    choice: "today" | "evening" | "tomorrow" | "weekend" | "nextWeek" | "someday" | "clear" | string,
+    via: "manual" | "lumi",
+  ): Promise<boolean> {
+    if (activeWorkspaceId === "all" || isAdopting()) return false;
+    const stored = (await db.entities.get(task.id)) || task;
+    if (stored.type !== "task" || stored.status !== "open") return false;
+    const targets = deferTargets(ymd());
+    const when = choice === "today" || choice === "evening" ? targets.today
+      : choice === "tomorrow" ? targets.tomorrow
+        : choice === "weekend" ? targets.weekend
+          : choice === "nextWeek" ? targets.nextWeek
+            : choice === "someday" || choice === "clear" ? ""
+              : /^\d{4}-\d{2}-\d{2}$/.test(choice) ? choice : null;
+    if (when === null) return false;
+    const deadline = typeof stored.properties.deadline === "string" ? stored.properties.deadline.slice(0, 10) : "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(deadline) && when && when > deadline) {
+      const confirmed = await askConfirm({
+        title: tr("deferAfterDeadlineTitle"),
+        message: tr("deferAfterDeadline").replace("{date}", () => friendlyDate(deadline, language)),
+        confirmLabel: tr("deferAfterDeadlineConfirm"),
+      });
+      if (!confirmed) return false;
+    }
+    setUndo(stored);
+    setUndoRelations([]);
+    await patch(stored, (current) => {
+      const previous = typeof current.when === "string" && current.when ? current.when : current.someday === true ? "someday" : null;
+      const next = when || (choice === "someday" ? "someday" : null);
+      const history = Array.isArray(current.deferHistory) ? current.deferHistory : [];
+      return {
+        when,
+        today: when === ymd(),
+        someday: choice === "someday",
+        inbox: false,
+        evening: choice === "evening",
+        ...(previous !== next ? { deferHistory: [...history, { from: previous, to: next, at: Date.now(), via }].slice(-10) } : {}),
+      };
+    }, `deferred ${choice}`);
+    return true;
   }
   async function done(id: string) {
     if (workSession?.taskId === id) { await workSessionAction("finish"); return; }
@@ -3293,9 +3343,12 @@ export function useLumiApp() {
         : view === "Notes"
           ? "note"
           : "task";
+  // Today lists "This evening" after the other tasks, in the same list; keyboard moves follow what is shown.
   const collection = ["Projects", "Areas", "Notes"].includes(view)
     ? scopedItems.filter((x) => x.type === type).sort(byManualOrder(`${type}:all`))
-    : visible;
+    : view === "Today"
+      ? [...visible.filter((x) => !isEveningTask(x, today)), ...visible.filter((x) => isEveningTask(x, today))]
+      : visible;
   const batchAllowed = view === "Inbox" && authState === "ready" && syncStatus === "synced" &&
     activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
   const batchCandidates = batchAllowed ? collection.filter((task) =>
@@ -3772,6 +3825,9 @@ export function useLumiApp() {
     saveTheme,
     saveWorkspaceName,
     scheduleTask,
+    deferTask,
+    deferOpen,
+    setDeferOpen,
     scopedItems,
     scopedRelations,
     selectWorkspace,

@@ -18,6 +18,7 @@ import { CaptureDialog } from "./ui/views/capture-dialog";
 import { DetailPanel } from "./ui/views/detail-panel";
 import { AssistantPanel } from "./ui/views/assistant-panel";
 import { ConfirmDialog } from "./ui/views/confirm-dialog";
+import { DeferPopover } from "./ui/views/defer-popover";
 import { HeldBack } from "./ui/views/held-back";
 
 export default function App() {
@@ -90,6 +91,7 @@ export default function App() {
       <CaptureDialog app={app} />
       <DetailPanel app={app} />
       <AssistantPanel app={app} />
+      <DeferPopover app={app} />
       <ConfirmDialog app={app} />
       {app.signingOutElsewhere && <div className="tabNotice" role="status">{app.tr("signingOutElsewhere")}</div>}
       {undo && (

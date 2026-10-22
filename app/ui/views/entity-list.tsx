@@ -1,11 +1,13 @@
 "use client";
-import { byManualOrder, taskDueTone } from "../../../lib/task-views";
+import { Fragment } from "react";
+import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
 import { openTaskCountsByProject } from "../open-task-counts";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 import { ProjectIcon, ViewIcon } from "./project-icon";
 import { InboxBatchTriage } from "./inbox-batch-triage";
+import { DeferChip } from "./defer-popover";
 
 export function EntityList({ app }: { app: LumiApp }) {
   const {
@@ -135,15 +137,18 @@ export function EntityList({ app }: { app: LumiApp }) {
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {collection.map((x) => {
+                {collection.map((x, index) => {
                   const meta = taskRowValue(x, language, today, {
                     held: heldReasons.has(x.id),
                     unsent: unsent.has(x.id),
                     openTaskCount: openTasksByProject.get(x.id) || 0,
                   });
+                  // Today lists evening tasks last, under their own heading (the collection is already ordered that way).
+                  const startsEvening = view === "Today" && isEveningTask(x, today) && (index === 0 || !isEveningTask(collection[index - 1], today));
                   return (
+                    <Fragment key={x.id}>
+                    {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
                     <article
-                      key={x.id}
                       className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
                       data-drop-entity={x.id}
                       data-entity-type={x.type}
@@ -192,12 +197,15 @@ export function EntityList({ app }: { app: LumiApp }) {
                           </span>
                         )}
                       </div>
-                      {meta.text && (
+                      {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
+                        <DeferChip app={app} task={x} meta={meta} />
+                      ) : meta.text && (
                         <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
                           {meta.kind === "sync" && <span aria-hidden="true">{heldReasons.has(x.id) ? "⚠ " : "↻ "}</span>}{meta.text}
                         </span>
                       )}
                     </article>
+                    </Fragment>
                   );
                 })}
                 {collection.length === 0 && view !== "Home" && view !== "Search" && (
