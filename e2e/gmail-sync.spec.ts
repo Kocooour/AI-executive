@@ -299,3 +299,56 @@ test("Mail v4 committed sync uses its returned status without an extra status re
   expect(syncCalls).toBe(1);
   expect(statusCalls, "no follow-up status request after a successful sync").toBe(1);
 });
+
+
+test("Mail v4 ignores a late sync reply after workspace selection changes", async ({ page }) => {
+  const account = { id: "11111111-1111-4111-8111-111111111111",
+    workspaceId: "personal", email: "scope-guard@example.com" };
+  let statusCalls = 0;
+  let sendLateReply: (() => void) | undefined;
+  let notifySyncStarted: (() => void) | undefined;
+  const syncStarted = new Promise<void>(resolve => { notifySyncStarted = resolve; });
+  await page.route("**/api/mail/gmail?*", async route => {
+    await route.fulfill({ contentType: "application/json",
+      body: JSON.stringify({ accounts: [account] }) });
+  });
+  await page.route("**/api/mail/gmail/sync", async route => {
+    const body = route.request().postDataJSON();
+    if (body.action === "status") {
+      statusCalls++;
+      const ok = statusCalls === 1;
+      await route.fulfill({ status: ok ? 200 : 503, contentType: "application/json",
+        body: ok ? JSON.stringify({ accounts: [{
+          accountId: account.id, workspaceId: "personal", enabled: true,
+          retentionDays: 7, indexedCount: 1, lastSyncedAt: Date.now(),
+        }] }) : '{"error":"temporary unavailable"}' });
+    } else if (body.action === "sync") {
+      notifySyncStarted?.();
+      await new Promise<void>(resolve => { sendLateReply = resolve; });
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+        full: false, updated: 2, partial: false, state: {
+          accountId: account.id, workspaceId: "personal", enabled: true,
+          retentionDays: 7, indexedCount: 3, lastSyncedAt: Date.now(),
+        },
+      }) });
+    } else throw new Error("Unexpected mail sync action " + body.action);
+  });
+  await page.goto("/?view=Settings");
+  await waitUntilSynced(page);
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  const section = page.locator(".settingsPanel section").filter({ has: page.getByRole("heading", { name: "Pošta" }) });
+  await expect(section.getByText("scope-guard@example.com")).toBeVisible();
+  await section.getByRole("button", { name: "Synchronizovat nyní" }).click();
+  await syncStarted;
+  await settingsSections(page).filter({ hasText: "Workspace" }).click();
+  await page.getByLabel("Aktuální pohled").selectOption("all");
+  await page.getByLabel("Aktuální pohled").selectOption("personal");
+  await settingsSections(page).filter({ hasText: "Pošta" }).click();
+  await expect(section.getByText("Stav neznámý")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Zapnout synchronizaci" })).toBeDisabled();
+  sendLateReply?.();
+  await page.waitForTimeout(150);
+  await expect(section.getByText("Stav neznámý")).toBeVisible();
+  await expect(section.getByRole("button", { name: "Zapnout synchronizaci" })).toBeDisabled();
+  expect(statusCalls).toBeGreaterThanOrEqual(2);
+});
