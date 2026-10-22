@@ -8,7 +8,7 @@ type Message = { id: string; subject: string; from: string; to: string; date: st
 type Folder = "inbox" | "sent";
 type Detail = { id: string; threadId: string; subject: string; from: string; to: string; date: string; text: string; truncated: boolean };
 type Thread = { id: string; total: number; omitted: number; messages: Message[] };
-type SyncState = { accountId: string; workspaceId: string; enabled: boolean; retentionDays: number; lastSyncedAt: number | null; indexedCount: number };
+type SyncState = { accountId: string; workspaceId: string; enabled: boolean; retentionDays: number; lastSyncedAt: number | null; indexedCount: number; reconciliationPending?: number };
 
 export function GmailSettings({ app }: { app: LumiApp }) {
   const { language, tr } = app;
@@ -114,8 +114,8 @@ export function GmailSettings({ app }: { app: LumiApp }) {
         const status = await json("/api/mail/gmail/sync", { action: "status", workspaceId });
         setSyncStates(status.accounts as SyncState[]);
         setSyncNotice(data.partial === true ? label(
-          "Byla zpracována pouze část změn. Pro pokračování spusť synchronizaci znovu.",
-          "Only part of the changes were processed. Run sync again to continue.",
+          "Synchronizace není úplná. Spusť ji znovu pro další změny nebo ověření dříve uložených zpráv.",
+          "Sync is incomplete. Run it again to process more changes or verify previously indexed messages.",
         ) : "");
       } else {
         setSyncStates(data.accounts as SyncState[]);
@@ -278,6 +278,11 @@ export function GmailSettings({ app }: { app: LumiApp }) {
                             state.indexedCount + " " + label("záznamů", "records") +
                             (state.lastSyncedAt ? " · " + new Date(state.lastSyncedAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB") : "")
                           : label("Synchronizace vypnutá", "Sync disabled")}</p>
+                        {syncStatusKnown && state && (state.reconciliationPending ?? 0) > 0 &&
+                          <p role="status">{label(
+                            "Nevyřízené ověření dřívějších metadat: ",
+                            "Previously indexed messages awaiting revalidation: ",
+                          )}{state.reconciliationPending}</p>}
                         <div className="notificationActions">
                           <button disabled={busy || !syncStatusKnown} onClick={() => void changeSync(account, "enable")}>
                             {state ? label("Uložit uchovávání", "Save retention") : label("Zapnout synchronizaci", "Enable sync")}
