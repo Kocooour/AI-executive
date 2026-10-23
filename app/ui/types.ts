@@ -151,6 +151,9 @@ export interface CalendarEvent {
   id: string;
   sourceId: string;
   workspaceId: string;
+  /** The event's uid and occurrence key; opaque identity of a series and of one repeat. */
+  uid?: string;
+  occurrenceKey?: string;
   title: string;
   start: string;
   end: string;

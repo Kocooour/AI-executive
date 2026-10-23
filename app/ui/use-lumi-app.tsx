@@ -27,6 +27,7 @@ import { type AIProposal, type AssistantMessage, type CalendarEvent, type Calend
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
+import { useCalendarEvents } from "./hooks/use-calendar-events";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useContextEvidence } from "./hooks/use-context-evidence";
 import { getRelationDefinition, relationsBetween } from "../../lib/context-relations";
@@ -255,6 +256,8 @@ export function useLumiApp() {
   const dragTargetRef = useRef("");
   const pointerDragRef = useRef({ id: "", startX: 0, startY: 0, active: false });
   const calendarLoadVersion = useRef(0);
+  // The task a calendar event just became: its Undo removes that task instead of restoring a record.
+  const undoCreated = useRef<Entity | null>(null);
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
@@ -1977,21 +1980,22 @@ export function useLumiApp() {
   // Keep the workday slice for capacity calculations, but give Calendar its own
   // complete local-day slice. A morning or evening commitment must not disappear
   // merely because it falls outside the configured working interval.
-  const todayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
+  // Hidden events leave the lists but keep occupying time: capacity, free windows and conflicts use all events.
+  const busyTodayCalendarEvents = calendarEvents.filter((event) => Date.parse(event.end) > dayStart && Date.parse(event.start) < dayEnd);
   const [calendarTodayRange, calendarNearTermRange] = useMemo(() => [
     calendarLocalDayRange(calendarToday, 1, calendarTimezone),
     calendarLocalDayRange(addCalendarDays(calendarToday, 1), 7, calendarTimezone),
   ], [calendarToday, calendarTimezone]);
-  const calendarDayEvents = useMemo(() => calendarEvents.filter((event) =>
+  const calendarDayEventsAll = useMemo(() => calendarEvents.filter((event) =>
     calendarEventOverlapsLocalRange(event, calendarTodayRange)), [calendarEvents, calendarTodayRange]);
   const calendarFresh = calendarSources.length > 0 && calendarSources.every((source) =>
     source.status === "ready" && source.lastSuccessAt !== null &&
     calendarFreshNow >= source.lastSuccessAt && calendarFreshNow - source.lastSuccessAt <= 30 * 60_000,
   );
-  const nearbyCalendarEvents = useMemo(() => calendarEvents
+  const nearbyCalendarEventsAll = useMemo(() => calendarEvents
     .filter((event) => calendarEventOverlapsLocalRange(event, calendarNearTermRange))
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)), [calendarEvents, calendarNearTermRange]);
-  const mergedBusy = todayCalendarEvents.filter((event) => event.busy).map((event) => [
+  const mergedBusy = busyTodayCalendarEvents.filter((event) => event.busy).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
     const last = merged[merged.length - 1];
@@ -2010,6 +2014,17 @@ export function useLumiApp() {
     if (dayEnd - cursor >= 30 * 60_000) result.push([cursor, dayEnd]);
     return result;
   })();
+  const calendarEventsState = useCalendarEvents({
+    items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
+    workdayStart: notificationState?.preferences.workdayStart || "08:00", workdayEnd: notificationState?.preferences.workdayEnd || "18:00",
+    localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, create, deferTask,
+  });
+  const { visibleCalendarEvents, isCalendarEventHidden } = calendarEventsState;
+  const todayCalendarEvents = visibleCalendarEvents(busyTodayCalendarEvents);
+  const calendarDayEvents = visibleCalendarEvents(calendarDayEventsAll);
+  const nearbyCalendarEvents = visibleCalendarEvents(nearbyCalendarEventsAll);
+  const hiddenCalendarEvents = [...calendarDayEventsAll, ...nearbyCalendarEventsAll.filter((event) => !calendarDayEventsAll.includes(event))]
+    .filter((event) => isCalendarEventHidden(event));
   const targets = (sourceId: string, type: string) =>
     scopedRelations
       .filter((r) => r.sourceEntityId === sourceId && r.relationType === type)
@@ -2754,6 +2769,24 @@ export function useLumiApp() {
   }
   async function restore() {
     if (!undo) return;
+    if (undoCreated.current === undo) {
+      const created = undo;
+      undoCreated.current = null;
+      const linkedRelations = (await db.relations.toArray()).filter((relation) => relation.sourceEntityId === created.id || relation.targetEntityId === created.id);
+      localDataVersion.current += 1;
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        await db.entities.delete(created.id);
+        await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
+      });
+      localDataVersion.current += 1;
+      recordDeleted(localStorage, created.id);
+      setUndo(null);
+      setUndoRelations([]);
+      await syncToServer();
+      if (inspectorSelectionRef.current?.id === created.id) closeDetail();
+      load();
+      return;
+    }
     localDataVersion.current += 1;
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.entities.put({
@@ -3826,6 +3859,9 @@ export function useLumiApp() {
     enableNotifications,
     freeHours,
     freeWindows,
+    calendarDayEventsAll,
+    hiddenCalendarEvents,
+    ...calendarEventsState,
     homeTodayTasks,
     homeToday,
     todayTasks,

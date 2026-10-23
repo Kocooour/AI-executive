@@ -472,3 +472,26 @@
     white-space: nowrap;
   }
 }
+
+/* Calendar events: "Is it a task?", the task an event became, Lumi's suggestion for a full day, and Hide. */
+.calendarEventActions { grid-column: 1 / -1; display: grid; gap: 6px; min-width: 0; }
+.calendarAgendaItem > .calendarEventActions { padding: 0 12px 10px; }
+.calendarEventRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.calendarEventAsk, .calendarEventTask { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); min-width: 0; }
+.calendarEventTask .textAction { color: var(--text); text-align: left; }
+.calendarEventActions button:not(.textAction) {
+  min-height: 32px; padding: 3px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
+  background: var(--surface-subtle); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+}
+.calendarEventActions button.primaryAction { border-color: transparent; }
+.calendarEventHide { margin-left: auto; }
+.calendarEventSuggestion { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--surface-subtle); font-size: 13px; }
+.calendarEventError { margin: 0; color: var(--danger, #a64220); font-size: 13px; }
+.calendarEventHideMenu { display: grid; gap: 4px; min-width: 160px; }
+.calendarEventHideMenu button { text-align: left; }
+.calendarHidden { margin-top: 12px; }
+.calendarAgendaItem.hiddenEvent { opacity: .8; }
+.calendarAgendaItem.hiddenEvent .calendarAgendaOpen { cursor: default; }
+@media (pointer: coarse) {
+  .calendarEventActions button:not(.textAction), .calendarEventHideMenu button, .calendarHidden .textAction { min-height: 44px; min-width: 44px; padding: 8px 14px; }
+}
