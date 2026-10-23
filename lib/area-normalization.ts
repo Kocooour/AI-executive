@@ -20,9 +20,12 @@ export interface AreaNormalizationReport {
 }
 
 export class AreaNormalizationBlocked extends Error {
-  constructor(readonly issues: readonly string[]) {
+  readonly issues: readonly string[];
+
+  constructor(issues: readonly string[]) {
     super("Area normalization blocked");
     this.name = "AreaNormalizationBlocked";
+    this.issues = issues;
   }
 }
 
@@ -213,7 +216,10 @@ export function planAreaNormalization(
       return;
     }
     if (areaLinks.length) {
-      const [primary, ...duplicates] = areaLinks;
+      // Retain the oldest canonical relation; break timestamp ties by ID.
+      // The source snapshot may arrive in a different order on another device.
+      const [primary, ...duplicates] = [...areaLinks].sort((a, b) =>
+        a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (primary.targetEntityId !== area.id) {
         issues.push("unexpected-area-link:" + entity.id);
         return;
