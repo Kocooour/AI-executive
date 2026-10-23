@@ -13,6 +13,7 @@ export interface AreaNormalizationReport {
   after: { entities: number; relations: number };
   createdAreaIds: string[];
   addedRelationIds: string[];
+  addedLegacyProjectRelationIds: string[];
   removedRedundantRelationIds: string[];
   inheritedTaskIds: string[];
   unchangedWorkspaceIds: boolean;
@@ -99,13 +100,13 @@ export function planAreaNormalization(
   for (const relation of snapshot.relations) {
     if (relationIds.has(relation.id)) issues.push("duplicate-relation-id:" + relation.id);
     relationIds.add(relation.id);
-    if (relation.relationType !== "belongs_to_area" && relation.relationType !== "belongs_to_project") continue;
     const source = original.get(relation.sourceEntityId);
     const target = original.get(relation.targetEntityId);
     if (!source || !target || source.workspaceId !== target.workspaceId || relation.workspaceId !== source.workspaceId) {
       issues.push("invalid-scope-relation:" + relation.id);
       continue;
     }
+    if (relation.relationType !== "belongs_to_area" && relation.relationType !== "belongs_to_project") continue;
     if ((relation.relationType === "belongs_to_area" && target.type !== "area")
       || (relation.relationType === "belongs_to_project" && target.type !== "project")) {
       issues.push("invalid-relation-target:" + relation.id);
@@ -192,6 +193,7 @@ export function planAreaNormalization(
   }
 
   const addedRelations: Relation[] = [];
+  const addedLegacyProjectRelations: Relation[] = [];
   const removed = new Set<string>();
   const inherited: string[] = [];
   function linkEntity(entity: Entity, area: Entity | undefined, inherits: boolean) {
@@ -251,6 +253,19 @@ export function planAreaNormalization(
         issues.push("invalid-task-project:" + entity.id);
         continue;
       }
+      // A legacy property-only project membership must not disappear when
+      // normalization becomes the canonical relational representation.
+      if (oldProject && projectLinks.length === 0) {
+        const id = "relation:2a:" + digest("project", entity.id, projectId);
+        if (relationIds.has(id) || addedLegacyProjectRelations.some((relation) => relation.id === id)) {
+          issues.push("generated-project-relation-id-collision:" + id);
+          continue;
+        }
+        addedLegacyProjectRelations.push({
+          id, workspaceId: entity.workspaceId, sourceEntityId: entity.id,
+          targetEntityId: projectId, relationType: "belongs_to_project", createdAt: at,
+        });
+      }
       linkEntity(entity, projectAreas.get(projectId), true);
     } else {
       const area = explicitArea(entity) ?? (issues.length ? undefined : fallback(entity.workspaceId));
@@ -261,7 +276,7 @@ export function planAreaNormalization(
   if (issues.length) throw new AreaNormalizationBlocked([...new Set(issues)]);
   const entities = [...snapshot.entities, ...[...newAreas.values()].sort((a,b) => a.id.localeCompare(b.id))];
   const relations = [...snapshot.relations.filter((relation) => !removed.has(relation.id)),
-    ...addedRelations.sort((a,b) => a.id.localeCompare(b.id))];
+    ...[...addedRelations, ...addedLegacyProjectRelations].sort((a,b) => a.id.localeCompare(b.id))];
   const oldWorkspaceIds = snapshot.entities.map((entity) => [entity.id, entity.workspaceId]);
   const newById = new Map(entities.map((entity) => [entity.id, entity.workspaceId]));
   return {
@@ -271,6 +286,7 @@ export function planAreaNormalization(
       after: { entities: entities.length, relations: relations.length },
       createdAreaIds: [...newAreas.keys()].sort(),
       addedRelationIds: addedRelations.map((relation) => relation.id),
+      addedLegacyProjectRelationIds: addedLegacyProjectRelations.map((relation) => relation.id),
       removedRedundantRelationIds: [...removed].sort(),
       inheritedTaskIds: inherited.sort(),
       unchangedWorkspaceIds: oldWorkspaceIds.every(([id, workspace]) => newById.get(id) === workspace),
