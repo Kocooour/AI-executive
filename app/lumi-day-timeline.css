@@ -173,3 +173,16 @@
 }
 
 .calendarOverview > .dayTimeline + p { margin-top: 8px; }
+
+.view-today .taskRow { box-sizing: border-box; }
+.taskRowEstimate { color: var(--muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+@media (max-width: 700px) {
+  /* The estimate label goes under the title so the title keeps its width. */
+  .appShell.view-today .taskRowList .taskRowMain { flex-wrap: wrap; row-gap: 0; }
+  .appShell.view-today .taskRowList .taskRowMain .taskRowEstimate { order: 9; flex: 0 0 100%; }
+}
+@media (min-width: 701px) {
+  /* The panel opens over the top of its item (an item can be taller than the screen), never above it. */
+  .dayTimelineItem .popoverMenuPanel,
+  .dayTimelineItem .popoverMenuPanel.isAbove { top: 6px; bottom: auto; right: 4px; }
+}

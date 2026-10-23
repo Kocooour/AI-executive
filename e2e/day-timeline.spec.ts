@@ -125,6 +125,25 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
     await expect(section.getByRole("heading", { name: "Průběh dne" })).toBeVisible();
     await expect(section.locator("[data-timeline-item]", { hasText: event.title })).toHaveAttribute("data-timeline-kind", "task");
     await expect(page.locator(".taskRow", { hasText: long.title })).toBeVisible();
+    // Never twice: the event's task is on the axis only, yet the header still counts it (3 tasks).
+    await expect(page.locator(".taskRow", { hasText: event.title })).toHaveCount(0);
+    const listed = await page.locator(".taskRowList .taskRow").count();
+    await expect(page.locator("[data-today-summary]")).toContainText(new RegExp(`^${listed + 1} úkol`));
+    // Complete and open stay reachable from its timeline panel.
+    await section.locator("[data-timeline-item]", { hasText: event.title }).click();
+    await expect(page.locator("[data-timeline-panel] [data-event-complete]")).toBeVisible();
+    await expect(page.locator("[data-timeline-panel]").getByRole("button", { name: `Otevřít úkol ${event.title}` })).toBeVisible();
+    await expect(page.locator("[data-timeline-panel] .deferChip")).toBeVisible();
+    await page.keyboard.press("Escape");
+    // List rows are as tall as their estimate (44-240 px) with a quiet label.
+    const listLong = page.locator(".taskRow", { hasText: long.title }), listNone = page.locator(".taskRow", { hasText: none.title });
+    await expect(listLong.locator("[data-row-estimate]")).toHaveText("120 min");
+    await expect(listNone.locator("[data-row-estimate]")).toHaveText("bez odhadu");
+    expect((await listLong.boundingBox())!.height).toBeGreaterThanOrEqual(119);
+    expect((await listNone.boundingBox())!.height).toBeLessThan(60);
+    await page.setViewportSize({ width: 390, height: 844 });
+    if (process.env.E4_SHOTS) await page.screenshot({ path: `${process.env.E4_SHOTS}/today-390.png`, fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
     if (process.env.E4_SHOTS) await page.screenshot({ path: `${process.env.E4_SHOTS}/today-1280.png`, fullPage: true });
   } finally {
     const created = (await serverEntities(page)).filter((entity) => entity.type === "task" && entity.title.includes(id)).map((entity) => entity.id);

@@ -152,6 +152,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
           </>
         ))}
         {entry.kind === "task" && event && <CalendarEventActions app={app} event={event} />}
+        {entry.kind === "task" && entry.task?.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={entry.task} />}
         {entry.kind === "plan" && (
           <div className="timeMenuActions">
             {entry.task && <button type="button" onClick={() => { close(false); void inspect(entry.task as Entity); }}>{tr("timelineOpenTask")}</button>}
