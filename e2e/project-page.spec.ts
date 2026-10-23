@@ -1,4 +1,5 @@
-import type { Page } from "@playwright/test";
+import type { Browser, Page } from "@playwright/test";
+import { sessionFile } from "../playwright.config";
 import { expect, test } from "./fixtures";
 import { expectOnServer, waitUntilSynced } from "./helpers";
 
@@ -349,5 +350,58 @@ test("phone 390px: the project page and the list fit the screen, with 44px touch
     await expect(page.locator(".projectPage")).toBeVisible();
   } finally {
     await cleanup(page, Object.values(id));
+  }
+});
+
+async function device(browser: Browser) {
+  const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
+  return { context, page: await context.newPage() };
+}
+
+test("a context changed on another device while this one is being typed in is never overwritten silently", async ({ browser }) => {
+  const a = await device(browser), b = await device(browser);
+  await a.page.goto("/?view=Projects");
+  await waitUntilSynced(a.page);
+  const id = await seedWorld(a.page, now());
+  const title = `Projekt B1${R} s kontextem`;
+  const open = async (page: Page) => {
+    await page.goto("/?view=Projects");
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    await expect(page.locator(".projectPage")).toBeVisible();
+  };
+  const whyOnServer = (page: Page, why: string) =>
+    expectOnServer(page, (row) => row.id === id.rich && (row.properties?.context as { why?: string })?.why === why, true);
+  try {
+    await open(a.page);
+    await open(b.page);
+    const whyA = a.page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" });
+    // A types and does not leave the field.
+    await whyA.click();
+    await whyA.fill("Proč podle A");
+    // B saves a different why.
+    const whyB = b.page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" });
+    await whyB.fill("Proč podle B");
+    await whyB.press("Tab");
+    await whyOnServer(b.page, "Proč podle B");
+    // A takes B's change in while still typing: its draft stays and the conflict is shown with B's text.
+    await a.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await waitUntilSynced(a.page);
+    const conflict = a.page.locator(".projectContextConflict");
+    await expect(conflict).toBeVisible({ timeout: 15_000 });
+    await expect(conflict).toContainText("Proč podle B");
+    await expect(whyA).toHaveValue("Proč podle A");
+    // Leaving the field writes nothing until the owner chooses: B's text is still the stored one.
+    await whyA.press("Tab");
+    await a.page.waitForTimeout(1000);
+    await whyOnServer(a.page, "Proč podle B");
+    // An explicit choice keeps A's draft.
+    await conflict.getByRole("button", { name: "Přepsat aktuální verzi mým zněním" }).click();
+    await expect(conflict).toHaveCount(0);
+    await whyOnServer(a.page, "Proč podle A");
+  } finally {
+    await cleanup(a.page, Object.values(id));
+    await a.context.close();
+    await b.context.close();
   }
 });

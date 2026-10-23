@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
-import { contextLimits, contextPatchIfUnchanged, contextProblem, ownerProjectContext, readProjectContext, type ProjectContext } from "../../../lib/project-context";
+import { contextLimits, contextPatchIfUnchanged, contextProblem, ownerProjectContext, readProjectContext, sameStoredContext, type ProjectContext } from "../../../lib/project-context";
 import { db } from "../../../lib/db";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
@@ -49,6 +49,8 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const savedRef = useRef<Draft>(storedDraft);
   // The full origin (including provenance and revision) must not move while there are unsaved edits.
   const baseRef = useRef<ProjectContext>(stored);
+  // The context this editor wrote last: when it comes back through sync it is our own save, not a remote change.
+  const ownWrite = useRef<ProjectContext | null>(null);
   const editVersion = useRef(0);
   const dirty = useRef(false);
   const pendingSaves = useRef(0);
@@ -59,6 +61,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   // A remote change must never silently replace the baseline of a locally edited draft.
   useEffect(() => {
     const incoming = JSON.parse(storedKey) as ProjectContext;
+    if (ownWrite.current && sameStoredContext(incoming, ownWrite.current)) {
+      baseRef.current = incoming;
+      return;
+    }
     if (!focused.current && !dirty.current) {
       baseRef.current = incoming;
       savedRef.current = contextDraft(incoming);
@@ -107,8 +113,11 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       await app.patch(project, (currentProperties) => {
         // app.patch evaluates this while holding the IndexedDB write transaction.
         // Compare against the ORIGINAL edit base, not a remote update received while typing.
-        const patch = contextPatchIfUnchanged(currentProperties, base, next);
+        // Our own earlier save (a field saved a moment ago) is not a change from elsewhere.
+        const own = ownWrite.current && sameStoredContext(readProjectContext(currentProperties), ownWrite.current) ? ownWrite.current : null;
+        const patch = contextPatchIfUnchanged(currentProperties, own ?? base, next);
         if (!patch) { stale = true; throw new Error("Project context was updated during editing"); }
+        ownWrite.current = next;
         return patch;
       }, "project context changed", true);
       if (version === editVersion.current) {
@@ -255,7 +264,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
           <button type="button" onClick={() => { void resolveConflict(false); }}>{t.contextLoadRemote}</button>
           <button type="button" onClick={() => { void resolveConflict(true); }}>{t.contextKeepMine}</button>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

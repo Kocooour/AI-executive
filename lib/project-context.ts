@@ -107,12 +107,13 @@ export function contextPatch(context: ProjectContext) {
 export function contextPatchIfUnchanged(
   currentProperties: Record<string, unknown>, expected: ProjectContext, proposed: ProjectContext,
 ): ReturnType<typeof contextPatch> | null {
-  const current = readProjectContext(currentProperties);
-  const same = current.why === expected.why && current.doneWhen === expected.doneWhen
-    && current.provenance === expected.provenance && current.updatedAt === expected.updatedAt
-    && current.proposalId === expected.proposalId && current.goals.length === expected.goals.length
-    && current.goals.every((goal, index) => goal === expected.goals[index]);
-  return same ? contextPatch(proposed) : null;
+  return sameStoredContext(readProjectContext(currentProperties), expected) ? contextPatch(proposed) : null;
+}
+
+/** The same stored context: text, provenance and revision. */
+export function sameStoredContext(a: ProjectContext, b: ProjectContext) {
+  return a.why === b.why && a.doneWhen === b.doneWhen && a.provenance === b.provenance && a.updatedAt === b.updatedAt
+    && a.proposalId === b.proposalId && a.goals.length === b.goals.length && a.goals.every((goal, index) => goal === b.goals[index]);
 }
 
 // The first sentence of a text, for the project list. A sentence ends with . ! or ? followed by a space or the end.

@@ -213,3 +213,11 @@ test("validator rejects unknown keys and an own __proto__; contextProblem refuse
   assert.equal("context" in ctx.migrateProjectGoal(project({ context: null })).properties, false);
   assert.equal("context" in ctx.migrateProjectGoal(project({ goal: "g".repeat(500), context: null })).properties, false);
 });
+
+test("the editor's own earlier save is the same stored context, a change from elsewhere is not", async () => {
+  const { sameStoredContext, ownerProjectContext } = await import("../lib/project-context.ts");
+  const mine = ownerProjectContext({ why: "A", goals: ["x"], doneWhen: "D" }, 1000);
+  assert.equal(sameStoredContext(mine, { ...mine, goals: [...mine.goals] }), true);
+  assert.equal(sameStoredContext(mine, { ...mine, why: "B" }), false);
+  assert.equal(sameStoredContext(mine, { ...mine, updatedAt: 2000 }), false, "the same text saved again elsewhere is another revision");
+});
