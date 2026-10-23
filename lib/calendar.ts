@@ -18,6 +18,11 @@ export interface CalendarEvent {
   workspaceId: string;
   uid: string;
   occurrenceKey: string;
+  /**
+   * The repeat's place in its series ("<uid>:<RECURRENCE-ID ISO>" for a moved repeat, else as
+   * occurrenceKey): it stays when one repeat is moved, so decisions and the task made from it follow.
+   */
+  slotKey?: string;
   title: string;
   start: string;
   end: string;
@@ -140,11 +145,14 @@ function normalizeInstance(sourceId: string, workspaceId: string, uid: string, i
   if (status === "CANCELLED") return null;
   const transparency = scalar(event.transparency || "OPAQUE").toUpperCase();
   const occurrenceKey = `${uid}:${start.toISOString()}`;
+  // A moved repeat (RECURRENCE-ID override) keeps the slot it was originally scheduled in.
+  const recurrenceId = instance.isOverride ? (instance.event as VEvent).recurrenceid : undefined;
+  const slotKey = recurrenceId instanceof Date && !Number.isNaN(recurrenceId.getTime()) ? `${uid}:${recurrenceId.toISOString()}` : occurrenceKey;
   const classification = scalar((event as Record<string, unknown>).class || "PUBLIC").toUpperCase();
   const timezone = String((start as Date & { tz?: string }).tz || "UTC");
   return {
     id: createHash("sha256").update(`${sourceId}\0${occurrenceKey}`).digest("hex"),
-    sourceId, workspaceId, uid, occurrenceKey,
+    sourceId, workspaceId, uid, occurrenceKey, slotKey,
     title: classification === "PRIVATE" || classification === "CONFIDENTIAL"
       ? "Soukromá událost"
       : scalar(event.summary || "Událost").slice(0, 500),

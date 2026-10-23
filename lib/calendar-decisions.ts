@@ -3,7 +3,7 @@
 //
 // Decisions live on the workspace entity under `properties.calendarDecisions`, a bounded map of
 // opaque keys to "hidden" | "notTask". Keys never contain a title:
-//   occ:<sourceId>:<occurrenceKey>   one occurrence   (occurrenceKey = "<uid>:<start ISO>")
+//   occ:<sourceId>:<slotKey>         one occurrence   (slotKey = "<uid>:<original start ISO>", stable when one repeat is moved)
 //   series:<sourceId>:<uid>          every repeat of a recurring event
 import type { Entity } from "./db";
 import { suggestDeferral } from "./defer-suggestion";
@@ -19,6 +19,8 @@ export interface DecisionEvent {
   sourceId: string;
   uid?: string;
   occurrenceKey?: string;
+  /** "<uid>:<original start>": stays when one repeat of a series is moved (RECURRENCE-ID). */
+  slotKey?: string;
   title?: string;
   start: string;
   end: string;
@@ -61,8 +63,11 @@ function shortOccurrence(key: string) {
   return match ? `${shortPart(match[1])}${match[2]}` : shortPart(key);
 }
 
-export const occurrenceDecisionKey = (event: Pick<DecisionEvent, "sourceId" | "occurrenceKey" | "id">) =>
-  `occ:${event.sourceId}:${shortOccurrence(event.occurrenceKey || event.id)}`;
+// The repeat's stable identity: its slot in the series, else (older cached events) its occurrence.
+const eventSlot = (event: Pick<DecisionEvent, "slotKey" | "occurrenceKey" | "id">) => event.slotKey || event.occurrenceKey || event.id;
+
+export const occurrenceDecisionKey = (event: Pick<DecisionEvent, "sourceId" | "slotKey" | "occurrenceKey" | "id">) =>
+  `occ:${event.sourceId}:${shortOccurrence(eventSlot(event))}`;
 export const seriesDecisionKey = (event: Pick<DecisionEvent, "sourceId" | "uid">) =>
   event.uid ? `series:${event.sourceId}:${shortPart(event.uid)}` : "";
 
@@ -158,11 +163,12 @@ function taskEventUid(task: Entity) {
  * The task each event became. A task points to its event by id; the id changes when the event is
  * moved in the source calendar, so an event that was single (not recurring) when the task was made
  * (`calendarEventSingle`) is also found by its source and uid, but only by an event the calendar defines
- * as a one-off (`recurring === false`): a yearly series has one repeat in the cached window too.
+ * as a one-off (`recurring === false`): a yearly series has one repeat in the cached window too. A repeat
+ * of a series moved on its own keeps its slot (RECURRENCE-ID), by which its task is found.
  * `tasks` may hold anything, only tasks count; an open task is preferred when an event has several.
  */
 export function eventTaskLinks(events: DecisionEvent[], tasks: Entity[]): Map<string, Entity> {
-  const byId = new Map<string, Entity>(), byUid = new Map<string, Entity>();
+  const byId = new Map<string, Entity>(), byUid = new Map<string, Entity>(), bySlot = new Map<string, Entity>();
   const better = (current: Entity | undefined, task: Entity) => !current || (task.status === "open" && current.status !== "open");
   for (const task of tasks) {
     if (task?.type !== "task") continue;
@@ -171,13 +177,20 @@ export function eventTaskLinks(events: DecisionEvent[], tasks: Entity[]): Map<st
     const source = task.properties?.calendarSourceId, uid = taskEventUid(task);
     const uidKey = task.properties?.calendarEventSingle === true && typeof source === "string" && source && uid ? `${source}\0${uid}` : "";
     if (uidKey && better(byUid.get(uidKey), task)) byUid.set(uidKey, task);
+    // A repeat is found by its slot in the series (older tasks: the occurrence key they were made from).
+    const slot = typeof task.properties?.calendarEventSlot === "string" ? task.properties.calendarEventSlot
+      : typeof task.properties?.calendarEventKey === "string" ? task.properties.calendarEventKey : "";
+    const slotKey = typeof source === "string" && source && slot ? `${source}\0${slot}` : "";
+    if (slotKey && better(bySlot.get(slotKey), task)) bySlot.set(slotKey, task);
   }
   const uidCounts = new Map<string, number>();
   for (const event of events) if (event.uid) uidCounts.set(`${event.sourceId}\0${event.uid}`, (uidCounts.get(`${event.sourceId}\0${event.uid}`) || 0) + 1);
   const result = new Map<string, Entity>();
   for (const event of events) {
     const uidKey = event.uid ? `${event.sourceId}\0${event.uid}` : "";
-    const task = byId.get(event.id) ?? (uidKey && event.recurring === false && uidCounts.get(uidKey) === 1 ? byUid.get(uidKey) : undefined);
+    const task = byId.get(event.id)
+      ?? (uidKey && event.recurring === false && uidCounts.get(uidKey) === 1 ? byUid.get(uidKey) : undefined)
+      ?? (event.recurring === true && event.slotKey ? bySlot.get(`${event.sourceId}\0${event.slotKey}`) : undefined);
     if (task) result.set(event.id, task);
   }
   return result;
@@ -219,7 +232,7 @@ export const isSingleEvent = (event: Pick<DecisionEvent, "recurring" | "uid">) =
  * source and uid (stable when it is moved), a repeat by its occurrence.
  */
 export function eventTaskId(event: DecisionEvent, workspaceId: string) {
-  const identity = isSingleEvent(event) ? `uid\0${event.uid}` : `occ\0${event.occurrenceKey || event.id}`;
+  const identity = isSingleEvent(event) ? `uid\0${event.uid}` : `occ\0${eventSlot(event)}`;
   return `calendar-task:${stableDigest(`${workspaceId}\0${event.sourceId}\0${identity}`)}`;
 }
 
@@ -270,6 +283,7 @@ export function eventTaskDraft(event: DecisionEvent, timezone: string): EventTas
     calendarEventId: event.id,
     calendarSourceId: event.sourceId,
     ...(event.occurrenceKey ? { calendarEventKey: event.occurrenceKey } : {}),
+    ...(event.slotKey ? { calendarEventSlot: event.slotKey } : {}),
     ...(event.uid ? { calendarEventUid: event.uid, ...(single ? { calendarEventSingle: true } : {}) } : {}),
   };
   if (!event.allDay && Number.isFinite(end) && end > start) {
