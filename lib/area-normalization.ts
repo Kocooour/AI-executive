@@ -82,7 +82,16 @@ export function planAreaNormalization(
     if (!workspaceKind.has(entity.workspaceId)) {
       issues.push("unknown-workspace:" + entity.id);
     }
-    if (entity.type === "area") areas.set(entity.id, entity);
+    if (entity.type === "area") {
+      const expectedKind = workspaceKind.get(entity.workspaceId) === "personal" ? "private" : "shared";
+      const existingKind = entity.properties.kind;
+      // An explicitly classified Area must never disagree with its legacy
+      // workspace. Older Areas without this property retain their old data.
+      if (existingKind !== undefined && existingKind !== expectedKind) {
+        issues.push("area-visibility-mismatch:" + entity.id);
+      }
+      areas.set(entity.id, entity);
+    }
     if (entity.type === "project") projectIds.add(entity.id);
   }
   const bySource = new Map<string, Relation[]>();
@@ -139,7 +148,8 @@ export function planAreaNormalization(
     }
     const area: Entity = {
       id, type: "area", title: label, status: "active", workspaceId,
-      properties: { kind }, createdAt: at, updatedAt: at,
+      properties: { kind: kind === "personal" ? "private" : "shared" },
+      createdAt: at, updatedAt: at,
     };
     newAreas.set(id, area);
     areaLabelIndex.set(workspaceId + "\0" + normalizedLabel(label), [area]);
