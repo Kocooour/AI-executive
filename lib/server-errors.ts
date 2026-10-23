@@ -145,6 +145,12 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // D3 pre-activation read-selector guards: internal programmer/snapshot errors,
+  // not surfaced by any live UI or route until the access-control gates ship.
+  "Conflicting canonical entity ID in work scope snapshot",
+  "Unsupported work read scope",
+  "Work scope requires an actor and a personal workspace",
+  "Personal and shared workspace scopes must not overlap",
   "Gmail connection failed", // Sanitized generic OAuth failure, not provider error text.
   "Gmail request failed", // Generic API failure without third-party details.
   "Gmail request was invalid", // Generic HTTP 400 from Google; no provider response text.
