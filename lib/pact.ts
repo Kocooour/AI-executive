@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { calendarAvailability, listCalendarEvents } from "./calendar";
+import { calendarAvailability, listCalendarEvents, visibleCalendarEventsFor } from "./calendar";
 import { listEligibleClaims, toAgentClaim, type AgentClaim } from "./context-claims";
 import type { Entity } from "./db";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
@@ -230,7 +230,7 @@ export function resolvePACTContext(input: {
       input.calendarRange.workdayStart,
       input.calendarRange.workdayEnd,
     );
-    const events = listCalendarEvents(input.workspaceId, input.calendarRange.from, input.calendarRange.to)
+    const events = visibleCalendarEventsFor(input.workspaceId, listCalendarEvents(input.workspaceId, input.calendarRange.from, input.calendarRange.to))
       .slice(0, 50)
       .map((event) => ({ title: event.title, start: event.start, end: event.end, private: event.private }));
     calendar = { ...availability, events };

@@ -46,3 +46,8 @@ test("a hidden event and an event that became a task stop occupying time", () =>
   assert.equal(free(), 10 - 1);
   assert.deepEqual(calendar.effectiveBusyEventsFor("personal", [plain, hidden, converted]).map((event) => event.id), ["plain"]);
 });
+
+test("agents see neither hidden events nor events that became tasks", () => {
+  const listed = calendar.visibleCalendarEventsFor("personal", calendar.listCalendarEvents("personal", Date.parse(`${date}T00:00:00.000Z`), Date.parse(`${date}T23:59:59.000Z`)));
+  assert.deepEqual(listed.map((event) => event.id), ["plain"]);
+});

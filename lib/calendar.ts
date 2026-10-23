@@ -3,7 +3,7 @@ import https from "node:https";
 import ical, { type EventInstance, type VEvent } from "node-ical";
 import { CalDavAuthError, CalDavError, defaultCalDavOptions, fetchCalendarObjects, type CalDavCredentials, type CalDavOptions } from "./caldav";
 import { resolvedTarget } from "./calendar-net";
-import { effectiveBusyEvents, readDecisions } from "./calendar-decisions";
+import { convertedEventIds, effectiveBusyEvents, isHiddenEvent, readDecisions } from "./calendar-decisions";
 import { serverErrorKeys } from "./server-errors";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
@@ -466,6 +466,18 @@ export function effectiveBusyEventsFor(workspaceId: string, events: CalendarEven
   const entities = readSnapshot().entities;
   const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
   return effectiveBusyEvents(events, readDecisions(workspace), entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+}
+
+/**
+ * The events an agent may see: hidden events ("only in the calendar so I know") and events that became
+ * tasks (the task stands for them) are left out, like everywhere outside the Calendar view.
+ */
+export function visibleCalendarEventsFor(workspaceId: string, events: CalendarEvent[]) {
+  const entities = readSnapshot().entities;
+  const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
+  const decisions = readDecisions(workspace);
+  const converted = convertedEventIds(entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+  return events.filter((event) => !isHiddenEvent(decisions, event) && !converted.has(event.id));
 }
 
 export function calendarAvailability(
