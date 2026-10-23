@@ -472,6 +472,22 @@ collection address. Events are fetched with one calendar-query REPORT per calend
 component and occurrence limits over the whole calendar) and cached in `calendar_events` in the same shape, so planning and
 freshness work exactly as for ICS.
 
+### Owner decisions about calendar events
+
+The calendar stays read-only. What the owner decides about an event is stored on the workspace entity (`type: "workspace"`, the
+event's `workspaceId`) under `properties.calendarDecisions`, a map of opaque keys to `"hidden"` or `"notTask"`:
+`occ:<sourceId>:<occurrenceKey>` for one occurrence and `series:<sourceId>:<uid>` for every repeat; titles are never stored.
+It is written through the normal local-first path (Dexie, then `/api/store`), so it syncs across devices; the field merge
+treats it like `manualOrders` (merged key by key, never reported as a sync conflict, `lib/field-merge.ts`), and the workspace
+validators only constrain `kind`, `role` and `members`. A write prunes occurrences that started more than 30 days ago and keeps
+at most 500 keys (`lib/calendar-decisions.ts`); the local placeholder of the personal workspace (timestamp 0) is never written.
+Hiding only filters the lists in the UI: capacity, free windows and conflicts (client `mergedBusy`, server `calendarAvailability`)
+still use every event. “Yes” on “Je to úkol?” creates an ordinary task with `properties.calendarEventId` (the event's id),
+`calendarEventKey`, `calendarSourceId`, `when` (the event's date in the calendar time zone) and `estimatedMinutes` (the event's
+length, 5–480); no deadline is set. Day-plan capacity is deliberately unchanged: the event stays busy time, so the free
+windows stay truthful; only the client's one-line reprioritization suggestion (`reprioritizeSuggestion`) leaves event-linked tasks
+out of the day's planned minutes to avoid counting that time twice.
+
 Requests go only to `caldav.icloud.com` and `pNN-caldav.icloud.com` over HTTPS on port 443, to a validated public address
 pinned for the connection; every hop of a redirect (at most three) and every address in a response is checked against that
 list before anything is sent, so the Basic authorization header never leaves iCloud. Responses are capped (2 MB per PROPFIND

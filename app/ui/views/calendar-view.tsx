@@ -73,7 +73,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
       {showHidden && <><p className="attentionMeta">{tr("calEventHiddenNote")}</p><div className="calendarAgenda">{hiddenCalendarEvents.map((event) => {
         const display = calendarEventDisplay(event, { language, timezone: calendarTimezone });
         return <article key={event.id} className="calendarAgendaItem hiddenEvent"><div className="calendarAgendaOpen"><span>{event.allDay ? `${tr("allDay")} · ${display.date}` : `${display.date} · ${display.time}`}</span><strong>{event.title}</strong><small /></div>
-          <div className="calendarEventActions"><div className="calendarEventRow"><span /><button type="button" className="calendarEventHide" data-event-unhide={event.id} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })} onClick={() => void unhideCalendarEvent(event)}>{tr("calEventUnhide")}</button></div></div></article>;
+          <div className="calendarEventActions"><div className="calendarEventRow"><button type="button" className="calendarEventHide" data-event-unhide={event.id} aria-label={fill(tr("calEventUnhideLabel"), { title: event.title })} onClick={() => void unhideCalendarEvent(event)}>{tr("calEventUnhide")}</button></div></div></article>;
       })}</div></>}
     </section>}
     <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{calendarStatus && <p role="status">{calendarStatus}</p>}

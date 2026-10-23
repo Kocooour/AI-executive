@@ -478,6 +478,8 @@
 .calendarAgendaItem > .calendarEventActions { padding: 0 12px 10px; }
 .calendarEventRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .calendarEventAsk, .calendarEventTask { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); min-width: 0; }
+.calendarEventAsk p { margin: 0; }
+.calendarEventSuggestion::before { content: "✦"; }
 .calendarEventTask .textAction { color: var(--text); text-align: left; }
 .calendarEventActions button:not(.textAction) {
   min-height: 32px; padding: 3px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);

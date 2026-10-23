@@ -21,14 +21,14 @@ export function CalendarEventActions({ app, event }: { app: LumiApp; event: Cale
     <div className="calendarEventActions" data-event-actions={event.id}>
       <div className="calendarEventRow">
         {task ? (
-          <span className="calendarEventTask">{tr("calEventTask")}: <button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{task.title}</button></span>
+          <div className="calendarEventTask">{tr("calEventTask")}: <button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{task.title}</button></div>
         ) : asking ? (
-          <span className="calendarEventAsk" role="group" aria-label={`${tr("calEventIsTask")} ${event.title}`}>
-            <span>{tr("calEventIsTask")}</span>
+          <div className="calendarEventAsk" role="group" aria-label={`${tr("calEventIsTask")} ${event.title}`}>
+            <p>{tr("calEventIsTask")}</p>
             <button type="button" className="primaryAction" data-event-answer="yes" aria-label={fill(tr("calEventYesLabel"), title)} onClick={() => void createCalendarEventTask(event)}>{tr("calEventYes")}</button>
             <button type="button" data-event-answer="no" aria-label={fill(tr("calEventNoLabel"), title)} onClick={() => void markCalendarEventNotTask(event)}>{tr("calEventNo")}</button>
-          </span>
-        ) : <span />}
+          </div>
+        ) : null}
         {isCalendarEventRecurring(event) ? (
           <PopoverMenu label={hideLabel} triggerLabel={hideLabel} triggerClassName="calendarEventHide" triggerContent={tr("calEventHide")} triggerData={{ "data-event-hide": event.id }}>
             {(close) => (
@@ -44,7 +44,6 @@ export function CalendarEventActions({ app, event }: { app: LumiApp; event: Cale
       </div>
       {suggestion && (
         <p className="calendarEventSuggestion" role="status" data-event-suggestion>
-          <span aria-hidden="true">✦ </span>
           {fill(tr("calEventSuggest"), { task: suggestion.taskTitle, target: suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(suggestion.target, language) })}
           {activeWorkspaceId !== "all" && <button type="button" className="primaryAction" data-event-suggestion-apply onClick={() => void applyCalendarEventSuggestion()}>{tr("calEventSuggestApply")}</button>}
           <button type="button" data-event-suggestion-dismiss onClick={dismissCalendarEventSuggestion}>{tr("calEventSuggestDismiss")}</button>
