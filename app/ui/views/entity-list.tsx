@@ -11,6 +11,7 @@ import { InboxBatchTriage } from "./inbox-batch-triage";
 import { DeferChip } from "./defer-popover";
 import { TodayTimeCell } from "./today-time-cell";
 import { planSlotsByTask } from "../../../lib/today-plan";
+import { untimedRowHeight } from "../../../lib/day-timeline";
 import { GmailReader } from "./gmail-reader";
 
 export function EntityList({ app }: { app: LumiApp }) {
@@ -65,6 +66,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     : new Map<string, number>();
 
   // Today folds the day plan into its rows: a time cell per task instead of a separate plan list.
+  // Tasks made from today's events are rows of the day timeline, not of this list (the header still counts them).
+  const listed = view === "Today" ? collection.filter((x) => !app.todayTimelineTaskIds.has(x.id)) : collection;
   const planSlots = view === "Today" ? planSlotsByTask(visibleDayPlan) : null;
   const renderRow = (x: Entity, index: number, rows: Entity[]) => {
       const meta = taskRowValue(x, language, today, {
@@ -78,6 +81,7 @@ export function EntityList({ app }: { app: LumiApp }) {
         <Fragment key={x.id}>
         {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
         <article
+          style={view === "Today" && x.type === "task" ? { minHeight: untimedRowHeight(typeof x.properties.estimatedMinutes === "number" ? x.properties.estimatedMinutes : null) } : undefined}
           className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
           data-drop-entity={x.id}
           data-entity-type={x.type}
@@ -119,6 +123,9 @@ export function EntityList({ app }: { app: LumiApp }) {
               className="taskRowOpen"
               onClick={(event) => { event.stopPropagation(); void inspect(x); }}
             >{x.title || tr("untitledItem")}</button></strong>
+            {view === "Today" && x.type === "task" && (
+              <small className="taskRowEstimate" data-row-estimate>{typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0 ? tr("timelineMinutes").replace("{n}", String(x.properties.estimatedMinutes)) : tr("timelineNoEstimate")}</small>
+            )}
             <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
             {activeWorkspaceId === "all" && (
               <span className="workspaceBadge">
@@ -233,7 +240,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {view === "Projects" ? null : collection.map((x, index) => renderRow(x, index, collection))}
+                {view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
                 {view === "Projects" && projectGroups.length > 0 && (
                   <div className="projectGroups" aria-label={tr("projectsByArea")}>
                     {projectGroups.map((group) => (

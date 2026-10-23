@@ -151,6 +151,13 @@ export interface CalendarEvent {
   id: string;
   sourceId: string;
   workspaceId: string;
+  /** The event's uid and occurrence key; opaque identity of a series and of one repeat. */
+  uid?: string;
+  occurrenceKey?: string;
+  /** The repeat's stable place in its series (RECURRENCE-ID of a moved repeat); see lib/calendar.ts. */
+  slotKey?: string;
+  /** Part of a recurring series, from the calendar's definition; absent in older cached events (unknown). */
+  recurring?: boolean;
   title: string;
   start: string;
   end: string;

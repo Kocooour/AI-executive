@@ -3,6 +3,7 @@ import https from "node:https";
 import ical, { type EventInstance, type VEvent } from "node-ical";
 import { CalDavAuthError, CalDavError, defaultCalDavOptions, fetchCalendarObjects, type CalDavCredentials, type CalDavOptions } from "./caldav";
 import { resolvedTarget } from "./calendar-net";
+import { convertedEventIds, effectiveBusyEvents, isHiddenEvent, readDecisions } from "./calendar-decisions";
 import { serverErrorKeys } from "./server-errors";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
@@ -17,6 +18,11 @@ export interface CalendarEvent {
   workspaceId: string;
   uid: string;
   occurrenceKey: string;
+  /**
+   * The repeat's place in its series ("<uid>:<RECURRENCE-ID ISO>" for a moved repeat, else as
+   * occurrenceKey): it stays when one repeat is moved, so decisions and the task made from it follow.
+   */
+  slotKey?: string;
   title: string;
   start: string;
   end: string;
@@ -26,6 +32,8 @@ export interface CalendarEvent {
   transparency: string;
   busy: boolean;
   private: boolean;
+  /** Whether the event belongs to a recurring series (RRULE, overrides or RECURRENCE-ID); absent in payloads cached before 2026-10. */
+  recurring?: boolean;
 }
 
 export interface CalendarSourceState {
@@ -127,7 +135,7 @@ function scalar(value: unknown) {
   return String(value || "");
 }
 
-function normalizeInstance(sourceId: string, workspaceId: string, uid: string, instance: EventInstance): CalendarEvent | null {
+function normalizeInstance(sourceId: string, workspaceId: string, uid: string, instance: EventInstance, recurring: boolean): CalendarEvent | null {
   if (!(instance.start instanceof Date) || Number.isNaN(instance.start.getTime())) return null;
   const event = instance.event as VEvent & Record<string, unknown>;
   const start = instance.start;
@@ -137,11 +145,14 @@ function normalizeInstance(sourceId: string, workspaceId: string, uid: string, i
   if (status === "CANCELLED") return null;
   const transparency = scalar(event.transparency || "OPAQUE").toUpperCase();
   const occurrenceKey = `${uid}:${start.toISOString()}`;
+  // A moved repeat (RECURRENCE-ID override) keeps the slot it was originally scheduled in.
+  const recurrenceId = instance.isOverride ? (instance.event as VEvent).recurrenceid : undefined;
+  const slotKey = recurrenceId instanceof Date && !Number.isNaN(recurrenceId.getTime()) ? `${uid}:${recurrenceId.toISOString()}` : occurrenceKey;
   const classification = scalar((event as Record<string, unknown>).class || "PUBLIC").toUpperCase();
   const timezone = String((start as Date & { tz?: string }).tz || "UTC");
   return {
     id: createHash("sha256").update(`${sourceId}\0${occurrenceKey}`).digest("hex"),
-    sourceId, workspaceId, uid, occurrenceKey,
+    sourceId, workspaceId, uid, occurrenceKey, slotKey,
     title: classification === "PRIVATE" || classification === "CONFIDENTIAL"
       ? "Soukromá událost"
       : scalar(event.summary || "Událost").slice(0, 500),
@@ -149,6 +160,7 @@ function normalizeInstance(sourceId: string, workspaceId: string, uid: string, i
     timezone, status, transparency,
     busy: transparency !== "TRANSPARENT" && status !== "CANCELLED",
     private: classification === "PRIVATE" || classification === "CONFIDENTIAL",
+    recurring,
   };
 }
 
@@ -186,9 +198,11 @@ export async function parseCalendar(sourceId: string, workspaceId: string, input
     }
     const uid = scalar(component.uid);
     if (!uid) continue;
+    // From the definition, not from how many repeats fall into the cached window (a yearly series has one).
+    const recurring = Boolean(component.rrule || component.recurrenceid || Object.keys(component.recurrences || {}).length);
     const instances = ical.expandRecurringEvent(component, { from, to, includeOverrides: true, excludeExdates: true, expandOngoing: true });
     for (const instance of instances) {
-      const event = normalizeInstance(sourceId, workspaceId, uid, instance);
+      const event = normalizeInstance(sourceId, workspaceId, uid, instance, recurring);
       if (event) events.push(event);
       if (events.length > MAX_EVENTS) throw new Error("Calendar contains too many occurrences");
     }
@@ -460,6 +474,25 @@ function zonedDateTimeToMs(dateValue: string, timeValue: string, timeZone: strin
   return candidate;
 }
 
+/** The events that occupy time in a workspace: not hidden by the owner and not turned into a task (lib/calendar-decisions.ts). */
+export function effectiveBusyEventsFor(workspaceId: string, events: CalendarEvent[]) {
+  const entities = readSnapshot().entities;
+  const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
+  return effectiveBusyEvents(events, readDecisions(workspace), entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+}
+
+/**
+ * The events an agent may see: hidden events ("only in the calendar so I know") and events that became
+ * tasks (the task stands for them) are left out, like everywhere outside the Calendar view.
+ */
+export function visibleCalendarEventsFor(workspaceId: string, events: CalendarEvent[]) {
+  const entities = readSnapshot().entities;
+  const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
+  const decisions = readDecisions(workspace);
+  const converted = convertedEventIds(entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId), events);
+  return events.filter((event) => !isHiddenEvent(decisions, event) && !converted.has(event.id));
+}
+
 export function calendarAvailability(
   workspaceId: string,
   localDate: string,
@@ -472,7 +505,7 @@ export function calendarAvailability(
   const to = zonedDateTimeToMs(localDate, workdayEnd, timezone);
   if (!sources.length || to <= from) return { configured: false, fresh: false, freeHours: 0, busyHours: 0, windows: [] as Array<{ start: string; end: string; hours: number }> };
   const fresh = sources.every((source) => source.status === "ready");
-  const events = listCalendarEvents(workspaceId, from, to).filter((event) => event.busy);
+  const events = effectiveBusyEventsFor(workspaceId, listCalendarEvents(workspaceId, from, to));
   const merged = events.map((event) => [Math.max(from, Date.parse(event.start)), Math.min(to, Date.parse(event.end))] as [number, number])
     .filter((interval) => interval[1] > interval[0]).sort((a, b) => a[0] - b[0])
     .reduce<Array<[number, number]>>((result, interval) => {

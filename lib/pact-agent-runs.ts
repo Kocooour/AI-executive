@@ -1,4 +1,4 @@
-import { listCalendarEvents } from "./calendar";
+import { effectiveBusyEventsFor, listCalendarEvents } from "./calendar";
 import { beginPACTRun, finishPACTRun, getPACTAgent, resolvePACTContext } from "./pact";
 import { readSnapshot } from "./server-store";
 
@@ -66,8 +66,8 @@ function meetingPrepResult(workspaceId: string, language: "cs" | "en"): ManualPA
   const agent = getPACTAgent("meeting-prep");
   if (!agent) throw new Error("Meeting Prep agent is unavailable");
   const resolved = resolvePACTContext({ agent, workspaceId, includeSensitive: false });
-  const events = listCalendarEvents(workspaceId, now, now + 7 * day)
-    .filter((event) => event.status !== "cancelled" && event.busy)
+  const events = effectiveBusyEventsFor(workspaceId, listCalendarEvents(workspaceId, now, now + 7 * day))
+    .filter((event) => event.status !== "cancelled")
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const next = events[0];
   const openTasks = resolved.entities.filter((entity) => entity.type === "task" && entity.status === "open").length;

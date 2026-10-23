@@ -1,4 +1,4 @@
-import { calendarAvailability, listCalendarEvents } from "./calendar";
+import { calendarAvailability, listCalendarEvents, visibleCalendarEventsFor } from "./calendar";
 import { searchContext } from "./context-search";
 import { listPACTContext, type ContextScope, type PACTPermission } from "./pact";
 import { readSnapshot } from "./server-store";
@@ -69,7 +69,7 @@ export function executePACTReadTool(
     const from = Number(input.from);
     const to = Number(input.to);
     if (!Number.isFinite(from) || !Number.isFinite(to)) throw new Error("Calendar range is required");
-    return listCalendarEvents(workspaceId, from, to).slice(0, 100);
+    return visibleCalendarEventsFor(workspaceId, listCalendarEvents(workspaceId, from, to)).slice(0, 100);
   }
   if (name === "calendar.free_time") {
     const localDate = String(input.localDate || "");

@@ -408,9 +408,9 @@ test("an offline start over a stalled connection shows the data and never waits 
   await context.close();
 });
 
-// Over a stalled connection, an action that needs the server (starting work on a task) ends with
-// its usual message instead of staying busy.
-test("an offline start over a stalled connection: starting work on a task does not hang", async ({ browser }) => {
+// Starting work on a task is no longer offered (the owner only completes, defers or deletes a task),
+// so an offline task opens with its one-button actions and without a start button.
+test("an offline task offers complete, defer and delete and no start button", async ({ browser }) => {
   test.setTimeout(90_000);
   const context = await browser.newContext({ storageState: sessionFile, locale: "cs-CZ" });
   const page = await context.newPage();
@@ -424,9 +424,10 @@ test("an offline start over a stalled connection: starting work on a task does n
   await page.reload();
   await expect(page.locator(".offlineStart")).toBeVisible({ timeout: 20_000 });
   await page.locator("article", { hasText: title }).first().click();
-  const start = page.locator("aside.detail").getByRole("button", { name: "Spustit" });
-  await start.click();
-  await expect(start).toBeEnabled({ timeout: 3_000 });
+  const detail = page.locator("aside.detail");
+  await expect(detail.getByRole("button", { name: "Dokončit" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Smazat" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Spustit" })).toHaveCount(0);
   await context.close();
 });
 
