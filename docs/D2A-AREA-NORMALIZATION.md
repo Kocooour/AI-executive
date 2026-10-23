@@ -1,0 +1,29 @@
+# D2 / krok 2a — normalizace Oblastí (přípravná implementace)
+
+Kontrakt: ARCHITECTURE.md, PRODUCT.md LUMI-FR-013 a rozhodnutí vlastníka z 2026-10-23.
+
+## Dodaná bezpečná část
+
+- Funkce planAreaNormalization je čistý, deterministický **návrh** transformace dvou polí entities a relations: **žádné čtení ani zápis živé SQLite**, žádné změny workspaceId, ID, dat a revizí existujících entit.
+- Každý projekt a samostatný úkol získá přesně jednu explicitní vazbu belongs_to_area; úkol s belongs_to_project vlastní area vazbu nemá, odvozuje ji od projektu. Redundantní existující vazby jsou **pouze v návrhu** odstraněny a jejich ID jsou v auditním reportu.
+- Výchozí oblast **Nezařazeno** je soukromá uvnitř personal workspace. Legacy sdílená data zůstávají uvnitř svého původního shared workspace s kompatibilní oblastí **Nezařazeno (původní sdílené)**. Textové legacy properties.area se mapuje jen podle přesného normalizovaného popisku **v témže workspace**; neznámý popisek vytvoří oblast ve stejném workspace, nikdy nezakládá nové sdílení.
+- Nové ID oblastí a vazeb se odvozuje deterministicky (SHA-256 ze scope a canonical label / ID). Při opakování na již normalizovaném snímku se nepřidávají další vazby ani entity.
+- Více možných oblastí, projektů, vadné interní vazby, chybné workspaces, rozpor legacy popisku s explicitním přiřazením nebo nesoulad projektové a úkolové oblasti **zablokují celou transformaci** (AreaNormalizationBlocked), žádná částečná mutace.
+- Report před/po uvádí počet entit a relací, vytvořené ID, odstraněné redundantní vazby, úkoly s děděním a potvrzuje neměnnost workspace každého starého objektu. **Rozdíl počtů je explicitní a očekávaný** při doplnění chybějících oblastí/vazeb nebo odstranění redundance; nikdy nejde o tichou ztrátu původních projektů, úkolů, poznámek či vazeb. Před budoucí aplikací se musí auditovat každé odstraněné redundantní ID.
+
+## Offline náhled nad výslovně připravenou kopií
+
+Spustit na syntetickém/zkopírovaném JSON snapshotu s poli entities a relations:
+
+    node --experimental-loader ./tests/ts-loader.mjs scripts/plan-area-normalization.mjs /cesta/ke/kopii.json
+
+Skript pouze čte soubor a vrátí hash vstupu a auditní report bez obsahu záznamů. **Nemá přepínač pro aplikaci změn**. Pro SQLite se nejprve pořídí ověřená konzistentní kopie a ta se samostatným bezpečným nástrojem exportuje do JSON; živý store.sqlite se tomuto skriptu nepředává.
+
+## Zbývá před aplikací 2a a navazujícím 2b
+
+1. Ověřená plná záloha SQLite včetně historie, tokenů a lokálních klientských front, pnpm check-data nad kopií a inventář nejednoznačných vazeb, legacy štítků a reálných počtů dat.
+2. Samostatný **transakční, zálohovaný a vratný 2a aplikátor**: kontrola předpokládaných ID/revizí a původního snapshot SHA, nezměněný workspace každé položky, kontrola referencí a counts, audit, čitelnost z GET /api/store, nové device base a kompatibilita se starým offline snapshotem. Při konfliktu abort beze změn.
+3. Doplňování oblastí musí platit také pro **nové zápisy** klienta, včetně offline scénářů; jinak se starý snapshot může vrátit před normalizaci. Do té doby jde **pouze o náhled**, ne zapnutou migraci.
+4. Krok **2b** je další samostatná migrace se změnou sdílených workspaceId a s předčasnou restoreGeneration / offline-sync bariérou; **2c** řeší přiřazení otevřených legacy sdílených úkolů k owner. Teprve po 2a–2c lze aktivovat cílové UI Můj plán či víceuživatelský přístup.
+
+Celá browser E2E sada se spouští až jako release gate bezprostředně před nasazením.
