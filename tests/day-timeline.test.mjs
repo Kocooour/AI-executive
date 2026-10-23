@@ -129,3 +129,16 @@ test("now is placed on the axis only inside today's axis", () => {
   assert.equal(timelineNowOffset(layout, Date.parse("2026-10-21T02:00:00Z")), null);
   assert.equal(timelineNowOffset(layout, Date.parse("2026-10-22T08:00:00Z")), null);
 });
+
+test("a compact axis fits the items (at least three hours) instead of the whole workday", () => {
+  const layout = layoutDayTimeline([item("a", "11:10", "11:50"), item("b", "12:30", "13:00")], { ...base, fitToItems: true });
+  // 11:10Z..13:00Z is 13:10..15:00 in Prague: padded to a 3-hour span, then to whole hours.
+  assert.equal(layout.axisStartMinute, 12 * 60);
+  assert.equal(layout.axisEndMinute, 16 * 60);
+  const wide = layoutDayTimeline([item("a", "06:00", "14:00")], { ...base, fitToItems: true });
+  assert.equal(wide.axisStartMinute, 8 * 60);
+  assert.equal(wide.axisEndMinute, 16 * 60);
+  const none = layoutDayTimeline([], { ...base, fitToItems: true });
+  assert.equal(none.axisStartMinute, 8 * 60);
+  assert.equal(none.axisEndMinute, 18 * 60);
+});

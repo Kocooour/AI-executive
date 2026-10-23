@@ -38,6 +38,7 @@
 }
 .view-today .dayTimelineHour span { background: var(--surface-subtle); }
 .dayTimelineItems {
+  z-index: 2;
   position: absolute;
   inset: 0 0 0 var(--tl-gutter);
   margin: 0;
@@ -113,7 +114,7 @@
   height: 0;
   border-top: 2px solid var(--danger);
   pointer-events: none;
-  z-index: 3;
+  z-index: 1;
 }
 .dayTimelineNow span {
   position: absolute;
@@ -170,3 +171,5 @@
   .dayTimelineBlock .dtMeta { font-size: 11px; }
   .dayTimelineUntimedRow { flex-wrap: wrap; }
 }
+
+.calendarOverview > .dayTimeline + p { margin-top: 8px; }

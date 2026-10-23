@@ -191,10 +191,13 @@ test("a full day answered from Today: the event leaves the agenda and Lumi's sug
     await page.reload();
     await waitUntilSynced(page);
     const agenda = page.locator(".todayCalendarCommitments");
+    await agenda.locator("[data-timeline-item]", { hasText: event.title }).click();
     await agenda.getByRole("button", { name: `Vytvořit úkol z události ${event.title}` }).click();
     const line = page.locator("[data-event-suggestion]");
     await expect(line).toContainText(`Lumi navrhuje posunout ${movable.title}`);
-    await expect(agenda.locator("[data-event-actions]", { hasText: event.title })).toHaveCount(0);
+    // The event is now a task: it sits on the axis as that task, and its question is gone.
+    await expect(agenda.locator("[data-timeline-item]", { hasText: event.title })).toHaveAttribute("data-timeline-kind", "task");
+    await expect(page.locator("[data-event-answer]")).toHaveCount(0);
     await line.getByRole("button", { name: "Posunout" }).click();
     await expect(line).toHaveCount(0);
     await expectOnServer(page, (entity) => entity.id === movable.id && entity.properties?.when !== today, true);

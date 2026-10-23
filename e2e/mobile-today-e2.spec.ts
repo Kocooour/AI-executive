@@ -152,26 +152,28 @@ for (const width of [390, 1280]) {
     await page.goto("/?view=Today");
     await waitUntilSynced(page);
     const section = page.locator(".todayCalendarCommitments");
-    await expect(section.getByRole("heading", { name: "Události v kalendáři" })).toBeVisible();
-    const agenda = section.locator(".calendarAgenda");
-    await expect(agenda.locator(":scope > div")).toHaveCount(5);
-    await expect(agenda).toContainText("Morning meeting outside work hours");
-    await expect(agenda).toContainText("Evening meeting outside work hours");
-    await expect(agenda).toContainText("Open midday calendar slot");
-    await expect(agenda).toContainText("All-day birthday");
-    await expect(agenda).toContainText("Previous evening crossing midnight");
-    await expect(agenda).not.toContainText("Tomorrow must not appear");
-    await expect(agenda.locator(".free", { hasText: "Open midday calendar slot" }))
-      .toContainText("volný čas");
-    const allDayEvent = agenda.locator(":scope > div", { hasText: "All-day birthday" });
-    await expect(allDayEvent.locator("span")).toHaveText("Celý den");
+    await expect(section.getByRole("heading", { name: "Průběh dne" })).toBeVisible();
+    // The timeline lists the timed events by start; all-day events are a strip above the axis.
+    const timed = section.locator(".dayTimelineItems [data-timeline-item]");
+    await expect(timed).toHaveCount(4);
+    const allDay = section.locator(".dayTimelineAllDay [data-timeline-item]");
+    await expect(allDay).toHaveCount(1);
+    await expect(allDay).toContainText("All-day birthday");
+    await expect(allDay).toContainText("Celý den");
+    const named = (title: string) => section.locator("[data-timeline-item]", { hasText: title });
+    await expect(named("Morning meeting outside work hours")).toBeVisible();
+    await expect(named("Evening meeting outside work hours")).toBeVisible();
+    await expect(named("Open midday calendar slot")).toBeVisible();
+    await expect(section).not.toContainText("Tomorrow must not appear");
+    await expect(named("Open midday calendar slot")).toHaveAttribute("aria-label", /volný čas/);
 
     // Today displays only the portion after local midnight, not yesterday's 23:30 start.
-    const overnightEvent = agenda.locator(":scope > div", { hasText: "Previous evening crossing midnight" });
-    await expect(overnightEvent.locator("span")).toHaveText(/^0?0:00–0?0:30$/);
-    await expect(overnightEvent.locator("small")).toContainText("Pokračuje z předchozího dne");
-    const morningEvent = agenda.locator(":scope > div", { hasText: "Morning meeting outside work hours" });
-    await expect(morningEvent.locator("span")).toHaveText(/^0?7:00–0?7:30$/);
+    await expect(named("Previous evening crossing midnight")).toHaveAttribute("aria-label", /^Previous evening crossing midnight, 0?0:00–0?0:30, 30 min/);
+    await expect(named("Previous evening crossing midnight")).toHaveAttribute("aria-label", /Pokračuje z předchozího dne/);
+    await named("Previous evening crossing midnight").click();
+    await expect(section.locator("[data-timeline-panel]")).toContainText("Pokračuje z předchozího dne");
+    await page.keyboard.press("Escape");
+    await expect(named("Morning meeting outside work hours")).toHaveAttribute("aria-label", /^Morning meeting outside work hours, 0?7:00–0?7:30, 30 min/);
 
     // This repair must not change the existing Home workday-only agenda.
     await page.goto("/?view=Home");

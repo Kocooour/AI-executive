@@ -105,9 +105,9 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
   const allDay = useMemo(() => entries.filter((entry) => entry.allDay), [entries]);
   const timed = useMemo(() => entries.filter((entry) => !entry.allDay), [entries]);
   const layout = useMemo(() => layoutDayTimeline(timed, {
-    day: calendarToday, timezone: calendarTimezone, pxPerMinute,
+    day: calendarToday, timezone: calendarTimezone, pxPerMinute, fitToItems: mode === "today",
     workdayStart: notificationState?.preferences.workdayStart, workdayEnd: notificationState?.preferences.workdayEnd,
-  }), [timed, calendarToday, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
+  }), [timed, mode, calendarToday, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
   const nowTop = timelineNowOffset(layout, dayPlanNow);
 
   // Calendar only: today's open tasks that have no time on the axis, each as tall as its estimate.
@@ -199,7 +199,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
               const entry = placed.source;
               const when = timeText(placed);
               const minutes = entry.minutes ?? placed.durationMinutes;
-              const label = `${entry.title}, ${when}, ${minutesText(minutes)}, ${kindText(entry)}${flags(entry) ? `, ${flags(entry)}` : ""}`;
+              const continues = [placed.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), placed.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(", ");
+              const label = `${entry.title}, ${when}, ${minutesText(minutes)}, ${kindText(entry)}${flags(entry) ? `, ${flags(entry)}` : ""}${continues ? `, ${continues}` : ""}`;
               return (
                 <li key={entry.id} className="dayTimelineItem" style={{ top: placed.top, height: placed.height, "--col": placed.column, "--cols": placed.columns } as CSSProperties}>
                   <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineItemMenu"), { title: entry.title })} triggerLabel={label}

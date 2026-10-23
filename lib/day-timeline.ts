@@ -29,6 +29,9 @@ export interface DayTimelineOptions {
   workdayEnd?: string;
   pxPerMinute?: number;
   minItemPx?: number;
+  /** A compact axis: only the span of the items (at least `minSpanMinutes`), not the whole workday. */
+  fitToItems?: boolean;
+  minSpanMinutes?: number;
 }
 
 export interface PlacedTimelineItem<T extends TimelineSource> {
@@ -123,10 +126,16 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
   const workdayValid = workEnd > workStart;
   let wantStart = workdayValid ? workStart : 8 * 60;
   let wantEnd = workdayValid ? workEnd : 18 * 60;
+  const fit = Boolean(options.fitToItems) && clipped.length > 0;
+  if (fit) { wantStart = Infinity; wantEnd = -Infinity; }
   for (const item of clipped) {
     // An item's visible extent includes its minimum height, so a short last item still fits.
     wantStart = Math.min(wantStart, item.startMinute);
     wantEnd = Math.max(wantEnd, item.endMinute, item.startMinute + minItemMinutes);
+  }
+  if (fit) {
+    const span = options.minSpanMinutes ?? 180;
+    if (wantEnd - wantStart < span) { const extra = (span - (wantEnd - wantStart)) / 2; wantStart -= extra; wantEnd += extra; }
   }
   wantStart = Math.max(0, wantStart);
   wantEnd = Math.min(dayMinutes, wantEnd);
