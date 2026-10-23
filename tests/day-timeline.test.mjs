@@ -192,3 +192,16 @@ test("a short item just before midnight stays inside the axis instead of coverin
   assert.ok(late.top + late.height <= layout.height, `${late.top}+${late.height} > ${layout.height}`);
   assert.equal(Math.round(late.startMinute), 23 * 60 + 59, "its time is unchanged");
 });
+
+test("an item moved up at the end of the axis never draws over the item before it", () => {
+  // Prague 2026-10-21: A 23:20-23:55, B 23:59-00:00. B's minimum height moves it up into A's time.
+  const layout = layoutDayTimeline([
+    { id: "a", start: "2026-10-21T21:20:00.000Z", end: "2026-10-21T21:55:00.000Z" },
+    { id: "b", start: "2026-10-21T21:59:00.000Z", end: "2026-10-21T22:00:00.000Z" },
+  ], base);
+  const [a, b] = ["a", "b"].map((id) => layout.items.find((item) => item.id === id));
+  const overlapsVertically = a.top < b.top + b.height && b.top < a.top + a.height;
+  assert.ok(!overlapsVertically || a.column !== b.column, `same lane and overlapping: a ${a.top}+${a.height}, b ${b.top}+${b.height}`);
+  assert.ok(b.top + b.height <= layout.height);
+  assert.equal(Math.round(b.startMinute), 23 * 60 + 59, "B's time is unchanged");
+});

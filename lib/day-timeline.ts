@@ -165,8 +165,13 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
   // lane: they are full width behind the others. A cluster has at most `maxColumns` lanes; items that
   // do not fit collapse into one "+N" group in the last lane.
   const maxColumns = Math.max(2, Math.floor(options.maxColumns ?? 4));
-  type Clipped = (typeof clipped)[number];
-  const visualEnd = (item: Clipped) => Math.max(item.endMinute, item.startMinute + minItemMinutes);
+  // Each item's drawn interval: at least the minimum height, and moved up when that would run past the
+  // end of the axis (a 23:59 item). Clusters and lanes use the drawn interval, so a moved item never
+  // lands on top of the item before it.
+  const drawnStart = (startMinute: number, endMinute: number) =>
+    Math.max(axisStartMinute, Math.min(startMinute, axisEndMinute - Math.max(endMinute - startMinute, minItemMinutes)));
+  type Clipped = (typeof clipped)[number] & { drawnStart: number };
+  const visualEnd = (item: Clipped) => item.drawnStart + Math.max(item.endMinute - item.startMinute, minItemMinutes);
   // An item drawn taller than its length (the minimum height) near the end of the axis is moved up so
   // it stays inside the axis instead of covering what follows it.
   const axisPx = (axisEndMinute - axisStartMinute) * pxPerMinute;
@@ -179,7 +184,7 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
     durationMinutes: Math.round(item.endMinute - item.startMinute),
     continuesFromPreviousDay: item.continuesFromPreviousDay,
     continuesIntoNextDay: item.continuesIntoNextDay,
-    top: inside((item.startMinute - axisStartMinute) * pxPerMinute, Math.max(minItemPx, (item.endMinute - item.startMinute) * pxPerMinute)),
+    top: inside((item.drawnStart - axisStartMinute) * pxPerMinute, Math.max(minItemPx, (item.endMinute - item.startMinute) * pxPerMinute)),
     height: Math.max(minItemPx, (item.endMinute - item.startMinute) * pxPerMinute),
     column, columns, underlay,
   });
@@ -188,7 +193,7 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
     const lanes = new Map<Clipped, number>();
     const overflow: Clipped[] = [];
     for (const item of members) {
-      let lane = laneEnds.findIndex((end) => end <= item.startMinute);
+      let lane = laneEnds.findIndex((end) => end <= item.drawnStart);
       if (lane === -1 && laneEnds.length < limit) lane = laneEnds.length;
       if (lane === -1) { overflow.push(item); continue; }
       laneEnds[lane] = visualEnd(item);
@@ -206,7 +211,7 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
     const columns = result.overflow.length > 0 ? limit + 1 : Math.max(1, result.count);
     for (const [item, lane] of result.lanes) placed.push(make(item, lane, columns));
     if (result.overflow.length > 0) {
-      const start = Math.min(...result.overflow.map((item) => item.startMinute));
+      const start = Math.min(...result.overflow.map((item) => item.drawnStart));
       const end = Math.max(...result.overflow.map(visualEnd));
       overflowGroups.push({
         id: `overflow:${result.overflow[0].source.id}`,
@@ -220,9 +225,11 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
   };
   let members: Clipped[] = [];
   let clusterEnd = -Infinity;
-  for (const item of clipped) {
+  const drawn: Clipped[] = clipped.map((item) => ({ ...item, drawnStart: drawnStart(item.startMinute, item.endMinute) }))
+    .sort((a, b) => a.drawnStart - b.drawnStart || b.endMinute - a.endMinute || a.source.id.localeCompare(b.source.id));
+  for (const item of drawn) {
     if (item.source.underlay) { placed.push(make(item, 0, 1, true)); continue; }
-    if (item.startMinute >= clusterEnd) { flush(members); members = []; clusterEnd = -Infinity; }
+    if (item.drawnStart >= clusterEnd) { flush(members); members = []; clusterEnd = -Infinity; }
     members.push(item);
     clusterEnd = Math.max(clusterEnd, visualEnd(item));
   }
