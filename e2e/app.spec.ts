@@ -497,8 +497,9 @@ test("losing the connection keeps the attention list and marks it out of date", 
   await context.setOffline(true);
   await expect(attention.locator(".attentionStale")).toBeVisible();
   await expect(attention.locator(".attentionItem").first()).toBeVisible();
-  await attention.locator(".attentionMore summary").first().click();
-  await expect(attention.locator(".attentionActions button").first()).toBeDisabled();
+  // Snooze and dismiss are in the item's "⋯" menu and wait for a fresh evaluation.
+  await attention.locator(".attentionItem").first().getByRole("button", { name: /^Další akce/ }).click();
+  await expect(attention.getByRole("menuitem", { name: /^Odložit o 24 h/ })).toBeDisabled();
   await context.setOffline(false);
   // Well under the one-minute periodic refresh: coming back online must refresh by itself.
   await expect(attention.locator(".attentionStale")).toHaveCount(0, { timeout: 15_000 });

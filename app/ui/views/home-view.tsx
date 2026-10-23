@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { taskDueTone, taskMatchesView } from "../../../lib/task-views";
 import { attentionReason, taskDueSummary } from "../format";
 import type { LumiApp } from "../use-lumi-app";
+import { AttentionItemRow } from "./attention-item";
 import { DeferChip } from "./defer-popover";
 import { RecordMarks } from "./held-back";
 import { TodayAgenda } from "./today-agenda";
@@ -13,9 +14,7 @@ import { WorkNowCard } from "./work-now-card";
 export function HomeView({ app }: { app: LumiApp }) {
   const {
     acceptNativeDrop,
-    actOnAttention,
     activeWorkspaceId,
-    attentionBusyKey,
     attentionActionsBlocked,
     attentionError,
     attentionOutdated,
@@ -30,6 +29,7 @@ export function HomeView({ app }: { app: LumiApp }) {
     dragTarget,
     draggingId,
     freeHours,
+    homeToday,
     homeTodayTasks,
     inspect,
     items,
@@ -42,7 +42,6 @@ export function HomeView({ app }: { app: LumiApp }) {
     setShowAllAttention,
     setView,
     showAllAttention,
-    sidebarCounts,
     syncStatus,
     today,
     todayCalendarEvents,
@@ -51,7 +50,6 @@ export function HomeView({ app }: { app: LumiApp }) {
     visibleAttention,
     visibleDayPlan,
     workSession,
-    workspaces,
     writeWorkspace,
   } = app;
   // An ordinary save shows "syncing" for a moment; the line appears only when offline or when
@@ -69,22 +67,21 @@ export function HomeView({ app }: { app: LumiApp }) {
     Object.entries(values).reduce((text, [name, value]) => text.replace(`{${name}}`, String(value)), tr(key));
   const shortTime = (value: number, timeZone?: string) =>
     new Date(value).toLocaleString(locale, { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone });
-  const workspaceTitle = (workspaceId: string) =>
-    workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.title || workspaceId;
   const planBlockState = (block: { existing?: boolean; planningSource?: string }) =>
     tr(block.existing ? block.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting" : "dayPlanProposed");
 
-  // A row evaluated before the user edited its subject on this device may no longer hold.
-  const changedSince = (candidate: { subjectId: string; workspaceId: string; evaluatedAt: number }) => {
-    if (!attentionActionsBlocked) return false;
-    const local = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
-    return Boolean(local && Number(local.updatedAt) > candidate.evaluatedAt);
-  };
   const capacityLabel = calendarSources.length === 0 ? tr("calendarDisconnected")
     : calendarFresh ? `${freeHours.toLocaleString(locale, { maximumFractionDigits: 1 })} ${tr("freeHours")}` : tr("capacityUnknown");
   const syncLabel = syncStatus === "synced" ? tr("synced") : syncStatus === "syncing" ? tr("syncing")
     : syncStatus === "offline" ? tr("offline") : tr("connecting");
-  const moreToday = (sidebarCounts.Today ?? homeTodayTasks.length) - homeTodayTasks.length;
+  // Counts come from the same set the list is cut from: Today tasks that are not attention items.
+  const moreToday = homeToday.more;
+  // The evaluation time is shown once, in the section header (the day too when it is not today).
+  const updatedLabel = visibleAttention ? fill("homeUpdated", {
+    time: new Date(visibleAttention.evaluatedAt).toLocaleString(locale, {
+      ...(new Date(visibleAttention.evaluatedAt).toDateString() === new Date().toDateString() ? {} : { day: "numeric", month: "numeric" }),
+      hour: "numeric", minute: "2-digit", timeZone: visibleAttention.timezone }),
+  }) : "";
   const proposedBlocks = visibleDayPlan ? visibleDayPlan.planBlocks.length : 0;
   const unscheduledTasks = visibleDayPlan ? visibleDayPlan.unscheduled.length : 0;
   // The plan also takes tasks that are not in Today (a close deadline, high priority).
@@ -97,31 +94,17 @@ export function HomeView({ app }: { app: LumiApp }) {
 
   const showSync = syncStatus === "offline" || (syncStatus !== "synced" && slowSync);
 
-  // The snoozed or dismissed item leaves the list; keyboard focus moves to the item now in its place
-  // (or the one before it, or the section heading) instead of falling back to the page.
-  async function actAndKeepFocus(button: HTMLElement, candidate: Parameters<typeof actOnAttention>[0], action: "snooze" | "dismiss") {
-    const items = Array.from(document.querySelectorAll<HTMLElement>(".attentionSection .attentionItem"));
-    const index = items.indexOf(button.closest(".attentionItem") as HTMLElement);
-    await actOnAttention(candidate, action);
-    // Let React remove the item first.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (document.activeElement && document.activeElement !== document.body && document.contains(document.activeElement)) return;
-    const opens = document.querySelectorAll<HTMLElement>(".attentionSection .attentionItem .attentionOpen");
-    const target = opens[Math.min(Math.max(index, 0), opens.length - 1)] ?? document.getElementById("attention-title");
-    target?.focus();
-  }
-
   return (
     <>
       {/* Only states that need something are shown; the Inbox count is in the navigation. */}
       <div role="status" className="homeNoticeLive">{showSync && <p className={`homeNotice homeSync ${syncStatus}`}><span className={`homeNoticeDot ${syncStatus === "offline" ? "danger" : ""}`} aria-hidden="true" />{tr("homeDataState")}: <b>{syncLabel}</b></p>}</div>
-      {calendarSources.length === 0 && <p className="homeNotice"><span className="homeNoticeDot muted" aria-hidden="true" />{tr("calendarDisconnected")} · <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
 
-      {workSession && <WorkNowCard app={app} />}
+      {workSession && <WorkNowCard app={app} compact />}
 
       <section className="homeSection attentionSection" aria-labelledby="attention-title">
         <div className="homeSectionHead">
           <h2 id="attention-title" tabIndex={-1}>{tr("attentionTitle")}</h2>
+          {updatedLabel && <span className="attentionUpdated" data-attention-updated>{updatedLabel}</span>}
           <button type="button" onClick={() => { if (syncStatus === "synced") void loadAttention(activeWorkspaceId).catch((error) => setAttentionError(error instanceof Error ? error.message : tr("attentionUnavailable"))); }} disabled={syncStatus !== "synced"}>
             {tr("refresh")}
           </button>
@@ -132,31 +115,11 @@ export function HomeView({ app }: { app: LumiApp }) {
             : null}
           {attentionActionsBlocked && (syncStatus === "synced" || showSync) && visibleAttention.items.length > 0 && <p className="attentionMeta attentionBlocked">{tr("attentionStaleActions")}</p>}
           {visibleAttention.items.length === 0 ? <p className="attentionEmpty">{tr("attentionNone")}</p> : <div className="attentionList">
-            {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <article key={candidate.attentionKey} className="attentionItem">
-              <div className="attentionBody">
-                <strong>{candidate.title}</strong>
-                {/* One line: why, from what, when evaluated (docs/UX-UI.md asks all three on every card). */}
-                <p className="attentionWhy"><span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span> · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{activeWorkspaceId === "all" && <> · {workspaceTitle(candidate.workspaceId)}</>} · <span className="attentionTime">{tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)}</span>{changedSince(candidate) && <> · <b>{tr("attentionChangedSince")}</b></>}</p>
-              </div>
-              <div className="attentionActions">
-                <button type="button" aria-label={`${tr("attentionSnooze")}: ${candidate.title}`} disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={(event) => void actAndKeepFocus(event.currentTarget, candidate, "snooze")}>{tr("attentionSnooze")}</button>
-                <button type="button" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={Boolean(attentionBusyKey) || attentionActionsBlocked} onClick={(event) => void actAndKeepFocus(event.currentTarget, candidate, "dismiss")}>{tr("attentionDismiss")}</button>
-              </div>
-              <button type="button" className="attentionOpen" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={() => {
-                const entity = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
-                if (entity) void inspect(entity);
-                else setAttentionError(tr("attentionDetailMissing"));
-              }}>{tr("attentionOpen")}</button>
-              <details className="attentionMore">
-                <summary>{tr("attentionSourceDetails")}</summary>
-                <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
-                <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
-              </details>
-            </article>)}
+            {visibleAttention.items.slice(0, showAllAttention ? undefined : 5).map((candidate) => <AttentionItemRow key={candidate.attentionKey} app={app} candidate={candidate} />)}
           </div>}
           {visibleAttention.items.length > 5 && <button className="textAction" type="button" onClick={() => setShowAllAttention((current) => !current)}>{showAllAttention ? tr("attentionShowFewer") : fill("attentionShowMore", { n: visibleAttention.items.length - 5 })}</button>}
           {(visibleAttention.hidden.snoozed > 0 || visibleAttention.hidden.dismissed > 0) && <p className="attentionMeta">{fill("attentionHidden", visibleAttention.hidden)}</p>}
-          <details className="attentionLimits"><summary>{tr("attentionCoverage")}</summary><p>{tr("attentionCoverageText")} {tr("attentionLastSource")}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(locale) : tr("attentionUnknown")}. {tr("attentionRevision")} {visibleAttention.dataRevision} · {visibleAttention.timezone}.</p></details>
+          <details className="attentionLimits"><summary>{tr("attentionCoverage")}</summary><p>{tr("attentionCoverageText")} {tr("attentionLastSource")}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(locale) : tr("attentionUnknown")}.{visibleAttention.timezone && visibleAttention.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` ${tr("attentionTimezone")}: ${visibleAttention.timezone}.` : ""}</p></details>
         </> : <p className="attentionEmpty" role="status">{syncStatus === "offline" ? tr("attentionOffline") : syncStatus !== "synced" ? tr("attentionWaitingSync") : attentionOutdated ? tr("attentionUnavailable") : tr("attentionEvaluating")}</p>}
         {attentionError && <p role="alert" className="attentionError">{attentionError}</p>}
       </section>
@@ -183,7 +146,8 @@ export function HomeView({ app }: { app: LumiApp }) {
               {activeWorkspaceId !== "all" && <DeferChip app={app} task={task} />}
             </article>
           ))}
-          {homeTodayTasks.length === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}
+          {homeTodayTasks.length === 0 && homeToday.inAttention > 0 && <p className="attentionEmpty">{tr("homeTodayAllAttention")}</p>}
+          {homeTodayTasks.length === 0 && homeToday.inAttention === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}
         </div>
         {moreToday > 0 && <button type="button" className="textAction" onClick={() => setView("Today")}>{fill("homeMoreToday", { n: moreToday })} →</button>}
         {todayCalendarEvents.length > 0 && <>
@@ -193,7 +157,8 @@ export function HomeView({ app }: { app: LumiApp }) {
         {calendarSources.length > 0 && !calendarFresh && <p className="attentionEmpty" role="status">{tr("calendarStale")}</p>}
         {visibleDayPlan ? <div className="homePlan">
           {scopeNote && <p className="attentionMeta">{tr("dayPlanTitle")}{scopeNote}</p>}
-          {visibleDayPlan.calendar !== "ready" && <p>{tr(visibleDayPlan.calendar === "missing" ? "dayPlanMissing" : visibleDayPlan.calendar === "stale" ? "dayPlanStale" : "dayPlanNonWorkday")}</p>}
+          {/* Without any calendar the single quiet line in the footer below says so. */}
+          {visibleDayPlan.calendar !== "ready" && (visibleDayPlan.calendar !== "missing" || calendarSources.length > 0) && <p>{tr(visibleDayPlan.calendar === "missing" ? "dayPlanMissing" : visibleDayPlan.calendar === "stale" ? "dayPlanStale" : "dayPlanNonWorkday")}</p>}
           {visibleDayPlan.calendar === "ready" && visibleDayPlan.overloaded && <p role="status" className="dayPlanWarning">{tr("dayPlanOverloaded")} ({visibleDayPlan.requiredMinutes} min)</p>}
           {currentDayPlanBlock && <p><strong>{tr("dayPlanCurrent")}:</strong> {currentDayPlanBlock.title} · {planBlockState(currentDayPlanBlock)}</p>}
           {nextDayPlanBlock && <p><strong>{tr("dayPlanNext")}:</strong> {nextDayPlanBlock.title} · {planBlockState(nextDayPlanBlock)}</p>}
@@ -201,6 +166,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           {unscheduledTasks > 0 && <p>{unscheduledOutsideToday > 0 ? fill("homePlanUnscheduledExtra", { n: unscheduledTasks, m: unscheduledOutsideToday }) : fill("homePlanUnscheduled", { n: unscheduledTasks })}</p>}
           <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("homePlanOpen")} →</button>
         </div> : dayPlanStatus ? <p className="attentionEmpty" role="status">{dayPlanStatus}</p> : null}
+        {calendarSources.length === 0 && <p className="homeNotice homeCalendarNote">{tr("calendarDisconnectedNote")} <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
       </section>
     </>
   );

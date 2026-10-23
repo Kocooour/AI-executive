@@ -1,89 +1,474 @@
-/* Today E2: distinguish commitments, owner-approved work and editable proposals.
-   The status is written out in headings and row labels, never conveyed by color alone. */
-.view-today .todayCalendarCommitments,
-.view-today .dayPlanCard {
-  margin: 20px 0 24px;
+/* Today D2: one list. The day plan is a time cell in each row; the calendar strip, the running work
+   bar and the footer sit around it. The status of a plan block is written out in the cell's label and
+   menu, never conveyed by style alone. */
+.view-today .todayCalendarCommitments {
+  margin: 12px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
 }
 .view-today .todayCalendarCommitments h2 {
-  margin: 0 0 8px;
-  font-size: 1rem;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .view-today .todayCalendarCommitments > p[role="status"] {
-  margin: 6px 0;
+  margin: 4px 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
-.view-today .dayPlanTimeline {
-  display: grid;
-  gap: 20px;
+.view-today .todayCalendarCommitments .calendarAgenda {
+  gap: 4px;
 }
-.view-today .dayPlanGroup {
-  min-width: 0;
+
+/* Header: date, "N úkolů · ~X h" and the "⋯" options. */
+.view-today .pageTitleRow {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 14px;
 }
-.view-today .dayPlanGroupHeader {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--line);
+.view-today .pageTitleRow time {
+  margin-left: auto;
 }
-.view-today .dayPlanGroupHeader h3 {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 700;
-}
-.view-today .dayPlanGroupHeader span {
-  min-width: 24px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--surface-subtle);
+.todaySummary {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  text-align: center;
 }
-.view-today .dayPlanGroupItems {
+.todayOptions {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+}
+.todayOptionsButton,
+.attentionMenuButton {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.todayOptionsButton:hover,
+.attentionMenuButton:hover,
+.todayOptionsButton[aria-expanded="true"],
+.attentionMenuButton[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+.todayOptionsButton:focus-visible,
+.attentionMenuButton:focus-visible,
+.todayTimeCell:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Popover panel shared by the header options, the time cell and the Home item menu. */
+.popoverMenu {
+  position: relative;
+  display: inline-flex;
+}
+.popoverMenuPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  box-sizing: border-box;
+  min-width: 220px;
+  max-width: min(340px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+  font-size: 14px;
+  text-align: left;
+}
+.popoverMenuPanel.isAbove {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.popoverMenuPanel[role="menu"] {
   display: grid;
-  gap: 9px;
+  gap: 2px;
+  min-width: 180px;
 }
-.view-today .dayPlanBlock {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.popoverMenuPanel[role="menu"] button {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.view-today .dayPlanBlock small {
+.popoverMenuPanel[role="menu"] button:hover:not(:disabled),
+.popoverMenuPanel[role="menu"] button:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.popoverMenuPanel button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.popoverMenuPanel[role="menu"] button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.todayOptionsBody {
+  display: grid;
+  gap: 10px;
+}
+.todayOptionsBody .listControls {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+}
+.todayOptionsBody .listControls label {
+  justify-content: space-between;
+}
+.todayOptionsBody .listControls select {
+  min-height: 36px;
+  min-width: 140px;
+}
+.todayRefresh {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* Time cell of a row. */
+.todayTime {
+  flex: 0 0 auto;
+}
+.todayTimeCell {
+  min-height: 32px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.todayTimeCell:hover,
+.todayTimeCell[aria-expanded="true"] {
+  background: var(--hover);
+}
+.todayTimeCell.isProposed {
+  color: var(--muted);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.todayTimeCell.isUnplaced {
+  color: var(--muted);
+}
+.timeMenu {
+  display: grid;
+  gap: 8px;
+}
+.timeMenuHead {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.timeMenuHead span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.timeMenuWhyTitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.timeMenuWhy {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.timeMenuActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.timeMenuActions button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.timeMenuActions button.primaryAction {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.timeMenuActions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Running work: a compact bar instead of a card. */
+.workNowCard.compact {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  gap: 6px 12px;
+}
+.workNowCard.compact h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.workNowCard.compact .eyebrow {
+  display: none;
+}
+.workNowCard.compact p {
+  margin: 0;
+}
+.workNowCard.compact time {
+  font-size: 0.95rem;
+}
+.workNowStatus {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.todayPlanNote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.todayPlanNote p {
+  margin: 0;
+}
+.todayPlanNote button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Footer: out-of-Today line, Lumi's one suggestion, one calendar sentence. */
+.todayFooter {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.todayFooter p {
+  margin: 0;
   line-height: 1.5;
 }
-.view-today .dayPlanBlock .whyNow {
-  margin-top: 8px;
+.todayFooter .textAction {
+  padding: 0;
+  color: var(--accent);
+  font-size: 13px;
 }
-.view-today .dayPlanGroup[data-plan-group="suggested"] .dayPlanBlock {
-  border-left-color: var(--accent);
+.todaySuggestion {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
+  font-size: 14px;
 }
-.view-today .dayPlanGroup[data-plan-group="unscheduled"] .dayPlanBlock {
-  border-left-color: var(--muted);
+.todaySuggestion b {
+  font-weight: 600;
 }
-@media (max-width: 700px) {
-  .view-today .dayPlanCard {
-    padding: 14px;
-    border-radius: 14px;
-  }
-  .view-today .dayPlanBlock {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 12px;
-    gap: 6px;
-  }
-  .view-today .dayPlanActions button {
+.todaySuggestionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.todaySuggestionActions button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.todaySuggestionActions button.primaryAction {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.todaySuggestionActions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (pointer: coarse), (max-width: 700px) {
+  .todayTimeCell,
+  .todayOptionsButton,
+  .attentionMenuButton {
     min-height: 44px;
-    flex: 1 1 44%;
-    white-space: normal;
+    min-width: 44px;
+  }
+  .todayFooter .textAction {
+    min-height: 44px;
+  }
+  .todaySuggestionActions button,
+  .timeMenuActions button,
+  .todayRefresh,
+  .todayPlanNote button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 700px) {
+  .view-today .pageTitleRow time {
+    margin-left: 0;
   }
   .view-today .todayCalendarCommitments .calendarAgenda > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
   }
-  .view-today .dayPlanGroupHeader {
-    margin-bottom: 8px;
+  /* The panel is a bottom sheet above the navigation bar. */
+  .popoverMenuPanel {
+    position: fixed;
+    top: auto;
+    right: 8px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    left: 8px;
+    max-width: none;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+  .popoverMenuPanel.isAbove {
+    top: auto;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  .popoverMenuPanel[role="menu"] button {
+    min-height: 48px;
+  }
+}
+
+/* Plan state lines (calendar state, overload, current and next block). */
+.todayPlanState {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.todayPlanState p {
+  margin: 0;
+}
+.todayPlanState strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.timeMenuEstimate {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.todayTimeCell.isSkipped,
+.todayTimeCell[data-time-kind="skipped"] {
+  color: var(--muted);
+}
+.todayTimeIcon {
+  display: none;
+  flex: none;
+}
+
+/* Phone: the title has priority. The time cell is a compact 44px control (clock + range, only the
+   clock for "no time" and "not planned") under the handle and check, and the deadline moves to a
+   second line under the title; the date chip stays on the first line. */
+@media (max-width: 700px) {
+  .appShell.view-today .taskRowList .taskRow {
+    display: grid;
+    grid-template-columns: 44px 44px minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 4px;
+  }
+  .appShell.view-today .taskRowList .taskRow > .dragHandle { grid-column: 1; grid-row: 1; }
+  .appShell.view-today .taskRowList .taskRow > .check { grid-column: 2; grid-row: 1; }
+  .appShell.view-today .taskRowList .taskRow > .taskRowMain { grid-column: 3; grid-row: 1; }
+  .appShell.view-today .taskRowList .taskRow > .taskRowMeta,
+  .appShell.view-today .taskRowList .taskRow > .deferGroup,
+  .appShell.view-today .taskRowList .taskRow .deferChip { grid-column: 4; grid-row: 1; margin-left: 0; }
+  .appShell.view-today .taskRowList .taskRow > .deferGroup { display: contents; }
+  .appShell.view-today .taskRowList .taskRow .deadlineBadge {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: start;
+    min-width: 0;
+    padding-bottom: 6px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .appShell.view-today .taskRowList .taskRow > .todayTime {
+    grid-column: 1 / 3;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .todayTimeIcon { display: block; }
+  .todayTimeCell {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 3px;
+    font-size: 11px;
+    letter-spacing: -0.01em;
+  }
+  .todayTimeCell.isUnplaced .todayTimeText,
+  .todayTimeCell[data-time-kind="skipped"] .todayTimeText {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }

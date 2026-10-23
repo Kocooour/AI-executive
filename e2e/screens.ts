@@ -19,7 +19,10 @@ export async function visitScreens(page: Page, record: (where: string) => Promis
   await record("Workspace chooser");
   await page.goto("/");
   await waitUntilSynced(page);
-  await page.locator(".attentionMore summary").first().click();
+  // Sources are in the item's "⋯" menu.
+  // By class and position, so that the walk works in both interface languages (Sources is the last entry).
+  await page.locator(".attentionItem").first().locator(".attentionMenuButton").click();
+  await page.locator(".attentionItem").first().getByRole("menuitem").last().click();
   await page.locator(".attentionLimits summary").first().click();
   await record("Home, attention details");
   await page.goto("/?view=Settings");

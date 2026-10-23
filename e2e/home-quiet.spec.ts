@@ -48,27 +48,41 @@ test("a recommendation shows reason, source and evaluation time without opening 
   await expect(why).toBeVisible();
   await expect(why).toContainText("uplynul");
   await expect(why).toContainText("zaznamenaný termín");
-  await expect(why.locator(".attentionTime")).toContainText("vyhodnoceno");
-  // Source ids and revisions stay one step away, in the item's own Zdroje.
+  // The evaluation time is shown once, in the section header, not on every item.
+  await expect(why).not.toContainText("vyhodnoceno");
+  await expect(page.locator(".attentionSection .attentionUpdated")).toHaveCount(1);
+  await expect(page.locator(".attentionSection .attentionUpdated")).toContainText(/Aktualizováno \d{1,2}:\d{2}/);
+  // The sources stay one step away, in the item's own Zdroje (in its "⋯" menu), with the evaluation time:
+  // named records, not internal ids or revision numbers.
   await expect(item.locator(".attentionSources")).toBeHidden();
-  await item.locator(".attentionMore summary").click();
+  await item.getByRole("button", { name: /^Další akce/ }).click();
+  await item.getByRole("menuitem", { name: "Zdroje" }).click();
   await expect(item.locator(".attentionSources")).toBeVisible();
+  await expect(item.locator(".attentionMore")).toContainText(/vyhodnoceno/i);
+  await expect(item.locator(".attentionSources")).toContainText(`Úkol: ${seeded.overdueTask}`);
+  await expect(item.locator(".attentionMore")).not.toContainText("rev.");
+  await expect(item.locator(".attentionMore")).not.toContainText("revize dat");
+  await expect(item.locator(".attentionSources code")).toHaveCount(0);
 });
 
-test("snooze and dismiss appear on hover and keyboard focus", async ({ page }) => {
+test("snooze and dismiss are in the item's menu, reachable by mouse and keyboard", async ({ page }) => {
   await page.goto("/");
   await waitUntilSynced(page);
   const item = page.locator(".attentionItem").first();
   await expect(item).toBeVisible();
-  const actions = item.locator(".attentionActions");
-  await page.mouse.move(0, 0);
-  await expect(actions).toHaveCSS("opacity", "0");
-  await item.hover();
-  await expect(actions).toHaveCSS("opacity", "1");
-  await page.mouse.move(0, 0);
-  await page.keyboard.press("Shift");
-  await item.getByRole("button", { name: "Odložit o 24 h" }).focus();
-  await expect(actions).toHaveCSS("opacity", "1");
+  // Closed: only the primary action and the "⋯" button; snooze and dismiss are not on the row.
+  await expect(item.getByRole("menuitem")).toHaveCount(0);
+  const menuButton = item.getByRole("button", { name: /^Další akce/ });
+  await menuButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(item.getByRole("menuitem", { name: /^Odložit o 24 h/ })).toBeVisible();
+  await expect(item.getByRole("menuitem", { name: /^Skrýt/ })).toBeVisible();
+  await expect(item.getByRole("menuitem", { name: "Zdroje" })).toBeVisible();
+  // The first entry has focus; arrows move, Esc closes and gives focus back to the "⋯" button.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Escape");
+  await expect(item.getByRole("menuitem")).toHaveCount(0);
+  await expect(menuButton).toBeFocused();
 });
 
 test("an ordinary save does not push the list down; a slow one and offline are shown", async ({ page, context }) => {
@@ -126,7 +140,8 @@ test("after dismissing from the keyboard, focus moves to the next recommendation
   const item = page.locator(".attentionSection .attentionItem", { hasText: title });
   await expect(item).toBeVisible();
   await page.keyboard.press("Shift");
-  await item.getByRole("button", { name: `Skrýt: ${title}` }).focus();
+  await item.getByRole("button", { name: /^Další akce/ }).click();
+  await item.getByRole("menuitem", { name: `Skrýt: ${title}` }).focus();
   await page.keyboard.press("Enter");
   await expect(item).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => {
@@ -138,13 +153,18 @@ test("after dismissing from the keyboard, focus moves to the next recommendation
 test.describe("on a touch phone", () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-  test("snooze and dismiss are always visible", async ({ page }) => {
+  test("the item's menu button is always visible and a 44px target", async ({ page }) => {
     await page.goto("/");
     await waitUntilSynced(page);
     expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
     const item = page.locator(".attentionItem").first();
-    await expect(item.locator(".attentionActions")).toHaveCSS("opacity", "1");
-    await expect(item.getByRole("button", { name: "Skrýt" })).toBeVisible();
+    const menuButton = item.getByRole("button", { name: /^Další akce/ });
+    await expect(menuButton).toBeVisible();
+    const box = await menuButton.boundingBox();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    await menuButton.click();
+    await expect(item.getByRole("menuitem", { name: /^Skrýt/ })).toBeVisible();
   });
 
   test("the calendar notice's Připojit button is a 44px target", async ({ page }) => {

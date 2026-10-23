@@ -93,3 +93,27 @@ export function serverEntities(page: Page) {
 export async function expectOnServer(page: Page, match: (entity: { id: string; title: string; properties?: Record<string, unknown> }) => boolean, present: boolean) {
   await expect.poll(async () => (await serverEntities(page)).some(match), { timeout: 20_000 }).toBe(present);
 }
+
+// Adds tasks straight to the server store, as another device would (with the restore generation, since
+// other specs restore backups), retrying when a save of the open page takes the revision first.
+export async function seedTasks(page: Page, tasks: Array<{ id: string; title: string; properties: Record<string, unknown> }>) {
+  await expect.poll(() => page.evaluate(async (newTasks) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const now = Date.now();
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+      entities: [...snapshot.entities, ...newTasks.map((task) => ({ ...task, type: "task", status: "open", workspaceId: "personal", createdAt: now, updatedAt: now }))],
+      relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
+    return response.status;
+  }, tasks), { timeout: 15_000 }).toBe(200);
+}
+
+// Removes tasks from the server store again, so a scenario that seeded dated tasks leaves nothing that
+// pushes items out of Home for the scenarios after it (the instance is shared).
+export async function removeTasks(page: Page, ids: string[]) {
+  await expect.poll(() => page.evaluate(async (gone) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+      entities: snapshot.entities.filter((row: { id: string }) => !gone.includes(row.id)), relations: snapshot.relations, deletedIds: gone, revivedIds: [] }) });
+    return response.status;
+  }, ids), { timeout: 15_000 }).toBe(200);
+}

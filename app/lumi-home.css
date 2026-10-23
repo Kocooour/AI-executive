@@ -80,11 +80,12 @@
   }
 }
 
-/* Recommendation: title, then why · from what · when; actions on the right. */
+/* Recommendation: title, then one line saying why; one primary action and "⋯" on the right.
+   The evaluation time is in the section header once. */
 .appShell .attentionItem {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px 8px;
-  padding: 10px 8px;
+  padding: 8px 8px;
   margin: 0 -8px;
   border-top: 0;
   border-bottom: 0;
@@ -95,14 +96,38 @@
   background: var(--hover);
 }
 .appShell .attentionItem strong {
+  display: block;
   font-size: 14px;
   font-weight: 600;
+}
+.appShell .attentionItem .attentionTitleButton {
+  display: block;
+  max-width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.appShell .attentionItem .attentionTitleButton:hover {
+  background: none;
+  color: var(--accent);
 }
 .appShell .attentionItem .attentionWhy {
   margin: 1px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+}
+.appShell .attentionRowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
 }
 .appShell .attentionItem button {
   border: 0;
@@ -115,51 +140,72 @@
   border-color: transparent;
   background: var(--surface);
 }
-.appShell .attentionItem .attentionOpen {
+.appShell .attentionItem .attentionOpenAction {
   color: var(--accent);
   font-weight: 600;
 }
-.appShell .attentionActions {
-  display: flex;
-  gap: 8px;
-  margin: 0;
-}
-.appShell .attentionActions button {
-  color: var(--muted);
-}
-/* With a mouse on a wide window, Odložit/Skrýt appear on hover or keyboard focus; on touch and on
-   narrow windows they are always shown (an invisible row would only leave a gap). */
-@media (hover: hover) and (min-width: 701px) {
-  .appShell .attentionItem:not(:hover):not(:focus-within) .attentionActions {
-    opacity: 0;
-    /* Hidden buttons must not take a click on a touch laptop that also reports hover. */
-    pointer-events: none;
-  }
+.appShell .attentionItem .attentionMenuButton {
+  padding: 0 8px;
+  font-size: 20px;
 }
 .appShell .attentionItem .attentionBlocked,
 .appShell .attentionItem .attentionMore {
   grid-column: 1 / -1;
   margin: 0;
 }
-.appShell .attentionMore summary {
+.appShell .attentionMore {
+  padding: 4px 0 6px;
+}
+.appShell .attentionMore .attentionMeta {
+  margin: 0 0 4px;
+}
+/* Section header: "Aktualizováno 8:07 · Obnovit". */
+.appShell .homeSectionHead > .attentionUpdated {
+  margin-left: auto;
+  color: var(--muted);
   font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.appShell .homeSectionHead > .attentionUpdated + button {
+  margin-left: 0;
+}
+.appShell .homeSectionHead > .attentionUpdated::after {
+  content: " ·";
+}
+.appShell .homeCalendarNote {
+  margin: 14px 0 0;
+  color: var(--muted);
 }
 
-/* Phone: the text takes the full width, the actions share one row under it in reading order
-   (Odložit, Skrýt, Otevřít), so each item stays short. */
+/* Phone: the text takes the full width and the primary action and "⋯" share one row under it, every
+   target at least 44px. Items keep room so the round "+" never lies over the action of the last one. */
 @media (max-width: 700px) {
   .appShell .attentionItem {
-    grid-template-columns: minmax(0, 1fr) auto;
     padding-bottom: 4px;
+    scroll-margin-bottom: 150px;
   }
   .appShell .attentionItem .attentionBody {
     grid-column: 1 / -1;
   }
-  .appShell .attentionActions {
-    grid-column: 1;
-    margin-left: -8px;
+  .appShell .attentionItem .attentionTitleButton {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
   }
-  .appShell .attentionItem .attentionOpen {
-    grid-column: 2;
+  .appShell .attentionRowActions {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    /* Left, under the text, and wrapped before the column of the round "+" at the right edge. */
+    justify-content: flex-start;
+    max-width: calc(100% - 64px);
+  }
+  .appShell .attentionItem .attentionOpenAction {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .appShell .attentionSection .attentionList {
+    padding-bottom: 8px;
   }
 }
