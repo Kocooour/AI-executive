@@ -7,6 +7,7 @@ import { ProjectOverview } from "./project-overview";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
+import { DeferChip } from "./defer-popover";
 import { InboxTriage } from "./inbox-triage";
 import { heldBackReason } from "./held-back";
 import { useEffect, useRef, useState } from "react";
@@ -124,8 +125,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     tr,
     view,
     workSession,
-    workSessionAction,
-    workSessionBusy,
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
   const inspectorRef = useRef<HTMLElement>(null);
@@ -799,12 +798,12 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 >
                   {tr("moveSomeday")}
                 </button>
+                {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
                 {selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <>
-                    {!workSession && <button className="primaryAction" disabled={workSessionBusy} onClick={() => workSessionAction("start", selected)}>{tr("workStart")}</button>}
-                    <button onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
+                    <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
                   </>
                 )}
                 <button className="danger" onClick={() => remove(selected)}>

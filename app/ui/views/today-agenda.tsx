@@ -1,6 +1,7 @@
 "use client";
 import type { LumiApp } from "../use-lumi-app";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
+import { CalendarEventActions } from "./calendar-event-actions";
 
 // Read-only calendar events: Home retains its workday slice; Today can pass all local-day events.
 export function TodayAgenda({ app, events = app.todayCalendarEvents, day }: {
@@ -25,6 +26,7 @@ export function TodayAgenda({ app, events = app.todayCalendarEvents, day }: {
             <span>{timeLabel}</span>
             <strong>{event.title}</strong>
             <small>{event.busy ? tr("busy") : tr("freeTime")}{continuation ? ` · ${continuation}` : ""}</small>
+            <CalendarEventActions app={app} event={event} />
           </div>
         );
       })}

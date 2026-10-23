@@ -225,7 +225,14 @@ test("REPORT data becomes events identical in shape to an ICS feed: recurrence, 
   assert.equal(privateEvent.title, "Soukromá událost");
   assert.equal(privateEvent.private, true);
   assert.ok(!JSON.stringify(fromCalDav).includes("Lékař"));
-  assert.deepEqual(Object.keys(fromCalDav[0]).sort(), ["allDay", "busy", "end", "id", "occurrenceKey", "private", "sourceId", "start", "status", "timezone", "title", "transparency", "uid", "workspaceId"]);
+  assert.deepEqual(Object.keys(fromCalDav[0]).sort(), ["allDay", "busy", "end", "id", "occurrenceKey", "private", "recurring", "slotKey", "sourceId", "start", "status", "timezone", "title", "transparency", "uid", "workspaceId"]);
+  // Whether an event repeats comes from its definition.
+  assert.ok(fromCalDav.filter((event) => event.uid === "weekly-1").every((event) => event.recurring === true));
+  assert.equal(allDay.recurring, false);
+  // A yearly series has one repeat in the cached window and is still recurring.
+  const yearly = await calendar.parseCalendar("s", "personal", vcalendar(vevent("yearly-1", [`DTSTART:${tomorrow}T090000Z`, `DTEND:${tomorrow}T100000Z`, "SUMMARY:Výroční schůzka", "RRULE:FREQ=YEARLY"])));
+  assert.equal(yearly.length, 1);
+  assert.equal(yearly[0].recurring, true);
   // Escaped text and CDATA both arrive as the original iCalendar text.
   const work = await caldav.fetchCalendarObjects(credentials, `${HOME}work/`, range, fake.options);
   assert.equal((await calendar.parseCalendar("s", "personal", work))[0].title, "Klient <A&B>");
@@ -689,4 +696,30 @@ test("the browser-test override needs both settings and a loopback http address"
     if (keep.e2e === undefined) delete process.env.AI_EXECUTIVE_E2E; else process.env.AI_EXECUTIVE_E2E = keep.e2e;
     if (keep.url === undefined) delete process.env.AI_EXECUTIVE_E2E_CALDAV_URL; else process.env.AI_EXECUTIVE_E2E_CALDAV_URL = keep.url;
   }
+});
+
+test("a repeat moved on its own keeps its slot in the series, so its decisions and task follow it", async () => {
+  const decisions = await import("../lib/calendar-decisions.ts");
+  const nextWeek = ymd(Date.now() + 8 * day);
+  const movedTo = ymd(Date.now() + 9 * day);
+  const series = vevent("weekly-move", [`DTSTART:${tomorrow}T090000Z`, `DTEND:${tomorrow}T100000Z`, "SUMMARY:Porada", "RRULE:FREQ=WEEKLY;COUNT=3"]);
+  const before = await calendar.parseCalendar("s", "personal", vcalendar(series));
+  const original = before.find((event) => event.start.startsWith(`${nextWeek.slice(0, 4)}-${nextWeek.slice(4, 6)}-${nextWeek.slice(6)}`));
+  assert.ok(original, "the second repeat is cached");
+  assert.equal(original.slotKey, original.occurrenceKey);
+  // The organizer moves only that repeat to the next day.
+  const override = vevent("weekly-move", [`RECURRENCE-ID:${nextWeek}T090000Z`, `DTSTART:${movedTo}T140000Z`, `DTEND:${movedTo}T150000Z`, "SUMMARY:Porada"]);
+  const after = await calendar.parseCalendar("s", "personal", vcalendar(series, override));
+  const moved = after.find((event) => event.start.startsWith(`${movedTo.slice(0, 4)}-${movedTo.slice(4, 6)}-${movedTo.slice(6)}`));
+  assert.ok(moved, "the moved repeat is cached at its new time");
+  assert.notEqual(moved.id, original.id);
+  assert.equal(moved.slotKey, original.slotKey);
+  assert.equal(moved.recurring, true);
+  // Same decision key, same task id, and the task made before the move still stands for it.
+  assert.equal(decisions.occurrenceDecisionKey(moved), decisions.occurrenceDecisionKey(original));
+  assert.equal(decisions.eventTaskId(moved, "personal"), decisions.eventTaskId(original, "personal"));
+  const draft = decisions.eventTaskDraft(original, "UTC");
+  const task = { id: decisions.eventTaskId(original, "personal"), type: "task", title: "Porada", status: "open", workspaceId: "personal", properties: draft.properties, createdAt: 1, updatedAt: 1 };
+  assert.deepEqual([...decisions.convertedEventIds([task], after)], [moved.id]);
+  assert.equal(decisions.needsTaskQuestion(moved, { decisions: {}, linked: decisions.eventTaskLinks(after, [task]), now: Date.now() }), false);
 });

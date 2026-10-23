@@ -43,6 +43,7 @@ const unreported = new Set([
   "properties.workSessionHistory",
   "properties.waitingSince",
   "properties.manualOrders",
+  "properties.calendarDecisions",
   "properties.manualOrder",
   "properties.relationsUpdatedAt",
   "properties.completedAt",
@@ -264,7 +265,7 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
     let value: unknown;
     if (logFields.has(key)) value = mergeLog(b, l, s);
     else if (key === "relationsUpdatedAt") value = Math.max(Number(l || 0), Number(s || 0)) || undefined;
-    else if (key === "manualOrders") value = mergeObject(b, l, s, localWins);
+    else if (key === "manualOrders" || key === "calendarDecisions") value = mergeObject(b, l, s, localWins);
     else {
       const items = key === "checklist" || key === conflictsKey ? mergeItems(b, l, s, localWins) : null;
       if (items) {

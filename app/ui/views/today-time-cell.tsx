@@ -20,7 +20,7 @@ function ClockIcon() {
 // menu with why the task is planned and the plan actions the day-plan cards used to carry (the
 // confirmations and Undo are those of the plan itself). On a phone it is a compact icon control.
 export function TodayTimeCell({ app, task, slot }: { app: LumiApp; task: Entity; slot: PlanSlot<DayPlanItem> | undefined }) {
-  const { activeWorkspaceId, applyDayPlanAction, dayPlanBusy, dayPlanWhy, deferBusy, deferTask, inspect, language, tr, visibleDayPlan, workSession, workSessionAction, workSessionBusy } = app;
+  const { activeWorkspaceId, applyDayPlanAction, dayPlanBusy, dayPlanWhy, deferBusy, deferTask, done, inspect, language, remove, tr, visibleDayPlan } = app;
   if (!visibleDayPlan || task.workspaceId !== visibleDayPlan.workspaceId) return null;
   const skipped = !slot && planSkippedToday(task, visibleDayPlan.date);
   if (!slot && !skipped) return null;
@@ -69,7 +69,8 @@ export function TodayTimeCell({ app, task, slot }: { app: LumiApp; task: Entity;
                   : activeWorkspaceId !== "all" && <button type="button" data-time-action="tomorrow" disabled={deferBusy} onClick={() => { close(true); void deferTask(task, "tomorrow", "manual"); }}>{tr("moveTomorrow")}</button>}
                 {item && <button type="button" data-time-action="dismiss" disabled={dayPlanBusy} onClick={() => run("dismissed")}>{tr("skipPlanning")}</button>}
               </>}
-              {!workSession && item && kind !== "unscheduled" && <button type="button" data-time-action="start" disabled={workSessionBusy} onClick={() => { close(false); void workSessionAction("start", task); }}>{tr("todayStart")}</button>}
+              <button type="button" data-time-action="complete" onClick={() => { close(false); void done(task.id); }}>{tr("complete")}</button>
+              <button type="button" className="danger" data-time-action="delete" onClick={() => { close(false); void remove(task); }}>{tr("delete")}</button>
             </div>
           </div>
         );

@@ -6,6 +6,7 @@ import { pickSummarySuggestion } from "../../../lib/today-summary";
 import { inSentenceDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { PopoverMenu } from "./popover-menu";
+import { CalendarEventNotice } from "./calendar-event-actions";
 import { TodayAgenda } from "./today-agenda";
 import { WorkNowCard } from "./work-now-card";
 
@@ -90,6 +91,8 @@ export function TodayTop({ app }: { app: LumiApp }) {
   return (
     <>
       <WorkNowCard app={app} compact />
+      {/* Outside the calendar section: the event that became a task may have been the day's last one. */}
+      <CalendarEventNotice app={app} />
       {calendarDayEvents.length > 0 && (
         <section className="todayCalendarCommitments" aria-labelledby="today-calendar-title">
           <h2 id="today-calendar-title">{tr("todayGroupCalendar")}</h2>

@@ -472,6 +472,44 @@ collection address. Events are fetched with one calendar-query REPORT per calend
 component and occurrence limits over the whole calendar) and cached in `calendar_events` in the same shape, so planning and
 freshness work exactly as for ICS.
 
+### Owner decisions about calendar events
+
+The calendar stays read-only. What the owner decides about an event is stored on the workspace entity (`type: "workspace"`, the
+event's `workspaceId`) under `properties.calendarDecisions`, a map of opaque keys to `"hidden"` or `"notTask"`:
+`occ:<sourceId>:<slotKey>` for one occurrence and `series:<sourceId>:<uid>` for every repeat; titles are never stored. `slotKey` is the
+repeat's place in its series (`<uid>:<RECURRENCE-ID>` for a repeat moved on its own, else the occurrence key), so a decision and the
+task made from one repeat (`calendarEventSlot`, matched by `eventTaskLinks`; `eventTaskId` uses it too) follow that repeat when it is moved.
+A uid longer than 160 characters is replaced in the key by a short stable digest. Whether an event repeats comes from its
+definition (`recurring`: RRULE, RECURRENCE-ID or overrides, set by the parser), never from how many repeats fall into the cached
+window (a yearly series has one); events cached before the flag existed are treated as possibly recurring. Only a one-off event
+(`recurring === false`) uses the series key for its decision, so it survives the event being moved in the source calendar (which
+changes its id and occurrence key).
+It is written through the normal local-first path (Dexie, then `/api/store`), so it syncs across devices; the field merge
+treats it like `manualOrders` (merged key by key, never reported as a sync conflict, `lib/field-merge.ts`). The client and server
+workspace validators accept it only as a plain object of at most 1,000 `occ:`/`series:` keys (each at most 600 characters) with
+`"hidden"`/`"notTask"` values (`validDecisionsValue`). Undo of a decision puts back only the keys that write changed, on the record as
+it is then, so a decision or rename made meanwhile on another device stays. A write prunes occurrences that started more than 30 days ago and keeps
+at most 500 keys (`lib/calendar-decisions.ts`); the local placeholder of the personal workspace (timestamp 0) is never written.
+Decisions belong to the owner's own view (owner decision 2026-10-23): "not a task" and "hidden" describe how one person treats an
+event, not a fact about the shared calendar. Today every workspace, shared ones included, has a single account (invitations stay
+disabled), so storing them on the workspace entity affects only the owner. Before additional accounts are enabled, decisions must
+move to per-member storage (or be keyed by member) so one member's decision never changes another member's agenda or busy time.
+Busy time has one definition, `effectiveBusyEvents(events, decisions, tasks)` in `lib/calendar-decisions.ts`: a busy event that is
+not hidden and has no task pointing to it. The client (`mergedBusy`, free hours and windows, Calendar conflicts) and the server
+(`calendarAvailability` through `effectiveBusyEventsFor` in `lib/calendar.ts`, which reads the workspace entity and tasks from the
+store snapshot; so the day plan, task suggestions, priorities and meeting prep) both use it. Hidden events are listed only in the
+Calendar view (faded); an event with a task is listed once, as that task, and Today/Home leave it out. “Yes” on “Je to úkol?”
+creates an ordinary task with `properties.calendarEventId` (the event's id), `calendarEventKey`, `calendarSourceId`, `calendarEventUid`,
+`calendarEventSingle` (for an event that was not recurring; such a task is also matched to its event by source and uid when the id
+changed, as long as the calendar defines that event as a one-off and only one cached event has that uid; `eventTaskLinks`), `when` (the
+event's date in the calendar time zone) and `estimatedMinutes` (the event's length, 5–480); no deadline is set. Its id is
+derived from the workspace, source and the event's identity (uid for a one-off event, the occurrence for a repeat; `eventTaskId`),
+so two devices answering "Yes" for the same event create one record that the sync merges by id; a re-created task revives that id. The one-line
+reprioritization suggestion (`reprioritizeSuggestion`) compares the day's known task estimates (the new task included) with the
+free time computed from the effective busy events; it is shown once per view (Home, Today, Calendar), since the event leaves
+Today's and Home's agenda as soon as it is a task. Agents' calendar listings (`lib/pact.ts`, the `calendar.read` tool) leave out hidden
+and converted events too (`visibleCalendarEventsFor`).
+
 Requests go only to `caldav.icloud.com` and `pNN-caldav.icloud.com` over HTTPS on port 443, to a validated public address
 pinned for the connection; every hop of a redirect (at most three) and every address in a response is checked against that
 list before anything is sent, so the Basic authorization header never leaves iCloud. Responses are capped (2 MB per PROPFIND

@@ -1,3 +1,4 @@
+import { DECISIONS_PROPERTY, validDecisionsValue } from "./calendar-decisions";
 import type { Entity, Relation } from "./db";
 
 // What the server accepts as a record (validateSnapshot in lib/server-store.ts). A record it would
@@ -27,6 +28,7 @@ function ownProblem(entity: Entity): HeldBackReason | null {
     if (entity.id !== `workspace:${entity.workspaceId}` || entity.title.trim().length === 0) return "invalid";
     if (entity.title.length > 120) return "longTitle";
     if (!["personal", "shared"].includes(String(kind)) || role !== "owner" || !Array.isArray(members)) return "invalid";
+    if (!validDecisionsValue(entity.properties[DECISIONS_PROPERTY])) return "invalid";
   }
   return null;
 }
