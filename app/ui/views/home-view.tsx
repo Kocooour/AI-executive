@@ -119,7 +119,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           </div>}
           {visibleAttention.items.length > 5 && <button className="textAction" type="button" onClick={() => setShowAllAttention((current) => !current)}>{showAllAttention ? tr("attentionShowFewer") : fill("attentionShowMore", { n: visibleAttention.items.length - 5 })}</button>}
           {(visibleAttention.hidden.snoozed > 0 || visibleAttention.hidden.dismissed > 0) && <p className="attentionMeta">{fill("attentionHidden", visibleAttention.hidden)}</p>}
-          <details className="attentionLimits"><summary>{tr("attentionCoverage")}</summary><p>{tr("attentionCoverageText")} {tr("attentionLastSource")}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(locale) : tr("attentionUnknown")}. {tr("attentionRevision")} {visibleAttention.dataRevision} · {visibleAttention.timezone}.</p></details>
+          <details className="attentionLimits"><summary>{tr("attentionCoverage")}</summary><p>{tr("attentionCoverageText")} {tr("attentionLastSource")}: {visibleAttention.sourceUpdatedAt ? new Date(visibleAttention.sourceUpdatedAt).toLocaleString(locale) : tr("attentionUnknown")}.{visibleAttention.timezone && visibleAttention.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` ${tr("attentionTimezone")}: ${visibleAttention.timezone}.` : ""}</p></details>
         </> : <p className="attentionEmpty" role="status">{syncStatus === "offline" ? tr("attentionOffline") : syncStatus !== "synced" ? tr("attentionWaitingSync") : attentionOutdated ? tr("attentionUnavailable") : tr("attentionEvaluating")}</p>}
         {attentionError && <p role="alert" className="attentionError">{attentionError}</p>}
       </section>

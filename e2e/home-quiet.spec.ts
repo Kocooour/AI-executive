@@ -52,12 +52,17 @@ test("a recommendation shows reason, source and evaluation time without opening 
   await expect(why).not.toContainText("vyhodnoceno");
   await expect(page.locator(".attentionSection .attentionUpdated")).toHaveCount(1);
   await expect(page.locator(".attentionSection .attentionUpdated")).toContainText(/Aktualizováno \d{1,2}:\d{2}/);
-  // Source ids and revisions stay one step away, in the item's own Zdroje (in its "⋯" menu), with the evaluation time.
+  // The sources stay one step away, in the item's own Zdroje (in its "⋯" menu), with the evaluation time:
+  // named records, not internal ids or revision numbers.
   await expect(item.locator(".attentionSources")).toBeHidden();
   await item.getByRole("button", { name: /^Další akce/ }).click();
   await item.getByRole("menuitem", { name: "Zdroje" }).click();
   await expect(item.locator(".attentionSources")).toBeVisible();
-  await expect(item.locator(".attentionMore")).toContainText("vyhodnoceno");
+  await expect(item.locator(".attentionMore")).toContainText(/vyhodnoceno/i);
+  await expect(item.locator(".attentionSources")).toContainText(`Úkol: ${seeded.overdueTask}`);
+  await expect(item.locator(".attentionMore")).not.toContainText("rev.");
+  await expect(item.locator(".attentionMore")).not.toContainText("revize dat");
+  await expect(item.locator(".attentionSources code")).toHaveCount(0);
 });
 
 test("snooze and dismiss are in the item's menu, reachable by mouse and keyboard", async ({ page }) => {

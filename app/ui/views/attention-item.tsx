@@ -20,6 +20,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
   const workspaceTitle = (workspaceId: string) => workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.title || workspaceId;
   const shortTime = (value: number, timeZone?: string) =>
     new Date(value).toLocaleString(locale, { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone });
+  const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const subject = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
   // A row evaluated before the user edited its subject on this device may no longer hold.
   const changedSince = attentionActionsBlocked && Boolean(subject && Number(subject.updatedAt) > candidate.evaluatedAt);
@@ -69,8 +70,17 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
       </div>
       {sourcesOpen && (
         <div className="attentionMore">
-          <p className="attentionMeta">{candidate.subjectType === "task" ? tr("task") : tr("project")} · {workspaceTitle(candidate.workspaceId)} · {tr("attentionEvaluated")} {shortTime(candidate.evaluatedAt, candidate.timezone)} · {tr("attentionRevision")} {candidate.evaluatedDataRevision} · {candidate.timezone}</p>
-          <ul className="attentionSources">{candidate.sourceIds.map((id) => <li key={id}><code>{id}</code> · rev. {candidate.sourceRevisions[id]}</li>)}</ul>
+          {/* What a person can act on: when it was evaluated and which records it rests on, by name.
+              Internal IDs and revision numbers stay out of the view. */}
+          <p className="attentionMeta">{tr("attentionEvaluatedAt")} {shortTime(candidate.evaluatedAt, candidate.timezone)}
+            {activeWorkspaceId === "all" ? ` · ${workspaceTitle(candidate.workspaceId)}` : ""}
+            {candidate.timezone && candidate.timezone !== deviceTimeZone ? ` (${candidate.timezone})` : ""}</p>
+          <ul className="attentionSources" aria-label={tr("attentionSourceDetails")}>{candidate.sourceIds.map((id) => {
+            const source = items.find((item) => item.id === id && item.workspaceId === candidate.workspaceId);
+            return <li key={id}>{source
+              ? <>{tr(source.type === "project" ? "project" : source.type === "note" ? "note" : source.type === "area" ? "area" : "task")}: {source.title || tr("untitledItem")}</>
+              : tr("attentionSourceMissing")}</li>;
+          })}</ul>
         </div>
       )}
     </article>
