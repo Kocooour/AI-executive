@@ -196,6 +196,31 @@ test("missing area ID, unknown workspace, and mismatched labels fail closed", ()
   }, 100), "conflicting-legacy-area-label:p");
 });
 
+test("Area dedup retains earliest relation across snapshot permutations and stable ID on ties", () => {
+  const entities = [workspace("personal", "personal"), entity("a", "area", "personal"),
+    entity("p", "project", "personal")];
+  const earliest = { ...link("later-lexically", "p", "a"), createdAt: 1 };
+  const later = { ...link("first-lexically", "p", "a"), createdAt: 9 };
+  for (const relations of [[later, earliest], [earliest, later]]) {
+    const result = planAreaNormalization({ entities, relations }, 100);
+    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["later-lexically"]);
+    assert.strictEqual(areaFor(result, "p")[0], earliest);
+    assert.deepEqual(result.report.removedRedundantRelationIds, ["first-lexically"]);
+    assert.equal(result.report.after.relations, 1);
+  }
+
+  const high = { ...link("z", "p", "a"), createdAt: 5 };
+  const low = { ...link("a", "p", "a"), createdAt: 5 };
+  for (const relations of [[high, low], [low, high]]) {
+    const result = planAreaNormalization({ entities, relations }, 100);
+    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["a"]);
+    assert.strictEqual(areaFor(result, "p")[0], low);
+    assert.deepEqual(result.report.removedRedundantRelationIds, ["z"]);
+    // Re-running a normalized snapshot cannot replace that surviving ID.
+    assert.deepEqual(areaFor(planAreaNormalization(result, 101), "p").map((rel) => rel.id), ["a"]);
+  }
+});
+
 test("redundant duplicate links are removed but the surviving relation keeps its ID/revision", () => {
   const source = {
     entities: [workspace("personal", "personal"), entity("a", "area", "personal"),
