@@ -1,5 +1,5 @@
 "use client";
-import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   dayFreeMinutes, decisionFor, effectiveBusyEvents, eventTaskDraft, isRecurringEvent, linkedEventTasks, needsTaskQuestion, occurrenceDecisionKey, readDecisions,
   reprioritizeSuggestion, restoreCalendarDecisions, eventTaskId, isSingleEvent, seriesDecisionKey, withDecision, DECISIONS_PROPERTY, type CalendarDecision, type CalendarDecisions,
@@ -64,11 +64,11 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
 
   useEffect(() => { setSuggestion(null); setFailed(false); }, [workspaceId, activeWorkspaceId]);
 
-  const isHidden = (event: CalendarEvent) => decisionFor(decisions, event)?.decision === "hidden";
+  const isHidden = useCallback((event: CalendarEvent) => decisionFor(decisions, event)?.decision === "hidden", [decisions]);
   // Today and Home list neither hidden events nor events that became a task (the task is listed).
-  const agendaEvents = (events: CalendarEvent[]) => events.filter((event) => !isHidden(event) && !eventTasks.has(event.id));
+  const agendaEvents = useCallback((events: CalendarEvent[]) => events.filter((event) => !isHidden(event) && !eventTasks.has(event.id)), [isHidden, eventTasks]);
   // What occupies time: not hidden, not converted. Every capacity figure and conflict uses this.
-  const busyEvents = (events: CalendarEvent[]) => effectiveBusyEvents(events, decisions, items.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+  const busyEvents = useCallback((events: CalendarEvent[]) => effectiveBusyEvents(events, decisions, items.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId)), [decisions, items, workspaceId]);
   const isRecurring = (event: CalendarEvent) => isRecurringEvent(event, calendarEvents);
   const needsQuestion = (event: CalendarEvent) => needsTaskQuestion(event, { decisions, linked: eventTasks, now: Date.now() });
 

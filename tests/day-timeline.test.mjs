@@ -142,3 +142,29 @@ test("a compact axis fits the items (at least three hours) instead of the whole 
   assert.equal(none.axisStartMinute, 8 * 60);
   assert.equal(none.axisEndMinute, 18 * 60);
 });
+
+test("more overlapping items than lanes collapse into one +N group in the last lane", () => {
+  const many = ["a", "b", "c", "d", "e", "f"].map((id) => item(id, "08:00", "09:00"));
+  const layout = layoutDayTimeline(many, { ...base, maxColumns: 4 });
+  assert.equal(layout.items.length, 3);
+  assert.deepEqual(layout.items.map((entry) => entry.column), [0, 1, 2]);
+  assert.ok(layout.items.every((entry) => entry.columns === 4));
+  assert.equal(layout.overflow.length, 1);
+  assert.equal(layout.overflow[0].items.length, 3);
+  assert.equal(layout.overflow[0].column, 3);
+  // Nothing is lost: every source is either placed or in the group.
+  assert.equal(layout.items.length + layout.overflow[0].items.length, many.length);
+  const phone = layoutDayTimeline(many, { ...base, maxColumns: 3 });
+  assert.equal(phone.items.length, 2);
+  assert.equal(phone.overflow[0].items.length, 4);
+  // Within the cap there is no group.
+  assert.equal(layoutDayTimeline(many.slice(0, 4), { ...base, maxColumns: 4 }).overflow.length, 0);
+});
+
+test("underlay items (hidden events) take no lane", () => {
+  const layout = layoutDayTimeline([item("a", "08:00", "09:00"), { ...item("hidden", "08:00", "09:30"), underlay: true }, item("b", "08:30", "09:00")], base);
+  const byId = Object.fromEntries(layout.items.map((entry) => [entry.id, entry]));
+  assert.equal(byId.hidden.underlay, true);
+  assert.equal(byId.hidden.columns, 1);
+  assert.deepEqual([byId.a.columns, byId.b.columns], [2, 2]);
+});

@@ -23,8 +23,6 @@ export function EntityList({ app }: { app: LumiApp }) {
     batchIds,
     setBatchIds,
     areas,
-    calendarDayEventsAll,
-    calendarEventTasks,
     collection,
     createFromRow,
     rowError,
@@ -68,13 +66,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     : new Map<string, number>();
 
   // Today folds the day plan into its rows: a time cell per task instead of a separate plan list.
-  // Tasks made from today's calendar events are rows of the day timeline ("Průběh dne"), at the event's
-  // time; the list does not repeat them (the header counts still include them).
-  const timelineTaskIds = new Set<string>();
-  if (view === "Today") for (const event of calendarDayEventsAll) {
-    const linked = calendarEventTasks.get(event.id);
-    if (linked && linked.status === "open") timelineTaskIds.add(linked.id);
-  }
+  // Tasks made from today's events are rows of the day timeline, not of this list (the header still counts them).
+  const listed = view === "Today" ? collection.filter((x) => !app.todayTimelineTaskIds.has(x.id)) : collection;
   const planSlots = view === "Today" ? planSlotsByTask(visibleDayPlan) : null;
   const renderRow = (x: Entity, index: number, rows: Entity[]) => {
       const meta = taskRowValue(x, language, today, {
@@ -247,7 +240,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {view === "Projects" ? null : collection.filter((x) => !timelineTaskIds.has(x.id)).map((x, index) => renderRow(x, index, collection))}
+                {view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
                 {view === "Projects" && projectGroups.length > 0 && (
                   <div className="projectGroups" aria-label={tr("projectsByArea")}>
                     {projectGroups.map((group) => (
