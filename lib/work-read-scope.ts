@@ -4,6 +4,7 @@
 // Do not connect it to the UI until the 2a/2b/2c migration and preservation gates
 // documented in docs/ARCHITECTURE.md are complete and independently verified.
 import type { Entity, Relation } from "./db";
+import { sameValue } from "./field-merge";
 
 export type WorkReadScope = "my-plan" | "personal" | "shared";
 
@@ -27,7 +28,7 @@ function canonicalEntities(entities: readonly Entity[]): Entity[] {
     const previous = byId.get(entity.id);
     // A canonical ID must never resolve to two different revisions or scopes.
     // Refuse an inconsistent snapshot instead of arbitrarily choosing a copy.
-    if (previous && JSON.stringify(previous) !== JSON.stringify(entity)) {
+    if (previous && !sameValue(previous, entity)) {
       throw new Error("Conflicting canonical entity ID in work scope snapshot");
     }
     if (!previous) byId.set(entity.id, entity);
