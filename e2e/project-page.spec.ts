@@ -7,32 +7,47 @@ import { expectOnServer, waitUntilSynced } from "./helpers";
 
 type Seed = { entities: Array<Record<string, unknown>>; relations?: Array<Record<string, unknown>> };
 
+// A save that meets a newer revision (409) is repeated with a fresh snapshot, at most three times.
 async function seed(page: Page, data: Seed) {
   return page.evaluate(async (data) => {
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const ids = new Set(data.entities.map((entity) => entity.id));
-    const relationIds = new Set((data.relations || []).map((relation) => relation.id));
-    const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-      entities: [...snapshot.entities.filter((row: { id: string }) => !ids.has(row.id)), ...data.entities],
-      relations: [...snapshot.relations.filter((row: { id: string }) => !relationIds.has(row.id)), ...(data.relations || [])],
-      deletedIds: [], revivedIds: [] }) });
-    return response.status;
+    let status = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const ids = new Set(data.entities.map((entity) => entity.id));
+      const relationIds = new Set((data.relations || []).map((relation) => relation.id));
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: [...snapshot.entities.filter((row: { id: string }) => !ids.has(row.id)), ...data.entities],
+        relations: [...snapshot.relations.filter((row: { id: string }) => !relationIds.has(row.id)), ...(data.relations || [])],
+        deletedIds: [], revivedIds: [] }) });
+      status = response.status;
+      if (status !== 409) break;
+    }
+    return status;
   }, data);
 }
 
 async function cleanup(page: Page, ids: string[]) {
-  await page.evaluate(async (ids) => {
-    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
-    const gone = new Set(ids);
-    await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
-      baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-      entities: snapshot.entities.filter((row: { id: string }) => !gone.has(row.id)),
-      relations: snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => !gone.has(row.sourceEntityId) && !gone.has(row.targetEntityId)),
-      deletedIds: ids, revivedIds: [] }) });
+  const status = await page.evaluate(async (ids) => {
+    let status = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      const gone = new Set(ids);
+      const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: snapshot.entities.filter((row: { id: string }) => !gone.has(row.id)),
+        relations: snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => !gone.has(row.sourceEntityId) && !gone.has(row.targetEntityId)),
+        deletedIds: ids, revivedIds: [] }) });
+      status = response.status;
+      if (status !== 409) break;
+    }
+    return status;
   }, ids);
+  expect(status).toBe(200);
 }
 
+// Titles carry a tag of this run, so records left behind by another run can never match a locator.
+const R = Date.now().toString(36).slice(-5);
 const now = () => Date.now();
 const entity = (id: string, type: string, title: string, properties: Record<string, unknown> = {}, status = "open") =>
   ({ id, type, title, status: type === "task" ? status : "active", workspaceId: "personal", properties, createdAt: now(), updatedAt: now() });
@@ -51,15 +66,15 @@ async function seedWorld(page: Page, stamp: number) {
   const day = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
   const status = await seed(page, {
     entities: [
-      entity(id.area, "area", "Oblast B1"),
-      entity(id.rich, "project", "Projekt B1 s kontextem", {
+      entity(id.area, "area", `Oblast B1${R}`),
+      entity(id.rich, "project", `Projekt B1${R} s kontextem`, {
         context: { why: "Současný web neprodává. Brzdí také nábor.", goals: ["Spustit do 30. 11.", "Udržet SEO"], doneWhen: "Web běží na produkční doméně", provenance: "owner", updatedAt: stamp } }),
-      entity(id.bare, "project", "Projekt B1 bez kontextu"),
-      entity(id.old, "project", "Projekt B1 starý cíl", { goal: "Starý cíl projektu zůstane vidět" }),
-      entity(id.t1, "task", "Úkol B1 první", { deadline: day }),
-      entity(id.t2, "task", "Úkol B1 druhý"),
-      entity(id.done, "task", "Úkol B1 hotový", {}, "completed"),
-      entity(id.note, "note", "Poznámka B1"),
+      entity(id.bare, "project", `Projekt B1${R} bez kontextu`),
+      entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět" }),
+      entity(id.t1, "task", `Úkol B1${R} první`, { deadline: day }),
+      entity(id.t2, "task", `Úkol B1${R} druhý`),
+      entity(id.done, "task", `Úkol B1${R} hotový`, {}, "completed"),
+      entity(id.note, "note", `Poznámka B1${R}`),
     ],
     relations: [inArea(stamp, id.rich, id.area), inArea(stamp, id.bare, id.area), member(stamp, id.t1, id.rich), member(stamp, id.t2, id.rich),
       member(stamp, id.done, id.rich), member(stamp, id.note, id.rich)],
@@ -78,19 +93,19 @@ test("project list: first sentence of why, progress, next step and one attention
     await page.reload();
     await waitUntilSynced(page);
     const group = page.locator(`[data-project-group="${id.area}"]`);
-    const rich = group.locator(".taskRow", { hasText: "Projekt B1 s kontextem" });
+    const rich = group.locator(".taskRow", { hasText: `Projekt B1${R} s kontextem` });
     await expect(rich.locator("[data-project-why]")).toHaveText("Současný web neprodává.");
     await expect(rich.locator(".taskRowMeta")).toHaveText("1/3 kroků");
-    await expect(rich.locator("[data-project-next]")).toContainText("Další krok: Úkol B1 první");
+    await expect(rich.locator("[data-project-next]")).toContainText(`Další krok: Úkol B1${R} první`);
     await expect(rich.locator("[data-project-attention]")).toHaveText("1 po termínu");
     // Without context the row asks for it, instead of leaving the place empty; without any task it says so, once.
-    const bare = group.locator(".taskRow", { hasText: "Projekt B1 bez kontextu" });
+    const bare = group.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` });
     await expect(bare.locator("[data-project-why]")).toHaveText("Doplňte, proč je projekt důležitý");
     await expect(bare.locator(".taskRowMeta")).toHaveText("Zatím bez kroků");
     await expect(bare.locator("[data-project-attention]")).toHaveText("bez dalšího kroku");
     await expect(bare.locator("[data-project-attention]")).toHaveCount(1);
     // The former goal is read as "Hotovo, když" even before anything was saved.
-    const loose = page.locator('[data-project-group="none"]').locator(".taskRow", { hasText: "Projekt B1 starý cíl" });
+    const loose = page.locator('[data-project-group="none"]').locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` });
     await expect(loose).toBeVisible();
   } finally {
     await cleanup(page, Object.values(id));
@@ -106,13 +121,13 @@ test("opening a project shows its page as the main view; a task opens the inspec
   try {
     await page.reload();
     await waitUntilSynced(page);
-    await page.locator(".taskRow", { hasText: "Projekt B1 s kontextem" }).getByRole("button", { name: "Projekt B1 s kontextem", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} s kontextem` }).getByRole("button", { name: `Projekt B1${R} s kontextem`, exact: true }).click();
     const projectPage = page.locator(".projectPage");
     await expect(projectPage).toBeVisible();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
     await expect(page).toHaveURL(/\?view=Projects$/);
     // Header: title, status, progress and the context.
-    await expect(projectPage.getByRole("textbox", { name: "Název projektu" })).toHaveValue("Projekt B1 s kontextem");
+    await expect(projectPage.getByRole("textbox", { name: "Název projektu" })).toHaveValue(`Projekt B1${R} s kontextem`);
     await expect(page.getByTestId("project-status")).toHaveText("Aktivní");
     await expect(page.getByTestId("project-progress")).toContainText("1/3 kroků");
     await expect(projectPage.getByRole("textbox", { name: "Proč je důležitý" })).toHaveValue("Současný web neprodává. Brzdí také nábor.");
@@ -121,7 +136,7 @@ test("opening a project shows its page as the main view; a task opens the inspec
     await expect(projectPage.locator(".projectContextHint")).toHaveText("Lumi může navrhnout znění, uloží se až po vašem schválení.");
     // The tasks are ordinary list rows with their actions; the notes are rows too.
     await expect(projectPage.locator(".projectTaskList .taskRow")).toHaveCount(2);
-    await expect(projectPage.locator(".projectNoteList .taskRow", { hasText: "Poznámka B1" })).toBeVisible();
+    await expect(projectPage.locator(".projectNoteList .taskRow", { hasText: `Poznámka B1${R}` })).toBeVisible();
     // "Podrobnosti" is collapsed and holds the area (exactly one) and the rest.
     const details = projectPage.locator(".projectDetails");
     await expect(details).not.toHaveAttribute("open", "");
@@ -132,12 +147,12 @@ test("opening a project shows its page as the main view; a task opens the inspec
     await expect(details.getByText("Historie")).toBeVisible();
 
     // Completing a step from the page moves the progress.
-    await projectPage.locator(".taskRow", { hasText: "Úkol B1 druhý" }).locator(".check").click();
+    await projectPage.locator(".taskRow", { hasText: `Úkol B1${R} druhý` }).locator(".check").click();
     await expect(page.getByTestId("project-progress")).toContainText("2/3 kroků");
 
     // A task opened from the page uses the inspector; the project page stays under it.
-    await projectPage.locator(".taskRow", { hasText: "Úkol B1 první" }).getByRole("button", { name: "Úkol B1 první", exact: true }).click();
-    await expect(page.locator("aside.inspectorDetail")).toHaveAttribute("aria-label", "Úkol: Úkol B1 první");
+    await projectPage.locator(".taskRow", { hasText: `Úkol B1${R} první` }).getByRole("button", { name: `Úkol B1${R} první`, exact: true }).click();
+    await expect(page.locator("aside.inspectorDetail")).toHaveAttribute("aria-label", `Úkol: Úkol B1${R} první`);
     await expect(projectPage).toBeVisible();
     await page.locator("aside.inspectorDetail button.close").click();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
@@ -147,11 +162,11 @@ test("opening a project shows its page as the main view; a task opens the inspec
     await page.locator(".projectBack").click();
     await expect(projectPage).toHaveCount(0);
     await expect(page.locator(`[data-project-group="${id.area}"]`)).toBeVisible();
-    await page.locator(".taskRow", { hasText: "Projekt B1 bez kontextu" }).getByRole("button", { name: "Projekt B1 bez kontextu", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` }).getByRole("button", { name: `Projekt B1${R} bez kontextu`, exact: true }).click();
     await expect(projectPage).toBeVisible();
     await page.goBack();
     await expect(projectPage).toHaveCount(0);
-    await page.locator(".taskRow", { hasText: "Projekt B1 bez kontextu" }).getByRole("button", { name: "Projekt B1 bez kontextu", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` }).getByRole("button", { name: `Projekt B1${R} bez kontextu`, exact: true }).click();
     await expect(projectPage).toBeVisible();
     await page.locator('aside > nav [data-nav-view="Projects"]').click();
     await expect(projectPage).toHaveCount(0);
@@ -169,7 +184,7 @@ test("context is edited in place with a visible save state, stored as one object
   try {
     await page.reload();
     await waitUntilSynced(page);
-    await page.locator(".taskRow", { hasText: "Projekt B1 bez kontextu" }).getByRole("button", { name: "Projekt B1 bez kontextu", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` }).getByRole("button", { name: `Projekt B1${R} bez kontextu`, exact: true }).click();
     const context = page.locator(".projectContext");
     // Empty state: the hint is the placeholder, not an empty place.
     await expect(context.getByRole("textbox", { name: "Proč je důležitý" })).toHaveAttribute("placeholder", "Doplňte, proč je projekt důležitý");
@@ -204,7 +219,7 @@ test("context is edited in place with a visible save state, stored as one object
     await expectOnServer(page, (row) => row.id === id.bare && (row.properties?.context as { goals?: string[] })?.goals?.length === 4, true);
     // The list shows the first sentence now.
     await page.locator(".projectBack").click();
-    await expect(page.locator(".taskRow", { hasText: "Projekt B1 bez kontextu" }).locator("[data-project-why]")).toHaveText("Bez toho nejde kampaň.");
+    await expect(page.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` }).locator("[data-project-why]")).toHaveText("Bez toho nejde kampaň.");
   } finally {
     await cleanup(page, Object.values(id));
   }
@@ -218,7 +233,7 @@ test("an old project's goal is shown as 'Hotovo, když' and nothing is lost when
   try {
     await page.reload();
     await waitUntilSynced(page);
-    await page.locator(".taskRow", { hasText: "Projekt B1 starý cíl" }).getByRole("button", { name: "Projekt B1 starý cíl", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} starý cíl` }).getByRole("button", { name: `Projekt B1${R} starý cíl`, exact: true }).click();
     const done = page.locator(".projectContext").getByRole("textbox", { name: "Hotovo, když" });
     await expect(done).toHaveValue("Starý cíl projektu zůstane vidět");
     await page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" }).fill("Protože ano");
@@ -236,11 +251,11 @@ test("an old goal over 300 characters is shown in full and not saved until short
   const stamp = now();
   const long = "Dlouhý cíl ".repeat(50);
   const id = `e2e-b1-longgoal-${stamp}`;
-  expect(await seed(page, { entities: [entity(id, "project", "Projekt B1 dlouhý cíl", { goal: long })] })).toBe(200);
+  expect(await seed(page, { entities: [entity(id, "project", `Projekt B1${R} dlouhý cíl`, { goal: long })] })).toBe(200);
   try {
     await page.reload();
     await waitUntilSynced(page);
-    await page.locator(".taskRow", { hasText: "Projekt B1 dlouhý cíl" }).getByRole("button", { name: "Projekt B1 dlouhý cíl", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} dlouhý cíl` }).getByRole("button", { name: `Projekt B1${R} dlouhý cíl`, exact: true }).click();
     const done = page.locator(".projectContext").getByRole("textbox", { name: "Hotovo, když" });
     await expect(done).toHaveValue(long);
     await page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" }).fill("Důvod");
@@ -259,10 +274,10 @@ test("the server refuses a context over its limits", async ({ page }) => {
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   const stamp = now();
-  const project = entity(`e2e-b1-long-${stamp}`, "project", "Projekt B1 příliš dlouhý", {
+  const project = entity(`e2e-b1-long-${stamp}`, "project", `Projekt B1${R} příliš dlouhý`, {
     context: { why: "x".repeat(601), goals: [], doneWhen: "", provenance: "owner", updatedAt: stamp } });
   expect(await seed(page, { entities: [project] })).toBe(400);
-  const tooMany = entity(`e2e-b1-many-${stamp}`, "project", "Projekt B1 moc cílů", {
+  const tooMany = entity(`e2e-b1-many-${stamp}`, "project", `Projekt B1${R} moc cílů`, {
     context: { why: "", goals: ["1", "2", "3", "4", "5", "6"], doneWhen: "", provenance: "owner", updatedAt: stamp } });
   expect(await seed(page, { entities: [tooMany] })).toBe(400);
 });
@@ -278,7 +293,7 @@ test("phone 390px: the project page and the list fit the screen, with 44px touch
     await waitUntilSynced(page);
     const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
     expect(await fits()).toBe(true);
-    await page.locator(".taskRow", { hasText: "Projekt B1 s kontextem" }).getByRole("button", { name: "Projekt B1 s kontextem", exact: true }).click();
+    await page.locator(".taskRow", { hasText: `Projekt B1${R} s kontextem` }).getByRole("button", { name: `Projekt B1${R} s kontextem`, exact: true }).click();
     await expect(page.locator(".projectPage")).toBeVisible();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
     expect(await fits()).toBe(true);

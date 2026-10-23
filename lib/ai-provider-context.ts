@@ -2,8 +2,9 @@ import type { Entity } from "./db";
 import { resolvePACTContext } from "./pact";
 import { projectOwnerStatement } from "./project-context";
 
-// The text sent to an AI provider as workspace context. Everything in it comes from the PACT resolver, which only
-// hands over eligible claims whose evidence is limited to normal-sensitivity sources.
+// The text sent to an AI provider as workspace context. For one workspace, everything in it comes from the PACT resolver,
+// which only hands over eligible claims whose evidence is limited to normal-sensitivity sources. The "all" scope has no
+// resolver: it sends the plain entity fields and never a project's context text.
 export function providerContext(workspaceId: string, entities: Entity[], focusEntityId?: string) {
   const resolved = workspaceId === "all"
     ? null
@@ -17,8 +18,9 @@ export function providerContext(workspaceId: string, entities: Entity[], focusEn
     when: entity.properties.when,
     deadline: entity.properties.deadline,
     priority: entity.properties.priority,
-    // The owner's own words about a project (why, goals, done when), with their provenance. Not a guess of the model.
-    ownerContext: projectOwnerStatement(entity) ?? undefined,
+    // The words written about a project (why, goals, done when), with their provenance. Only a resolved workspace's own
+    // projects contribute; the "all" scope mixes workspaces and sends none.
+    ownerContext: resolved ? projectOwnerStatement(entity) ?? undefined : undefined,
   }));
   const durableContext = (resolved?.context || []).slice(0, 40).map((item) => ({
     scope: item.scope,

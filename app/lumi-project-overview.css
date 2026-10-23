@@ -221,3 +221,9 @@
 .projectPage, .projectHeader, .projectSection, .projectDetailsBody, .projectContext, .projectContextFields { grid-template-columns: minmax(0, 1fr); }
 .projectGroups, .projectGroup { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .appShell .taskRowList .taskRow > .entityIcon { flex: none; }
+
+/* Phone: content scrolls above the floating "+" and the bottom bar; the title is a 44px target; textareas grow with their text. */
+@media (max-width: 700px) { .projectPage { padding-bottom: 132px; } }
+@media (pointer: coarse) { .projectTitleInput { min-height: 44px; } }
+.projectTitleInput { min-height: 44px; }
+.projectContext textarea { overflow: hidden; resize: none; }

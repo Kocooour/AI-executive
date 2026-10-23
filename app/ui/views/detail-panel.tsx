@@ -84,7 +84,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     noteOpenTexts,
     unsent,
     heldBack,
-    askConfirm,
     acceptNativeDrop,
     areas,
     calendarToday,
@@ -103,7 +102,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     inspect,
     language,
     notificationState,
-    openCapture,
     patch,
     projects,
     relate,
@@ -111,11 +109,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     rename,
     reopenTask,
     scheduleTask,
-    scopedItems,
     selected,
     setActiveDragTarget,
     setChecklistDraft,
-    setProjectStatus,
     setSelected,
     sources,
     targets,
@@ -197,7 +193,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </small>
               </div>
             )}
-            {(selected.type === "task" || selected.type === "project") && (
+            {selected.type === "task" && (
               <section className="detailKnowledge" aria-label={tr("whatLumiKnows")}>
                 <h3>{tr("whatLumiKnows2")}</h3>
                 {contextClaims.filter((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt).map((claim) => <article key={claim.id}>

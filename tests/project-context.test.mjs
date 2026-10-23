@@ -51,8 +51,8 @@ test("reading: an old project's goal is its doneWhen; a stored context wins; gar
   assert.deepEqual(ctx.readProjectContext(undefined).goals, []);
 });
 
-test("an owner edit is trimmed, drops empty goals, keeps at most five and mirrors goal", () => {
-  const next = ctx.ownerProjectContext({ why: "  Proč  ", goals: [" a ", "", "b", "c", "d", "e", "f"], doneWhen: " Hotovo " }, 99);
+test("an owner edit is trimmed, drops empty goals and mirrors goal", () => {
+  const next = ctx.ownerProjectContext({ why: "  Proč  ", goals: [" a ", "", "b", "c", "d", "e"], doneWhen: " Hotovo " }, 99);
   assert.deepEqual(next, { why: "Proč", goals: ["a", "b", "c", "d", "e"], doneWhen: "Hotovo", provenance: "owner", updatedAt: 99 });
   assert.equal(ctx.contextPatch(next).goal, "Hotovo");
   assert.ok(ctx.validProjectContext(next));
@@ -152,15 +152,49 @@ test("summary: progress, next step, overdue and the single attention label", () 
   assert.equal(foreign.total, 0);
 });
 
-test("the assistant gets the owner's context as a statement with provenance, only when there is one", () => {
+test("the 'all' scope sends no project context; the owner statement itself carries provenance", () => {
   const withContext = project({ context: context({ why: "Brzdí nábor", goals: ["Spustit"], provenance: "lumi-approved" }) });
   const goalOnly = project({ goal: "Web běží" }, { id: "p2" });
   const bare = project({}, { id: "p3" });
   const prompt = providerContext("all", [withContext, goalOnly, bare]);
-  const line = prompt.split("\n").find((entry) => entry.startsWith("Canonical entities:"));
-  const entities = JSON.parse(line.slice("Canonical entities: ".length));
-  assert.deepEqual(entities[0].ownerContext, { why: "Brzdí nábor", goals: ["Spustit"], doneWhen: "Hotovo", provenance: "owner-approved Lumi proposal" });
-  assert.equal(entities[1].ownerContext.doneWhen, "Web běží");
-  assert.equal(entities[1].ownerContext.provenance, "owner statement");
-  assert.equal(entities[2].ownerContext, undefined);
+  assert.ok(!prompt.includes("Brzdí nábor") && !prompt.includes("Web běží") && !prompt.includes("ownerContext\":"));
+  assert.deepEqual(ctx.projectOwnerStatement(withContext), { why: "Brzdí nábor", goals: ["Spustit"], doneWhen: "Hotovo", provenance: "owner-approved Lumi proposal" });
+  assert.equal(ctx.projectOwnerStatement(goalOnly).provenance, "owner statement");
+  assert.equal(ctx.projectOwnerStatement(bare), null);
+});
+
+test("an older client editing only goal moves doneWhen with it; one notice at most", () => {
+  const base = project({ goal: "Starý", context: context({ doneWhen: "Starý" }) });
+  const oldClient = project({ goal: "Nový cíl", context: context({ doneWhen: "Starý" }) }, { updatedAt: 20 });
+  const server = project({ goal: "Starý", context: context({ doneWhen: "Starý", why: "Jiné proč", updatedAt: 30 }) }, { updatedAt: 30 });
+  const merged = mergeEntity(base, oldClient, server, 100);
+  assert.equal(merged.properties.context.doneWhen, "Nový cíl");
+  assert.equal(merged.properties.context.why, "Jiné proč");
+  // Only goal changed on one side and the server is unchanged: still normalized (the early-return path).
+  assert.equal(mergeEntity(base, oldClient, base, 100).properties.context.doneWhen, "Nový cíl");
+  // Both sides changed goal: one notice at most, none for goal itself.
+  const both = mergeEntity(base, project({ goal: "A", context: context({ doneWhen: "A", updatedAt: 20 }) }, { updatedAt: 20 }),
+    project({ goal: "B", context: context({ doneWhen: "B", updatedAt: 30 }) }, { updatedAt: 30 }), 100);
+  const fields = (both.properties.syncConflicts || []).map((item) => item.field);
+  assert.ok(!fields.includes("properties.goal"));
+  assert.equal(fields.filter((field) => field === "properties.context").length, 1);
+  // doneWhen changed too: the context is not overwritten by the goal. A goal over 300 characters is not copied.
+  const edited = mergeEntity(base, project({ goal: "G", context: context({ doneWhen: "D", updatedAt: 20 }) }, { updatedAt: 20 }), base, 100);
+  assert.equal(edited.properties.context.doneWhen, "D");
+  const long = mergeEntity(base, project({ goal: "g".repeat(400), context: context({ doneWhen: "Starý" }) }, { updatedAt: 20 }), base, 100);
+  assert.equal(long.properties.context.doneWhen, "Starý");
+  assert.equal(long.properties.goal.length, 400);
+});
+
+test("validator rejects unknown keys and an own __proto__; contextProblem refuses instead of cutting; null context migrates", () => {
+  assert.ok(!ctx.validProjectContext({ ...context(), extra: 1 }));
+  assert.ok(!ctx.validProjectContext(JSON.parse(`{"why":"","goals":[],"doneWhen":"","provenance":"owner","updatedAt":1,"__proto__":{"x":1}}`)));
+  assert.deepEqual(ctx.contextProblem({ why: "", goals: Array(6).fill("a"), doneWhen: "" }), { field: "goals", limit: 5 });
+  assert.deepEqual(ctx.contextProblem({ why: "", goals: ["x".repeat(201)], doneWhen: "" }), { field: "goal", limit: 200 });
+  assert.equal(ctx.contextProblem({ why: "ok", goals: ["a", " "], doneWhen: "ok" }), null);
+  assert.equal(ctx.ownerProjectContext({ why: "", goals: Array(6).fill("a"), doneWhen: "" }, 1).goals.length, 6);
+  const fromNull = ctx.migrateProjectGoal(project({ goal: "Cíl", context: null }));
+  assert.equal(fromNull.properties.context.doneWhen, "Cíl");
+  assert.equal("context" in ctx.migrateProjectGoal(project({ context: null })).properties, false);
+  assert.equal("context" in ctx.migrateProjectGoal(project({ goal: "g".repeat(500), context: null })).properties, false);
 });

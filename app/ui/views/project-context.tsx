@@ -2,9 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
-import { contextLimits, contextPatch, ownerProjectContext, readProjectContext } from "../../../lib/project-context";
+import { contextLimits, contextPatch, contextProblem, ownerProjectContext, readProjectContext } from "../../../lib/project-context";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
+
+// A textarea that grows with its text, so a long text is fully visible.
+function GrowingTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight + 2}px`;
+  }, [props.value]);
+  return <textarea ref={ref} {...props} />;
+}
 
 type Draft = { why: string; goals: string[]; doneWhen: string };
 
@@ -26,6 +38,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const readOnly = app.activeWorkspaceId === "all";
   const [draft, setDraft] = useState<Draft>(storedDraft);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong">("idle");
+  const [problem, setProblem] = useState<{ field: string; limit: number } | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
   const draftRef = useRef<Draft>(storedDraft);
@@ -65,8 +78,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const version = editVersion.current;
     const snapshot = draftRef.current;
     if (sameText(snapshot, savedRef.current)) { dirty.current = false; return; }
-    // An over-long text (an old goal read as "Hotovo, když") is never cut: the save waits until the owner shortens it.
-    if (normalized(snapshot).doneWhen.length > contextLimits.doneWhen || normalized(snapshot).why.length > contextLimits.why) { setState("tooLong"); return; }
+    // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
+    const problem = contextProblem(snapshot);
+    if (problem) { setProblem(problem); setState("tooLong"); return; }
+    setProblem(null);
     pendingSaves.current += 1;
     setState("saving");
     // Saves of this field run one after another. A revision superseded while it waited is skipped; an in-flight save
@@ -114,7 +129,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       >
         <label className="projectContextField">
           <span>{t.why}</span>
-          <textarea
+          <GrowingTextarea
             aria-label={t.why}
             readOnly={readOnly}
             value={draft.why}
@@ -161,7 +176,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         </div>
         <label className="projectContextField">
           <span>{t.doneWhen}</span>
-          <textarea
+          <GrowingTextarea
             aria-label={t.doneWhen}
             readOnly={readOnly}
             value={draft.doneWhen}
@@ -177,7 +192,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         {approvedDate && <small className="projectContextProvenance">{t.approved(approvedDate)}</small>}
         {state === "saving" && <small role="status" className="projectContextState">{t.saving}</small>}
         {state === "saved" && <small role="status" className="projectContextState saved">{t.saved}</small>}
-        {state === "tooLong" && <small role="alert" className="projectContextState error">{t.tooLong(contextLimits.doneWhen)}</small>}
+        {state === "tooLong" && <small role="alert" className="projectContextState error">{problem?.field === "goals" ? t.tooMany(problem.limit) : t.tooLong(problem?.limit ?? contextLimits.doneWhen)}</small>}
         {state === "error" && <small role="alert" className="projectContextState error">{t.saveError}</small>}
       </div>
     </section>

@@ -22,6 +22,9 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 // with anything else is refused (server) or held back (client), never silently cut.
 export function validProjectContext(value: unknown): value is ProjectContext {
   if (!isObject(value)) return false;
+  // Only the six fields; an unknown key (or an own __proto__) makes the record invalid, never silently kept.
+  const allowed = new Set(["why", "goals", "doneWhen", "provenance", "proposalId", "updatedAt"]);
+  if (Object.getOwnPropertyNames(value).some((key) => !allowed.has(key))) return false;
   const { why, goals, doneWhen, provenance, proposalId, updatedAt } = value;
   if (typeof why !== "string" || why.length > contextLimits.why) return false;
   if (!Array.isArray(goals) || goals.length > contextLimits.goals) return false;
@@ -56,16 +59,40 @@ export function readProjectContext(properties: Record<string, unknown> | undefin
   return { why: "", goals: [], doneWhen: goal, provenance: "owner", updatedAt: 0 };
 }
 
-// The owner's edit of the context: trimmed, empty goals dropped, cut to the limits the editor enforces anyway
-// (maxLength), provenance "owner". An edit by the owner always ends as owner-written text, also over an approved proposal.
+// The owner's edit of the context: trimmed, empty goals dropped, provenance "owner". An edit by the owner always ends as
+// owner-written text, also over an approved proposal. Nothing is cut: `contextProblem` says first whether the text fits.
 export function ownerProjectContext(input: { why: string; goals: string[]; doneWhen: string }, now: number): ProjectContext {
   return {
-    why: input.why.trim().slice(0, contextLimits.why),
-    goals: input.goals.map((goal) => goal.trim()).filter(Boolean).slice(0, contextLimits.goals).map((goal) => goal.slice(0, contextLimits.goal)),
-    doneWhen: input.doneWhen.trim().slice(0, contextLimits.doneWhen),
+    why: input.why.trim(),
+    goals: input.goals.map((goal) => goal.trim()).filter(Boolean),
+    doneWhen: input.doneWhen.trim(),
     provenance: "owner",
     updatedAt: now,
   };
+}
+
+// What stops a text from being saved, or null. The editor refuses the save with this instead of cutting the text.
+export function contextProblem(input: { why: string; goals: string[]; doneWhen: string }): { field: "why" | "goals" | "goal" | "doneWhen"; limit: number } | null {
+  const goals = input.goals.map((goal) => goal.trim()).filter(Boolean);
+  if (input.why.trim().length > contextLimits.why) return { field: "why", limit: contextLimits.why };
+  if (goals.length > contextLimits.goals) return { field: "goals", limit: contextLimits.goals };
+  if (goals.some((goal) => goal.length > contextLimits.goal)) return { field: "goal", limit: contextLimits.goal };
+  if (input.doneWhen.trim().length > contextLimits.doneWhen) return { field: "doneWhen", limit: contextLimits.doneWhen };
+  return null;
+}
+
+// After a merge: an older client edits only `goal`. When `goal` changed against the common version and "Hotovo, když" did not,
+// the new goal is the new doneWhen (when it fits; a longer one is left to the fallback read and the editor's refusal).
+export function syncGoalIntoContext(base: Entity, merged: Entity): Entity {
+  if (merged.type !== "project" || !isObject(merged.properties.context)) return merged;
+  const goal = merged.properties.goal;
+  if (typeof goal !== "string" || goal === base.properties?.goal) return merged;
+  const context = merged.properties.context as Record<string, unknown>;
+  const baseContext = isObject(base.properties?.context) ? base.properties.context as Record<string, unknown> : null;
+  const baseDone = baseContext ? baseContext.doneWhen : (typeof base.properties?.goal === "string" ? base.properties.goal : "");
+  if (context.doneWhen !== baseDone || context.doneWhen === goal) return merged;
+  if (goal.trim().length > contextLimits.doneWhen) return merged;
+  return { ...merged, properties: { ...merged.properties, context: { ...context, doneWhen: goal.trim() } } };
 }
 
 // `properties` patch that saves the context. `goal` mirrors "Hotovo, když" so a device that still runs the previous version
@@ -88,11 +115,20 @@ export function firstSentence(text: string, max = 160) {
 // "Hotovo, když" limit is left alone (no context): nothing is truncated.
 export function migrateProjectGoal(entity: Entity): Entity | null {
   if (!entity || entity.type !== "project" || !isObject(entity.properties)) return null;
-  if (entity.properties.context !== undefined) return null;
+  if (entity.properties.context !== undefined && entity.properties.context !== null) return null;
   const goal = typeof entity.properties.goal === "string" ? entity.properties.goal.trim() : "";
-  if (!goal) return null;
+  // A null context is treated as missing: without a usable goal it is simply removed, so the record is not held back forever.
+  if (!goal) {
+    if (entity.properties.context !== null) return null;
+    const { context: _removed, ...rest } = entity.properties;
+    return { ...entity, properties: rest };
+  }
   // Nothing is ever cut: a goal over the limit stays as it is, without a context, and is read in full as "Hotovo, když".
-  if (goal.length > contextLimits.doneWhen) return null;
+  if (goal.length > contextLimits.doneWhen) {
+    if (entity.properties.context !== null) return null;
+    const { context: _removed, ...rest } = entity.properties;
+    return { ...entity, properties: rest };
+  }
   const context: ProjectContext = {
     why: "",
     goals: [],

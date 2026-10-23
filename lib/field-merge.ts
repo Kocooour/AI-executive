@@ -1,4 +1,5 @@
 import type { Entity, Relation } from "./db";
+import { syncGoalIntoContext } from "./project-context";
 
 // Three-way merge of one record: the version this device last had in common with the server
 // (`base`), the device's version (`local`) and the server's version (`server`). A field changed on
@@ -45,6 +46,8 @@ const unreported = new Set([
   "properties.manualOrders",
   "properties.calendarDecisions",
   "properties.manualOrder",
+  // The old project goal mirrors context.doneWhen; the one notice of a concurrent edit is the one for the context.
+  "properties.goal",
   "properties.relationsUpdatedAt",
   "properties.completedAt",
   "properties.recurrenceSeriesId",
@@ -211,6 +214,10 @@ export function limitConflicts(entities: Entity[], limit = maxConflictsTotal): E
 }
 
 export function mergeEntity(base: Entity, local: Entity, server: Entity, now = Date.now()): Entity {
+  return syncGoalIntoContext(base, mergeFields(base, local, server, now));
+}
+
+function mergeFields(base: Entity, local: Entity, server: Entity, now: number): Entity {
   // A side that did not change the record takes the other as it is. This compares content: a
   // merged record keeps the larger of the two timestamps, so an equal updatedAt does not prove
   // that nothing changed.

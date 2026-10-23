@@ -366,7 +366,15 @@ export function useLumiApp() {
   }, [authState]);
   const sessionChannel = "ai-executive-session";
   // Any change of view leaves the project page: Projects then shows its list.
+  // A page that pushed a history step is left by going back one step first (no duplicate list entry stays behind); the view
+  // chosen meanwhile is applied when that step has been taken (see followAddress).
+  const pendingView = useRef<string | null>(null);
   function setView(next: string) {
+    if (openProjectIdRef.current && window.history.state?.lumiProject) {
+      pendingView.current = next;
+      window.history.back();
+      return;
+    }
     setViewState(next);
     setOpenProjectId(null);
   }
@@ -1455,7 +1463,10 @@ export function useLumiApp() {
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       addressedView.current = next;
-      setView(views.includes(next) || next === "Settings" ? next : "Home");
+      const chosen = pendingView.current;
+      pendingView.current = null;
+      setViewState(chosen ?? (views.includes(next) || next === "Settings" ? next : "Home"));
+      setOpenProjectId(null);
       // Nothing that belongs to the view being left may stay open over the next one.
       answerConfirm(false);
       setCapture(false);
