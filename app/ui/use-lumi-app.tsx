@@ -27,6 +27,7 @@ import { type AIProposal, type AssistantMessage, type CalendarEvent, type Calend
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
+import { eventTaskSpan } from "../../lib/calendar-decisions";
 import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useContextEvidence } from "./hooks/use-context-evidence";
@@ -1922,7 +1923,7 @@ export function useLumiApp() {
   }, [badgeNow, calendarTimezone]);
   const dayPlanState = useDayPlan({ authState, activeWorkspaceId, writeWorkspaceId, items, language, tr, calendarToday,
     calendarWorkspaceSelection, askConfirm, closeDetail, pullFromServer, selectWorkspace, syncQueue, pendingKey });
-  const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
+  const { applyDayPlanAction, currentDayPlanBlock, dayPlanBusy, dayPlanNow, dayPlanStatus, dayPlanTimeline, dayPlanUndo, dayPlanWhy, loadDayPlan, nextDayPlanBlock, setDayPlanNow, setDayPlanStatus, undoDayPlanBlock, visibleDayPlan, workElapsedText, workOverrun, workSession, workSessionAction, workSessionBusy, workSessionStatus } = dayPlanState;
   const { passkeys, passkeyLabel, setPasskeyLabel, passkeyPassword, setPasskeyPassword, passkeyStatus, registerPasskey,
     removePasskey } = usePasskeys({ view, authState, tr, language, askConfirm, setPasskeyBusy });
   const { backups, setBackups, backupStatus, setBackupStatus, backupBusy, backupFailed, createServerBackup, restoreServerBackup, downloadExport, importExport } = useBackups({
@@ -2004,10 +2005,24 @@ export function useLumiApp() {
   const { agendaCalendarEvents, effectiveBusyCalendarEvents } = calendarEventsState;
   // Agendas (Today, Home) leave out hidden and converted events; the Calendar view lists everything.
   const todayCalendarEvents = agendaCalendarEvents(busyTodayCalendarEvents);
-  const calendarDayEvents = agendaCalendarEvents(calendarDayEventsAll);
+  const calendarDayEvents = useMemo(() => agendaCalendarEvents(calendarDayEventsAll), [agendaCalendarEvents, calendarDayEventsAll]);
   const nearbyCalendarEvents = agendaCalendarEvents(nearbyCalendarEventsAll);
   // Busy time, free hours/windows and conflicts: hidden events and events that became tasks do not occupy time.
-  const busyCalendarDayEvents = effectiveBusyCalendarEvents(calendarDayEventsAll);
+  const busyCalendarDayEvents = useMemo(() => effectiveBusyCalendarEvents(calendarDayEventsAll), [effectiveBusyCalendarEvents, calendarDayEventsAll]);
+  // Tasks made from today's events that Today shows on its day timeline instead of in its list: open,
+  // linked to an event of today, and a Today task (a task deferred away leaves Today altogether).
+  const todayTimelineTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const event of calendarDayEventsAll) {
+      const linked = calendarEventsState.calendarEventTasks.get(event.id);
+      if (!linked || linked.status !== "open" || !taskMatchesView(linked, "Today", today)) continue;
+      // The task's own span (its estimate from the event's start) must reach into today, or it would be
+      // on neither the timeline nor the list.
+      const span = eventTaskSpan(event, linked);
+      if (Number.isFinite(span.start) && Number.isFinite(span.end) && span.end > calendarTodayRange.start && span.start < calendarTodayRange.end) ids.add(linked.id);
+    }
+    return ids;
+  }, [calendarDayEventsAll, calendarEventsState.calendarEventTasks, today, calendarTodayRange]);
   const mergedBusy = effectiveBusyCalendarEvents(busyTodayCalendarEvents).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
@@ -3616,7 +3631,7 @@ export function useLumiApp() {
       if (view === "Today" && scope === "task:Today" && source.type === "task") {
         const evening = isEveningTask(source, today);
         if (isEveningTask(targetEntity, today) !== evening) return;
-        peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening);
+        peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
       }
       const sourceIndex = peers.findIndex((entity) => entity.id === source.id);
       const targetIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
@@ -3678,7 +3693,7 @@ export function useLumiApp() {
     // Today shows its evening tasks as a group of their own: a task moves within its own group only.
     if (view === "Today" && scope === "task:Today") {
       const evening = isEveningTask(entity, today);
-      peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening);
+      peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
     }
     const index = peers.findIndex((candidate) => candidate.id === entity.id);
     const target = peers[index + direction];
@@ -3731,6 +3746,7 @@ export function useLumiApp() {
     providerLabel,
     relationLabel,
     setDayPlanNow,
+    dayPlanNow,
     dayPlanStatus,
     setDayPlanStatus,
     dayPlanBusy,
@@ -3879,6 +3895,7 @@ export function useLumiApp() {
     calendarDayEventsAll,
     nearbyCalendarEventsAll,
     busyCalendarDayEvents,
+    todayTimelineTaskIds,
     ...calendarEventsState,
     homeTodayTasks,
     homeToday,

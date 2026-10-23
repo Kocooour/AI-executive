@@ -7,7 +7,7 @@ import { inSentenceDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { PopoverMenu } from "./popover-menu";
 import { CalendarEventNotice } from "./calendar-event-actions";
-import { TodayAgenda } from "./today-agenda";
+import { DayTimeline } from "./day-timeline";
 import { WorkNowCard } from "./work-now-card";
 
 // Today is one list. These are the parts around it (the list itself is EntityList): the count and
@@ -75,7 +75,7 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
 // A running work session, today's calendar events (only with a connected calendar) and the plan's
 // status line with Undo.
 export function TodayTop({ app }: { app: LumiApp }) {
-  const { calendarDayEvents, calendarFresh, calendarSources, calendarToday, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanUndo, nextDayPlanBlock,
+  const { calendarDayEvents, calendarFresh, calendarSources, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanUndo, nextDayPlanBlock,
     tr, undoDayPlanBlock, visibleDayPlan } = app;
   const canUndo = Boolean(visibleDayPlan && dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date);
   const stripShowsStale = calendarDayEvents.length > 0 && !calendarFresh;
@@ -93,13 +93,7 @@ export function TodayTop({ app }: { app: LumiApp }) {
       <WorkNowCard app={app} compact />
       {/* Outside the calendar section: the event that became a task may have been the day's last one. */}
       <CalendarEventNotice app={app} />
-      {calendarDayEvents.length > 0 && (
-        <section className="todayCalendarCommitments" aria-labelledby="today-calendar-title">
-          <h2 id="today-calendar-title">{tr("todayGroupCalendar")}</h2>
-          {!calendarFresh && <p role="status">{tr("dayPlanStale")}</p>}
-          <TodayAgenda app={app} events={calendarDayEvents} day={calendarToday} />
-        </section>
-      )}
+      <DayTimeline app={app} mode="today" />
       {(planState || overloaded || currentDayPlanBlock || nextDayPlanBlock) && (
         <div className="todayPlanState" data-today-plan-state>
           {planState && <p role="status">{tr(planState)}</p>}

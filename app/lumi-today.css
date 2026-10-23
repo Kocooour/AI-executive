@@ -426,16 +426,22 @@
 @media (max-width: 700px) {
   .appShell.view-today .taskRowList .taskRow {
     display: grid;
-    grid-template-columns: 44px 44px minmax(0, 1fr) auto;
+    grid-template-columns: 32px 34px minmax(0, 1fr) auto auto;
     align-items: center;
-    column-gap: 4px;
+    column-gap: 2px;
   }
+  /* Tight first line so the title keeps at least half of it: the handle and the check are drawn narrower
+     but keep a 44px press area (::before reaches into the neighbouring gap). */
+  .appShell.view-today .taskRowList .taskRow > .dragHandle,
+  .appShell.view-today .taskRowList .taskRow > .check { position: relative; width: auto; min-width: 0; flex: none; }
+  .appShell.view-today .taskRowList .taskRow > .dragHandle::before,
+  .appShell.view-today .taskRowList .taskRow > .check::before { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }
   .appShell.view-today .taskRowList .taskRow > .dragHandle { grid-column: 1; grid-row: 1; }
   .appShell.view-today .taskRowList .taskRow > .check { grid-column: 2; grid-row: 1; }
   .appShell.view-today .taskRowList .taskRow > .taskRowMain { grid-column: 3; grid-row: 1; }
   .appShell.view-today .taskRowList .taskRow > .taskRowMeta,
   .appShell.view-today .taskRowList .taskRow > .deferGroup,
-  .appShell.view-today .taskRowList .taskRow .deferChip { grid-column: 4; grid-row: 1; margin-left: 0; }
+  .appShell.view-today .taskRowList .taskRow .deferChip { grid-column: 5; grid-row: 1; margin-left: 0; }
   .appShell.view-today .taskRowList .taskRow > .deferGroup { display: contents; }
   .appShell.view-today .taskRowList .taskRow .deadlineBadge {
     grid-column: 3;
@@ -447,9 +453,10 @@
     overflow-wrap: anywhere;
   }
   .appShell.view-today .taskRowList .taskRow > .todayTime {
-    grid-column: 1 / 3;
-    grid-row: 2;
-    justify-self: start;
+    /* On the first row: the row stays one line tall, so its height can follow the estimate. */
+    grid-column: 4;
+    grid-row: 1;
+    justify-self: end;
   }
   .todayTimeIcon { display: block; }
   .todayTimeCell {
@@ -462,8 +469,8 @@
     font-size: 11px;
     letter-spacing: -0.01em;
   }
-  .todayTimeCell.isUnplaced .todayTimeText,
-  .todayTimeCell[data-time-kind="skipped"] .todayTimeText {
+  /* Icon only: the range is in the cell's label, the menu and the day timeline above. */
+  .todayTimeCell .todayTimeText {
     position: absolute;
     width: 1px;
     height: 1px;
