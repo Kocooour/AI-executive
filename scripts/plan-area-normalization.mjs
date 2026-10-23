@@ -17,7 +17,8 @@ try {
   if (!snapshot || !Array.isArray(snapshot.entities) || !Array.isArray(snapshot.relations)) {
     throw new AreaNormalizationBlocked(["snapshot-structure-invalid"]);
   }
-  const timestamp = Math.max(0, ...snapshot.entities.map((entity) => entity.updatedAt || 0));
+  // A large snapshot must not exceed the JS argument stack.
+  const timestamp = snapshot.entities.reduce((max, entity) => Math.max(max, entity.updatedAt || 0), 0);
   const { report } = planAreaNormalization(snapshot, timestamp);
   console.log(JSON.stringify({ status: "plan-only", inputSha256, report }, null, 2));
 } catch (error) {
