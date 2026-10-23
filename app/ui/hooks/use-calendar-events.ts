@@ -1,7 +1,7 @@
 "use client";
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
-  dayFreeMinutes, decisionFor, eventTaskDraft, isRecurringEvent, linkedEventTasks, needsTaskQuestion, occurrenceDecisionKey, readDecisions,
+  convertedEventIds, dayFreeMinutes, decisionFor, effectiveBusyEvents, eventTaskDraft, isRecurringEvent, linkedEventTasks, needsTaskQuestion, occurrenceDecisionKey, readDecisions,
   reprioritizeSuggestion, seriesDecisionKey, withDecision, DECISIONS_PROPERTY, type CalendarDecision, type CalendarDecisions,
 } from "../../../lib/calendar-decisions";
 import { isAdopting } from "../../../lib/adoption";
@@ -54,7 +54,10 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
   useEffect(() => { setSuggestion(null); setFailed(false); }, [workspaceId, activeWorkspaceId]);
 
   const isHidden = (event: CalendarEvent) => decisionFor(decisions, event)?.decision === "hidden";
-  const visibleEvents = (events: CalendarEvent[]) => events.filter((event) => !isHidden(event));
+  // Today and Home list neither hidden events nor events that became a task (the task is listed).
+  const agendaEvents = (events: CalendarEvent[]) => events.filter((event) => !isHidden(event) && !eventTasks.has(event.id));
+  // What occupies time: not hidden, not converted. Every capacity figure and conflict uses this.
+  const busyEvents = (events: CalendarEvent[]) => effectiveBusyEvents(events, decisions, items.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
   const isRecurring = (event: CalendarEvent) => isRecurringEvent(event, calendarEvents);
   const needsQuestion = (event: CalendarEvent) => needsTaskQuestion(event, { decisions, linked: eventTasks, now: Date.now() });
 
@@ -127,7 +130,7 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
       const tasks = (await db.entities.toArray()).filter((entity) => entity.type === "task" && entity.workspaceId === event.workspaceId);
       const proposal = reprioritizeSuggestion({
         tasks, workspaceId: event.workspaceId, day: draft.when, today,
-        freeMinutes: dayFreeMinutes(calendarEvents, draft.when, calendarTimezone, workdayStart, workdayEnd),
+        freeMinutes: dayFreeMinutes(effectiveBusyEvents(calendarEvents, decisions, tasks), draft.when, calendarTimezone, workdayStart, workdayEnd),
       });
       setSuggestion(proposal ? { eventId: event.id, taskId: proposal.task.id, taskTitle: proposal.task.title, target: proposal.target } : null);
     } catch {
@@ -150,7 +153,8 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
     calendarEventSuggestion: suggestion,
     calendarDecisionFailed: failed,
     isCalendarEventHidden: isHidden,
-    visibleCalendarEvents: visibleEvents,
+    agendaCalendarEvents: agendaEvents,
+    effectiveBusyCalendarEvents: busyEvents,
     isCalendarEventRecurring: isRecurring,
     calendarEventNeedsQuestion: needsQuestion,
     hideCalendarEvent: hideEvent,

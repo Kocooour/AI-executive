@@ -11,7 +11,7 @@ const fill = (text: string, values: Record<string, string>) => text.replace(/\{(
 // the whole series. Hidden events still occupy time in the calendar.
 export function CalendarEventActions({ app, event }: { app: LumiApp; event: CalendarEvent }) {
   const { activeWorkspaceId, applyCalendarEventSuggestion, calendarDecisionFailed, calendarEventNeedsQuestion, calendarEventSuggestion, calendarEventTasks, createCalendarEventTask,
-    dismissCalendarEventSuggestion, hideCalendarEvent, inspect, isCalendarEventRecurring, language, markCalendarEventNotTask, tr } = app;
+    dismissCalendarEventSuggestion, hideCalendarEvent, done, inspect, isCalendarEventRecurring, language, markCalendarEventNotTask, tr } = app;
   const task = calendarEventTasks.get(event.id);
   const asking = !task && calendarEventNeedsQuestion(event);
   const suggestion = calendarEventSuggestion?.eventId === event.id ? calendarEventSuggestion : null;
@@ -21,7 +21,7 @@ export function CalendarEventActions({ app, event }: { app: LumiApp; event: Cale
     <div className="calendarEventActions" data-event-actions={event.id}>
       <div className="calendarEventRow">
         {task ? (
-          <div className="calendarEventTask">{tr("calEventTask")}: <button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{task.title}</button></div>
+          <div className="calendarEventTask">{tr("calEventTask")}: <button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{task.title}</button>{task.status === "open" && <button type="button" className="primaryAction" data-event-complete={task.id} aria-label={`${tr("complete")}: ${task.title}`} onClick={() => void done(task.id)}>{tr("complete")}</button>}</div>
         ) : asking ? (
           <div className="calendarEventAsk" role="group" aria-label={`${tr("calEventIsTask")} ${event.title}`}>
             <p>{tr("calEventIsTask")}</p>
@@ -29,7 +29,7 @@ export function CalendarEventActions({ app, event }: { app: LumiApp; event: Cale
             <button type="button" data-event-answer="no" aria-label={fill(tr("calEventNoLabel"), title)} onClick={() => void markCalendarEventNotTask(event)}>{tr("calEventNo")}</button>
           </div>
         ) : null}
-        {isCalendarEventRecurring(event) ? (
+        {task ? null : isCalendarEventRecurring(event) ? (
           <PopoverMenu label={hideLabel} triggerLabel={hideLabel} triggerClassName="calendarEventHide" triggerContent={tr("calEventHide")} triggerData={{ "data-event-hide": event.id }}>
             {(close) => (
               <div className="calendarEventHideMenu">

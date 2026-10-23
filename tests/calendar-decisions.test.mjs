@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  KEEP_DECISION_DAYS, MAX_DECISIONS, decisionFor, dayFreeMinutes, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
+  KEEP_DECISION_DAYS, MAX_DECISIONS, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
   needsTaskQuestion, occurrenceDecisionKey, pruneDecisions, readDecisions, reprioritizeSuggestion, seriesDecisionKey, withDecision,
 } from "../lib/calendar-decisions.ts";
 import { mergeEntity } from "../lib/field-merge.ts";
@@ -120,13 +120,13 @@ test("when the day is full, the least important movable task is proposed for the
     task("low-short", { when: day, priority: "low", estimatedMinutes: 30 }),
     task("low-long", { when: day, priority: "low", estimatedMinutes: 90 }),
     task("deadline", { when: day, priority: "none", deadline: day, estimatedMinutes: 30 }),
-    task("fromEvent", { when: day, calendarEventId: "e1", estimatedMinutes: 300 }),
+    task("fromEvent", { when: day, calendarEventId: "e1", estimatedMinutes: 60 }),
     task("elsewhere", { when: "2026-10-27", priority: "none", estimatedMinutes: 600 }),
   ];
   const result = reprioritizeSuggestion({ tasks, workspaceId: "w", day, today: "2026-10-23", freeMinutes: 200 });
   assert.equal(result.task.id, "low-long");
   assert.equal(result.target, "2026-10-27");
-  assert.equal(result.plannedMinutes, 120 + 60 + 30 + 90 + 30);
+  assert.equal(result.plannedMinutes, 120 + 60 + 30 + 90 + 30 + 60, "the task made from an event counts, its event is not busy");
   assert.equal(reprioritizeSuggestion({ tasks, workspaceId: "w", day, today: "2026-10-23", freeMinutes: 400 }), null, "the day fits");
   assert.equal(reprioritizeSuggestion({ tasks, workspaceId: "w", day, today: "2026-10-23", freeMinutes: null }), null, "no capacity data");
   assert.equal(reprioritizeSuggestion({ tasks, workspaceId: "other", day, today: "2026-10-23", freeMinutes: 10 }), null);
@@ -154,4 +154,31 @@ test("calendar decisions merge key by key across devices", () => {
   const merged = mergeEntity(base, local, server, 10);
   assert.deepEqual(merged.properties.calendarDecisions, { "occ:s:b": "notTask", "occ:s:c": "hidden" });
   assert.ok(!merged.properties.syncConflicts);
+});
+
+test("effective busy events: hidden and converted events do not occupy time, 'not a task' and plain events do", () => {
+  const events = [
+    event({ id: "plain" }),
+    event({ id: "hiddenOcc", occurrenceKey: "u2:k" , uid: "u2" }),
+    event({ id: "series1", uid: "ser", occurrenceKey: "ser:a" }),
+    event({ id: "series2", uid: "ser", occurrenceKey: "ser:b" }),
+    event({ id: "notTask", uid: "nt", occurrenceKey: "nt:a" }),
+    event({ id: "converted", uid: "cv", occurrenceKey: "cv:a" }),
+    event({ id: "free", uid: "fr", occurrenceKey: "fr:a", busy: false }),
+  ];
+  const decisions = { "occ:src:u2:k": "hidden", "series:src:ser": "hidden", "occ:src:nt:a": "notTask" };
+  const tasks = [task("t", { calendarEventId: "converted" }), task("other", {}), { ...task("note", { calendarEventId: "plain" }), type: "note" }];
+  assert.deepEqual(effectiveBusyEvents(events, decisions, tasks).map((e) => e.id), ["plain", "notTask"]);
+  assert.deepEqual(effectiveBusyEvents(events, {}, []).map((e) => e.id).sort(), ["converted", "hiddenOcc", "notTask", "plain", "series1", "series2"].sort());
+  assert.deepEqual([...convertedEventIds(tasks)], ["converted"]);
+  // A completed task still stands in for its event.
+  assert.equal(effectiveBusyEvents([event({ id: "x" })], {}, [task("d", { calendarEventId: "x" }, { status: "completed" })]).length, 0);
+});
+
+test("free minutes grow when hidden or converted events stop being busy", () => {
+  const timed = [event({ id: "a", start: "2026-10-23T07:00:00Z", end: "2026-10-23T09:00:00Z" })];
+  const full = dayFreeMinutes(effectiveBusyEvents(timed, {}, []), "2026-10-23", "Europe/Prague", "09:00", "17:00");
+  const hidden = dayFreeMinutes(effectiveBusyEvents(timed, { [occurrenceDecisionKey(timed[0])]: "hidden" }, []), "2026-10-23", "Europe/Prague", "09:00", "17:00");
+  assert.equal(full, 6 * 60);
+  assert.equal(hidden, 8 * 60);
 });

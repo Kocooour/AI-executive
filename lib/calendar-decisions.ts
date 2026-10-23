@@ -100,6 +100,30 @@ export function decisionFor(decisions: CalendarDecisions, event: DecisionEvent):
 
 export const isHiddenEvent = (decisions: CalendarDecisions, event: DecisionEvent) => decisionFor(decisions, event)?.decision === "hidden";
 
+/** Ids of the events that tasks point to (`properties.calendarEventId`); `tasks` may hold anything, only tasks count. */
+export function convertedEventIds(tasks: Entity[]) {
+  const ids = new Set<string>();
+  for (const task of tasks) {
+    const id = task?.type === "task" ? task.properties?.calendarEventId : undefined;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return ids;
+}
+
+/** Hidden by the owner, or turned into a task: the event is not an event any more (not in agendas, not busy). */
+export const isConvertedEvent = (event: Pick<DecisionEvent, "id">, converted: Set<string>) => converted.has(event.id);
+
+/**
+ * The events that occupy the owner's time. A hidden event ("only in the calendar so I know something
+ * happens") and an event that became a task (the task's estimate carries the time) do not; an event
+ * marked "not a task" does. Every busy interval, free window, conflict and capacity figure, on the client
+ * and the server, is computed from this list. `tasks` are the workspace's non-deleted tasks.
+ */
+export function effectiveBusyEvents<E extends DecisionEvent & { busy: boolean }>(events: E[], decisions: CalendarDecisions, tasks: Entity[]): E[] {
+  const converted = convertedEventIds(tasks);
+  return events.filter((event) => event.busy && !isHiddenEvent(decisions, event) && !converted.has(event.id));
+}
+
 /** Another cached event belongs to the same series (same source and uid). */
 export const isRecurringEvent = (event: DecisionEvent, events: DecisionEvent[]) =>
   Boolean(event.uid) && events.some((other) => other.id !== event.id && other.sourceId === event.sourceId && other.uid === event.uid);
@@ -199,8 +223,9 @@ const priorityOf = (task: Entity) => priorityLevel[String(task.properties?.prior
 
 /**
  * After a task was made from a calendar event: when the known estimates of the open tasks planned
- * for that day exceed the day's free time, the task Lumi proposes to move away. Tasks made from
- * calendar events are not counted (their time is already busy in the calendar) and never moved.
+ * for that day exceed the day's free time, the task Lumi proposes to move away. `freeMinutes` comes
+ * from the effective busy time (an event that became a task is not busy; its task's estimate counts
+ * here instead). Tasks made from calendar events are counted but never moved.
  * Candidates are tasks without a deadline on or before that day and of medium priority or lower,
  * the least important first (then the longest, to free the most). Null when the day fits, there is
  * no free-time data, or nothing can sensibly move.
@@ -211,10 +236,11 @@ export function reprioritizeSuggestion(input: { tasks: Entity[]; workspaceId: st
   const open = (Array.isArray(input.tasks) ? input.tasks : []).filter((task) =>
     task && task.type === "task" && task.status === "open" && task.workspaceId === input.workspaceId && task.properties && typeof task.properties === "object");
   const plannedFor = (task: Entity) => task.properties.when === day || (day === input.today && taskMatchesView(task, "Today", day));
-  const planned = open.filter((task) => plannedFor(task) && !task.properties.calendarEventId);
+  const planned = open.filter(plannedFor);
   const plannedMinutes = planned.reduce((total, task) => total + (taskMinutes(task.properties.estimatedMinutes) ?? 0), 0);
   if (plannedMinutes <= freeMinutes) return null;
   const candidates = planned.filter((task) => {
+    if (task.properties.calendarEventId) return false;
     const deadline = typeof task.properties.deadline === "string" ? task.properties.deadline.slice(0, 10) : "";
     return priorityOf(task) < priorityLevel.high && !(deadline && deadline <= day);
   }).sort((a, b) => priorityOf(a) - priorityOf(b)

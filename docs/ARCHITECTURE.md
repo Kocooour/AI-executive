@@ -481,12 +481,15 @@ It is written through the normal local-first path (Dexie, then `/api/store`), so
 treats it like `manualOrders` (merged key by key, never reported as a sync conflict, `lib/field-merge.ts`), and the workspace
 validators only constrain `kind`, `role` and `members`. A write prunes occurrences that started more than 30 days ago and keeps
 at most 500 keys (`lib/calendar-decisions.ts`); the local placeholder of the personal workspace (timestamp 0) is never written.
-Hiding only filters the lists in the UI: capacity, free windows and conflicts (client `mergedBusy`, server `calendarAvailability`)
-still use every event. “Yes” on “Je to úkol?” creates an ordinary task with `properties.calendarEventId` (the event's id),
-`calendarEventKey`, `calendarSourceId`, `when` (the event's date in the calendar time zone) and `estimatedMinutes` (the event's
-length, 5–480); no deadline is set. Day-plan capacity is deliberately unchanged: the event stays busy time, so the free
-windows stay truthful; only the client's one-line reprioritization suggestion (`reprioritizeSuggestion`) leaves event-linked tasks
-out of the day's planned minutes to avoid counting that time twice.
+Busy time has one definition, `effectiveBusyEvents(events, decisions, tasks)` in `lib/calendar-decisions.ts`: a busy event that is
+not hidden and has no task pointing to it. The client (`mergedBusy`, free hours and windows, Calendar conflicts) and the server
+(`calendarAvailability` through `effectiveBusyEventsFor` in `lib/calendar.ts`, which reads the workspace entity and tasks from the
+store snapshot; so the day plan, task suggestions, priorities and meeting prep) both use it. Hidden events are listed only in the
+Calendar view (faded); an event with a task is listed once, as that task, and Today/Home leave it out. “Yes” on “Je to úkol?”
+creates an ordinary task with `properties.calendarEventId` (the event's id), `calendarEventKey`, `calendarSourceId`, `when` (the
+event's date in the calendar time zone) and `estimatedMinutes` (the event's length, 5–480); no deadline is set. The one-line
+reprioritization suggestion (`reprioritizeSuggestion`) compares the day's known task estimates (the new task included) with the
+free time computed from the effective busy events.
 
 Requests go only to `caldav.icloud.com` and `pNN-caldav.icloud.com` over HTTPS on port 443, to a validated public address
 pinned for the connection; every hop of a redirect (at most three) and every address in a response is checked against that

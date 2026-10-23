@@ -1995,7 +1995,19 @@ export function useLumiApp() {
   const nearbyCalendarEventsAll = useMemo(() => calendarEvents
     .filter((event) => calendarEventOverlapsLocalRange(event, calendarNearTermRange))
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start)), [calendarEvents, calendarNearTermRange]);
-  const mergedBusy = busyTodayCalendarEvents.filter((event) => event.busy).map((event) => [
+  const calendarEventsState = useCalendarEvents({
+    items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
+    workdayStart: notificationState?.preferences.workdayStart || "08:00", workdayEnd: notificationState?.preferences.workdayEnd || "18:00",
+    localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, create, deferTask,
+  });
+  const { agendaCalendarEvents, effectiveBusyCalendarEvents } = calendarEventsState;
+  // Agendas (Today, Home) leave out hidden and converted events; the Calendar view lists everything.
+  const todayCalendarEvents = agendaCalendarEvents(busyTodayCalendarEvents);
+  const calendarDayEvents = agendaCalendarEvents(calendarDayEventsAll);
+  const nearbyCalendarEvents = agendaCalendarEvents(nearbyCalendarEventsAll);
+  // Busy time, free hours/windows and conflicts: hidden events and events that became tasks do not occupy time.
+  const busyCalendarDayEvents = effectiveBusyCalendarEvents(calendarDayEventsAll);
+  const mergedBusy = effectiveBusyCalendarEvents(busyTodayCalendarEvents).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
     const last = merged[merged.length - 1];
@@ -2014,17 +2026,6 @@ export function useLumiApp() {
     if (dayEnd - cursor >= 30 * 60_000) result.push([cursor, dayEnd]);
     return result;
   })();
-  const calendarEventsState = useCalendarEvents({
-    items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
-    workdayStart: notificationState?.preferences.workdayStart || "08:00", workdayEnd: notificationState?.preferences.workdayEnd || "18:00",
-    localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, create, deferTask,
-  });
-  const { visibleCalendarEvents, isCalendarEventHidden } = calendarEventsState;
-  const todayCalendarEvents = visibleCalendarEvents(busyTodayCalendarEvents);
-  const calendarDayEvents = visibleCalendarEvents(calendarDayEventsAll);
-  const nearbyCalendarEvents = visibleCalendarEvents(nearbyCalendarEventsAll);
-  const hiddenCalendarEvents = [...calendarDayEventsAll, ...nearbyCalendarEventsAll.filter((event) => !calendarDayEventsAll.includes(event))]
-    .filter((event) => isCalendarEventHidden(event));
   const targets = (sourceId: string, type: string) =>
     scopedRelations
       .filter((r) => r.sourceEntityId === sourceId && r.relationType === type)
@@ -3860,7 +3861,8 @@ export function useLumiApp() {
     freeHours,
     freeWindows,
     calendarDayEventsAll,
-    hiddenCalendarEvents,
+    nearbyCalendarEventsAll,
+    busyCalendarDayEvents,
     ...calendarEventsState,
     homeTodayTasks,
     homeToday,

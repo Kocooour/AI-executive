@@ -3,6 +3,7 @@ import https from "node:https";
 import ical, { type EventInstance, type VEvent } from "node-ical";
 import { CalDavAuthError, CalDavError, defaultCalDavOptions, fetchCalendarObjects, type CalDavCredentials, type CalDavOptions } from "./caldav";
 import { resolvedTarget } from "./calendar-net";
+import { effectiveBusyEvents, readDecisions } from "./calendar-decisions";
 import { serverErrorKeys } from "./server-errors";
 import { ensureDailyBackup, getDatabase, readSnapshot } from "./server-store";
 
@@ -460,6 +461,13 @@ function zonedDateTimeToMs(dateValue: string, timeValue: string, timeZone: strin
   return candidate;
 }
 
+/** The events that occupy time in a workspace: not hidden by the owner and not turned into a task (lib/calendar-decisions.ts). */
+export function effectiveBusyEventsFor(workspaceId: string, events: CalendarEvent[]) {
+  const entities = readSnapshot().entities;
+  const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
+  return effectiveBusyEvents(events, readDecisions(workspace), entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+}
+
 export function calendarAvailability(
   workspaceId: string,
   localDate: string,
@@ -472,7 +480,7 @@ export function calendarAvailability(
   const to = zonedDateTimeToMs(localDate, workdayEnd, timezone);
   if (!sources.length || to <= from) return { configured: false, fresh: false, freeHours: 0, busyHours: 0, windows: [] as Array<{ start: string; end: string; hours: number }> };
   const fresh = sources.every((source) => source.status === "ready");
-  const events = listCalendarEvents(workspaceId, from, to).filter((event) => event.busy);
+  const events = effectiveBusyEventsFor(workspaceId, listCalendarEvents(workspaceId, from, to));
   const merged = events.map((event) => [Math.max(from, Date.parse(event.start)), Math.min(to, Date.parse(event.end))] as [number, number])
     .filter((interval) => interval[1] > interval[0]).sort((a, b) => a[0] - b[0])
     .reduce<Array<[number, number]>>((result, interval) => {

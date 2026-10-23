@@ -62,31 +62,30 @@ test("hide: a single event hides at once with Undo, a recurring one asks, hidden
     const hide = page.getByRole("button", { name: `Skrýt událost: ${single.title}` });
     await expect(hide).toHaveAttribute("data-event-hide", single.id);
     await hide.click();
-    await expect(card(page, single.title)).toHaveCount(0);
-    await expect(page.locator("[data-hidden-events]")).toContainText("Skryté události: 1");
+    const hiddenCards = (title: string) => page.locator('[data-event-state="hidden"]', { hasText: title });
+    await expect(hiddenCards(single.title)).toHaveCount(1);
+    await expect(hiddenCards(single.title)).toContainText("Skryto");
+    await expect(hiddenCards(single.title).locator("[data-event-answer]")).toHaveCount(0);
     await expectOnServer(page, (entity) => Boolean((entity.properties?.calendarDecisions as Record<string, string> | undefined)?.[`occ:e2e-src:${single.uid}:${single.start}`]), true);
     expect(JSON.stringify(await decisionsOnServer(page))).not.toContain("Jednorázová");
 
     // Undo puts it back.
     await page.locator(".undo").getByRole("button", { name: "Zpět" }).click();
     await expect(card(page, single.title)).toBeVisible();
-    await expect(page.locator("[data-hidden-events]")).toHaveCount(0);
+    await expect(hiddenCards(single.title)).toHaveCount(0);
 
     // A recurring event asks: only this one, or every repeat.
     await page.getByRole("button", { name: `Skrýt událost: ${first.title}` }).first().click();
     await page.getByRole("menuitem", { name: "Jen tuto" }).click();
-    await expect(card(page, first.title)).toHaveCount(1);
-    await expect(page.locator("[data-hidden-events]")).toContainText("Skryté události: 1");
+    await expect(hiddenCards(first.title)).toHaveCount(1);
     await page.getByRole("button", { name: `Skrýt událost: ${first.title}` }).first().click();
     await page.getByRole("menuitem", { name: "Všechna opakování" }).click();
-    await expect(card(page, first.title)).toHaveCount(0);
-    await expect(page.locator("[data-hidden-events]")).toContainText("Skryté události: 2");
+    await expect(hiddenCards(first.title)).toHaveCount(2);
     await expectOnServer(page, (entity) => Boolean((entity.properties?.calendarDecisions as Record<string, string> | undefined)?.[`series:e2e-src:${first.uid}`]), true);
 
-    // The footer shows them again and un-hides one.
-    await page.locator("[data-hidden-events]").getByRole("button", { name: "Zobrazit" }).click();
-    await page.getByRole("button", { name: `Zobrazit znovu událost: ${first.title}` }).first().click();
-    await expect(card(page, first.title).first()).toBeVisible();
+    // The faded item un-hides itself (the whole series was hidden, so both repeats come back).
+    await page.getByRole("button", { name: `Zobrazit událost: ${first.title}` }).first().click();
+    await expect(hiddenCards(first.title)).toHaveCount(0);
   } finally {
     await clearDecisions(page);
   }
@@ -109,7 +108,10 @@ test("Je to úkol?: Ne stops asking, Ano makes a task with the event's length an
 
     await expect(card(page, asked.title).getByText("Je to úkol?")).toBeVisible();
     await card(page, asked.title).getByRole("button", { name: `Vytvořit úkol z události ${asked.title}` }).click();
+    await expect(card(page, asked.title)).toHaveCount(1);
+    await expect(card(page, asked.title)).toHaveAttribute("data-event-state", "task");
     await expect(card(page, asked.title).locator(".calendarEventTask")).toContainText(`Úkol: ${asked.title}`);
+    await expect(card(page, asked.title).locator("[data-event-complete]")).toBeVisible();
     await expect(card(page, asked.title).locator("[data-event-answer]")).toHaveCount(0);
     await expectOnServer(page, (entity) => entity.title === asked.title && entity.properties?.calendarEventId === asked.id, true);
     const task = (await serverEntities(page)).find((entity) => entity.title === asked.title && entity.properties?.calendarEventId === asked.id)!;
@@ -121,6 +123,7 @@ test("Je to úkol?: Ne stops asking, Ano makes a task with the event's length an
     await page.reload();
     await waitUntilSynced(page);
     await expect(card(page, asked.title).locator(".calendarEventTask")).toBeVisible();
+    await expect(card(page, asked.title)).toHaveCount(1);
     await expect(card(page, refused.title).locator("[data-event-answer]")).toHaveCount(0);
 
     // Undo of a creation removes the task again (here: a second event, then Undo).

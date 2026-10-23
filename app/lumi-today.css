@@ -491,9 +491,10 @@
 .calendarEventError { margin: 0; color: var(--danger, #a64220); font-size: 13px; }
 .calendarEventHideMenu { display: grid; gap: 4px; min-width: 160px; }
 .calendarEventHideMenu button { text-align: left; }
-.calendarHidden { margin-top: 12px; }
-.calendarAgendaItem.hiddenEvent { opacity: .8; }
+.calendarAgendaItem.taskEvent { border-left: 4px solid var(--success, #2f7d4f); }
+.calendarAgendaItem.taskEvent.isDone strong { text-decoration: line-through; opacity: .7; }
+.calendarAgendaItem.hiddenEvent { opacity: .5; border-style: dashed; }
 .calendarAgendaItem.hiddenEvent .calendarAgendaOpen { cursor: default; }
 @media (pointer: coarse) {
-  .calendarEventActions button:not(.textAction), .calendarEventHideMenu button, .calendarHidden .textAction { min-height: 44px; min-width: 44px; padding: 8px 14px; }
+  .calendarEventActions button:not(.textAction), .calendarEventHideMenu button { min-height: 44px; min-width: 44px; padding: 8px 14px; }
 }
