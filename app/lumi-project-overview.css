@@ -211,3 +211,13 @@
   .projectTitleInput { font-size: 22px; }
   .projectProgressBar { width: 72px; }
 }
+
+/* Contrast: global label/list rules would otherwise lighten these texts below 4.5:1. */
+.projectPage .projectSection .projectEmpty,
+.projectPage .projectDetailsField small { color: var(--muted); }
+.projectPage .projectContext .projectGoalAdd { color: var(--on-accent-soft); }
+
+/* Grid tracks must be allowed to shrink, or a long unwrapped title widens the page past a 390px phone. */
+.projectPage, .projectHeader, .projectSection, .projectDetailsBody, .projectContext, .projectContextFields { grid-template-columns: minmax(0, 1fr); }
+.projectGroups, .projectGroup { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.appShell .taskRowList .taskRow > .entityIcon { flex: none; }
