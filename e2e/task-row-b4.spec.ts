@@ -12,8 +12,11 @@ test("working lists show one right-side value and no repeated view subtitles", a
 
   await page.goto("/?view=Projects");
   await expect(page.locator(".taskRow[data-entity-type='project']").first()).toHaveAttribute("data-entity-type", "project");
-  await expect(page.locator(".taskRow[data-entity-type='project'] .taskRowMeta").first()).toContainText(/\d+ úkol/);
-  await expect(page.locator(".taskRow[data-entity-type='project'] small")).toHaveCount(0);
+  // B1 (owner decision 2026-10-22): a project row says why it matters (or asks for it), shows its progress at the right and
+  // at most one attention label; the right-side value is still a single one.
+  await expect(page.locator(".taskRow[data-entity-type='project'] .taskRowMeta").first()).toContainText(/(\d+\/\d+ kroků|Zatím bez kroků)/);
+  await expect(page.locator(".taskRow[data-entity-type='project'] [data-project-why]").first()).toBeVisible();
+  expect(await page.locator(".taskRow[data-entity-type='project']").first().locator("[data-project-attention]").count()).toBeLessThanOrEqual(1);
 
   await page.goto("/?view=Notes");
   const title = `B4 note ${Date.now()}`;
