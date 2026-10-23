@@ -225,7 +225,14 @@ test("REPORT data becomes events identical in shape to an ICS feed: recurrence, 
   assert.equal(privateEvent.title, "Soukromá událost");
   assert.equal(privateEvent.private, true);
   assert.ok(!JSON.stringify(fromCalDav).includes("Lékař"));
-  assert.deepEqual(Object.keys(fromCalDav[0]).sort(), ["allDay", "busy", "end", "id", "occurrenceKey", "private", "sourceId", "start", "status", "timezone", "title", "transparency", "uid", "workspaceId"]);
+  assert.deepEqual(Object.keys(fromCalDav[0]).sort(), ["allDay", "busy", "end", "id", "occurrenceKey", "private", "recurring", "sourceId", "start", "status", "timezone", "title", "transparency", "uid", "workspaceId"]);
+  // Whether an event repeats comes from its definition.
+  assert.ok(fromCalDav.filter((event) => event.uid === "weekly-1").every((event) => event.recurring === true));
+  assert.equal(allDay.recurring, false);
+  // A yearly series has one repeat in the cached window and is still recurring.
+  const yearly = await calendar.parseCalendar("s", "personal", vcalendar(vevent("yearly-1", [`DTSTART:${tomorrow}T090000Z`, `DTEND:${tomorrow}T100000Z`, "SUMMARY:Výroční schůzka", "RRULE:FREQ=YEARLY"])));
+  assert.equal(yearly.length, 1);
+  assert.equal(yearly[0].recurring, true);
   // Escaped text and CDATA both arrive as the original iCalendar text.
   const work = await caldav.fetchCalendarObjects(credentials, `${HOME}work/`, range, fake.options);
   assert.equal((await calendar.parseCalendar("s", "personal", work))[0].title, "Klient <A&B>");

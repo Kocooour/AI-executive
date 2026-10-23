@@ -154,6 +154,8 @@ export interface CalendarEvent {
   /** The event's uid and occurrence key; opaque identity of a series and of one repeat. */
   uid?: string;
   occurrenceKey?: string;
+  /** Part of a recurring series, from the calendar's definition; absent in older cached events (unknown). */
+  recurring?: boolean;
   title: string;
   start: string;
   end: string;

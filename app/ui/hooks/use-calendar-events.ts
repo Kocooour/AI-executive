@@ -2,9 +2,10 @@
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   dayFreeMinutes, decisionFor, effectiveBusyEvents, eventTaskDraft, isRecurringEvent, linkedEventTasks, needsTaskQuestion, occurrenceDecisionKey, readDecisions,
-  reprioritizeSuggestion, restoreCalendarDecisions, seriesDecisionKey, withDecision, DECISIONS_PROPERTY, type CalendarDecision, type CalendarDecisions,
+  reprioritizeSuggestion, restoreCalendarDecisions, eventTaskId, isSingleEvent, seriesDecisionKey, withDecision, DECISIONS_PROPERTY, type CalendarDecision, type CalendarDecisions,
 } from "../../../lib/calendar-decisions";
 import { isAdopting } from "../../../lib/adoption";
+import { recordRevived } from "../../../lib/pending-markers";
 import { writeTime } from "../../../lib/clock";
 import { db, type Entity, type Relation } from "../../../lib/db";
 import type { CalendarEvent } from "../types";
@@ -121,7 +122,7 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
   // A single (not recurring) event's decision is kept by its uid, so it survives the event being moved
   // in the source calendar (which changes its occurrence key).
   const decisionKey = (event: CalendarEvent, scope: "occurrence" | "series") =>
-    scope === "series" || !isRecurring(event) ? seriesDecisionKey(event) || occurrenceDecisionKey(event) : occurrenceDecisionKey(event);
+    scope === "series" || isSingleEvent(event) ? seriesDecisionKey(event) || occurrenceDecisionKey(event) : occurrenceDecisionKey(event);
   const hideEvent = (event: CalendarEvent, scope: "occurrence" | "series" = "occurrence") =>
     changeDecisions((current) => withDecision(current, decisionKey(event, scope), "hidden", Date.now()));
   // Removes every decision that hides the event: its own and its whole series'.
@@ -139,11 +140,16 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
     busy.current = true;
     setFailed(false);
     try {
-      const draft = eventTaskDraft(event, calendarTimezone, !isRecurring(event));
+      const draft = eventTaskDraft(event, calendarTimezone);
       if (!draft || !draft.title) return;
+      // The same id on every device: two devices answering "Yes" make one task. A task of that id
+      // deleted before (Undo) is brought back instead of being refused as deleted.
+      const taskId = eventTaskId(event, event.workspaceId);
+      if (await db.entities.get(taskId)) return;
+      recordRevived(localStorage, taskId);
       const id = await create("task", draft.title, {
         ...draft.properties,
-        entityId: crypto.randomUUID(),
+        entityId: taskId,
         workspaceId: event.workspaceId,
         literalTaskTitle: true,
         when: draft.when,

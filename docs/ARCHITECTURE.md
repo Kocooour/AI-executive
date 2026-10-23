@@ -477,8 +477,11 @@ freshness work exactly as for ICS.
 The calendar stays read-only. What the owner decides about an event is stored on the workspace entity (`type: "workspace"`, the
 event's `workspaceId`) under `properties.calendarDecisions`, a map of opaque keys to `"hidden"` or `"notTask"`:
 `occ:<sourceId>:<occurrenceKey>` for one occurrence and `series:<sourceId>:<uid>` for every repeat; titles are never stored.
-A uid longer than 160 characters is replaced in the key by a short stable digest. A single (not recurring) event's decision uses
-the series key, so it survives the event being moved in the source calendar (which changes its id and occurrence key).
+A uid longer than 160 characters is replaced in the key by a short stable digest. Whether an event repeats comes from its
+definition (`recurring`: RRULE, RECURRENCE-ID or overrides, set by the parser), never from how many repeats fall into the cached
+window (a yearly series has one); events cached before the flag existed are treated as possibly recurring. Only a one-off event
+(`recurring === false`) uses the series key for its decision, so it survives the event being moved in the source calendar (which
+changes its id and occurrence key).
 It is written through the normal local-first path (Dexie, then `/api/store`), so it syncs across devices; the field merge
 treats it like `manualOrders` (merged key by key, never reported as a sync conflict, `lib/field-merge.ts`). The client and server
 workspace validators accept it only as a plain object of at most 1,000 `occ:`/`series:` keys (each at most 600 characters) with
@@ -496,8 +499,10 @@ store snapshot; so the day plan, task suggestions, priorities and meeting prep) 
 Calendar view (faded); an event with a task is listed once, as that task, and Today/Home leave it out. “Yes” on “Je to úkol?”
 creates an ordinary task with `properties.calendarEventId` (the event's id), `calendarEventKey`, `calendarSourceId`, `calendarEventUid`,
 `calendarEventSingle` (for an event that was not recurring; such a task is also matched to its event by source and uid when the id
-changed, as long as only one cached event has that uid; `eventTaskLinks`), `when` (the
-event's date in the calendar time zone) and `estimatedMinutes` (the event's length, 5–480); no deadline is set. The one-line
+changed, as long as the calendar defines that event as a one-off and only one cached event has that uid; `eventTaskLinks`), `when` (the
+event's date in the calendar time zone) and `estimatedMinutes` (the event's length, 5–480); no deadline is set. Its id is
+derived from the workspace, source and the event's identity (uid for a one-off event, the occurrence for a repeat; `eventTaskId`),
+so two devices answering "Yes" for the same event create one record that the sync merges by id; a re-created task revives that id. The one-line
 reprioritization suggestion (`reprioritizeSuggestion`) compares the day's known task estimates (the new task included) with the
 free time computed from the effective busy events; it is shown once per view (Home, Today, Calendar), since the event leaves
 Today's and Home's agenda as soon as it is a task. Agents' calendar listings (`lib/pact.ts`, the `calendar.read` tool) leave out hidden

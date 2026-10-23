@@ -23,7 +23,7 @@ async function mockCalendar(page: Page, events: MockEvent[]) {
     if (route.request().method() !== "GET") { await route.continue(); return; }
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       sources: [{ id: "e2e-src", workspaceId: "personal", provider: "ics", accountId: null, label: "E2E", status: "ready", configured: true, lastSyncAt: now, lastSuccessAt: now, lastError: "", eventCount: events.length, revision: 1 }],
-      events: events.map((event) => ({ ...event, sourceId: "e2e-src", workspaceId: "personal", occurrenceKey: `${event.uid}:${event.start}`, allDay: false, timezone: "Europe/Prague", status: "confirmed", transparency: "OPAQUE", busy: true, private: false })),
+      events: events.map((event) => ({ recurring: events.some((other) => other !== event && other.uid === event.uid), ...event, sourceId: "e2e-src", workspaceId: "personal", occurrenceKey: `${event.uid}:${event.start}`, allDay: false, timezone: "Europe/Prague", status: "confirmed", transparency: "OPAQUE", busy: true, private: false })),
     }) });
   });
 }

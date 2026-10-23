@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  KEEP_DECISION_DAYS, MAX_DECISIONS, restoreCalendarDecisions, validDecisionsValue, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
+  KEEP_DECISION_DAYS, MAX_DECISIONS, restoreCalendarDecisions, validDecisionsValue, isSingleEvent, eventTaskId, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
   needsTaskQuestion, occurrenceDecisionKey, pruneDecisions, readDecisions, reprioritizeSuggestion, seriesDecisionKey, withDecision,
 } from "../lib/calendar-decisions.ts";
 import { mergeEntity } from "../lib/field-merge.ts";
@@ -89,7 +89,9 @@ test("the task draft takes the title, local date, rounded length and a link back
   assert.equal(draft.title, "Secret title");
   assert.equal(draft.when, "2026-10-24", "22:30Z is already the next day in Prague");
   assert.deepEqual(draft.properties, { calendarEventId: "e1", calendarSourceId: "src", calendarEventKey: "u1:k", calendarEventUid: "u1", estimatedMinutes: 50 });
-  assert.equal(eventTaskDraft(event(), "UTC", true).properties.calendarEventSingle, true);
+  assert.equal(eventTaskDraft(event({ recurring: false }), "UTC").properties.calendarEventSingle, true);
+  assert.equal(eventTaskDraft(event({ recurring: true }), "UTC").properties.calendarEventSingle, undefined);
+  assert.equal(eventTaskDraft(event(), "UTC").properties.calendarEventSingle, undefined, "unknown is not single");
   assert.equal(eventTaskDraft(event(), "America/New_York").when, "2026-10-23");
 });
 
@@ -185,7 +187,7 @@ test("free minutes grow when hidden or converted events stop being busy", () => 
 });
 
 test("a single event moved in the source calendar keeps its task; a recurring occurrence does not borrow another's", () => {
-  const moved = event({ id: "new-id", uid: "one", occurrenceKey: "one:2026-10-24T10:00:00.000Z" });
+  const moved = event({ id: "new-id", uid: "one", occurrenceKey: "one:2026-10-24T10:00:00.000Z", recurring: false });
   const single = task("t1", { calendarEventId: "old-id", calendarSourceId: "src", calendarEventUid: "one", calendarEventSingle: true });
   assert.deepEqual([...convertedEventIds([single], [moved])], ["new-id"]);
   // Legacy task without the uid: read from the occurrence key.
@@ -195,7 +197,7 @@ test("a single event moved in the source calendar keeps its task; a recurring oc
   const fromSeries = task("t3", { calendarEventId: "mon", calendarSourceId: "src", calendarEventUid: "ser" });
   assert.deepEqual([...convertedEventIds([fromSeries], [event({ id: "tue", uid: "ser", occurrenceKey: "ser:2026-10-27T09:00:00.000Z" })])], []);
   // Two cached events with the uid: only the id matches.
-  const twin = [event({ id: "a", uid: "one" }), event({ id: "b", uid: "one" })];
+  const twin = [event({ id: "a", uid: "one", recurring: false }), event({ id: "b", uid: "one", recurring: false })];
   assert.deepEqual([...convertedEventIds([single], twin)], []);
 });
 
@@ -229,4 +231,54 @@ test("Undo puts back only the decisions it changed and keeps the rest of the rec
   assert.deepEqual(properties.calendarDecisions, { "occ:s:other-device": "hidden" });
   assert.deepEqual(properties.manualOrders, { a: 1 });
   assert.equal("calendarDecisions" in restoreCalendarDecisions({ properties: { calendarDecisions: { "occ:s:mine": "hidden" } } }, { "occ:s:mine": null }, 0), false);
+});
+
+test("a yearly or monthly series with one repeat in the cached window is still a series", () => {
+  // The cache holds -14/+90 days: a yearly meeting has exactly one occurrence there.
+  const yearly = event({ id: "y2026", uid: "yearly", occurrenceKey: "yearly:2026-11-02T09:00:00.000Z", recurring: true });
+  assert.equal(isRecurringEvent(yearly, [yearly]), true, "the menu offers this one / the whole series");
+  assert.equal(isSingleEvent(yearly), false);
+  // A task made from this year's meeting never stands in for next year's.
+  const draft = eventTaskDraft(yearly, "UTC");
+  assert.equal(draft.properties.calendarEventSingle, undefined);
+  const made = task("t", draft.properties);
+  const nextYear = event({ id: "y2027", uid: "yearly", occurrenceKey: "yearly:2027-11-02T09:00:00.000Z", recurring: true });
+  assert.deepEqual([...convertedEventIds([made], [nextYear])], []);
+  assert.deepEqual(effectiveBusyEvents([nextYear], {}, [made]).map((e) => e.id), ["y2027"]);
+  // Even a task marked single is not matched by uid to an event the calendar says repeats.
+  const marked = task("m", { calendarEventId: "y2026", calendarSourceId: "src", calendarEventUid: "yearly", calendarEventSingle: true });
+  assert.deepEqual([...convertedEventIds([marked], [nextYear])], []);
+  // Cached before the flag existed (unknown): neither single nor matched by uid.
+  const unknown = event({ id: "u", uid: "yearly" });
+  assert.equal(isSingleEvent(unknown), false);
+  assert.deepEqual([...convertedEventIds([marked], [unknown])], []);
+});
+
+test("the task made from an event has the same id on every device", () => {
+  const repeat = event({ recurring: true });
+  assert.equal(eventTaskId(repeat, "w"), eventTaskId({ ...repeat }, "w"));
+  assert.notEqual(eventTaskId(repeat, "w"), eventTaskId(event({ recurring: true, occurrenceKey: "u1:2026-10-30T09:00:00.000Z" }), "w"), "each repeat its own task");
+  assert.notEqual(eventTaskId(repeat, "w"), eventTaskId(repeat, "other"));
+  // A one-off event keeps its task id when moved (its occurrence key changes, its uid does not).
+  const one = event({ recurring: false });
+  assert.equal(eventTaskId(one, "w"), eventTaskId(event({ recurring: false, id: "moved", occurrenceKey: "u1:2026-10-24T09:00:00.000Z" }), "w"));
+  assert.match(eventTaskId(one, "w"), /^calendar-task:[0-9a-f]{16}$/);
+});
+
+test("two devices answering Yes for the same event end up with one task after sync", async () => {
+  const { mergeSnapshots } = await import("../lib/server-sync.ts");
+  const meeting = event({ recurring: true, title: "Porada" });
+  const make = (updatedAt) => {
+    const draft = eventTaskDraft(meeting, "Europe/Prague");
+    return { id: eventTaskId(meeting, "w"), type: "task", title: draft.title, status: "open", workspaceId: "w",
+      properties: { ...draft.properties, when: draft.when }, createdAt: updatedAt, updatedAt };
+  };
+  const fromA = make(1000), fromB = make(1005);
+  // Device A synced first; device B, which had not seen it, merges its own copy onto the server's.
+  const server = { revision: 2, entities: [fromA], relations: [], tombstones: [] };
+  const merged = mergeSnapshots(server, [fromB], [], { entities: [], relations: [] });
+  const tasks = merged.entities.filter((entity) => entity.type === "task");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].id, fromA.id);
+  assert.equal(linkedEventTasks(merged.entities, "w", [meeting]).get(meeting.id).id, fromA.id);
 });

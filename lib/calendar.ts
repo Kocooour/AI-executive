@@ -27,6 +27,8 @@ export interface CalendarEvent {
   transparency: string;
   busy: boolean;
   private: boolean;
+  /** Whether the event belongs to a recurring series (RRULE, overrides or RECURRENCE-ID); absent in payloads cached before 2026-10. */
+  recurring?: boolean;
 }
 
 export interface CalendarSourceState {
@@ -128,7 +130,7 @@ function scalar(value: unknown) {
   return String(value || "");
 }
 
-function normalizeInstance(sourceId: string, workspaceId: string, uid: string, instance: EventInstance): CalendarEvent | null {
+function normalizeInstance(sourceId: string, workspaceId: string, uid: string, instance: EventInstance, recurring: boolean): CalendarEvent | null {
   if (!(instance.start instanceof Date) || Number.isNaN(instance.start.getTime())) return null;
   const event = instance.event as VEvent & Record<string, unknown>;
   const start = instance.start;
@@ -150,6 +152,7 @@ function normalizeInstance(sourceId: string, workspaceId: string, uid: string, i
     timezone, status, transparency,
     busy: transparency !== "TRANSPARENT" && status !== "CANCELLED",
     private: classification === "PRIVATE" || classification === "CONFIDENTIAL",
+    recurring,
   };
 }
 
@@ -187,9 +190,11 @@ export async function parseCalendar(sourceId: string, workspaceId: string, input
     }
     const uid = scalar(component.uid);
     if (!uid) continue;
+    // From the definition, not from how many repeats fall into the cached window (a yearly series has one).
+    const recurring = Boolean(component.rrule || component.recurrenceid || Object.keys(component.recurrences || {}).length);
     const instances = ical.expandRecurringEvent(component, { from, to, includeOverrides: true, excludeExdates: true, expandOngoing: true });
     for (const instance of instances) {
-      const event = normalizeInstance(sourceId, workspaceId, uid, instance);
+      const event = normalizeInstance(sourceId, workspaceId, uid, instance, recurring);
       if (event) events.push(event);
       if (events.length > MAX_EVENTS) throw new Error("Calendar contains too many occurrences");
     }

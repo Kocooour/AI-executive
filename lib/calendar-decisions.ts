@@ -24,6 +24,8 @@ export interface DecisionEvent {
   end: string;
   allDay: boolean;
   status?: string;
+  /** From the calendar's definition (RRULE etc.); `undefined` means unknown and is treated as possibly recurring. */
+  recurring?: boolean;
 }
 
 export const DECISIONS_PROPERTY = "calendarDecisions";
@@ -41,14 +43,18 @@ const LONG_PART = 160;
 
 // A calendar uid has no length limit: a long one is replaced by a short stable digest (FNV-1a, two
 // seeds), so the map stays small. The start time an occurrence key ends with is kept for pruning.
-function shortPart(value: string) {
-  if (value.length <= LONG_PART) return value;
+/** A short stable digest of a string (two FNV-1a hashes, 64 bits as hex). */
+export function stableDigest(value: string) {
   const fnv = (seed: number) => {
     let hash = seed;
     for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619) >>> 0;
     return hash.toString(16).padStart(8, "0");
   };
-  return `#${fnv(2166136261)}${fnv(0x9747b28c)}`;
+  return `${fnv(2166136261)}${fnv(0x9747b28c)}`;
+}
+function shortPart(value: string) {
+  if (value.length <= LONG_PART) return value;
+  return `#${stableDigest(value)}`;
 }
 function shortOccurrence(key: string) {
   const match = /^(.*)(:\d{4}-\d{2}-\d{2}T[0-9:.]+Z)$/.exec(key);
@@ -151,7 +157,8 @@ function taskEventUid(task: Entity) {
 /**
  * The task each event became. A task points to its event by id; the id changes when the event is
  * moved in the source calendar, so an event that was single (not recurring) when the task was made
- * (`calendarEventSingle`) is also found by its source and uid.
+ * (`calendarEventSingle`) is also found by its source and uid, but only by an event the calendar defines
+ * as a one-off (`recurring === false`): a yearly series has one repeat in the cached window too.
  * `tasks` may hold anything, only tasks count; an open task is preferred when an event has several.
  */
 export function eventTaskLinks(events: DecisionEvent[], tasks: Entity[]): Map<string, Entity> {
@@ -170,7 +177,7 @@ export function eventTaskLinks(events: DecisionEvent[], tasks: Entity[]): Map<st
   const result = new Map<string, Entity>();
   for (const event of events) {
     const uidKey = event.uid ? `${event.sourceId}\0${event.uid}` : "";
-    const task = byId.get(event.id) ?? (uidKey && uidCounts.get(uidKey) === 1 ? byUid.get(uidKey) : undefined);
+    const task = byId.get(event.id) ?? (uidKey && event.recurring === false && uidCounts.get(uidKey) === 1 ? byUid.get(uidKey) : undefined);
     if (task) result.set(event.id, task);
   }
   return result;
@@ -195,9 +202,26 @@ export function effectiveBusyEvents<E extends DecisionEvent & { busy: boolean }>
   return events.filter((event) => event.busy && !isHiddenEvent(decisions, event) && !converted.has(event.id));
 }
 
-/** Another cached event belongs to the same series (same source and uid). */
+/**
+ * Whether to offer "this occurrence / the whole series": the calendar says the event repeats, or (for an
+ * event cached before that was known) another cached event has the same source and uid.
+ */
 export const isRecurringEvent = (event: DecisionEvent, events: DecisionEvent[]) =>
-  Boolean(event.uid) && events.some((other) => other.id !== event.id && other.sourceId === event.sourceId && other.uid === event.uid);
+  event.recurring === true || (event.recurring === undefined && Boolean(event.uid)
+    && events.some((other) => other.id !== event.id && other.sourceId === event.sourceId && other.uid === event.uid));
+
+/** Known to be a one-off event (the calendar defines no repeats). Only such an event is identified by its uid alone. */
+export const isSingleEvent = (event: Pick<DecisionEvent, "recurring" | "uid">) => event.recurring === false && Boolean(event.uid);
+
+/**
+ * The id of the task made from an event: the same on every device, so two devices answering "Yes" for
+ * the same event make one task (the sync merges records by id). A one-off event is identified by its
+ * source and uid (stable when it is moved), a repeat by its occurrence.
+ */
+export function eventTaskId(event: DecisionEvent, workspaceId: string) {
+  const identity = isSingleEvent(event) ? `uid\0${event.uid}` : `occ\0${event.occurrenceKey || event.id}`;
+  return `calendar-task:${stableDigest(`${workspaceId}\0${event.sourceId}\0${identity}`)}`;
+}
 
 /** The task each event of a workspace became (see `eventTaskLinks`). */
 export function linkedEventTasks(entities: Entity[], workspaceId: string, events: DecisionEvent[]): Map<string, Entity> {
@@ -235,7 +259,8 @@ export interface EventTaskDraft {
 }
 
 /** The task made from an event: its title and day, its length as the estimate, and a link back. */
-export function eventTaskDraft(event: DecisionEvent, timezone: string, single = false): EventTaskDraft | null {
+export function eventTaskDraft(event: DecisionEvent, timezone: string): EventTaskDraft | null {
+  const single = isSingleEvent(event);
   const start = Date.parse(event.start), end = Date.parse(event.end);
   if (!Number.isFinite(start)) return null;
   // An all-day event (VALUE=DATE) starts at midnight of the server's zone, given in UTC: half a day
