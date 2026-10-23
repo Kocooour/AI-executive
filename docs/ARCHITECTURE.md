@@ -485,6 +485,10 @@ workspace validators accept it only as a plain object of at most 1,000 `occ:`/`s
 `"hidden"`/`"notTask"` values (`validDecisionsValue`). Undo of a decision puts back only the keys that write changed, on the record as
 it is then, so a decision or rename made meanwhile on another device stays. A write prunes occurrences that started more than 30 days ago and keeps
 at most 500 keys (`lib/calendar-decisions.ts`); the local placeholder of the personal workspace (timestamp 0) is never written.
+Decisions belong to the owner's own view (owner decision 2026-10-23): "not a task" and "hidden" describe how one person treats an
+event, not a fact about the shared calendar. Today every workspace, shared ones included, has a single account (invitations stay
+disabled), so storing them on the workspace entity affects only the owner. Before additional accounts are enabled, decisions must
+move to per-member storage (or be keyed by member) so one member's decision never changes another member's agenda or busy time.
 Busy time has one definition, `effectiveBusyEvents(events, decisions, tasks)` in `lib/calendar-decisions.ts`: a busy event that is
 not hidden and has no task pointing to it. The client (`mergedBusy`, free hours and windows, Calendar conflicts) and the server
 (`calendarAvailability` through `effectiveBusyEventsFor` in `lib/calendar.ts`, which reads the workspace entity and tasks from the
