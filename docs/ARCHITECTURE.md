@@ -192,7 +192,7 @@ Before connecting an external client in production, deploy the new code, set `AI
 | Projekt | Jedna explicitní Oblast | Veškerý současný obsah podle členství cílové Oblasti; dřívější soukromá historie zůstane soukromá |
 | Úkol v projektu | Projektová Oblast odvozená z projektu | Nesmí mít vlastní odlišnou oblast/ACL; společná pole vidí oprávnění členové |
 | Samostatný úkol | Jedna vlastní Oblast, default soukromé Nezařazeno | Viditelný jen v cílové Oblasti, přiřazení jen aktuálním členům |
-| Poznámka a její revize | Projektová Oblast, je-li přidružena jako projektový obsah; jinak vlastní Oblast | Staré revize před zveřejněním nejsou zpřístupněny novým členům |
+| Poznámka a její revize | Jedna vlastní Oblast, případně Oblast projektu, jestliže je poznámka jeho přímou součástí; pouhý odkaz na více projektů Oblast ani oprávnění nemění | Staré revize před zveřejněním nejsou zpřístupněny novým členům |
 | Context subject, claim, relation, review | Explicitní Oblast/security workspace vlastního kanonického objektu | Zdroj/evidence se čte jen při samostatném oprávnění; žádné relace přes interní workspace |
 | Evidence a zdroj, `mailSource`, import | Výchozí soukromý účet/Oblast aktéra a původní citlivost | Zkopírování konkrétního úryvku do sdíleného obsahuje schválenou explicitní publikaci; link nevytváří přístup |
 | Kalendářové události a osobní bloky | Vlastník připojeného účtu; osobní plánovací stav uživatele | Soukromá kapacita a detail kalendáře se nezveřejní přes sdílené úkoly |
@@ -210,7 +210,7 @@ Stav ochrany zdrojových dat může být **přísnější** než viditelnost Obl
 |---|---|
 | Název, popis, dokončení, deadline, prioritizace týmu, řešitel, checklist a společné poznámky | `today`, plánovaný den / `when`, přijatý časový blok, odhad osobní kapacity, plánovací feedback, snooze/dismiss, vlastní připomínky a nastavení oznámení |
 
-Změna osobního `when` jednoho uživatele nemění společný deadline ani osobní `when` jiného člena. Rovněž `attention_states` a `push_subscriptions` musí mít user binding; dosavadní workspace-only index není dostatečný. Komentáře/kontekst, které mohou být soukromé, se nikdy nevydají jako sdílený obsah bez explicitního záměru.
+Změna osobního `when` jednoho uživatele nemění společný deadline ani osobní `when` jiného člena. Rovněž `attention_states` a `push_subscriptions` musí mít user binding; dosavadní workspace-only index není dostatečný. Komentáře/kontext, které mohou být soukromé, se nikdy nevydají jako sdílený obsah bez explicitního záměru.
 
 ### Synchronizace, revokace, historie a souběh
 
