@@ -85,16 +85,18 @@ export function firstSentence(text: string, max = 160) {
 
 // Migration of one stored project payload: `properties.goal` becomes `context.doneWhen`. `goal` stays. Returns the new
 // payload, or null when there is nothing to do (not a project, already has a context, no goal text). A goal longer than the
-// "Hotovo, když" limit is cut for the context only; the complete text stays in `goal`.
+// "Hotovo, když" limit is left alone (no context): nothing is truncated.
 export function migrateProjectGoal(entity: Entity): Entity | null {
   if (!entity || entity.type !== "project" || !isObject(entity.properties)) return null;
   if (entity.properties.context !== undefined) return null;
   const goal = typeof entity.properties.goal === "string" ? entity.properties.goal.trim() : "";
   if (!goal) return null;
+  // Nothing is ever cut: a goal over the limit stays as it is, without a context, and is read in full as "Hotovo, když".
+  if (goal.length > contextLimits.doneWhen) return null;
   const context: ProjectContext = {
     why: "",
     goals: [],
-    doneWhen: goal.slice(0, contextLimits.doneWhen),
+    doneWhen: goal,
     provenance: "owner",
     updatedAt: Number.isFinite(entity.updatedAt) ? entity.updatedAt : 0,
   };

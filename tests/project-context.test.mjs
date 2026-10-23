@@ -75,11 +75,10 @@ test("migration of one project keeps goal, copies it to doneWhen and leaves othe
   assert.equal(ctx.migrateProjectGoal(project({ goal: "   " })), null);
   assert.equal(ctx.migrateProjectGoal(project({})), null);
   assert.equal(ctx.migrateProjectGoal({ ...project({ goal: "x" }), type: "task" }), null);
-  // A goal longer than the limit is cut in the context only; the full text stays in goal.
-  const long = ctx.migrateProjectGoal(project({ goal: "g".repeat(500) }));
-  assert.equal(long.properties.context.doneWhen.length, 300);
-  assert.equal(long.properties.goal.length, 500);
-  assert.ok(ctx.validProjectContext(long.properties.context));
+  // A goal over the limit is never truncated: no context is made and the fallback read shows it in full.
+  const long = project({ goal: "g".repeat(500) });
+  assert.equal(ctx.migrateProjectGoal(long), null);
+  assert.equal(ctx.readProjectContext(long.properties).doneWhen, "g".repeat(500));
 });
 
 test("the named migration moves goals in the database, bumps the revision once and runs once", () => {

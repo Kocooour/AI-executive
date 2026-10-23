@@ -25,7 +25,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const storedKey = JSON.stringify(storedDraft);
   const readOnly = app.activeWorkspaceId === "all";
   const [draft, setDraft] = useState<Draft>(storedDraft);
-  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong">("idle");
   const container = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
   const draftRef = useRef<Draft>(storedDraft);
@@ -65,6 +65,8 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const version = editVersion.current;
     const snapshot = draftRef.current;
     if (sameText(snapshot, savedRef.current)) { dirty.current = false; return; }
+    // An over-long text (an old goal read as "Hotovo, když") is never cut: the save waits until the owner shortens it.
+    if (normalized(snapshot).doneWhen.length > contextLimits.doneWhen || normalized(snapshot).why.length > contextLimits.why) { setState("tooLong"); return; }
     pendingSaves.current += 1;
     setState("saving");
     // Saves of this field run one after another. A revision superseded while it waited is skipped; an in-flight save
@@ -175,6 +177,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         {approvedDate && <small className="projectContextProvenance">{t.approved(approvedDate)}</small>}
         {state === "saving" && <small role="status" className="projectContextState">{t.saving}</small>}
         {state === "saved" && <small role="status" className="projectContextState saved">{t.saved}</small>}
+        {state === "tooLong" && <small role="alert" className="projectContextState error">{t.tooLong(contextLimits.doneWhen)}</small>}
         {state === "error" && <small role="alert" className="projectContextState error">{t.saveError}</small>}
       </div>
     </section>

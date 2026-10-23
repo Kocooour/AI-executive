@@ -230,6 +230,31 @@ test("an old project's goal is shown as 'Hotovo, když' and nothing is lost when
   }
 });
 
+test("an old goal over 300 characters is shown in full and not saved until shortened", async ({ page }) => {
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const stamp = now();
+  const long = "Dlouhý cíl ".repeat(50);
+  const id = `e2e-b1-longgoal-${stamp}`;
+  expect(await seed(page, { entities: [entity(id, "project", "Projekt B1 dlouhý cíl", { goal: long })] })).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: "Projekt B1 dlouhý cíl" }).getByRole("button", { name: "Projekt B1 dlouhý cíl", exact: true }).click();
+    const done = page.locator(".projectContext").getByRole("textbox", { name: "Hotovo, když" });
+    await expect(done).toHaveValue(long);
+    await page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" }).fill("Důvod");
+    await page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" }).press("Tab");
+    await expect(page.getByText("Zkraťte na 300 znaků")).toBeVisible();
+    await expectOnServer(page, (row) => row.id === id && row.properties?.goal === long && row.properties?.context === undefined, true);
+    await done.fill("Krátký cíl");
+    await done.press("Tab");
+    await expectOnServer(page, (row) => row.id === id && (row.properties?.context as { doneWhen?: string } | undefined)?.doneWhen === "Krátký cíl" && row.properties?.goal === "Krátký cíl", true);
+  } finally {
+    await cleanup(page, [id]);
+  }
+});
+
 test("the server refuses a context over its limits", async ({ page }) => {
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
