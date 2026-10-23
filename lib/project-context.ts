@@ -101,6 +101,20 @@ export function contextPatch(context: ProjectContext) {
   return { context, goal: context.doneWhen };
 }
 
+// Compare with the snapshot the editor started from inside the caller's IndexedDB write transaction.
+// A server pull or another tab may change context after a field receives focus; refusing this patch
+// preserves the incoming version until the owner explicitly resolves the conflict.
+export function contextPatchIfUnchanged(
+  currentProperties: Record<string, unknown>, expected: ProjectContext, proposed: ProjectContext,
+): ReturnType<typeof contextPatch> | null {
+  const current = readProjectContext(currentProperties);
+  const same = current.why === expected.why && current.doneWhen === expected.doneWhen
+    && current.provenance === expected.provenance && current.updatedAt === expected.updatedAt
+    && current.proposalId === expected.proposalId && current.goals.length === expected.goals.length
+    && current.goals.every((goal, index) => goal === expected.goals[index]);
+  return same ? contextPatch(proposed) : null;
+}
+
 // The first sentence of a text, for the project list. A sentence ends with . ! or ? followed by a space or the end.
 export function firstSentence(text: string, max = 160) {
   const flat = text.replace(/\s+/g, " ").trim();

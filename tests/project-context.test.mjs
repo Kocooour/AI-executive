@@ -34,6 +34,21 @@ test("limits: why 600, five goals of 200, doneWhen 300; provenance and updatedAt
   assert.ok(!ctx.validProjectContext("text") && !ctx.validProjectContext(null) && !ctx.validProjectContext([]));
 });
 
+test("a stale editing base never overwrites another device's context without an explicit choice", () => {
+  const initial = context({ why: "A started with this", doneWhen: "Old finish" });
+  const editBase = ctx.readProjectContext({ context: initial });
+  const myDraft = ctx.ownerProjectContext({ why: "A has typed new why", goals: ["a"], doneWhen: "Old finish" }, 30);
+  const remote = context({ why: "B saved something else", doneWhen: "B new finish", updatedAt: 20 });
+  const live = { context: remote, goal: remote.doneWhen };
+  // A's field was focused when B synced. The guard runs at write time, in the current DB transaction.
+  assert.equal(ctx.contextPatchIfUnchanged(live, editBase, myDraft), null);
+  assert.deepEqual(ctx.readProjectContext(live), remote, "B must remain fully available after A's rejected blur");
+  // An explicit resolution uses the current B version as its new base.
+  assert.deepEqual(ctx.contextPatchIfUnchanged(live, remote, myDraft), ctx.contextPatch(myDraft));
+  // Even if the text stayed the same but metadata/provenance advanced, that is still a new version.
+  assert.equal(ctx.contextPatchIfUnchanged({ context: { ...initial, updatedAt: 21 } }, editBase, myDraft), null);
+});
+
 test("the client holds back a project with a context the server would refuse", () => {
   assert.equal(isSendable(project({ context: context() })), true);
   assert.equal(isSendable(project({})), true);

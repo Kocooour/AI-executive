@@ -227,3 +227,12 @@
 @media (pointer: coarse) { .projectTitleInput { min-height: 44px; } }
 .projectTitleInput { min-height: 44px; }
 .projectContext textarea { overflow: hidden; resize: none; }
+
+/* A remote edit must remain visible alongside the unsent local text until the owner resolves it. */
+.projectContextConflict { border: 1px solid var(--border, #aaa); border-radius: 8px; padding: 12px; margin-top: 12px; }
+.projectContextConflict p { margin: 0 0 10px; }
+.projectContextConflict dl { margin: 8px 0; }
+.projectContextConflict dt { font-weight: 600; margin-top: 8px; }
+.projectContextConflict dd { margin: 2px 0 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.projectContextConflictActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.projectContextConflictActions button { min-height: 44px; }

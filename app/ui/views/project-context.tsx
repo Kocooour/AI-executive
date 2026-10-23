@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
-import { contextLimits, contextPatch, contextProblem, ownerProjectContext, readProjectContext } from "../../../lib/project-context";
+import { contextLimits, contextPatchIfUnchanged, contextProblem, ownerProjectContext, readProjectContext, type ProjectContext } from "../../../lib/project-context";
+import { db } from "../../../lib/db";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
 
@@ -19,6 +20,8 @@ function GrowingTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
 }
 
 type Draft = { why: string; goals: string[]; doneWhen: string };
+const contextDraft = (context: Pick<ProjectContext, "why" | "goals" | "doneWhen">): Draft =>
+  ({ why: context.why, goals: [...context.goals], doneWhen: context.doneWhen });
 
 const sameText = (a: Draft, b: Draft) => JSON.stringify(normalized(a)) === JSON.stringify(normalized(b));
 const normalized = (draft: Draft) => ({
@@ -33,16 +36,19 @@ const normalized = (draft: Draft) => ({
 export function ProjectContext({ app, project }: { app: LumiApp; project: Entity }) {
   const t = labelsFor(app.language);
   const stored = readProjectContext(project.properties);
-  const storedDraft: Draft = { why: stored.why, goals: stored.goals, doneWhen: stored.doneWhen };
-  const storedKey = JSON.stringify(storedDraft);
+  const storedDraft = contextDraft(stored);
+  const storedKey = JSON.stringify(stored);
   const readOnly = app.activeWorkspaceId === "all";
   const [draft, setDraft] = useState<Draft>(storedDraft);
-  const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong">("idle");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong" | "conflict">("idle");
+  const [conflict, setConflict] = useState<Draft | null>(null);
   const [problem, setProblem] = useState<{ field: string; limit: number } | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
   const draftRef = useRef<Draft>(storedDraft);
   const savedRef = useRef<Draft>(storedDraft);
+  // The full origin (including provenance and revision) must not move while there are unsaved edits.
+  const baseRef = useRef<ProjectContext>(stored);
   const editVersion = useRef(0);
   const dirty = useRef(false);
   const pendingSaves = useRef(0);
@@ -50,12 +56,18 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const focusGoal = useRef<number | null>(null);
   const goalInputs = useRef<Array<HTMLInputElement | null>>([]);
 
-  // A change from elsewhere (sync, another device) replaces the fields only while they are not being edited.
+  // A remote change must never silently replace the baseline of a locally edited draft.
   useEffect(() => {
-    savedRef.current = JSON.parse(storedKey) as Draft;
+    const incoming = JSON.parse(storedKey) as ProjectContext;
     if (!focused.current && !dirty.current) {
-      draftRef.current = JSON.parse(storedKey) as Draft;
+      baseRef.current = incoming;
+      savedRef.current = contextDraft(incoming);
+      draftRef.current = contextDraft(incoming);
       setDraft(draftRef.current);
+      setConflict(null);
+    } else if (!contextPatchIfUnchanged({ context: incoming }, baseRef.current, incoming)) {
+      setConflict(contextDraft(incoming));
+      setState("conflict");
     }
   }, [storedKey]);
   useEffect(() => {
@@ -70,13 +82,15 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     editVersion.current += 1;
     dirty.current = true;
     setDraft(next);
-    setState("idle");
+    if (!conflict) setState("idle");
   }
 
-  async function save() {
+  async function save(confirmedOverwrite = false) {
     if (readOnly || !dirty.current) return;
+    if (conflict && !confirmedOverwrite) { setState("conflict"); return; }
     const version = editVersion.current;
     const snapshot = draftRef.current;
+    const base = baseRef.current;
     if (sameText(snapshot, savedRef.current)) { dirty.current = false; return; }
     // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
     const problem = contextProblem(snapshot);
@@ -86,13 +100,22 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     setState("saving");
     // Saves of this field run one after another. A revision superseded while it waited is skipped; an in-flight save
     // finishes before a newer one starts.
+    let stale = false;
     const run = saveTail.current.then(async () => {
       if (version !== editVersion.current) return;
       const next = ownerProjectContext(snapshot, Date.now());
-      await app.patch(project, contextPatch(next), "project context changed", true);
+      await app.patch(project, (currentProperties) => {
+        // app.patch evaluates this while holding the IndexedDB write transaction.
+        // Compare against the ORIGINAL edit base, not a remote update received while typing.
+        const patch = contextPatchIfUnchanged(currentProperties, base, next);
+        if (!patch) { stale = true; throw new Error("Project context was updated during editing"); }
+        return patch;
+      }, "project context changed", true);
       if (version === editVersion.current) {
         dirty.current = false;
+        baseRef.current = next;
         savedRef.current = normalized(snapshot);
+        setConflict(null);
         if (!focused.current) { draftRef.current = normalized(snapshot); setDraft(draftRef.current); }
       }
     });
@@ -101,12 +124,37 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       await run;
       if (version === editVersion.current && pendingSaves.current === 1) setState("saved");
     } catch {
-      // The unsent text stays dirty; leaving a field again retries it.
-      if (version === editVersion.current) setState("error");
+      if (version === editVersion.current) {
+        if (stale) {
+          // Preserve the unsent draft and present the newest copy side-by-side.
+          const latest = await db.entities.get(project.id).catch(() => undefined);
+          setConflict(contextDraft(readProjectContext(latest?.properties)));
+          setState("conflict");
+        } else setState("error");
+      }
     } finally {
       pendingSaves.current -= 1;
       if (pendingSaves.current === 0) setState((current) => (current === "saving" ? "idle" : current));
     }
+  }
+
+  async function resolveConflict(keepMine: boolean) {
+    const latest = await db.entities.get(project.id).catch(() => undefined);
+    if (!latest) { setState("error"); return; }
+    const remote = readProjectContext(latest.properties);
+    baseRef.current = remote;
+    savedRef.current = contextDraft(remote);
+    setConflict(null);
+    if (!keepMine) {
+      dirty.current = false;
+      draftRef.current = contextDraft(remote);
+      setDraft(draftRef.current);
+      setState("idle");
+      return;
+    }
+    // Explicit owner choice. If another sync arrives meanwhile, the transactional guard reopens the conflict.
+    dirty.current = true;
+    await save(true);
   }
 
   const empty = !draft.why.trim() && !draft.doneWhen.trim() && !draft.goals.some((goal) => goal.trim());
@@ -194,6 +242,19 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         {state === "saved" && <small role="status" className="projectContextState saved">{t.saved}</small>}
         {state === "tooLong" && <small role="alert" className="projectContextState error">{problem?.field === "goals" ? t.tooMany(problem.limit) : t.tooLong(problem?.limit ?? contextLimits.doneWhen)}</small>}
         {state === "error" && <small role="alert" className="projectContextState error">{t.saveError}</small>}
+      </div>
+      {conflict && <div className="projectContextConflict" role="alert" aria-label={t.contextConflict}>
+        <p>{t.contextConflict}</p>
+        <strong>{t.contextRemote}</strong>
+        <dl>
+          <dt>{t.why}</dt><dd>{conflict.why || "—"}</dd>
+          <dt>{t.goals}</dt><dd>{conflict.goals.join("; ") || "—"}</dd>
+          <dt>{t.doneWhen}</dt><dd>{conflict.doneWhen || "—"}</dd>
+        </dl>
+        <div className="projectContextConflictActions">
+          <button type="button" onClick={() => { void resolveConflict(false); }}>{t.contextLoadRemote}</button>
+          <button type="button" onClick={() => { void resolveConflict(true); }}>{t.contextKeepMine}</button>
+        </div>
       </div>
     </section>
   );

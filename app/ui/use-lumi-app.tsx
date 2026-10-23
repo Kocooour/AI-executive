@@ -4,7 +4,7 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -269,6 +269,8 @@ export function useLumiApp() {
   viewRef.current = view;
   const openProjectIdRef = useRef(openProjectId);
   openProjectIdRef.current = openProjectId;
+  // History markers may restore only a project that is still visible in the authorized active scope.
+  const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
@@ -378,20 +380,22 @@ export function useLumiApp() {
     setViewState(next);
     setOpenProjectId(null);
   }
-  // A project is a page of its own (B1, owner decision 2026-10-22), not an inspector over the list. The inspector stays for a
-  // task or note opened from that page. Inside Projects the page gets a history step, so the browser's Back returns to the list.
+  // The project page has its own history entry, preceded by a Projects LIST entry even when
+  // opened from Home/Today sidebar. Its ID stays in history.state, never in URLs.
   function openProjectPage(project: Entity) {
     closeDetail();
-    const alreadyInProjects = viewRef.current === "Projects";
+    try {
+      if (viewRef.current !== "Projects") {
+        const listAddress = `${window.location.pathname}${searchForView("Projects", startupView)}`;
+        window.history.pushState(null, "", listAddress);
+        addressedView.current = "Projects"; // Prevent the view effect from pushing a second list entry.
+      }
+      const marker = { lumiProject: project.id };
+      if (window.history.state?.lumiProject) window.history.replaceState(marker, "", window.location.href);
+      else window.history.pushState(marker, "", window.location.href);
+    } catch { /* Navigation still works in memory when History API is unavailable. */ }
     setViewState("Projects");
     setOpenProjectId(project.id);
-    if (alreadyInProjects) {
-      try {
-        const marker = { lumiProject: project.id };
-        if (window.history.state?.lumiProject) window.history.replaceState(marker, "", window.location.href);
-        else window.history.pushState(marker, "", window.location.href);
-      } catch { /* the page itself is unaffected */ }
-    }
   }
   function closeProjectPage() {
     if (window.history.state?.lumiProject) window.history.back();
@@ -1465,8 +1469,12 @@ export function useLumiApp() {
       addressedView.current = next;
       const chosen = pendingView.current;
       pendingView.current = null;
-      setViewState(chosen ?? (views.includes(next) || next === "Settings" ? next : "Home"));
-      setOpenProjectId(null);
+      const nextView = chosen ?? (views.includes(next) || next === "Settings" ? next : "Home");
+      setViewState(nextView);
+      // Never trust a history marker as authorization or restore a project in another workspace.
+      const candidate = !chosen && nextView === "Projects" ? window.history.state?.lumiProject : null;
+      setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
+        ? candidate : null);
       // Nothing that belongs to the view being left may stay open over the next one.
       answerConfirm(false);
       setCapture(false);
@@ -1934,6 +1942,7 @@ export function useLumiApp() {
     projects = scopedItems.filter((x) => x.type === "project"),
     areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
+  visibleProjectsRef.current = projects;
   const openProject = openProjectId ? projects.find((project) => project.id === openProjectId) ?? null : null;
   // The page closes when its project is gone (deleted elsewhere) or out of the open workspace.
   useEffect(() => { if (openProjectId && !openProject) setOpenProjectId(null); }, [openProjectId, openProject]);

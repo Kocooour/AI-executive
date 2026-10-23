@@ -166,10 +166,41 @@ test("opening a project shows its page as the main view; a task opens the inspec
     await expect(projectPage).toBeVisible();
     await page.goBack();
     await expect(projectPage).toHaveCount(0);
+    await page.goForward();
+    await expect(projectPage).toBeVisible();
+    await page.locator(".projectBack").click();
     await page.locator(".taskRow", { hasText: `Projekt B1${R} bez kontextu` }).getByRole("button", { name: `Projekt B1${R} bez kontextu`, exact: true }).click();
     await expect(projectPage).toBeVisible();
     await page.locator('aside > nav [data-nav-view="Projects"]').click();
     await expect(projectPage).toHaveCount(0);
+  } finally {
+    await cleanup(page, Object.values(id));
+  }
+});
+
+test("Home sidebar project creates list→page history, Back/Forward restore each step", async ({ page }) => {
+  await page.goto("/?view=Home");
+  await waitUntilSynced(page);
+  const stamp = now();
+  const id = await seedWorld(page, stamp);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    const sidebar = page.locator("aside .sidebarProjects button", { hasText: `Projekt B1${R} s kontextem` });
+    await expect(sidebar).toBeVisible();
+    await sidebar.click();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id.rich);
+    await expect(page).toHaveURL(/\\?view=Projects$/);
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+    await expect(page.locator(`[data-project-group="${id.area}"]`)).toBeVisible();
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+    await expect(page).not.toHaveURL(/\\?view=Projects$/);
+    await page.goForward();
+    await expect(page.locator(`[data-project-group="${id.area}"]`)).toBeVisible();
+    await page.goForward();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id.rich);
   } finally {
     await cleanup(page, Object.values(id));
   }
