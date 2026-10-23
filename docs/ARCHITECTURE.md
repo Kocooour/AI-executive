@@ -476,7 +476,9 @@ freshness work exactly as for ICS.
 
 The calendar stays read-only. What the owner decides about an event is stored on the workspace entity (`type: "workspace"`, the
 event's `workspaceId`) under `properties.calendarDecisions`, a map of opaque keys to `"hidden"` or `"notTask"`:
-`occ:<sourceId>:<occurrenceKey>` for one occurrence and `series:<sourceId>:<uid>` for every repeat; titles are never stored.
+`occ:<sourceId>:<slotKey>` for one occurrence and `series:<sourceId>:<uid>` for every repeat; titles are never stored. `slotKey` is the
+repeat's place in its series (`<uid>:<RECURRENCE-ID>` for a repeat moved on its own, else the occurrence key), so a decision and the
+task made from one repeat (`calendarEventSlot`, matched by `eventTaskLinks`; `eventTaskId` uses it too) follow that repeat when it is moved.
 A uid longer than 160 characters is replaced in the key by a short stable digest. Whether an event repeats comes from its
 definition (`recurring`: RRULE, RECURRENCE-ID or overrides, set by the parser), never from how many repeats fall into the cached
 window (a yearly series has one); events cached before the flag existed are treated as possibly recurring. Only a one-off event
