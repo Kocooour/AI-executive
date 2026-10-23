@@ -140,7 +140,7 @@ export function EntityList({ app }: { app: LumiApp }) {
             )}
             {projectSummary && (
               <>
-                <small className={`projectRowWhy${projectWhy ? "" : " empty"}`} data-project-why>{projectWhy || projectText.whyHint}</small>
+                <small className={`projectRowWhy${projectWhy ? "" : " isEmpty"}`} data-project-why>{projectWhy || projectText.whyHint}</small>
                 {(projectSummary.next || projectAttention) && (
                   <small className="projectRowNext" data-project-next>
                     {projectSummary.next && <>{projectText.nextStep}: <span>{projectSummary.next.title || tr("untitledItem")}</span></>}

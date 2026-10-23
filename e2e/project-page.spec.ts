@@ -268,7 +268,7 @@ test("phone 390px: the project page and the list fit the screen, with 44px touch
     await page.locator(".projectDetails summary").click();
     expect(await fits()).toBe(true);
     // A task opens the full-screen inspector; closing it returns to the page.
-    await page.locator(".projectTaskList .taskRow").first().getByRole("button").nth(1).click();
+    await page.locator(".projectTaskList .taskRow").first().locator(".taskRowOpen").click();
     await expect(page.locator("aside.inspectorDetail")).toBeVisible();
     await page.getByRole("button", { name: "← Zpět" }).click();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);

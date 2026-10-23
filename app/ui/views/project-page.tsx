@@ -47,7 +47,7 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
     <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}>
       <button type="button" className="projectBack" aria-label={t.backAria} onClick={closeProjectPage}>{t.back}</button>
 
-      <header className="projectHeader">
+      <div className="projectHeader">
         <h1 className="projectHeading" ref={headingRef} tabIndex={-1}>
           <input
             className="projectTitleInput"
@@ -90,7 +90,7 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
             if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", () => project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
           }}>{tr("delete")}</button>
         </div>
-      </header>
+      </div>
 
       <section className="projectSection" aria-labelledby="project-tasks-heading">
         <h2 id="project-tasks-heading" className="projectSectionHeading">{t.tasks}</h2>

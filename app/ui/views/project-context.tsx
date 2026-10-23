@@ -104,9 +104,9 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         className="projectContextFields"
         onFocus={() => { focused.current = true; }}
         onBlur={(event) => {
-          // Moving between the fields of the context is not leaving it.
-          if (container.current?.contains(event.relatedTarget as Node | null)) return;
-          focused.current = false;
+          // Every field is saved when it is left (an unchanged context writes nothing); moving between the fields
+          // of the context does not count as leaving it, so a save does not reset a field that is about to be typed in.
+          if (!container.current?.contains(event.relatedTarget as Node | null)) focused.current = false;
           void save();
         }}
       >

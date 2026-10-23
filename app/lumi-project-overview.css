@@ -71,7 +71,7 @@
   font-size: 12px;
   line-height: 1.35;
 }
-.projectRowWhy.empty { font-style: italic; }
+.projectRowWhy.isEmpty { font-style: italic; }
 .projectRowNext > span:not(.projectAttention) { color: var(--text); }
 .projectAttention {
   display: inline-block;
