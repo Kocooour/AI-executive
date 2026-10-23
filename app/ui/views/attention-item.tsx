@@ -1,4 +1,5 @@
 "use client";
+import { describeAttentionSources } from "../../../lib/attention-sources";
 import { useState } from "react";
 import { attentionPrimaryAction } from "../../../lib/home-today";
 import { attentionReason } from "../format";
@@ -14,13 +15,15 @@ type Candidate = AttentionResponse["items"][number];
 // in the item's "⋯" menu. The reason, source and evaluation time stay available: the evaluation time
 // is in the section header once and in the expanded sources.
 export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: Candidate }) {
-  const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, inspect, items, language, setAttentionError, tr, workspaces } = app;
+  const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, inspect, items, language, scopedRelations, setAttentionError, tr, workspaces } = app;
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const workspaceTitle = (workspaceId: string) => workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.title || workspaceId;
   const shortTime = (value: number, timeZone?: string) =>
     new Date(value).toLocaleString(locale, { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone });
   const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { records: sourceRecords, claims: sourceClaims, missing: sourceMissing } = describeAttentionSources(candidate.sourceIds, candidate.workspaceId, items, scopedRelations);
+  const sourceTypeKey = (type: string) => ["task", "project", "note", "area"].includes(type) ? type : "attentionSourceRecord";
   const subject = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
   // A row evaluated before the user edited its subject on this device may no longer hold.
   const changedSince = attentionActionsBlocked && Boolean(subject && Number(subject.updatedAt) > candidate.evaluatedAt);
@@ -75,12 +78,11 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
           <p className="attentionMeta">{tr("attentionEvaluatedAt")} {shortTime(candidate.evaluatedAt, candidate.timezone)}
             {activeWorkspaceId === "all" ? ` · ${workspaceTitle(candidate.workspaceId)}` : ""}
             {candidate.timezone && candidate.timezone !== deviceTimeZone ? ` (${candidate.timezone})` : ""}</p>
-          <ul className="attentionSources" aria-label={tr("attentionSourceDetails")}>{candidate.sourceIds.map((id) => {
-            const source = items.find((item) => item.id === id && item.workspaceId === candidate.workspaceId);
-            return <li key={id}>{source
-              ? <>{tr(source.type === "project" ? "project" : source.type === "note" ? "note" : source.type === "area" ? "area" : "task")}: {source.title || tr("untitledItem")}</>
-              : tr("attentionSourceMissing")}</li>;
-          })}</ul>
+          <ul className="attentionSources" aria-label={tr("attentionSourceDetails")}>
+            {sourceRecords.map((source) => <li key={source.id}>{tr(sourceTypeKey(source.type))}: {source.title || tr("untitledItem")}</li>)}
+            {sourceClaims > 0 && <li>{tr("attentionSourceContext").replace("{n}", String(sourceClaims))}</li>}
+            {sourceMissing > 0 && <li>{tr("attentionSourceMissing")}{sourceMissing > 1 ? ` (${sourceMissing})` : ""}</li>}
+          </ul>
         </div>
       )}
     </article>
