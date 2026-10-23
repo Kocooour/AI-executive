@@ -190,9 +190,15 @@ test("context is edited in place with a visible save state, stored as one object
     await expect(context.getByRole("textbox", { name: "Proč je důležitý" })).toHaveAttribute("placeholder", "Doplňte, proč je projekt důležitý");
     await expect(context).toHaveAttribute("data-context-empty", "true");
     await context.getByRole("textbox", { name: "Proč je důležitý" }).fill("Bez toho nejde kampaň. Druhá věta.");
-    await context.getByRole("button", { name: "Přidat cíl" }).click();
-    await page.keyboard.type("První cíl");
+    // Typing starts once the new goal field has focus, as a person would see the cursor there.
+    const addGoal = async (number: number, text: string) => {
+      await context.getByRole("button", { name: "Přidat cíl" }).click();
+      await expect(context.getByRole("textbox", { name: `Hlavní cíle ${number}` })).toBeFocused();
+      await page.keyboard.type(text);
+    };
+    await addGoal(1, "První cíl");
     await page.keyboard.press("Enter");
+    await expect(context.getByRole("textbox", { name: "Hlavní cíle 2" })).toBeFocused();
     await page.keyboard.type("Druhý cíl");
     await context.getByRole("textbox", { name: "Hotovo, když" }).fill("Kampaň běží");
     await context.getByRole("textbox", { name: "Hotovo, když" }).press("Tab");
@@ -207,12 +213,9 @@ test("context is edited in place with a visible save state, stored as one object
     expect(typeof stored.context.updatedAt).toBe("number");
     expect(stored.goal).toBe("Kampaň běží");
     // At most five goals; a goal can be removed.
-    await context.getByRole("button", { name: "Přidat cíl" }).click();
-    await page.keyboard.type("Třetí");
-    await context.getByRole("button", { name: "Přidat cíl" }).click();
-    await page.keyboard.type("Čtvrtý");
-    await context.getByRole("button", { name: "Přidat cíl" }).click();
-    await page.keyboard.type("Pátý");
+    await addGoal(3, "Třetí");
+    await addGoal(4, "Čtvrtý");
+    await addGoal(5, "Pátý");
     await expect(context.getByRole("button", { name: "Přidat cíl" })).toHaveCount(0);
     await context.getByRole("button", { name: "Odebrat cíl 1" }).click();
     await expect(context.getByRole("button", { name: "Přidat cíl" })).toBeVisible();
