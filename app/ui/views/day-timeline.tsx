@@ -1,4 +1,5 @@
 "use client";
+import { eventTaskSpan } from "../../../lib/calendar-decisions";
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { calendarOverviewIntersects } from "../../../lib/calendar-overview";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
@@ -66,9 +67,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       if (task) {
         // Today shows the task only where it is a Today task (same predicate as the list leaving it out).
         if (mode === "today" && !todayTimelineTaskIds.has(task.id)) continue;
-        const estimate = typeof task.properties.estimatedMinutes === "number" && task.properties.estimatedMinutes > 0 ? task.properties.estimatedMinutes : 0;
-        const start = Date.parse(event.start);
-        const end = estimate ? start + estimate * MINUTE : Date.parse(event.end);
+        // The same span the Today predicate checks (lib/calendar-decisions.ts).
+        const { end, minutes: estimate } = eventTaskSpan(event, task);
         taskIds.add(task.id);
         result.push({ id: `event:${event.id}`, kind: "task", title: task.title || event.title, start: event.start, end: Number.isFinite(end) ? new Date(end).toISOString() : event.end,
           event, task, done: task.status !== "open", allDay: event.allDay, minutes: estimate || undefined });
@@ -199,7 +199,21 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
             {layout.hours.map((hour) => <div key={hour.minute} className={`dayTimelineHour ${nowTop !== null && Math.abs(hour.top - nowTop) < 16 ? "isUnderNow" : ""}`.trim()} style={{ top: hour.top }}><span>{hour.label}</span></div>)}
           </div>
           <ol className="dayTimelineItems" aria-label={tr("timelineTitle")}>
-            {layout.items.map((placed) => {
+            {/* One list in time order: single items and "+N" groups, so Tab and screen readers follow the day. */}
+            {[...layout.items.map((placed) => ({ start: placed.startMinute, placed, group: null as OverflowGroup<Entry> | null })),
+              ...layout.overflow.map((group) => ({ start: group.startMinute, placed: null as PlacedTimelineItem<Entry> | null, group }))]
+              .sort((a, b) => a.start - b.start || (a.group ? 1 : 0) - (b.group ? 1 : 0))
+              .map(({ placed, group }) => {
+              if (group) return (
+                <li key={group.id} className="dayTimelineItem" style={{ top: group.top, height: group.height, "--col": group.column, "--cols": group.columns } as CSSProperties}>
+                  <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineMoreLabel"), { n: group.items.length })} triggerLabel={fill(tr("timelineMoreLabel"), { n: group.items.length })}
+                    triggerClassName="dayTimelineBlock dayTimelineMore" triggerData={{ "data-timeline-more": group.id }}
+                    triggerContent={<span className="dtTitle">+{group.items.length}</span>}>
+                    {(close) => <OverflowList group={group} when={timeText} minutesText={minutesText} panel={panel} close={close} />}
+                  </PopoverMenu>
+                </li>
+              );
+              if (!placed) return null;
               const entry = placed.source;
               const when = timeText(placed);
               const minutes = entry.minutes ?? placed.durationMinutes;
@@ -216,15 +230,6 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
                 </li>
               );
             })}
-            {layout.overflow.map((group) => (
-              <li key={group.id} className="dayTimelineItem" style={{ top: group.top, height: group.height, "--col": group.column, "--cols": group.columns } as CSSProperties}>
-                <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineMoreLabel"), { n: group.items.length })} triggerLabel={fill(tr("timelineMoreLabel"), { n: group.items.length })}
-                  triggerClassName="dayTimelineBlock dayTimelineMore" triggerData={{ "data-timeline-more": group.id }}
-                  triggerContent={<span className="dtTitle">+{group.items.length}</span>}>
-                  {(close) => <OverflowList group={group} when={timeText} minutesText={minutesText} panel={panel} close={close} />}
-                </PopoverMenu>
-              </li>
-            ))}
           </ol>
           {nowTop !== null && <div className="dayTimelineNow" style={{ top: nowTop }} aria-hidden="true"><span>{tr("timelineNow")}</span></div>}
         </div>

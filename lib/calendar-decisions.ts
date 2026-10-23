@@ -201,6 +201,20 @@ export function convertedEventIds(tasks: Entity[], events: DecisionEvent[]) {
   return new Set(eventTaskLinks(events, tasks).keys());
 }
 
+/**
+ * The time a task made from an event takes on a day's timeline: from the event's start for the task's
+ * estimate (else the event's own length). Today places the task on its timeline only when this span
+ * reaches into today; otherwise the task stays in the list (e.g. a 24 h event from yesterday whose
+ * 8 h estimate ended yesterday).
+ */
+export function eventTaskSpan(event: Pick<DecisionEvent, "start" | "end">, task: Pick<Entity, "properties">) {
+  const start = Date.parse(event.start);
+  const estimate = task.properties?.estimatedMinutes;
+  const minutes = typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0 ? estimate : 0;
+  const end = minutes ? start + minutes * 60_000 : Date.parse(event.end);
+  return { start, end, minutes };
+}
+
 /** Hidden by the owner, or turned into a task: the event is not an event any more (not in agendas, not busy). */
 export const isConvertedEvent = (event: Pick<DecisionEvent, "id">, converted: Set<string>) => converted.has(event.id);
 

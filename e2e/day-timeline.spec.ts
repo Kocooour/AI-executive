@@ -191,3 +191,43 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
     });
   }
 });
+
+test("Calendar: a +N group sits in time order among the items, so Tab reaches 09:00 before 17:00", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const id = stamp();
+  // Five overlapping events at 09:00 (four lanes on a wide screen, so one collapses into +N) and one at 17:00.
+  const crowd: MockEvent[] = Array.from({ length: 5 }, (_, index) => ({ id: `tl-crowd-${index}-${id}`, title: `Souběh ${index} ${id}`, start: on("09:00"), end: on(`10:${String(index * 10).padStart(2, "0")}`) }));
+  const later: MockEvent = { id: `tl-later-${id}`, title: `Odpolední ${id}`, start: on("17:00"), end: on("17:30") };
+  await mockCalendar(page, [...crowd, later]);
+  await page.goto("/?view=Calendar");
+  await waitUntilSynced(page);
+  await expect(page.locator("[data-timeline-more]")).toHaveCount(1);
+  const order = await page.locator(".dayTimelineItems").first().evaluate((list) =>
+    Array.from(list.querySelectorAll("[data-timeline-item], [data-timeline-more]")).map((node) => node.hasAttribute("data-timeline-more") ? "more" : node.textContent || ""));
+  const more = order.indexOf("more");
+  const afternoon = order.findIndex((text) => text.includes(later.title));
+  expect(more).toBeGreaterThanOrEqual(0);
+  expect(afternoon).toBeGreaterThan(more);
+});
+
+test("Today: a task from an overnight event whose estimate ended yesterday stays in the list", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const id = stamp();
+  const yesterday = new Date(Date.parse(`${localToday()}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  // Yesterday 08:00 -> today 08:00; its task has the capped 480 min estimate, so its span ended yesterday 16:00.
+  const event: MockEvent = { id: `tl-night-${id}`, title: `Noční služba ${id}`, start: zonedDateTimeToIso(yesterday, "08:00", timezone), end: on("08:00") };
+  const task = { id: `e2e-tl-night-${id}`, title: event.title, properties: { when: yesterday, estimatedMinutes: 480, calendarEventId: event.id, calendarSourceId: "e2e-tl-src", calendarEventUid: event.id } };
+  await mockCalendar(page, [event]);
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  try {
+    await seedTasks(page, [task]);
+    await page.reload();
+    await waitUntilSynced(page);
+    // Not on today's axis (nothing of it falls today) and therefore in the list: shown exactly once.
+    await expect(page.locator(".dayTimelineSection [data-timeline-item]", { hasText: event.title })).toHaveCount(0);
+    await expect(page.locator(".taskRow", { hasText: event.title })).toHaveCount(1);
+  } finally {
+    await removeTasks(page, [task.id]);
+  }
+});

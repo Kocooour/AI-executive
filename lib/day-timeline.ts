@@ -120,14 +120,13 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
   const dayEndMs = Date.parse(zonedDateTimeToIso(addCalendarDays(options.day, 1), "00:00", options.timezone));
   const dayMinutes = Math.round((dayEndMs - dayStartMs) / 60_000);
 
-  // Whole local hours of the day as axis candidates, by elapsed minute (a skipped hour has none).
+  // Hour marks by real elapsed hours from local midnight: a skipped hour (spring) has no mark and a
+  // repeated hour (autumn) has two, each at its own elapsed minute.
   const candidates: Array<{ minute: number; label: string }> = [];
-  for (let hour = 0; hour <= 24; hour += 1) {
-    const timestamp = hour === 24 ? dayEndMs : Date.parse(zonedDateTimeToIso(options.day, `${String(hour).padStart(2, "0")}:00`, options.timezone));
-    const minute = Math.round((timestamp - dayStartMs) / 60_000);
-    if (minute < 0 || minute > dayMinutes || candidates.some((candidate) => candidate.minute === minute)) continue;
-    candidates.push({ minute, label: hourLabel(timestamp, options.timezone) });
+  for (let timestamp = dayStartMs; timestamp <= dayEndMs; timestamp += 3_600_000) {
+    candidates.push({ minute: Math.round((timestamp - dayStartMs) / 60_000), label: hourLabel(timestamp, options.timezone) });
   }
+  if (candidates[candidates.length - 1]?.minute !== dayMinutes) candidates.push({ minute: dayMinutes, label: hourLabel(dayEndMs, options.timezone) });
   candidates.sort((a, b) => a.minute - b.minute);
 
   // Items clipped to the day, ordered by start (longer first), invalid ones dropped.
@@ -168,6 +167,10 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
   const maxColumns = Math.max(2, Math.floor(options.maxColumns ?? 4));
   type Clipped = (typeof clipped)[number];
   const visualEnd = (item: Clipped) => Math.max(item.endMinute, item.startMinute + minItemMinutes);
+  // An item drawn taller than its length (the minimum height) near the end of the axis is moved up so
+  // it stays inside the axis instead of covering what follows it.
+  const axisPx = (axisEndMinute - axisStartMinute) * pxPerMinute;
+  const inside = (top: number, height: number) => Math.max(0, Math.min(top, axisPx - height));
   const make = (item: Clipped, column: number, columns: number, underlay = false): PlacedTimelineItem<T> => ({
     source: item.source,
     id: item.source.id,
@@ -176,7 +179,7 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
     durationMinutes: Math.round(item.endMinute - item.startMinute),
     continuesFromPreviousDay: item.continuesFromPreviousDay,
     continuesIntoNextDay: item.continuesIntoNextDay,
-    top: (item.startMinute - axisStartMinute) * pxPerMinute,
+    top: inside((item.startMinute - axisStartMinute) * pxPerMinute, Math.max(minItemPx, (item.endMinute - item.startMinute) * pxPerMinute)),
     height: Math.max(minItemPx, (item.endMinute - item.startMinute) * pxPerMinute),
     column, columns, underlay,
   });
@@ -209,7 +212,7 @@ export function layoutDayTimeline<T extends TimelineSource>(sources: T[], option
         id: `overflow:${result.overflow[0].source.id}`,
         items: result.overflow.map((item) => make(item, limit, columns)),
         startMinute: start, endMinute: end,
-        top: (start - axisStartMinute) * pxPerMinute,
+        top: inside((start - axisStartMinute) * pxPerMinute, Math.max(minItemPx, (end - start) * pxPerMinute)),
         height: Math.max(minItemPx, (end - start) * pxPerMinute),
         column: limit, columns,
       });

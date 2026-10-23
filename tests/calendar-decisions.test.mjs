@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  KEEP_DECISION_DAYS, MAX_DECISIONS, restoreCalendarDecisions, validDecisionsValue, isSingleEvent, eventTaskId, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
+  KEEP_DECISION_DAYS, MAX_DECISIONS, restoreCalendarDecisions, validDecisionsValue, eventTaskSpan, isSingleEvent, eventTaskId, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
   needsTaskQuestion, occurrenceDecisionKey, pruneDecisions, readDecisions, reprioritizeSuggestion, seriesDecisionKey, withDecision,
 } from "../lib/calendar-decisions.ts";
 import { mergeEntity } from "../lib/field-merge.ts";
@@ -281,4 +281,14 @@ test("two devices answering Yes for the same event end up with one task after sy
   assert.equal(tasks.length, 1);
   assert.equal(tasks[0].id, fromA.id);
   assert.equal(linkedEventTasks(merged.entities, "w", [meeting]).get(meeting.id).id, fromA.id);
+});
+
+test("an event task's span runs from the event's start for its estimate (else the event's length)", () => {
+  // A 24 h event yesterday 08:00 -> today 08:00 with the estimate capped at 480 min ends yesterday 16:00.
+  const overnight = event({ start: "2026-10-22T06:00:00.000Z", end: "2026-10-23T06:00:00.000Z" });
+  const span = eventTaskSpan(overnight, { properties: { estimatedMinutes: 480 } });
+  assert.equal(new Date(span.end).toISOString(), "2026-10-22T14:00:00.000Z");
+  const todayStart = Date.parse("2026-10-22T22:00:00.000Z");
+  assert.ok(span.end <= todayStart, "so it does not reach into today and stays in the Today list");
+  assert.equal(eventTaskSpan(overnight, { properties: {} }).end, Date.parse(overnight.end));
 });

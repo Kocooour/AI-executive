@@ -168,3 +168,27 @@ test("underlay items (hidden events) take no lane", () => {
   assert.equal(byId.hidden.columns, 1);
   assert.deepEqual([byId.a.columns, byId.b.columns], [2, 2]);
 });
+
+test("autumn daylight-saving day: both 02:00 hours get their own mark, 60 elapsed minutes apart", () => {
+  // Europe/Prague 2026-10-25: 03:00 CEST becomes 02:00 CET, so 02:00 happens twice.
+  const layout = layoutDayTimeline([], { ...base, day: "2026-10-25", workdayStart: "00:00", workdayEnd: "23:59" });
+  const twos = layout.hours.filter((hour) => hour.label === "02:00");
+  assert.equal(twos.length, 2);
+  assert.equal(twos[1].minute - twos[0].minute, 60);
+  // Marks are an hour apart everywhere; no two-hour gap.
+  const gaps = layout.hours.slice(1).map((hour, index) => hour.minute - layout.hours[index].minute);
+  assert.ok(gaps.every((gap) => gap === 60), JSON.stringify(gaps));
+  // Spring: the skipped 02:00 has no mark, and the marks stay an hour apart.
+  const spring = layoutDayTimeline([], { ...base, day: "2026-03-29", workdayStart: "00:00", workdayEnd: "23:59" });
+  assert.equal(spring.hours.some((hour) => hour.label === "02:00"), false);
+});
+
+test("a short item just before midnight stays inside the axis instead of covering what follows", () => {
+  const layout = layoutDayTimeline([{ id: "late", start: "2026-10-21T21:59:00.000Z", end: "2026-10-21T22:00:00.000Z" }], base);
+  const [late] = layout.items;
+  // 23:59-00:00 in Prague; drawn at the minimum height, moved up to end on the axis' last line.
+  assert.equal(layout.axisEndMinute, 24 * 60);
+  assert.ok(late.height >= 22);
+  assert.ok(late.top + late.height <= layout.height, `${late.top}+${late.height} > ${layout.height}`);
+  assert.equal(Math.round(late.startMinute), 23 * 60 + 59, "its time is unchanged");
+});

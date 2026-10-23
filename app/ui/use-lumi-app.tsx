@@ -27,6 +27,7 @@ import { type AIProposal, type AssistantMessage, type CalendarEvent, type Calend
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
+import { eventTaskSpan } from "../../lib/calendar-decisions";
 import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useContextEvidence } from "./hooks/use-context-evidence";
@@ -2014,10 +2015,14 @@ export function useLumiApp() {
     const ids = new Set<string>();
     for (const event of calendarDayEventsAll) {
       const linked = calendarEventsState.calendarEventTasks.get(event.id);
-      if (linked && linked.status === "open" && taskMatchesView(linked, "Today", today)) ids.add(linked.id);
+      if (!linked || linked.status !== "open" || !taskMatchesView(linked, "Today", today)) continue;
+      // The task's own span (its estimate from the event's start) must reach into today, or it would be
+      // on neither the timeline nor the list.
+      const span = eventTaskSpan(event, linked);
+      if (Number.isFinite(span.start) && Number.isFinite(span.end) && span.end > calendarTodayRange.start && span.start < calendarTodayRange.end) ids.add(linked.id);
     }
     return ids;
-  }, [calendarDayEventsAll, calendarEventsState.calendarEventTasks, today]);
+  }, [calendarDayEventsAll, calendarEventsState.calendarEventTasks, today, calendarTodayRange]);
   const mergedBusy = effectiveBusyCalendarEvents(busyTodayCalendarEvents).map((event) => [
     Math.max(dayStart, Date.parse(event.start)), Math.min(dayEnd, Date.parse(event.end)),
   ] as [number, number]).sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((merged, interval) => {
