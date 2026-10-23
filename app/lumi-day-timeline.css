@@ -1,0 +1,172 @@
+/* Day timeline: one local day on a vertical time axis; an item's height follows its duration
+   (--tl-scale px per minute, set by the component). The axis is decorative. Colors come from the
+   workspace tokens; status is always also written in the item's label, never conveyed by style alone. */
+.dayTimeline {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  --tl-gutter: 44px;
+}
+.dayTimelineBody {
+  position: relative;
+  min-width: 0;
+  margin-block: 4px;
+}
+.dayTimelineAxis {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.dayTimelineHour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--line);
+}
+.dayTimelineHour span {
+  position: absolute;
+  top: -8px;
+  left: 0;
+  width: calc(var(--tl-gutter) - 8px);
+  padding-right: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.view-today .dayTimelineHour span { background: var(--surface-subtle); }
+.dayTimelineItems {
+  position: absolute;
+  inset: 0 0 0 var(--tl-gutter);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dayTimelineItem {
+  position: absolute;
+  box-sizing: border-box;
+  left: calc(var(--col) * 100% / var(--cols));
+  width: calc(100% / var(--cols));
+  padding: 0 0 2px 3px;
+}
+.dayTimelineItemMenu {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.dayTimelineBlock {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong, var(--line));
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--accent-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+.dayTimelineBlock:hover { filter: brightness(0.97); }
+.dayTimelineBlock:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 1px; }
+.dayTimelineBlock .dtTitle {
+  display: block;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dayTimelineBlock .dtMeta {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dayTimelineBlock.isCompact { flex-direction: row; align-items: center; gap: 8px; padding-block: 0; }
+.dayTimelineBlock.isCompact .dtMeta { display: none; }
+.dayTimelineBlock.free { border-left-style: dashed; background: var(--surface); }
+.dayTimelineBlock.isHidden { opacity: 0.55; border-style: dashed; background: var(--surface); }
+.dayTimelineBlock.is-plan { border-left-color: var(--success); background: var(--success-soft); }
+.dayTimelineBlock.is-plan.isProposal { border-style: dashed; border-left-style: dashed; background: var(--surface); }
+.dayTimelineBlock.is-task { border-left-color: var(--today-accent, var(--success)); background: var(--warning-soft); }
+.dayTimelineBlock.isDone { opacity: 0.6; }
+.dayTimelineBlock.isDone .dtTitle { text-decoration: line-through; }
+.dayTimelineBlock.isConflict { border-color: var(--danger); border-left-color: var(--danger); }
+.dayTimelineNow {
+  position: absolute;
+  left: calc(var(--tl-gutter) - 6px);
+  right: 0;
+  height: 0;
+  border-top: 2px solid var(--danger);
+  pointer-events: none;
+  z-index: 3;
+}
+.dayTimelineNow span {
+  position: absolute;
+  top: -9px;
+  left: -34px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+}
+.dayTimelineAllDay {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dayTimelineAllDay li { min-width: 0; max-width: 100%; }
+.dayTimelineAllDay .dayTimelineItemMenu { display: inline-block; max-width: 100%; height: auto; }
+.dayTimelineBlock.isAllDay { flex-direction: row; align-items: center; gap: 8px; width: auto; max-width: 100%; height: auto; min-height: 32px; }
+.dayTimelinePanel { display: grid; gap: 8px; min-width: 200px; }
+.dayTimelinePanel .dayTimelineNote { margin: 0; color: var(--muted); font-size: 13px; }
+.dayTimelinePanel button { min-height: 36px; justify-self: start; }
+.dayTimelinePanel .calendarEventActions { margin: 0; }
+.dayTimelinePanel .timeMenuHead { margin: 0; display: grid; gap: 2px; }
+.dayTimelinePanel .timeMenuHead span { color: var(--muted); font-size: 13px; }
+.dayTimelineUntimed h4 { margin: 4px 0 6px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.dayTimelineUntimed ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.dayTimelineUntimedRow {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface);
+}
+.dayTimelineUntimedMain { display: grid; flex: 1 1 auto; min-width: 0; gap: 1px; }
+.dayTimelineUntimedMain .taskRowOpen { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.dayTimelineUntimedMain small { color: var(--muted); }
+@media (pointer: coarse) {
+  .dayTimelinePanel button, .dayTimelineUntimedRow button { min-height: 44px; }
+  .dayTimelineBlock.isAllDay { min-height: 44px; }
+}
+@media (max-width: 560px) {
+  .dayTimeline { --tl-gutter: 36px; }
+  .dayTimelineBlock { padding: 3px 6px; font-size: 12.5px; }
+  .dayTimelineBlock .dtMeta { font-size: 11px; }
+  .dayTimelineUntimedRow { flex-wrap: wrap; }
+}

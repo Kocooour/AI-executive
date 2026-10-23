@@ -11,6 +11,7 @@ import "./lumi-inspector.css";
 import "./lumi-project-overview.css";
 import "./lumi-capture-b3.css";
 import "./lumi-today.css";
+import "./lumi-day-timeline.css";
 import "./lumi-search.css";
 import "./lumi-inbox-b4.css";
 import "./lumi-inbox-b5.css";
