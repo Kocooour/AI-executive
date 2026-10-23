@@ -1,6 +1,6 @@
 # Lumi — technická architektura a provozní kontrakty
 
-> **Závazná technická specifikace** (stav k 14. 10. 2026). [Rozcestník](../README.md) · [Produktové zadání](PRODUCT.md) · [UX/UI](UX-UI.md). Technické interní identifikátory typu `aifred` se nemění pouze kvůli nové produktové značce.
+> **Závazná technická specifikace** (základní revize 14. 10. 2026; cílový kontrakt víceuživatelských Oblastí schválen 23. 10. 2026). [Rozcestník](../README.md) · [Produktové zadání](PRODUCT.md) · [UX/UI](UX-UI.md). Technické interní identifikátory typu `aifred` se nemění pouze kvůli nové produktové značce.
 
 ## Architektonický přehled
 
@@ -9,7 +9,7 @@
 - **Attention Engine** vyhodnocuje stabilní signály a jejich stav; produktová pravidla, meze a deduplikaci definuje [produktový kontrakt](PRODUCT.md#attention-contract--target-requirement).
 - **Planning Engine** pracuje s ověřenou čerstvostí kalendáře a nepovažuje neznámé časové bloky za volné.
 - **Action Engine** dodržuje `intent → context → allowlisted tool → proposal → approval → execution → audit → guarded Undo`; API a storage vynucují revize, idempotenci a hranice workspace.
-- **Privacy-first:** Personal a Shared zůstávají oddělené, `All my work` je jen read-only pohled; citlivé či neověřené claims nejsou automatickým důkazem ani povoleným kontextem pro agenty.
+- **Privacy-first:** cílové Osobní a Sdílené jsou oddělené hranicí oprávnění odvozenou z Oblasti, `Můj plán` je jen osobní agregovaný čtecí rozsah; citlivé či neověřené claims nejsou automatickým důkazem ani povoleným kontextem pro agenty.
 - Stav implementace je důsledně oddělen od **target specification** v níže uvedených oddílech. Při rozporu UI návrhu s oprávněními a integritou dat platí přísnější bezpečnostní kontrakt.
 
 ## Mapování dokumentů a implementace
@@ -22,6 +22,7 @@
 | LUMI-FR-005/011 | [Trust and action](PRODUCT.md#trust-and-action-contract) | PACT architecture; Security deployment |
 | LUMI-FR-006/012 | [Universal chat a hlas](PRODUCT.md#product-contract) | ChatGPT / Voice integration contract |
 | LUMI-FR-007/008 | [Remember a search](PRODUCT.md#product-contract) | Personal Context Graph v2 |
+| LUMI-FR-013 | [Prostory, Oblasti a Můj plán](PRODUCT.md) | Víceuživatelské Oblasti — cílový bezpečnostní kontrakt |
 
 ## Run
 
@@ -163,6 +164,87 @@ External conversational clients authenticate with `Authorization: Bearer <AI_EXE
 The OpenAPI contract exposes two operations: `planWithAifred` for reasoning and approval-bound proposals, and `readAifredTool` for the allowlisted read-only Tool Registry. A proposal returned to ChatGPT is only a pending proposal; the owner must confirm it through Lumi. The integration has no confirmation, Undo, arbitrary database or provider-credential endpoint.
 
 Before connecting an external client in production, deploy the new code, set `AI_EXECUTIVE_INTEGRATION_TOKEN` in the root-managed service environment, restart AI Executive, and verify that the OpenAPI endpoint is reachable only over the intended HTTPS/Tailscale path. Do not expose the local Node listener directly to the public Internet.
+
+## Víceuživatelské Oblasti — cílový bezpečnostní kontrakt (2026-10-23)
+
+**Stav a rozhodnutí.** Vlastník schválil víceuživatelskou spolupráci jako doplněk Lumi, která zůstává osobním asistentem jednotlivce, nikoli systémem sledování lidí. Tato kapitola je **budoucí cílová architektura**, nikoli popis dodané podpory více uživatelů. Aktuálně je přihlášení jednouživatelské (`owner`), passkeys a integrační token nerozlišují osoby, `Shared` má pouze členství vlastníka, `GET/PUT /api/store` čtou/zapisují celý snímek, `properties.members` je slučované pole, osobní attention/push stav nemusí být user-scoped a úkoly nemají řešitele. Do dokončení bezpečnostních bran **nesmí být umožněno pozvat další uživatele ani jim zpřístupnit data**. Následující cílová pravidla mají v budoucím víceuživatelském režimu přednost před legacy větami o `All my work`, explicitním workspace a owner-only sessions jinde v tomto dokumentu; popisy **Current MVP** zůstávají historicky pravdivé.
+
+### Model rozsahů, Oblastí a položek
+
+- V UI jsou právě **dva prostory**: Osobní a Sdílené. Přepínač **Můj plán / Osobní / Sdílené** volí pouze **čtecí rozsah**, nikoli vlastníka ani fyzické umístění dat. Home zůstává úvodní obrazovka. V Mém plánu jsou soukromé úkoly uživatele a jemu přidělené sdílené úkoly; unassigned shared se zobrazuje v Sdílené, nikoli automaticky v osobních plánech. Datové výpisy agregují autorizovaná stabilní ID bez duplicit.
+- Každá soukromá Oblast vlastníka mapuje do **jeho jediného interního osobního workspace**; každá **sdílená Oblast** mapuje na **svůj interní samostatný workspace** s přesným členstvím. Interní workspaces jsou bezpečnostním detailem serveru, ne uživatelskou hierarchií; stávající zákaz relací napříč interními workspaces zůstává. Odkaz z veřejnější položky na soukromou není automatickou propustkou k původním datům; taková vazba je buď zakázána, nebo reprezentována bezpečným textovým odkazem bez existence/titulu pro neautorizované identity.
+- **Oblast je jediným zdrojem sdílené viditelnosti.** Každý projekt má právě jednu Oblast a každý samostatný úkol právě jednu; Oblast úkolu v projektu se **odvozuje pouze z projektu** (nepersistovat samostatnou `belongs_to_area` relaci). Vytvoření úkolu v projektu i přesun úkolu do projektu přijímá Oblast projektu. Při vyjmutí úkolu z projektu se nastaví samostatná Oblast, bezpečným defaultem je uživatelovo soukromé **Nezařazeno**. Nový projekt bez výběru Oblasti též přejde do soukromého Nezařazeno. Inbox je třídicí stav, není Oblast. Oblast může nést jméno „Osobní“, projekt v ní může nést jméno „Rodina“, bez duplicitních tematických Oblastí.
+- Zápis z Mého plánu nemíří do agregátu: musí mít **jednu explicitní cílovou Oblast**, zobrazovanou ve formuláři/návrhu (bezpečná soukromá výchozí hodnota je explicitně viditelná). Resolver mapuje Oblast na právě jeden interní workspace a odmítne rozpor, chybějící oprávnění i pokus o zápis přes `all`. Agregované čtení volá pouze autorizované jednotlivé scope dotazy s post-filterem; interní nástroj nikdy nešíří čtecí agregaci na pravomoc zápisu.
+- Oblast má stabilní ID, typ `private|shared`, vlastníka/správce, revizi přístupové politiky, uživatelský popisek a řazení. Při archivaci/smazání nelze zanechat osiřelé položky: vyžaduje atomický přesun obsahu do oprávněné cílové Oblasti nebo archivaci pod stejnou politikou; soukromí se nemůže implicitně rozšířit. Změna typu Oblasti je operace nad veškerým jejím obsahem, s potvrzením a auditem.
+
+### Identita, role, členství a vlastnictví (bez automatického sdílení)
+
+- Cílová autentizace má **samostatnou identitu `userId` pro každého člověka**. Sessions, passkeys, password/recovery prostředky, zařízení a lokální cache musí patřit této identitě; žádný implicitní `subject:"owner"` pro nově pozvané osoby. Onboarding: pozvánka oprávněným adminem s omezenou platností a explicitním přijetím; bezpečná obnova účtu, odebrání zařízení a zneplatnění sessions. Všechny tyto akce jsou auditované, bez prozrazení dat do obsahu pozvánky.
+- Role **viewer** smí autorizované čtení; **editor** smí měnit běžná společná data (úkol/projekt/poznámku) a přiřazovat řešitele pouze mezi členy; **admin** spravuje členství, role, typ a životní cyklus Oblasti, převod/přesun sdílených dat, administrativní mazání a předání správce. Výchozí pozvánka nepřiděluje administrátora. V soukromé Oblasti má práva jen vlastník. Musí existovat alespoň jeden aktivní admin sdílené Oblasti; jeho poslední odchod/odebrání je blokováno, dokud není předána správa. Ztráta členství odstraní přístup i právo upravovat dříve přidělené úkoly.
+- Rozlišují se **vlastník**, **řešitel (assignee)** a **člen Oblasti**. Soukromý úkol nemůže být přiřazen jiné identitě; pokud se má přiřadit jiné osobě, vyžaduje potvrzený přesun do sdílené Oblasti. Sdílený řešitel musí mít aktuální členství; odebranému členu se nedokončené úkoly atomicky odeberou z přiřazení, zůstanou v Oblasti jako **Nepřiděleno** a admin dostane soukromé attention upozornění k přeřazení. Změna vlastnictví/admina podléhá potvrzení a revizní kontrole.
+- API pro správu členství/rolí je **samostatný serverový příkaz** s autorizací role admin, potvrzením tam, kde mění viditelnost, auditem, revizí politiky a idempotencí. `members` ani ACL se nesmějí přijímat jako běžné slučované entity/pole přes offline sync (`properties.members` z něj vyřadit). Změny členství nesmí způsobit starý klient, import ani restore bez zvláštního oprávnění.
+- Každý **integrační token** pro ChatGPT, Hermes/Telegram, externí chat/MCP a budoucí konektory má konkrétního aktéra/userId, povolené scope a akce, expirační/revokační pravidla a minimální privileges. Pro cílový multi-user režim jsou staré globální owner tokeny nekompatibilní a musí být nahrazeny nebo odmítnuty. Pozvánky, členství a potvrzení sdílení nejsou model-controlled operace.
+
+### Příslušnost dat a informační toky
+
+| Datová položka | Cílová příslušnost a autorita | Pravidlo zpřístupnění |
+|---|---|---|
+| Projekt | Jedna explicitní Oblast | Veškerý současný obsah podle členství cílové Oblasti; dřívější soukromá historie zůstane soukromá |
+| Úkol v projektu | Projektová Oblast odvozená z projektu | Nesmí mít vlastní odlišnou oblast/ACL; společná pole vidí oprávnění členové |
+| Samostatný úkol | Jedna vlastní Oblast, default soukromé Nezařazeno | Viditelný jen v cílové Oblasti, přiřazení jen aktuálním členům |
+| Poznámka a její revize | Projektová Oblast, je-li přidružena jako projektový obsah; jinak vlastní Oblast | Staré revize před zveřejněním nejsou zpřístupněny novým členům |
+| Context subject, claim, relation, review | Explicitní Oblast/security workspace vlastního kanonického objektu | Zdroj/evidence se čte jen při samostatném oprávnění; žádné relace přes interní workspace |
+| Evidence a zdroj, `mailSource`, import | Výchozí soukromý účet/Oblast aktéra a původní citlivost | Zkopírování konkrétního úryvku do sdíleného obsahuje schválenou explicitní publikaci; link nevytváří přístup |
+| Kalendářové události a osobní bloky | Vlastník připojeného účtu; osobní plánovací stav uživatele | Soukromá kapacita a detail kalendáře se nezveřejní přes sdílené úkoly |
+| Attention kandidát a jeho lifecycle | Odvozený obsah autorizované Oblasti + osobní `userId` | Snooze/dismiss/feedback jednotlivce, bez ovlivnění druhých |
+| Push subscription / reminder / delivery | Jednoznačné `userId` + zařízení + platná oblastní politika | Bez upozornění odebraným členům; revokované úryvky se zneplatní |
+| Audit, event log a historie | Neměnný actor, scope a aktuální přístupová politika plus historická visibility epoch | Novému členovi se nevydají soukromé starší hodnoty; vlastníkovy chráněné revize zůstávají izolované |
+| Cache, index, autocomplete, graf, export | Odvozené z kanonických dat se scope a `userId` | Revokace/změna Oblasti okamžitě blokuje serverový výdej i čítače/snippety; cache invalidace |
+| Záloha / restore / import | Správce serveru a explicitní strategie identity + členství | Obnova obsahu nikdy automaticky nereaktivuje dřívější přístup ani nevydá data cizí identitě |
+
+Stav ochrany zdrojových dat může být **přísnější** než viditelnost Oblasti, protože odkaz na cizí osobní e-mail nebo source evidence nemění jeho vlastnictví. Pokud zdroj neumožňuje bezpečné přenesení, operace se odmítne nebo zveřejní pouze explicitně odsouhlasený výňatek jako nový sdílený obsah s nezávislou proveniencí. **Oblast zůstává jediným zdrojem viditelnosti kanonických úkolů/projektů/poznámek;** dědičná citlivost a přístup k původnímu externímu zdroji jsou další podmínkou jeho vlastního přečtení, nikoli druhým přepínačem sdílení projektu. Přílohy úkolů nyní nejsou implementované; před budoucím přidáním musí zdědit stejnou ochranu, včetně URL, preview, historie a záloh.
+
+**Osobní vs. společná pole úkolu (cílové rozdělení):**
+
+| Společná kanonická pole úkolu | Oddělený osobní stav `(userId, taskId)` |
+|---|---|
+| Název, popis, dokončení, deadline, prioritizace týmu, řešitel, checklist a společné poznámky | `today`, plánovaný den / `when`, přijatý časový blok, odhad osobní kapacity, plánovací feedback, snooze/dismiss, vlastní připomínky a nastavení oznámení |
+
+Změna osobního `when` jednoho uživatele nemění společný deadline ani osobní `when` jiného člena. Rovněž `attention_states` a `push_subscriptions` musí mít user binding; dosavadní workspace-only index není dostatečný. Komentáře/kontekst, které mohou být soukromé, se nikdy nevydají jako sdílený obsah bez explicitního záměru.
+
+### Synchronizace, revokace, historie a souběh
+
+1. Server musí při **každém čtení** vyhodnotit aktéra, Oblast, členství/roli, případnou citlivost a účel. `GET /api/store` nesmí v multi-user režimu vracet globální snímek. Oprávněný klient může číst pouze svůj osobní workspace a sdílené Oblasti, jejichž je členem; všechna data, relace, search, count, autocomplete, attention a AI výstupy musejí mít stejný filtr.
+2. **Zápisy po položkách / transakčních příkazech**, ne `PUT` celého globálního snapshotu: každá operace včetně tombstone, přesunu, změny rodiče, Undo a „vzkříšení“ starého záznamu kontroluje serverem aktuální revizi, aktéra, právo v cílové Oblasti a idempotenci. Neautorizovaný edit/delayed offline queue nesmí přepsat data jiných uživatelů.
+3. Změny členství/Oblasti musí v atomickém kroku aktualizovat **revizi politiky**, zneplatnit čekající návrhy na staré revizi (TOCTOU), revidovat assignees, auditovat dopady, zneplatnit index/caches a při příští synchronizaci nařídit odstranění již neoprávněného obsahu. Schválení vytvořené před odebráním člena či přesunem Oblasti **selže bezpečně**, i když revize úkolu zůstala stejná.
+4. **Revokace offline nemůže odstranit dříve staženou kopii**, pokud zařízení zůstane offline nebo si uživatel obsah zkopíroval. Po připojení server okamžitě odmítá čtení i opožděné zápisy a klient odstraní data dané Oblasti, cache, indexové úryvky a offline frontu; UI tento limit komunikuje poctivě. Odhlášení, změna identity, ztráta role a obnova přihlašování musí odstranit nebo kryptograficky oddělit data předchozí identity.
+5. Přesun mezi soukromou a sdílenou Oblastí nebo mezi různými sdílenými Oblastmi je **atomická potvrzovaná** změna interního workspace, vazeb, dítěte a indexu, s auditem. Před potvrzením zobrazit členy nově oprávněné i ty, kdo přístup ztratí, a dopad na přiřazené úkoly. Obsahové revize a předchozí soukromé hodnoty se nezpřístupní novým členům; historická dostupnost je řízena podle visibility epoch, ne jen dnešní Oblasti. Pokud ochranu nelze vynutit, přesun se zamítne.
+6. Sync protokol se **verzuje**. Starší klienti s celým snímkem nesmějí po aktivaci víceuživatelského režimu synchronizovat, dokud neprovedou kontrolovaný upgrade/reconciliaci lokální fronty; žádná tichá ztráta offline změn. Stejně je chráněn restore: stará záloha/datový import nesmí obnovit zrušené členství, tokeny ani starou možnost zápisu. Membership audit/policy revize musí mít obnovovací postup nezávislý na běžném obsahu zálohy.
+
+### AI, schvalování, externalita a provozní požadavky
+
+- Context Resolver musí rozlišit **čtecí agregaci Můj plán** (filtrované jednotlivé autorizované rozsahy) od **jediné cílové Oblasti zápisu**; přepnutý pohled nikdy není oprávnění. Z `create_project_bundle` ani z jiného návrhu nelze zveřejnit osobní poštu, kalendářové události, claim/evidence či soukromé shrnutí do sdílené Oblasti bez konkrétního schválení obsahu a okruhu příjemců. Bez oprávnění se neprozradí ani název/existence entity, počet výsledků, odvozené embeddingy či evidence.
+- Notifikace k sdíleným úkolům se cílí na jejich řešitele (nebo admina u nepřidělených actionable položek) dle osobního stavu a platných oprávnění; při revokaci se zastaví nové doručování a vymažou související subscriptions/queue. Dřívější oznámení na cizím zamčeném zařízení nelze vrátit; obsah zohledňuje soukromí a nastavení. 
+- Serverový export pro člena obsahuje jen aktuálně povolené položky; privilegovaná záloha celé instance je administrátorská operace, která nesmí být vystavena běžným členům ani přes integrační token. Je nutné definovat obnovu admin přístupu a zachování historie, aniž by restore vrátil revokované členství. Pro změny s dopadem na bezpečnost je nutný audit aktéra, okamžiku, revizí, nové/odebrané množiny členů a úspěchu/odmítnutí bez volného exportu soukromého textu do operačních logů.
+
+### Bezpečný migrační a implementační plán
+
+**Přípravná inventura:** `pnpm check-data` / `scripts/check-data.mjs` na ověřené kopii, inventář entit, relací, legacy `belongs_to_area` u úkolů v projektech, projektů bez Oblasti, starých `properties.area` textových štítků, současných `members`, contextových zdrojů, historie a offline front. Zdrojová data zachovat; vytvořit ověřenou konzistentní zálohu. Převod bez dalších uživatelů nesmí měnit původní interní workspace ani počet/ID entit či relací. U úkolů v projektu vyhraje Oblast projektu; nejednoznačné textové štítky zůstanou v historii nebo se převedou výslovně, nikdy svévolně do shared. Projekt ve stávajícím shared workspace dostane sdílenou Oblast **téhož** workspace, nikoliv soukromou. Kdo nemá platné přiřazení, dostane soukromé Nezařazeno v *jeho* osobním workspace. Data musí být vratná z ověřené zálohy; následný multi-user upgrade je oddělený feature gate.
+
+**Fáze / navržené PR, každé samostatně kontrolovatelné:**
+1. **Spec-only PR:** zapsat rozhodnutí a nový produktový, UX a bezpečnostní kontrakt (tento krok; žádný runtime).
+2. **Povinná Oblast:** bezpečný default a jediné odvozené přiřazení úkolu v projektu, migrace jednoho uživatele.
+3. **UX rozsahů:** přepínač Můj plán / Osobní / Sdílené při zachování Home, štítky Oblastí a filtrování.
+4. **Identity a pozvánky:** více uživatelů, passkeys a obnovy, ale **vypnuté** faktické sdílení do další fáze.
+5. **Serverová ACL a nový sync protokol:** filtrované čtení, per-item zápis/tombstones, membership commands, klientská invalidace a revokace.
+6. **Osobní stav a notifications:** per-user plánování, attention, push a offline chování.
+7. **Atomický přesun Oblastí a historie:** potvrzování obou směrů, audit, visibility epochs, revizní/TOCTOU ochrana, invalidace indexu.
+8. **Řešitel, vlastník a AI/integrace:** přidělení pouze členům, Můj plán, privátní externalita, tokeny vázané na identity.
+9. **Zálohy / import / export:** členství bez možnosti rollback eskalace, recovery a bezpečné exports. **Aktivovat pozvánky a sdílení až po celé bezpečnostní bráně** (nejméně identity, ACL/sync, per-user stav, revokace, historie/přesuny, AI a recovery podle rozsahu vydání).
+
+**Akceptační bezpečnostní testy (nejdřív syntetické 2–3 identity):** izolace úkolu/poznámky/claim/evidence pro každou kombinaci `user × Oblast × UI/API/search/index/AI/push/export/history`; odmítnutý `GET`, `PUT`, tombstone i legacy full-snapshot zápis; pokus měnit `members` syncem; stará offline fronta po odebrání člena; souběh revokace a schválení; přesun oběma směry a staré soukromé revize; assignee po odebrání člena; personal `today/when` a snooze/dismiss bez ovlivnění druhého; restore staré zálohy; absence soukromých textů v autocomplete/počtech/notifikaci; uživatelsky zacílené externí tokeny. Deterministická migrace kontroluje stabilní ID, počet entit, vztahů a zachování přísnosti přístupu.
+
+**Pravidlo testů:** při vývoji a review PR spouštět odpovídající jednotkové, integrační, bezpečnostní a cílené UI testy plus běžné `PR Checks`; **celou Browser E2E sadu nespouštět pro každý PR**, ale jako povinnou release gate **až před nasazením produkce** nad přesným plánovaným SHA `main`, podle `AGENTS.md`. Tato specifikace neuděluje výjimku.
 
 ## Personal Context Graph v2 — target specification
 
