@@ -255,7 +255,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
           <button type="button" onClick={() => { void resolveConflict(false); }}>{t.contextLoadRemote}</button>
           <button type="button" onClick={() => { void resolveConflict(true); }}>{t.contextKeepMine}</button>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

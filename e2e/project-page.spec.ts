@@ -181,28 +181,31 @@ test("opening a project shows its page as the main view; a task opens the inspec
 test("Home sidebar project creates list→page history, Back/Forward restore each step", async ({ page }) => {
   await page.goto("/?view=Home");
   await waitUntilSynced(page);
-  const stamp = now();
-  const id = await seedWorld(page, stamp);
+  const id = `e2e-b1-side-${now()}`;
+  const title = `Projekt B1${R} v navigaci`;
+  // Pin the test project to the top of the sidebar: other focused tests may have left more projects.
+  expect(await seed(page, { entities: [entity(id, "project", title,
+    { manualOrders: { "personal:project:all": -1_000_000 } })] })).toBe(200);
   try {
     await page.reload();
     await waitUntilSynced(page);
-    const sidebar = page.locator("aside .sidebarProjects button", { hasText: `Projekt B1${R} s kontextem` });
+    const sidebar = page.locator("aside .sidebarProjects button", { hasText: title });
     await expect(sidebar).toBeVisible();
     await sidebar.click();
-    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id.rich);
-    await expect(page).toHaveURL(/\\?view=Projects$/);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+    await expect(page).toHaveURL(/\?view=Projects$/);
     await page.goBack();
     await expect(page.locator(".projectPage")).toHaveCount(0);
-    await expect(page.locator(`[data-project-group="${id.area}"]`)).toBeVisible();
+    await expect(page.locator(".taskRow", { hasText: title })).toBeVisible();
     await page.goBack();
     await expect(page.locator(".projectPage")).toHaveCount(0);
-    await expect(page).not.toHaveURL(/\\?view=Projects$/);
+    await expect(page).not.toHaveURL(/\?view=Projects$/);
     await page.goForward();
-    await expect(page.locator(`[data-project-group="${id.area}"]`)).toBeVisible();
+    await expect(page.locator(".taskRow", { hasText: title })).toBeVisible();
     await page.goForward();
-    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id.rich);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
   } finally {
-    await cleanup(page, Object.values(id));
+    await cleanup(page, [id]);
   }
 });
 
