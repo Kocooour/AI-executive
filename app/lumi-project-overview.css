@@ -51,3 +51,163 @@
 @media (pointer: coarse) {
   .projectNextAction { min-height: 44px; padding: 8px 0; }
 }
+
+/* B1: the project page (main view of Projects) and the project rows of the list. Owner decision 2026-10-22. */
+.appShell .taskRowList .taskRow[data-entity-type="project"] { min-height: 64px; padding-block: 8px; }
+.appShell .taskRowList .taskRow[data-entity-type="project"] .taskRowMain {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+}
+.appShell .taskRowList .taskRow[data-entity-type="project"] .taskRowMain > * { max-width: 100%; }
+.projectRowWhy, .projectRowNext {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.projectRowWhy.empty { font-style: italic; }
+.projectRowNext > span:not(.projectAttention) { color: var(--text); }
+.projectAttention {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.projectRowNext > .projectAttention:first-child { margin-left: 0; }
+.projectAttention.danger { color: var(--danger); border-color: currentColor; }
+
+.projectPage { display: grid; gap: 22px; max-width: 760px; min-width: 0; padding-bottom: 40px; }
+.projectBack {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 10px;
+  margin-left: -10px;
+  border: 0;
+  border-radius: var(--radius-md, 10px);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.projectBack:hover { background: var(--hover); }
+.projectHeader { display: grid; gap: 12px; min-width: 0; }
+.projectHeading { margin: 0; font-size: inherit; }
+.projectHeading:focus { outline: none; }
+.projectTitleInput {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+.projectTitleInput:hover { border-bottom-color: var(--line); }
+.projectTitleInput:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
+.projectStatusLine { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 13px; color: var(--muted); }
+.projectStatus { padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.projectStatus.completed { background: var(--surface-subtle); color: var(--muted); }
+.projectProgress { display: inline-flex; align-items: center; gap: 8px; }
+.projectProgressBar { display: inline-block; width: 96px; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.projectProgressBar > span { display: block; height: 100%; background: var(--accent); }
+.projectStatusLine .projectAttention { margin-left: 0; }
+
+.projectContext {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+.projectContextFields { display: grid; gap: 14px; }
+.projectContextField { display: grid; gap: 6px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.projectContext textarea, .projectContext input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--control-border, var(--line));
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.projectContext textarea { min-height: 64px; resize: vertical; }
+.projectContext textarea:read-only, .projectContext input:read-only { background: transparent; border-color: var(--line); }
+.projectGoalRow { display: flex; align-items: center; gap: 6px; }
+.projectGoalRow > span { color: var(--muted); }
+.projectGoalRemove, .projectGoalAdd, .projectAdd {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px dashed var(--control-border, var(--line));
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.projectGoalRemove { flex: 0 0 44px; padding: 0; border-style: solid; color: var(--muted); font-size: 20px; }
+.projectGoalAdd, .projectAdd { justify-self: start; }
+.projectContextFoot { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.projectContextFoot small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.projectContextState.saved { color: var(--accent); }
+.projectContextState.error { color: var(--danger); }
+
+.projectPage .projectActions { flex-wrap: wrap; }
+.projectPage .projectActions button { min-height: 44px; }
+.projectSection { display: grid; gap: 8px; min-width: 0; }
+.projectSectionHeading { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.projectEmpty { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.projectPage .taskRowList .taskRow[data-entity-type="note"] { min-height: 52px; }
+
+.projectDetails { border-top: 1px solid var(--line); padding-top: 4px; }
+.projectDetails > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--text);
+}
+.projectDetailsBody { display: grid; gap: 14px; padding: 8px 0 12px; min-width: 0; }
+.projectDetailsField { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.projectDetailsField small { font-weight: 400; font-size: 12px; }
+.projectDetailsField input, .projectDetailsField select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--control-border, var(--line));
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 400;
+}
+.projectDetailsBody .projectOverview { margin: 0; }
+.projectDetailsBody .detailKnowledge, .projectDetailsBody .activityLog { margin: 0; }
+.appShell.projectPageOpen .pageIntro { display: none; }
+@media (max-width: 700px) {
+  .projectTitleInput { font-size: 22px; }
+  .projectProgressBar { width: 72px; }
+}

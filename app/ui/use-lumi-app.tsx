@@ -50,7 +50,9 @@ export function useLumiApp() {
   // The Inbox shows its tasks or the mail of the connected Gmail accounts. UI state only: the address
   // carries the view and nothing else (lib/view-url.ts), so a mail message is never put into it.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
-  const [view, setView] = useState("Home"),
+  const [view, setViewState] = useState("Home"),
+    // The project whose page is the main pane of Projects (B1). In-memory like the open record: the address carries the view only.
+    [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
@@ -263,6 +265,10 @@ export function useLumiApp() {
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const openProjectIdRef = useRef(openProjectId);
+  openProjectIdRef.current = openProjectId;
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
@@ -359,7 +365,32 @@ export function useLumiApp() {
     if (authState !== "ready") answerConfirm(false);
   }, [authState]);
   const sessionChannel = "ai-executive-session";
+  // Any change of view leaves the project page: Projects then shows its list.
+  function setView(next: string) {
+    setViewState(next);
+    setOpenProjectId(null);
+  }
+  // A project is a page of its own (B1, owner decision 2026-10-22), not an inspector over the list. The inspector stays for a
+  // task or note opened from that page. Inside Projects the page gets a history step, so the browser's Back returns to the list.
+  function openProjectPage(project: Entity) {
+    closeDetail();
+    const alreadyInProjects = viewRef.current === "Projects";
+    setViewState("Projects");
+    setOpenProjectId(project.id);
+    if (alreadyInProjects) {
+      try {
+        const marker = { lumiProject: project.id };
+        if (window.history.state?.lumiProject) window.history.replaceState(marker, "", window.location.href);
+        else window.history.pushState(marker, "", window.location.href);
+      } catch { /* the page itself is unaffected */ }
+    }
+  }
+  function closeProjectPage() {
+    if (window.history.state?.lumiProject) window.history.back();
+    else setOpenProjectId(null);
+  }
   async function inspect(e: Entity) {
+    if (e.type === "project") { openProjectPage(e); return; }
     const version = ++inspectionVersion.current;
     const workspaceAtRequest = activeWorkspaceRef.current;
     setSelected(e);
@@ -1892,6 +1923,9 @@ export function useLumiApp() {
     projects = scopedItems.filter((x) => x.type === "project"),
     areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
+  const openProject = openProjectId ? projects.find((project) => project.id === openProjectId) ?? null : null;
+  // The page closes when its project is gone (deleted elsewhere) or out of the open workspace.
+  useEffect(() => { if (openProjectId && !openProject) setOpenProjectId(null); }, [openProjectId, openProject]);
   const sidebarCounts: Record<string, number> = {
     Inbox: tasks.filter((task) => taskMatchesView(task, "Inbox", today)).length,
     Today: tasks.filter((task) => taskMatchesView(task, "Today", today)).length,
@@ -2761,6 +2795,7 @@ export function useLumiApp() {
     setUndoRelations(linkedRelations);
     await syncToServer();
     if (inspectorSelectionRef.current?.id === e.id) closeDetail();
+    if (openProjectIdRef.current === e.id) closeProjectPage();
     load();
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed") {
@@ -3833,6 +3868,8 @@ export function useLumiApp() {
     claimValueMode,
     claimValueType,
     closeDetail,
+    closeProjectPage,
+    openProject,
     collection,
     context,
     contextAction,

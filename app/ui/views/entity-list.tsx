@@ -2,7 +2,10 @@
 import { Fragment } from "react";
 import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
-import { openTaskCountsByProject } from "../open-task-counts";
+import { summarizeProject, type ProjectSummary } from "../../../lib/project-summary";
+import { firstSentence, readProjectContext } from "../../../lib/project-context";
+import { attentionText, labelsFor } from "../project-labels";
+import { ProjectPage } from "./project-page";
 import type { Entity } from "../../../lib/db";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
@@ -61,20 +64,29 @@ export function EntityList({ app }: { app: LumiApp }) {
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
   const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
-  const openTasksByProject = view === "Projects"
-    ? openTaskCountsByProject(items, projects, scopedRelations)
-    : new Map<string, number>();
+  const projectText = labelsFor(language);
+  const projectSummaries = new Map<string, ProjectSummary>();
+  if (view === "Projects" && !app.openProject) {
+    for (const project of projects) projectSummaries.set(project.id, summarizeProject(project, items, scopedRelations, today));
+  }
 
   // Today folds the day plan into its rows: a time cell per task instead of a separate plan list.
   // Tasks made from today's events are rows of the day timeline, not of this list (the header still counts them).
   const listed = view === "Today" ? collection.filter((x) => !app.todayTimelineTaskIds.has(x.id)) : collection;
   const planSlots = view === "Today" ? planSlotsByTask(visibleDayPlan) : null;
-  const renderRow = (x: Entity, index: number, rows: Entity[]) => {
-      const meta = taskRowValue(x, language, today, {
+  // `dragScope`: the ordering a drag changes, when it is not the one of the view (the tasks and notes of a project page).
+  const renderRow = (x: Entity, index: number, rows: Entity[], dragScope?: string) => {
+      const projectSummary = x.type === "project" ? projectSummaries.get(x.id) : undefined;
+      let meta = taskRowValue(x, language, today, {
         held: heldReasons.has(x.id),
         unsent: unsent.has(x.id),
-        openTaskCount: openTasksByProject.get(x.id) || 0,
+        openTaskCount: projectSummary?.open ?? 0,
       });
+      // A project row says where it stands: progress on the right (a failed or pending save still wins).
+      if (projectSummary && meta.kind === "count") meta = { text: projectText.progressText(projectSummary.done, projectSummary.total), kind: "count", tone: "default" };
+      const projectContext = projectSummary ? readProjectContext(x.properties) : null;
+      const projectWhy = projectContext ? firstSentence(projectContext.why) : "";
+      const projectAttention = projectSummary ? attentionText(language, projectSummary.attention) : "";
       // Today lists evening tasks last, under their own heading (the collection is already ordered that way).
       const startsEvening = view === "Today" && isEveningTask(x, today) && (index === 0 || !isEveningTask(rows[index - 1], today));
       return (
@@ -101,7 +113,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {dragHandle(x, x.type === "task" ? `task:${view}` : `${x.type}:all`)}
+          {dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
             <button
               type="button"
@@ -126,6 +138,17 @@ export function EntityList({ app }: { app: LumiApp }) {
             {view === "Today" && x.type === "task" && (
               <small className="taskRowEstimate" data-row-estimate>{typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0 ? tr("timelineMinutes").replace("{n}", String(x.properties.estimatedMinutes)) : tr("timelineNoEstimate")}</small>
             )}
+            {projectSummary && (
+              <>
+                <small className={`projectRowWhy${projectWhy ? "" : " empty"}`} data-project-why>{projectWhy || projectText.whyHint}</small>
+                {(projectSummary.next || projectAttention) && (
+                  <small className="projectRowNext" data-project-next>
+                    {projectSummary.next && <>{projectText.nextStep}: <span>{projectSummary.next.title || tr("untitledItem")}</span></>}
+                    {projectAttention && <span className={`projectAttention${projectSummary.attention?.kind === "overdue" ? " danger" : ""}`} data-project-attention>{projectAttention}</span>}
+                  </small>
+                )}
+              </>
+            )}
             <span className="taskRowMarks"><RecordMarks app={app} entity={x} hideSync /></span>
             {activeWorkspaceId === "all" && (
               <span className="workspaceBadge">
@@ -148,6 +171,8 @@ export function EntityList({ app }: { app: LumiApp }) {
 
   // The Calendar page shows its own planned work; it does not repeat every open task as a list.
   if (view === "Calendar") return null;
+  // A project opened from the list or the sidebar is the main view of Projects (B1); its rows are these same rows.
+  if (view === "Projects" && app.openProject) return <ProjectPage app={app} project={app.openProject} renderRow={renderRow} />;
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
