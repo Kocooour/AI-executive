@@ -125,6 +125,30 @@ test("deduplicates identical canonical IDs and fails closed on conflicting revis
   const task = data.entities[1];
   const repeated = selectScopedWork({ ...data, entities: [...data.entities, task, structuredClone(task)] });
   assert.equal(repeated.tasks.filter((item) => item.id === task.id).length, 1);
+  // Identical JSON content from separate sources may have differently ordered keys.
+  // This must deduplicate, including nested objects, without cloning the original.
+  const first = { ...task, properties: {
+    assigneeUserId: "owner", nested: { first: 1, second: { a: "one", b: ["x", "y"] } },
+  } };
+  const reordered = {
+    updatedAt: task.updatedAt, createdAt: task.createdAt,
+    properties: { nested: { second: { b: ["x", "y"], a: "one" }, first: 1 }, assigneeUserId: "owner" },
+    status: task.status, title: task.title, workspaceId: task.workspaceId,
+    type: task.type, id: task.id,
+  };
+  const reorderedResult = selectScopedWork({
+    ...data, entities: [...data.entities.filter((item) => item.id !== task.id), first, reordered],
+  });
+  assert.equal(reorderedResult.tasks.filter((item) => item.id === task.id).length, 1);
+  assert.strictEqual(reorderedResult.tasks.find((item) => item.id === task.id), first);
+  // Semantic differences in nested values or arrays remain real conflicts.
+  assert.throws(() => selectScopedWork({
+    ...data, entities: [...data.entities.filter((item) => item.id !== task.id), first, {
+      ...reordered, properties: { ...reordered.properties, nested: {
+        second: { b: ["y", "x"], a: "one" }, first: 1,
+      } },
+    }],
+  }), /Conflicting canonical entity ID/);
   assert.throws(() => selectScopedWork({
     ...data,
     entities: [...data.entities, { ...task, workspaceId: "area:b" }],
