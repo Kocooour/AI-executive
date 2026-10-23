@@ -95,10 +95,11 @@ export function useCalendarEvents({ items, calendarEvents, calendarFresh, calend
 
   const hideEvent = (event: CalendarEvent, scope: "occurrence" | "series" = "occurrence") =>
     changeDecisions((current) => withDecision(current, scope === "series" ? seriesDecisionKey(event) || occurrenceDecisionKey(event) : occurrenceDecisionKey(event), "hidden", Date.now()));
-  // Removes whichever decision hides the event (its own, or its whole series').
+  // Removes every decision that hides the event: its own and its whole series'.
   const unhideEvent = (event: CalendarEvent) => {
-    const found = decisionFor(decisions, event);
-    return found ? changeDecisions((current) => withDecision(current, found.key, null, Date.now())) : Promise.resolve(false);
+    if (!isHidden(event)) return Promise.resolve(false);
+    const keys = [occurrenceDecisionKey(event), seriesDecisionKey(event)].filter((key) => key && decisions[key] === "hidden");
+    return changeDecisions((current) => keys.reduce((next, key) => withDecision(next, key, null, Date.now()), current));
   };
   const markNotTask = (event: CalendarEvent) =>
     changeDecisions((current) => withDecision(current, occurrenceDecisionKey(event), "notTask" satisfies CalendarDecision, Date.now()));
