@@ -1,6 +1,6 @@
 # Lumi — produktové zadání
 
-> **Závazný dokument pro produktové chování a priority.** Stav k 14. 10. 2026. [Rozcestník](../README.md) · [UX/UI](UX-UI.md) · [Architektura](ARCHITECTURE.md). Níže jsou zachované a uspořádané původní produktové kontrakty; cílové požadavky nejsou automaticky implementované funkce.
+> **Závazný dokument pro produktové chování a priority.** Základní revize 14. 10. 2026; cílový dodatek Prostory/Oblasti/Můj plán schválen 23. 10. 2026. [Rozcestník](../README.md) · [UX/UI](UX-UI.md) · [Architektura](ARCHITECTURE.md). Níže jsou zachované a uspořádané původní produktové kontrakty; cílové požadavky nejsou automaticky implementované funkce.
 
 ## Jak tento dokument používat
 
@@ -14,7 +14,7 @@
 
 | ID | Funkční oblast a minimální produktový závazek | Stav (orientační přehled) | Vazba na UX |
 |---|---|---|---|
-| **LUMI-FR-001** | Remember: kanonické úkoly/projekty/oblasti/poznámky/vztahy, historie a jednoznačné workspaces | Existující základ; širší Graph v2 je cíl | [Projekt](UX-UI.md#ux-přehled), Inbox, Notes |
+| **LUMI-FR-001** | Remember: kanonické úkoly/projekty/oblasti/poznámky/vztahy, historie a bezpečné hranice přístupu | Existující základ; širší Graph v2 je cíl | [Projekt](UX-UI.md#ux-přehled), Inbox, Notes |
 | **LUMI-FR-002** | Quick Capture, Inbox, bezpečné třídění návrhů a kontextových výtažků | Částečně dodáno, cílová interakce rozšířena | Inbox, mobile capture |
 | **LUMI-FR-003** | Attention: vysvětlitelné signály, stabilní pořadí, snooze/dismiss, životní cyklus | Částečně dodáno; kalendářová rizika zůstávají cíl | Home, oznámení |
 | **LUMI-FR-004** | Plan: proveditelný plán, oddělení dostupných a neověřených časových bloků | Existuje omezené ICS plánování; cílové UX je širší | Today, Calendar |
@@ -24,8 +24,9 @@
 | **LUMI-FR-008** | Globální hledání v přístupných datech s přiznáním chybějících konektorů | Částečně; externí soubory/e-maily jsou cíl | Global search |
 | **LUMI-FR-009** | Omezená, deduplikovaná a respektující soukromí proaktivita | Základ notifikací existuje; kompletní kontrakt je cíl | Notifications |
 | **LUMI-FR-010** | Mobilní a desktop PWA, offline práce, viditelné sync/freshness stavy | Existující základ; úplné UX cílové | iPhone Home, Today, Calendar |
-| **LUMI-FR-011** | Ochrana hranic workspaces, zdrojů, citlivosti a oprávnění | Existující základ a rozšiřující cílové kontrakty | Všechny |
+| **LUMI-FR-011** | Ochrana hranic Oblastí / interních workspaces, zdrojů, citlivosti a oprávnění | Existující základ a rozšiřující cílové kontrakty | Všechny |
 | **LUMI-FR-012** | Hlas, nové konektory a budoucí řízené akce | Cíl; není plně dodáno | Voice, Calendar, Search |
+| **LUMI-FR-013** | Můj plán, dva prostory, Oblasti určující oprávnění a bezpečná víceuživatelská spolupráce | Schválený cíl 2026-10-23; víceuživatelské sdílení dosud nedodáno | Home, Inbox, Today, Projects, scope switcher |
 
 ## Záměr, uživatel a hranice produktu
 
@@ -37,7 +38,7 @@ Typické scénáře: zachytit poznámku hlasem či textem; roztřídit příchoz
 
 Závazný výčet produktových metrik a pravidla jejich ochrany soukromí jsou uvedeny v kapitole [Shipped foundation and phased delivery](#shipped-foundation-and-phased-delivery), v odstavci začínajícím „Privacy-preserving product metrics“. Toto rozdělení dokumentace nepřidává nové metriky ani nemění jejich pravidla měření.
 
-Do cílového rozsahu patří osobní a sdílené workspaces, PWA, kanonické úkoly, Context Graph a schvalované nástroje. Mimo počáteční rozsah patří firemní BI, povinná nativní macOS aplikace, neomezená autonomie agentů nebo povinný cloudový účet třetí strany.
+Do cílového rozsahu patří individuální osobní prostor a sdílené Oblasti s řízeným členstvím, PWA, kanonické úkoly, Context Graph a schvalované nástroje. Vlastník produktu 23. 10. 2026 výslovně schválil víceuživatelskou spolupráci jako doplněk osobního asistenta; nejde o monitoring členů, zaměstnanců ani o enterprise řízení výkonu. Mimo počáteční rozsah patří firemní BI, povinná nativní macOS aplikace, neomezená autonomie agentů nebo povinný cloudový účet třetí strany.
 
 ---
 
@@ -52,9 +53,35 @@ Lumi helps one person remember commitments, see the few things needing attention
 | Plan | The next sequence is realistic. | Brief, ranked actions, capacity and calendar-aware proposals with stated data limits. |
 | Act | Approved work moves forward safely. | Reviewable proposal, scoped approval, controlled execution, audit and guarded Undo. |
 
-The canonical model remains **Tasks / Projects / Areas / Notes / Relations**. A task is the canonical execution record; a claim, note or chat message cannot silently become a task or mark it complete. People, organizations, meetings, decisions, topics and tools can be Context subjects with reviewed claims linked to canonical entities. Stable IDs, recurrence, history, deletion tombstones and sync behavior remain intact. Personal and Shared are distinct workspaces; All my work is a read-only aggregate and never a write target. Every mutation selects one explicit workspace.
+The canonical model remains **Tasks / Projects / Areas / Notes / Relations**. A task is the canonical execution record; a claim, note or chat message cannot silently become a task or mark it complete. People, organizations, meetings, decisions, topics and tools can be Context subjects with reviewed claims linked to canonical entities. Stable IDs, recurrence, history, deletion tombstones and sync behavior remain intact. User-facing **Osobní** and **Sdílené** are two spaces/scopes; **Můj plán** is the default authorized personal aggregation, never a third data store or write target. Target writes choose exactly one Area (Oblast), which resolves to one internal security workspace; legacy single-workspace write contracts remain enforced until migration.
 
 Lumi's principles are calm attention over volume, one coherent assistant across chat and UI, useful initiative with controlled execution, local-first operation, and evidence before confidence. Recommendations must never imply that Lumi knows, changed, sent or scheduled something it cannot substantiate. Agents are internal reusable capabilities, not the primary user mental model.
+
+### Prostory, Oblasti a Můj plán — schválený cílový kontrakt (2026-10-23, LUMI-FR-013)
+
+**Rozhodnutí vlastníka a status.** Lumi zůstává osobním asistentem konkrétního člověka (Remember → Attention → Plan → Act). Vlastník výslovně schválil řízenou spolupráci více identit v rodinných a dalších sdílených Oblastech; zákaz monitoringu lidí a autonomního sdílení zůstává. Toto je **cílový požadavek**, nikoli tvrzení o současném stavu. Aktuální MVP má jedinou identitu `owner`, sdílený workspace bez dalších členů a synchronizaci celého snímku. Žádné pozvánky ani sdílení dalším osobám nesmí být zapnuto před splněním bezpečnostních milníků v [architektuře](ARCHITECTURE.md#viceuzivatelske-oblasti--cilovy-bezpecnostni-kontrakt-2026-10-23).
+
+**Dva prostory, tři rozsahy zobrazení:**
+- **Osobní**: soukromé projekty a úkoly aktuálního uživatele ze všech jeho soukromých Oblastí.
+- **Sdílené**: projekty a úkoly ze všech sdílených Oblastí, ve kterých má uživatel platné členství, včetně práce ostatních oprávněných členů.
+- **Můj plán**: výchozí **agregovaný datový rozsah** pro Home, Inbox, Today, Upcoming, Projects a související pracovní filtry. Není samostatný prostor, obrazovka ani entita; Home / Denní brief zůstává první obrazovkou. Obsahuje všechny uživatelovy soukromé úkoly a jemu přidělené úkoly ze sdílených Oblastí. Samostatný sdílený úkol bez řešitele, sdílený úkol přidělený jinému členu ani úkol, který uživatel pouze vytvořil, nepatří automaticky do jeho plánu; zůstávají v pohledu Sdílené a nepřidělené úkoly jsou dostupné ke zpracování správcům Oblasti. Bez duplicit, se stejným ID/revizí napříč pohledy.
+
+**Oblasti jsou jediný uživatelský zdroj viditelnosti**, současně slouží jako organizační štítky a filtry. Každá Oblast je soukromá (patří jedinému uživateli) nebo sdílená (má explicitní seznam členů a jejich rolí). Každý projekt a každý samostatný úkol má **právě jednu** Oblast; úkol v projektu ji **povinně dědí** a nemůže mít vlastní odlišnou Oblast. Přesun do projektu převezme jeho Oblast, vyjmutí z projektu vyžaduje vlastní Oblast s výchozí bezpečnou soukromou hodnotou. Výchozí soukromou systémovou Oblastí při neurčeném zařazení je **Nezařazeno**; Inbox je stav třídění, ne Oblast. V soukromé Oblasti „Osobní“ lze mít projekt „Rodina“; není nutné vytvářet duplicitní Oblasti „Rodina – moje / společné“. Projekt může mít jen jednu Oblast; budoucí jiné tematické štítky nesmějí měnit oprávnění.
+
+**Soukromí a spolupráce.** Soukromé položky nejsou přidělitelné jiné identitě. Sdíleného řešitele lze vybrat jen mezi aktuálními členy cílové Oblasti; po odebrání člena se jeho nedokončené úkoly vrátí k přidělení a správce na to dostane bezpečnou upozorňovací položku. Vlastník, řešitel a člen Oblasti jsou odlišné pojmy. Role sdílené Oblasti: `viewer` (čtení), `editor` (práce s povoleným obsahem) a `admin` (členství, změny oprávnění a správa Oblasti); přesná matice akcí a pravidla posledního admina jsou v architektuře. Osobní plánování sdíleného úkolu (`today/when`, plánovaný blok, snooze/dismiss, soukromé připomínky) patří vždy **konkrétnímu uživateli**, nikoliv všem členům; společná pole úkolu zůstávají společná.
+
+**Změny hranice oprávnění.** Zařazení, přejmenování či přesun mezi Oblastmi nikdy nesmějí tiše zveřejnit data. Přesun soukromé položky do sdílené Oblasti, mezi dvěma sdílenými Oblastmi s různým členstvím a také odebrání dřívějšího přístupu (sdílená → soukromá/užší skupina) vyžaduje kontrolu oprávnění a explicitní potvrzení se seznamem získávajících/ztrácejících členů, dopadem na řešitele a na úkoly, poznámky a přílohy. Změna celé Oblasti na sdílenou se potvrzuje nad veškerým obsahem. Přesun musí být atomický a auditovaný. Historické hodnoty a revize **před** zpřístupněním soukromého projektu zůstávají dostupné jen původnímu oprávněnému uživateli; nový člen vidí až aktuální stav a oprávněnou následnou historii. Dříve stažené offline kopie nelze technicky vzít zpět; server revokuje přístup okamžitě a klient při příštím spojení data odstraní a nepovolí opožděné zápisy.
+
+**AI a zdrojový kontext.** Lumi může doporučit Oblast podle kontextu, ale nikdy nesmí bez výslovného potvrzení umístit soukromý obsah do sdílené Oblasti. Vytvoření sdíleného úkolu/projektu/poznámky z osobního e-mailu, kalendáře nebo citlivého kontextu musí před zveřejněním ukázat konkrétní přenášený obsah a adresáty. Agregovaná odpověď v Mém plánu neopravňuje publikovat soukromé závěry do sdílené Oblasti; autorizace zápisu se řídí **cílovou Oblastí**, nikoli aktivním pohledem. AI, vyhledávání, notifikace, index, cache, export a externí integrace respektují tutéž hranici.
+
+**Akceptace cílové funkce.**
+1. Home zůstává výchozí obrazovka; přepnutí Můj plán / Osobní / Sdílené mění pouze datový rozsah Home, Inbox, Today, Upcoming, Projects a vyhledávání, nikoliv identitu úkolů.
+2. Můj plán zahrne soukromé úkoly a sdílené úkoly přidělené uživateli, ale nikoli úkoly ostatních nebo nepřidělené; všechny oprávněné sdílené úkoly zůstanou dohledatelné v Sdílené.
+3. Projekt má přesně jednu Oblast; jeho úkoly ji odvozují, včetně přesunu, změny projektu a vyjmutí úkolu. Samostatný úkol bez Oblasti bezpečně skončí v soukromém Nezařazeno.
+4. Soukromý projekt „Rodina“ v soukromé Oblasti zůstává nepřístupný ostatním. Soukromý úkol nelze přiřadit jinému uživateli bez schválené změny Oblasti.
+5. Pozvání/odebrání člena mění skutečné serverové oprávnění; neautorizované čtení, zápis, tombstone, indexové výsledky ani AI odpověď neprozradí existenci soukromého obsahu.
+6. Změna Oblasti v obou směrech potvrzuje dopad, stará historie zůstává chráněná a zastaralá schválení po změně členství selhávají.
+7. Sdílený úkol může mít společný termín a řešitele, ale plánování, snooze, dismiss a push jednoho uživatele neovlivní druhého.
 
 ### Experience targets
 
@@ -63,7 +90,7 @@ Lumi's principles are calm attention over volume, one coherent assistant across 
 - **Working views:** Inbox, Today, Overdue, Upcoming, Anytime, Someday and Completed retain dates, deadline, priority, checklist, recurrence, notes, history and filters. Projects and Areas show outcome, status, next action, related notes/context and risk. A project without a next action is an attention candidate, not automatically a failed project.
 - **Notes, relations and retrieval:** Markdown-oriented knowledge, typed relations, backlinks/mentions, search and claim-level review. Global search labels type, workspace and source. The target covers permitted tasks, projects, areas, notes, people/organizations, relations and, when explicitly connected and indexed, files and e-mails. Current sources remain narrower; unavailable or unindexed connectors must be disclosed. Restricted content must not appear in snippets. A wiki mention is navigation, not a confirmed semantic relation.
 - **Calendar-aware planning:** Rank work using deadlines, priority, confirmed current non-sensitive importance/waiting claims, availability and measured duration. Exact free blocks require a fresh connected calendar and must avoid existing planned work. A missing or stale calendar permits task ordering but no claimed free time. Accepting a block is a revision- and overlap-checked proposal, does not rewrite the due date, and records planning feedback.
-- **Universal chat:** Chat answers questions, captures input and prepares the same operations as the UI: ask what matters, plan today, move a task, create a project, or explain a blocker. It uses the minimum authorized Context Resolver bundle, one explicit workspace, the Tool Registry and the same proposal/approval boundary. Chat is neither a second data store nor an authorization bypass. Conversation history alone is not evidence of a commitment.
+- **Universal chat:** Chat answers questions, captures input and prepares the same operations as the UI: ask what matters, plan today, move a task, create a project, or explain a blocker. It uses the minimum authorized Context Resolver bundle, the actor's permitted read scopes and exactly one explicit target Area/security scope for each proposed write, the Tool Registry and the same proposal/approval boundary. The current one-workspace API remains in force until the multi-user migration. Chat is neither a second data store nor an authorization bypass. Conversation history alone is not evidence of a commitment.
 - **Mobile/PWA/offline:** Desktop and mobile support the same essential capture, triage and brief paths with keyboard and touch access, visible focus, semantic labels, adequate contrast and reduced motion. The installed PWA shows a truthful offline state. Capture and allowed edits may queue locally with visible pending/sync/conflict states; agents cannot consume them as confirmed context before canonical acceptance. Offline availability never implies a live calendar, push delivery or server proactivity.
 
 ## Attention contract — target requirement
@@ -98,7 +125,7 @@ Quiet hours defer routine sends to the next allowed window. A controlled urgent 
 
 Every material recommendation and context claim exposes provenance (owner statement, source extraction, inference or legacy import), review state, freshness, sensitivity and workspace/scope. Unknown source, date or confidence stays unknown. Metadata-only coverage cannot substantiate unseen content; conflicting evidence becomes a reviewable proposal. A private source remains private even when a visible subject points to it. The detailed Context Graph v2 contract below governs claims, evidence, migration and export.
 
-Reads run automatically only inside explicit permitted scopes. The server validates all structured proposals and tool permissions. The required path is **intent/trigger → minimum context → allowed tool → proposal → owner approval → execution → audit → guarded Undo**. The owner sees exact target, workspace, proposed before/after values and side effects. Proposals bind to the creating owner session, workspace, expected object/data revision and expiry; a stale, expired, already-used or different-session approval is rejected, with no partial mutation. Concurrent approvals of the same revision allow at most one successful write. Retries use idempotency keys. External sends and calendar writes require explicit approval by default and dedicated policy; a read-only scheduled agent can prepare, but not approve, its own proposal. Audit records actor, operation, target, before/after revisions, approval and outcome without copying protected content into operational logs. Undo is a new guarded compensating action, available only where side effects can be safely reversed; it refuses to overwrite a later edit, explains non-reversible sends, and never erases history.
+Reads run automatically only inside explicit permitted scopes. The server validates all structured proposals and tool permissions. The required path is **intent/trigger → minimum context → allowed tool → proposal → owner approval → execution → audit → guarded Undo**. The actor sees exact target Area, underlying security workspace, proposed before/after values, affected members and side effects. In the multi-user target proposals bind to the authenticated actor/session, target Area/workspace, expected object/data revision, Area/membership revision and expiry; a stale, expired, already-used or different-session approval is rejected, with no partial mutation. Concurrent approvals of the same revision allow at most one successful write. Retries use idempotency keys. External sends and calendar writes require explicit approval by default and dedicated policy; a read-only scheduled agent can prepare, but not approve, its own proposal. Audit records actor, operation, target, before/after revisions, approval and outcome without copying protected content into operational logs. Undo is a new guarded compensating action, available only where side effects can be safely reversed; it refuses to overwrite a later edit, explains non-reversible sends, and never erases history.
 
 ## Shipped foundation and phased delivery
 
