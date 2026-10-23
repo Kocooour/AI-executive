@@ -114,7 +114,8 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
 
     // "Ano": the event becomes a task of its length and stays on the axis, now as that task.
     await item(page, event.title).click();
-    await page.getByRole("button", { name: `Vytvořit úkol z události ${event.title}` }).click();
+    // "Je to úkol?" is asked only before the event is over; later the panel offers "Vytvořit úkol".
+    await page.locator("[data-timeline-panel]").locator("[data-event-answer='yes'], [data-event-create-task]").first().click();
     await expect.poll(async () => (await serverEntities(page)).some((entity) => entity.title === event.title && entity.properties?.calendarEventId === event.id)).toBe(true);
     await expect(item(page, event.title)).toHaveAttribute("data-timeline-kind", "task");
     await expect(item(page, event.title)).toHaveAttribute("data-timeline-minutes", "60");

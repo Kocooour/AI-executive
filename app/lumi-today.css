@@ -463,8 +463,8 @@
     font-size: 11px;
     letter-spacing: -0.01em;
   }
-  .todayTimeCell.isUnplaced .todayTimeText,
-  .todayTimeCell[data-time-kind="skipped"] .todayTimeText {
+  /* Icon only: the range is in the cell's label, the menu and the day timeline above. */
+  .todayTimeCell .todayTimeText {
     position: absolute;
     width: 1px;
     height: 1px;

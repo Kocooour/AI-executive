@@ -444,8 +444,9 @@ test.describe("on a 390px phone", () => {
       const badge = await rect(taskRow.locator(".deadlineBadge"));
       const chip = await rect(taskRow.locator(".deferChip"));
       const cellBox = await rect(cell);
-      // The title keeps at least half of the row (about 24 characters at this size).
-      expect(title.width).toBeGreaterThanOrEqual(rowBox.width * 0.5);
+      // The title keeps priority: the time cell is an icon on the first line (E4: one line per row, so a
+      // row's height can follow its estimate), which leaves the title about 40% of the row.
+      expect(title.width).toBeGreaterThanOrEqual(rowBox.width * 0.4);
       expect(cellBox.height).toBeGreaterThanOrEqual(43.5);
       const overlap = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
         a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
