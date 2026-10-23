@@ -76,6 +76,9 @@ test("a project task inherits when an old property holds the project reference",
   assert.equal(areaFor(result, "p").length, 1);
   assert.equal(areaFor(result, "t").length, 0);
   assert.equal(result.report.inheritedTaskIds[0], "t");
+  assert.equal(result.relations.filter((relation) =>
+    relation.sourceEntityId === "t" && relation.relationType === "belongs_to_project").length, 1);
+  assert.equal(result.report.addedLegacyProjectRelationIds.length, 1);
 });
 
 test("shared legacy workspace remains shared, with compatibility Area in same workspace", () => {
