@@ -27,7 +27,7 @@ import { type AIProposal, type AssistantMessage, type CalendarEvent, type Calend
 import { copy } from "./copy";
 import { views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
-import { useCalendarEvents } from "./hooks/use-calendar-events";
+import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
 import { useDayPlan } from "./hooks/use-day-plan";
 import { useContextEvidence } from "./hooks/use-context-evidence";
 import { getRelationDefinition, relationsBetween } from "../../lib/context-relations";
@@ -258,6 +258,7 @@ export function useLumiApp() {
   const calendarLoadVersion = useRef(0);
   // The task a calendar event just became: its Undo removes that task instead of restoring a record.
   const undoCreated = useRef<Entity | null>(null);
+  const undoDecisions = useRef<CalendarDecisionUndo | null>(null);
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
@@ -1998,7 +1999,7 @@ export function useLumiApp() {
   const calendarEventsState = useCalendarEvents({
     items, calendarEvents, calendarFresh, calendarTimezone, today, activeWorkspaceId, calendarWorkspaceSelection,
     workdayStart: notificationState?.preferences.workdayStart || "08:00", workdayEnd: notificationState?.preferences.workdayEnd || "18:00",
-    localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, create, deferTask,
+    localDataVersion, syncToServer, load, setUndo, setUndoRelations, undoCreated, undoDecisions, create, deferTask,
   });
   const { agendaCalendarEvents, effectiveBusyCalendarEvents } = calendarEventsState;
   // Agendas (Today, Home) leave out hidden and converted events; the Calendar view lists everything.
@@ -2770,6 +2771,21 @@ export function useLumiApp() {
   }
   async function restore() {
     if (!undo) return;
+    if (undoDecisions.current?.entity === undo) {
+      const { previous } = undoDecisions.current;
+      undoDecisions.current = null;
+      localDataVersion.current += 1;
+      await db.transaction("rw", db.entities, async () => {
+        const current = await db.entities.get(undo.id);
+        if (current) await db.entities.put({ ...current, properties: restoreCalendarDecisions(current, previous, Date.now()), updatedAt: writeTime() });
+      });
+      localDataVersion.current += 1;
+      setUndo(null);
+      setUndoRelations([]);
+      await syncToServer();
+      load();
+      return;
+    }
     if (undoCreated.current === undo) {
       const created = undo;
       undoCreated.current = null;

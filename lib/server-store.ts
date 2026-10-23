@@ -20,6 +20,7 @@ import {
 } from "./backup-engine";
 import { HttpInputError } from "./http-security";
 import { excludedClearedTables, replacedTables } from "./backup-scope";
+import { DECISIONS_PROPERTY, validDecisionsValue } from "./calendar-decisions";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
@@ -950,7 +951,8 @@ export function validateSnapshot(snapshot: unknown): asserts snapshot is StoreSn
       workspace.title.length > 120 ||
       !["personal", "shared"].includes(String(workspace.properties.kind)) ||
       workspace.properties.role !== "owner" ||
-      !Array.isArray(workspace.properties.members)
+      !Array.isArray(workspace.properties.members) ||
+      !validDecisionsValue(workspace.properties[DECISIONS_PROPERTY])
     ) {
       throw new Error("Snapshot contains an invalid workspace");
     }

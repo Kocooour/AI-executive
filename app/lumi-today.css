@@ -476,6 +476,9 @@
 /* Calendar events: "Is it a task?", the task an event became, Lumi's suggestion for a full day, and Hide. */
 .calendarEventActions { grid-column: 1 / -1; display: grid; gap: 6px; min-width: 0; }
 .calendarAgendaItem > .calendarEventActions { padding: 0 12px 10px; }
+/* The card is the event line with its actions below, never side by side (a generic article rule makes it a flex row). */
+.calendarView .calendarAgendaItem { display: grid; grid-template-columns: minmax(0, 1fr); }
+.calendarAgendaOpen strong { overflow-wrap: anywhere; }
 .calendarEventRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .calendarEventAsk, .calendarEventTask { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); min-width: 0; }
 .calendarEventAsk p { margin: 0; }
@@ -486,6 +489,7 @@
   background: var(--surface-subtle); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
 }
 .calendarEventActions button.primaryAction { border-color: transparent; }
+.calendarEventActions button { flex: 0 0 auto; width: auto; }
 .calendarEventHide { margin-left: auto; }
 .calendarEventSuggestion { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--surface-subtle); font-size: 13px; }
 .calendarEventError { margin: 0; color: var(--danger, #a64220); font-size: 13px; }
@@ -493,7 +497,9 @@
 .calendarEventHideMenu button { text-align: left; }
 .calendarAgendaItem.taskEvent { border-left: 4px solid var(--success, #2f7d4f); }
 .calendarAgendaItem.taskEvent.isDone strong { text-decoration: line-through; opacity: .7; }
-.calendarAgendaItem.hiddenEvent { opacity: .5; border-style: dashed; }
+/* Hidden: faded text only, so the Show button keeps its full contrast. */
+.calendarAgendaItem.hiddenEvent { border-style: dashed; background: transparent; }
+.calendarAgendaItem.hiddenEvent .calendarAgendaOpen { opacity: .5; }
 .calendarAgendaItem.hiddenEvent .calendarAgendaOpen { cursor: default; }
 @media (pointer: coarse) {
   .calendarEventActions button:not(.textAction), .calendarEventHideMenu button { min-height: 44px; min-width: 44px; padding: 8px 14px; }

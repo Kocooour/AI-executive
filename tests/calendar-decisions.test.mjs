@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  KEEP_DECISION_DAYS, MAX_DECISIONS, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
+  KEEP_DECISION_DAYS, MAX_DECISIONS, restoreCalendarDecisions, validDecisionsValue, decisionFor, dayFreeMinutes, effectiveBusyEvents, convertedEventIds, eventTaskDraft, isHiddenEvent, isRecurringEvent, linkedEventTasks,
   needsTaskQuestion, occurrenceDecisionKey, pruneDecisions, readDecisions, reprioritizeSuggestion, seriesDecisionKey, withDecision,
 } from "../lib/calendar-decisions.ts";
 import { mergeEntity } from "../lib/field-merge.ts";
@@ -79,7 +79,7 @@ test("linkedEventTasks maps events to tasks of the workspace and prefers an open
   const map = linkedEventTasks([
     task("done", { calendarEventId: "e1" }, { status: "completed" }), task("open", { calendarEventId: "e1" }),
     task("other", { calendarEventId: "e2" }, { workspaceId: "x" }), task("plain"),
-  ], "w");
+  ], "w", [event(), event({ id: "e2", uid: "u2" })]);
   assert.deepEqual([...map.keys()], ["e1"]);
   assert.equal(map.get("e1").id, "open");
 });
@@ -88,7 +88,8 @@ test("the task draft takes the title, local date, rounded length and a link back
   const draft = eventTaskDraft(event({ start: "2026-10-23T22:30:00.000Z", end: "2026-10-23T23:20:20.000Z", occurrenceKey: "u1:k" }), "Europe/Prague");
   assert.equal(draft.title, "Secret title");
   assert.equal(draft.when, "2026-10-24", "22:30Z is already the next day in Prague");
-  assert.deepEqual(draft.properties, { calendarEventId: "e1", calendarSourceId: "src", calendarEventKey: "u1:k", estimatedMinutes: 50 });
+  assert.deepEqual(draft.properties, { calendarEventId: "e1", calendarSourceId: "src", calendarEventKey: "u1:k", calendarEventUid: "u1", estimatedMinutes: 50 });
+  assert.equal(eventTaskDraft(event(), "UTC", true).properties.calendarEventSingle, true);
   assert.equal(eventTaskDraft(event(), "America/New_York").when, "2026-10-23");
 });
 
@@ -170,7 +171,7 @@ test("effective busy events: hidden and converted events do not occupy time, 'no
   const tasks = [task("t", { calendarEventId: "converted" }), task("other", {}), { ...task("note", { calendarEventId: "plain" }), type: "note" }];
   assert.deepEqual(effectiveBusyEvents(events, decisions, tasks).map((e) => e.id), ["plain", "notTask"]);
   assert.deepEqual(effectiveBusyEvents(events, {}, []).map((e) => e.id).sort(), ["converted", "hiddenOcc", "notTask", "plain", "series1", "series2"].sort());
-  assert.deepEqual([...convertedEventIds(tasks)], ["converted"]);
+  assert.deepEqual([...convertedEventIds(tasks, events)], ["converted"]);
   // A completed task still stands in for its event.
   assert.equal(effectiveBusyEvents([event({ id: "x" })], {}, [task("d", { calendarEventId: "x" }, { status: "completed" })]).length, 0);
 });
@@ -181,4 +182,51 @@ test("free minutes grow when hidden or converted events stop being busy", () => 
   const hidden = dayFreeMinutes(effectiveBusyEvents(timed, { [occurrenceDecisionKey(timed[0])]: "hidden" }, []), "2026-10-23", "Europe/Prague", "09:00", "17:00");
   assert.equal(full, 6 * 60);
   assert.equal(hidden, 8 * 60);
+});
+
+test("a single event moved in the source calendar keeps its task; a recurring occurrence does not borrow another's", () => {
+  const moved = event({ id: "new-id", uid: "one", occurrenceKey: "one:2026-10-24T10:00:00.000Z" });
+  const single = task("t1", { calendarEventId: "old-id", calendarSourceId: "src", calendarEventUid: "one", calendarEventSingle: true });
+  assert.deepEqual([...convertedEventIds([single], [moved])], ["new-id"]);
+  // Legacy task without the uid: read from the occurrence key.
+  const legacy = task("t2", { calendarEventId: "old-id", calendarSourceId: "src", calendarEventKey: "one:2026-10-23T10:00:00.000Z", calendarEventSingle: true });
+  assert.deepEqual([...convertedEventIds([legacy], [moved])], ["new-id"]);
+  // A task made from one occurrence of a series never covers another occurrence.
+  const fromSeries = task("t3", { calendarEventId: "mon", calendarSourceId: "src", calendarEventUid: "ser" });
+  assert.deepEqual([...convertedEventIds([fromSeries], [event({ id: "tue", uid: "ser", occurrenceKey: "ser:2026-10-27T09:00:00.000Z" })])], []);
+  // Two cached events with the uid: only the id matches.
+  const twin = [event({ id: "a", uid: "one" }), event({ id: "b", uid: "one" })];
+  assert.deepEqual([...convertedEventIds([single], twin)], []);
+});
+
+test("an all-day event's task gets its date whatever the server's zone was", () => {
+  // VALUE=DATE 2026-10-23 parsed east of UTC (Prague) and west of UTC (New York).
+  assert.equal(eventTaskDraft(event({ allDay: true, start: "2026-10-22T22:00:00.000Z", end: "2026-10-23T22:00:00.000Z" }), "UTC").when, "2026-10-23");
+  assert.equal(eventTaskDraft(event({ allDay: true, start: "2026-10-23T04:00:00.000Z", end: "2026-10-24T04:00:00.000Z" }), "UTC").when, "2026-10-23");
+});
+
+test("a long uid becomes a short stable digest in decision keys, keeping the start for pruning", () => {
+  const uid = "x".repeat(2000);
+  const key = occurrenceDecisionKey(event({ uid, occurrenceKey: `${uid}:2026-10-23T09:00:00.000Z` }));
+  assert.ok(key.length < 60, key);
+  assert.ok(key.endsWith(":2026-10-23T09:00:00.000Z"));
+  assert.equal(key, occurrenceDecisionKey(event({ uid, occurrenceKey: `${uid}:2026-10-23T09:00:00.000Z` })));
+  assert.notEqual(seriesDecisionKey(event({ uid })), seriesDecisionKey(event({ uid: `${uid}y` })));
+});
+
+test("stored decisions are validated for sync", () => {
+  assert.equal(validDecisionsValue(undefined), true);
+  assert.equal(validDecisionsValue({ "occ:s:a": "hidden", "series:s:b": "notTask" }), true);
+  for (const bad of [null, [], "x", { "occ:s:a": 1 }, { "other:a": "hidden" }, { ["occ:" + "x".repeat(700)]: "hidden" },
+    Object.fromEntries(Array.from({ length: 1001 }, (_, index) => [`occ:s:${index}`, "hidden"]))]) {
+    assert.equal(validDecisionsValue(bad), false, JSON.stringify(bad)?.slice(0, 40));
+  }
+});
+
+test("Undo puts back only the decisions it changed and keeps the rest of the record", () => {
+  const current = { properties: { kind: "personal", calendarDecisions: { "occ:s:mine": "hidden", "occ:s:other-device": "hidden" }, manualOrders: { a: 1 } } };
+  const properties = restoreCalendarDecisions(current, { "occ:s:mine": null }, Date.parse("2026-10-23T00:00:00Z"));
+  assert.deepEqual(properties.calendarDecisions, { "occ:s:other-device": "hidden" });
+  assert.deepEqual(properties.manualOrders, { a: 1 });
+  assert.equal("calendarDecisions" in restoreCalendarDecisions({ properties: { calendarDecisions: { "occ:s:mine": "hidden" } } }, { "occ:s:mine": null }, 0), false);
 });

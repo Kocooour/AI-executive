@@ -66,7 +66,7 @@ test("hide: a single event hides at once with Undo, a recurring one asks, hidden
     await expect(hiddenCards(single.title)).toHaveCount(1);
     await expect(hiddenCards(single.title)).toContainText("Skryto");
     await expect(hiddenCards(single.title).locator("[data-event-answer]")).toHaveCount(0);
-    await expectOnServer(page, (entity) => Boolean((entity.properties?.calendarDecisions as Record<string, string> | undefined)?.[`occ:e2e-src:${single.uid}:${single.start}`]), true);
+    await expectOnServer(page, (entity) => Boolean((entity.properties?.calendarDecisions as Record<string, string> | undefined)?.[`series:e2e-src:${single.uid}`]), true);
     expect(JSON.stringify(await decisionsOnServer(page))).not.toContain("Jednorázová");
 
     // Undo puts it back.
@@ -110,7 +110,9 @@ test("Je to úkol?: Ne stops asking, Ano makes a task with the event's length an
     await card(page, asked.title).getByRole("button", { name: `Vytvořit úkol z události ${asked.title}` }).click();
     await expect(card(page, asked.title)).toHaveCount(1);
     await expect(card(page, asked.title)).toHaveAttribute("data-event-state", "task");
-    await expect(card(page, asked.title).locator(".calendarEventTask")).toContainText(`Úkol: ${asked.title}`);
+    // The card is the task: its title once, a link to open it and one-click complete.
+    await expect(card(page, asked.title).getByText(asked.title, { exact: true })).toHaveCount(1);
+    await expect(card(page, asked.title).getByRole("button", { name: `Otevřít úkol ${asked.title}` })).toBeVisible();
     await expect(card(page, asked.title).locator("[data-event-complete]")).toBeVisible();
     await expect(card(page, asked.title).locator("[data-event-answer]")).toHaveCount(0);
     await expectOnServer(page, (entity) => entity.title === asked.title && entity.properties?.calendarEventId === asked.id, true);
@@ -160,13 +162,42 @@ test("a full day: after Ano Lumi proposes moving the least important task and ap
     await page.reload();
     await waitUntilSynced(page);
     await card(page, event.title).getByRole("button", { name: `Vytvořit úkol z události ${event.title}` }).click();
-    const line = card(page, event.title).locator("[data-event-suggestion]");
+    const line = page.locator("[data-event-suggestion]");
     await expect(line).toContainText(`Lumi navrhuje posunout ${movable.title}`);
     await expect(line).toContainText("protože den je plný");
     await line.getByRole("button", { name: "Posunout" }).click();
     await expect(line).toHaveCount(0);
     await expectOnServer(page, (entity) => entity.id === movable.id && entity.properties?.when === after, true);
     await expectOnServer(page, (entity) => entity.id === keep.id && entity.properties?.when === day, true);
+  } finally {
+    const created = (await serverEntities(page)).filter((entity) => entity.type === "task" && entity.title.includes(id)).map((entity) => entity.id);
+    await removeTasks(page, [...new Set([keep.id, movable.id, ...created])]);
+    await clearDecisions(page);
+  }
+});
+
+test("a full day answered from Today: the event leaves the agenda and Lumi's suggestion is still shown there", async ({ page }) => {
+  const id = stamp();
+  const iso = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+  const event: MockEvent = { id: `e2e-ev-${id}-t`, uid: `today-${id}`, title: `Dlouhý blok ${id}`, start: iso(5), end: iso(5 + 7 * 60) };
+  await mockCalendar(page, [event]);
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  const today = await dayOffset(page, 0);
+  const keep = { id: `e2e-cal-tkeep-${id}`, title: `Důležitý dnes ${id}`, properties: { when: today, today: true, priority: "high", estimatedMinutes: 240 } };
+  const movable = { id: `e2e-cal-tmove-${id}`, title: `Odložitelný dnes ${id}`, properties: { when: today, today: true, estimatedMinutes: 180 } };
+  try {
+    await seedTasks(page, [keep, movable]);
+    await page.reload();
+    await waitUntilSynced(page);
+    const agenda = page.locator(".todayCalendarCommitments");
+    await agenda.getByRole("button", { name: `Vytvořit úkol z události ${event.title}` }).click();
+    const line = page.locator("[data-event-suggestion]");
+    await expect(line).toContainText(`Lumi navrhuje posunout ${movable.title}`);
+    await expect(agenda.locator("[data-event-actions]", { hasText: event.title })).toHaveCount(0);
+    await line.getByRole("button", { name: "Posunout" }).click();
+    await expect(line).toHaveCount(0);
+    await expectOnServer(page, (entity) => entity.id === movable.id && entity.properties?.when !== today, true);
   } finally {
     const created = (await serverEntities(page)).filter((entity) => entity.type === "task" && entity.title.includes(id)).map((entity) => entity.id);
     await removeTasks(page, [...new Set([keep.id, movable.id, ...created])]);

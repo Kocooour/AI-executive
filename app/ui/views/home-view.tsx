@@ -6,6 +6,7 @@ import type { LumiApp } from "../use-lumi-app";
 import { AttentionItemRow } from "./attention-item";
 import { DeferChip } from "./defer-popover";
 import { RecordMarks } from "./held-back";
+import { CalendarEventNotice } from "./calendar-event-actions";
 import { TodayAgenda } from "./today-agenda";
 import { WorkNowCard } from "./work-now-card";
 
@@ -150,6 +151,7 @@ export function HomeView({ app }: { app: LumiApp }) {
           {homeTodayTasks.length === 0 && homeToday.inAttention === 0 && <div className="calmEmpty"><span>✓</span><p>{tr("nothingToday")}</p><button onClick={() => openCapture()}>{tr("addTask")}</button></div>}
         </div>
         {moreToday > 0 && <button type="button" className="textAction" onClick={() => setView("Today")}>{fill("homeMoreToday", { n: moreToday })} →</button>}
+        <CalendarEventNotice app={app} />
         {todayCalendarEvents.length > 0 && <>
           <p className="homeSubhead">{tr("homeFixedEvents")}</p>
           <TodayAgenda app={app} />

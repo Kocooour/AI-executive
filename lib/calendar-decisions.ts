@@ -36,10 +36,38 @@ export const MAX_EVENT_TASK_MINUTES = 480;
 const DAY_MS = 86_400_000;
 const isDecision = (value: unknown): value is CalendarDecision => value === "hidden" || value === "notTask";
 
+export const MAX_DECISION_KEY_LENGTH = 600;
+const LONG_PART = 160;
+
+// A calendar uid has no length limit: a long one is replaced by a short stable digest (FNV-1a, two
+// seeds), so the map stays small. The start time an occurrence key ends with is kept for pruning.
+function shortPart(value: string) {
+  if (value.length <= LONG_PART) return value;
+  const fnv = (seed: number) => {
+    let hash = seed;
+    for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619) >>> 0;
+    return hash.toString(16).padStart(8, "0");
+  };
+  return `#${fnv(2166136261)}${fnv(0x9747b28c)}`;
+}
+function shortOccurrence(key: string) {
+  const match = /^(.*)(:\d{4}-\d{2}-\d{2}T[0-9:.]+Z)$/.exec(key);
+  return match ? `${shortPart(match[1])}${match[2]}` : shortPart(key);
+}
+
 export const occurrenceDecisionKey = (event: Pick<DecisionEvent, "sourceId" | "occurrenceKey" | "id">) =>
-  `occ:${event.sourceId}:${event.occurrenceKey || event.id}`;
+  `occ:${event.sourceId}:${shortOccurrence(event.occurrenceKey || event.id)}`;
 export const seriesDecisionKey = (event: Pick<DecisionEvent, "sourceId" | "uid">) =>
-  event.uid ? `series:${event.sourceId}:${event.uid}` : "";
+  event.uid ? `series:${event.sourceId}:${shortPart(event.uid)}` : "";
+
+/** Whether a stored `calendarDecisions` value is acceptable for sync (absent is). */
+export function validDecisionsValue(value: unknown) {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  return entries.length <= MAX_DECISIONS * 2 && entries.every(([key, decision]) =>
+    key.length <= MAX_DECISION_KEY_LENGTH && (key.startsWith("occ:") || key.startsWith("series:")) && isDecision(decision));
+}
 
 /** The decisions stored on a workspace entity; anything malformed is ignored. */
 export function readDecisions(workspace: Pick<Entity, "properties"> | null | undefined): CalendarDecisions {
@@ -89,6 +117,17 @@ export function withDecision(decisions: CalendarDecisions, key: string, value: C
   return pruneDecisions(next, now);
 }
 
+/**
+ * A workspace record's properties with some decisions put back (`null` clears one): Undo of one
+ * decision change, applied to the record as it is now so changes made meanwhile elsewhere stay.
+ */
+export function restoreCalendarDecisions(current: Pick<Entity, "properties">, previous: Record<string, CalendarDecision | null>, now: number) {
+  const next = Object.entries(previous).reduce((decisions, [key, value]) => withDecision(decisions, key, value, now), readDecisions(current));
+  const properties = { ...current.properties };
+  if (Object.keys(next).length) properties[DECISIONS_PROPERTY] = next; else delete properties[DECISIONS_PROPERTY];
+  return properties;
+}
+
 /** The decision that applies to an event: its own occurrence first, then its series. */
 export function decisionFor(decisions: CalendarDecisions, event: DecisionEvent): { decision: CalendarDecision; key: string } | null {
   const own = occurrenceDecisionKey(event);
@@ -100,14 +139,46 @@ export function decisionFor(decisions: CalendarDecisions, event: DecisionEvent):
 
 export const isHiddenEvent = (decisions: CalendarDecisions, event: DecisionEvent) => decisionFor(decisions, event)?.decision === "hidden";
 
-/** Ids of the events that tasks point to (`properties.calendarEventId`); `tasks` may hold anything, only tasks count. */
-export function convertedEventIds(tasks: Entity[]) {
-  const ids = new Set<string>();
+// The uid a task's event had: stored since 2026-10, else read from its occurrence key ("<uid>:<start ISO>").
+function taskEventUid(task: Entity) {
+  const uid = task.properties?.calendarEventUid;
+  if (typeof uid === "string" && uid) return uid;
+  const key = task.properties?.calendarEventKey;
+  const match = typeof key === "string" ? /^(.+):\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/.exec(key) : null;
+  return match ? match[1] : "";
+}
+
+/**
+ * The task each event became. A task points to its event by id; the id changes when the event is
+ * moved in the source calendar, so an event that was single (not recurring) when the task was made
+ * (`calendarEventSingle`) is also found by its source and uid.
+ * `tasks` may hold anything, only tasks count; an open task is preferred when an event has several.
+ */
+export function eventTaskLinks(events: DecisionEvent[], tasks: Entity[]): Map<string, Entity> {
+  const byId = new Map<string, Entity>(), byUid = new Map<string, Entity>();
+  const better = (current: Entity | undefined, task: Entity) => !current || (task.status === "open" && current.status !== "open");
   for (const task of tasks) {
-    const id = task?.type === "task" ? task.properties?.calendarEventId : undefined;
-    if (typeof id === "string" && id) ids.add(id);
+    if (task?.type !== "task") continue;
+    const id = task.properties?.calendarEventId;
+    if (typeof id === "string" && id && better(byId.get(id), task)) byId.set(id, task);
+    const source = task.properties?.calendarSourceId, uid = taskEventUid(task);
+    const uidKey = task.properties?.calendarEventSingle === true && typeof source === "string" && source && uid ? `${source}\0${uid}` : "";
+    if (uidKey && better(byUid.get(uidKey), task)) byUid.set(uidKey, task);
   }
-  return ids;
+  const uidCounts = new Map<string, number>();
+  for (const event of events) if (event.uid) uidCounts.set(`${event.sourceId}\0${event.uid}`, (uidCounts.get(`${event.sourceId}\0${event.uid}`) || 0) + 1);
+  const result = new Map<string, Entity>();
+  for (const event of events) {
+    const uidKey = event.uid ? `${event.sourceId}\0${event.uid}` : "";
+    const task = byId.get(event.id) ?? (uidKey && uidCounts.get(uidKey) === 1 ? byUid.get(uidKey) : undefined);
+    if (task) result.set(event.id, task);
+  }
+  return result;
+}
+
+/** Ids of the events that became tasks (see `eventTaskLinks`). */
+export function convertedEventIds(tasks: Entity[], events: DecisionEvent[]) {
+  return new Set(eventTaskLinks(events, tasks).keys());
 }
 
 /** Hidden by the owner, or turned into a task: the event is not an event any more (not in agendas, not busy). */
@@ -120,7 +191,7 @@ export const isConvertedEvent = (event: Pick<DecisionEvent, "id">, converted: Se
  * and the server, is computed from this list. `tasks` are the workspace's non-deleted tasks.
  */
 export function effectiveBusyEvents<E extends DecisionEvent & { busy: boolean }>(events: E[], decisions: CalendarDecisions, tasks: Entity[]): E[] {
-  const converted = convertedEventIds(tasks);
+  const converted = convertedEventIds(tasks, events);
   return events.filter((event) => event.busy && !isHiddenEvent(decisions, event) && !converted.has(event.id));
 }
 
@@ -128,17 +199,9 @@ export function effectiveBusyEvents<E extends DecisionEvent & { busy: boolean }>
 export const isRecurringEvent = (event: DecisionEvent, events: DecisionEvent[]) =>
   Boolean(event.uid) && events.some((other) => other.id !== event.id && other.sourceId === event.sourceId && other.uid === event.uid);
 
-/** Ids of calendar events that tasks of a workspace point to (`properties.calendarEventId`). */
-export function linkedEventTasks(entities: Entity[], workspaceId: string): Map<string, Entity> {
-  const result = new Map<string, Entity>();
-  for (const entity of entities) {
-    if (entity.type !== "task" || entity.workspaceId !== workspaceId) continue;
-    const id = entity.properties?.calendarEventId;
-    if (typeof id !== "string" || !id) continue;
-    // An open task is the one to show when an event has several.
-    if (!result.has(id) || (entity.status === "open" && result.get(id)?.status !== "open")) result.set(id, entity);
-  }
-  return result;
+/** The task each event of a workspace became (see `eventTaskLinks`). */
+export function linkedEventTasks(entities: Entity[], workspaceId: string, events: DecisionEvent[]): Map<string, Entity> {
+  return eventTaskLinks(events, entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
 }
 
 /**
@@ -172,15 +235,17 @@ export interface EventTaskDraft {
 }
 
 /** The task made from an event: its title and day, its length as the estimate, and a link back. */
-export function eventTaskDraft(event: DecisionEvent, timezone: string): EventTaskDraft | null {
+export function eventTaskDraft(event: DecisionEvent, timezone: string, single = false): EventTaskDraft | null {
   const start = Date.parse(event.start), end = Date.parse(event.end);
   if (!Number.isFinite(start)) return null;
-  // An all-day event (VALUE=DATE) keeps its date in UTC; it has no duration worth an estimate.
-  const when = event.allDay ? event.start.slice(0, 10) : localDay(start, timezone);
+  // An all-day event (VALUE=DATE) starts at midnight of the server's zone, given in UTC: half a day
+  // later is its date in UTC for any zone within ±12 h. It has no duration worth an estimate.
+  const when = event.allDay ? new Date(start + DAY_MS / 2).toISOString().slice(0, 10) : localDay(start, timezone);
   const properties: Record<string, unknown> = {
     calendarEventId: event.id,
     calendarSourceId: event.sourceId,
     ...(event.occurrenceKey ? { calendarEventKey: event.occurrenceKey } : {}),
+    ...(event.uid ? { calendarEventUid: event.uid, ...(single ? { calendarEventSingle: true } : {}) } : {}),
   };
   if (!event.allDay && Number.isFinite(end) && end > start) {
     const minutes = Math.max(MIN_EVENT_TASK_MINUTES, Math.min(MAX_EVENT_TASK_MINUTES, Math.round((end - start) / 60_000)));

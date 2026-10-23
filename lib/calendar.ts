@@ -476,7 +476,7 @@ export function visibleCalendarEventsFor(workspaceId: string, events: CalendarEv
   const entities = readSnapshot().entities;
   const workspace = entities.find((entity) => entity.type === "workspace" && entity.workspaceId === workspaceId);
   const decisions = readDecisions(workspace);
-  const converted = convertedEventIds(entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId));
+  const converted = convertedEventIds(entities.filter((entity) => entity.type === "task" && entity.workspaceId === workspaceId), events);
   return events.filter((event) => !isHiddenEvent(decisions, event) && !converted.has(event.id));
 }
 

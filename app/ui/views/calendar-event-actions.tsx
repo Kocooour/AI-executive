@@ -6,22 +6,19 @@ import { PopoverMenu } from "./popover-menu";
 
 const fill = (text: string, values: Record<string, string>) => text.replace(/\{(\w+)\}/g, (match, name: string) => values[name] ?? match);
 
-// The owner's controls for one calendar event: "Is it a task?" (Yes / No), the task it became, Lumi's
-// one suggestion for a full day, and Hide. A recurring event asks whether to hide this occurrence or
-// the whole series. Hidden events still occupy time in the calendar.
+// The owner's controls for one calendar event: "Is it a task?" (Yes / No), the task it became, and
+// Hide. A recurring event asks whether to hide this occurrence or the whole series.
 export function CalendarEventActions({ app, event }: { app: LumiApp; event: CalendarEvent }) {
-  const { activeWorkspaceId, applyCalendarEventSuggestion, calendarDecisionFailed, calendarEventNeedsQuestion, calendarEventSuggestion, calendarEventTasks, createCalendarEventTask,
-    dismissCalendarEventSuggestion, hideCalendarEvent, done, inspect, isCalendarEventRecurring, language, markCalendarEventNotTask, tr } = app;
+  const { calendarEventNeedsQuestion, calendarEventTasks, createCalendarEventTask, hideCalendarEvent, done, inspect, isCalendarEventRecurring, markCalendarEventNotTask, tr } = app;
   const task = calendarEventTasks.get(event.id);
   const asking = !task && calendarEventNeedsQuestion(event);
-  const suggestion = calendarEventSuggestion?.eventId === event.id ? calendarEventSuggestion : null;
   const title = { title: event.title };
   const hideLabel = fill(tr("calEventHideLabel"), title);
   return (
     <div className="calendarEventActions" data-event-actions={event.id}>
       <div className="calendarEventRow">
         {task ? (
-          <div className="calendarEventTask">{tr("calEventTask")}: <button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{task.title}</button>{task.status === "open" && <button type="button" className="primaryAction" data-event-complete={task.id} aria-label={`${tr("complete")}: ${task.title}`} onClick={() => void done(task.id)}>{tr("complete")}</button>}</div>
+          <div className="calendarEventTask"><button type="button" className="textAction" onClick={() => void inspect(task)} aria-label={fill(tr("calEventOpenTask"), { title: task.title })}>{tr("calendarOpenTask")}</button>{task.status === "open" && <button type="button" className="primaryAction" data-event-complete={task.id} aria-label={`${tr("complete")}: ${task.title}`} onClick={() => void done(task.id)}>{tr("complete")}</button>}</div>
         ) : asking ? (
           <div className="calendarEventAsk" role="group" aria-label={`${tr("calEventIsTask")} ${event.title}`}>
             <p>{tr("calEventIsTask")}</p>
@@ -42,14 +39,24 @@ export function CalendarEventActions({ app, event }: { app: LumiApp; event: Cale
           <button type="button" className="calendarEventHide" data-event-hide={event.id} aria-label={hideLabel} onClick={() => void hideCalendarEvent(event)}>{tr("calEventHide")}</button>
         )}
       </div>
-      {suggestion && (
-        <p className="calendarEventSuggestion" role="status" data-event-suggestion>
-          {fill(tr("calEventSuggest"), { task: suggestion.taskTitle, target: suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(suggestion.target, language) })}
-          {activeWorkspaceId !== "all" && <button type="button" className="primaryAction" data-event-suggestion-apply onClick={() => void applyCalendarEventSuggestion()}>{tr("calEventSuggestApply")}</button>}
-          <button type="button" data-event-suggestion-dismiss onClick={dismissCalendarEventSuggestion}>{tr("calEventSuggestDismiss")}</button>
-        </p>
-      )}
-      {calendarDecisionFailed && <p className="calendarEventError" role="alert">{tr("calEventFailed")}</p>}
     </div>
   );
+}
+
+// Lumi's one suggestion after an event became a task on a full day, and a failed decision. Shown once
+// per view (Home, Today, Calendar), not in the event's row: the event leaves Today's and Home's agenda
+// as soon as it is a task.
+export function CalendarEventNotice({ app }: { app: LumiApp }) {
+  const { activeWorkspaceId, applyCalendarEventSuggestion, calendarDecisionFailed, calendarEventSuggestion: suggestion, dismissCalendarEventSuggestion, language, tr } = app;
+  if (!suggestion && !calendarDecisionFailed) return null;
+  return <>
+    {suggestion && (
+      <p className="calendarEventSuggestion" role="status" data-event-suggestion>
+        {fill(tr("calEventSuggest"), { task: suggestion.taskTitle, target: suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(suggestion.target, language) })}
+        {activeWorkspaceId !== "all" && <button type="button" className="primaryAction" data-event-suggestion-apply onClick={() => void applyCalendarEventSuggestion()}>{tr("calEventSuggestApply")}</button>}
+        <button type="button" data-event-suggestion-dismiss onClick={dismissCalendarEventSuggestion}>{tr("calEventSuggestDismiss")}</button>
+      </p>
+    )}
+    {calendarDecisionFailed && <p className="calendarEventError" role="alert">{tr("calEventFailed")}</p>}
+  </>;
 }

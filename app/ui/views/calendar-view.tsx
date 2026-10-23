@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { calendarOverviewConflictIds, calendarOverviewIntersects } from "../../../lib/calendar-overview";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import type { CalendarEvent } from "../types";
-import { CalendarEventActions } from "./calendar-event-actions";
+import { CalendarEventActions, CalendarEventNotice } from "./calendar-event-actions";
 import type { LumiApp } from "../use-lumi-app";
 
 function blockTime(start: string | undefined, end: string | undefined, language: string, timezone: string) {
@@ -73,6 +73,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
     <p className="attentionMeta">{tr("sourceConnectedReadOnly")} · {calendarTimezone}</p>
     <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
     {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty" role="status">{tr("calendarStale")} {tr("freeWindowsAreHidden")}</p>}
+    <CalendarEventNotice app={app} />
     {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
     <section className="calendarOverview" aria-labelledby="calendar-today-title"><h3 id="calendar-today-title">{tr("calendarTodayOverview")}</h3>{calendarDayEventsAll.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p> : <div className="calendarAgenda">{calendarDayEventsAll.map((event) => eventCard(event))}</div>}{calendarFresh && freeWindows.length > 0 && <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) => `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}</section>
     <section className="calendarOverview" aria-labelledby="calendar-work-title"><h3 id="calendar-work-title">{tr("calendarPlannedWork")}</h3>{timeline.length === 0 ? <p className="attentionEmpty">{tr("calendarNoPlannedWork")}</p> : <div className="calendarPlanList">{timeline.map((block) => {
