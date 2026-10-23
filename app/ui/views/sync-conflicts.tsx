@@ -26,6 +26,9 @@ const fieldKeys: Record<string, string> = {
   "properties.waitingFor": "conflictField_waitingFor",
   "properties.followUpDate": "conflictField_followUp",
   "properties.blocked": "conflictField_blocked",
+  // The project context merges as one object: the newer edit wins whole and the replaced one can be restored (lib/project-context.ts).
+  "properties.context": "conflictField_context",
+  "properties.goal": "conflictField_goal",
   "relation.belongs_to_project": "conflictField_project",
   "relation.belongs_to_area": "conflictField_area",
 };
@@ -64,6 +67,12 @@ function shown(conflict: SyncConflict, items: Entity[], tr: (key: string) => str
   }
   if ((conflict.field === "properties.plannedStart" || conflict.field === "properties.plannedEnd" || conflict.field === "properties.reminderAt") && typeof value === "string" && !Number.isNaN(Date.parse(value))) {
     return new Date(value).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB");
+  }
+  if (conflict.field === "properties.context" && value && typeof value === "object" && !Array.isArray(value)) {
+    const context = value as { why?: unknown; goals?: unknown; doneWhen?: unknown };
+    const parts = [context.why, ...(Array.isArray(context.goals) ? context.goals : []), context.doneWhen]
+      .filter((part): part is string => typeof part === "string" && part.trim() !== "");
+    return parts.join(" · ").slice(0, 300) || tr("conflictNone");
   }
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return text.length > 160 ? `${text.slice(0, 160)}…` : text;

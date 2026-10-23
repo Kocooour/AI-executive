@@ -12,6 +12,7 @@ import {
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { validProjectContext } from "./project-context";
 import { repairContextEventOrder, repairLegacySourceRecords, runSchemaMigrations, schemaMigrations } from "./schema-migrations";
 import { pruneExpiredMailMetadata } from "./mail-sync-retention";
 import {
@@ -925,6 +926,10 @@ export function validateSnapshot(snapshot: unknown): asserts snapshot is StoreSn
       typeof entity.updatedAt !== "number" ||
       !Number.isFinite(entity.updatedAt)
     ) {
+      throw new Error("Snapshot contains an invalid entity");
+    }
+    // The context of a project: why <= 600, <= 5 goals of <= 200, doneWhen <= 300 characters (lib/project-context.ts).
+    if (entity.type === "project" && entity.properties.context !== undefined && !validProjectContext(entity.properties.context)) {
       throw new Error("Snapshot contains an invalid entity");
     }
     if (entityIds.has(entity.id)) throw new Error("Snapshot contains duplicate entity IDs");
