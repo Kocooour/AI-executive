@@ -36,7 +36,7 @@ test("2a adds a single private Nezařazeno for missing project and standalone ta
   const area = result.entities.find((e) => e.type === "area");
   assert.equal(area.title, "Nezařazeno");
   assert.equal(area.workspaceId, "personal");
-  assert.equal(area.properties.kind, "personal");
+  assert.equal(area.properties.kind, "private");
   assert.equal(areaFor(result, "p")[0].targetEntityId, area.id);
   assert.equal(areaFor(result, "t")[0].targetEntityId, area.id);
   assert.equal(result.report.unchangedWorkspaceIds, true);
@@ -109,6 +109,16 @@ test("text labels map to same-workspace area, never cross into other workspace",
   assert.equal(sharedArea.properties.kind, "shared");
   assert.equal(result.entities.find((e) => e.title === "auto").workspaceId, "personal");
   assert.equal(result.entities.find((e) => e.id === "known").updatedAt, 20);
+});
+
+test("an existing Area whose visibility contradicts its workspace is rejected", () => {
+  const source = {
+    entities: [workspace("personal", "personal"),
+      entity("a", "area", "personal", { kind: "shared" }, "Do not expose"),
+      entity("p", "project", "personal")],
+    relations: [link("pa", "p", "a")],
+  };
+  expectsBlocked(() => planAreaNormalization(source, 100), "area-visibility-mismatch:a");
 });
 
 test("generated IDs and content are deterministic for an identical input", () => {
