@@ -221,3 +221,58 @@ test("the editor's own earlier save is the same stored context, a change from el
   assert.equal(sameStoredContext(mine, { ...mine, why: "B" }), false);
   assert.equal(sameStoredContext(mine, { ...mine, updatedAt: 2000 }), false, "the same text saved again elsewhere is another revision");
 });
+
+
+test("a project draft survives navigation, restores against a changed base, and clears on resolution", async () => {
+  const drafts = await import("../lib/project-context-drafts.ts");
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+    key: (index) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  };
+  const base = context({ why: "A old" });
+  const A = { why: "A draft", goals: ["a"], doneWhen: "Hotovo" };
+  const B = context({ why: "B remote", updatedAt: 22 });
+  assert.equal(drafts.keepProjectContextDraft(storage, {
+    page: "tab-a", workspaceId: "personal", projectId: "project-a", base, draft: A, at: 10,
+  }), true);
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "project-a").draft.why, "A draft");
+  assert.equal(ctx.sameStoredContext(base, B), false);
+  assert.equal(ctx.contextPatchIfUnchanged({ context: B }, base, ctx.ownerProjectContext(A, 50)), null);
+  // A new browser document uses the same tab key (a different tab is free to edit independently).
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "personal", "project-a").draft.why, "A draft");
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "other-workspace", "project-a"), null);
+  const saved = ctx.ownerProjectContext(A, 60);
+  drafts.settleProjectContextDraft(storage, "tab-a", "personal", "project-a", A, saved);
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "project-a"), null);
+});
+
+test("project draft storage is tab-scoped, preserves newer typing and is wiped on sign-out/restore", async () => {
+  const drafts = await import("../lib/project-context-drafts.ts");
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+    key: (index) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  };
+  const base = context();
+  const save = (page, why, at = 1) => drafts.keepProjectContextDraft(storage, {
+    page, workspaceId: "personal", projectId: "p1", base, draft: { why, goals: [], doneWhen: "" }, at,
+  });
+  save("tab-a", "A"); save("tab-b", "B", 2);
+  assert.equal(drafts.keptProjectContextDrafts(storage).length, 2);
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "p1").draft.why, "A");
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "personal", "p1").draft.why, "B");
+  drafts.settleProjectContextDraft(storage, "tab-a", "personal", "p1", { why: "stale", goals: [], doneWhen: "" }, context({ why: "saved" }));
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "p1").draft.why, "A");
+  assert.equal(drafts.keptProjectContextDrafts(storage).length, 2);
+  values.set("ai-executive-signed-out", "1");
+  assert.equal(save("tab-c", "no"), false, "no new draft can be added once signed out");
+  drafts.clearProjectContextDrafts(storage);
+  assert.equal(drafts.keptProjectContextDrafts(storage).length, 0);
+});

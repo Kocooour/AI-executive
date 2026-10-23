@@ -10,6 +10,7 @@ import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncL
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -249,6 +250,7 @@ export function useSync() {
       const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
       attempt(() => clearAllMarkers(localStorage));
       attempt(() => clearNotesDrafts(localStorage));
+      attempt(() => clearProjectContextDrafts(localStorage));
       attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
       serverRevision.current = source.revision;
       rememberGeneration(source.restoreGeneration);

@@ -396,12 +396,23 @@ test("a context changed on another device while this one is being typed in is ne
     await expect(whyA).toHaveValue("Proč podle A");
     // Leaving the field writes nothing until the owner chooses: B's text is still the stored one.
     await whyA.press("Tab");
-    await a.page.waitForTimeout(1000);
     await whyOnServer(a.page, "Proč podle B");
-    // An explicit choice keeps A's draft.
-    await conflict.getByRole("button", { name: "Přepsat aktuální verzi mým zněním" }).click();
-    await expect(conflict).toHaveCount(0);
+    // The local draft must survive both project navigation and a full browser reload.
+    await a.page.locator(".projectBack").click();
+    await expect(a.page.locator(".projectPage")).toHaveCount(0);
+    await a.page.reload();
+    await waitUntilSynced(a.page);
+    await a.page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    const restored = a.page.locator(".projectContextConflict");
+    await expect(restored).toBeVisible();
+    await expect(a.page.locator(".projectContext").getByRole("textbox", { name: "Proč je důležitý" })).toHaveValue("Proč podle A");
+    await expect(restored).toContainText("Proč podle B");
+    await whyOnServer(a.page, "Proč podle B");
+    // An explicit choice keeps A's draft, and the resolved draft is removed.
+    await restored.getByRole("button", { name: "Přepsat aktuální verzi mým zněním" }).click();
+    await expect(restored).toHaveCount(0);
     await whyOnServer(a.page, "Proč podle A");
+    await expect(a.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("ai-executive-project-context-drafts:")))).resolves.toHaveLength(0);
   } finally {
     await cleanup(a.page, Object.values(id));
     await a.context.close();

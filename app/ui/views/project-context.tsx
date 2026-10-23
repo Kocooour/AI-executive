@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import { contextLimits, contextPatchIfUnchanged, contextProblem, ownerProjectContext, readProjectContext, sameStoredContext, type ProjectContext } from "../../../lib/project-context";
 import { db } from "../../../lib/db";
+import { dropProjectContextDraft, keepProjectContextDraft, recoverProjectContextDraft, settleProjectContextDraft, tabProjectContextDraftId } from "../../../lib/project-context-drafts";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
 
@@ -42,6 +43,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const [draft, setDraft] = useState<Draft>(storedDraft);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong" | "conflict">("idle");
   const [conflict, setConflict] = useState<Draft | null>(null);
+  const [recovered, setRecovered] = useState(false);
   const [problem, setProblem] = useState<{ field: string; limit: number } | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const focused = useRef(false);
@@ -51,12 +53,56 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const baseRef = useRef<ProjectContext>(stored);
   // The context this editor wrote last: when it comes back through sync it is our own save, not a remote change.
   const ownWrite = useRef<ProjectContext | null>(null);
+  const pageRef = useRef<string | null>(null);
+  function draftPage() {
+    if (!pageRef.current) pageRef.current = tabProjectContextDraftId(sessionStorage);
+    return pageRef.current;
+  }
+  function keepDraft(text: Draft, base = baseRef.current) {
+    const stored = keepProjectContextDraft(localStorage, {
+      page: draftPage(), workspaceId: project.workspaceId, projectId: project.id,
+      draft: text, base, at: Date.now(),
+    });
+    if (!stored) setState("error");
+    return stored;
+  }
+  function dropDraft() {
+    dropProjectContextDraft(localStorage, draftPage(), project.workspaceId, project.id);
+    setRecovered(false);
+  }
   const editVersion = useRef(0);
   const dirty = useRef(false);
   const pendingSaves = useRef(0);
   const saveTail = useRef<Promise<void>>(Promise.resolve());
   const focusGoal = useRef<number | null>(null);
   const goalInputs = useRef<Array<HTMLInputElement | null>>([]);
+
+  // Restore before the next edit. The saved base is kept so a newer server version can
+  // never be overwritten after navigation or reload. Every keypress is persisted synchronously.
+  useEffect(() => {
+    if (readOnly) return;
+    const page = draftPage();
+    const kept = recoverProjectContextDraft(localStorage, page, project.workspaceId, project.id);
+    if (!kept) return;
+    if (sameText(kept.draft, storedDraft)) {
+      if (kept.page === page) dropDraft();
+      return;
+    }
+    baseRef.current = kept.base;
+    savedRef.current = contextDraft(kept.base);
+    draftRef.current = kept.draft;
+    dirty.current = true;
+    setDraft(kept.draft);
+    setRecovered(true);
+    // Import a draft from a previous browser tab into this tab's own storage key.
+    if (kept.page !== page) keepDraft(kept.draft, kept.base);
+    if (!sameStoredContext(kept.base, stored)) {
+      setConflict(storedDraft);
+      setState("conflict");
+    }
+  // Mount-only: the source project is keyed by project.id in ProjectPage.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, project.workspaceId, readOnly]);
 
   // A remote change must never silently replace the baseline of a locally edited draft.
   useEffect(() => {
@@ -88,7 +134,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     editVersion.current += 1;
     dirty.current = true;
     setDraft(next);
-    if (!conflict) setState("idle");
+    if (keepDraft(next) && !conflict) setState("idle");
   }
 
   async function save(confirmedOverwrite = false) {
@@ -97,7 +143,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const version = editVersion.current;
     const snapshot = draftRef.current;
     const base = baseRef.current;
-    if (sameText(snapshot, savedRef.current)) { dirty.current = false; return; }
+    if (sameText(snapshot, savedRef.current)) { dirty.current = false; dropDraft(); return; }
     // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
     const problem = contextProblem(snapshot);
     if (problem) { setProblem(problem); setState("tooLong"); return; }
@@ -120,11 +166,15 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         ownWrite.current = next;
         return patch;
       }, "project context changed", true);
+      // Only settle the exact version that was committed. A newer draft keeps its own copy
+      // (with its base advanced to this acknowledged version) while this save was in flight.
+      settleProjectContextDraft(localStorage, draftPage(), project.workspaceId, project.id, snapshot, next);
       if (version === editVersion.current) {
         dirty.current = false;
         baseRef.current = next;
         savedRef.current = normalized(snapshot);
         setConflict(null);
+        setRecovered(false);
         if (!focused.current) { draftRef.current = normalized(snapshot); setDraft(draftRef.current); }
       }
     });
@@ -155,14 +205,17 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     savedRef.current = contextDraft(remote);
     setConflict(null);
     if (!keepMine) {
+      dropDraft();
       dirty.current = false;
       draftRef.current = contextDraft(remote);
       setDraft(draftRef.current);
       setState("idle");
       return;
     }
-    // Explicit owner choice. If another sync arrives meanwhile, the transactional guard reopens the conflict.
+    // Explicit owner choice. Persist the new edit base *before* attempting the write,
+    // so a reload mid-flight can still offer this version and reject a newer remote update.
     dirty.current = true;
+    keepDraft(draftRef.current, remote);
     await save(true);
   }
 
@@ -251,6 +304,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         {state === "saved" && <small role="status" className="projectContextState saved">{t.saved}</small>}
         {state === "tooLong" && <small role="alert" className="projectContextState error">{problem?.field === "goals" ? t.tooMany(problem.limit) : t.tooLong(problem?.limit ?? contextLimits.doneWhen)}</small>}
         {state === "error" && <small role="alert" className="projectContextState error">{t.saveError}</small>}
+        {recovered && !conflict && <small role="status" className="projectContextState">{t.contextRecovered}</small>}
       </div>
       {conflict && <div className="projectContextConflict" role="alert" aria-label={t.contextConflict}>
         <p>{t.contextConflict}</p>
