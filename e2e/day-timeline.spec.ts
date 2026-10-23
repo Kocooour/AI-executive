@@ -161,6 +161,7 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
     await page.setViewportSize({ width: 390, height: 844 });
     const heightOf = async (title: string) => (await page.locator(".taskRow", { hasText: title }).boundingBox())!.height;
     const phone = { long: await heightOf(long.title), none: await heightOf(none.title), brief: await heightOf(brief.title) };
+    if (process.env.E4_SHOTS) console.log("PHONE_ROWS", JSON.stringify(phone));
     expect(phone.long).toBeGreaterThanOrEqual(119);
     expect(phone.none).toBeLessThan(62);
     expect(phone.brief).toBeLessThan(62);

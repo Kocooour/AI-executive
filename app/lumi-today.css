@@ -426,10 +426,16 @@
 @media (max-width: 700px) {
   .appShell.view-today .taskRowList .taskRow {
     display: grid;
-    grid-template-columns: 44px 44px minmax(0, 1fr) auto auto;
+    grid-template-columns: 32px 34px minmax(0, 1fr) auto auto;
     align-items: center;
-    column-gap: 4px;
+    column-gap: 2px;
   }
+  /* Tight first line so the title keeps at least half of it: the handle and the check are drawn narrower
+     but keep a 44px press area (::before reaches into the neighbouring gap). */
+  .appShell.view-today .taskRowList .taskRow > .dragHandle,
+  .appShell.view-today .taskRowList .taskRow > .check { position: relative; width: auto; min-width: 0; flex: none; }
+  .appShell.view-today .taskRowList .taskRow > .dragHandle::before,
+  .appShell.view-today .taskRowList .taskRow > .check::before { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }
   .appShell.view-today .taskRowList .taskRow > .dragHandle { grid-column: 1; grid-row: 1; }
   .appShell.view-today .taskRowList .taskRow > .check { grid-column: 2; grid-row: 1; }
   .appShell.view-today .taskRowList .taskRow > .taskRowMain { grid-column: 3; grid-row: 1; }
