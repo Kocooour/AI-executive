@@ -52,9 +52,9 @@ for (const width of [1280, 390]) {
     const ninety = await box(page, events[1].title);
     // 1 px per minute (0.8 on a phone): 90 minutes is 1.5 times as tall as 60.
     expect(ninety.height / sixty.height).toBeCloseTo(1.5, 1);
-    expect(sixty.height).toBeCloseTo(width === 390 ? 48 : 60, 0);
+    expect(sixty.height).toBeCloseTo(60, 0);
     // Its position follows its start: 11:00 is two hours below 09:00.
-    expect(ninety.y - sixty.y).toBeCloseTo((width === 390 ? 0.8 : 1) * 120, 0);
+    expect(ninety.y - sixty.y).toBeCloseTo(120, 0);
 
     // The accessible name carries title, time range and length.
     await expect(item(page, events[1].title)).toHaveAttribute("aria-label", new RegExp(`^${events[1].title}, 0?11:00–0?12:30, 90 min`));
@@ -91,11 +91,13 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
   const event: MockEvent = { id: `tl-task-${id}`, title: `Workshop ${id}`, start: on("13:00"), end: on("14:00") };
   const long = { id: `e2e-tl-long-${id}`, title: `Dlouhý úkol ${id}`, properties: { today: true, estimatedMinutes: 120 } };
   const none = { id: `e2e-tl-none-${id}`, title: `Úkol bez odhadu ${id}`, properties: { today: true } };
+  const brief = { id: `e2e-tl-brief-${id}`, title: `Krátký úkol ${id}`, properties: { today: true, estimatedMinutes: 15 } };
+  const eve = { id: `e2e-tl-eve-${id}`, title: `Večerní úkol ${id}`, properties: { today: true, when: localToday(), evening: true } };
   await mockCalendar(page, [event]);
   await page.goto("/?view=Calendar");
   await waitUntilSynced(page);
   try {
-    await seedTasks(page, [long, none]);
+    await seedTasks(page, [long, none, brief, eve]);
     await page.reload();
     await waitUntilSynced(page);
 
@@ -141,13 +143,40 @@ test("Today and Calendar: a task made from an event is as tall as its estimate; 
     await expect(listNone.locator("[data-row-estimate]")).toHaveText("bez odhadu");
     expect((await listLong.boundingBox())!.height).toBeGreaterThanOrEqual(119);
     expect((await listNone.boundingBox())!.height).toBeLessThan(60);
+    // One evening group heading with one id, although a task left the list above it.
+    await expect(page.locator("#today-evening-heading")).toHaveCount(1);
+    await expect(page.locator(".eveningHeading")).toHaveCount(1);
+    // The keyboard moves past the visible rows only (the event's task is not one of them).
+    const regular = async () => (await page.locator(".taskRowList .taskRow:not(.eveningHeading ~ .taskRow) .taskRowOpen").allTextContents()).filter((text) => text.includes(id));
+    const before = await regular();
+    const at = before.indexOf(long.title);
+    expect(at).toBeGreaterThanOrEqual(0);
+    if (at < before.length - 1) {
+      await listLong.locator(".dragHandle").focus();
+      await page.keyboard.press("ArrowDown");
+      await expect.poll(regular).toEqual(before.map((title, index) => index === at ? before[at + 1] : index === at + 1 ? long.title : title));
+    }
+    // A phone: the time cell shares the first line, so rows are about one line tall and only the estimate makes them taller.
     await page.setViewportSize({ width: 390, height: 844 });
+    const heightOf = async (title: string) => (await page.locator(".taskRow", { hasText: title }).boundingBox())!.height;
+    const phone = { long: await heightOf(long.title), none: await heightOf(none.title), brief: await heightOf(brief.title) };
+    expect(phone.long).toBeGreaterThanOrEqual(119);
+    expect(phone.none).toBeLessThan(62);
+    expect(phone.brief).toBeLessThan(62);
+    expect(phone.long).toBeGreaterThan(phone.brief * 1.8);
     if (process.env.E4_SHOTS) await page.screenshot({ path: `${process.env.E4_SHOTS}/today-390.png`, fullPage: true });
     await page.setViewportSize({ width: 1280, height: 900 });
     if (process.env.E4_SHOTS) await page.screenshot({ path: `${process.env.E4_SHOTS}/today-1280.png`, fullPage: true });
+
+    // Deferred to tomorrow, the event's task leaves Today altogether: not on the axis, not in the list.
+    await section.locator("[data-timeline-item]", { hasText: event.title }).click();
+    await page.locator("[data-timeline-panel] .deferChip").click();
+    await page.locator('[data-defer-choice="tomorrow"]').click();
+    await expect(section.locator("[data-timeline-item]", { hasText: event.title })).toHaveCount(0);
+    await expect(page.locator(".taskRow", { hasText: event.title })).toHaveCount(0);
   } finally {
     const created = (await serverEntities(page)).filter((entity) => entity.type === "task" && entity.title.includes(id)).map((entity) => entity.id);
-    await removeTasks(page, [...new Set([long.id, none.id, ...created])]);
+    await removeTasks(page, [...new Set([long.id, none.id, brief.id, eve.id, ...created])]);
     await page.evaluate(async () => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const now = Date.now();

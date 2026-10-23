@@ -50,8 +50,14 @@
   box-sizing: border-box;
   left: calc(var(--col) * 100% / var(--cols));
   width: calc(100% / var(--cols));
+  z-index: 1;
   padding: 0 0 2px 3px;
 }
+.dayTimelineItem.isUnderlay { left: 0; width: 100%; z-index: 0; }
+.dayTimelineHour.isUnderNow span { visibility: hidden; }
+.dayTimelineMore { align-items: center; justify-content: center; border-left-width: 1px; background: var(--surface-subtle); }
+.dayTimelineMoreList { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.dayTimelineMoreList button { width: 100%; min-height: 36px; text-align: left; }
 .dayTimelineItemMenu {
   display: block;
   width: 100%;
@@ -98,7 +104,10 @@
   white-space: nowrap;
 }
 .dayTimelineBlock.isCompact { flex-direction: row; align-items: center; gap: 8px; padding-block: 0; }
+.dayTimelineBlock .dtDur { display: none; }
 .dayTimelineBlock.isCompact .dtMeta { display: none; }
+.dayTimelineBlock.isCompact .dtDur { display: block; flex: none; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dayTimelineBlock.isCompact .dtTitle { flex: 0 1 auto; min-width: 0; }
 .dayTimelineBlock.free { border-left-style: dashed; background: var(--surface); }
 .dayTimelineBlock.isHidden { opacity: 0.55; border-style: dashed; background: var(--surface); }
 .dayTimelineBlock.is-plan { border-left-color: var(--success); background: var(--success-soft); }
@@ -162,6 +171,9 @@
 .dayTimelineUntimedMain .taskRowOpen { overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .dayTimelineUntimedMain small { color: var(--muted); }
 @media (pointer: coarse) {
+  /* Short items keep their true height; an invisible 44px hit area makes them easy to press. */
+  .dayTimelineBlock.isCompact { position: relative; overflow: visible; }
+  .dayTimelineBlock.isCompact::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
   .dayTimelinePanel button, .dayTimelineUntimedRow button { min-height: 44px; }
   .dayTimelineBlock.isAllDay { min-height: 44px; }
 }
@@ -169,7 +181,6 @@
   .dayTimeline { --tl-gutter: 36px; }
   .dayTimelineBlock { padding: 3px 6px; font-size: 12.5px; }
   .dayTimelineBlock .dtMeta { font-size: 11px; }
-  .dayTimelineUntimedRow { flex-wrap: wrap; }
 }
 
 .calendarOverview > .dayTimeline + p { margin-top: 8px; }

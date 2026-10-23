@@ -3,7 +3,7 @@ import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from
 import { calendarOverviewIntersects } from "../../../lib/calendar-overview";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import {
-  layoutDayTimeline, timelineNowOffset, TIMELINE_PX_PER_MINUTE, TIMELINE_PX_PER_MINUTE_NARROW, untimedRowHeight, type PlacedTimelineItem, type TimelineSource,
+  layoutDayTimeline, timelineNowOffset, TIMELINE_PX_PER_MINUTE, TIMELINE_PX_PER_MINUTE_NARROW, untimedRowHeight, type OverflowGroup, type PlacedTimelineItem, type TimelineSource,
 } from "../../../lib/day-timeline";
 import type { Entity } from "../../../lib/db";
 import { planSlotsByTask } from "../../../lib/today-plan";
@@ -36,13 +36,14 @@ interface Entry extends TimelineSource {
   done?: boolean;
   allDay?: boolean;
   conflict?: boolean;
+  underlay?: boolean;
   /** Length used when the item is not drawn from clock times (all-day items have none). */
   minutes?: number;
 }
 
 export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode }) {
   const { applyDayPlanAction, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
-    dayPlanBusy, dayPlanNow, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion } = app;
+    dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion } = app;
   const [narrow, setNarrow] = useState(false);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 560px)");
@@ -63,7 +64,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
     for (const event of calendarDayEventsAll) {
       const task = calendarEventTasks.get(event.id);
       if (task) {
-        if (mode === "today" && task.status !== "open") continue;
+        // Today shows the task only where it is a Today task (same predicate as the list leaving it out).
+        if (mode === "today" && !todayTimelineTaskIds.has(task.id)) continue;
         const estimate = typeof task.properties.estimatedMinutes === "number" && task.properties.estimatedMinutes > 0 ? task.properties.estimatedMinutes : 0;
         const start = Date.parse(event.start);
         const end = estimate ? start + estimate * MINUTE : Date.parse(event.end);
@@ -74,7 +76,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       }
       const hidden = isCalendarEventHidden(event);
       if (mode === "today" ? !agendaIds.has(event.id) : false) continue;
-      result.push({ id: `event:${event.id}`, kind: "event", title: event.title, start: event.start, end: event.end, event, hidden, busy: event.busy, allDay: event.allDay });
+      result.push({ id: `event:${event.id}`, kind: "event", title: event.title, start: event.start, end: event.end, event, hidden, busy: event.busy, allDay: event.allDay, underlay: hidden });
     }
     if (visibleDayPlan) {
       const blocks = [
@@ -100,14 +102,14 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       }
     }
     return result;
-  }, [mode, calendarDayEvents, calendarDayEventsAll, calendarEventTasks, calendarTimezone, busyCalendarDayEvents, isCalendarEventHidden, items, visibleDayPlan]);
+  }, [mode, todayTimelineTaskIds, calendarDayEvents, calendarDayEventsAll, calendarEventTasks, calendarTimezone, busyCalendarDayEvents, isCalendarEventHidden, items, visibleDayPlan]);
 
   const allDay = useMemo(() => entries.filter((entry) => entry.allDay), [entries]);
   const timed = useMemo(() => entries.filter((entry) => !entry.allDay), [entries]);
   const layout = useMemo(() => layoutDayTimeline(timed, {
-    day: calendarToday, timezone: calendarTimezone, pxPerMinute, fitToItems: mode === "today",
+    day: calendarToday, timezone: calendarTimezone, pxPerMinute, fitToItems: mode === "today", maxColumns: narrow ? 3 : 4,
     workdayStart: notificationState?.preferences.workdayStart, workdayEnd: notificationState?.preferences.workdayEnd,
-  }), [timed, mode, calendarToday, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
+  }), [timed, mode, narrow, calendarToday, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
   const nowTop = timelineNowOffset(layout, dayPlanNow);
 
   // Calendar only: today's open tasks that have no time on the axis, each as tall as its estimate.
@@ -126,7 +128,6 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
     entry.kind === "event" && entry.hidden && tr("calEventHiddenLabel"),
     entry.kind === "event" && !entry.hidden && (entry.busy ? tr("busy") : tr("freeTime")),
     entry.kind === "plan" && tr(entry.proposal ? "dayPlanProposed" : entry.block?.planningSource === "albert-day-plan" ? "dayPlanApproved" : "dayPlanExisting"),
-    entry.proposal && tr("calendarProposalNeedsApproval"),
     entry.done && tr("Completed"),
     entry.conflict && tr("calendarConflict"),
   ].filter(Boolean).join(", ");
@@ -136,7 +137,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
     const display = event ? calendarEventDisplay(event, { language, timezone: calendarTimezone, day: calendarToday }) : null;
     const continuation = display ? [display.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), display.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(" · ") : "";
     return (
-      <div className="dayTimelinePanel" data-timeline-panel={entry.id}>
+      <div className="dayTimelinePanel" data-timeline-panel={entry.id}
+        onClick={(click) => { if (click.target instanceof Element && click.target.closest("[data-event-answer='yes'], [data-event-create-task]")) close(true); }}>
         <p className="timeMenuHead"><strong>{entry.title}</strong><span>{[when, kindText(entry), flags(entry)].filter(Boolean).join(" · ")}</span></p>
         {continuation && <p className="dayTimelineNote">{continuation}</p>}
         {entry.kind === "event" && event && (entry.hidden ? (
@@ -155,6 +157,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
         {entry.kind === "task" && entry.task?.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={entry.task} />}
         {entry.kind === "plan" && (
           <div className="timeMenuActions">
+            {entry.proposal && <p className="dayTimelineNote">{tr("calendarProposalNeedsApproval")}</p>}
             {entry.task && <button type="button" onClick={() => { close(false); void inspect(entry.task as Entity); }}>{tr("timelineOpenTask")}</button>}
             {entry.proposal && entry.block && (
               <button type="button" className="primaryAction" disabled={dayPlanBusy} onClick={() => { close(true); void applyDayPlanAction(entry.block as DayPlanItem, "accepted"); }}>{tr("calendarReviewProposal")}</button>
@@ -193,7 +196,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       {layout.items.length > 0 && (
         <div className="dayTimelineBody" style={{ height: layout.height }}>
           <div className="dayTimelineAxis" aria-hidden="true">
-            {layout.hours.map((hour) => <div key={hour.minute} className="dayTimelineHour" style={{ top: hour.top }}><span>{hour.label}</span></div>)}
+            {layout.hours.map((hour) => <div key={hour.minute} className={`dayTimelineHour ${nowTop !== null && Math.abs(hour.top - nowTop) < 16 ? "isUnderNow" : ""}`.trim()} style={{ top: hour.top }}><span>{hour.label}</span></div>)}
           </div>
           <ol className="dayTimelineItems" aria-label={tr("timelineTitle")}>
             {layout.items.map((placed) => {
@@ -203,16 +206,25 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
               const continues = [placed.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), placed.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(", ");
               const label = `${entry.title}, ${when}, ${minutesText(minutes)}, ${kindText(entry)}${flags(entry) ? `, ${flags(entry)}` : ""}${continues ? `, ${continues}` : ""}`;
               return (
-                <li key={entry.id} className="dayTimelineItem" style={{ top: placed.top, height: placed.height, "--col": placed.column, "--cols": placed.columns } as CSSProperties}>
+                <li key={entry.id} className={`dayTimelineItem ${placed.underlay ? "isUnderlay" : ""}`.trim()} style={{ top: placed.top, height: placed.height, "--col": placed.column, "--cols": placed.columns } as CSSProperties}>
                   <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineItemMenu"), { title: entry.title })} triggerLabel={label}
                     triggerClassName={`${classes(entry)} ${placed.height < 40 ? "isCompact" : ""}`.trim()}
                     triggerData={{ "data-timeline-item": entry.id, "data-timeline-minutes": String(minutes), "data-timeline-kind": entry.kind }}
-                    triggerContent={<><span className="dtTitle">{entry.title}</span><span className="dtMeta">{when} · {minutesText(minutes)}</span></>}>
+                    triggerContent={<><span className="dtTitle">{entry.title}</span><span className="dtMeta">{when} · {minutesText(minutes)}</span><span className="dtDur" aria-hidden="true">· {minutesText(minutes)}</span></>}>
                     {(close) => panel(entry, `${when} · ${minutesText(minutes)}`, close)}
                   </PopoverMenu>
                 </li>
               );
             })}
+            {layout.overflow.map((group) => (
+              <li key={group.id} className="dayTimelineItem" style={{ top: group.top, height: group.height, "--col": group.column, "--cols": group.columns } as CSSProperties}>
+                <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineMoreLabel"), { n: group.items.length })} triggerLabel={fill(tr("timelineMoreLabel"), { n: group.items.length })}
+                  triggerClassName="dayTimelineBlock dayTimelineMore" triggerData={{ "data-timeline-more": group.id }}
+                  triggerContent={<span className="dtTitle">+{group.items.length}</span>}>
+                  {(close) => <OverflowList group={group} when={timeText} minutesText={minutesText} panel={panel} close={close} />}
+                </PopoverMenu>
+              </li>
+            ))}
           </ol>
           {nowTop !== null && <div className="dayTimelineNow" style={{ top: nowTop }} aria-hidden="true"><span>{tr("timelineNow")}</span></div>}
         </div>
@@ -248,5 +260,25 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       {stale && <p role="status">{tr("dayPlanStale")}</p>}
       {body}
     </section>
+  );
+}
+
+// The items that did not fit beside each other: a list; choosing one shows its panel, with a way back.
+function OverflowList({ group, when, minutesText, panel, close }: {
+  group: OverflowGroup<Entry>;
+  when: (item: PlacedTimelineItem<Entry>) => string;
+  minutesText: (minutes: number) => string;
+  panel: (entry: Entry, when: string, close: (returnFocus?: boolean) => void) => ReactNode;
+  close: (returnFocus?: boolean) => void;
+}) {
+  const [chosen, setChosen] = useState<string | null>(null);
+  const picked = group.items.find((item) => item.id === chosen);
+  if (picked) return <>{panel(picked.source, `${when(picked)} · ${minutesText(picked.source.minutes ?? picked.durationMinutes)}`, close)}<button type="button" onClick={() => setChosen(null)}>←</button></>;
+  return (
+    <ul className="dayTimelineMoreList">
+      {group.items.map((item) => (
+        <li key={item.id}><button type="button" data-timeline-more-item={item.id} onClick={() => setChosen(item.id)}>{item.source.title} · {when(item)} · {minutesText(item.source.minutes ?? item.durationMinutes)}</button></li>
+      ))}
+    </ul>
   );
 }
