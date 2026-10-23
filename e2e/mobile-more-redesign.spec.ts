@@ -28,7 +28,7 @@ test.describe("mobile More sheet (E3)", () => {
       { x: calendarRect!.x + calendarRect!.width / 2, y: calendarRect!.y + calendarRect!.height / 2 },
     )).toBe(true);
     await expect(sheet.getByRole("button", { name: "Zavřít nabídku" })).toHaveCount(1);
-    await expect(sheet.locator(".mobileMoreGroup button")).toHaveCount(12);
+    await expect(sheet.locator(".mobileMoreGroup button")).toHaveCount(11);
     await sheet.locator('.mobileMoreItem[data-nav-view="Settings"]').click();
     await expect(sheet).toHaveCount(0);
     await expect(page.locator(".mobileCaptureButton")).toBeVisible();
@@ -45,9 +45,17 @@ test.describe("mobile More sheet (E3)", () => {
     const sheet = page.getByRole("dialog", { name: "Více" });
     const groups = sheet.locator(".mobileMoreGroup");
     const itemsOf = (index: number) => groups.nth(index).locator("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("data-nav-view")));
-    expect(await itemsOf(0)).toEqual(["Calendar", "Upcoming", "Areas", "Notes", "Search"]);
+    expect(await itemsOf(0)).toEqual(["Calendar", "Upcoming", "Areas", "Notes"]);
     expect(await itemsOf(1)).toEqual(["Overdue", "Anytime", "Someday", "Completed"]);
     expect(await itemsOf(2)).toEqual(["Context", "Agents", "Settings"]);
+    // Search is not a menu item: the search field at the top of the screen opens it.
+    await expect(sheet.locator('[data-nav-view="Search"]')).toHaveCount(0);
+    await sheet.getByRole("button", { name: "Zavřít nabídku" }).click();
+    const search = page.locator(".searchField input").first();
+    await expect(search).toBeVisible();
+    await search.fill("Inzerát");
+    await expect(page).toHaveURL(/view=Search/);
+    await nav.locator('button[data-nav-view="More"]').click();
     // A view that lives in the sheet highlights More, since the bar has no entry of its own for it.
     await sheet.locator('.mobileMoreItem[data-nav-view="Calendar"]').click();
     await expect(sheet).toHaveCount(0);

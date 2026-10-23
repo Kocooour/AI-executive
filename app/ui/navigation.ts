@@ -21,7 +21,8 @@ export const primaryViews = ["Home", "Inbox", "Today", "Upcoming", "Projects", "
 export const secondaryViews = ["Areas", "Notes", "Overdue", "Anytime", "Someday", "Completed", "Context", "Agents"];
 // One source of truth for grouped mobile menu and active-view detection.
 export const mobileMoreGroups: { title: string; views: string[] }[] = [
-  { title: "mobileMorePlanning", views: ["Calendar", "Upcoming", "Areas", "Notes", "Search"] },
+  // Owner decision 2026-10-23: Search is the field at the top of every screen, not a menu item.
+  { title: "mobileMorePlanning", views: ["Calendar", "Upcoming", "Areas", "Notes"] },
   { title: "mobileMoreFilters", views: ["Overdue", "Anytime", "Someday", "Completed"] },
   { title: "mobileMoreSystem", views: ["Context", "Agents", "Settings"] },
 ];

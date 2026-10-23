@@ -304,6 +304,8 @@ test("a claim can be confirmed, rejected and returned to review", async ({ page 
   await expect(history.filter({ hasText: "Vráceno ke kontrole" })).toHaveCount(1);
   await expect(history.filter({ hasText: "Odmítnuto" })).toHaveCount(1);
   await expect(history.filter({ hasText: "Potvrzeno" })).toHaveCount(2);
+  // Internal revision numbers are not shown, neither in the history nor on the card.
+  await expect(claim).not.toContainText("rev.");
 });
 
 test("claim cards stack and fit a phone screen", async ({ page }) => {
