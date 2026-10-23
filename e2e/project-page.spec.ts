@@ -412,7 +412,8 @@ test("a context changed on another device while this one is being typed in is ne
     await restored.getByRole("button", { name: "Přepsat aktuální verzi mým zněním" }).click();
     await expect(restored).toHaveCount(0);
     await whyOnServer(a.page, "Proč podle A");
-    await expect(a.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("ai-executive-project-context-drafts:")))).resolves.toHaveLength(0);
+    // The draft is settled right after the save returns, which can be a moment after the server already has it.
+    await expect.poll(() => a.page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith("ai-executive-project-context-drafts:"))).then((keys) => keys.length)).toBe(0);
   } finally {
     await cleanup(a.page, Object.values(id));
     await a.context.close();
