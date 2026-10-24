@@ -186,7 +186,7 @@ export function useSync() {
           await db.entities.bulkPut(released);
           requeue = true;
         }
-        const heldRelations = linkMerge.relations.filter((relation) => present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        const heldRelations = linkMerge.relations.filter((relation) => !deleted.has(relation.id) && present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
         if (serverInGroups.length) await db.relations.bulkDelete(serverInGroups.map((relation) => relation.id));
         if (heldRelations.length) await db.relations.bulkPut(heldRelations);
         // Links that differ from the server's and can be sent now need that save too (only then:
@@ -395,6 +395,7 @@ export function useSync() {
           entities: current.entities.filter((entity) => !deletedIds.has(entity.id)),
           relations: current.relations.filter(
             (relation) =>
+              !deletedIds.has(relation.id) &&
               !deletedIds.has(relation.sourceEntityId) &&
               !deletedIds.has(relation.targetEntityId),
           ),
