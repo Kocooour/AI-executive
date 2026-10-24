@@ -176,7 +176,7 @@ test("a task added from a project in another workspace offers that workspace's a
     suggestedFor = JSON.parse(route.request().postData() || "{}").workspaceId;
     return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' });
   });
-  await page.locator("aside.detail").getByRole("button", { name: /Přidat úkol/ }).click();
+  await page.locator(".projectPage").getByRole("button", { name: /Přidat úkol/ }).click();
   const modal = page.locator(".captureModal");
   const area = modal.getByLabel("Oblast");
   await expect(area.locator(`option[value="${ids.otherAreaId}"]`)).toHaveCount(1);

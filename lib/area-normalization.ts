@@ -2,10 +2,14 @@
 // resolver or write it to a live store until the migration/sync review is complete.
 import { createHash } from "node:crypto";
 import type { Entity, Relation } from "./db";
+import { validateSnapshotStructure } from "./snapshot-validation";
 
 export interface AreaNormalizationSnapshot {
   entities: readonly Entity[];
   relations: readonly Relation[];
+  // A missing tombstone array is accepted for old offline exports, but
+  // known deletions reserve their IDs for the entire migration plan.
+  tombstones?: readonly { id: string; deletedAt: number }[];
 }
 
 export interface AreaNormalizationReport {
@@ -14,6 +18,8 @@ export interface AreaNormalizationReport {
   createdAreaIds: string[];
   addedRelationIds: string[];
   addedLegacyProjectRelationIds: string[];
+  // IDs of removed duplicate Area or project memberships, and inherited
+  // task-level Area memberships. Audit each before any future application.
   removedRedundantRelationIds: string[];
   inheritedTaskIds: string[];
   // Existing legacy Area entities are left untouched; a future transactional
@@ -62,10 +68,19 @@ export function planAreaNormalization(
   snapshot: AreaNormalizationSnapshot,
   at: number,
 ): { entities: Entity[]; relations: Relation[]; report: AreaNormalizationReport } {
+  // Shared preflight uses the same canonical entity/relation/workspace rules
+  // as GET/PUT /api/store, without loading SQLite or accessing live data.
+  // Never expose record contents (or raw validator exceptions) in audit logs.
+  try {
+    validateSnapshotStructure(snapshot);
+  } catch {
+    throw new AreaNormalizationBlocked(["snapshot-structure-invalid"]);
+  }
   if (!Number.isSafeInteger(at) || at < 0) {
     throw new AreaNormalizationBlocked(["invalid-migration-timestamp"]);
   }
   const issues: string[] = [];
+  const tombstonedIds = new Set((snapshot.tombstones ?? []).map((item) => item.id));
   const original = new Map<string, Entity>();
   // The Personal workspace can be implicit in a legacy snapshot, but any
   // explicit workspace record must have its canonical ID and unique scope.
@@ -165,6 +180,12 @@ export function planAreaNormalization(
   }
   if (issues.length) throw new AreaNormalizationBlocked(issues);
 
+  // The same ID may be tombstoned whether it names an entity or relation.
+  // Reserve every live/deleted ID, plus IDs generated during this plan, so
+  // new Areas and both relation types cannot collide across collections.
+  const reservedRecordIds = new Set([
+    ...original.keys(), ...relationIds, ...tombstonedIds,
+  ]);
   const newAreas = new Map<string, Entity>();
   const areaLabelIndex = new Map<string, Entity[]>();
   const areaList = () => [...areas.values(), ...newAreas.values()];
@@ -194,8 +215,11 @@ export function planAreaNormalization(
       return undefined;
     }
     const id = generatedAreaId(workspaceId, label);
-    const earlier = original.get(id);
-    if (earlier || newAreas.has(id)) {
+    if (tombstonedIds.has(id)) {
+      issues.push("tombstoned-generated-area-id:" + id);
+      return undefined;
+    }
+    if (reservedRecordIds.has(id)) {
       issues.push("generated-area-id-collision:" + id);
       return undefined;
     }
@@ -210,6 +234,7 @@ export function planAreaNormalization(
       createdAt: at, updatedAt: at,
     };
     newAreas.set(id, area);
+    reservedRecordIds.add(id);
     areaLabelIndex.set(workspaceId + "\0" + normalizedLabel(label), [area]);
     return area;
   }
@@ -252,6 +277,10 @@ export function planAreaNormalization(
   const addedRelations: Relation[] = [];
   const addedLegacyProjectRelations: Relation[] = [];
   const removed = new Set<string>();
+  // Use identical canonical ordering for pre-existing Area and project links,
+  // so different snapshot permutations retain the same ID and audit trail.
+  const byCanonicalRelationOrder = (a: Relation, b: Relation) =>
+    a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const inherited: string[] = [];
   function linkEntity(entity: Entity, area: Entity | undefined, inherits: boolean) {
     if (!area) return;
@@ -279,8 +308,7 @@ export function planAreaNormalization(
     if (areaLinks.length) {
       // Retain the oldest canonical relation; break timestamp ties by ID.
       // The source snapshot may arrive in a different order on another device.
-      const [primary, ...duplicates] = [...areaLinks].sort((a, b) =>
-        a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const [primary, ...duplicates] = [...areaLinks].sort(byCanonicalRelationOrder);
       if (primary.targetEntityId !== area.id) {
         issues.push("unexpected-area-link:" + entity.id);
         return;
@@ -289,7 +317,11 @@ export function planAreaNormalization(
       return;
     }
     const id = generatedRelationId(entity.id, area.id);
-    if (relationIds.has(id) || addedRelations.some((relation) => relation.id === id)) {
+    if (tombstonedIds.has(id)) {
+      issues.push("tombstoned-generated-area-relation-id:" + id);
+      return;
+    }
+    if (reservedRecordIds.has(id)) {
       issues.push("generated-relation-id-collision:" + id);
       return;
     }
@@ -297,6 +329,7 @@ export function planAreaNormalization(
       id, workspaceId: entity.workspaceId, sourceEntityId: entity.id,
       targetEntityId: area.id, relationType: "belongs_to_area", createdAt: at,
     });
+    reservedRecordIds.add(id);
   }
   for (const entity of snapshot.entities) {
     if (entity.type === "project") {
@@ -304,11 +337,13 @@ export function planAreaNormalization(
       continue;
     }
     if (entity.type !== "task") continue;
-    const projectLinks = (bySource.get(entity.id) ?? [])
-      .filter((relation) => relation.relationType === "belongs_to_project")
-      .map((relation) => relation.targetEntityId);
+    const projectRelations = (bySource.get(entity.id) ?? [])
+      .filter((relation) => relation.relationType === "belongs_to_project");
     const oldProject = textId(entity.properties.projectId);
-    const possibleProjects = new Set([...projectLinks, ...(oldProject ? [oldProject] : [])]);
+    const possibleProjects = new Set([
+      ...projectRelations.map((relation) => relation.targetEntityId),
+      ...(oldProject ? [oldProject] : []),
+    ]);
     if (possibleProjects.size > 1) {
       issues.push("ambiguous-task-project:" + entity.id);
       continue;
@@ -320,11 +355,22 @@ export function planAreaNormalization(
         issues.push("invalid-task-project:" + entity.id);
         continue;
       }
+      // Multiple links to the SAME project are also redundant, not just
+      // links to different projects (handled by the ambiguity guard above).
+      // Retain the oldest canonical ID and audit every removed duplicate.
+      if (projectRelations.length > 1) {
+        const [, ...duplicates] = [...projectRelations].sort(byCanonicalRelationOrder);
+        for (const relation of duplicates) removed.add(relation.id);
+      }
       // A legacy property-only project membership must not disappear when
       // normalization becomes the canonical relational representation.
-      if (oldProject && projectLinks.length === 0) {
+      if (oldProject && projectRelations.length === 0) {
         const id = "relation:2a:" + digest("project", entity.id, projectId);
-        if (relationIds.has(id) || addedLegacyProjectRelations.some((relation) => relation.id === id)) {
+        if (tombstonedIds.has(id)) {
+          issues.push("tombstoned-generated-project-relation-id:" + id);
+          continue;
+        }
+        if (reservedRecordIds.has(id)) {
           issues.push("generated-project-relation-id-collision:" + id);
           continue;
         }
@@ -332,6 +378,7 @@ export function planAreaNormalization(
           id, workspaceId: entity.workspaceId, sourceEntityId: entity.id,
           targetEntityId: projectId, relationType: "belongs_to_project", createdAt: at,
         });
+        reservedRecordIds.add(id);
       }
       linkEntity(entity, projectAreas.get(projectId), true);
     } else {

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 const { planAreaNormalization, AreaNormalizationBlocked } =
   await import("../lib/area-normalization.ts");
+const { validateSnapshotStructure } = await import("../lib/snapshot-validation.ts");
 
 const entity = (id, type, workspaceId, properties = {}, title = id) => ({
   id, type, title, workspaceId, properties,
@@ -167,7 +169,7 @@ test("conflicting project targets and cross-workspace relations are rejected", (
     entities: [...source.entities, entity("p3", "project", "legacy")],
     relations: [projectLink("tp3", "t", "p3", "personal")],
   };
-  expectsBlocked(() => planAreaNormalization(forged, 100), "invalid-scope-relation:tp3");
+  expectsBlocked(() => planAreaNormalization(forged, 100), "snapshot-structure-invalid");
 });
 
 test("duplicate Area names fail if a legacy text label needs disambiguation", () => {
@@ -188,7 +190,7 @@ test("missing area ID, unknown workspace, and mismatched labels fail closed", ()
   expectsBlocked(() => planAreaNormalization({
     entities: [workspace("personal", "personal"), entity("p", "project", "unknown")],
     relations: [],
-  }, 100), "unknown-workspace:p");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [workspace("personal", "personal"), entity("a", "area", "personal", {}, "Work"),
       entity("p", "project", "personal", { area: "Cars" })],
@@ -209,15 +211,16 @@ test("Area dedup retains earliest relation across snapshot permutations and stab
     assert.equal(result.report.after.relations, 1);
   }
 
+  // Relation IDs share the entity namespace, so the lexically low relation is "link-a", not the Area's own ID "a".
   const high = { ...link("z", "p", "a"), createdAt: 5 };
-  const low = { ...link("a", "p", "a"), createdAt: 5 };
+  const low = { ...link("link-a", "p", "a"), createdAt: 5 };
   for (const relations of [[high, low], [low, high]]) {
     const result = planAreaNormalization({ entities, relations }, 100);
-    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["a"]);
+    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["link-a"]);
     assert.strictEqual(areaFor(result, "p")[0], low);
     assert.deepEqual(result.report.removedRedundantRelationIds, ["z"]);
     // Re-running a normalized snapshot cannot replace that surviving ID.
-    assert.deepEqual(areaFor(planAreaNormalization(result, 101), "p").map((rel) => rel.id), ["a"]);
+    assert.deepEqual(areaFor(planAreaNormalization(result, 101), "p").map((rel) => rel.id), ["link-a"]);
   }
 });
 
@@ -361,11 +364,11 @@ test("workspace preflight rejects duplicate scopes and noncanonical workspace ID
   expectsBlocked(() => planAreaNormalization({
     entities: [valid, duplicateScope, entity("p", "project", "personal")],
     relations: [],
-  }, 100), "duplicate-workspace:personal");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [invalidId, entity("p", "project", "shared-area")],
     relations: [],
-  }, 100), "noncanonical-workspace-id:wrong");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [illegalKind, entity("p", "project", "unrelated")],
     relations: [],
@@ -399,4 +402,321 @@ test("added Area and legacy project relation audit IDs are sorted across permuta
   assert.equal(one.report.addedLegacyProjectRelationIds.length, 2);
   assert.equal(one.report.addedRelationIds.length, 4);
   assert.deepEqual(one.report.createdAreaIds, two.report.createdAreaIds);
+});
+
+test("canonical structural validation blocks malformed entities before 2a planning", () => {
+  const valid = { entities: [workspace("personal", "personal"),
+    entity("t", "task", "personal")], relations: [] };
+  const mutations = [
+    [() => ({ ...entity("alien", "not-a-type", "personal") }), "unknown entity type"],
+    [() => ({ ...entity("t", "task", "personal"), properties: null }), "null properties"],
+    [() => ({ ...entity("t", "task", "personal"), title: "" }), "empty title"],
+    [() => ({ ...entity("t", "task", "personal"), updatedAt: "bad" }), "nonnumeric update"],
+    [() => ({ ...entity("t", "task", "personal"), id: "x".repeat(241) }), "oversized ID"],
+  ];
+  for (const [change, reason] of mutations) {
+    const bad = change();
+    const entities = reason === "unknown entity type"
+      ? [...valid.entities, bad] : [valid.entities[0], bad];
+    const snapshot = { entities, relations: [] };
+    const saved = structuredClone(snapshot);
+    expectsBlocked(() => planAreaNormalization(snapshot, 100), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, saved, reason);
+  }
+});
+
+test("canonical structural validation rejects invalid relations, including timestamps", () => {
+  const area = entity("a", "area", "personal", {}, "Family");
+  const task = entity("t", "task", "personal");
+  const good = link("belongs", "t", "a");
+  const entities = [workspace("personal", "personal"), area, task];
+  for (const invalid of [
+    { ...good, createdAt: "yesterday" },
+    { ...good, createdAt: Number.NaN },
+    { ...good, relationType: "" },
+    { ...good, targetEntityId: "missing" },
+    { ...good, workspaceId: "other" },
+  ]) {
+    expectsBlocked(() => planAreaNormalization({ entities, relations: [invalid] }, 100),
+      "snapshot-structure-invalid");
+  }
+});
+
+test("canonical structural validation rejects malformed workspace properties", () => {
+  const baseline = workspace("personal", "personal");
+  for (const properties of [
+    { ...baseline.properties, role: "editor" },
+    { ...baseline.properties, members: "owner" },
+    { ...baseline.properties, calendarDecisions: { "occ:test": "yes" } },
+  ]) {
+    const snapshot = { entities: [{ ...baseline, properties },
+      entity("t", "task", "personal")], relations: [] };
+    expectsBlocked(() => planAreaNormalization(snapshot, 100), "snapshot-structure-invalid");
+  }
+  const titleTooLong = { ...baseline, title: "X".repeat(121) };
+  expectsBlocked(() => planAreaNormalization({ entities: [titleTooLong], relations: [] }, 100),
+    "snapshot-structure-invalid");
+  // Valid calendar decisions remain accepted without a live server connection.
+  const valid = { ...baseline, properties: {
+    ...baseline.properties, calendarDecisions: { "occ:source:item": "hidden" },
+  } };
+  assert.equal(planAreaNormalization({ entities: [valid,
+    entity("t", "task", "personal")], relations: [] }, 100).report.addedRelationIds.length, 1);
+});
+
+test("canonical structural validation also checks supplied tombstones without changing them", () => {
+  const entities = [workspace("personal", "personal"), entity("t", "task", "personal")];
+  const valid = { entities, relations: [], tombstones: [{ id: "obsolete", deletedAt: 100 }] };
+  const planned = planAreaNormalization(valid, 100);
+  assert.equal(planned.report.addedRelationIds.length, 1);
+  assert.deepEqual(valid.tombstones, [{ id: "obsolete", deletedAt: 100 }]);
+  for (const tombstones of [[{ id: "obsolete", deletedAt: "today" }], "invalid"]) {
+    expectsBlocked(() => planAreaNormalization({ entities, relations: [], tombstones }, 100),
+      "snapshot-structure-invalid");
+  }
+});
+
+test("tombstoned generated Area IDs block a new Area instead of resurrecting it", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("project", "project", "personal")];
+  const first = planAreaNormalization({ entities, relations: [] }, 100);
+  const deletedAreaId = first.report.createdAreaIds[0];
+  assert.ok(deletedAreaId.startsWith("area:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedAreaId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-area-id:" + deletedAreaId);
+  assert.deepEqual(input, original);
+});
+
+test("tombstoned generated belongs_to_area relation IDs block relinking", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("known-area", "area", "personal", { kind: "private" }, "Family"),
+    entity("task", "task", "personal", { areaId: "known-area" })];
+  const initial = planAreaNormalization({ entities, relations: [] }, 100);
+  assert.deepEqual(initial.report.createdAreaIds, []);
+  const deletedRelationId = initial.report.addedRelationIds[0];
+  assert.ok(deletedRelationId.startsWith("relation:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedRelationId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-area-relation-id:" + deletedRelationId);
+  assert.deepEqual(input, original);
+});
+
+test("tombstoned generated legacy belongs_to_project IDs block project relinking", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("known-area", "area", "personal", { kind: "private" }, "Family"),
+    entity("project", "project", "personal", { areaId: "known-area" }),
+    entity("task", "task", "personal", { projectId: "project" })];
+  const initial = planAreaNormalization({ entities, relations: [] }, 100);
+  const deletedRelationId = initial.report.addedLegacyProjectRelationIds[0];
+  assert.ok(deletedRelationId.startsWith("relation:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedRelationId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-project-relation-id:" + deletedRelationId);
+  assert.deepEqual(input, original);
+
+  // Unrelated historical tombstones must not suppress valid new IDs.
+  const allowed = planAreaNormalization({
+    entities, relations: [], tombstones: [{ id: "unrelated-deleted-record", deletedAt: 101 }],
+  }, 102);
+  assert.equal(allowed.report.addedLegacyProjectRelationIds.length, 1);
+  assert.equal(allowed.report.addedRelationIds.length, 1);
+});
+
+test("2a preflight preserves main project-context validation", () => {
+  const validContext = {
+    why: "Proč", goals: ["Dokončit"], doneWhen: "Hotovo", provenance: "owner", updatedAt: 100,
+  };
+  const source = (properties) => ({
+    entities: [workspace("personal", "personal"),
+      entity("project", "project", "personal", properties)],
+    relations: [],
+  });
+  const valid = source({ context: validContext });
+  assert.equal(planAreaNormalization(valid, 101).report.addedRelationIds.length, 1);
+  // Existing projects may have the legacy goal and no context.
+  assert.equal(planAreaNormalization(source({ goal: "legacy" }), 101).report.addedRelationIds.length, 1);
+
+  const invalid = [
+    { ...validContext, why: "x".repeat(601) },
+    { ...validContext, goals: Array(6).fill("A") },
+    { ...validContext, goals: ["x".repeat(201)] },
+    { ...validContext, doneWhen: "x".repeat(301) },
+    { ...validContext, provenance: "unknown" },
+    { ...validContext, extra: "unexpected" },
+    "not-a-project-context",
+  ];
+  for (const context of invalid) {
+    const snapshot = source({ context });
+    const before = structuredClone(snapshot);
+    expectsBlocked(() => planAreaNormalization(snapshot, 101), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before);
+  }
+});
+
+test("shared canonical validation rejects tombstones on existing entity and relation IDs", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("old-area", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "old-area" })];
+  const relations = [link("project-area", "p", "old-area")];
+  for (const id of ["old-area", "project-area", "workspace:personal", "p"]) {
+    const snapshot = {
+      entities, relations, tombstones: [{ id, deletedAt: 120 }],
+    };
+    const before = structuredClone(snapshot);
+    assert.throws(() => validateSnapshotStructure(snapshot), /tombstone overlaps a live record/);
+    expectsBlocked(() => planAreaNormalization(snapshot, 121), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before, `snapshot must remain unchanged for ${id}`);
+  }
+});
+
+test("shared canonical validation rejects a relation that reuses an entity ID; distinct IDs still pass", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("a", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "a" }),
+    entity("same", "note", "personal")];
+  const colliding = { entities, relations: [link("same", "p", "a")] };
+  const before = structuredClone(colliding);
+  assert.throws(() => validateSnapshotStructure(colliding), /relation ID used by an entity/);
+  expectsBlocked(() => planAreaNormalization(colliding, 130), "snapshot-structure-invalid");
+  assert.deepEqual(colliding, before, "the snapshot is not changed");
+  const distinct = { entities, relations: [link("project-area", "p", "a")] };
+  assert.doesNotThrow(() => validateSnapshotStructure(distinct));
+  assert.doesNotThrow(() => planAreaNormalization(distinct, 131));
+});
+
+test("shared canonical validation rejects duplicate tombstone IDs even at different timestamps", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("t", "task", "personal")];
+  for (const timestamps of [[100, 100], [100, 200]]) {
+    const snapshot = {
+      entities, relations: [],
+      tombstones: timestamps.map((deletedAt) => ({ id: "previously-deleted", deletedAt })),
+    };
+    const before = structuredClone(snapshot);
+    assert.throws(() => validateSnapshotStructure(snapshot), /duplicate tombstone IDs/);
+    expectsBlocked(() => planAreaNormalization(snapshot, 201), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before);
+  }
+});
+
+test("distinct unrelated tombstones remain valid for shared validation and offline 2a", () => {
+  const snapshot = {
+    entities: [workspace("personal", "personal"),
+      entity("p", "project", "personal")],
+    relations: [],
+    tombstones: [
+      { id: "deleted-task", deletedAt: 40 },
+      { id: "deleted-project", deletedAt: 50 },
+    ],
+  };
+  const before = structuredClone(snapshot);
+  assert.doesNotThrow(() => validateSnapshotStructure(snapshot));
+  const planned = planAreaNormalization(snapshot, 201);
+  assert.equal(planned.report.createdAreaIds.length, 1);
+  assert.equal(planned.report.addedRelationIds.length, 1);
+  assert.deepEqual(snapshot, before);
+});
+
+test("duplicate belongs_to_project links keep a stable canonical ID and audit removals", () => {
+  const entities = [
+    workspace("personal", "personal"),
+    entity("a", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "a" }),
+    entity("t", "task", "personal", { projectId: "p" }),
+  ];
+  const projectArea = link("p-area", "p", "a");
+  for (const [first, second, survivor, removedId] of [
+    [{ ...projectLink("earlier", "t", "p"), createdAt: 5 },
+      { ...projectLink("later", "t", "p"), createdAt: 25 }, "earlier", "later"],
+    // Relation IDs share the entity namespace: the lexically low link is "link-a", not the Area's ID "a".
+    [projectLink("link-a", "t", "p"), projectLink("z", "t", "p"), "link-a", "z"],
+  ]) {
+    const results = [];
+    for (const links of [[first, second], [second, first]]) {
+      const snapshot = { entities, relations: [projectArea, ...links] };
+      const before = structuredClone(snapshot);
+      const result = planAreaNormalization(snapshot, 100);
+      assert.deepEqual(snapshot, before, "planning must never modify source records");
+      assert.deepEqual(
+        result.relations.filter((r) => r.sourceEntityId === "t" && r.relationType === "belongs_to_project")
+          .map((r) => r.id),
+        [survivor],
+      );
+      assert.strictEqual(result.relations.find((r) => r.id === survivor),
+        links.find((r) => r.id === survivor), "surviving relation must keep its identity and timestamps");
+      assert.deepEqual(result.report.removedRedundantRelationIds, [removedId]);
+      assert.deepEqual(result.report.addedLegacyProjectRelationIds, []);
+      assert.equal(result.report.before.relations, 3);
+      assert.equal(result.report.after.relations, 2);
+      assert.equal(result.report.inheritedTaskIds.length, 1);
+      const secondPass = planAreaNormalization(result, 101);
+      assert.deepEqual(secondPass.entities, result.entities);
+      assert.deepEqual(secondPass.relations, result.relations);
+      assert.deepEqual(secondPass.report.removedRedundantRelationIds, []);
+      results.push(result);
+    }
+    assert.deepEqual(results[0].report, results[1].report,
+      "audit report must be independent of incoming duplicate link order");
+  }
+});
+
+const predicted2aId = (...parts) => "relation:2a:"
+  + createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
+
+test("generated Area ID cannot reuse an existing belongs_to_area relation ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const existing = entity("existing", "project", "personal", { areaId: area.id });
+  const missing = entity("missing", "project", "personal", { area: "Cars" });
+  const collisionId = "area:2a:"
+    + createHash("sha256").update(JSON.stringify(["personal", "cars"])).digest("hex").slice(0, 32);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, existing, missing],
+    relations: [link(collisionId, existing.id, area.id)],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100), "generated-area-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
+});
+
+test("generated belongs_to_area ID cannot reuse an existing entity ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const project = entity("project", "project", "personal", { areaId: area.id });
+  const collisionId = predicted2aId(project.id, area.id);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, project,
+      entity(collisionId, "note", "personal")],
+    relations: [],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100), "generated-relation-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
+});
+
+test("generated belongs_to_project ID cannot reuse an existing entity ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const project = entity("project", "project", "personal", { areaId: area.id });
+  const task = entity("task", "task", "personal", { projectId: project.id });
+  const collisionId = predicted2aId("project", task.id, project.id);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, project, task,
+      entity(collisionId, "note", "personal")],
+    relations: [],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100),
+    "generated-project-relation-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
 });

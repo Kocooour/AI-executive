@@ -3,7 +3,6 @@ import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../../lib/local-dates";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
-import { ProjectOverview } from "./project-overview";
 import { DurationInput } from "./duration-input";
 import { SyncConflicts } from "./sync-conflicts";
 import { NoteEditor } from "./note-editor";
@@ -85,7 +84,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     noteOpenTexts,
     unsent,
     heldBack,
-    askConfirm,
     acceptNativeDrop,
     areas,
     calendarToday,
@@ -104,7 +102,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     inspect,
     language,
     notificationState,
-    openCapture,
     patch,
     projects,
     relate,
@@ -112,11 +109,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     rename,
     reopenTask,
     scheduleTask,
-    scopedItems,
     selected,
     setActiveDragTarget,
     setChecklistDraft,
-    setProjectStatus,
     setSelected,
     sources,
     targets,
@@ -198,7 +193,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 </small>
               </div>
             )}
-            {(selected.type === "task" || selected.type === "project") && (
+            {selected.type === "task" && (
               <section className="detailKnowledge" aria-label={tr("whatLumiKnows")}>
                 <h3>{tr("whatLumiKnows2")}</h3>
                 {contextClaims.filter((claim) => (claim.subject.canonicalEntityId === selected.id || claim.target?.canonicalEntityId === selected.id) && !claim.archivedAt).map((claim) => <article key={claim.id}>
@@ -263,108 +258,6 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                       <strong>{t.title}</strong>
                     </article>
                   ))}
-              </div>
-            )}
-            {selected.type === "project" && (
-              <div className="projectDetail">
-                <ProjectOverview key={selected.id} app={app} project={selected} />
-                <div className="projectActions">
-                  <button type="button" onClick={() => void setProjectStatus(selected, selected.status === "completed" ? "active" : "completed")}>{tr(selected.status === "completed" ? "reopen" : "complete")}</button>
-                  <button type="button" className="danger" onClick={async () => {
-                    const project = selected;
-                    if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", () => project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
-                  }}>{tr("delete")}</button>
-                </div>
-                <label>
-                  {tr("deadline")}
-                  <input type="date" value={String(selected.properties.deadline || "")}
-                    onChange={(event) => void patch(selected, { deadline: event.target.value }, "deadline changed")} />
-                </label>
-                <label>
-                  {tr("area")}
-                  <select
-                    aria-label={tr("area")}
-                    value={String(
-                      targets(selected.id, "belongs_to_area")[0] || "",
-                    )}
-                    onChange={async (e) => {
-                      await relate(
-                        selected.id,
-                        e.target.value,
-                        "belongs_to_area",
-                      );
-                    }}
-                  >
-                    <option value="">{tr("none")}</option>
-                    {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
-                      <option value={a.id} key={a.id}>
-                        {a.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <h3>{tr("openTasks").toUpperCase()}</h3>
-                {tasks
-                  .filter(
-                    (t) =>
-                      t.status === "open" &&
-                      sources(selected.id, "belongs_to_project").includes(t.id),
-                  )
-                  .sort(byManualOrder(`task:project:${selected.id}`))
-                  .map((t) => (
-                    <article
-                      key={t.id}
-                      className={`${draggingId === t.id ? "isDragging" : ""} ${dragTarget === `entity:${t.id}` ? "dropActive" : ""} ${taskDueTone(t, today)}`.trim()}
-                      data-drop-entity={t.id}
-                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${t.id}`); }}
-                      onDrop={(event) => acceptNativeDrop(event, `entity:${t.id}`)}
-                      onClick={() => inspect(t)}
-                    >
-                      {dragHandle(t, `task:project:${selected.id}`)}
-                      <button className="check" onClick={(event) => { event.stopPropagation(); done(t.id); }}>
-                        ○
-                      </button>
-                      <strong>{t.title}</strong>
-                    </article>
-                  ))}
-                <button
-                  onClick={() => {
-                    openCapture("task", selected.id);
-                  }}
-                >
-                  ＋ {tr("addTask")}
-                </button>
-                <h3>{tr("Notes").toUpperCase()}</h3>
-                {scopedItems
-                  .filter(
-                    (n) =>
-                      n.type === "note" &&
-                      sources(selected.id, "belongs_to_project").includes(n.id),
-                  )
-                  .sort(byManualOrder(`note:project:${selected.id}`))
-                  .map((n) => (
-                    <article
-                      key={n.id}
-                      className={`${draggingId === n.id ? "isDragging" : ""} ${dragTarget === `entity:${n.id}` ? "dropActive" : ""}`.trim()}
-                      data-drop-entity={n.id}
-                      onDragOver={(event) => { event.preventDefault(); setActiveDragTarget(`entity:${n.id}`); }}
-                      onDrop={(event) => acceptNativeDrop(event, `entity:${n.id}`)}
-                      onClick={() => inspect(n)}
-                    >
-                      {dragHandle(n, `note:project:${selected.id}`)}
-                      <div>
-                        <strong>{n.title}</strong>
-                        <p>{n.content}</p>
-                      </div>
-                    </article>
-                  ))}
-                <button
-                  onClick={() => {
-                    openCapture("note", selected.id);
-                  }}
-                >
-                  ＋ {tr("addNote")}
-                </button>
               </div>
             )}
             {selected.type === "note" && (

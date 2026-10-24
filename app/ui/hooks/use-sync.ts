@@ -10,6 +10,7 @@ import { hasChangesBeyond, postToTabs, requestTimeout, tabChannelName, withSyncL
 import { markSignedIn } from "../../../lib/local-data";
 import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/adoption";
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
+import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
@@ -185,7 +186,7 @@ export function useSync() {
           await db.entities.bulkPut(released);
           requeue = true;
         }
-        const heldRelations = linkMerge.relations.filter((relation) => present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
+        const heldRelations = linkMerge.relations.filter((relation) => !deleted.has(relation.id) && present.has(relation.sourceEntityId) && present.has(relation.targetEntityId));
         if (serverInGroups.length) await db.relations.bulkDelete(serverInGroups.map((relation) => relation.id));
         if (heldRelations.length) await db.relations.bulkPut(heldRelations);
         // Links that differ from the server's and can be sent now need that save too (only then:
@@ -249,6 +250,7 @@ export function useSync() {
       const attempt = (work: () => void) => { try { work(); } catch { /* storage unavailable */ } };
       attempt(() => clearAllMarkers(localStorage));
       attempt(() => clearNotesDrafts(localStorage));
+      attempt(() => clearProjectContextDrafts(localStorage));
       attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
       serverRevision.current = source.revision;
       rememberGeneration(source.restoreGeneration);
@@ -393,6 +395,7 @@ export function useSync() {
           entities: current.entities.filter((entity) => !deletedIds.has(entity.id)),
           relations: current.relations.filter(
             (relation) =>
+              !deletedIds.has(relation.id) &&
               !deletedIds.has(relation.sourceEntityId) &&
               !deletedIds.has(relation.targetEntityId),
           ),

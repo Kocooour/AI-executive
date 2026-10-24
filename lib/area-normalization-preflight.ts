@@ -59,7 +59,10 @@ export function createAreaPreflight(source: AreaNormalizationSnapshot, identity:
   if (!source || !Array.isArray(source.entities) || !Array.isArray(source.relations))
     throw new AreaNormalizationBlocked(["invalid-source-shape"]);
   const sourceSha256 = areaSnapshotSha256(source, identity.tombstones);
-  const planned = planAreaNormalization(source, at);
+  // A deletion reserves its ID across both entity and relation namespaces.
+  // Pass the authoritative tombstones into the shared 2a planner so the
+  // audit cannot plan a link that was already deleted on this server.
+  const planned = planAreaNormalization({ ...source, tombstones: identity.tombstones }, at);
   const sourceEntities = new Map(source.entities.map(e => [e.id, e]));
   const sourceRelations = new Map(source.relations.map(r => [r.id, r]));
   const outputEntities = new Map(planned.entities.map(e => [e.id, e]));
@@ -79,7 +82,8 @@ export function createAreaPreflight(source: AreaNormalizationSnapshot, identity:
   }
   for (const id of sourceEntities.keys()) if (!outputEntities.has(id)) issues.push("entity-lost");
   for (const [id, r] of sourceRelations) {
-    if (!outputRelations.has(id) && (!removed.has(id) || r.relationType !== "belongs_to_area"))
+    if (!outputRelations.has(id) && (!removed.has(id) ||
+      (r.relationType !== "belongs_to_area" && r.relationType !== "belongs_to_project")))
       issues.push("unexpected-relation-loss");
   }
   for (const id of removed) if (outputRelations.has(id) || !sourceRelations.has(id)) issues.push("bad-redundancy-audit");
