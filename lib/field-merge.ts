@@ -1,5 +1,5 @@
 import type { Entity, Relation } from "./db";
-import { syncGoalIntoContext } from "./project-context";
+import { reconcileDoneWhen, syncGoalIntoContext } from "./project-context";
 
 // Three-way merge of one record: the version this device last had in common with the server
 // (`base`), the device's version (`local`) and the server's version (`server`). A field changed on
@@ -214,7 +214,12 @@ export function limitConflicts(entities: Entity[], limit = maxConflictsTotal): E
 }
 
 export function mergeEntity(base: Entity, local: Entity, server: Entity, now = Date.now()): Entity {
-  return syncGoalIntoContext(base, mergeFields(base, local, server, now));
+  // One side unchanged: that side's record is the other one as it is; only the goal/context mirror is settled.
+  if (same(local, base) || same(server, base)) return syncGoalIntoContext(base, mergeFields(base, local, server, now));
+  const { merged, lost } = reconcileDoneWhen(base, local, server, mergeFields(base, local, server, now), local.updatedAt > server.updatedAt);
+  // When both sides changed `context` itself, the field merge has already kept the other context as a notice.
+  const contextOnBothSides = !same(local.properties?.context, base.properties?.context) && !same(server.properties?.context, base.properties?.context);
+  return lost && !contextOnBothSides ? withConflicts(merged, [{ id: conflictId(now), field: lost.field, lostValue: lost.value, at: now }]) : merged;
 }
 
 function mergeFields(base: Entity, local: Entity, server: Entity, now: number): Entity {

@@ -46,10 +46,15 @@ export const contextIsEmpty = (context: Pick<ProjectContext, "why" | "goals" | "
 export function readProjectContext(properties: Record<string, unknown> | undefined): ProjectContext {
   const stored = properties?.context;
   if (isObject(stored)) {
+    // A "Hotovo, když" over the limit (written by the previous version into `goal`) cannot be in `context`; it is shown from
+    // `goal` so it is never hidden, and the editor asks for it to be shortened before saving.
+    const doneWhen = typeof stored.doneWhen === "string" ? stored.doneWhen : "";
+    const legacy = typeof properties?.goal === "string" && properties.goal.trim().length > contextLimits.doneWhen && properties.goal !== doneWhen
+      ? properties.goal : null;
     return {
       why: typeof stored.why === "string" ? stored.why : "",
       goals: Array.isArray(stored.goals) ? stored.goals.filter((goal): goal is string => typeof goal === "string") : [],
-      doneWhen: typeof stored.doneWhen === "string" ? stored.doneWhen : "",
+      doneWhen: legacy ?? doneWhen,
       provenance: stored.provenance === "lumi-approved" ? "lumi-approved" : "owner",
       ...(typeof stored.proposalId === "string" && stored.proposalId ? { proposalId: stored.proposalId } : {}),
       updatedAt: typeof stored.updatedAt === "number" && Number.isFinite(stored.updatedAt) ? stored.updatedAt : 0,
@@ -81,18 +86,55 @@ export function contextProblem(input: { why: string; goals: string[]; doneWhen: 
   return null;
 }
 
-// After a merge: an older client edits only `goal`. When `goal` changed against the common version and "Hotovo, když" did not,
-// the new goal is the new doneWhen (when it fits; a longer one is left to the fallback read and the editor's refusal).
-export function syncGoalIntoContext(base: Entity, merged: Entity): Entity {
-  if (merged.type !== "project" || !isObject(merged.properties.context)) return merged;
-  const goal = merged.properties.goal;
-  if (typeof goal !== "string" || goal === base.properties?.goal) return merged;
-  const context = merged.properties.context as Record<string, unknown>;
+// "Hotovo, když" as each side of a merge wrote it. A current client writes `context.doneWhen` (and mirrors it into
+// `goal`); a client of the previous version writes only `goal`. Compared with the common version, a side changed it when
+// its `context.doneWhen` differs, or else when its `goal` does.
+function doneWhenChange(base: Entity, side: Entity): string | null {
   const baseContext = isObject(base.properties?.context) ? base.properties.context as Record<string, unknown> : null;
-  const baseDone = baseContext ? baseContext.doneWhen : (typeof base.properties?.goal === "string" ? base.properties.goal : "");
-  if (context.doneWhen !== baseDone || context.doneWhen === goal) return merged;
-  if (goal.trim().length > contextLimits.doneWhen) return merged;
-  return { ...merged, properties: { ...merged.properties, context: { ...context, doneWhen: goal.trim() } } };
+  const baseGoal = typeof base.properties?.goal === "string" ? base.properties.goal : "";
+  const baseDone = baseContext && typeof baseContext.doneWhen === "string" ? baseContext.doneWhen : baseGoal;
+  const context = isObject(side.properties?.context) ? side.properties.context as Record<string, unknown> : null;
+  if (context && typeof context.doneWhen === "string" && context.doneWhen !== baseDone) return context.doneWhen;
+  const goal = side.properties?.goal;
+  if (typeof goal === "string" && goal !== baseGoal) return goal;
+  return null;
+}
+
+export interface DoneWhenReconciled {
+  merged: Entity;
+  /** The other side's text when both sides changed "Hotovo, když" differently: a restorable notice for it. */
+  lost: { field: "properties.context" | "properties.goal"; value: unknown } | null;
+}
+
+// After a three-way merge of a project: `goal` and `context` are merged as separate fields, so an older client's `goal`
+// edit and a current client's `doneWhen` edit would both "win" in their own field and the two clients would show
+// different texts. This settles one "Hotovo, když": the side that changed it (or, when both did differently, the side
+// whose version wins, with the other's text kept as a restorable notice), written to `context.doneWhen` when it fits
+// and always mirrored into `goal`. A text over the limit stays in `goal` only; it is read as "Hotovo, když" (see
+// readProjectContext) so the editor shows it in full and asks for it to be shortened.
+export function reconcileDoneWhen(base: Entity, local: Entity, server: Entity, merged: Entity, localWins: boolean): DoneWhenReconciled {
+  if (merged.type !== "project") return { merged, lost: null };
+  const fromLocal = doneWhenChange(base, local), fromServer = doneWhenChange(base, server);
+  if (fromLocal === null && fromServer === null) return { merged, lost: null };
+  const both = fromLocal !== null && fromServer !== null && fromLocal.trim() !== fromServer.trim();
+  const winner = both ? (localWins ? fromLocal : fromServer) as string : (fromLocal ?? fromServer) as string;
+  const loser = both ? (localWins ? fromServer : fromLocal) as string : null;
+  const properties: Record<string, unknown> = { ...merged.properties, goal: winner };
+  const context = isObject(merged.properties.context) ? merged.properties.context as Record<string, unknown> : null;
+  const fits = winner.trim().length <= contextLimits.doneWhen;
+  if (context && fits) properties.context = { ...context, doneWhen: winner.trim() };
+  let lost: DoneWhenReconciled["lost"] = null;
+  if (loser !== null) {
+    lost = loser.trim().length <= contextLimits.doneWhen && context
+      ? { field: "properties.context", value: { ...context, doneWhen: loser.trim() } }
+      : { field: "properties.goal", value: loser };
+  }
+  return { merged: { ...merged, properties }, lost };
+}
+
+// After a merge where only one side changed the record (no three-way merge ran): the same settling, with no conflict.
+export function syncGoalIntoContext(base: Entity, merged: Entity): Entity {
+  return reconcileDoneWhen(base, merged, base, merged, true).merged;
 }
 
 // `properties` patch that saves the context. `goal` mirrors "Hotovo, když" so a device that still runs the previous version

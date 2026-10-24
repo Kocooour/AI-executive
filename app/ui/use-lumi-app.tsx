@@ -2450,6 +2450,10 @@ export function useLumiApp() {
             if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key === conflictsKey) return;
             if (conflict.lostValue === null || conflict.lostValue === undefined) delete properties[key];
             else properties[key] = conflict.lostValue;
+            // A restored project context keeps `goal` mirroring its "Hotovo, když" for the previous app version.
+            if (key === "context" && conflict.lostValue && typeof (conflict.lostValue as { doneWhen?: unknown }).doneWhen === "string") {
+              properties.goal = (conflict.lostValue as { doneWhen: string }).doneWhen;
+            }
           } else if (conflict.field === "content") {
             update.content = typeof conflict.lostValue === "string" ? conflict.lostValue : "";
           } else if ((conflict.field === "title" || conflict.field === "status") && typeof conflict.lostValue === "string" && conflict.lostValue) {

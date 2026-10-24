@@ -276,3 +276,63 @@ test("project draft storage is tab-scoped, preserves newer typing and is wiped o
   drafts.clearProjectContextDrafts(storage);
   assert.equal(drafts.keptProjectContextDrafts(storage).length, 0);
 });
+
+// Owner review 2026-10-24: an older client edits `goal` while a current one edits `context.doneWhen`.
+{
+  const { readProjectContext: read } = await import("../lib/project-context.ts");
+  const project = (properties, updatedAt) => ({ id: "p", type: "project", title: "P", status: "active", workspaceId: "w", properties, createdAt: 1, updatedAt });
+  const ctx = (doneWhen) => ({ why: "W", goals: ["g"], doneWhen, provenance: "owner", updatedAt: 5 });
+  const base = project({ goal: "Old", context: ctx("Old") }, 10);
+  const oldClient = (at) => project({ goal: "A", context: ctx("Old") }, at);           // previous version: goal only
+  const newClient = (at) => project({ goal: "B", context: { ...ctx("B"), updatedAt: 20 } }, at); // mirrors goal
+  const notices = (entity) => (entity.properties.syncConflicts || []);
+
+  for (const [name, local, server, expected, lostText] of [
+    ["old local newer", oldClient(30), newClient(20), "A", "B"],
+    ["old local older", oldClient(20), newClient(30), "B", "A"],
+    ["new local newer", newClient(30), oldClient(20), "B", "A"],
+    ["new local older", newClient(20), oldClient(30), "A", "B"],
+  ]) {
+    test(`goal vs doneWhen from an old and a new client is one text with a notice for the other (${name})`, () => {
+      const merged = mergeEntity(base, local, server, 100);
+      assert.equal(merged.properties.context.doneWhen, expected);
+      assert.equal(merged.properties.goal, expected, "goal keeps mirroring doneWhen");
+      assert.equal(read(merged.properties).doneWhen, expected);
+      const notice = notices(merged).find((item) => item.field === "properties.context");
+      assert.ok(notice, "the other text is kept as a restorable notice");
+      assert.equal(notice.lostValue.doneWhen, lostText);
+      assert.equal(notice.lostValue.why, "W", "the notice restores the whole context with the other text");
+    });
+  }
+
+  test("only an old client changed goal: it becomes doneWhen with no notice", () => {
+    const merged = mergeEntity(base, oldClient(30), project({ goal: "Old", context: ctx("Old"), other: 1 }, 25), 100);
+    assert.equal(merged.properties.context.doneWhen, "A");
+    assert.equal(merged.properties.goal, "A");
+    assert.equal(notices(merged).length, 0);
+  });
+
+  test("both sides wrote the same text: no notice", () => {
+    const merged = mergeEntity(base, project({ goal: "B", context: ctx("Old") }, 30), newClient(20), 100);
+    assert.equal(merged.properties.context.doneWhen, "B");
+    assert.equal(notices(merged).filter((item) => item.field === "properties.context" || item.field === "properties.goal").length, 0);
+  });
+
+  test("an old client's goal over the limit with an existing context is shown in full, not hidden", () => {
+    const long = "x".repeat(400);
+    const merged = mergeEntity(base, project({ goal: long, context: ctx("Old") }, 30), project({ goal: "Old", context: ctx("Old"), other: 1 }, 25), 100);
+    assert.equal(merged.properties.goal, long);
+    assert.equal(merged.properties.context.doneWhen, "Old", "context stays valid");
+    assert.equal(read(merged.properties).doneWhen, long, "read as 'Hotovo, když' so the editor asks to shorten it");
+  });
+
+  test("a long old-client goal that loses to a newer doneWhen is kept as a goal notice", () => {
+    const long = "y".repeat(400);
+    const merged = mergeEntity(base, project({ goal: long, context: ctx("Old") }, 20), newClient(30), 100);
+    assert.equal(merged.properties.context.doneWhen, "B");
+    assert.equal(merged.properties.goal, "B");
+    const notice = notices(merged).find((item) => item.field === "properties.goal");
+    assert.ok(notice);
+    assert.equal(notice.truncated ? true : notice.lostValue === long, true);
+  });
+}
