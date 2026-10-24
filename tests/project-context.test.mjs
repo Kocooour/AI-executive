@@ -312,6 +312,19 @@ test("legacy client removing context still leaves a valid restorable notice for 
   assert.equal(ctx.validProjectContext(contextNotices[0].lostValue), true, "restoring the conflict must remain server-valid");
 });
 
+test("a newer legacy-only goal does not discard the modern client's why and goals", () => {
+  const base = project({ goal: "Old", context: context({ doneWhen: "Old", why: "Original" }) }, { updatedAt: 10 });
+  const legacy = project({ goal: "A" }, { updatedAt: 40 });
+  const modern = project({ goal: "B", context: context({ doneWhen: "B", why: "Why from modern", goals: ["Modern goal"], updatedAt: 30 }) }, { updatedAt: 30 });
+  const merged = mergeEntity(base, legacy, modern, 100);
+  assert.equal(merged.properties.context.doneWhen, "A");
+  assert.equal(merged.properties.goal, "A");
+  assert.equal(merged.properties.context.why, "Why from modern");
+  assert.deepEqual(merged.properties.context.goals, ["Modern goal"]);
+  assert.equal(merged.properties.syncConflicts.filter((c) => c.field === "properties.context").length, 1);
+  assert.equal(merged.properties.syncConflicts.find((c) => c.field === "properties.context").lostValue.doneWhen, "B");
+});
+
 test("a stale context received by a legacy client does not disguise its own newer goal edit", () => {
   const base = project({ goal: "Old", context: context({ doneWhen: "Old" }) }, { updatedAt: 10 });
   const received = context({ doneWhen: "B", updatedAt: 20 });
