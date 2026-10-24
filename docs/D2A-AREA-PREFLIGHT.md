@@ -15,3 +15,10 @@ node --experimental-loader ./tests/ts-loader.mjs scripts/preflight-area-normaliz
 Vývoj: `codex/d2a-offline-preflight-20261024`, stacked proti `feat/d2a-area-normalization-20261023`, žádný běžící server/worktree/port ani sdílená mutabilní databáze. Oddělené modelové testery v této relaci nejsou k dispozici; CI a nezávislé review jsou nezbytné před merge.
 
 **Nová brána základního PR #105:** existující legacy Oblasti bez `properties.kind` jsou v manifestu označené jako `pendingAreaKindBackfills` / `areaKindBackfillRequired`. `noChanges` nesmí znamenat hotovou normalizaci, pokud ještě zbývá bezpečnostní typ doplnit. Tento PR tyto oblasti **nemění** a aplikátor musí backfill zvlášť auditovat.
+
+
+## SQLite a plný otisk zdroje
+- `restoreGeneration` v `metadata` může před první obnovou zcela chybět; tehdy je podle serverového kontraktu **0**. Přítomná hodnota však musí být validní nezáporné celé číslo; `revision` je povinná.
+- Zdrojový i cílový SHA-256 zahrnují všechny entity, relace a také tombstones s dvojicí `id` + `deletedAt`. Ověření pozdějšího stavu zamítne jak změnu času smazání, tak přidání nebo odebrání tombstonu bez posunu revize. Pořadí tabulek nehraje roli.
+- `entities.updated_at` musí odpovídat `payload.updatedAt || 0` a `relations.created_at` musí odpovídat `payload.createdAt || 0`, přesně podle zápisu v `server-store.ts`. Při nesouladu je offline kopie odmítnuta.
+- Manifest nadále **nepokrývá ostatní SQLite tabulky** (context, historie, tokens, atd.) a není aplikátorem. Konzistentní plná záloha, audit a transakční read/write bariéra proto zůstávají nutnou podmínkou před případnou živou migrací.

@@ -13,7 +13,7 @@ const before = () => ({ entities:[e("workspace:personal","workspace",{kind:"pers
   e("project","project"), e("task","task",{notes:"SECRET-CONTENT"})],
   relations:[{id:"r1", sourceEntityId:"task", targetEntityId:"project",
     relationType:"belongs_to_project",workspaceId:"personal",createdAt:1}] });
-const meta = () => ({ revision:7, restoreGeneration:3, tombstoneIds:[] });
+const meta = () => ({ revision:7, restoreGeneration:3, tombstones:[] });
 const blocked = (fn, reason) => assert.throws(fn, x => x instanceof AreaNormalizationBlocked && x.issues.includes(reason));
 
 test("manifest is content-free; 2a preserves all original records", () => {
@@ -36,20 +36,38 @@ test("stale entity text, relation, revision and restore generation fail closed",
 });
 test("hash stable under field and row permutations; tombstone collision blocks", () => {
   const s=before(), swap={entities:[...s.entities].reverse().map(x=>({updatedAt:x.updatedAt,...x})),relations:s.relations};
-  assert.equal(areaSnapshotSha256(s),areaSnapshotSha256(swap));
+  assert.equal(areaSnapshotSha256(s, []),areaSnapshotSha256(swap, []));
   const id=planAreaNormalization(s,20).report.createdAreaIds[0];
-  blocked(()=>createAreaPreflight(s,{...meta(),tombstoneIds:[id]},20),"area-id-reused");
+  blocked(()=>createAreaPreflight(s,{...meta(),tombstones:[{id,deletedAt:19}]},20),"area-id-reused");
+});
+test("any tombstone addition, removal or deletedAt change invalidates an approved manifest", () => {
+  const identity={...meta(),tombstones:[{id:"deleted-task",deletedAt:7},{id:"deleted-note",deletedAt:12}]};
+  const manifest=createAreaPreflight(before(),identity,20);
+  const permuted={...identity,tombstones:[...identity.tombstones].reverse()};
+  assert.deepEqual(verifyAreaPreflight(before(),permuted,manifest),manifest);
+  const changed={...identity,tombstones:[{id:"deleted-task",deletedAt:8},identity.tombstones[1]]};
+  blocked(()=>verifyAreaPreflight(before(),changed,manifest),"preflight-source-drift");
+  const removed={...identity,tombstones:identity.tombstones.slice(0,1)};
+  blocked(()=>verifyAreaPreflight(before(),removed,manifest),"preflight-source-drift");
+  const added={...identity,tombstones:[...identity.tombstones,{id:"another",deletedAt:13}]};
+  blocked(()=>verifyAreaPreflight(before(),added,manifest),"preflight-source-drift");
+  blocked(()=>createAreaPreflight(before(),{...meta(),tombstones:[{id:"x",deletedAt:-1}]},20),"invalid-source-identity");
 });
 test("already normalized snapshot is a no-op", () => {
   const after=planAreaNormalization(before(),20);
   const p=createAreaPreflight(after,meta(),21);
   assert.equal(p.noChanges,true); assert.equal(p.addedAreas,0);
 });
-test("CLI opens a synthetic SQLite copy read-only; refuses tampered row IDs", () => {
+// Synthetic SQLite fixtures model the real server schema and save semantics.
+function withOfflineStore(runChecks) {
   const dir=mkdtempSync(path.join(tmpdir(),"lumi-2a-"));
   const file=path.join(dir,"copy.sqlite");
   const run=()=>spawnSync(process.execPath,["--experimental-loader","./tests/ts-loader.mjs",
     "scripts/preflight-area-normalization.mjs","--offline-copy",file],{encoding:"utf8",timeout:15000});
+  const change=(statement,...args)=>{
+    const db=new DatabaseSync(file);
+    try { db.prepare(statement).run(...args); } finally { db.close(); }
+  };
   try {
     const db=new DatabaseSync(file);
     db.exec("CREATE TABLE entities(id TEXT PRIMARY KEY,payload TEXT NOT NULL,updated_at INTEGER NOT NULL)");
@@ -61,18 +79,76 @@ test("CLI opens a synthetic SQLite copy read-only; refuses tampered row IDs", ()
     const insertR=db.prepare("INSERT INTO relations VALUES (?,?,?)");
     for(const x of before().relations)insertR.run(x.id,JSON.stringify(x),x.createdAt);
     db.prepare("INSERT INTO metadata VALUES ('revision','7')").run();
-    db.prepare("INSERT INTO metadata VALUES ('restoreGeneration','3')").run();
+    db.prepare("INSERT INTO tombstones VALUES ('deleted-note', 12)").run();
+    // Do not insert restoreGeneration: a fresh real server legitimately has no such row.
     db.close();
-    const good=run();
-    assert.equal(good.status,0,good.stderr);
-    assert.equal(JSON.parse(good.stdout).status,"offline-preflight-only");
-    assert.ok(!good.stdout.includes("SECRET-CONTENT")&&!good.stderr.includes("SECRET-CONTENT"));
-    const edit=new DatabaseSync(file);
-    edit.prepare("UPDATE relations SET payload=? WHERE id='r1'").run(JSON.stringify({...before().relations[0],id:"forged"}));
-    edit.close();
-    const bad=run();
-    assert.equal(bad.status,1);assert.match(bad.stderr,/relation-id-disagrees/);
+    runChecks({run,change});
   } finally {rmSync(dir,{recursive:true,force:true});}
+}
+function successful(run) {
+  const result=run();
+  assert.equal(result.status,0,result.stderr);
+  assert.ok(!result.stdout.includes("SECRET-CONTENT")&&!result.stderr.includes("SECRET-CONTENT"));
+  return JSON.parse(result.stdout);
+}
+function rejected(run,issue) {
+  const result=run();
+  assert.equal(result.status,1,result.stdout);
+  assert.match(result.stderr,new RegExp(issue));
+  assert.ok(!result.stderr.includes("SECRET-CONTENT"));
+}
+
+test("CLI accepts absent restoreGeneration as zero, stored zero and post-restore positive integer", () => {
+  withOfflineStore(({run,change})=>{
+    const fresh=successful(run);
+    assert.equal(fresh.restoreGeneration,0);
+    change("INSERT INTO metadata VALUES ('restoreGeneration','0')");
+    assert.equal(successful(run).restoreGeneration,0);
+    change("UPDATE metadata SET value='3' WHERE key='restoreGeneration'");
+    assert.equal(successful(run).restoreGeneration,3);
+    change("DELETE FROM metadata WHERE key='revision'");
+    rejected(run,"missing-store-revision");
+  });
+});
+test("CLI rejects any present malformed restoreGeneration or revision", () => {
+  withOfflineStore(({run,change})=>{
+    for(const malformed of ["", "-1", "3.5", "NaN", "9007199254740992"]) {
+      change("INSERT INTO metadata(key,value) VALUES('restoreGeneration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",malformed);
+      rejected(run,"invalid-store-restore-generation");
+    }
+    change("UPDATE metadata SET value='5' WHERE key='restoreGeneration'");
+    change("UPDATE metadata SET value='not-a-revision' WHERE key='revision'");
+    rejected(run,"invalid-store-revision");
+  });
+});
+test("CLI refuses tampered payload IDs and SQL mirror timestamps", () => {
+  withOfflineStore(({run,change})=>{
+    assert.equal(successful(run).status,"offline-preflight-only");
+    change("UPDATE relations SET payload=? WHERE id='r1'",JSON.stringify({...before().relations[0],id:"forged"}));
+    rejected(run,"relation-id-disagrees");
+    change("UPDATE relations SET payload=? WHERE id='r1'",JSON.stringify(before().relations[0]));
+    change("UPDATE entities SET payload=? WHERE id='task'",JSON.stringify({...before().entities[2],id:"forged"}));
+    rejected(run,"entity-id-disagrees");
+    change("UPDATE entities SET payload=? WHERE id='task'",JSON.stringify(before().entities[2]));
+    change("UPDATE entities SET updated_at=999 WHERE id='task'");
+    rejected(run,"entity-timestamp-disagrees");
+    change("UPDATE entities SET updated_at=2 WHERE id='task'");
+    change("UPDATE relations SET created_at=999 WHERE id='r1'");
+    rejected(run,"relation-timestamp-disagrees");
+    change("UPDATE relations SET created_at=1 WHERE id='r1'");
+    assert.equal(successful(run).status,"offline-preflight-only");
+  });
+});
+test("CLI fingerprint covers exact tombstone timestamps and removals without revision changes", () => {
+  withOfflineStore(({run,change})=>{
+    const beforeHash=successful(run).sourceSha256;
+    change("UPDATE tombstones SET deleted_at=13 WHERE id='deleted-note'");
+    const afterUpdate=successful(run).sourceSha256;
+    assert.notEqual(afterUpdate,beforeHash);
+    change("DELETE FROM tombstones WHERE id='deleted-note'");
+    const afterRemove=successful(run).sourceSha256;
+    assert.notEqual(afterRemove,afterUpdate);
+  });
 });
 
 test("preflight explicitly reports legacy Area kind backfill as an activation blocker", () => {
