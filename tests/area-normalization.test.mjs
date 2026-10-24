@@ -472,3 +472,62 @@ test("canonical structural validation also checks supplied tombstones without ch
       "snapshot-structure-invalid");
   }
 });
+
+test("tombstoned generated Area IDs block a new Area instead of resurrecting it", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("project", "project", "personal")];
+  const first = planAreaNormalization({ entities, relations: [] }, 100);
+  const deletedAreaId = first.report.createdAreaIds[0];
+  assert.ok(deletedAreaId.startsWith("area:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedAreaId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-area-id:" + deletedAreaId);
+  assert.deepEqual(input, original);
+});
+
+test("tombstoned generated belongs_to_area relation IDs block relinking", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("known-area", "area", "personal", { kind: "private" }, "Family"),
+    entity("task", "task", "personal", { areaId: "known-area" })];
+  const initial = planAreaNormalization({ entities, relations: [] }, 100);
+  assert.deepEqual(initial.report.createdAreaIds, []);
+  const deletedRelationId = initial.report.addedRelationIds[0];
+  assert.ok(deletedRelationId.startsWith("relation:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedRelationId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-area-relation-id:" + deletedRelationId);
+  assert.deepEqual(input, original);
+});
+
+test("tombstoned generated legacy belongs_to_project IDs block project relinking", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("known-area", "area", "personal", { kind: "private" }, "Family"),
+    entity("project", "project", "personal", { areaId: "known-area" }),
+    entity("task", "task", "personal", { projectId: "project" })];
+  const initial = planAreaNormalization({ entities, relations: [] }, 100);
+  const deletedRelationId = initial.report.addedLegacyProjectRelationIds[0];
+  assert.ok(deletedRelationId.startsWith("relation:2a:"));
+  const input = {
+    entities, relations: [],
+    tombstones: [{ id: deletedRelationId, deletedAt: 101 }],
+  };
+  const original = structuredClone(input);
+  expectsBlocked(() => planAreaNormalization(input, 102),
+    "tombstoned-generated-project-relation-id:" + deletedRelationId);
+  assert.deepEqual(input, original);
+
+  // Unrelated historical tombstones must not suppress valid new IDs.
+  const allowed = planAreaNormalization({
+    entities, relations: [], tombstones: [{ id: "unrelated-deleted-record", deletedAt: 101 }],
+  }, 102);
+  assert.equal(allowed.report.addedLegacyProjectRelationIds.length, 1);
+  assert.equal(allowed.report.addedRelationIds.length, 1);
+});
