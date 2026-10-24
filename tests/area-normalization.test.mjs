@@ -211,15 +211,16 @@ test("Area dedup retains earliest relation across snapshot permutations and stab
     assert.equal(result.report.after.relations, 1);
   }
 
+  // Relation IDs share the entity namespace, so the lexically low relation is "link-a", not the Area's own ID "a".
   const high = { ...link("z", "p", "a"), createdAt: 5 };
-  const low = { ...link("a", "p", "a"), createdAt: 5 };
+  const low = { ...link("link-a", "p", "a"), createdAt: 5 };
   for (const relations of [[high, low], [low, high]]) {
     const result = planAreaNormalization({ entities, relations }, 100);
-    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["a"]);
+    assert.deepEqual(areaFor(result, "p").map((rel) => rel.id), ["link-a"]);
     assert.strictEqual(areaFor(result, "p")[0], low);
     assert.deepEqual(result.report.removedRedundantRelationIds, ["z"]);
     // Re-running a normalized snapshot cannot replace that surviving ID.
-    assert.deepEqual(areaFor(planAreaNormalization(result, 101), "p").map((rel) => rel.id), ["a"]);
+    assert.deepEqual(areaFor(planAreaNormalization(result, 101), "p").map((rel) => rel.id), ["link-a"]);
   }
 });
 
@@ -581,6 +582,21 @@ test("shared canonical validation rejects tombstones on existing entity and rela
   }
 });
 
+test("shared canonical validation rejects a relation that reuses an entity ID; distinct IDs still pass", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("a", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "a" }),
+    entity("same", "note", "personal")];
+  const colliding = { entities, relations: [link("same", "p", "a")] };
+  const before = structuredClone(colliding);
+  assert.throws(() => validateSnapshotStructure(colliding), /relation ID used by an entity/);
+  expectsBlocked(() => planAreaNormalization(colliding, 130), "snapshot-structure-invalid");
+  assert.deepEqual(colliding, before, "the snapshot is not changed");
+  const distinct = { entities, relations: [link("project-area", "p", "a")] };
+  assert.doesNotThrow(() => validateSnapshotStructure(distinct));
+  assert.doesNotThrow(() => planAreaNormalization(distinct, 131));
+});
+
 test("shared canonical validation rejects duplicate tombstone IDs even at different timestamps", () => {
   const entities = [workspace("personal", "personal"),
     entity("t", "task", "personal")];
@@ -625,7 +641,8 @@ test("duplicate belongs_to_project links keep a stable canonical ID and audit re
   for (const [first, second, survivor, removedId] of [
     [{ ...projectLink("earlier", "t", "p"), createdAt: 5 },
       { ...projectLink("later", "t", "p"), createdAt: 25 }, "earlier", "later"],
-    [projectLink("a", "t", "p"), projectLink("z", "t", "p"), "a", "z"],
+    // Relation IDs share the entity namespace: the lexically low link is "link-a", not the Area's ID "a".
+    [projectLink("link-a", "t", "p"), projectLink("z", "t", "p"), "link-a", "z"],
   ]) {
     const results = [];
     for (const links of [[first, second], [second, first]]) {

@@ -234,6 +234,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Request body is required",
   "Request body is too large",
   "Snapshot contains a cross-workspace relation",
+  "Snapshot contains a relation ID used by an entity",
   "Snapshot contains a relation to a missing entity",
   "Snapshot contains an entity in an unknown workspace",
   "Snapshot contains an invalid entity",

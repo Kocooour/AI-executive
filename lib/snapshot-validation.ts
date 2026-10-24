@@ -122,6 +122,8 @@ export function validateSnapshotStructure(snapshot: unknown): asserts snapshot i
       throw new Error("Snapshot contains an invalid relation");
     }
     if (relationIds.has(relation.id)) throw new Error("Snapshot contains duplicate relation IDs");
+    // Entities and relations share one ID namespace (a tombstone names either), so a relation may not reuse an entity ID.
+    if (entityIds.has(relation.id)) throw new Error("Snapshot contains a relation ID used by an entity");
     if (
       !entityIds.has(relation.sourceEntityId) ||
       !entityIds.has(relation.targetEntityId)
