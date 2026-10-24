@@ -442,3 +442,85 @@ test("a context changed on another device while this one is being typed in is ne
     await b.context.close();
   }
 });
+
+// The previous app version writes only `goal`; here as another tab would, straight into this browser's IndexedDB.
+async function writeLegacyGoal(page: Page, projectId: string, goal: string) {
+  await page.evaluate(async ({ projectId, goal }) => {
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open("ai-executive");
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const store = open.result.transaction("entities", "readwrite").objectStore("entities");
+        const get = store.get(projectId);
+        get.onsuccess = () => {
+          const record = get.result;
+          record.properties = { ...record.properties, goal };
+          record.updatedAt = Date.now();
+          const put = store.put(record);
+          put.onsuccess = () => resolve();
+          put.onerror = () => reject(put.error);
+        };
+      };
+    });
+  }, { projectId, goal });
+}
+
+test("'Načíst aktuální verzi' after a legacy goal conflict takes that goal, and the next save succeeds without a new conflict", async ({ page }) => {
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const id = await seedWorld(page, now());
+  const title = `Projekt B1${R} s kontextem`;
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    const context = page.locator(".projectContext");
+    const why = context.getByRole("textbox", { name: "Proč je důležitý" });
+    await why.click();
+    await why.fill("Proč během konfliktu");
+    await writeLegacyGoal(page, id.rich, "Cíl ze staré verze");
+    await why.press("Tab");
+    const conflict = page.locator(".projectContextConflict");
+    await expect(conflict).toBeVisible();
+    await conflict.getByRole("button", { name: "Načíst aktuální verzi" }).click();
+    await expect(conflict).toHaveCount(0);
+    // The loaded version is the one the notice showed: the old version's goal is "Hotovo, když".
+    await expect(context.getByRole("textbox", { name: "Hotovo, když" })).toHaveValue("Cíl ze staré verze");
+    // Editing on top of it saves without another conflict, and context and goal agree again.
+    await why.fill("Proč po načtení");
+    await why.press("Tab");
+    await expect(context.getByRole("status")).toHaveText("Uloženo");
+    await expect(conflict).toHaveCount(0);
+    await expectOnServer(page, (row) => row.id === id.rich && (row.properties?.context as { why?: string; doneWhen?: string })?.why === "Proč po načtení"
+      && (row.properties?.context as { doneWhen?: string })?.doneWhen === "Cíl ze staré verze" && row.properties?.goal === "Cíl ze staré verze", true);
+  } finally {
+    await cleanup(page, Object.values(id));
+  }
+});
+
+test("a long goal from the previous version next to an existing context can be shortened and saved without a false conflict", async ({ page }) => {
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const id = await seedWorld(page, now());
+  const title = `Projekt B1${R} s kontextem`;
+  const long = `Dlouhý cíl ze staré verze ${"a".repeat(320)}`;
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await writeLegacyGoal(page, id.rich, long);
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    const context = page.locator(".projectContext");
+    const doneWhen = context.getByRole("textbox", { name: "Hotovo, když" });
+    await expect(doneWhen).toHaveValue(long);
+    await doneWhen.fill("Zkrácený cíl");
+    await doneWhen.press("Tab");
+    await expect(context.getByRole("status")).toHaveText("Uloženo");
+    await expect(page.locator(".projectContextConflict")).toHaveCount(0);
+    await expectOnServer(page, (row) => row.id === id.rich && (row.properties?.context as { doneWhen?: string })?.doneWhen === "Zkrácený cíl"
+      && row.properties?.goal === "Zkrácený cíl", true);
+  } finally {
+    await cleanup(page, Object.values(id));
+  }
+});

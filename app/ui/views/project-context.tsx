@@ -41,13 +41,22 @@ function legacyGoalForNotice(properties: Record<string, unknown> | undefined): s
   return typeof doneWhen === "string" && goal.trim() !== doneWhen.trim() ? goal : null;
 }
 
+// What the editor shows as the stored context. A `goal` that differs from `context.doneWhen` is an edit by the previous
+// app version (a current client always mirrors it; a merge settles both): it is the "Hotovo, když" the owner sees and edits,
+// so saving any field writes it into the context and the two agree again.
+function shownDraft(properties: Record<string, unknown> | undefined): Draft {
+  const draft = contextDraft(readProjectContext(properties));
+  const legacy = legacyGoalForNotice(properties);
+  return legacy === null ? draft : { ...draft, doneWhen: legacy };
+}
+
 // The context of a project, edited in place (B1, proposal §4.1-4.2). Saved when a field is left, with a visible state. The
 // whole context travels as one object (sync merges it whole, lib/project-context.ts). Same race handling as the former
 // goal field: a slow save of an older text must not reset a newer text still being typed, and saves run one after another.
 export function ProjectContext({ app, project }: { app: LumiApp; project: Entity }) {
   const t = labelsFor(app.language);
   const stored = readProjectContext(project.properties);
-  const storedDraft = contextDraft(stored);
+  const storedDraft = shownDraft(project.properties);
   const storedKey = JSON.stringify(stored);
   const storedGoal = typeof project.properties.goal === "string" ? project.properties.goal : null;
   const readOnly = app.activeWorkspaceId === "all";
@@ -136,8 +145,8 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     if (!focused.current && !dirty.current) {
       baseRef.current = incoming;
       baseGoalRef.current = storedGoal;
-      savedRef.current = contextDraft(incoming);
-      draftRef.current = contextDraft(incoming);
+      savedRef.current = shownDraft(project.properties);
+      draftRef.current = shownDraft(project.properties);
       setDraft(draftRef.current);
       setConflict(null);
       setLegacyGoalConflict(null);
@@ -169,6 +178,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const snapshot = draftRef.current;
     const base = baseRef.current;
     const baseGoal = baseGoalRef.current;
+    // The editor showed the stored `goal` as "Hotovo, když" (also a different one written by the previous app version):
+    // the owner edited on top of it, so writing the context and its mirror over that goal is not a silent overwrite. A goal
+    // changed after that is still refused by the compare-and-swap below.
+    const editedOverGoal = baseGoal !== null && savedRef.current.doneWhen.trim() === baseGoal.trim();
     if (sameText(snapshot, savedRef.current)) { dirty.current = false; dropDraft(); return; }
     // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
     const problem = contextProblem(snapshot);
@@ -190,7 +203,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         const own = ownWrite.current && sameStoredContext(readProjectContext(currentProperties), ownWrite.current)
           && currentGoal === ownWrite.current.doneWhen ? ownWrite.current : null;
         const patch = contextPatchIfUnchanged(currentProperties, own ?? base, next,
-          own ? own.doneWhen : baseGoal, confirmedOverwrite);
+          own ? own.doneWhen : baseGoal, confirmedOverwrite || editedOverGoal);
         if (!patch) { stale = true; throw new Error("Project context was updated during editing"); }
         ownWrite.current = next;
         return patch;
@@ -235,13 +248,13 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const remote = readProjectContext(latest.properties);
     baseRef.current = remote;
     baseGoalRef.current = typeof latest.properties.goal === "string" ? latest.properties.goal : null;
-    savedRef.current = contextDraft(remote);
+    savedRef.current = shownDraft(latest.properties);
     setConflict(null);
     setLegacyGoalConflict(null);
     if (!keepMine) {
       dropDraft();
       dirty.current = false;
-      draftRef.current = contextDraft(remote);
+      draftRef.current = shownDraft(latest.properties);
       setDraft(draftRef.current);
       setState("idle");
       return;
