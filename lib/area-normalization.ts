@@ -2,6 +2,7 @@
 // resolver or write it to a live store until the migration/sync review is complete.
 import { createHash } from "node:crypto";
 import type { Entity, Relation } from "./db";
+import { validateSnapshotStructure } from "./snapshot-validation";
 
 export interface AreaNormalizationSnapshot {
   entities: readonly Entity[];
@@ -62,6 +63,14 @@ export function planAreaNormalization(
   snapshot: AreaNormalizationSnapshot,
   at: number,
 ): { entities: Entity[]; relations: Relation[]; report: AreaNormalizationReport } {
+  // Shared preflight uses the same canonical entity/relation/workspace rules
+  // as GET/PUT /api/store, without loading SQLite or accessing live data.
+  // Never expose record contents (or raw validator exceptions) in audit logs.
+  try {
+    validateSnapshotStructure(snapshot);
+  } catch {
+    throw new AreaNormalizationBlocked(["snapshot-structure-invalid"]);
+  }
   if (!Number.isSafeInteger(at) || at < 0) {
     throw new AreaNormalizationBlocked(["invalid-migration-timestamp"]);
   }
