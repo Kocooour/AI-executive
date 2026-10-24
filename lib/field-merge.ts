@@ -217,9 +217,26 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
   // One side unchanged: that side's record is the other one as it is; only the goal/context mirror is settled.
   if (same(local, base) || same(server, base)) return syncGoalIntoContext(base, mergeFields(base, local, server, now));
   const { merged, lost } = reconcileDoneWhen(base, local, server, mergeFields(base, local, server, now), local.updatedAt > server.updatedAt);
-  // When both sides changed `context` itself, the field merge has already kept the other context as a notice.
-  const contextOnBothSides = !same(local.properties?.context, base.properties?.context) && !same(server.properties?.context, base.properties?.context);
-  return lost && !contextOnBothSides ? withConflicts(merged, [{ id: conflictId(now), field: lost.field, lostValue: lost.value, at: now }]) : merged;
+  if (!lost) return merged;
+  // Two sides may have edited context as well as the old goal. In that case mergeFields already created
+  // a context notice, but its lostValue can carry the obsolete doneWhen instead of the old client's
+  // actual goal. Enrich only a NEW notice: pre-existing unresolved notices must never be rewritten.
+  if (lost.field === "properties.context") {
+    const existingIds = new Set([...entityConflicts(local), ...entityConflicts(server)].map((item) => item.id));
+    const notices = entityConflicts(merged);
+    const index = notices.findIndex((item) => item.field === "properties.context" && !existingIds.has(item.id));
+    if (index !== -1) {
+      const replacement = lost.value as { doneWhen: string };
+      notices[index] = {
+        ...notices[index],
+        lostValue: { ...(notices[index].lostValue as Record<string, unknown>), doneWhen: replacement.doneWhen },
+      };
+      return { ...merged, properties: { ...merged.properties, [conflictsKey]: notices } };
+    }
+  }
+  // No context conflict was recorded by the generic merge (or the losing goal exceeds the context
+  // limit): keep the semantic conflict separately instead of dropping the old client's words.
+  return withConflicts(merged, [{ id: conflictId(now), field: lost.field, lostValue: lost.value, at: now }]);
 }
 
 function mergeFields(base: Entity, local: Entity, server: Entity, now: number): Entity {
