@@ -7,6 +7,9 @@ import { validateSnapshotStructure } from "./snapshot-validation";
 export interface AreaNormalizationSnapshot {
   entities: readonly Entity[];
   relations: readonly Relation[];
+  // A missing tombstone array is accepted for old offline exports, but
+  // known deletions reserve their IDs for the entire migration plan.
+  tombstones?: readonly { id: string; deletedAt: number }[];
 }
 
 export interface AreaNormalizationReport {
@@ -75,6 +78,7 @@ export function planAreaNormalization(
     throw new AreaNormalizationBlocked(["invalid-migration-timestamp"]);
   }
   const issues: string[] = [];
+  const tombstonedIds = new Set((snapshot.tombstones ?? []).map((item) => item.id));
   const original = new Map<string, Entity>();
   // The Personal workspace can be implicit in a legacy snapshot, but any
   // explicit workspace record must have its canonical ID and unique scope.
@@ -203,6 +207,10 @@ export function planAreaNormalization(
       return undefined;
     }
     const id = generatedAreaId(workspaceId, label);
+    if (tombstonedIds.has(id)) {
+      issues.push("tombstoned-generated-area-id:" + id);
+      return undefined;
+    }
     const earlier = original.get(id);
     if (earlier || newAreas.has(id)) {
       issues.push("generated-area-id-collision:" + id);
@@ -298,6 +306,10 @@ export function planAreaNormalization(
       return;
     }
     const id = generatedRelationId(entity.id, area.id);
+    if (tombstonedIds.has(id)) {
+      issues.push("tombstoned-generated-area-relation-id:" + id);
+      return;
+    }
     if (relationIds.has(id) || addedRelations.some((relation) => relation.id === id)) {
       issues.push("generated-relation-id-collision:" + id);
       return;
@@ -333,6 +345,10 @@ export function planAreaNormalization(
       // normalization becomes the canonical relational representation.
       if (oldProject && projectLinks.length === 0) {
         const id = "relation:2a:" + digest("project", entity.id, projectId);
+        if (tombstonedIds.has(id)) {
+          issues.push("tombstoned-generated-project-relation-id:" + id);
+          continue;
+        }
         if (relationIds.has(id) || addedLegacyProjectRelations.some((relation) => relation.id === id)) {
           issues.push("generated-project-relation-id-collision:" + id);
           continue;
