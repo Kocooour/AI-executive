@@ -67,19 +67,28 @@ export function planAreaNormalization(
   }
   const issues: string[] = [];
   const original = new Map<string, Entity>();
+  // The Personal workspace can be implicit in a legacy snapshot, but any
+  // explicit workspace record must have its canonical ID and unique scope.
   const workspaceKind = new Map<string, "personal" | "shared">([["personal", "personal"]]);
+  const explicitWorkspaceIds = new Set<string>();
   for (const entity of snapshot.entities) {
     if (original.has(entity.id)) issues.push("duplicate-entity-id:" + entity.id);
     original.set(entity.id, entity);
     if (entity.type === "workspace") {
+      if (entity.id !== "workspace:" + entity.workspaceId) {
+        issues.push("noncanonical-workspace-id:" + entity.id);
+      }
+      if (explicitWorkspaceIds.has(entity.workspaceId)) {
+        issues.push("duplicate-workspace:" + entity.workspaceId);
+      }
+      explicitWorkspaceIds.add(entity.workspaceId);
       const kind = entity.properties.kind;
       if (kind !== "personal" && kind !== "shared") {
         issues.push("invalid-workspace-kind:" + entity.id);
-      } else if (workspaceKind.has(entity.workspaceId)
-        && !(entity.workspaceId === "personal" && kind === "personal")) {
-        issues.push("duplicate-workspace:" + entity.workspaceId);
       } else if (entity.workspaceId === "personal" && kind !== "personal") {
         issues.push("personal-workspace-kind-mismatch");
+      } else if (entity.workspaceId !== "personal" && kind !== "shared") {
+        issues.push("nonpersonal-workspace-kind-mismatch:" + entity.id);
       } else {
         workspaceKind.set(entity.workspaceId, kind);
       }
@@ -246,6 +255,13 @@ export function planAreaNormalization(
   const inherited: string[] = [];
   function linkEntity(entity: Entity, area: Entity | undefined, inherits: boolean) {
     if (!area) return;
+    // Historical archived records can keep their old Area, but no live item
+    // may acquire (or retain as a proposed canonical assignment) an archived
+    // Area. Never silently create a similarly named replacement.
+    if (area.status === "archived" && entity.status !== "archived") {
+      issues.push("archived-area-for-active-item:" + entity.id + ":" + area.id);
+      return;
+    }
     const areaLinks = (bySource.get(entity.id) ?? []).filter((relation) => relation.relationType === "belongs_to_area");
     if (inherits) {
       // The canonical Area of a project task is its project's Area. An equal
@@ -336,8 +352,8 @@ export function planAreaNormalization(
       before: { entities: snapshot.entities.length, relations: snapshot.relations.length },
       after: { entities: entities.length, relations: relations.length },
       createdAreaIds: [...newAreas.keys()].sort(),
-      addedRelationIds: addedRelations.map((relation) => relation.id),
-      addedLegacyProjectRelationIds: addedLegacyProjectRelations.map((relation) => relation.id),
+      addedRelationIds: addedRelations.map((relation) => relation.id).sort(),
+      addedLegacyProjectRelationIds: addedLegacyProjectRelations.map((relation) => relation.id).sort(),
       removedRedundantRelationIds: [...removed].sort(),
       inheritedTaskIds: inherited.sort(),
       existingAreaKindBackfillIds: existingAreaKindBackfillIds.sort(),
