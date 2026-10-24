@@ -12,11 +12,9 @@ export interface WorkScopeSwitcherProps {
   enabled: boolean;
 }
 
-interface WorkScopeClasses {
-  group: string;
-  active: string;
-  option: string;
-}
+// Next.js types CSS modules as a readonly string-indexed map, not as an
+// object with known required class keys.
+type WorkScopeClasses = Readonly<Record<string, string>>;
 
 /**
  * DOM semantics and behavior shared by the styled switcher and isolated unit
