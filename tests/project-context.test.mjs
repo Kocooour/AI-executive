@@ -277,6 +277,55 @@ test("project draft storage is tab-scoped, preserves newer typing and is wiped o
   assert.equal(drafts.keptProjectContextDrafts(storage).length, 0);
 });
 
+
+test("legacy goal conflict retains the actual losing goal when both clients also changed context", () => {
+  const base = project({ goal: "Old", context: context({ why: "Original", doneWhen: "Old" }) }, { updatedAt: 10 });
+  const oldClient = project({ goal: "A", context: context({ why: "Old client why", doneWhen: "Old", updatedAt: 21 }) }, { updatedAt: 20 });
+  const modernClient = project({ goal: "B", context: context({ why: "New client why", doneWhen: "B", updatedAt: 31 }) }, { updatedAt: 30 });
+
+  for (const [local, server, expected, losingGoal, losingWhy] of [
+    [oldClient, modernClient, "B", "A", "Old client why"],
+    [modernClient, oldClient, "B", "A", "Old client why"],
+    [{ ...oldClient, updatedAt: 40 }, modernClient, "A", "B", "New client why"],
+    [modernClient, { ...oldClient, updatedAt: 40 }, "A", "B", "New client why"],
+  ]) {
+    const merged = mergeEntity(base, local, server, 100);
+    assert.equal(merged.properties.goal, expected);
+    assert.equal(merged.properties.context.doneWhen, expected);
+    const conflicts = (merged.properties.syncConflicts || []).filter((c) => c.field === "properties.context");
+    assert.equal(conflicts.length, 1, "one context notice covers both the text and other context edits");
+    assert.equal(conflicts[0].lostValue.doneWhen, losingGoal, "lost old-client goal must not revert to the obsolete context text");
+    assert.equal(conflicts[0].lostValue.why, losingWhy, "the losing side's unrelated context edit must remain restorable");
+  }
+});
+
+test("a stale context received by a legacy client does not disguise its own newer goal edit", () => {
+  const base = project({ goal: "Old", context: context({ doneWhen: "Old" }) }, { updatedAt: 10 });
+  const received = context({ doneWhen: "B", updatedAt: 20 });
+  const oldClient = project({ goal: "A", context: received }, { updatedAt: 30 });
+  const modernClient = project({ goal: "B", context: received }, { updatedAt: 20 });
+  const merged = mergeEntity(base, oldClient, modernClient, 100);
+  assert.equal(merged.properties.goal, "A");
+  assert.equal(merged.properties.context.doneWhen, "A");
+  const conflict = (merged.properties.syncConflicts || []).find((c) => c.field === "properties.context");
+  assert.equal(conflict?.lostValue.doneWhen, "B");
+});
+
+test("an over-limit losing old goal remains readable when both contexts changed", () => {
+  const long = "long legacy ".repeat(35);
+  const base = project({ goal: "Old", context: context({ doneWhen: "Old", why: "before" }) }, { updatedAt: 10 });
+  const legacy = project({ goal: long, context: context({ doneWhen: "Old", why: "old edit" }) }, { updatedAt: 20 });
+  const modern = project({ goal: "B", context: context({ doneWhen: "B", why: "new edit", updatedAt: 30 }) }, { updatedAt: 30 });
+  const merged = mergeEntity(base, legacy, modern, 100);
+  assert.equal(merged.properties.goal, "B");
+  assert.equal(merged.properties.context.doneWhen, "B");
+  const notices = merged.properties.syncConflicts || [];
+  assert.equal(notices.filter((c) => c.field === "properties.context").length, 1);
+  const goalNotice = notices.find((c) => c.field === "properties.goal");
+  assert.ok(goalNotice, "over-limit goal must survive despite the generic context conflict");
+  assert.equal(goalNotice.lostValue, long);
+});
+
 // Owner review 2026-10-24: an older client edits `goal` while a current one edits `context.doneWhen`.
 {
   const { readProjectContext: read } = await import("../lib/project-context.ts");
