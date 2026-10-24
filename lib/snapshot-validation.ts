@@ -142,6 +142,7 @@ export function validateSnapshotStructure(snapshot: unknown): asserts snapshot i
   }
   if (value.tombstones !== undefined) {
     if (!Array.isArray(value.tombstones)) throw new Error("Snapshot tombstones are invalid");
+    const tombstoneIds = new Set<string>();
     for (const tombstone of value.tombstones) {
       if (
         !tombstone ||
@@ -153,6 +154,16 @@ export function validateSnapshotStructure(snapshot: unknown): asserts snapshot i
       ) {
         throw new Error("Snapshot contains an invalid tombstone");
       }
+      // Canonical SQLite tombstones have a unique primary key. A deleted ID
+      // also cannot remain present as a live entity or relation: the sync
+      // write path filters such entities and their links before persisting.
+      if (tombstoneIds.has(tombstone.id)) {
+        throw new Error("Snapshot contains duplicate tombstone IDs");
+      }
+      if (entityIds.has(tombstone.id) || relationIds.has(tombstone.id)) {
+        throw new Error("Snapshot tombstone overlaps a live record");
+      }
+      tombstoneIds.add(tombstone.id);
     }
   }
 }

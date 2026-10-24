@@ -3,6 +3,7 @@ import test from "node:test";
 
 const { planAreaNormalization, AreaNormalizationBlocked } =
   await import("../lib/area-normalization.ts");
+const { validateSnapshotStructure } = await import("../lib/snapshot-validation.ts");
 
 const entity = (id, type, workspaceId, properties = {}, title = id) => ({
   id, type, title, workspaceId, properties,
@@ -561,4 +562,53 @@ test("2a preflight preserves main project-context validation", () => {
     expectsBlocked(() => planAreaNormalization(snapshot, 101), "snapshot-structure-invalid");
     assert.deepEqual(snapshot, before);
   }
+});
+
+test("shared canonical validation rejects tombstones on existing entity and relation IDs", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("old-area", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "old-area" })];
+  const relations = [link("project-area", "p", "old-area")];
+  for (const id of ["old-area", "project-area", "workspace:personal", "p"]) {
+    const snapshot = {
+      entities, relations, tombstones: [{ id, deletedAt: 120 }],
+    };
+    const before = structuredClone(snapshot);
+    assert.throws(() => validateSnapshotStructure(snapshot), /tombstone overlaps a live record/);
+    expectsBlocked(() => planAreaNormalization(snapshot, 121), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before, `snapshot must remain unchanged for ${id}`);
+  }
+});
+
+test("shared canonical validation rejects duplicate tombstone IDs even at different timestamps", () => {
+  const entities = [workspace("personal", "personal"),
+    entity("t", "task", "personal")];
+  for (const timestamps of [[100, 100], [100, 200]]) {
+    const snapshot = {
+      entities, relations: [],
+      tombstones: timestamps.map((deletedAt) => ({ id: "previously-deleted", deletedAt })),
+    };
+    const before = structuredClone(snapshot);
+    assert.throws(() => validateSnapshotStructure(snapshot), /duplicate tombstone IDs/);
+    expectsBlocked(() => planAreaNormalization(snapshot, 201), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before);
+  }
+});
+
+test("distinct unrelated tombstones remain valid for shared validation and offline 2a", () => {
+  const snapshot = {
+    entities: [workspace("personal", "personal"),
+      entity("p", "project", "personal")],
+    relations: [],
+    tombstones: [
+      { id: "deleted-task", deletedAt: 40 },
+      { id: "deleted-project", deletedAt: 50 },
+    ],
+  };
+  const before = structuredClone(snapshot);
+  assert.doesNotThrow(() => validateSnapshotStructure(snapshot));
+  const planned = planAreaNormalization(snapshot, 201);
+  assert.equal(planned.report.createdAreaIds.length, 1);
+  assert.equal(planned.report.addedRelationIds.length, 1);
+  assert.deepEqual(snapshot, before);
 });
