@@ -18,7 +18,7 @@ Spustit na syntetickém/zkopírovaném JSON snapshotu s poli entities a relation
 
     node --experimental-loader ./tests/ts-loader.mjs scripts/plan-area-normalization.mjs /cesta/ke/kopii.json
 
-Skript pouze čte soubor a vrátí hash vstupu a auditní report bez obsahu záznamů. **Nemá přepínač pro aplikaci změn**. Pro SQLite se nejprve pořídí ověřená konzistentní kopie a ta se samostatným bezpečným nástrojem exportuje do JSON; živý store.sqlite se tomuto skriptu nepředává.
+Plánovač respektuje i volitelné `tombstones` z offline snapshotu: pokud deterministické ID nově vytvářené Oblasti, vazby `belongs_to_area` nebo doplňované `belongs_to_project` bylo v minulosti smazáno, návrh skončí `AreaNormalizationBlocked` s kódem `tombstoned-generated-…`. Nikdy automaticky neoživuje smazaná ID ani je nenahrazuje nově vymyšlenými; vstupní záznamy a tombstones ponechává beze změny. Snapshot bez `tombstones` zůstává podporovaný jen jako starší offline formát, nikoli jako důkaz absence historických smazání. Skript pouze čte soubor a vrátí hash vstupu a auditní report bez obsahu záznamů. **Nemá přepínač pro aplikaci změn**. Pro SQLite se nejprve pořídí ověřená konzistentní kopie a ta se samostatným bezpečným nástrojem exportuje do JSON; živý store.sqlite se tomuto skriptu nepředává.
 
 ## Zbývá před aplikací 2a a navazujícím 2b
 
