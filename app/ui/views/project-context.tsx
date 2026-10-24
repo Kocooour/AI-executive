@@ -31,6 +31,16 @@ const normalized = (draft: Draft) => ({
   doneWhen: draft.doneWhen.trim(),
 });
 
+// Short legacy edits are normally hidden behind a valid context. Show the different
+// raw goal alongside the context when a concurrent edit is rejected.
+function legacyGoalForNotice(properties: Record<string, unknown> | undefined): string | null {
+  const context = properties?.context;
+  const goal = properties?.goal;
+  if (typeof goal !== "string" || !context || typeof context !== "object" || Array.isArray(context)) return null;
+  const doneWhen = (context as { doneWhen?: unknown }).doneWhen;
+  return typeof doneWhen === "string" && goal.trim() !== doneWhen.trim() ? goal : null;
+}
+
 // The context of a project, edited in place (B1, proposal §4.1-4.2). Saved when a field is left, with a visible state. The
 // whole context travels as one object (sync merges it whole, lib/project-context.ts). Same race handling as the former
 // goal field: a slow save of an older text must not reset a newer text still being typed, and saves run one after another.
@@ -39,10 +49,12 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const stored = readProjectContext(project.properties);
   const storedDraft = contextDraft(stored);
   const storedKey = JSON.stringify(stored);
+  const storedGoal = typeof project.properties.goal === "string" ? project.properties.goal : null;
   const readOnly = app.activeWorkspaceId === "all";
   const [draft, setDraft] = useState<Draft>(storedDraft);
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong" | "conflict">("idle");
   const [conflict, setConflict] = useState<Draft | null>(null);
+  const [legacyGoalConflict, setLegacyGoalConflict] = useState<string | null>(null);
   const [recovered, setRecovered] = useState(false);
   const [problem, setProblem] = useState<{ field: string; limit: number } | null>(null);
   const container = useRef<HTMLDivElement>(null);
@@ -51,6 +63,8 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   const savedRef = useRef<Draft>(storedDraft);
   // The full origin (including provenance and revision) must not move while there are unsaved edits.
   const baseRef = useRef<ProjectContext>(stored);
+  // Keep the original mirror, too: an old client can change it without touching context.
+  const baseGoalRef = useRef<string | null>(storedGoal);
   // The context this editor wrote last: when it comes back through sync it is our own save, not a remote change.
   const ownWrite = useRef<ProjectContext | null>(null);
   const pageRef = useRef<string | null>(null);
@@ -58,10 +72,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     if (!pageRef.current) pageRef.current = tabProjectContextDraftId(sessionStorage);
     return pageRef.current;
   }
-  function keepDraft(text: Draft, base = baseRef.current) {
+  function keepDraft(text: Draft, base = baseRef.current, baseGoal = baseGoalRef.current) {
     const stored = keepProjectContextDraft(localStorage, {
       page: draftPage(), workspaceId: project.workspaceId, projectId: project.id,
-      draft: text, base, at: Date.now(),
+      draft: text, base, baseGoal, at: Date.now(),
     });
     if (!stored) setState("error");
     return stored;
@@ -89,6 +103,9 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       return;
     }
     baseRef.current = kept.base;
+    // Drafts saved before this guard had no mirror snapshot. Use the old doneWhen as
+    // a conservative baseline; uncertainty rejects a write instead of losing text.
+    baseGoalRef.current = kept.baseGoal === undefined ? kept.base.doneWhen : kept.baseGoal;
     savedRef.current = contextDraft(kept.base);
     draftRef.current = kept.draft;
     dirty.current = true;
@@ -96,8 +113,9 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     setRecovered(true);
     // Import a draft from a previous browser tab into this tab's own storage key.
     if (kept.page !== page) keepDraft(kept.draft, kept.base);
-    if (!sameStoredContext(kept.base, stored)) {
+    if (!contextPatchIfUnchanged(project.properties, kept.base, stored, baseGoalRef.current)) {
       setConflict(storedDraft);
+      setLegacyGoalConflict(legacyGoalForNotice(project.properties));
       setState("conflict");
     }
   // Mount-only: the source project is keyed by project.id in ProjectPage.
@@ -107,21 +125,28 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
   // A remote change must never silently replace the baseline of a locally edited draft.
   useEffect(() => {
     const incoming = JSON.parse(storedKey) as ProjectContext;
-    if (ownWrite.current && sameStoredContext(incoming, ownWrite.current)) {
+    // A matching context with a different raw goal is not our write: it can be
+    // another tab's legacy edit and must not advance the CAS baseline.
+    if (ownWrite.current && sameStoredContext(incoming, ownWrite.current)
+        && storedGoal === ownWrite.current.doneWhen) {
       baseRef.current = incoming;
+      baseGoalRef.current = storedGoal;
       return;
     }
     if (!focused.current && !dirty.current) {
       baseRef.current = incoming;
+      baseGoalRef.current = storedGoal;
       savedRef.current = contextDraft(incoming);
       draftRef.current = contextDraft(incoming);
       setDraft(draftRef.current);
       setConflict(null);
-    } else if (!contextPatchIfUnchanged({ context: incoming }, baseRef.current, incoming)) {
+      setLegacyGoalConflict(null);
+    } else if (!contextPatchIfUnchanged(project.properties, baseRef.current, incoming, baseGoalRef.current)) {
       setConflict(contextDraft(incoming));
+      setLegacyGoalConflict(legacyGoalForNotice(project.properties));
       setState("conflict");
     }
-  }, [storedKey]);
+  }, [storedKey, storedGoal]);
   useEffect(() => {
     if (focusGoal.current !== null) {
       goalInputs.current[focusGoal.current]?.focus();
@@ -143,6 +168,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     const version = editVersion.current;
     const snapshot = draftRef.current;
     const base = baseRef.current;
+    const baseGoal = baseGoalRef.current;
     if (sameText(snapshot, savedRef.current)) { dirty.current = false; dropDraft(); return; }
     // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
     const problem = contextProblem(snapshot);
@@ -160,8 +186,11 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
         // app.patch evaluates this while holding the IndexedDB write transaction.
         // Compare against the ORIGINAL edit base, not a remote update received while typing.
         // Our own earlier save (a field saved a moment ago) is not a change from elsewhere.
-        const own = ownWrite.current && sameStoredContext(readProjectContext(currentProperties), ownWrite.current) ? ownWrite.current : null;
-        const patch = contextPatchIfUnchanged(currentProperties, own ?? base, next);
+        const currentGoal = typeof currentProperties.goal === "string" ? currentProperties.goal : null;
+        const own = ownWrite.current && sameStoredContext(readProjectContext(currentProperties), ownWrite.current)
+          && currentGoal === ownWrite.current.doneWhen ? ownWrite.current : null;
+        const patch = contextPatchIfUnchanged(currentProperties, own ?? base, next,
+          own ? own.doneWhen : baseGoal, confirmedOverwrite);
         if (!patch) { stale = true; throw new Error("Project context was updated during editing"); }
         ownWrite.current = next;
         return patch;
@@ -172,8 +201,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
       if (version === editVersion.current) {
         dirty.current = false;
         baseRef.current = next;
+        baseGoalRef.current = next.doneWhen;
         savedRef.current = normalized(snapshot);
         setConflict(null);
+        setLegacyGoalConflict(null);
         setRecovered(false);
         if (!focused.current) { draftRef.current = normalized(snapshot); setDraft(draftRef.current); }
       }
@@ -188,6 +219,7 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
           // Preserve the unsent draft and present the newest copy side-by-side.
           const latest = await db.entities.get(project.id).catch(() => undefined);
           setConflict(contextDraft(readProjectContext(latest?.properties)));
+          setLegacyGoalConflict(legacyGoalForNotice(latest?.properties));
           setState("conflict");
         } else setState("error");
       }
@@ -202,8 +234,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
     if (!latest) { setState("error"); return; }
     const remote = readProjectContext(latest.properties);
     baseRef.current = remote;
+    baseGoalRef.current = typeof latest.properties.goal === "string" ? latest.properties.goal : null;
     savedRef.current = contextDraft(remote);
     setConflict(null);
+    setLegacyGoalConflict(null);
     if (!keepMine) {
       dropDraft();
       dirty.current = false;
@@ -313,6 +347,10 @@ export function ProjectContext({ app, project }: { app: LumiApp; project: Entity
           <dt>{t.why}</dt><dd>{conflict.why || "—"}</dd>
           <dt>{t.goals}</dt><dd>{conflict.goals.join("; ") || "—"}</dd>
           <dt>{t.doneWhen}</dt><dd>{conflict.doneWhen || "—"}</dd>
+          {legacyGoalConflict !== null && <>
+            <dt>{app.language === "cs" ? "Cíl změněný ve starší verzi" : "Goal changed in an older version"}</dt>
+            <dd>{legacyGoalConflict || "—"}</dd>
+          </>}
         </dl>
         <div className="projectContextConflictActions">
           <button type="button" onClick={() => { void resolveConflict(false); }}>{t.contextLoadRemote}</button>
