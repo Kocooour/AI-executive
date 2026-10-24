@@ -95,6 +95,7 @@ export function mergeSnapshots(
     ...mergeableLocalRelations,
   ]) {
     const { sourceEntityId, targetEntityId } = relation;
+    if (deletedIds.has(relation.id)) continue;
     if (!entities.has(sourceEntityId) || !entities.has(targetEntityId)) continue;
     const source = entities.get(sourceEntityId);
     const target = entities.get(targetEntityId);
@@ -161,6 +162,7 @@ function mergeWithBase(server: ServerSnapshot, localEntities: Entity[], localRel
   }
   const relations = new Map<string, Relation>();
   for (const relation of merged.relations) {
+    if (deletedIds.has(relation.id)) continue;
     const source = entities.get(relation.sourceEntityId);
     const target = entities.get(relation.targetEntityId);
     if (!source || !target || source.workspaceId !== target.workspaceId || relation.workspaceId !== source.workspaceId) continue;
