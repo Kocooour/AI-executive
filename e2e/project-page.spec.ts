@@ -113,6 +113,28 @@ test("project list: first sentence of why, progress, next step and one attention
   }
 });
 
+test("completed project hides add task/note until it is reopened", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const id = `e2e-b1-completed-${now()}`;
+  const title = `Projekt B1${R} dokončený`;
+  expect(await seed(page, { entities: [{ ...entity(id, "project", title), status: "completed" }] })).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    const projectPage = page.locator(".projectPage");
+    await expect(projectPage).toBeVisible();
+    await expect(projectPage.locator(".projectAdd")).toHaveCount(0);
+    // The first project action reopens it; only then are both capture actions offered.
+    await projectPage.locator(".projectActions button").first().click();
+    await expect(projectPage.locator(".projectAdd")).toHaveCount(2);
+  } finally {
+    await cleanup(page, [id]);
+  }
+});
+
 test("opening a project shows its page as the main view; a task opens the inspector over it; Back returns to the list", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/?view=Projects");
