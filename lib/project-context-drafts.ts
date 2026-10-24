@@ -102,7 +102,9 @@ export function settleProjectContextDraft(storage: DraftStorage, page: string, w
   if (JSON.stringify(current.draft) === JSON.stringify(saved)) {
     dropProjectContextDraft(storage, page, workspaceId, projectId);
   } else {
-    keepProjectContextDraft(storage, { ...current, base: newBase });
+    // The in-flight save advanced both the context revision and its legacy mirror.
+    // A newer draft must resume from that complete baseline after a reload.
+    keepProjectContextDraft(storage, { ...current, base: newBase, baseGoal: newBase.doneWhen });
   }
 }
 export function clearProjectContextDrafts(storage: DraftStorage) {
