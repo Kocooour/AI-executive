@@ -180,6 +180,12 @@ export function planAreaNormalization(
   }
   if (issues.length) throw new AreaNormalizationBlocked(issues);
 
+  // The same ID may be tombstoned whether it names an entity or relation.
+  // Reserve every live/deleted ID, plus IDs generated during this plan, so
+  // new Areas and both relation types cannot collide across collections.
+  const reservedRecordIds = new Set([
+    ...original.keys(), ...relationIds, ...tombstonedIds,
+  ]);
   const newAreas = new Map<string, Entity>();
   const areaLabelIndex = new Map<string, Entity[]>();
   const areaList = () => [...areas.values(), ...newAreas.values()];
@@ -213,8 +219,7 @@ export function planAreaNormalization(
       issues.push("tombstoned-generated-area-id:" + id);
       return undefined;
     }
-    const earlier = original.get(id);
-    if (earlier || newAreas.has(id)) {
+    if (reservedRecordIds.has(id)) {
       issues.push("generated-area-id-collision:" + id);
       return undefined;
     }
@@ -229,6 +234,7 @@ export function planAreaNormalization(
       createdAt: at, updatedAt: at,
     };
     newAreas.set(id, area);
+    reservedRecordIds.add(id);
     areaLabelIndex.set(workspaceId + "\0" + normalizedLabel(label), [area]);
     return area;
   }
@@ -315,7 +321,7 @@ export function planAreaNormalization(
       issues.push("tombstoned-generated-area-relation-id:" + id);
       return;
     }
-    if (relationIds.has(id) || addedRelations.some((relation) => relation.id === id)) {
+    if (reservedRecordIds.has(id)) {
       issues.push("generated-relation-id-collision:" + id);
       return;
     }
@@ -323,6 +329,7 @@ export function planAreaNormalization(
       id, workspaceId: entity.workspaceId, sourceEntityId: entity.id,
       targetEntityId: area.id, relationType: "belongs_to_area", createdAt: at,
     });
+    reservedRecordIds.add(id);
   }
   for (const entity of snapshot.entities) {
     if (entity.type === "project") {
@@ -363,7 +370,7 @@ export function planAreaNormalization(
           issues.push("tombstoned-generated-project-relation-id:" + id);
           continue;
         }
-        if (relationIds.has(id) || addedLegacyProjectRelations.some((relation) => relation.id === id)) {
+        if (reservedRecordIds.has(id)) {
           issues.push("generated-project-relation-id-collision:" + id);
           continue;
         }
@@ -371,6 +378,7 @@ export function planAreaNormalization(
           id, workspaceId: entity.workspaceId, sourceEntityId: entity.id,
           targetEntityId: projectId, relationType: "belongs_to_project", createdAt: at,
         });
+        reservedRecordIds.add(id);
       }
       linkEntity(entity, projectAreas.get(projectId), true);
     } else {

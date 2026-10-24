@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 const { planAreaNormalization, AreaNormalizationBlocked } =
@@ -653,4 +654,52 @@ test("duplicate belongs_to_project links keep a stable canonical ID and audit re
     assert.deepEqual(results[0].report, results[1].report,
       "audit report must be independent of incoming duplicate link order");
   }
+});
+
+const predicted2aId = (...parts) => "relation:2a:"
+  + createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
+
+test("generated Area ID cannot reuse an existing belongs_to_area relation ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const existing = entity("existing", "project", "personal", { areaId: area.id });
+  const missing = entity("missing", "project", "personal", { area: "Cars" });
+  const collisionId = "area:2a:"
+    + createHash("sha256").update(JSON.stringify(["personal", "cars"])).digest("hex").slice(0, 32);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, existing, missing],
+    relations: [link(collisionId, existing.id, area.id)],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100), "generated-area-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
+});
+
+test("generated belongs_to_area ID cannot reuse an existing entity ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const project = entity("project", "project", "personal", { areaId: area.id });
+  const collisionId = predicted2aId(project.id, area.id);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, project,
+      entity(collisionId, "note", "personal")],
+    relations: [],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100), "generated-relation-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
+});
+
+test("generated belongs_to_project ID cannot reuse an existing entity ID", () => {
+  const area = entity("known-area", "area", "personal", { kind: "private" }, "Known");
+  const project = entity("project", "project", "personal", { areaId: area.id });
+  const task = entity("task", "task", "personal", { projectId: project.id });
+  const collisionId = predicted2aId("project", task.id, project.id);
+  const snapshot = {
+    entities: [workspace("personal", "personal"), area, project, task,
+      entity(collisionId, "note", "personal")],
+    relations: [],
+  };
+  const before = structuredClone(snapshot);
+  expectsBlocked(() => planAreaNormalization(snapshot, 100),
+    "generated-project-relation-id-collision:" + collisionId);
+  assert.deepEqual(snapshot, before);
 });
