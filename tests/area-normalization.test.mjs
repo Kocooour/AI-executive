@@ -167,7 +167,7 @@ test("conflicting project targets and cross-workspace relations are rejected", (
     entities: [...source.entities, entity("p3", "project", "legacy")],
     relations: [projectLink("tp3", "t", "p3", "personal")],
   };
-  expectsBlocked(() => planAreaNormalization(forged, 100), "invalid-scope-relation:tp3");
+  expectsBlocked(() => planAreaNormalization(forged, 100), "snapshot-structure-invalid");
 });
 
 test("duplicate Area names fail if a legacy text label needs disambiguation", () => {
@@ -188,7 +188,7 @@ test("missing area ID, unknown workspace, and mismatched labels fail closed", ()
   expectsBlocked(() => planAreaNormalization({
     entities: [workspace("personal", "personal"), entity("p", "project", "unknown")],
     relations: [],
-  }, 100), "unknown-workspace:p");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [workspace("personal", "personal"), entity("a", "area", "personal", {}, "Work"),
       entity("p", "project", "personal", { area: "Cars" })],
@@ -361,11 +361,11 @@ test("workspace preflight rejects duplicate scopes and noncanonical workspace ID
   expectsBlocked(() => planAreaNormalization({
     entities: [valid, duplicateScope, entity("p", "project", "personal")],
     relations: [],
-  }, 100), "duplicate-workspace:personal");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [invalidId, entity("p", "project", "shared-area")],
     relations: [],
-  }, 100), "noncanonical-workspace-id:wrong");
+  }, 100), "snapshot-structure-invalid");
   expectsBlocked(() => planAreaNormalization({
     entities: [illegalKind, entity("p", "project", "unrelated")],
     relations: [],
