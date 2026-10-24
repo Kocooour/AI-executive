@@ -4,7 +4,7 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -20,6 +20,7 @@ import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange
 import { deferTargets } from "../../lib/defer-suggestion";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
+import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
@@ -50,7 +51,9 @@ export function useLumiApp() {
   // The Inbox shows its tasks or the mail of the connected Gmail accounts. UI state only: the address
   // carries the view and nothing else (lib/view-url.ts), so a mail message is never put into it.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
-  const [view, setView] = useState("Home"),
+  const [view, setViewState] = useState("Home"),
+    // The project whose page is the main pane of Projects (B1). In-memory like the open record: the address carries the view only.
+    [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
@@ -263,6 +266,12 @@ export function useLumiApp() {
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const openProjectIdRef = useRef(openProjectId);
+  openProjectIdRef.current = openProjectId;
+  // History markers may restore only a project that is still visible in the authorized active scope.
+  const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
@@ -359,7 +368,42 @@ export function useLumiApp() {
     if (authState !== "ready") answerConfirm(false);
   }, [authState]);
   const sessionChannel = "ai-executive-session";
+  // Any change of view leaves the project page: Projects then shows its list.
+  // A page that pushed a history step is left by going back one step first (no duplicate list entry stays behind); the view
+  // chosen meanwhile is applied when that step has been taken (see followAddress).
+  const pendingView = useRef<string | null>(null);
+  function setView(next: string) {
+    if (openProjectIdRef.current && window.history.state?.lumiProject) {
+      pendingView.current = next;
+      window.history.back();
+      return;
+    }
+    setViewState(next);
+    setOpenProjectId(null);
+  }
+  // The project page has its own history entry, preceded by a Projects LIST entry even when
+  // opened from Home/Today sidebar. Its ID stays in history.state, never in URLs.
+  function openProjectPage(project: Entity) {
+    closeDetail();
+    try {
+      if (viewRef.current !== "Projects") {
+        const listAddress = `${window.location.pathname}${searchForView("Projects", startupView)}`;
+        window.history.pushState(null, "", listAddress);
+        addressedView.current = "Projects"; // Prevent the view effect from pushing a second list entry.
+      }
+      const marker = { lumiProject: project.id };
+      if (window.history.state?.lumiProject) window.history.replaceState(marker, "", window.location.href);
+      else window.history.pushState(marker, "", window.location.href);
+    } catch { /* Navigation still works in memory when History API is unavailable. */ }
+    setViewState("Projects");
+    setOpenProjectId(project.id);
+  }
+  function closeProjectPage() {
+    if (window.history.state?.lumiProject) window.history.back();
+    else setOpenProjectId(null);
+  }
   async function inspect(e: Entity) {
+    if (e.type === "project") { openProjectPage(e); return; }
     const version = ++inspectionVersion.current;
     const workspaceAtRequest = activeWorkspaceRef.current;
     setSelected(e);
@@ -1424,7 +1468,14 @@ export function useLumiApp() {
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       addressedView.current = next;
-      setView(views.includes(next) || next === "Settings" ? next : "Home");
+      const chosen = pendingView.current;
+      pendingView.current = null;
+      const nextView = chosen ?? (views.includes(next) || next === "Settings" ? next : "Home");
+      setViewState(nextView);
+      // Never trust a history marker as authorization or restore a project in another workspace.
+      const candidate = !chosen && nextView === "Projects" ? window.history.state?.lumiProject : null;
+      setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
+        ? candidate : null);
       // Nothing that belongs to the view being left may stay open over the next one.
       answerConfirm(false);
       setCapture(false);
@@ -1892,6 +1943,10 @@ export function useLumiApp() {
     projects = scopedItems.filter((x) => x.type === "project"),
     areas = scopedItems.filter((x) => x.type === "area"),
     today = ymd();
+  visibleProjectsRef.current = projects;
+  const openProject = openProjectId ? projects.find((project) => project.id === openProjectId) ?? null : null;
+  // The page closes when its project is gone (deleted elsewhere) or out of the open workspace.
+  useEffect(() => { if (openProjectId && !openProject) setOpenProjectId(null); }, [openProjectId, openProject]);
   const sidebarCounts: Record<string, number> = {
     Inbox: tasks.filter((task) => taskMatchesView(task, "Inbox", today)).length,
     Today: tasks.filter((task) => taskMatchesView(task, "Today", today)).length,
@@ -2102,7 +2157,7 @@ export function useLumiApp() {
           : { title: title.trim(), when: "", priority: "none" };
     const linkedProject = projectId ? await db.entities.get(projectId) : null;
     const linkedArea = areaId ? await db.entities.get(areaId) : null;
-    if (projectId && (!linkedProject || linkedProject.type !== "project" || linkedProject.status !== "active")) {
+    if (projectId && (!linkedProject || !projectAcceptsNewItems(linkedProject))) {
       throw new Error("The selected project is invalid");
     }
     if (areaId && (!linkedArea || linkedArea.type !== "area" || linkedArea.status !== "active")) {
@@ -2396,6 +2451,10 @@ export function useLumiApp() {
             if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key === conflictsKey) return;
             if (conflict.lostValue === null || conflict.lostValue === undefined) delete properties[key];
             else properties[key] = conflict.lostValue;
+            // A restored project context keeps `goal` mirroring its "Hotovo, když" for the previous app version.
+            if (key === "context" && conflict.lostValue && typeof (conflict.lostValue as { doneWhen?: unknown }).doneWhen === "string") {
+              properties.goal = (conflict.lostValue as { doneWhen: string }).doneWhen;
+            }
           } else if (conflict.field === "content") {
             update.content = typeof conflict.lostValue === "string" ? conflict.lostValue : "";
           } else if ((conflict.field === "title" || conflict.field === "status") && typeof conflict.lostValue === "string" && conflict.lostValue) {
@@ -2761,6 +2820,7 @@ export function useLumiApp() {
     setUndoRelations(linkedRelations);
     await syncToServer();
     if (inspectorSelectionRef.current?.id === e.id) closeDetail();
+    if (openProjectIdRef.current === e.id) closeProjectPage();
     load();
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed") {
@@ -3833,6 +3893,8 @@ export function useLumiApp() {
     claimValueMode,
     claimValueType,
     closeDetail,
+    closeProjectPage,
+    openProject,
     collection,
     context,
     contextAction,

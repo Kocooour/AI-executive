@@ -348,7 +348,8 @@ test("after an offline start, deleting a project asks in the app dialog", async 
   await expect(confirmDialog(page)).toBeVisible();
   await confirmDialog(page).getByRole("button", { name: "Zrušit" }).click();
   await expect(confirmDialog(page)).not.toBeVisible();
-  await expect(page.getByText(project).first()).toBeVisible();
+  // The project page shows the name in an input: the page is still open with its name.
+  await expect(page.getByRole("textbox", { name: "Název projektu" })).toHaveValue(project);
   await context.close();
 });
 

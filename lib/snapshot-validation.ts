@@ -1,6 +1,7 @@
 // Shared, storage-free structural validation for canonical store records.
 // Keep the rules identical for live store writes and offline migration audits.
 import { DECISIONS_PROPERTY, validDecisionsValue } from "./calendar-decisions";
+import { validProjectContext } from "./project-context";
 import type { Entity, Relation } from "./db";
 
 export interface CanonicalRecordSnapshot {
@@ -49,6 +50,12 @@ export function validateSnapshotStructure(snapshot: unknown): asserts snapshot i
       typeof entity.updatedAt !== "number" ||
       !Number.isFinite(entity.updatedAt)
     ) {
+      throw new Error("Snapshot contains an invalid entity");
+    }
+    // Match the project-context constraint introduced on main by PR #104.
+    // Old projects with no context remain supported, but malformed present
+    // context must be refused by both live store and offline 2a preflight.
+    if (entity.type === "project" && entity.properties.context !== undefined && !validProjectContext(entity.properties.context)) {
       throw new Error("Snapshot contains an invalid entity");
     }
     if (entityIds.has(entity.id)) throw new Error("Snapshot contains duplicate entity IDs");

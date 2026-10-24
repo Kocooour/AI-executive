@@ -531,3 +531,34 @@ test("tombstoned generated legacy belongs_to_project IDs block project relinking
   assert.equal(allowed.report.addedLegacyProjectRelationIds.length, 1);
   assert.equal(allowed.report.addedRelationIds.length, 1);
 });
+
+test("2a preflight preserves main project-context validation", () => {
+  const validContext = {
+    why: "Proč", goals: ["Dokončit"], doneWhen: "Hotovo", provenance: "owner", updatedAt: 100,
+  };
+  const source = (properties) => ({
+    entities: [workspace("personal", "personal"),
+      entity("project", "project", "personal", properties)],
+    relations: [],
+  });
+  const valid = source({ context: validContext });
+  assert.equal(planAreaNormalization(valid, 101).report.addedRelationIds.length, 1);
+  // Existing projects may have the legacy goal and no context.
+  assert.equal(planAreaNormalization(source({ goal: "legacy" }), 101).report.addedRelationIds.length, 1);
+
+  const invalid = [
+    { ...validContext, why: "x".repeat(601) },
+    { ...validContext, goals: Array(6).fill("A") },
+    { ...validContext, goals: ["x".repeat(201)] },
+    { ...validContext, doneWhen: "x".repeat(301) },
+    { ...validContext, provenance: "unknown" },
+    { ...validContext, extra: "unexpected" },
+    "not-a-project-context",
+  ];
+  for (const context of invalid) {
+    const snapshot = source({ context });
+    const before = structuredClone(snapshot);
+    expectsBlocked(() => planAreaNormalization(snapshot, 101), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, before);
+  }
+});

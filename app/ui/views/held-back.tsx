@@ -12,6 +12,7 @@ const reasonKeys: Record<HeldBackReason, string> = {
   tooLarge: "heldBackTooLarge",
   invalid: "heldBackInvalid",
   workspace: "heldBackWorkspace",
+  context: "heldBackContext",
 };
 
 // Why the server would refuse a record (lib/sendable.ts), in words the user can act on.
@@ -46,7 +47,7 @@ export function RecordMarks({ app, entity, hideSync = false }: { app: LumiApp; e
 }
 
 // Reasons the app has an editor for (title, notes); the others can only be deleted here.
-const fixable = new Set<HeldBackReason>(["noTitle", "longTitle", "longNotes"]);
+const fixable = new Set<HeldBackReason>(["noTitle", "longTitle", "longNotes", "context"]);
 
 // Records held back on this device because the server would refuse them; everything else is
 // still sent. Each can be opened to fix it, or deleted. Only those of the open workspace are

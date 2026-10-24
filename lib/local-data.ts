@@ -2,6 +2,7 @@ import { forServer } from "./sendable";
 import { db, readSyncBase } from "./db";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
+import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
 import { clearOpenTexts } from "./open-texts";
 import { attentionCacheKey } from "./attention-cache";
 
@@ -49,7 +50,7 @@ export async function hasUnsentChanges() {
   // A deletion or restoration recorded just before its save was asked for (a tab closed between).
   if (pendingDeletedIds(localStorage).length || pendingRevivedIds(localStorage).length) return true;
   // Notes still being typed, or left by a page closed before saving them.
-  if (keptNotesDrafts(localStorage).length) return true;
+  if (keptNotesDrafts(localStorage).length || keptProjectContextDrafts(localStorage).length) return true;
   // A record the server would refuse is held back here until it is fixed (lib/sendable.ts).
   if (forServer(await db.entities.toArray(), [], await readSyncBase()).heldBack.length) return true;
   if (localStorage.getItem(serverSyncedKey) === "1") return false;
@@ -68,6 +69,7 @@ export async function clearLocalData(timeoutMs = 4000) {
   clearAllMarkers(localStorage);
   // So are notes drafts and the notes of open texts, one per tab.
   clearNotesDrafts(localStorage);
+  clearProjectContextDrafts(localStorage);
   clearOpenTexts(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
   localStorage.setItem(serverSyncedKey, "1");

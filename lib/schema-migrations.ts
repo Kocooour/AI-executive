@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { baselineNoteRevisions } from "./note-revisions";
+import { migrateProjectGoal } from "./project-context";
+import type { Entity } from "./db";
 
 // Named, additive schema/data migrations. Each one runs exactly once per database, inside its
 // own transaction together with the row that records it, so an interrupted run leaves no trace
@@ -472,6 +474,33 @@ export const schemaMigrations: SchemaMigration[] = [
       const columns = new Set((database.prepare("PRAGMA table_info(mail_sync_accounts)").all() as Array<{ name: string }>).map((row) => row.name));
       if (!columns.has("recovery_since_seconds"))
         database.exec("ALTER TABLE mail_sync_accounts ADD COLUMN recovery_since_seconds INTEGER");
+    },
+  },
+  {
+    // Project context (B1, owner decision 2026-10-22): `properties.goal` ("Cíl / výsledek") becomes `properties.context.doneWhen`
+    // ("Hotovo, když"). `goal` stays on the record for one version, so an older binary or device still reads it, and nothing is
+    // removed. The record keeps its own updatedAt (the move is not an edit by the owner, so it is no conflict with a device that has
+    // not seen it); the store revision moves on, so clients pull the record instead of writing their copy back. Projects that
+    // already have a context, or no goal, are left alone; the migration can run again without a change.
+    id: "2026-10-project-context-from-goal",
+    up(database) {
+      const rows = database.prepare("SELECT id, payload, updated_at FROM entities").all() as Array<{ id: string; payload: string; updated_at: number }>;
+      const update = database.prepare("UPDATE entities SET payload = ? WHERE id = ?");
+      let changed = 0;
+      for (const row of rows) {
+        let entity: Entity;
+        try { entity = JSON.parse(String(row.payload)) as Entity; } catch { continue; }
+        const migrated = migrateProjectGoal(entity);
+        if (!migrated) continue;
+        update.run(JSON.stringify(migrated), row.id);
+        changed += 1;
+      }
+      if (changed > 0) {
+        const read = (key: string) => (database.prepare("SELECT value FROM metadata WHERE key = ?").get(key) as { value?: string } | undefined)?.value;
+        const set = database.prepare("INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+        set.run("revision", String((Number(read("revision")) || 0) + 1));
+        set.run("updatedAt", String(Date.now()));
+      }
     },
   },
 ];
