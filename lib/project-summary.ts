@@ -6,6 +6,12 @@ import { byManualOrder } from "./task-views";
 
 const validDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value);
 
+// Matches the create() authorization: a finished project must be reopened before new
+// tasks or notes can be attached. Shared between the page actions and mutation guard.
+export function projectAcceptsNewItems(project: Pick<Entity, "type" | "status">): boolean {
+  return project.type === "project" && project.status === "active";
+}
+
 export type ProjectSummary = {
   // Tasks of the project: all, completed, open.
   total: number;
