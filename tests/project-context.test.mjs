@@ -326,8 +326,11 @@ test("project draft storage is tab-scoped, preserves newer typing and is wiped o
   assert.equal(drafts.keptProjectContextDrafts(storage).length, 2);
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "p1").draft.why, "A");
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "personal", "p1").draft.why, "B");
-  drafts.settleProjectContextDraft(storage, "tab-a", "personal", "p1", { why: "stale", goals: [], doneWhen: "" }, context({ why: "saved" }));
+  const earlierSaved = context({ why: "saved", doneWhen: "Committed finish" });
+  drafts.settleProjectContextDraft(storage, "tab-a", "personal", "p1", { why: "stale", goals: [], doneWhen: "" }, earlierSaved);
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "p1").draft.why, "A");
+  assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "p1").baseGoal, "Committed finish",
+    "a newer draft must resume with the mirror from the previous successful save");
   assert.equal(drafts.keptProjectContextDrafts(storage).length, 2);
   values.set("ai-executive-signed-out", "1");
   assert.equal(save("tab-c", "no"), false, "no new draft can be added once signed out");
