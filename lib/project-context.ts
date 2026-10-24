@@ -164,8 +164,18 @@ export function contextPatch(context: ProjectContext) {
 // preserves the incoming version until the owner explicitly resolves the conflict.
 export function contextPatchIfUnchanged(
   currentProperties: Record<string, unknown>, expected: ProjectContext, proposed: ProjectContext,
+  expectedGoal?: string | null, allowLegacyGoalOverwrite = false,
 ): ReturnType<typeof contextPatch> | null {
-  return sameStoredContext(readProjectContext(currentProperties), expected) ? contextPatch(proposed) : null;
+  if (!sameStoredContext(readProjectContext(currentProperties), expected)) return null;
+  const currentGoal = typeof currentProperties.goal === "string" ? currentProperties.goal : null;
+  // The previous app version edits only `goal`. Since a short goal is normally hidden behind
+  // `context.doneWhen`, comparing the context alone would overwrite a concurrent legacy edit
+  // during this IndexedDB transaction without ever producing a sync conflict.
+  if (expectedGoal !== undefined && currentGoal !== expectedGoal) return null;
+  const context = isObject(currentProperties.context) ? currentProperties.context : null;
+  if (!allowLegacyGoalOverwrite && currentGoal !== null && typeof context?.doneWhen === "string"
+      && currentGoal.trim() !== context.doneWhen.trim()) return null;
+  return contextPatch(proposed);
 }
 
 /** The same stored context: text, provenance and revision. */
