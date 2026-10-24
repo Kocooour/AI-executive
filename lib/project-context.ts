@@ -86,18 +86,20 @@ export function contextProblem(input: { why: string; goals: string[]; doneWhen: 
   return null;
 }
 
-// "Hotovo, když" as each side of a merge wrote it. A current client writes `context.doneWhen` (and mirrors it into
-// `goal`); a client of the previous version writes only `goal`. Compared with the common version, a side changed it when
-// its `context.doneWhen` differs, or else when its `goal` does.
+// "Hotovo, když" as each side of a merge wrote it. A current client edits `context.doneWhen` and mirrors it into
+// `goal`; an old client edits `goal` alone, even if a newer context was already received through sync.
+// A changed goal that disagrees with the side's context therefore represents the legacy edit, not a stale mirror.
 function doneWhenChange(base: Entity, side: Entity): string | null {
   const baseContext = isObject(base.properties?.context) ? base.properties.context as Record<string, unknown> : null;
   const baseGoal = typeof base.properties?.goal === "string" ? base.properties.goal : "";
   const baseDone = baseContext && typeof baseContext.doneWhen === "string" ? baseContext.doneWhen : baseGoal;
   const context = isObject(side.properties?.context) ? side.properties.context as Record<string, unknown> : null;
-  if (context && typeof context.doneWhen === "string" && context.doneWhen !== baseDone) return context.doneWhen;
+  const contextDone = context && typeof context.doneWhen === "string" ? context.doneWhen : null;
   const goal = side.properties?.goal;
-  if (typeof goal === "string" && goal !== baseGoal) return goal;
-  return null;
+  const goalChanged = typeof goal === "string" && goal !== baseGoal;
+  if (goalChanged && goal !== contextDone) return goal;
+  if (contextDone !== null && contextDone !== baseDone) return contextDone;
+  return goalChanged ? goal : null;
 }
 
 export interface DoneWhenReconciled {
@@ -125,8 +127,12 @@ export function reconcileDoneWhen(base: Entity, local: Entity, server: Entity, m
   if (context && fits) properties.context = { ...context, doneWhen: winner.trim() };
   let lost: DoneWhenReconciled["lost"] = null;
   if (loser !== null) {
-    lost = loser.trim().length <= contextLimits.doneWhen && context
-      ? { field: "properties.context", value: { ...context, doneWhen: loser.trim() } }
+    // Preserve the losing side's other context fields as well, not the winner's. An older client
+    // may have changed a different field while editing goal; restoring the notice must recover both.
+    const loserSide = localWins ? server : local;
+    const loserContext = isObject(loserSide.properties?.context) ? loserSide.properties.context : context;
+    lost = loser.trim().length <= contextLimits.doneWhen && loserContext
+      ? { field: "properties.context", value: { ...loserContext, doneWhen: loser.trim() } }
       : { field: "properties.goal", value: loser };
   }
   return { merged: { ...merged, properties }, lost };
