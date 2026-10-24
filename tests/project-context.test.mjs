@@ -49,6 +49,41 @@ test("a stale editing base never overwrites another device's context without an 
   assert.equal(ctx.contextPatchIfUnchanged({ context: { ...initial, updatedAt: 21 } }, editBase, myDraft), null);
 });
 
+test("the context CAS refuses an interleaved legacy goal write in another tab before sync", () => {
+  const baseline = context({ doneWhen: "Old", why: "Original" });
+  const myDraft = ctx.ownerProjectContext({ why: "My unsaved why", goals: baseline.goals, doneWhen: "Old" }, 30);
+  const databaseRow = { context: baseline, goal: "Old" };
+  // A opened the context editor, B changed only the old goal in the same IndexedDB,
+  // then A blurred its field; this is precisely the transactional guard app.patch uses.
+  const expectedGoal = databaseRow.goal;
+  databaseRow.goal = "Changed by legacy tab";
+  assert.equal(ctx.contextPatchIfUnchanged(databaseRow, baseline, myDraft, expectedGoal), null);
+  assert.equal(databaseRow.goal, "Changed by legacy tab", "the rejected transaction leaves B's text intact");
+  // After the owner explicitly chooses to overwrite B, use the newly observed goal as
+  // baseline; another change between confirmation and transaction must still be rejected.
+  assert.equal(ctx.contextPatchIfUnchanged(databaseRow, baseline, myDraft, databaseRow.goal), null,
+    "a divergent legacy goal always requires explicit consent");
+  assert.deepEqual(ctx.contextPatchIfUnchanged(databaseRow, baseline, myDraft, databaseRow.goal, true), ctx.contextPatch(myDraft));
+  databaseRow.goal = "Third tab";
+  assert.equal(ctx.contextPatchIfUnchanged(databaseRow, baseline, myDraft, "Changed by legacy tab", true), null);
+});
+
+test("context CAS compares missing goal with its original absence and ignores mirror whitespace only", () => {
+  const baseline = context({ doneWhen: "Old" });
+  const draft = ctx.ownerProjectContext({ why: "New", goals: [], doneWhen: "Old" }, 42);
+  assert.deepEqual(ctx.contextPatchIfUnchanged({ context: baseline }, baseline, draft, null), ctx.contextPatch(draft));
+  assert.equal(ctx.contextPatchIfUnchanged({ context: baseline, goal: "New legacy goal" }, baseline, draft, null), null);
+  assert.deepEqual(ctx.contextPatchIfUnchanged({ context: baseline, goal: " Old " }, baseline, draft, " Old "), ctx.contextPatch(draft));
+});
+
+test("project add actions require active project, matching the creation guard", async () => {
+  const { projectAcceptsNewItems } = await import("../lib/project-summary.ts");
+  assert.equal(projectAcceptsNewItems(project()), true);
+  assert.equal(projectAcceptsNewItems(project({}, { status: "completed" })), false);
+  assert.equal(projectAcceptsNewItems(project({}, { status: "cancelled" })), false);
+  assert.equal(projectAcceptsNewItems({ type: "task", status: "active" }), false);
+});
+
 test("the client holds back a project with a context the server would refuse", () => {
   assert.equal(isSendable(project({ context: context() })), true);
   assert.equal(isSendable(project({})), true);
@@ -246,8 +281,31 @@ test("a project draft survives navigation, restores against a changed base, and 
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "personal", "project-a").draft.why, "A draft");
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-b", "other-workspace", "project-a"), null);
   const saved = ctx.ownerProjectContext(A, 60);
+  assert.equal(drafts.keptProjectContextDrafts(storage)[0].baseGoal, undefined, "legacy draft records remain readable");
   drafts.settleProjectContextDraft(storage, "tab-a", "personal", "project-a", A, saved);
   assert.equal(drafts.recoverProjectContextDraft(storage, "tab-a", "personal", "project-a"), null);
+});
+
+test("recovered context drafts retain the expected legacy goal across reloads and tabs", async () => {
+  const drafts = await import("../lib/project-context-drafts.ts");
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+    key: (index) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  };
+  const original = context({ doneWhen: "Old" });
+  const typed = { why: "In progress", goals: [], doneWhen: "Old" };
+  assert.equal(drafts.keepProjectContextDraft(storage, {
+    page: "tab-a", workspaceId: "personal", projectId: "p", base: original, baseGoal: "Old", draft: typed, at: 1,
+  }), true);
+  const recovered = drafts.recoverProjectContextDraft(storage, "tab-b", "personal", "p");
+  assert.equal(recovered?.baseGoal, "Old");
+  const changedElsewhere = { context: original, goal: "Other tab edit" };
+  const proposed = ctx.ownerProjectContext(typed, 2);
+  assert.equal(ctx.contextPatchIfUnchanged(changedElsewhere, recovered.base, proposed, recovered.baseGoal), null);
 });
 
 test("project draft storage is tab-scoped, preserves newer typing and is wiped on sign-out/restore", async () => {
