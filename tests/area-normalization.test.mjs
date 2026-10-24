@@ -612,3 +612,45 @@ test("distinct unrelated tombstones remain valid for shared validation and offli
   assert.equal(planned.report.addedRelationIds.length, 1);
   assert.deepEqual(snapshot, before);
 });
+
+test("duplicate belongs_to_project links keep a stable canonical ID and audit removals", () => {
+  const entities = [
+    workspace("personal", "personal"),
+    entity("a", "area", "personal", { kind: "private" }, "Work"),
+    entity("p", "project", "personal", { areaId: "a" }),
+    entity("t", "task", "personal", { projectId: "p" }),
+  ];
+  const projectArea = link("p-area", "p", "a");
+  for (const [first, second, survivor, removedId] of [
+    [{ ...projectLink("earlier", "t", "p"), createdAt: 5 },
+      { ...projectLink("later", "t", "p"), createdAt: 25 }, "earlier", "later"],
+    [projectLink("a", "t", "p"), projectLink("z", "t", "p"), "a", "z"],
+  ]) {
+    const results = [];
+    for (const links of [[first, second], [second, first]]) {
+      const snapshot = { entities, relations: [projectArea, ...links] };
+      const before = structuredClone(snapshot);
+      const result = planAreaNormalization(snapshot, 100);
+      assert.deepEqual(snapshot, before, "planning must never modify source records");
+      assert.deepEqual(
+        result.relations.filter((r) => r.sourceEntityId === "t" && r.relationType === "belongs_to_project")
+          .map((r) => r.id),
+        [survivor],
+      );
+      assert.strictEqual(result.relations.find((r) => r.id === survivor),
+        links.find((r) => r.id === survivor), "surviving relation must keep its identity and timestamps");
+      assert.deepEqual(result.report.removedRedundantRelationIds, [removedId]);
+      assert.deepEqual(result.report.addedLegacyProjectRelationIds, []);
+      assert.equal(result.report.before.relations, 3);
+      assert.equal(result.report.after.relations, 2);
+      assert.equal(result.report.inheritedTaskIds.length, 1);
+      const secondPass = planAreaNormalization(result, 101);
+      assert.deepEqual(secondPass.entities, result.entities);
+      assert.deepEqual(secondPass.relations, result.relations);
+      assert.deepEqual(secondPass.report.removedRedundantRelationIds, []);
+      results.push(result);
+    }
+    assert.deepEqual(results[0].report, results[1].report,
+      "audit report must be independent of incoming duplicate link order");
+  }
+});

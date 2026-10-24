@@ -18,6 +18,8 @@ export interface AreaNormalizationReport {
   createdAreaIds: string[];
   addedRelationIds: string[];
   addedLegacyProjectRelationIds: string[];
+  // IDs of removed duplicate Area or project memberships, and inherited
+  // task-level Area memberships. Audit each before any future application.
   removedRedundantRelationIds: string[];
   inheritedTaskIds: string[];
   // Existing legacy Area entities are left untouched; a future transactional
@@ -269,6 +271,10 @@ export function planAreaNormalization(
   const addedRelations: Relation[] = [];
   const addedLegacyProjectRelations: Relation[] = [];
   const removed = new Set<string>();
+  // Use identical canonical ordering for pre-existing Area and project links,
+  // so different snapshot permutations retain the same ID and audit trail.
+  const byCanonicalRelationOrder = (a: Relation, b: Relation) =>
+    a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const inherited: string[] = [];
   function linkEntity(entity: Entity, area: Entity | undefined, inherits: boolean) {
     if (!area) return;
@@ -296,8 +302,7 @@ export function planAreaNormalization(
     if (areaLinks.length) {
       // Retain the oldest canonical relation; break timestamp ties by ID.
       // The source snapshot may arrive in a different order on another device.
-      const [primary, ...duplicates] = [...areaLinks].sort((a, b) =>
-        a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const [primary, ...duplicates] = [...areaLinks].sort(byCanonicalRelationOrder);
       if (primary.targetEntityId !== area.id) {
         issues.push("unexpected-area-link:" + entity.id);
         return;
@@ -325,11 +330,13 @@ export function planAreaNormalization(
       continue;
     }
     if (entity.type !== "task") continue;
-    const projectLinks = (bySource.get(entity.id) ?? [])
-      .filter((relation) => relation.relationType === "belongs_to_project")
-      .map((relation) => relation.targetEntityId);
+    const projectRelations = (bySource.get(entity.id) ?? [])
+      .filter((relation) => relation.relationType === "belongs_to_project");
     const oldProject = textId(entity.properties.projectId);
-    const possibleProjects = new Set([...projectLinks, ...(oldProject ? [oldProject] : [])]);
+    const possibleProjects = new Set([
+      ...projectRelations.map((relation) => relation.targetEntityId),
+      ...(oldProject ? [oldProject] : []),
+    ]);
     if (possibleProjects.size > 1) {
       issues.push("ambiguous-task-project:" + entity.id);
       continue;
@@ -341,9 +348,16 @@ export function planAreaNormalization(
         issues.push("invalid-task-project:" + entity.id);
         continue;
       }
+      // Multiple links to the SAME project are also redundant, not just
+      // links to different projects (handled by the ambiguity guard above).
+      // Retain the oldest canonical ID and audit every removed duplicate.
+      if (projectRelations.length > 1) {
+        const [, ...duplicates] = [...projectRelations].sort(byCanonicalRelationOrder);
+        for (const relation of duplicates) removed.add(relation.id);
+      }
       // A legacy property-only project membership must not disappear when
       // normalization becomes the canonical relational representation.
-      if (oldProject && projectLinks.length === 0) {
+      if (oldProject && projectRelations.length === 0) {
         const id = "relation:2a:" + digest("project", entity.id, projectId);
         if (tombstonedIds.has(id)) {
           issues.push("tombstoned-generated-project-relation-id:" + id);
