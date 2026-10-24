@@ -400,3 +400,75 @@ test("added Area and legacy project relation audit IDs are sorted across permuta
   assert.equal(one.report.addedRelationIds.length, 4);
   assert.deepEqual(one.report.createdAreaIds, two.report.createdAreaIds);
 });
+
+test("canonical structural validation blocks malformed entities before 2a planning", () => {
+  const valid = { entities: [workspace("personal", "personal"),
+    entity("t", "task", "personal")], relations: [] };
+  const mutations = [
+    [() => ({ ...entity("alien", "not-a-type", "personal") }), "unknown entity type"],
+    [() => ({ ...entity("t", "task", "personal"), properties: null }), "null properties"],
+    [() => ({ ...entity("t", "task", "personal"), title: "" }), "empty title"],
+    [() => ({ ...entity("t", "task", "personal"), updatedAt: "bad" }), "nonnumeric update"],
+    [() => ({ ...entity("t", "task", "personal"), id: "x".repeat(241) }), "oversized ID"],
+  ];
+  for (const [change, reason] of mutations) {
+    const bad = change();
+    const entities = reason === "unknown entity type"
+      ? [...valid.entities, bad] : [valid.entities[0], bad];
+    const snapshot = { entities, relations: [] };
+    const saved = structuredClone(snapshot);
+    expectsBlocked(() => planAreaNormalization(snapshot, 100), "snapshot-structure-invalid");
+    assert.deepEqual(snapshot, saved, reason);
+  }
+});
+
+test("canonical structural validation rejects invalid relations, including timestamps", () => {
+  const area = entity("a", "area", "personal", {}, "Family");
+  const task = entity("t", "task", "personal");
+  const good = link("belongs", "t", "a");
+  const entities = [workspace("personal", "personal"), area, task];
+  for (const invalid of [
+    { ...good, createdAt: "yesterday" },
+    { ...good, createdAt: Number.NaN },
+    { ...good, relationType: "" },
+    { ...good, targetEntityId: "missing" },
+    { ...good, workspaceId: "other" },
+  ]) {
+    expectsBlocked(() => planAreaNormalization({ entities, relations: [invalid] }, 100),
+      "snapshot-structure-invalid");
+  }
+});
+
+test("canonical structural validation rejects malformed workspace properties", () => {
+  const baseline = workspace("personal", "personal");
+  for (const properties of [
+    { ...baseline.properties, role: "editor" },
+    { ...baseline.properties, members: "owner" },
+    { ...baseline.properties, calendarDecisions: { "occ:test": "yes" } },
+  ]) {
+    const snapshot = { entities: [{ ...baseline, properties },
+      entity("t", "task", "personal")], relations: [] };
+    expectsBlocked(() => planAreaNormalization(snapshot, 100), "snapshot-structure-invalid");
+  }
+  const titleTooLong = { ...baseline, title: "X".repeat(121) };
+  expectsBlocked(() => planAreaNormalization({ entities: [titleTooLong], relations: [] }, 100),
+    "snapshot-structure-invalid");
+  // Valid calendar decisions remain accepted without a live server connection.
+  const valid = { ...baseline, properties: {
+    ...baseline.properties, calendarDecisions: { "occ:source:item": "hidden" },
+  } };
+  assert.equal(planAreaNormalization({ entities: [valid,
+    entity("t", "task", "personal")], relations: [] }, 100).report.addedRelationIds.length, 1);
+});
+
+test("canonical structural validation also checks supplied tombstones without changing them", () => {
+  const entities = [workspace("personal", "personal"), entity("t", "task", "personal")];
+  const valid = { entities, relations: [], tombstones: [{ id: "obsolete", deletedAt: 100 }] };
+  const planned = planAreaNormalization(valid, 100);
+  assert.equal(planned.report.addedRelationIds.length, 1);
+  assert.deepEqual(valid.tombstones, [{ id: "obsolete", deletedAt: 100 }]);
+  for (const tombstones of [[{ id: "obsolete", deletedAt: "today" }], "invalid"]) {
+    expectsBlocked(() => planAreaNormalization({ entities, relations: [], tombstones }, 100),
+      "snapshot-structure-invalid");
+  }
+});
