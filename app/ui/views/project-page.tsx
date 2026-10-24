@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { byManualOrder } from "../../../lib/task-views";
-import { projectTasks, summarizeProject } from "../../../lib/project-summary";
+import { projectAcceptsNewItems, projectTasks, summarizeProject } from "../../../lib/project-summary";
 import type { Entity } from "../../../lib/db";
 import { labelsFor } from "../project-labels";
 import type { LumiApp } from "../use-lumi-app";
@@ -98,7 +98,7 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
           {openTasks.map((task, index) => renderRow(task, index, openTasks, `task:project:${project.id}`))}
           {openTasks.length === 0 && <p className="projectEmpty">{t.noTasks}</p>}
         </div>
-        <button type="button" className="projectAdd" onClick={() => openCapture("task", project.id)}>＋ {tr("addTask")}</button>
+        {projectAcceptsNewItems(project) && <button type="button" className="projectAdd" onClick={() => openCapture("task", project.id)}>＋ {tr("addTask")}</button>}
       </section>
 
       <section className="projectSection" aria-labelledby="project-notes-heading">
@@ -107,7 +107,7 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
           {orderedNotes.map((note, index) => renderRow(note, index, orderedNotes, `note:project:${project.id}`))}
           {orderedNotes.length === 0 && <p className="projectEmpty">{t.noNotes}</p>}
         </div>
-        <button type="button" className="projectAdd" onClick={() => openCapture("note", project.id)}>＋ {tr("addNote")}</button>
+        {projectAcceptsNewItems(project) && <button type="button" className="projectAdd" onClick={() => openCapture("note", project.id)}>＋ {tr("addNote")}</button>}
       </section>
 
       <details className="projectDetails" data-project-details>
