@@ -1,6 +1,6 @@
 // 2a, part 3: transactional, backed-up, verifiable and reversible Area normalization. A TOOL only: nothing calls
 // it from start-up, schema migrations, API routes or UI. Run it with the service stopped (docs/D2A-AREA-APPLY.md).
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Entity } from "./db";
@@ -66,19 +66,38 @@ export function fingerprintOtherTables(database: DatabaseSync) {
   return hash.digest("hex");
 }
 
+// A separate READ-ONLY connection to the live file, resolved exactly like server-store does. getDatabase() mutates the
+// store when it opens it (schema migrations, repairs, retention sweep), so every refusal that can be decided from a
+// read happens here, before getDatabase() is ever called.
+function withLiveReadOnly<T>(fn: (database: DatabaseSync) => T): T {
+  const file = path.join(resolveDataDirectory(), "store.sqlite");
+  let isFile = false;
+  try { isFile = statSync(file).isFile(); } catch { /* missing */ }
+  if (!isFile) throw blocked("missing-store");
+  const database = new DatabaseSync(file, { readOnly: true });
+  try { return fn(database); } finally { database.close(); }
+}
+
 export function applyAreaNormalization(expected: AreaPreflight, options: { now: number }): AreaApplyResult {
+  // a. Read-only connection, outside any transaction: drift (or noChanges) means getDatabase() is never called,
+  // so nothing is opened for writing, migrated, repaired, backed up or written.
+  const now = options.now;
+  const checked = withLiveReadOnly(database => {
+    const first = readAreaNormalizationSource(database);
+    verifyAreaPreflight(first.source, first.identity, expected);
+    if (expected.noChanges) return "noop" as const;
+    // A loop, not Math.max(...spread): spreading hundreds of thousands of records overflows the call stack.
+    let newest = 0;
+    for (const e of first.source.entities) newest = Math.max(newest, e.updatedAt || 0);
+    for (const r of first.source.relations) newest = Math.max(newest, r.createdAt || 0);
+    if (!Number.isSafeInteger(now) || now < newest) throw blocked("invalid-apply-timestamp");
+    return "go" as const;
+  });
+  if (checked === "noop") return { status: "noop" };
+  // From here the store is opened normally: its start-up repairs/retention run BEFORE the backup (so the backup
+  // contains their result), and the locked re-verification below catches anything they changed.
   const database = getDatabase();
   if ((database as unknown as { isTransaction?: boolean }).isTransaction) throw blocked("inside-transaction");
-  // a. Outside any transaction: drift means no backup and no write.
-  const first = readAreaNormalizationSource(database);
-  verifyAreaPreflight(first.source, first.identity, expected);
-  if (expected.noChanges) return { status: "noop" };
-  const { now } = options;
-  // A loop, not Math.max(...spread): spreading hundreds of thousands of records overflows the call stack.
-  let newest = 0;
-  for (const e of first.source.entities) newest = Math.max(newest, e.updatedAt || 0);
-  for (const r of first.source.relations) newest = Math.max(newest, r.createdAt || 0);
-  if (!Number.isSafeInteger(now) || now < newest) throw blocked("invalid-apply-timestamp");
 
   // b. createBackup must run outside a transaction. A failed backup writes nothing.
   let backup: ReturnType<typeof backupFacts>;
@@ -92,6 +111,12 @@ export function applyAreaNormalization(expected: AreaPreflight, options: { now: 
     // revision, so a source equal to the verified one also equals the backup just taken.
     const locked = readAreaNormalizationSource(database);
     verifyAreaPreflight(locked.source, locked.identity, expected);
+    // Tables the source sha does not cover (attention, context, work sessions...) can change without a revision
+    // bump: the backup must hold exactly the live rows, or a later rollback would restore an older copy.
+    const otherTablesSha256 = fingerprintOtherTables(database);
+    const copy = new DatabaseSync(backupFile(backup.name), { readOnly: true });
+    try { if (fingerprintOtherTables(copy) !== otherTablesSha256) throw blocked("other-tables-drift"); }
+    finally { copy.close(); }
     const { source, identity } = locked;
     if (backup.counts.entities !== source.entities.length || backup.counts.relations !== source.relations.length ||
         backup.counts.tombstones !== identity.tombstones.length) throw blocked("backup-mismatch");
@@ -145,7 +170,8 @@ export function applyAreaNormalization(expected: AreaPreflight, options: { now: 
           (!backfill.has(old.id) && !cleanup.has(old.id) && entitySha(kept) !== entitySha(old))) throw blocked("result-verification-failed");
     }
     if (!createAreaPreflight(after.source, after.identity, after.at).noChanges) throw blocked("result-not-normalized");
-    const otherTablesSha256 = fingerprintOtherTables(database);
+    // Unchanged by the writes above (verified equal to the backup before them), re-checked for safety.
+    if (fingerprintOtherTables(database) !== otherTablesSha256) throw blocked("other-tables-drift");
     database.exec("COMMIT");
     return {
       status: "applied", sourceSha256: expected.sourceSha256, resultSha256, otherTablesSha256,
@@ -171,11 +197,18 @@ export function applyAreaNormalization(expected: AreaPreflight, options: { now: 
  * restore takes its own lock and also returns the other backed-up tables (context, work sessions...) to the backup.
  */
 export function rollbackAreaNormalization(applied: AppliedManifest): AreaRollbackResult {
-  const database = getDatabase();
-  if ((database as unknown as { isTransaction?: boolean }).isTransaction) throw blocked("inside-transaction");
-  // The backup file is checked first; every state check is repeated INSIDE the restore transaction (below).
+  // Refusals decidable from reads happen on a read-only connection, before getDatabase() can touch the store;
+  // the same state checks are repeated INSIDE the restore transaction (verifyBefore below).
   const backup = backupFacts(applied.backup.name);
   if (backup.sha256 !== applied.backup.sha256 || backup.bytes !== applied.backup.bytes) throw blocked("backup-mismatch");
+  withLiveReadOnly(db => {
+    const current = readAreaNormalizationSource(db);
+    if (current.identity.revision !== applied.revisionAfter || current.identity.restoreGeneration !== applied.restoreGeneration ||
+        areaSnapshotSha256(current.source, current.identity.tombstones) !== applied.resultSha256 ||
+        fingerprintOtherTables(db) !== applied.otherTablesSha256) throw blocked("post-migration-changes");
+  });
+  const database = getDatabase();
+  if ((database as unknown as { isTransaction?: boolean }).isTransaction) throw blocked("inside-transaction");
   // The tombstones the backup knew; the restore adds some for the Areas this migration created.
   const copy = new DatabaseSync(backupFile(backup.name), { readOnly: true });
   let known: Set<string>;

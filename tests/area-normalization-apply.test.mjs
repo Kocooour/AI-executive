@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +17,7 @@ const { AreaNormalizationBlocked } = await import("../lib/area-normalization.ts"
 const { createAreaPreflight, areaSnapshotSha256 } = await import("../lib/area-normalization-preflight.ts");
 const { readAreaNormalizationSource } = await import("../lib/area-normalization-source.ts");
 const apply = await import("../lib/area-normalization-apply.ts");
+const scope = await import("../lib/backup-scope.ts");
 
 const backupsDir = path.join(dataDir, "backups");
 const migrationBackups = () => existsSync(backupsDir)
@@ -465,4 +468,120 @@ test("KNOWN GAP (documents current behaviour): a legacy device without a base ca
   const again = preflight();
   assert.equal(again.noChanges, false);
   assert.equal(again.pendingAreaKindBackfills, 1);
+});
+
+// ---- owner review: backup must equal the live other tables; no store mutation before verification ----------------
+const quoteName = name => `"${name}"`;
+const attentionRow = key => store.getDatabase().prepare(`INSERT INTO attention_states (workspace_id, attention_key, subject_id, rule_id, state, source_fingerprint, snooze_until, changed_at)
+  VALUES ('personal', ?, 's', 'r', 'dismissed', 'f', NULL, 1)`).run(key);
+
+test("a change to another restorable table between backup and BEGIN blocks the apply and writes nothing", () => {
+  seed(legacy());
+  const manifest = preflight();
+  let injected;
+  apply.areaNormalizationFaultsForTests({ afterBackup: () => { attentionRow("raced"); injected = state(); } });
+  try { blocked(() => apply.applyAreaNormalization(manifest, { now: NOW() }), "other-tables-drift"); }
+  finally { apply.areaNormalizationFaultsForTests(null); }
+  assert.deepEqual(state(), injected);
+  assert.equal(store.getDatabase().isTransaction, false);
+  assert.equal(preflight().noChanges, false);
+  store.getDatabase().prepare("DELETE FROM attention_states WHERE attention_key = 'raced'").run();
+});
+
+test("backup and live fingerprints agree with rows (incl. blobs and NULLs) in several restorable tables", () => {
+  const database = store.getDatabase();
+  const overrides = { work_sessions: { state: "completed", running_since: null }, work_session_intervals: { ended_at: 5 },
+    mail_sync_accounts: { retention_days: 30, history_backlog_pending: 0 }, mail_sync_messages: { needs_reconcile: 0 } };
+  const touched = [];
+  for (const table of scope.replacedTables) {
+    if (database.prepare(`SELECT 1 FROM ${quoteName(table)} LIMIT 1`).get()) continue;   // leave tables that already hold rows
+    const columns = database.prepare(`PRAGMA table_info(${quoteName(table)})`).all();
+    const values = columns.map((c, i) => {
+      if (overrides[table]?.[c.name] !== undefined) return overrides[table][c.name];
+      const type = String(c.type).toUpperCase();
+      if (!c.notnull && !c.pk && i % 2) return null;
+      if (type.includes("INT")) return 300 + i;
+      if (type.includes("BLOB")) return Buffer.from([0, 1, 255, i]);
+      return `x-${table}-${c.name}`;
+    });
+    try {
+      database.prepare(`INSERT INTO ${quoteName(table)} (${columns.map(c => quoteName(c.name)).join(",")}) VALUES (${columns.map(() => "?").join(",")})`).run(...values);
+      touched.push(table);
+    } catch { /* a table with extra constraints stays empty */ }
+  }
+  assert.ok(touched.length >= 5, "several tables were seeded: " + touched.join());
+  try {
+    seed(legacy());
+    const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+    assert.equal(applied.otherTablesSha256, apply.fingerprintOtherTables(store.getDatabase()));
+    const copy = new DatabaseSync(path.join(backupsDir, applied.backup.name), { readOnly: true });
+    try { assert.equal(apply.fingerprintOtherTables(copy), applied.otherTablesSha256); } finally { copy.close(); }
+    assert.equal(apply.rollbackAreaNormalization(applied).status, "rolled-back");
+  } finally {
+    for (const table of touched) database.exec(`DELETE FROM ${quoteName(table)}`);
+  }
+});
+
+// A second data directory holding a copy of the live store, used by fresh CLI processes (getDatabase() was never
+// initialised there), so any write caused by merely opening the store is visible.
+function storeCopy() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "lumi-area-apply-copy-"));
+  store.getDatabase().exec(`VACUUM INTO '${path.join(dir, "store.sqlite")}'`);
+  if (existsSync(backupsDir)) cpSync(backupsDir, path.join(dir, "backups"), { recursive: true });
+  const copy = new DatabaseSync(path.join(dir, "store.sqlite"));
+  try {
+    copy.prepare(`INSERT INTO mail_sync_accounts (account_id, workspace_id, consent_id, retention_days, created_at, updated_at) VALUES ('acc','personal','c',7,1,1)`).run();
+    // Expired (received long ago): the start-up retention sweep would delete it.
+    copy.prepare(`INSERT INTO mail_sync_messages (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
+      VALUES ('acc','personal','m1','t','s','f',1,0,1,0)`).run();
+  } finally { copy.close(); }
+  const fileSha = () => createHash("sha256").update(readFileSync(path.join(dir, "store.sqlite"))).digest("hex");
+  const mailRows = () => { const c = new DatabaseSync(path.join(dir, "store.sqlite"), { readOnly: true }); try { return c.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages").get().n; } finally { c.close(); } };
+  const files = () => readdirSync(dir).sort().join() + "|" + (existsSync(path.join(dir, "backups")) ? readdirSync(path.join(dir, "backups")).sort().join() : "");
+  return { dir, fileSha, mailRows, files, run: (args) => cli(args, { AI_EXECUTIVE_DATA_DIR: dir }) };
+}
+
+test("a drifted manifest never opens the store for writing: start-up retention does not run, no backup", () => {
+  seed(legacy());
+  const manifest = preflight();
+  seed({ ...legacy(), entities: legacy().entities.map(e => e.id === "t3" ? { ...e, title: "drifted", updatedAt: 101 } : e) });
+  const copy = storeCopy();
+  try {
+    const bytes = copy.fileSha(), files = copy.files();
+    const result = copy.run(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["preflight-source-drift"] });
+    assert.equal(copy.mailRows(), 1);
+    assert.equal(copy.fileSha(), bytes);
+    assert.equal(copy.files(), files);
+  } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+});
+
+test("control: merely opening the store in a fresh process does run the retention sweep", () => {
+  const copy = storeCopy();
+  try {
+    const opened = spawnSync(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", "--input-type=module", "-e",
+      "const m = await import('./lib/server-store.ts'); m.getDatabase();"],
+      { encoding: "utf8", env: { ...process.env, NODE_NO_WARNINGS: "1", AI_EXECUTIVE_DATA_DIR: copy.dir } });
+    assert.equal(opened.status, 0, opened.stderr);
+    assert.equal(copy.mailRows(), 0);
+  } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+});
+
+test("a refused rollback never opens the store for writing either", () => {
+  seed(legacy());
+  const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+  const cur = store.readSnapshot();
+  assert.equal(store.replaceSnapshot(cur.revision, cur.entities.map(e => e.id === "t3" ? { ...e, title: "later", updatedAt: Date.now() + 9000 } : e),
+    cur.relations, [], [], cur.restoreGeneration).conflict, false);
+  const copy = storeCopy();
+  try {
+    const bytes = copy.fileSha(), files = copy.files();
+    const result = copy.run(["--rollback", tmpJson(applied), "--confirm", applied.resultSha256]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["post-migration-changes"] });
+    assert.equal(copy.mailRows(), 1);
+    assert.equal(copy.fileSha(), bytes);
+    assert.equal(copy.files(), files);
+  } finally { rmSync(copy.dir, { recursive: true, force: true }); }
 });
