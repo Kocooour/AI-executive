@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { planAreaNormalization, AreaNormalizationBlocked } from "../lib/area-normalization.ts";
+import { validateSnapshotStructure } from "../lib/snapshot-validation.ts";
 
 const filename = process.argv[2];
 if (!filename || process.argv.length !== 3) {
@@ -14,7 +15,9 @@ try {
   const bytes = readFileSync(filename);
   const inputSha256 = createHash("sha256").update(bytes).digest("hex");
   const snapshot = JSON.parse(bytes.toString("utf8"));
-  if (!snapshot || !Array.isArray(snapshot.entities) || !Array.isArray(snapshot.relations)) {
+  try {
+    validateSnapshotStructure(snapshot);
+  } catch {
     throw new AreaNormalizationBlocked(["snapshot-structure-invalid"]);
   }
   // A large snapshot must not exceed the JS argument stack.
