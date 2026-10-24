@@ -227,10 +227,13 @@ export function mergeEntity(base: Entity, local: Entity, server: Entity, now = D
     const index = notices.findIndex((item) => item.field === "properties.context" && !existingIds.has(item.id));
     if (index !== -1) {
       const replacement = lost.value as { doneWhen: string };
-      notices[index] = {
-        ...notices[index],
-        lostValue: { ...(notices[index].lostValue as Record<string, unknown>), doneWhen: replacement.doneWhen },
-      };
+      const original = notices[index].lostValue;
+      // A previous-version client may have dropped the context object entirely. Its generic
+      // conflict then contains null, which cannot be restored as a valid project context.
+      const snapshot = original && typeof original === "object" && !Array.isArray(original)
+        ? { ...original as Record<string, unknown>, doneWhen: replacement.doneWhen }
+        : lost.value;
+      notices[index] = { ...notices[index], lostValue: snapshot };
       return { ...merged, properties: { ...merged.properties, [conflictsKey]: notices } };
     }
   }
