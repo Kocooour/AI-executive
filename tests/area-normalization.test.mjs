@@ -232,3 +232,77 @@ test("redundant duplicate links are removed but the surviving relation keeps its
   assert.equal(result.relations[0], source.relations[0]);
   assert.deepEqual(result.report.removedRedundantRelationIds, ["two"]);
 });
+
+test("invalid legacy projectId and areaId types block rather than assigning a fallback", () => {
+  const base = [workspace("personal", "personal"), entity("p", "project", "personal"),
+    entity("a", "area", "personal", { kind: "private" }, "Work")];
+  const samples = [
+    { task: entity("t", "task", "personal", { projectId: 123 }), reason: "invalid-legacy-reference:t:projectId" },
+    { task: entity("t", "task", "personal", { projectId: { id: "p" } }), reason: "invalid-legacy-reference:t:projectId" },
+    { task: entity("t", "task", "personal", { areaId: ["a"] }), reason: "invalid-legacy-reference:t:areaId" },
+    { task: entity("t", "task", "personal", { area: { label: "Work" } }), reason: "invalid-legacy-area-label:t" },
+    { task: entity("t", "project", "personal", { areaId: true }), reason: "invalid-legacy-reference:t:areaId" },
+  ];
+  for (const { task, reason } of samples) {
+    const snapshot = { entities: [...base, task], relations: [] };
+    const unchanged = structuredClone(snapshot);
+    expectsBlocked(() => planAreaNormalization(snapshot, 100), reason);
+    assert.deepEqual(snapshot, unchanged);
+  }
+  // Explicit null, absent and legacy empty values still represent "no link".
+  const legacyEmpty = {
+    entities: [workspace("personal", "personal"),
+      entity("t", "task", "personal", { projectId: null, areaId: "", area: " " })],
+    relations: [],
+  };
+  assert.equal(areaFor(planAreaNormalization(legacyEmpty, 100), "t").length, 1);
+});
+
+test("new Area names are deterministic across entity order and canonical labels are bounded", () => {
+  const a = entity("p", "project", "personal", { area: "  Rodina   " });
+  const b = entity("t", "task", "personal", { area: "rodina" });
+  const c = entity("q", "project", "personal", { area: "RODINA" });
+  const snapshots = [
+    [workspace("personal", "personal"), a, b, c],
+    [c, b, a, workspace("personal", "personal")],
+  ].map((entities) => planAreaNormalization({ entities, relations: [] }, 100));
+  const created = snapshots.map((snapshot) => snapshot.entities.filter((e) => e.type === "area"));
+  assert.deepEqual(created[0], created[1]);
+  assert.equal(created[0].length, 1);
+  assert.equal(created[0][0].title, "RODINA");
+  for (const snapshot of snapshots) {
+    assert.equal(areaFor(snapshot, "p")[0].targetEntityId, created[0][0].id);
+    assert.equal(areaFor(snapshot, "t")[0].targetEntityId, created[0][0].id);
+    assert.equal(areaFor(snapshot, "q")[0].targetEntityId, created[0][0].id);
+  }
+  expectsBlocked(() => planAreaNormalization({
+    entities: [workspace("personal", "personal"),
+      entity("p", "project", "personal", { area: "x".repeat(1001) })],
+    relations: [],
+  }, 100), "invalid-area-label-length:p");
+});
+
+test("legacy Area without kind is reported as an explicit unresolved authorization gate", () => {
+  const oldArea = entity("legacy-area", "area", "personal", {}, "Work");
+  const snapshot = {
+    entities: [workspace("personal", "personal"), oldArea,
+      entity("p", "project", "personal", { areaId: "legacy-area" })],
+    relations: [],
+  };
+  const result = planAreaNormalization(snapshot, 100);
+  assert.deepEqual(result.report.existingAreaKindBackfillIds, ["legacy-area"]);
+  assert.equal(result.report.areaKindBackfillRequired, true);
+  assert.equal(result.entities.find((e) => e.id === "legacy-area"), oldArea);
+  assert.equal(result.entities.find((e) => e.id === "legacy-area").properties.kind, undefined);
+  const second = planAreaNormalization(result, 101);
+  assert.deepEqual(second.report.existingAreaKindBackfillIds, ["legacy-area"]);
+  assert.equal(second.report.areaKindBackfillRequired, true);
+  const classified = planAreaNormalization({
+    entities: [workspace("personal", "personal"),
+      entity("typed", "area", "personal", { kind: "private" }, "Work"),
+      entity("p", "project", "personal", { areaId: "typed" })],
+    relations: [],
+  }, 100);
+  assert.deepEqual(classified.report.existingAreaKindBackfillIds, []);
+  assert.equal(classified.report.areaKindBackfillRequired, false);
+});
