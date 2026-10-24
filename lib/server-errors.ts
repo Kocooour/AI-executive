@@ -197,6 +197,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Invalid Inbox batch date",
   "Invalid Inbox batch targets",
   "Invalid Inbox batch destination",
+  "Inbox batch cannot be applied",
   "Cross-origin request rejected",
   "Entity not found",
   "Exactly one literal or target is required",

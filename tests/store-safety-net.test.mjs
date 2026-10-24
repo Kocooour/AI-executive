@@ -9,7 +9,8 @@ process.env.AI_EXECUTIVE_DATA_DIR = dataDir;
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 const store = await import("../lib/server-store.ts");
 
-const task = (id) => ({ id, type: "task", title: id, status: "open", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1 });
+// Notes: this file is about the safety net, not the Area model (a standalone task would also get the fallback Area, 2a part 4).
+const task = (id) => ({ id, type: "note", title: id, status: "open", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 1 });
 const ids = (snapshot) => snapshot.entities.filter((entity) => entity.type !== "workspace").map((entity) => entity.id).sort();
 const save = (entities, deletedIds = []) => {
   const current = store.readSnapshot();
@@ -71,11 +72,13 @@ test("a save that silently drops the links between records that stay is refused 
   const links = Array.from({ length: 12 }, (_, index) => relation(index));
   assert.equal(store.replaceSnapshot(current.revision, [...workspaces, ...tasks, project], links, []).conflict, false);
   const before = store.readSnapshot();
-  assert.equal(before.relations.length, 12);
+  // The new project also got its fallback Area link (2a part 4); count the links this test is about.
+  const projectLinks = (snapshot) => snapshot.relations.filter((link) => link.relationType === "belongs_to_project");
+  assert.equal(projectLinks(before).length, 12);
   // All records sent, all links missing, nothing announced.
   const refused = store.replaceSnapshot(before.revision, before.entities, [], []);
   assert.equal(refused.conflict, true);
-  assert.equal(store.readSnapshot().relations.length, 12);
+  assert.equal(projectLinks(store.readSnapshot()).length, 12);
   // Removing one link at a time, as the app does, is accepted.
   assert.equal(store.replaceSnapshot(before.revision, before.entities, before.relations.slice(1), []).conflict, false);
   // Links that go with an announced deletion of the project are not counted.

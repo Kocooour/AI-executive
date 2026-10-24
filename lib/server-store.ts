@@ -24,6 +24,7 @@ import { validateSnapshotStructure } from "./snapshot-validation";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
+import { enforceAreaWriteInvariants } from "./area-write-invariants";
 
 export interface StoreSnapshot {
   revision: number;
@@ -874,6 +875,17 @@ export function replaceSnapshot(
       tombstones: [...tombstones.values()],
       updatedAt: Date.now(),
     };
+    // 2a part 4: this write may not introduce a state the audited Area applicator would have to fix again
+    // (lib/area-write-invariants.ts). Only what this write changed is corrected, never legacy data it left alone.
+    const writtenAt = Date.now();
+    const enforced = enforceAreaWriteInvariants({ current, next, tombstones: next.tombstones || [], now: writtenAt });
+    if (enforced.changed) {
+      next.entities = enforced.entities;
+      next.relations = enforced.relations;
+      // A removed relation is announced like any deletion, so an old device cannot send it back.
+      next.tombstones = [...(next.tombstones || []), ...enforced.droppedRelationIds
+        .filter((id) => !tombstonedIds.has(id)).map((id) => ({ id, deletedAt: writtenAt }))];
+    }
     writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "edited", next.revision);
     database.exec("COMMIT");

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Entity } from "./db";
 import { ensureDailyBackup, getDatabase } from "./server-store";
+import { enforceAreaWritesInTransaction, readAreaRows } from "./area-write-store";
 import { learnPlanning } from "./day-plan-learning";
 import { getNotificationPreferences } from "./notifications";
 
@@ -130,6 +131,7 @@ function createRecurringOccurrence(task: Entity, now: number) {
   if (!next) return null;
   const database = getDatabase();
   if (database.prepare("SELECT 1 FROM tombstones WHERE id=?").get(next.id)) return null;
+  const areaBefore = readAreaRows(database);
   const inserted = database.prepare("INSERT OR IGNORE INTO entities (id,payload,updated_at) VALUES (?,?,?)")
     .run(next.id, JSON.stringify(next), next.updatedAt);
   if (!Number(inserted.changes)) return next;
@@ -140,6 +142,9 @@ function createRecurringOccurrence(task: Entity, now: number) {
     const copy = { ...relation, id: randomUUID(), sourceEntityId: next.id, createdAt: now };
     database.prepare("INSERT INTO relations (id,payload,created_at) VALUES (?,?,?)").run(copy.id, JSON.stringify(copy), now);
   }
+  // 2a part 4: the occurrence keeps the project (and inherits its Area) or, when standalone, copies the Area link;
+  // a standalone occurrence of a task that had none gets the fallback Area (lib/area-write-invariants.ts).
+  enforceAreaWritesInTransaction(database, areaBefore, now);
   return next;
 }
 

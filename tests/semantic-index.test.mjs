@@ -140,7 +140,7 @@ test("ordinary full-snapshot save queues only changed entities, not a global reb
   semantic.reconcileSemanticManifest();
   const initial = store.readSnapshot();
   const bulk = Array.from({ length: 550 }, (_, index) => ({
-    id: `snapshot-unchanged-${index}`, workspaceId: "personal", type: "task",
+    id: `snapshot-unchanged-${index}`, workspaceId: "personal", type: "note",
     title: `Bulk item ${index}`, status: "open", properties: { sensitivity: "normal" },
     createdAt: Date.now(), updatedAt: Date.now(),
   }));

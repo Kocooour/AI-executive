@@ -8,6 +8,7 @@ import { buildCurrentPriorities } from "./current-priorities";
 import { buildDayPlan, currentDayPlanDate } from "./day-plan";
 import { matchesDayPlanCandidate, type DayPlanDecision } from "./day-plan-decision";
 import { providerContext } from "./ai-provider-context";
+import { enforceAreaWritesInTransaction, readAreaRows } from "./area-write-store";
 
 type CreateOperation = {
   kind: "create";
@@ -698,6 +699,9 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       }
     }
     const now = Date.now();
+    // 2a part 4: the Area model is enforced for what this action changes (a created standalone task gets the
+    // fallback Area, a task moved into a project drops its own Area links).
+    const areaBefore = readAreaRows(database);
     let before: Entity | null = null;
     let after: Entity;
     let beforeRelations: Relation[] = [];
@@ -766,6 +770,16 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       database.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(after), after.updatedAt, after.id);
     }
+    let recordedRelations: Relation[] | null = null;
+    if (enforceAreaWritesInTransaction(database, areaBefore, now).changed) {
+      // The history must describe what is stored now, or the undo would refuse the changed record / relations.
+      after = JSON.parse(String((database.prepare("SELECT payload FROM entities WHERE id = ?").get(after.id) as { payload: string }).payload)) as Entity;
+      if (operation.kind === "create") {
+        recordedRelations = database.prepare("SELECT payload FROM relations").all()
+          .map((item) => JSON.parse(String((item as { payload: string }).payload)) as Relation)
+          .filter((relation) => relation.sourceEntityId === after.id || relation.targetEntityId === after.id);
+      }
+    }
     const actionId = randomUUID();
     const result = { actionId, message: `${payload.summary} — hotovo.` };
     database.prepare(`
@@ -783,7 +797,7 @@ export function confirmAIProposal(proposalId: string, sessionBinding: string) {
       before ? JSON.stringify({ entity: before, relations: beforeRelations }) : null,
       JSON.stringify({
         entity: after,
-        relations: operation.kind === "create" ? operation.relations : afterRelations,
+        relations: operation.kind === "create" ? recordedRelations ?? operation.relations : afterRelations,
       }),
       now,
     );
@@ -832,6 +846,7 @@ export function undoAIAction(actionId: string, sessionBinding: string) {
       throw new Error("Entity was changed later, so this action cannot be safely undone.");
     }
     const now = Date.now();
+    const areaBefore = readAreaRows(database);
     if (row.action === "create") {
       const expectedRelations = "relations" in afterRecord && Array.isArray(afterRecord.relations)
         ? afterRecord.relations
@@ -904,6 +919,8 @@ export function undoAIAction(actionId: string, sessionBinding: string) {
       database.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?")
         .run(JSON.stringify(restored), restored.updatedAt, restored.id);
     }
+    // A task taken out of a project again gets the fallback Area (lib/area-write-invariants.ts).
+    enforceAreaWritesInTransaction(database, areaBefore, now);
     database.prepare("UPDATE ai_action_history SET status = 'undone', undone_at = ? WHERE id = ?")
       .run(now, actionId);
     setRevision(readRevision() + 1, now);
