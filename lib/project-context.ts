@@ -89,15 +89,21 @@ export function contextProblem(input: { why: string; goals: string[]; doneWhen: 
 // "Hotovo, když" as each side of a merge wrote it. A current client edits `context.doneWhen` and mirrors it into
 // `goal`; an old client edits `goal` alone, even if a newer context was already received through sync.
 // A changed goal that disagrees with the side's context therefore represents the legacy edit, not a stale mirror.
-function doneWhenChange(base: Entity, side: Entity): string | null {
+function doneWhenChange(base: Entity, side: Entity, other: Entity): string | null {
   const baseContext = isObject(base.properties?.context) ? base.properties.context as Record<string, unknown> : null;
   const baseGoal = typeof base.properties?.goal === "string" ? base.properties.goal : "";
   const baseDone = baseContext && typeof baseContext.doneWhen === "string" ? baseContext.doneWhen : baseGoal;
   const context = isObject(side.properties?.context) ? side.properties.context as Record<string, unknown> : null;
   const contextDone = context && typeof context.doneWhen === "string" ? context.doneWhen : null;
+  const otherContext = isObject(other.properties?.context) ? other.properties.context : null;
   const goal = side.properties?.goal;
   const goalChanged = typeof goal === "string" && goal !== baseGoal;
-  if (goalChanged && goal !== contextDone) return goal;
+  // A newer client can deliberately edit context and carry a stale goal: its context must win.
+  // Only prefer a divergent legacy goal when the context itself is unchanged, or when its
+  // doneWhen AND revision match the other side (the old client merely received it via sync).
+  const receivedContext = contextDone !== null && contextDone !== baseDone
+    && contextDone === otherContext?.doneWhen && context?.updatedAt === otherContext?.updatedAt;
+  if (goalChanged && goal !== contextDone && (contextDone === baseDone || contextDone === null || receivedContext)) return goal;
   if (contextDone !== null && contextDone !== baseDone) return contextDone;
   return goalChanged ? goal : null;
 }
@@ -116,7 +122,7 @@ export interface DoneWhenReconciled {
 // readProjectContext) so the editor shows it in full and asks for it to be shortened.
 export function reconcileDoneWhen(base: Entity, local: Entity, server: Entity, merged: Entity, localWins: boolean): DoneWhenReconciled {
   if (merged.type !== "project") return { merged, lost: null };
-  const fromLocal = doneWhenChange(base, local), fromServer = doneWhenChange(base, server);
+  const fromLocal = doneWhenChange(base, local, server), fromServer = doneWhenChange(base, server, local);
   if (fromLocal === null && fromServer === null) return { merged, lost: null };
   const both = fromLocal !== null && fromServer !== null && fromLocal.trim() !== fromServer.trim();
   const winner = both ? (localWins ? fromLocal : fromServer) as string : (fromLocal ?? fromServer) as string;
