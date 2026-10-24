@@ -120,6 +120,11 @@ test("Je to úkol?: Ne stops asking, Ano makes a task with the event's length an
     taskIds.push(task.id);
     expect(task.properties).toMatchObject({ estimatedMinutes: 45, when: day, calendarEventKey: `${asked.uid}:${asked.start}`, calendarSourceId: "e2e-src" });
     expect(task.properties?.deadline).toBeUndefined();
+    // 2a part 4: a standalone task made from an event is filed under the workspace's fallback Area.
+    const store = await page.evaluate(async () => fetch("/api/store", { cache: "no-store" }).then((response) => response.json()));
+    const areaLinks = store.relations.filter((relation: { sourceEntityId: string; relationType: string }) => relation.sourceEntityId === task.id && relation.relationType === "belongs_to_area");
+    expect(areaLinks).toHaveLength(1);
+    expect(store.entities.find((entity: { id: string }) => entity.id === areaLinks[0].targetEntityId)).toMatchObject({ title: "Nezařazeno", properties: { kind: "private" } });
 
     // The answer survives a reload and no question is asked again.
     await page.reload();

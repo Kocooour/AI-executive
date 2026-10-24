@@ -244,11 +244,13 @@ export function enforceAreaWriteInvariants(input: {
   }
   needsFallback.sort((a, b) => compare(a.id, b.id));
   const takenIds = new Set<string>([...currentRelations.keys(), ...next.relations.map((relation) => relation.id)]);
-  for (const entity of needsFallback) {
-    if (hasArea(entity)) continue;
+  // One fallback decision per workspace (the plan does not depend on the item), made when first needed.
+  const fallbackFor = new Map<string, Entity | undefined>();
+  const fallbackOf = (workspaceId: string): Entity | undefined => {
+    if (fallbackFor.has(workspaceId)) return fallbackFor.get(workspaceId);
     const plan = planFallbackArea({
-      workspaceId: entity.workspaceId, kind: kinds.get(entity.workspaceId),
-      entities: [...entities.values(), ...createdAreas], tombstonedIds: tombstoned, now,
+      workspaceId, kind: kinds.get(workspaceId),
+      entities: [...entities.values()].filter((item) => item.type === "area"), tombstonedIds: tombstoned, now,
     });
     let area: Entity | undefined;
     if (plan.status === "existing") area = plan.area;
@@ -257,6 +259,12 @@ export function enforceAreaWriteInvariants(input: {
       createdAreas.push(area);
       report.fallbackAreasCreated += 1;
     }
+    fallbackFor.set(workspaceId, area);
+    return area;
+  };
+  for (const entity of needsFallback) {
+    if (hasArea(entity)) continue;
+    const area = fallbackOf(entity.workspaceId);
     const relationId = area && fallbackRelationId(entity.id, area.id,
       (candidate) => tombstoned.has(candidate) || takenIds.has(candidate) || entities.has(candidate) || candidate === area!.id);
     if (!area || !relationId) {

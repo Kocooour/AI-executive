@@ -21,7 +21,10 @@ async function setStore(page: Page, add: Array<Record<string, unknown>>, removeI
     const kept = snapshot.entities.filter((entity: { id: string }) => !(removed as string[]).includes(entity.id)).map((entity: { id: string }) => (replaced as Record<string, object>)[entity.id] ?? entity);
     const entities = [...kept, ...(added as object[]).map((entity) => ({ createdAt: now, updatedAt: now, ...entity }))];
     const saved = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities, relations: snapshot.relations, deletedIds: removed, revivedIds: [] }) });
+      body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities,
+        // A removed task takes its Area link with it (tasks carry one since 2a part 4).
+        relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !(removed as string[]).includes(link.sourceEntityId) && !(removed as string[]).includes(link.targetEntityId)),
+        deletedIds: removed, revivedIds: [] }) });
     return saved.status;
   }, [add, removeIds, replace] as const);
   expect(status).toBe(200);
@@ -66,7 +69,9 @@ async function cleanUp(page: Page) {
     const mine = snapshot.entities.filter((entity: { id: string }) => entity.id.startsWith("e2e-backup-"));
     if (mine.length) {
       await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-        entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")), relations: snapshot.relations,
+        entities: snapshot.entities.filter((entity: { id: string }) => !entity.id.startsWith("e2e-backup-")),
+        // Tasks carry their Area link (2a part 4): it goes with the task.
+        relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !link.sourceEntityId.startsWith("e2e-backup-") && !link.targetEntityId.startsWith("e2e-backup-")),
         deletedIds: mine.map((entity: { id: string }) => entity.id), revivedIds: [] }) });
     }
   }, marker);
@@ -338,7 +343,9 @@ test("a device with an unsent change from before a restore on another device dis
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const mine = snapshot.entities.filter((entity: { title: string }) => entity.title.startsWith("Zařízení:")).map((entity: { id: string }) => entity.id);
       if (mine.length) await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-        entities: snapshot.entities.filter((entity: { id: string }) => !mine.includes(entity.id)), relations: snapshot.relations, deletedIds: mine, revivedIds: [] }) });
+        entities: snapshot.entities.filter((entity: { id: string }) => !mine.includes(entity.id)),
+        relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !mine.includes(link.sourceEntityId) && !mine.includes(link.targetEntityId)),
+        deletedIds: mine, revivedIds: [] }) });
     }).catch(() => undefined);
     await first.context.close();
     await second.context.close();

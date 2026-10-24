@@ -56,14 +56,17 @@ for (const width of [390, 1280]) {
     await expect(panel).toContainText("Vybráno: 2");
     await expect(page.getByRole("checkbox", { name: `Vybrat: ${data.hidden}` })).toHaveCount(0);
     await panel.getByLabel("Hromadná akce").selectOption("organize");
-    await panel.getByLabel("Do projektu").selectOption(data.projectId);
+    // 2a part 4: a task in a project inherits the project's area, so a batch takes a project or an area, not both.
     await panel.getByLabel("Do oblasti").selectOption(data.areaId);
+    await panel.getByLabel("Do projektu").selectOption(data.projectId);
+    await expect(panel.getByLabel("Do oblasti")).toBeDisabled();
+    await expect(panel.getByLabel("Do oblasti")).toHaveValue("");
     await panel.getByRole("button", { name: "Zkontrolovat změny" }).click();
     const review = panel.getByRole("group", { name: "Kontrola před uložením" });
     await expect(review).toContainText(data.one);
     await expect(review).toContainText(data.two);
     await expect(review).toContainText(data.project);
-    await expect(review).toContainText(data.area);
+    await expect(review).not.toContainText(data.area);
     await expect(review.locator("li")).toHaveCount(2);
     if (width === 390) {
       // Check the touch target while its Inbox row still exists.
@@ -87,7 +90,7 @@ for (const width of [390, 1280]) {
         other: snapshot.entities.find((e: { id: string }) => e.id === hiddenId)?.properties?.inbox,
       };
     }, data), { timeout: 20000 }).toEqual({
-      inbox: [false, false], project: [true, true], area: [true, true], other: true,
+      inbox: [false, false], project: [true, true], area: [false, false], other: true,
     });
     if (width === 390) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -172,7 +175,6 @@ test("B5 canonical CAS refuses a changed project after review and leaves every t
   await page.getByRole("checkbox", { name: `Vybrat: ${data.two}` }).check();
   await panel.getByLabel("Hromadná akce").selectOption("organize");
   await panel.getByLabel("Do projektu").selectOption(data.projectId);
-  await panel.getByLabel("Do oblasti").selectOption(data.areaId);
   await panel.getByRole("button", { name: "Zkontrolovat změny" }).click();
   await expect(panel.getByRole("group", { name: "Kontrola před uložením" })).toContainText(data.project);
   await page.evaluate(async id => {

@@ -7,22 +7,27 @@ import { navView, settingsSections, sidebarView, waitUntilSynced } from "./helpe
 
 // Projects of this scenario only: other scenarios add and delete projects of their own, so nothing here relies on
 // the seeded one. The project has no task (the attention dot) and is first in the manual order (the sidebar list).
-async function seedProject(page: Page, id: string, title: string) {
-  await page.evaluate(async ({ id, title }) => {
+// `legacyLabel`: a project from before the Area model that has only a free-text area label and no Area link. A new
+// project without any Area is filed under "Nezařazeno" by the server (2a part 4), so "Bez oblasti" is only reachable
+// with such legacy data.
+async function seedProject(page: Page, id: string, title: string, legacyLabel = "") {
+  await page.evaluate(async ({ id, title, legacyLabel }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const now = Date.now();
-    const project = { id, type: "project", title, status: "active", workspaceId: "personal", properties: { manualOrders: { "personal:project:all": -1_000_000 } }, createdAt: now, updatedAt: now };
+    const project = { id, type: "project", title, status: "active", workspaceId: "personal", properties: { manualOrders: { "personal:project:all": -1_000_000 }, ...(legacyLabel ? { area: legacyLabel } : {}) }, createdAt: now, updatedAt: now };
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: [...snapshot.entities, project], relations: snapshot.relations, deletedIds: [], revivedIds: [] }) });
     if (!response.ok) throw new Error(`Seeding failed: ${response.status}`);
-  }, { id, title });
+  }, { id, title, legacyLabel });
 }
 async function removeProject(page: Page, id: string) {
   await page.evaluate(async (id) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration, entities: snapshot.entities.filter((row: { id: string }) => row.id !== id),
-      relations: snapshot.relations, deletedIds: [id], revivedIds: [] }) });
+      // A project carries its Area link (2a part 4): it goes with the project.
+      relations: snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => row.sourceEntityId !== id && row.targetEntityId !== id),
+      deletedIds: [id], revivedIds: [] }) });
   }, id);
 }
 
@@ -99,7 +104,7 @@ test("active projects are listed under the navigation and open like in the Proje
   }
 });
 
-test("Projects are grouped under their area, then 'Bez oblasti'; reordering stays inside a group", async ({ page }) => {
+test("Projects are grouped under their area, then a legacy project without an area link under 'Bez oblasti'; reordering stays inside a group", async ({ page }) => {
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
   const stamp = Date.now();
@@ -107,12 +112,12 @@ test("Projects are grouped under their area, then 'Bez oblasti'; reordering stay
   const put = (add: boolean) => page.evaluate(async ({ ids, add, stamp }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const mine = new Set(Object.values(ids));
-    const entity = (id: string, type: string, title: string, createdAt: number) => ({ id, type, title, status: "active", workspaceId: "personal", properties: {}, createdAt, updatedAt: Date.now() });
+    const entity = (id: string, type: string, title: string, createdAt: number, properties: Record<string, unknown> = {}) => ({ id, type, title, status: "active", workspaceId: "personal", properties, createdAt, updatedAt: Date.now() });
     const relation = (id: string, source: string) => ({ id, sourceEntityId: source, targetEntityId: ids.area, relationType: "belongs_to_area", workspaceId: "personal", createdAt: stamp });
     const entities = snapshot.entities.filter((row: { id: string }) => !mine.has(row.id));
     const relations = snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => !mine.has(row.sourceEntityId) && !mine.has(row.targetEntityId));
     if (add) {
-      entities.push(entity(ids.area, "area", "Oblast D1", stamp), entity(ids.one, "project", "Projekt D1 první", stamp + 1), entity(ids.two, "project", "Projekt D1 druhý", stamp + 2), entity(ids.loose, "project", "Projekt D1 volný", stamp + 3));
+      entities.push(entity(ids.area, "area", "Oblast D1", stamp), entity(ids.one, "project", "Projekt D1 první", stamp + 1), entity(ids.two, "project", "Projekt D1 druhý", stamp + 2), entity(ids.loose, "project", "Projekt D1 volný", stamp + 3, { area: "Starý štítek" }));
       relations.push(relation(`e2e-d1-r1-${stamp}`, ids.one), relation(`e2e-d1-r2-${stamp}`, ids.two));
     }
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
@@ -203,7 +208,8 @@ async function removeByTitle(page: Page, title: string) {
     await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
       baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
       entities: snapshot.entities.filter((row: { id: string }) => !ids.includes(row.id)),
-      relations: snapshot.relations, deletedIds: ids, revivedIds: [] }) });
+      relations: snapshot.relations.filter((row: { sourceEntityId: string; targetEntityId: string }) => !ids.includes(row.sourceEntityId) && !ids.includes(row.targetEntityId)),
+      deletedIds: ids, revivedIds: [] }) });
   }, title);
 }
 
@@ -381,11 +387,11 @@ test("'Open source message' with accounts that fail to load shows the load error
   }
 });
 
-test("a project without an area is listed under 'Bez oblasti'", async ({ page }) => {
+test("a legacy project without an area link is listed under 'Bez oblasti'", async ({ page }) => {
   const id = `e2e-d1-loose-${Date.now()}`;
   await page.goto("/?view=Projects");
   await waitUntilSynced(page);
-  await seedProject(page, id, "Projekt D1 bez oblasti");
+  await seedProject(page, id, "Projekt D1 bez oblasti", "Starý štítek");
   try {
     await page.reload();
     await waitUntilSynced(page);
