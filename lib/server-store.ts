@@ -860,8 +860,10 @@ export function replaceSnapshot(
       revision: current.revision + 1,
       restoreGeneration: current.restoreGeneration,
       entities: liveEntities,
+      // A tombstone may name a relation ID (crafted or stale request); never store it live beside its tombstone.
       relations: relations.filter(
         (relation) =>
+          !tombstonedIds.has(relation.id) &&
           liveEntityIds.has(relation.sourceEntityId) &&
           liveEntityIds.has(relation.targetEntityId),
       ),
