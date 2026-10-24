@@ -716,7 +716,11 @@ export function readSnapshot(): StoreSnapshot {
   };
 }
 
-function replaceUnchecked(database: DatabaseSync, snapshot: StoreSnapshot) {
+/**
+ * INTERNAL: writes the store rows of a snapshot with the store's row conventions. No transaction, backup, revision
+ * check or safety net: the caller owns all of these (restore, migrations, the 2a Area applicator).
+ */
+export function writeSnapshotRows(database: DatabaseSync, snapshot: StoreSnapshot) {
   const setMetadata = database.prepare(`
     INSERT INTO metadata (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -870,7 +874,7 @@ export function replaceSnapshot(
       tombstones: [...tombstones.values()],
       updatedAt: Date.now(),
     };
-    replaceUnchecked(database, next);
+    writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "edited", next.revision);
     database.exec("COMMIT");
     return { conflict: false as const, snapshot: next };
@@ -1109,7 +1113,7 @@ function restoreLegacyBackup(name: string) {
   try {
     const current = readSnapshot();
     const next = nextSnapshotAfterRestore(current, restored);
-    replaceUnchecked(database, next);
+    writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
     bumpRestoreGeneration(database);
     database.exec("COMMIT");
@@ -1127,6 +1131,8 @@ function nextSnapshotAfterRestore(current: StoreSnapshot, restored: StoreSnapsho
   const restoredIds = new Set(restored.entities.map((entity) => entity.id));
   const tombstones = new Map((current.tombstones || []).map((item) => [item.id, item]));
   for (const id of restoredIds) tombstones.delete(id);
+  // A restored link must not stay beside a tombstone of its own ID (e.g. one a later migration left for it).
+  for (const relation of restored.relations) tombstones.delete(relation.id);
   for (const entity of current.entities) {
     if (!restoredIds.has(entity.id)) tombstones.set(entity.id, { id: entity.id, deletedAt: Date.now() });
   }
@@ -1187,12 +1193,15 @@ export function releaseTemporaryFile(file: string) {
   try { removeIfExists(file); } finally { temporaryInUse.delete(file); }
 }
 
+/** Optional checks run INSIDE the restore transaction; throwing from either rolls the whole restore back. */
+export interface RestoreHooks { verifyBefore?(database: DatabaseSync): void; verifyAfter?(database: DatabaseSync): void }
+
 /**
  * Restores the owner data from a database file (a full backup or an imported package's database.sqlite): the file
  * is copied and brought to the current schema through the real migrations, a safety backup of the current state is
  * made, then everything is replaced in one transaction. A refused or failed restore leaves the live data as it was.
  */
-export function restoreDatabaseFile(file: string) {
+export function restoreDatabaseFile(file: string, hooks: RestoreHooks = {}) {
   const copy = temporaryFile("restore", ".sqlite");
   try {
     prepareRestoreCopy(file, copy, schemaMigrations.map((migration) => migration.id), applySchema);
@@ -1221,12 +1230,14 @@ export function restoreDatabaseFile(file: string) {
       database.exec("BEGIN IMMEDIATE");
       try {
         const current = readSnapshot();
+        hooks.verifyBefore?.(database);
         const next = nextSnapshotAfterRestore(current, restored);
-        replaceUnchecked(database, next);
+        writeSnapshotRows(database, next);
         replaceTablesFromAttached(database, "restore_source", replacedTables, excludedClearedTables, (table) => {
           if (restoreFaultForTests === table) throw new Error("Restore failed (test)");
         });
         bumpRestoreGeneration(database);
+        hooks.verifyAfter?.(database);
         database.exec("COMMIT");
         return { ...next, restoreGeneration: readRestoreGeneration(database) };
       } catch (error) {
@@ -1242,19 +1253,19 @@ export function restoreDatabaseFile(file: string) {
   }
 }
 
-function restoreFullBackup(name: string) {
+function restoreFullBackup(name: string, hooks?: RestoreHooks) {
   const file = path.join(backupDirectory, name);
   const meta = readSidecar(name);
   if (!existsSync(file)) throw new HttpInputError("Invalid backup");
   const actual = describeFile(file);
   if (actual.bytes !== meta.bytes || actual.sha256 !== meta.sha256) throw new HttpInputError("Backup does not match its checksum");
-  return restoreDatabaseFile(file);
+  return restoreDatabaseFile(file, hooks);
 }
 
-export function restoreBackup(name: string) {
+export function restoreBackup(name: string, hooks?: RestoreHooks) {
   const safe = safeBackupName(name);
   if (safe.endsWith(".json")) return restoreLegacyBackup(safe);
-  return restoreFullBackup(safe);
+  return restoreFullBackup(safe, hooks);
 }
 
 /** A cleaned copy of the live database for an export; the caller deletes it with `dispose`. */
@@ -1278,7 +1289,7 @@ function migrateLegacyStore(database: DatabaseSync) {
     const legacy = JSON.parse(readFileSync(legacyStorePath, "utf8")) as StoreSnapshot;
     if (!Array.isArray(legacy.entities) || !Array.isArray(legacy.relations)) return;
     database.exec("BEGIN IMMEDIATE");
-    replaceUnchecked(database, {
+    writeSnapshotRows(database, {
       revision: Number(legacy.revision) || 0,
       entities: legacy.entities,
       relations: legacy.relations,
