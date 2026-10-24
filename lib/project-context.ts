@@ -122,7 +122,11 @@ export function reconcileDoneWhen(base: Entity, local: Entity, server: Entity, m
   const winner = both ? (localWins ? fromLocal : fromServer) as string : (fromLocal ?? fromServer) as string;
   const loser = both ? (localWins ? fromServer : fromLocal) as string : null;
   const properties: Record<string, unknown> = { ...merged.properties, goal: winner };
-  const context = isObject(merged.properties.context) ? merged.properties.context as Record<string, unknown> : null;
+  // A previous-version client can omit `context` entirely. Its newer record must not erase
+  // the other side's why/goals; recover that context while reconciling the single doneWhen text.
+  const context = isObject(merged.properties.context) ? merged.properties.context
+    : isObject(local.properties?.context) ? local.properties.context
+    : isObject(server.properties?.context) ? server.properties.context : null;
   const fits = winner.trim().length <= contextLimits.doneWhen;
   if (context && fits) properties.context = { ...context, doneWhen: winner.trim() };
   let lost: DoneWhenReconciled["lost"] = null;
