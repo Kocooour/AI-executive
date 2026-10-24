@@ -13,7 +13,7 @@ const signedOutKey = "ai-executive-signed-out";
 export type ProjectContextText = { why: string; goals: string[]; doneWhen: string };
 export type KeptProjectContextDraft = {
   page: string; workspaceId: string; projectId: string;
-  base: ProjectContext; draft: ProjectContextText; at: number;
+  base: ProjectContext; baseGoal?: string | null; draft: ProjectContextText; at: number;
 };
 
 const keyOf = (page: string, workspaceId: string, projectId: string) =>
@@ -40,7 +40,8 @@ function parse(value: string | null): KeptProjectContextDraft | null {
     const item = JSON.parse(value) as KeptProjectContextDraft;
     return item && typeof item.page === "string" && typeof item.workspaceId === "string"
       && typeof item.projectId === "string" && Number.isFinite(item.at)
-      && isContext(item.base) && isText(item.draft) ? item : null;
+      && isContext(item.base) && (item.baseGoal === undefined || item.baseGoal === null || typeof item.baseGoal === "string")
+      && isText(item.draft) ? item : null;
   } catch { return null; }
 }
 function keys(storage: DraftStorage) {
