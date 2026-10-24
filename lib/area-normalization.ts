@@ -16,6 +16,10 @@ export interface AreaNormalizationReport {
   addedLegacyProjectRelationIds: string[];
   removedRedundantRelationIds: string[];
   inheritedTaskIds: string[];
+  // Existing legacy Area entities are left untouched; a future transactional
+  // applicator MUST backfill these kinds before enabling Area authorization.
+  existingAreaKindBackfillIds: string[];
+  areaKindBackfillRequired: boolean;
   unchangedWorkspaceIds: boolean;
 }
 
@@ -29,7 +33,8 @@ export class AreaNormalizationBlocked extends Error {
   }
 }
 
-const normalizedLabel = (label: string) => label.trim().normalize("NFC").replace(/\s+/g, " ").toLocaleLowerCase("cs");
+const displayLabel = (label: string) => label.trim().normalize("NFC").replace(/\s+/g, " ");
+const normalizedLabel = (label: string) => displayLabel(label).toLocaleLowerCase("cs");
 const digest = (...parts: string[]) =>
   createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
 const generatedAreaId = (workspaceId: string, label: string) =>
@@ -81,17 +86,48 @@ export function planAreaNormalization(
     }
   }
   const areas = new Map<string, Entity>();
+  const existingAreaKindBackfillIds: string[] = [];
+  const preferredTitles = new Map<string, string>();
   const projectIds = new Set<string>();
   for (const entity of snapshot.entities) {
     if (!workspaceKind.has(entity.workspaceId)) {
       issues.push("unknown-workspace:" + entity.id);
+    }
+    if (entity.type === "project" || entity.type === "task") {
+      // A present but malformed reference must not silently turn an inherited
+      // Area into a standalone fallback. Missing/null/blank legacy values are
+      // the only backward-compatible "unassigned" representations.
+      const referenceKeys = entity.type === "task" ? ["areaId", "projectId"] : ["areaId"];
+      for (const key of referenceKeys) {
+        const value = entity.properties[key];
+        if (value !== undefined && value !== null && typeof value !== "string") {
+          issues.push("invalid-legacy-reference:" + entity.id + ":" + key);
+        }
+      }
+      const label = entity.properties.area;
+      if (label !== undefined && label !== null && typeof label !== "string") {
+        issues.push("invalid-legacy-area-label:" + entity.id);
+      } else if (typeof label === "string" && label.trim()) {
+        const preferred = displayLabel(label);
+        if (preferred.length > 1000) {
+          issues.push("invalid-area-label-length:" + entity.id);
+        } else {
+          const key = entity.workspaceId + "\0" + normalizedLabel(label);
+          const previous = preferredTitles.get(key);
+          // The first entity in a snapshot is not necessarily the same on
+          // every device. Pick a stable display variant from ALL labels.
+          if (previous === undefined || preferred < previous) preferredTitles.set(key, preferred);
+        }
+      }
     }
     if (entity.type === "area") {
       const expectedKind = workspaceKind.get(entity.workspaceId) === "personal" ? "private" : "shared";
       const existingKind = entity.properties.kind;
       // An explicitly classified Area must never disagree with its legacy
       // workspace. Older Areas without this property retain their old data.
-      if (existingKind !== undefined && existingKind !== expectedKind) {
+      if (existingKind === undefined) {
+        existingAreaKindBackfillIds.push(entity.id);
+      } else if (existingKind !== expectedKind) {
         issues.push("area-visibility-mismatch:" + entity.id);
       }
       areas.set(entity.id, entity);
@@ -139,6 +175,15 @@ export function planAreaNormalization(
       return undefined;
     }
     if (existing.length === 1) return existing[0];
+    const key = workspaceId + "\0" + normalizedLabel(label);
+    const defaultTitle = workspaceKind.get(workspaceId) === "shared"
+      ? "Nezařazeno (původní sdílené)" : "Nezařazeno";
+    const title = normalizedLabel(label) === normalizedLabel(defaultTitle)
+      ? defaultTitle : (preferredTitles.get(key) ?? displayLabel(label));
+    if (!title || title.length > 1000) {
+      issues.push("invalid-generated-area-title:" + workspaceId);
+      return undefined;
+    }
     const id = generatedAreaId(workspaceId, label);
     const earlier = original.get(id);
     if (earlier || newAreas.has(id)) {
@@ -151,7 +196,7 @@ export function planAreaNormalization(
       return undefined;
     }
     const area: Entity = {
-      id, type: "area", title: label, status: "active", workspaceId,
+      id, type: "area", title, status: "active", workspaceId,
       properties: { kind: kind === "personal" ? "private" : "shared" },
       createdAt: at, updatedAt: at,
     };
@@ -295,6 +340,8 @@ export function planAreaNormalization(
       addedLegacyProjectRelationIds: addedLegacyProjectRelations.map((relation) => relation.id),
       removedRedundantRelationIds: [...removed].sort(),
       inheritedTaskIds: inherited.sort(),
+      existingAreaKindBackfillIds: existingAreaKindBackfillIds.sort(),
+      areaKindBackfillRequired: existingAreaKindBackfillIds.length > 0,
       unchangedWorkspaceIds: oldWorkspaceIds.every(([id, workspace]) => newById.get(id) === workspace),
     },
   };
