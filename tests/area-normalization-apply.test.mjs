@@ -308,9 +308,13 @@ test("CLI refuses a wrong --confirm with exit 2 before the database is opened", 
   assert.equal(migrationBackups().length, backups);
   // An unused data directory stays unused: nothing opened (or created) the store there.
   const fresh = path.join(os.tmpdir(), "lumi-area-apply-unused-" + process.pid);
-  const result = cli(["--manifest", tmpJson(manifest), "--confirm", "1".repeat(64)], { AI_EXECUTIVE_DATA_DIR: fresh });
+  const result = cli(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256], { AI_EXECUTIVE_DATA_DIR: fresh });
   assert.equal(result.status, 2);
+  assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["missing-store"] });
   assert.equal(existsSync(fresh), false);
+  // The data-directory hint appears only when it is the reason.
+  assert.ok(!cli(["--manifest", "x"]).stderr.includes("AI_EXECUTIVE_DATA_DIR"));
+  assert.ok(cli(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256], { AI_EXECUTIVE_DATA_DIR: "relative/dir" }).stderr.includes("absolute"));
   assert.equal(cli(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256], { AI_EXECUTIVE_DATA_DIR: "relative/dir" }).status, 2);
   assert.equal(cli(["--manifest", tmpJson(manifest)]).status, 2);
 });
@@ -348,4 +352,117 @@ test("CLI applies, prints only the result manifest, and rolls back with --rollba
   const again = cli(["--rollback", tmpJson(applied), "--confirm", applied.resultSha256]);
   assert.equal(again.status, 1);
   assert.deepEqual(JSON.parse(again.stderr), { status: "blocked", reasons: ["post-migration-changes"] });
+});
+
+// ---- review fixes -----------------------------------------------------------------------------------------------
+// The client's load migration (lib/db.ts migratePropertyRelations): any truthy properties.areaId/projectId whose relation
+// is missing would be turned into a relation. After normalization there must be none left to recreate a removed link.
+const clientWouldRecreate = ({ entities, relations }) => entities.filter(e => ["areaId", "projectId"].some(key => {
+  const target = e.properties[key], type = key === "areaId" ? "belongs_to_area" : "belongs_to_project";
+  return typeof target === "string" && target && !relations.some(r => r.sourceEntityId === e.id && r.relationType === type && r.targetEntityId === target);
+}));
+const inherited = () => ({
+  entities: [workspace("personal", "personal"), ent("area:a", "area", "personal", { kind: "private" }),
+    ent("pj", "project", "personal"), ent("tk", "task", "personal", { projectId: "pj", areaId: "area:a", note: "keep" })],
+  relations: [rel("r:pj-area", "pj", "area:a", "belongs_to_area"), rel("r:tk-proj", "tk", "pj", "belongs_to_project"),
+    rel("r:tk-area", "tk", "area:a", "belongs_to_area")],
+});
+
+test("inherited project tasks lose properties.areaId too, so the client migration cannot recreate the link", () => {
+  seed(inherited());
+  const manifest = preflight();
+  assert.equal(manifest.pendingAreaIdCleanups, 1);
+  const before = store.readSnapshot().entities.find(e => e.id === "tk");
+  const applied = apply.applyAreaNormalization(manifest, { now: NOW() });
+  assert.equal(applied.counts.areaIdCleanups, 1);
+  const after = store.readSnapshot();
+  const task = after.entities.find(e => e.id === "tk");
+  assert.deepEqual(task.properties, { projectId: "pj", note: "keep" });
+  assert.ok(task.updatedAt > before.updatedAt);
+  assert.deepEqual({ ...task, properties: before.properties, updatedAt: before.updatedAt }, before);
+  assert.ok(!after.relations.some(r => r.id === "r:tk-area"));
+  assert.deepEqual(clientWouldRecreate(after), []);
+  assert.equal(preflight().noChanges, true);
+});
+
+test("a store whose relation is gone but whose areaId property remains is not noChanges and gets cleaned", () => {
+  const data = inherited();
+  data.relations = data.relations.filter(r => r.id !== "r:tk-area");
+  seed(data);
+  const manifest = preflight();
+  assert.equal(manifest.noChanges, false);
+  assert.equal(manifest.pendingAreaIdCleanups, 1);
+  assert.equal(apply.applyAreaNormalization(manifest, { now: NOW() }).counts.areaIdCleanups, 1);
+  assert.equal(store.readSnapshot().entities.find(e => e.id === "tk").properties.areaId, undefined);
+  assert.equal(preflight().noChanges, true);
+});
+
+test("rollback re-checks the state inside the restore transaction: a competing write is refused, nothing restored", () => {
+  seed(legacy());
+  const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+  let injected;
+  apply.areaNormalizationFaultsForTests({ beforeRestore: () => {
+    const cur = store.readSnapshot();
+    const entities = cur.entities.map(e => e.id === "t3" ? { ...e, title: "raced", updatedAt: Date.now() + 9000 } : e);
+    assert.equal(store.replaceSnapshot(cur.revision, entities, cur.relations, [], [], cur.restoreGeneration).conflict, false);
+    injected = state();
+  } });
+  try { blocked(() => apply.rollbackAreaNormalization(applied), "post-migration-changes"); }
+  finally { apply.areaNormalizationFaultsForTests(null); }
+  assert.deepEqual(state(), injected);
+  assert.equal(store.readSnapshot().restoreGeneration, applied.restoreGeneration);
+});
+
+test("a failing post-verification rolls the restore back and leaves the applied state intact", () => {
+  seed(legacy());
+  const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+  const frozen = state();
+  blocked(() => apply.rollbackAreaNormalization({ ...applied, sourceSha256: "0".repeat(64) }), "rollback-verification-failed");
+  assert.deepEqual(state(), frozen);
+  assert.equal(store.getDatabase().isTransaction, false);
+  assert.equal(apply.rollbackAreaNormalization(applied).status, "rolled-back");
+});
+
+test("restore hooks run inside the transaction; throwing rolls back; default behaviour is unchanged", () => {
+  seed(legacy());
+  store.createBackup("manual");
+  const name = store.listBackups().find(b => b.label === "manual").name;
+  const frozen = state();
+  for (const hooks of [{ verifyBefore: () => { throw new Error("no"); } }, { verifyAfter: () => { throw new Error("no"); } }])
+    assert.throws(() => store.restoreBackup(name, hooks), /no/);
+  assert.deepEqual(state(), frozen);
+  let seen = 0;
+  store.restoreBackup(name, { verifyBefore: db => { assert.equal(db.isTransaction, true); seen++; }, verifyAfter: db => { assert.equal(db.isTransaction, true); seen++; } });
+  assert.equal(seen, 2);
+  assert.equal(store.readSnapshot().restoreGeneration, frozen.snapshot.restoreGeneration + 1);
+});
+
+test("rollback is refused after a later write to another restorable table, and that row survives", () => {
+  seed(legacy());
+  const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+  assert.match(applied.otherTablesSha256, /^[0-9a-f]{64}$/);
+  store.getDatabase().prepare(`INSERT INTO attention_states (workspace_id, attention_key, subject_id, rule_id, state, source_fingerprint, snooze_until, changed_at)
+    VALUES ('personal', 'k', 's', 'r', 'dismissed', 'f', NULL, 1)`).run();
+  const frozen = state();
+  blocked(() => apply.rollbackAreaNormalization(applied), "post-migration-changes");
+  assert.deepEqual(state(), frozen);
+  assert.equal(store.getDatabase().prepare("SELECT COUNT(*) AS n FROM attention_states WHERE attention_key = 'k'").get().n, 1);
+  store.getDatabase().prepare("DELETE FROM attention_states WHERE attention_key = 'k'").run();
+  assert.equal(apply.rollbackAreaNormalization(applied).status, "rolled-back");
+});
+
+test("KNOWN GAP (documents current behaviour): a legacy device without a base can strip an Area's kind", () => {
+  seed(legacy());
+  const pre = store.readSnapshot();
+  const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+  // The device's local Area copy is newer than the apply time, so it wins the base-less merge (lib/server-sync.ts).
+  const device = pre.entities.map(e => e.id === "area:old" ? { ...e, updatedAt: applied.appliedAt + 10000 } : e);
+  const server = store.readSnapshot();
+  const merged = mergeSnapshots(server, device, pre.relations, null);
+  assert.equal(merged.entities.find(e => e.id === "area:old").properties.kind, undefined);
+  assert.equal(store.replaceSnapshot(server.revision, merged.entities, merged.relations, [], [], pre.restoreGeneration).conflict, false);
+  // Fail-closed: the preflight shows the pending backfill again, so Area authorization stays inactive.
+  const again = preflight();
+  assert.equal(again.noChanges, false);
+  assert.equal(again.pendingAreaKindBackfills, 1);
 });

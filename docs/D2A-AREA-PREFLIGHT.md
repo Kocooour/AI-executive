@@ -10,7 +10,7 @@ Po konzistentním zálohování včetně WAL a `node scripts/check-data.mjs <off
 node --experimental-loader ./tests/ts-loader.mjs scripts/preflight-area-normalization.mjs --offline-copy /cesta/ke/kopii/store.sqlite
 ```
 
-**Důležité:** výsledný manifest musí budoucí transakční aplikátor ověřit **uvnitř stejné zamčené SQLite transakce**, ve které mění stav. Tady žádný aplikátor ještě neexistuje; nechrání to offline klienty ani návrat starých snapshotů. Před zapnutím normalizace 2a zbývá záloha a rollback, kompatibilita offline klientů a validace nových zápisů. Před Mým plánem navíc kroky 2b a 2c a serverová autorizace. Full browser E2E zůstává až release gate.
+**Důležité:** výsledný manifest musí budoucí transakční aplikátor ověřit **uvnitř stejné zamčené SQLite transakce**, ve které mění stav. Aplikátor existuje jako neaktivovaný nástroj (viz [D2A-AREA-APPLY.md](D2A-AREA-APPLY.md)); samotný preflight ale nechrání offline klienty ani návrat starých snapshotů. Před zapnutím normalizace 2a zbývá záloha a rollback, kompatibilita offline klientů a validace nových zápisů. Před Mým plánem navíc kroky 2b a 2c a serverová autorizace. Full browser E2E zůstává až release gate.
 
 Vývoj: `codex/d2a-offline-preflight-20261024`, po sloučení PR #105 cílený proti `main`; žádný běžící server/worktree/port ani sdílená mutabilní databáze. Oddělené modelové testery v této relaci nejsou k dispozici; CI a nezávislé review jsou nezbytné před merge.
 

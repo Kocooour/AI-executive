@@ -1193,12 +1193,15 @@ export function releaseTemporaryFile(file: string) {
   try { removeIfExists(file); } finally { temporaryInUse.delete(file); }
 }
 
+/** Optional checks run INSIDE the restore transaction; throwing from either rolls the whole restore back. */
+export interface RestoreHooks { verifyBefore?(database: DatabaseSync): void; verifyAfter?(database: DatabaseSync): void }
+
 /**
  * Restores the owner data from a database file (a full backup or an imported package's database.sqlite): the file
  * is copied and brought to the current schema through the real migrations, a safety backup of the current state is
  * made, then everything is replaced in one transaction. A refused or failed restore leaves the live data as it was.
  */
-export function restoreDatabaseFile(file: string) {
+export function restoreDatabaseFile(file: string, hooks: RestoreHooks = {}) {
   const copy = temporaryFile("restore", ".sqlite");
   try {
     prepareRestoreCopy(file, copy, schemaMigrations.map((migration) => migration.id), applySchema);
@@ -1227,12 +1230,14 @@ export function restoreDatabaseFile(file: string) {
       database.exec("BEGIN IMMEDIATE");
       try {
         const current = readSnapshot();
+        hooks.verifyBefore?.(database);
         const next = nextSnapshotAfterRestore(current, restored);
         writeSnapshotRows(database, next);
         replaceTablesFromAttached(database, "restore_source", replacedTables, excludedClearedTables, (table) => {
           if (restoreFaultForTests === table) throw new Error("Restore failed (test)");
         });
         bumpRestoreGeneration(database);
+        hooks.verifyAfter?.(database);
         database.exec("COMMIT");
         return { ...next, restoreGeneration: readRestoreGeneration(database) };
       } catch (error) {
@@ -1248,19 +1253,19 @@ export function restoreDatabaseFile(file: string) {
   }
 }
 
-function restoreFullBackup(name: string) {
+function restoreFullBackup(name: string, hooks?: RestoreHooks) {
   const file = path.join(backupDirectory, name);
   const meta = readSidecar(name);
   if (!existsSync(file)) throw new HttpInputError("Invalid backup");
   const actual = describeFile(file);
   if (actual.bytes !== meta.bytes || actual.sha256 !== meta.sha256) throw new HttpInputError("Backup does not match its checksum");
-  return restoreDatabaseFile(file);
+  return restoreDatabaseFile(file, hooks);
 }
 
-export function restoreBackup(name: string) {
+export function restoreBackup(name: string, hooks?: RestoreHooks) {
   const safe = safeBackupName(name);
   if (safe.endsWith(".json")) return restoreLegacyBackup(safe);
-  return restoreFullBackup(safe);
+  return restoreFullBackup(safe, hooks);
 }
 
 /** A cleaned copy of the live database for an export; the caller deletes it with `dispose`. */

@@ -1,5 +1,6 @@
 // D2a preflight: content fingerprints and fail-closed invariants. NO database writes.
 import { createHash } from "node:crypto";
+import type { Entity } from "./db";
 import { AreaNormalizationBlocked, planAreaNormalization, type AreaNormalizationSnapshot } from "./area-normalization";
 
 // The server snapshot contains the deletion timestamp, not only the deleted ID.
@@ -14,6 +15,9 @@ export type AreaPreflight = {
   addedAreas: number; addedRelations: number; removedRelations: number; inheritedTasks: number;
   // Existing legacy Areas without kind still need an audited backfill before any write.
   pendingAreaKindBackfills: number; areaKindBackfillRequired: boolean;
+  // Project tasks inherit their Area; a leftover properties.areaId would be turned back into a task-level
+  // belongs_to_area link by the client's load migration (migratePropertyRelations in lib/db.ts).
+  pendingAreaIdCleanups: number;
   noChanges: boolean;
 };
 function canonical(value: unknown): unknown {
@@ -44,6 +48,12 @@ export function areaSnapshotSha256(source: AreaNormalizationSnapshot, tombstones
     relations: [...source.relations].sort(byId),
     tombstones: [...tombstones].sort(byId),
   });
+}
+// Inherited project tasks that still carry a non-empty properties.areaId (the client's rule: any truthy string).
+export function areaIdCleanupIds(entities: readonly Entity[], inheritedTaskIds: readonly string[]): string[] {
+  const inherited = new Set(inheritedTaskIds);
+  return entities.filter(e => e.type === "task" && inherited.has(e.id) &&
+    typeof e.properties.areaId === "string" && e.properties.areaId !== "").map(e => e.id).sort();
 }
 function validIdentity(i: AreaSourceIdentity) {
   return Number.isSafeInteger(i.revision) && i.revision >= 0 &&
@@ -94,6 +104,7 @@ export function createAreaPreflight(source: AreaNormalizationSnapshot, identity:
     issues.push("count-mismatch");
   if (issues.length) throw new AreaNormalizationBlocked([...new Set(issues)]);
   const targetSha256 = areaSnapshotSha256(planned, identity.tombstones);
+  const areaIdCleanups = areaIdCleanupIds(planned.entities, planned.report.inheritedTaskIds).length;
   return {
     sourceSha256, targetSha256, revision: identity.revision, restoreGeneration: identity.restoreGeneration,
     at, before: planned.report.before, after: planned.report.after,
@@ -102,7 +113,8 @@ export function createAreaPreflight(source: AreaNormalizationSnapshot, identity:
     removedRelations: removed.size, inheritedTasks: planned.report.inheritedTaskIds.length,
     pendingAreaKindBackfills: planned.report.existingAreaKindBackfillIds.length,
     areaKindBackfillRequired: planned.report.areaKindBackfillRequired,
-    noChanges: sourceSha256 === targetSha256 && !planned.report.areaKindBackfillRequired,
+    pendingAreaIdCleanups: areaIdCleanups,
+    noChanges: sourceSha256 === targetSha256 && !planned.report.areaKindBackfillRequired && areaIdCleanups === 0,
   };
 }
 // Must be rerun INSIDE a future application's write transaction, under the same lock.

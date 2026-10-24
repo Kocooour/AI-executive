@@ -191,3 +191,16 @@ test("preflight accepts audited duplicate project memberships from current 2a pl
   assert.equal(report.after.relations, report.before.relations - 1 + report.addedRelations);
   assert.deepEqual(verifyAreaPreflight(source, meta(), report), report);
 });
+
+test("an inherited project task keeping properties.areaId is a pending cleanup, never noChanges", () => {
+  const source = before();
+  source.entities[2] = { ...source.entities[2], properties: { ...source.entities[2].properties, projectId: "project" } };
+  const normalized = planAreaNormalization(source, 20);
+  const area = normalized.entities.find(x => x.type === "area");
+  const dirty = { entities: normalized.entities.map(x => x.id === "task" ? { ...x, properties: { ...x.properties, areaId: area.id } } : x),
+    relations: normalized.relations };
+  const p = createAreaPreflight(dirty, meta(), 21);
+  assert.equal(p.pendingAreaIdCleanups, 1);
+  assert.equal(p.noChanges, false);
+  assert.equal(createAreaPreflight(normalized, meta(), 21).pendingAreaIdCleanups, 0);
+});
