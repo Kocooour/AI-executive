@@ -8,6 +8,8 @@ export type AreaPreflight = {
   before: { entities: number; relations: number };
   after: { entities: number; relations: number };
   addedAreas: number; addedRelations: number; removedRelations: number; inheritedTasks: number;
+  // Existing legacy Areas without kind still need an audited backfill before any write.
+  pendingAreaKindBackfills: number; areaKindBackfillRequired: boolean;
   noChanges: boolean;
 };
 function canonical(value: unknown): unknown {
@@ -82,7 +84,9 @@ export function createAreaPreflight(source: AreaNormalizationSnapshot, identity:
     addedAreas: planned.report.createdAreaIds.length,
     addedRelations: planned.report.addedRelationIds.length + planned.report.addedLegacyProjectRelationIds.length,
     removedRelations: removed.size, inheritedTasks: planned.report.inheritedTaskIds.length,
-    noChanges: sourceSha256 === targetSha256,
+    pendingAreaKindBackfills: planned.report.existingAreaKindBackfillIds.length,
+    areaKindBackfillRequired: planned.report.areaKindBackfillRequired,
+    noChanges: sourceSha256 === targetSha256 && !planned.report.areaKindBackfillRequired,
   };
 }
 // Must be rerun INSIDE a future application's write transaction, under the same lock.

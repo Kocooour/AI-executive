@@ -13,3 +13,5 @@ node --experimental-loader ./tests/ts-loader.mjs scripts/preflight-area-normaliz
 **Důležité:** výsledný manifest musí budoucí transakční aplikátor ověřit **uvnitř stejné zamčené SQLite transakce**, ve které mění stav. Tady žádný aplikátor ještě neexistuje; nechrání to offline klienty ani návrat starých snapshotů. Před zapnutím normalizace 2a zbývá záloha a rollback, kompatibilita offline klientů a validace nových zápisů. Před Mým plánem navíc kroky 2b a 2c a serverová autorizace. Full browser E2E zůstává až release gate.
 
 Vývoj: `codex/d2a-offline-preflight-20261024`, stacked proti `feat/d2a-area-normalization-20261023`, žádný běžící server/worktree/port ani sdílená mutabilní databáze. Oddělené modelové testery v této relaci nejsou k dispozici; CI a nezávislé review jsou nezbytné před merge.
+
+**Nová brána základního PR #105:** existující legacy Oblasti bez `properties.kind` jsou v manifestu označené jako `pendingAreaKindBackfills` / `areaKindBackfillRequired`. `noChanges` nesmí znamenat hotovou normalizaci, pokud ještě zbývá bezpečnostní typ doplnit. Tento PR tyto oblasti **nemění** a aplikátor musí backfill zvlášť auditovat.

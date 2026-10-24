@@ -74,3 +74,14 @@ test("CLI opens a synthetic SQLite copy read-only; refuses tampered row IDs", ()
     assert.equal(bad.status,1);assert.match(bad.stderr,/relation-id-disagrees/);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test("preflight explicitly reports legacy Area kind backfill as an activation blocker", () => {
+  const source = before();
+  source.entities.push(e("old-area", "area", {}));
+  source.relations.push({ id:"area-link",sourceEntityId:"project",targetEntityId:"old-area",
+    relationType:"belongs_to_area",workspaceId:"personal",createdAt:1 });
+  const p = createAreaPreflight(source, meta(), 20);
+  assert.equal(p.pendingAreaKindBackfills, 1);
+  assert.equal(p.areaKindBackfillRequired, true);
+  assert.equal(p.noChanges, false);
+});
