@@ -20,6 +20,7 @@ import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange
 import { deferTargets } from "../../lib/defer-suggestion";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
+import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
@@ -2156,7 +2157,7 @@ export function useLumiApp() {
           : { title: title.trim(), when: "", priority: "none" };
     const linkedProject = projectId ? await db.entities.get(projectId) : null;
     const linkedArea = areaId ? await db.entities.get(areaId) : null;
-    if (projectId && (!linkedProject || linkedProject.type !== "project" || linkedProject.status !== "active")) {
+    if (projectId && (!linkedProject || !projectAcceptsNewItems(linkedProject))) {
       throw new Error("The selected project is invalid");
     }
     if (areaId && (!linkedArea || linkedArea.type !== "area" || linkedArea.status !== "active")) {
