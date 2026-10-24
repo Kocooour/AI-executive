@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
@@ -494,6 +494,7 @@ test("backup and live fingerprints agree with rows (incl. blobs and NULLs) in se
     mail_sync_accounts: { retention_days: 30, history_backlog_pending: 0 }, mail_sync_messages: { needs_reconcile: 0 } };
   const touched = [];
   for (const table of scope.replacedTables) {
+    if (table === "mail_sync_messages") continue;   // rows this old would be swept by retention (see the retention-pending test)
     if (database.prepare(`SELECT 1 FROM ${quoteName(table)} LIMIT 1`).get()) continue;   // leave tables that already hold rows
     const columns = database.prepare(`PRAGMA table_info(${quoteName(table)})`).all();
     const values = columns.map((c, i) => {
@@ -524,21 +525,31 @@ test("backup and live fingerprints agree with rows (incl. blobs and NULLs) in se
 
 // A second data directory holding a copy of the live store, used by fresh CLI processes (getDatabase() was never
 // initialised there), so any write caused by merely opening the store is visible.
-function storeCopy() {
+function storeCopy({ mail = true, mutate } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "lumi-area-apply-copy-"));
   store.getDatabase().exec(`VACUUM INTO '${path.join(dir, "store.sqlite")}'`);
   if (existsSync(backupsDir)) cpSync(backupsDir, path.join(dir, "backups"), { recursive: true });
   const copy = new DatabaseSync(path.join(dir, "store.sqlite"));
   try {
-    copy.prepare(`INSERT INTO mail_sync_accounts (account_id, workspace_id, consent_id, retention_days, created_at, updated_at) VALUES ('acc','personal','c',7,1,1)`).run();
-    // Expired (received long ago): the start-up retention sweep would delete it.
-    copy.prepare(`INSERT INTO mail_sync_messages (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
-      VALUES ('acc','personal','m1','t','s','f',1,0,1,0)`).run();
+    copy.exec("PRAGMA journal_mode=WAL");   // like the live store
+    if (mail) {
+      copy.prepare(`INSERT INTO mail_sync_accounts (account_id, workspace_id, consent_id, retention_days, created_at, updated_at) VALUES ('acc','personal','c',7,1,1)`).run();
+      // Expired (received long ago): the start-up retention sweep would delete it.
+      copy.prepare(`INSERT INTO mail_sync_messages (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
+        VALUES ('acc','personal','m1','t','s','f',1,0,1,0)`).run();
+    }
+    mutate?.(copy);
   } finally { copy.close(); }
   const fileSha = () => createHash("sha256").update(readFileSync(path.join(dir, "store.sqlite"))).digest("hex");
-  const mailRows = () => { const c = new DatabaseSync(path.join(dir, "store.sqlite"), { readOnly: true }); try { return c.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages").get().n; } finally { c.close(); } };
-  const files = () => readdirSync(dir).sort().join() + "|" + (existsSync(path.join(dir, "backups")) ? readdirSync(path.join(dir, "backups")).sort().join() : "");
-  return { dir, fileSha, mailRows, files, run: (args) => cli(args, { AI_EXECUTIVE_DATA_DIR: dir }) };
+  const query = sql => { const c = new DatabaseSync(path.join(dir, "store.sqlite"), { readOnly: true }); try { return c.prepare(sql).get(); } finally { c.close(); } };
+  const mailRows = () => query("SELECT COUNT(*) AS n FROM mail_sync_messages").n;
+  // A read-only open of a WAL store may create EMPTY -wal/-shm sidecars; nothing else may appear or change.
+  const files = () => {
+    for (const f of readdirSync(dir).filter(f => f.endsWith("-wal"))) assert.equal(statSync(path.join(dir, f)).size, 0, f);   // the -shm index is transient by nature
+    return readdirSync(dir).filter(f => !/-(wal|shm)$/.test(f)).sort().join() + "|" +
+    (existsSync(path.join(dir, "backups")) ? readdirSync(path.join(dir, "backups")).sort().join() : "");
+  };
+  return { dir, fileSha, mailRows, query, files, run: (args) => cli(args, { AI_EXECUTIVE_DATA_DIR: dir }) };
 }
 
 test("a drifted manifest never opens the store for writing: start-up retention does not run, no backup", () => {
@@ -584,4 +595,114 @@ test("a refused rollback never opens the store for writing either", () => {
     assert.equal(copy.fileSha(), bytes);
     assert.equal(copy.files(), files);
   } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+});
+
+const lastMigration = async () => (await import("../lib/schema-migrations.ts")).schemaMigrations.at(-1).id;
+
+test("pending schema migrations are refused before the store is opened (apply and rollback)", async () => {
+  seed(legacy());
+  const manifest = preflight();
+  const pending = await lastMigration();
+  const copy = storeCopy({ mail: false, mutate: c => c.prepare("DELETE FROM schema_migrations WHERE id = ?").run(pending) });
+  try {
+    const bytes = copy.fileSha(), files = copy.files();
+    const result = copy.run(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["pending-schema-migrations"] });
+    assert.equal(copy.fileSha(), bytes);
+    assert.equal(copy.files(), files);
+    assert.equal(copy.query("SELECT COUNT(*) AS n FROM schema_migrations WHERE id = '" + pending + "'").n, 0);
+    const applied = apply.applyAreaNormalization(manifest, { now: NOW() });
+    const back = storeCopy({ mail: false, mutate: c => c.prepare("DELETE FROM schema_migrations WHERE id = ?").run(pending) });
+    try {
+      const refused = back.run(["--rollback", tmpJson(applied), "--confirm", applied.resultSha256]);
+      assert.deepEqual(JSON.parse(refused.stderr), { status: "blocked", reasons: ["pending-schema-migrations"] });
+      assert.equal(back.query("SELECT COUNT(*) AS n FROM schema_migrations WHERE id = '" + pending + "'").n, 0);
+    } finally { rmSync(back.dir, { recursive: true, force: true }); }
+  } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+});
+
+test("a missing default workspace is refused before the store is opened", () => {
+  seed(legacy());
+  const manifest = preflight();
+  const copy = storeCopy({ mail: false, mutate: c => c.exec("DELETE FROM entities WHERE id = 'workspace:personal'") });
+  try {
+    const bytes = copy.fileSha();
+    const result = copy.run(["--manifest", tmpJson(manifest), "--confirm", manifest.sourceSha256]);
+    assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["missing-default-workspace"] });
+    assert.equal(copy.fileSha(), bytes);
+  } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+});
+
+test("fingerprints tell NULL from Infinity: a change between backup and BEGIN is other-tables-drift", () => {
+  seed(legacy());
+  attentionRow("nullrow");
+  const manifest = preflight();
+  apply.areaNormalizationFaultsForTests({ afterBackup: () => {
+    store.getDatabase().prepare("UPDATE attention_states SET snooze_until = 1e999 WHERE attention_key = 'nullrow'").run();
+  } });
+  try { blocked(() => apply.applyAreaNormalization(manifest, { now: NOW() }), "other-tables-drift"); }
+  finally { apply.areaNormalizationFaultsForTests(null); }
+  store.getDatabase().prepare("DELETE FROM attention_states WHERE attention_key = 'nullrow'").run();
+});
+
+test("fingerprints tell BLOB from TEXT", () => {
+  const database = store.getDatabase();
+  const hex = "6162";
+  const put = value => { database.exec("DELETE FROM attention_states"); database.prepare(`INSERT INTO attention_states (workspace_id, attention_key, subject_id, rule_id, state, source_fingerprint, snooze_until, changed_at)
+    VALUES ('personal', 'k', 's', 'r', 'dismissed', ?, NULL, 1)`).run(value); return apply.fingerprintOtherTables(database); };
+  try { assert.notEqual(put("blob:" + hex), put(Buffer.from(hex, "hex"))); }
+  finally { database.exec("DELETE FROM attention_states"); }
+});
+
+test("integers beyond 2^53 in a restorable table apply and roll back and round-trip", () => {
+  const database = store.getDatabase();
+  const big = 9223372036854775807n;
+  database.prepare(`INSERT INTO attention_states (workspace_id, attention_key, subject_id, rule_id, state, source_fingerprint, snooze_until, changed_at)
+    VALUES ('personal', 'big', 's', 'r', 'dismissed', 'f', NULL, ?)`).run(big);
+  const value = () => { const q = database.prepare("SELECT changed_at FROM attention_states WHERE attention_key = 'big'"); q.setReadBigInts(true); return q.get().changed_at; };
+  try {
+    seed(legacy());
+    const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+    assert.equal(value(), big);
+    assert.equal(apply.rollbackAreaNormalization(applied).status, "rolled-back");
+    assert.equal(value(), big);
+  } finally { database.exec("DELETE FROM attention_states"); }
+});
+
+test("a rollback is refused with retention-pending, before the store is opened, while mail retention would delete rows", () => {
+  const database = store.getDatabase();
+  database.prepare(`INSERT INTO mail_sync_accounts (account_id, workspace_id, consent_id, retention_days, created_at, updated_at) VALUES ('racc','personal','c',7,1,1)`).run();
+  database.prepare(`INSERT INTO mail_sync_messages (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
+    VALUES ('racc','personal','m1','t','s','f',1,0,1,0)`).run();   // expired by the clock; no sweep ran in this process
+  try {
+    seed(legacy());
+    const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
+    const copy = storeCopy({ mail: false });
+    try {
+      const bytes = copy.fileSha(), files = copy.files();
+      const result = copy.run(["--rollback", tmpJson(applied), "--confirm", applied.resultSha256]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.deepEqual(JSON.parse(result.stderr), { status: "blocked", reasons: ["retention-pending"] });
+      assert.equal(copy.mailRows(), 1);
+      assert.equal(copy.fileSha(), bytes);
+      assert.equal(copy.files(), files);
+    } finally { rmSync(copy.dir, { recursive: true, force: true }); }
+  } finally { database.exec("DELETE FROM mail_sync_messages; DELETE FROM mail_sync_accounts"); }
+});
+
+test("the retention probe counts exactly what the sweep deletes", async () => {
+  const { countExpiredMailMetadata, pruneExpiredMailMetadata } = await import("../lib/mail-sync-retention.ts");
+  const database = store.getDatabase();
+  const message = (account, id, at) => database.prepare(`INSERT INTO mail_sync_messages (account_id, workspace_id, message_id, thread_id, subject, sender, received_at, unread, in_inbox, in_sent)
+    VALUES (?,'personal',?,'t','s','f',?,0,1,0)`).run(account, id, at);
+  database.prepare(`INSERT INTO mail_sync_accounts (account_id, workspace_id, consent_id, retention_days, created_at, updated_at) VALUES ('pacc','personal','c',7,1,1)`).run();
+  const now = 10 * 86_400_000;
+  message("pacc", "old", 1); message("pacc", "fresh", now - 1000); message("orphan", "o", now);
+  try {
+    assert.equal(countExpiredMailMetadata(database, now), 2);
+    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM mail_sync_messages").get().n, 3);
+    assert.equal(pruneExpiredMailMetadata(database, now), 2);
+    assert.equal(countExpiredMailMetadata(database, now), 0);
+  } finally { database.exec("DELETE FROM mail_sync_messages; DELETE FROM mail_sync_accounts"); }
 });

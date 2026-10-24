@@ -1,4 +1,5 @@
-// Strictly read-only D2a preflight of a consistent OFFLINE SQLite copy.
+// Read-only D2a preflight of a consistent OFFLINE SQLite copy: it never changes store contents (a read-only open of
+// a WAL-mode file may still create empty -wal/-shm sidecar files).
 import { DatabaseSync } from "node:sqlite";
 import { statSync } from "node:fs";
 import { AreaNormalizationBlocked } from "../lib/area-normalization.ts";

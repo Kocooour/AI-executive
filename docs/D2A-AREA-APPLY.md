@@ -19,7 +19,17 @@
 
 Úprava `nextSnapshotAfterRestore`: obnovená relace už nezůstane vedle tombstonu vlastního ID (jinak by po rollbacku zůstaly tombstones odstraněných redundantních vazeb vedle znovu obnovených relací).
 
+### Co se odmítne dříve, než se store otevře (read-only předkontrola)
+Otevření store (`getDatabase()`) by samo zapisovalo, proto aplikace i rollback před ním odmítnou:
+- `pending-schema-migrations` — v `schema_migrations` chybí některá známá migrace (chybějící tabulka = všechny čekají). Migrace přepisují payloady a zvedají revizi. **Postup operátora:** službu jednou spustit (migrace proběhnou), zastavit, preflight znovu udělat nad čerstvou kopií.
+- `missing-default-workspace` — `workspace:personal` neexistuje (otevření by ho vložilo).
+- `retention-pending` (jen rollback) — mailová retence by při otevření smazala řádky a smazání by se commitlo dřív, než by kontrola obnovy rollback odmítla; rollback by pak už nešel. Neprovádí se žádný zápis; sonda `countExpiredMailMetadata` (`lib/mail-sync-retention.ts`) sdílí predikáty s mazáním. U aplikace sonda není: retence před zálohou je neškodná (záloha pak obsahuje její výsledek).
+
+Odmítnutí nikdy nemění **obsah** store; read-only otevření WAL databáze ale může vytvořit prázdné soubory `store.sqlite-wal` / `-shm`.
+
 ### Omezení rollbacku
+- Tabulky vyprázdněné při každé obnově (`excludedClearedTables` v `backup-scope.ts`: `context_commands`, `work_session_commands`, `ai_proposals`, `calendar_events`, `semantic_index_outbox`, `mail_oauth_pending`) **nejsou v otisku** a rollback je vyprázdní jako každá obnova (jde o cache, čekající návrhy a výsledky příkazů).
+- Otisk `otherTablesSha256` označuje typ každé hodnoty (NULL, číslo, ±Infinity, celé číslo i nad 2^53, text, BLOB), takže se různé hodnoty nesplynou.
 - Rollback nejprve (na read-only spojení, bez `getDatabase()`) ověří zálohu a stav store (revize, `restoreGeneration`, SHA výsledku, otisk ostatních tabulek) a při odmítnutí store vůbec neotevře; tytéž kontroly se opakují uvnitř transakce obnovy.
 - **Zbytkové omezení:** jakmile ověření projde, otevření store (`getDatabase()`) spustí běžné start-up opravy a retenci (migrace schématu, `pruneExpiredMailMetadata` apod.) ještě **před** zálohou, takže záloha už jejich výsledek obsahuje. Pokud retence později změní některou obnovovanou tabulku (např. vyprší maily), rollback může být odmítnut (`post-migration-changes`; fail-closed) — rollback proto proveďte prakticky hned po aplikaci.
 - Kód `other-tables-drift`: viz bod 3 výše; stejně jako `backup-mismatch` blokuje před jakýmkoli zápisem (záloha zůstane na disku).

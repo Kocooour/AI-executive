@@ -10,6 +10,8 @@ import { readAreaNormalizationSource } from "./area-normalization-source";
 import { describeFile } from "./backup-engine";
 import { resolveDataDirectory } from "./data-dir";
 import { replacedTables } from "./backup-scope";
+import { countExpiredMailMetadata } from "./mail-sync-retention";
+import { schemaMigrations } from "./schema-migrations";
 import { createHash } from "node:crypto";
 import { createBackup, getDatabase, restoreBackup, writeSnapshotRows, type StoreSnapshot } from "./server-store";
 import { validateSnapshotStructure } from "./snapshot-validation";
@@ -54,12 +56,20 @@ function backupFacts(name: string) {
 }
 
 // Canonical sha256 over all rows of the tables a restore replaces besides the store tables (entities, relations,
-// tombstones are covered by the snapshot sha). Row order does not matter; blobs are hex.
+// tombstones are covered by the snapshot sha). Row order does not matter. Every value is tagged with its SQLite type,
+// so NULL, +-Infinity, BLOB vs TEXT and integers beyond 2^53 can never collide (integers are read as BigInt).
+const tagged = (v: unknown): unknown[] =>
+  v === null ? ["n"] : typeof v === "bigint" ? ["i", v.toString()]
+  : typeof v === "number" ? ["r", Object.is(v, -0) ? "-0" : Number.isFinite(v) ? v : String(v)]
+  : typeof v === "string" ? ["t", v] : v instanceof Uint8Array ? ["b", Buffer.from(v).toString("hex")]
+  : (() => { throw blocked("unfingerprintable-value"); })();
 export function fingerprintOtherTables(database: DatabaseSync) {
   const hash = createHash("sha256");
   for (const table of [...replacedTables].sort()) {
-    const rows = (database.prepare(`SELECT * FROM "${table}"`).all() as Array<Record<string, unknown>>)
-      .map(row => JSON.stringify(Object.keys(row).sort().map(k => [k, row[k] instanceof Uint8Array ? "blob:" + Buffer.from(row[k] as Uint8Array).toString("hex") : typeof row[k] === "bigint" ? "bigint:" + row[k] : row[k]])))
+    const statement = database.prepare(`SELECT * FROM "${table}"`);
+    statement.setReadBigInts(true);
+    const rows = (statement.all() as Array<Record<string, unknown>>)
+      .map(row => JSON.stringify(Object.keys(row).sort().map(k => [k, tagged(row[k])])))
       .sort();
     hash.update(JSON.stringify([table, rows]));
   }
@@ -78,11 +88,21 @@ function withLiveReadOnly<T>(fn: (database: DatabaseSync) => T): T {
   try { return fn(database); } finally { database.close(); }
 }
 
+// Refusals about work getDatabase() would do on open: pending schema migrations (they rewrite payloads and bump the
+// revision), the default workspace it would insert. The operator starts the service once so they run, then re-runs preflight.
+function assertStoreReady(database: DatabaseSync) {
+  const hasTable = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
+  const applied = new Set(hasTable ? (database.prepare("SELECT id FROM schema_migrations").all() as Array<{ id: string }>).map(r => r.id) : []);
+  if (schemaMigrations.some(m => !applied.has(m.id))) throw blocked("pending-schema-migrations");
+  if (!database.prepare("SELECT 1 FROM entities WHERE id = 'workspace:personal'").get()) throw blocked("missing-default-workspace");
+}
+
 export function applyAreaNormalization(expected: AreaPreflight, options: { now: number }): AreaApplyResult {
   // a. Read-only connection, outside any transaction: drift (or noChanges) means getDatabase() is never called,
   // so nothing is opened for writing, migrated, repaired, backed up or written.
   const now = options.now;
   const checked = withLiveReadOnly(database => {
+    assertStoreReady(database);
     const first = readAreaNormalizationSource(database);
     verifyAreaPreflight(first.source, first.identity, expected);
     if (expected.noChanges) return "noop" as const;
@@ -202,10 +222,15 @@ export function rollbackAreaNormalization(applied: AppliedManifest): AreaRollbac
   const backup = backupFacts(applied.backup.name);
   if (backup.sha256 !== applied.backup.sha256 || backup.bytes !== applied.backup.bytes) throw blocked("backup-mismatch");
   withLiveReadOnly(db => {
+    assertStoreReady(db);
     const current = readAreaNormalizationSource(db);
     if (current.identity.revision !== applied.revisionAfter || current.identity.restoreGeneration !== applied.restoreGeneration ||
         areaSnapshotSha256(current.source, current.identity.tombstones) !== applied.resultSha256 ||
         fingerprintOtherTables(db) !== applied.otherTablesSha256) throw blocked("post-migration-changes");
+    // Opening the store runs the mail retention sweep and COMMITS its deletes before any restore check could refuse,
+    // which would make the rollback impossible. Refuse while the sweep would delete anything (the apply needs no such
+    // probe: retention running before its backup is harmless, the backup then already contains the result).
+    if (countExpiredMailMetadata(db) > 0) throw blocked("retention-pending");
   });
   const database = getDatabase();
   if ((database as unknown as { isTransaction?: boolean }).isTransaction) throw blocked("inside-transaction");
