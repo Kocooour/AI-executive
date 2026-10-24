@@ -74,6 +74,12 @@ test("a task in a project shows the project's area read-only; a Quick Capture ta
       return store.relations.filter((relation: { sourceEntityId: string; relationType: string }) => relation.sourceEntityId === capturedId && relation.relationType === "belongs_to_area").length;
     }, { timeout: 20_000 }).toBe(0);
     await expect(page.locator("aside.detail").getByTestId("inherited-area")).toHaveText(`Oblast: ${names.area} (z projektu)`);
+    // 4. The fallback Area is the system Area: it cannot be renamed or deleted.
+    await page.goto("/?view=Areas");
+    await waitUntilSynced(page);
+    await page.locator("article", { hasText: "Nezařazeno" }).first().click();
+    await expect(page.locator("aside.detail").getByTestId("fallback-area-note")).toBeVisible();
+    await expect(page.locator("aside.detail .titleEdit")).toHaveJSProperty("readOnly", true);
   } finally {
     const store = await serverStore(page);
     const gone = [ids.area, ids.project, ids.task,

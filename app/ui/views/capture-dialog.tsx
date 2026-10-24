@@ -39,6 +39,10 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
   } = app;
   // A task added to a project goes to the project's workspace, so its area has to come from there.
   const captureWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+  // The task goes into a project (opened from one, or an accepted suggested one): it takes the project's Area, so no
+  // Area is chosen here (the save would drop it).
+  const targetsProject = Boolean(captureProjectId) ||
+    (captureType === "task" && useCaptureSuggestion && captureProjectAction === "existing" && Boolean(captureSuggestion?.projectId));
   return (
     <>
       {capture && (
@@ -92,7 +96,10 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                 captureType === "note" ? tr("noteTitle") : tr("taskPrompt")
               }
             />
-            {captureType === "task" && !captureProjectId && (
+            {captureType === "task" && targetsProject && (
+              <p className="inheritedArea captureAreaInherited" data-testid="capture-area-inherited">{tr("triageAreaInherited")}</p>
+            )}
+            {captureType === "task" && !targetsProject && (
               <label className="captureArea">
                 {tr("area")}
                 <select value={captureAreaId} onChange={(event) => chooseCaptureArea(event.target.value)}>

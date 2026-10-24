@@ -133,7 +133,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
       <label>
         {tr("triageArea")}
         <span className="inboxTriageField">
-          <select aria-label={tr("triageArea")} value={areaLocked ? "" : areaId}
+          <select aria-label={tr("triageArea")} aria-describedby={areaLocked ? "triage-area-note" : undefined} value={areaLocked ? "" : areaId}
             disabled={blocked || areaChoices.length === 0 || areaLocked}
             onChange={(event) => setAreaId(event.target.value)}>
             <option value="">{tr("triageChooseArea")}</option>
@@ -144,7 +144,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
             onClick={organize}>{tr("triageApply")}</button>
         </span>
       </label>
-      {areaLocked && <p className="inboxTriageHint" data-testid="triage-area-inherited">{tr("triageAreaInherited")}</p>}
+      {areaLocked && <p className="inboxTriageHint" id="triage-area-note" data-testid="triage-area-inherited">{tr("triageAreaInherited")}</p>}
       {canOrganize && <p className="inboxTriagePreview" role="status">
         {tr("triageAssignPreview")}: {[selectedProject?.title, selectedArea?.title].filter(Boolean).join(" · ")}
       </p>}

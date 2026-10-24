@@ -1,5 +1,6 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { isFallbackArea } from "../../lib/area-write-invariants";
 import { areaKindOf, assignFallbackArea, dropTaskAreaLinks, taskIsInProject } from "../../lib/area-write-client";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
@@ -2816,6 +2817,8 @@ export function useLumiApp() {
   // `seq`: the count of key presses in the title when the save started (see titleEditSeq). If more
   // was typed meanwhile, the open detail keeps what is being typed.
   async function rename(e: Entity, title: string, seq?: number) {
+    // The fallback Area is the system Area: it keeps its name.
+    if (isFallbackArea(e, items)) return;
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     if (!title.trim()) return;
@@ -2847,6 +2850,7 @@ export function useLumiApp() {
     });
   }
   async function remove(e: Entity) {
+    if (isFallbackArea(e, items)) return;
     const linkedRelations = (await db.relations.toArray()).filter(
       (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
     );
@@ -2854,6 +2858,21 @@ export function useLumiApp() {
     await db.transaction("rw", db.entities, db.relations, async () => {
       await db.entities.delete(e.id);
       await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
+      // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
+      // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
+      if (e.type === "project") {
+        const memberIds = new Set(linkedRelations.filter((relation) => relation.relationType === "belongs_to_project" && relation.targetEntityId === e.id).map((relation) => relation.sourceEntityId));
+        const members = [...(await db.entities.where("workspaceId").equals(e.workspaceId).filter((task) => task.type === "task").toArray())]
+          .filter((task) => memberIds.has(task.id) || task.properties.projectId === e.id);
+        const stamp = writeTime();
+        for (const task of members) {
+          const properties = { ...task.properties };
+          delete properties.projectId;
+          const updated: Entity = { ...task, properties: { ...properties, relationsUpdatedAt: stamp }, updatedAt: Math.max(stamp, task.updatedAt + 1) };
+          await db.entities.put(updated);
+          await assignFallbackArea(updated, stamp);
+        }
+      }
     });
     localDataVersion.current += 1;
     recordDeleted(localStorage, e.id);
@@ -3750,7 +3769,12 @@ export function useLumiApp() {
       await relate(source.id, targetEntity.id, "belongs_to_area");
     } else if (source.type === "task" && targetEntity.type === "area") {
       // A task in a project inherits its project's Area: dropping it on another Area is not a valid move.
-      if (!(await taskIsInProject(source))) await relate(source.id, targetEntity.id, "belongs_to_area");
+      if (await taskIsInProject(source)) {
+        // Visible feedback instead of a silent no-op.
+        await askConfirm({ title: tr("area"), message: tr("dragProjectTaskToArea"), confirmLabel: tr("close") });
+      } else {
+        await relate(source.id, targetEntity.id, "belongs_to_area");
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import test from "node:test";
-import { enforceAreaWriteInvariants, planFallbackArea, fallbackRelationId, workspaceKinds, legacyAreaIdBecomesRelation } from "../lib/area-write-invariants.ts";
+import { enforceAreaWriteInvariants, planFallbackArea, fallbackRelationId, workspaceKinds, legacyAreaIdBecomesRelation, isFallbackArea } from "../lib/area-write-invariants.ts";
 import { generatedAreaId, generatedRelationId, normalizedLabel } from "../lib/area-normalization.ts";
 import { sha256Hex } from "../lib/sha256.ts";
 import { planAreaNormalization } from "../lib/area-normalization.ts";
@@ -319,4 +319,60 @@ test("migratePropertyRelations rule: a legacy areaId on a task in a project is d
   assert.equal(legacyAreaIdBecomesRelation("task", false), true);
   assert.equal(legacyAreaIdBecomesRelation("project", true), true, "only tasks inherit");
   assert.equal(legacyAreaIdBecomesRelation("project", false), true);
+});
+
+test("deleting a project: member tasks lose the dangling projectId and get the fallback Area; untouched dangling ones stay", () => {
+  const members = [ent("m1", "task", "personal", { projectId: "proj" }), ent("m2", "task", "personal")];
+  const stale = ent("stale", "task", "personal", { projectId: "ghost" });
+  const current = state([...baseEntities(), ...members, stale], [...baseRelations(), rel("r:m2", "m2", "proj", "belongs_to_project")]);
+  const next = state(current.entities.filter((e) => e.id !== "proj"), current.relations.filter((r) => r.sourceEntityId !== "proj" && r.targetEntityId !== "proj"));
+  const out = run(current, next);
+  assert.equal("projectId" in entity(out, "m1").properties, false);
+  assert.deepEqual(areaLinks(out, "m1").map((r) => r.targetEntityId), [FALLBACK]);
+  assert.deepEqual(areaLinks(out, "m2").map((r) => r.targetEntityId), [FALLBACK]);
+  assert.equal(entity(out, "stale").properties.projectId, "ghost", "legacy dangling reference of an untouched task");
+  assert.deepEqual(areaLinks(out, "stale"), []);
+  const plan = planAreaNormalization({ entities: out.entities.filter((e) => e.id !== "stale"), relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+});
+
+test("R4 compares only the links new in this write (a skewed clock cannot drop the user's choice)", () => {
+  const current = state([...baseEntities(), ent("t", "task")], [rel("r:old", "t", "area:a", "belongs_to_area", "personal", 9_999_999)]);
+  const next = state(current.entities, [...current.relations, rel("r:new", "t", "area:b", "belongs_to_area", "personal", 70)]);
+  const out = run(current, next);
+  assert.deepEqual(out.droppedRelationIds, [], "the new link is the only new one; the legacy link is untouched");
+});
+
+test("the workspace kind comes from the stored record: redeclaring shared as personal creates no private fallback", () => {
+  const current = state([workspace("personal", "personal"), workspace("team", "shared")], []);
+  const next = state([workspace("personal", "personal"), workspace("team", "personal"), ent("t", "task", "team")], []);
+  const out = run(current, next);
+  assert.equal(entity(out, generatedAreaId("team", "Nezařazeno")), undefined);
+  assert.deepEqual(areaLinks(out, "t").map((r) => r.targetEntityId), [SHARED_FALLBACK]);
+});
+
+test("many join/leave cycles never leave the task unassigned", () => {
+  const taken = new Set();
+  for (let cycle = 0; cycle < 25; cycle += 1) {
+    const id = fallbackRelationId("t", FALLBACK, (candidate) => taken.has(candidate));
+    assert.ok(id, "cycle " + cycle);
+    taken.add(id);
+  }
+  assert.equal(taken.size, 25);
+});
+
+test("isFallbackArea identifies the system Area exactly as planFallbackArea does", () => {
+  const all = [workspace("personal", "personal"), workspace("team", "shared")];
+  const generated = ent(FALLBACK, "area", "personal", { kind: "private" }, { title: "renamed away" });
+  assert.equal(isFallbackArea(generated, [...all, generated]), true, "the deterministic ID");
+  const unique = ent("area:mine", "area", "personal", { kind: "private" }, { title: " nezařazeno " });
+  assert.equal(isFallbackArea(unique, [...all, unique]), true, "the unique active Area with the label");
+  const twin = ent("area:twin", "area", "personal", { kind: "private" }, { title: "Nezařazeno" });
+  assert.equal(isFallbackArea(unique, [...all, unique, twin]), false, "ambiguous label");
+  assert.equal(isFallbackArea({ ...unique, status: "archived" }, [...all, { ...unique, status: "archived" }]), false);
+  const other = ent("area:a", "area", "personal", { kind: "private" });
+  assert.equal(isFallbackArea(other, [...all, other]), false);
+  const shared = ent("area:s", "area", "team", { kind: "shared" }, { title: "Nezařazeno" });
+  assert.equal(isFallbackArea(shared, [...all, shared]), false, "the shared workspace's fallback is the (původní sdílené) one");
+  assert.equal(isFallbackArea(ent("t", "task"), all), false);
 });

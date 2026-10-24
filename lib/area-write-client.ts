@@ -36,6 +36,9 @@ export async function assignFallbackArea(entity: Entity, now: number): Promise<R
     workspaceId: entity.workspaceId,
     kind: await workspaceKindOf(entity.workspaceId),
     entities: await db.entities.where("workspaceId").equals(entity.workspaceId).filter((item) => item.type === "area").toArray(),
+    // The client keeps no copy of the server's tombstones (applySnapshot replaces the local data and drops them), so none
+    // can be passed. That is safe: the server is the authority and, for a fallback Area whose ID is tombstoned, drops
+    // the entity and its links and reports fallbackUnavailable (the item stays unassigned for the audited applicator).
     tombstonedIds: new Set(),
     now,
   });

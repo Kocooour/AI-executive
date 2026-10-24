@@ -47,3 +47,16 @@ Server-side helper pro přímé zápisy do SQLite: `lib/area-write-store.ts` (`r
 - Štítek `properties.area` (legacy text) a `properties.projectId` (legacy property) se počítají jako „má Oblast“, resp. „je v projektu“, ve shodě s plannerem; záložní Oblast se v takovém případě nepřidá, aby aplikátor nenarazil na `conflicting-legacy-area-label`.
 - Mimo rozsah (nejsou „nové zápisy“): restore/import zálohy, schématické migrace, poznámky a kontextové záznamy, a staré porušení, kterých se zápis nedotkl.
 - Server po oprávněném smazání záložní Oblasti (tombstone) další položky nezařazuje; zůstávají bez Oblasti, dokud je nenormalizuje aplikátor / vlastník.
+
+## Doplnění po revizi testery
+
+- **Smazaný projekt.** Úkol je „v projektu“ jen přes `belongs_to_project` nebo `properties.projectId` na **živý** projekt daného snímku. Když zápis způsobí, že projekt úkolu zmizí, odstraní se visící `projectId` a úkol dostane záložní Oblast (R3). Visící `projectId` u úkolů, kterých se zápis netýká, zůstávají (legacy, řeší aplikátor). Klient `remove(projekt)` dělá totéž lokálně.
+- **R4** porovnává jen vazby nové v zápisu (nikoli legacy), takže posun hodin neshodí volbu uživatele.
+- **Druh workspace** (a tím název záložní Oblasti) se u existujícího workspace bere z **uloženého** záznamu; zápis ho nemůže přepsat. Nový workspace použije vlastní záznam.
+- **Relace při přesunu mezi cykly**: hranice pokusů o ID záložní vazby je 1000.
+- **Záložní Oblast je systémová.** Klient (`isFallbackArea`) odmítne její přejmenování a smazání a v detailu to vysvětlí. Server to zatím **nevynucuje**: surový PUT, který ji smaže, projde (tombstone pak trvale blokuje 2a preflight `tombstoned-generated-area-id`). Důvod, proč server nic nepřidává: ochrana „ponechat smazanou, dokud na ni odkazují živé položky“ by měnila význam úmyslného smazání a patří do serverové autorizace Oblastí (2b/2c), ne do tohoto kroku.
+- **Tombstones na klientovi.** Klient serverové tombstones nedrží (`applySnapshot` je zahazuje), proto je `planFallbackArea` na klientu nedostává. Je to bezpečné: server entitu s tombstonovaným ID zahodí a nahlásí `fallbackUnavailable`.
+- **Surový PUT nesmí poslat relaci na smazanou entitu** (400 „Snapshot contains a relation to a missing entity“). Aplikace to řeší v `forServer`; skripty/testy musí relace smazaných záznamů odstranit samy (nové úkoly a projekty mají vazbu na Oblast).
+- **Souběh** „nastavit Oblast“ × „přesunout do projektu“ na dvou zařízeních vede k projektu (úkol dědí); nahrazená volba Oblasti zůstane jako značka sync-konfliktu.
+- **Undo AI vytvoření** úkolu ponechá vytvořenou (nyní prázdnou) záložní Oblast.
+- **Výkon:** zápisové cesty přímo do SQLite (Inbox batch, AI akce, výskyt opakovaného úkolu) čtou celé tabulky entit a relací před i po zápisu. Pro současné objemy stačí; případná optimalizace = čtení jen dotčených řádků.

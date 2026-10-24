@@ -133,14 +133,14 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
             </select>
           </label>
           <label>{tr("triageArea")}
-            <select aria-label={tr("triageArea")} value={project ? "" : areaId}
+            <select aria-label={tr("triageArea")} aria-describedby={project ? "batch-area-note" : areaBlockedByProject ? "batch-area-blocked" : undefined} value={project ? "" : areaId}
               disabled={busy || !areaChoices.length || Boolean(project)} onChange={e => setAreaId(e.target.value)}>
               <option value="">{tr("triageChooseArea")}</option>
               {areaChoices.map(a => <option value={a.id} key={a.id}>{a.title}</option>)}
             </select>
           </label>
-          {project && <p className="batchTriageHint" data-testid="batch-area-inherited">{tr("triageAreaInherited")}</p>}
-          {areaBlockedByProject && <p className="batchTriageHint" role="status">{tr("batchAreaInProject")}</p>}
+          {project && <p className="batchTriageHint" id="batch-area-note" data-testid="batch-area-inherited">{tr("triageAreaInherited")}</p>}
+          {areaBlockedByProject && <p className="batchTriageHint" id="batch-area-blocked" role="status">{tr("batchAreaInProject")}</p>}
         </div>}
         <button type="button" className="batchReview" disabled={!readyToReview || busy}
           onClick={prepare}>{tr("batchReview")}</button>

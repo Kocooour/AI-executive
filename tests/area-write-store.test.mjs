@@ -230,6 +230,30 @@ test("recurring occurrence: a standalone task keeps its Area; one without gets t
   assert.deepEqual(links(n3), []);
   assert.equal("areaId" in get(n3).properties, false);
   assert.deepEqual(links(n3, "belongs_to_project").map((r) => r.targetEntityId), ["ib-proj"]);
+  // rc2 was made Area-less on purpose (legacy); remove it so later preflight checks see only new writes.
+  save((s) => ({ ...s, entities: s.entities.filter((e) => e.id !== "rc2") }), { deletedIds: ["rc2"] });
+});
+
+test("deleting a project leaves no dangling projectId: its tasks get the fallback Area and the 2a preflight is not blocked", () => {
+  save((s) => ({ ...s, entities: [...s.entities, ent("dp", "project"), ent("dp-t1", "task", { projectId: "dp" }), ent("dp-t2", "task")],
+    relations: [...s.relations, rel("r:dp-t2", "dp-t2", "dp", "belongs_to_project")] }));
+  assert.deepEqual(links("dp-t1"), []);
+  save((s) => ({ ...s, entities: s.entities.filter((e) => e.id !== "dp"), relations: s.relations.filter((r) => r.sourceEntityId !== "dp" && r.targetEntityId !== "dp") }), { deletedIds: ["dp"] });
+  assert.equal("projectId" in get("dp-t1").properties, false);
+  assert.deepEqual(links("dp-t1").map((r) => r.targetEntityId), [FALLBACK]);
+  assert.deepEqual(links("dp-t2").map((r) => r.targetEntityId), [FALLBACK]);
+  const result = preflight();
+  assert.equal(result.noChanges, true, "no invalid-task-project, nothing pending");
+});
+
+test("a task joining and leaving a project many times is never left without an Area", () => {
+  save((s) => ({ ...s, entities: [...s.entities, ent("cy", "task"), ent("cy-p", "project")] }));
+  for (let cycle = 0; cycle < 14; cycle += 1) {
+    save((s) => ({ ...s, relations: [...s.relations, rel("cy-join-" + cycle, "cy", "cy-p", "belongs_to_project")] }));
+    assert.deepEqual(links("cy"), []);
+    save((s) => ({ ...s, relations: s.relations.filter((r) => r.id !== "cy-join-" + cycle) }), { deletedIds: ["cy-join-" + cycle] });
+    assert.equal(links("cy").length, 1, "cycle " + cycle);
+  }
 });
 
 // Last: it permanently tombstones the fallback Area of this store.

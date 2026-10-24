@@ -113,13 +113,30 @@ export function planFallbackArea(input: {
   };
 }
 
+/**
+ * The workspace's fallback Area, identified exactly as planFallbackArea does: the deterministic planner ID, or the one
+ * active Area with the fallback label. It is the system Area ("Nezařazeno"): deleting or renaming it would block the 2a
+ * applicator for good (tombstoned-generated-area-id), so the client refuses to.
+ */
+export function isFallbackArea(area: Entity, entities: readonly Entity[]): boolean {
+  if (area.type !== "area") return false;
+  const kind = workspaceKinds(entities).get(area.workspaceId);
+  if (!kind) return false;
+  const title = fallbackAreaTitle(kind);
+  if (area.id === generatedAreaId(area.workspaceId, title)) return true;
+  const wanted = normalizedLabel(title);
+  const matches = entities.filter((entity) =>
+    entity.type === "area" && entity.workspaceId === area.workspaceId && normalizedLabel(entity.title) === wanted);
+  return matches.length === 1 && matches[0].id === area.id && area.status === "active";
+}
+
 /** An unused deterministic ID for the fallback link (the planner ID first; later ones when it was deleted before). */
 export function fallbackRelationId(
   entityId: string,
   areaId: string,
   taken: (id: string) => boolean,
 ): string | undefined {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
     const id = writeRelationId(entityId, areaId, attempt);
     if (!taken(id)) return id;
   }
@@ -148,7 +165,15 @@ export function enforceAreaWriteInvariants(input: {
   };
   const currentEntities = new Map(current.entities.map((entity) => [entity.id, entity]));
   const currentRelations = new Map(current.relations.map((relation) => [relation.id, relation]));
+  // The kind of a workspace that already exists comes from the STORED record, so a write cannot redeclare a shared
+  // workspace as personal (and get a private "Nezařazeno" in it); only a workspace new in this write uses its own.
   const kinds = workspaceKinds(next.entities);
+  const storedKinds = workspaceKinds(current.entities);
+  for (const entity of current.entities) {
+    if (entity.type !== "workspace") continue;
+    const stored = storedKinds.get(entity.workspaceId);
+    if (stored) kinds.set(entity.workspaceId, stored); else kinds.delete(entity.workspaceId);
+  }
 
   const entities = new Map<string, Entity>(next.entities.map((entity) => [entity.id, entity]));
   const dropped = new Set<string>();
@@ -167,15 +192,34 @@ export function enforceAreaWriteInvariants(input: {
     return !before || before.sourceEntityId !== relation.sourceEntityId
       || before.targetEntityId !== relation.targetEntityId || before.relationType !== relation.relationType;
   };
-  const hasProjectProperty = (entity: Entity) => textValue(entity.properties.projectId);
-  const projectSources = (relations: readonly Relation[], list: Iterable<Entity>) => {
+  // A task is "in a project" only through a belongs_to_project relation or a projectId whose target is a LIVE project
+  // of that snapshot; a dangling reference (deleted project) does not count.
+  const projectSources = (relations: readonly Relation[], list: readonly Entity[]) => {
+    const live = new Set(list.filter((entity) => entity.type === "project").map((entity) => entity.id));
     const ids = new Set<string>();
-    for (const relation of relations) if (relation.relationType === "belongs_to_project") ids.add(relation.sourceEntityId);
-    for (const entity of list) if (entity.type === "task" && hasProjectProperty(entity)) ids.add(entity.id);
+    for (const relation of relations) {
+      if (relation.relationType === "belongs_to_project" && live.has(relation.targetEntityId)) ids.add(relation.sourceEntityId);
+    }
+    for (const entity of list) {
+      const projectId = entity.properties.projectId;
+      if (entity.type === "task" && textValue(projectId) && live.has(String(projectId))) ids.add(entity.id);
+    }
     return ids;
   };
   const projectBefore = projectSources(current.relations, current.entities);
   const projectAfter = projectSources(next.relations, next.entities);
+  // This write made the project of a task disappear (or created the task with a dangling reference): the reference is
+  // removed and the task is a standalone task that gets the fallback Area (R3). Untouched dangling ones are legacy.
+  for (const task of next.entities) {
+    if (task.type !== "task" || projectAfter.has(task.id) || !textValue(task.properties.projectId)) continue;
+    if (!projectBefore.has(task.id) && currentEntities.has(task.id)) continue;
+    edit(task.id, (entity) => {
+      const properties = { ...entity.properties };
+      delete properties.projectId;
+      return { ...entity, properties };
+    });
+    touch(task.id, false);
+  }
   const areaLinksOf = new Map<string, Relation[]>();
   for (const relation of next.relations) {
     if (relation.relationType !== "belongs_to_area") continue;
@@ -223,7 +267,8 @@ export function enforceAreaWriteInvariants(input: {
     if (links.length < 2) continue;
     const fresh = links.filter(isNewRelation);
     if (!fresh.length) continue;
-    const newest = [...links].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
+    // The user's choice is the newest among the NEW links; legacy links are never compared (clock skew).
+    const newest = [...fresh].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
     for (const relation of fresh) {
       if (relation.id === newest.id) continue;
       drop(relation);
