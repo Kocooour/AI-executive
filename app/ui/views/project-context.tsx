@@ -1,0 +1,375 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import type { Entity } from "../../../lib/db";
+import { contextLimits, contextPatchIfUnchanged, contextProblem, ownerProjectContext, readProjectContext, sameStoredContext, type ProjectContext } from "../../../lib/project-context";
+import { db } from "../../../lib/db";
+import { dropProjectContextDraft, keepProjectContextDraft, recoverProjectContextDraft, settleProjectContextDraft, tabProjectContextDraftId } from "../../../lib/project-context-drafts";
+import { labelsFor } from "../project-labels";
+import type { LumiApp } from "../use-lumi-app";
+
+// A textarea that grows with its text, so a long text is fully visible.
+function GrowingTextarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight + 2}px`;
+  }, [props.value]);
+  return <textarea ref={ref} {...props} />;
+}
+
+type Draft = { why: string; goals: string[]; doneWhen: string };
+const contextDraft = (context: Pick<ProjectContext, "why" | "goals" | "doneWhen">): Draft =>
+  ({ why: context.why, goals: [...context.goals], doneWhen: context.doneWhen });
+
+const sameText = (a: Draft, b: Draft) => JSON.stringify(normalized(a)) === JSON.stringify(normalized(b));
+const normalized = (draft: Draft) => ({
+  why: draft.why.trim(),
+  goals: draft.goals.map((goal) => goal.trim()).filter(Boolean),
+  doneWhen: draft.doneWhen.trim(),
+});
+
+// Short legacy edits are normally hidden behind a valid context. Show the different
+// raw goal alongside the context when a concurrent edit is rejected.
+function legacyGoalForNotice(properties: Record<string, unknown> | undefined): string | null {
+  const context = properties?.context;
+  const goal = properties?.goal;
+  if (typeof goal !== "string" || !context || typeof context !== "object" || Array.isArray(context)) return null;
+  const doneWhen = (context as { doneWhen?: unknown }).doneWhen;
+  return typeof doneWhen === "string" && goal.trim() !== doneWhen.trim() ? goal : null;
+}
+
+// What the editor shows as the stored context. A `goal` that differs from `context.doneWhen` is an edit by the previous
+// app version (a current client always mirrors it; a merge settles both): it is the "Hotovo, když" the owner sees and edits,
+// so saving any field writes it into the context and the two agree again.
+function shownDraft(properties: Record<string, unknown> | undefined): Draft {
+  const draft = contextDraft(readProjectContext(properties));
+  const legacy = legacyGoalForNotice(properties);
+  return legacy === null ? draft : { ...draft, doneWhen: legacy };
+}
+
+// The context of a project, edited in place (B1, proposal §4.1-4.2). Saved when a field is left, with a visible state. The
+// whole context travels as one object (sync merges it whole, lib/project-context.ts). Same race handling as the former
+// goal field: a slow save of an older text must not reset a newer text still being typed, and saves run one after another.
+export function ProjectContext({ app, project }: { app: LumiApp; project: Entity }) {
+  const t = labelsFor(app.language);
+  const stored = readProjectContext(project.properties);
+  const storedDraft = shownDraft(project.properties);
+  const storedKey = JSON.stringify(stored);
+  const storedGoal = typeof project.properties.goal === "string" ? project.properties.goal : null;
+  const readOnly = app.activeWorkspaceId === "all";
+  const [draft, setDraft] = useState<Draft>(storedDraft);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error" | "tooLong" | "conflict">("idle");
+  const [conflict, setConflict] = useState<Draft | null>(null);
+  const [legacyGoalConflict, setLegacyGoalConflict] = useState<string | null>(null);
+  const [recovered, setRecovered] = useState(false);
+  const [problem, setProblem] = useState<{ field: string; limit: number } | null>(null);
+  const container = useRef<HTMLDivElement>(null);
+  const focused = useRef(false);
+  const draftRef = useRef<Draft>(storedDraft);
+  const savedRef = useRef<Draft>(storedDraft);
+  // The full origin (including provenance and revision) must not move while there are unsaved edits.
+  const baseRef = useRef<ProjectContext>(stored);
+  // Keep the original mirror, too: an old client can change it without touching context.
+  const baseGoalRef = useRef<string | null>(storedGoal);
+  // The context this editor wrote last: when it comes back through sync it is our own save, not a remote change.
+  const ownWrite = useRef<ProjectContext | null>(null);
+  const pageRef = useRef<string | null>(null);
+  function draftPage() {
+    if (!pageRef.current) pageRef.current = tabProjectContextDraftId(sessionStorage);
+    return pageRef.current;
+  }
+  function keepDraft(text: Draft, base = baseRef.current, baseGoal = baseGoalRef.current) {
+    const stored = keepProjectContextDraft(localStorage, {
+      page: draftPage(), workspaceId: project.workspaceId, projectId: project.id,
+      draft: text, base, baseGoal, at: Date.now(),
+    });
+    if (!stored) setState("error");
+    return stored;
+  }
+  function dropDraft() {
+    dropProjectContextDraft(localStorage, draftPage(), project.workspaceId, project.id);
+    setRecovered(false);
+  }
+  const editVersion = useRef(0);
+  const dirty = useRef(false);
+  const pendingSaves = useRef(0);
+  const saveTail = useRef<Promise<void>>(Promise.resolve());
+  const focusGoal = useRef<number | null>(null);
+  const goalInputs = useRef<Array<HTMLInputElement | null>>([]);
+
+  // Restore before the next edit. The saved base is kept so a newer server version can
+  // never be overwritten after navigation or reload. Every keypress is persisted synchronously.
+  useEffect(() => {
+    if (readOnly) return;
+    const page = draftPage();
+    const kept = recoverProjectContextDraft(localStorage, page, project.workspaceId, project.id);
+    if (!kept) return;
+    if (sameText(kept.draft, storedDraft)) {
+      if (kept.page === page) dropDraft();
+      return;
+    }
+    baseRef.current = kept.base;
+    // Drafts saved before this guard had no mirror snapshot. Use the old doneWhen as
+    // a conservative baseline; uncertainty rejects a write instead of losing text.
+    baseGoalRef.current = kept.baseGoal === undefined ? kept.base.doneWhen : kept.baseGoal;
+    savedRef.current = contextDraft(kept.base);
+    draftRef.current = kept.draft;
+    dirty.current = true;
+    setDraft(kept.draft);
+    setRecovered(true);
+    // Import a draft from a previous browser tab into this tab's own storage key.
+    if (kept.page !== page) keepDraft(kept.draft, kept.base);
+    if (!contextPatchIfUnchanged(project.properties, kept.base, stored, baseGoalRef.current)) {
+      setConflict(storedDraft);
+      setLegacyGoalConflict(legacyGoalForNotice(project.properties));
+      setState("conflict");
+    }
+  // Mount-only: the source project is keyed by project.id in ProjectPage.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, project.workspaceId, readOnly]);
+
+  // A remote change must never silently replace the baseline of a locally edited draft.
+  useEffect(() => {
+    const incoming = JSON.parse(storedKey) as ProjectContext;
+    // A matching context with a different raw goal is not our write: it can be
+    // another tab's legacy edit and must not advance the CAS baseline.
+    if (ownWrite.current && sameStoredContext(incoming, ownWrite.current)
+        && storedGoal === ownWrite.current.doneWhen) {
+      baseRef.current = incoming;
+      baseGoalRef.current = storedGoal;
+      return;
+    }
+    if (!focused.current && !dirty.current) {
+      baseRef.current = incoming;
+      baseGoalRef.current = storedGoal;
+      savedRef.current = shownDraft(project.properties);
+      draftRef.current = shownDraft(project.properties);
+      setDraft(draftRef.current);
+      setConflict(null);
+      setLegacyGoalConflict(null);
+    } else if (!contextPatchIfUnchanged(project.properties, baseRef.current, incoming, baseGoalRef.current)) {
+      setConflict(contextDraft(incoming));
+      setLegacyGoalConflict(legacyGoalForNotice(project.properties));
+      setState("conflict");
+    }
+  }, [storedKey, storedGoal]);
+  useEffect(() => {
+    if (focusGoal.current !== null) {
+      goalInputs.current[focusGoal.current]?.focus();
+      focusGoal.current = null;
+    }
+  }, [draft.goals.length]);
+
+  function edit(next: Draft) {
+    draftRef.current = next;
+    editVersion.current += 1;
+    dirty.current = true;
+    setDraft(next);
+    if (keepDraft(next) && !conflict) setState("idle");
+  }
+
+  async function save(confirmedOverwrite = false) {
+    if (readOnly || !dirty.current) return;
+    if (conflict && !confirmedOverwrite) { setState("conflict"); return; }
+    const version = editVersion.current;
+    const snapshot = draftRef.current;
+    const base = baseRef.current;
+    const baseGoal = baseGoalRef.current;
+    // The editor showed the stored `goal` as "Hotovo, když" (also a different one written by the previous app version):
+    // the owner edited on top of it, so writing the context and its mirror over that goal is not a silent overwrite. A goal
+    // changed after that is still refused by the compare-and-swap below.
+    const editedOverGoal = baseGoal !== null && savedRef.current.doneWhen.trim() === baseGoal.trim();
+    if (sameText(snapshot, savedRef.current)) { dirty.current = false; dropDraft(); return; }
+    // Nothing is cut: a text over its limit (an old goal read as "Hotovo, když", too many goals) is not saved until it is shortened.
+    const problem = contextProblem(snapshot);
+    if (problem) { setProblem(problem); setState("tooLong"); return; }
+    setProblem(null);
+    pendingSaves.current += 1;
+    setState("saving");
+    // Saves of this field run one after another. A revision superseded while it waited is skipped; an in-flight save
+    // finishes before a newer one starts.
+    let stale = false;
+    const run = saveTail.current.then(async () => {
+      if (version !== editVersion.current) return;
+      const next = ownerProjectContext(snapshot, Date.now());
+      await app.patch(project, (currentProperties) => {
+        // app.patch evaluates this while holding the IndexedDB write transaction.
+        // Compare against the ORIGINAL edit base, not a remote update received while typing.
+        // Our own earlier save (a field saved a moment ago) is not a change from elsewhere.
+        const currentGoal = typeof currentProperties.goal === "string" ? currentProperties.goal : null;
+        const own = ownWrite.current && sameStoredContext(readProjectContext(currentProperties), ownWrite.current)
+          && currentGoal === ownWrite.current.doneWhen ? ownWrite.current : null;
+        const patch = contextPatchIfUnchanged(currentProperties, own ?? base, next,
+          own ? own.doneWhen : baseGoal, confirmedOverwrite || editedOverGoal);
+        if (!patch) { stale = true; throw new Error("Project context was updated during editing"); }
+        ownWrite.current = next;
+        return patch;
+      }, "project context changed", true);
+      // Only settle the exact version that was committed. A newer draft keeps its own copy
+      // (with its base advanced to this acknowledged version) while this save was in flight.
+      settleProjectContextDraft(localStorage, draftPage(), project.workspaceId, project.id, snapshot, next);
+      if (version === editVersion.current) {
+        dirty.current = false;
+        baseRef.current = next;
+        baseGoalRef.current = next.doneWhen;
+        savedRef.current = normalized(snapshot);
+        setConflict(null);
+        setLegacyGoalConflict(null);
+        setRecovered(false);
+        if (!focused.current) { draftRef.current = normalized(snapshot); setDraft(draftRef.current); }
+      }
+    });
+    saveTail.current = run.then(() => undefined, () => undefined);
+    try {
+      await run;
+      if (version === editVersion.current && pendingSaves.current === 1) setState("saved");
+    } catch {
+      if (version === editVersion.current) {
+        if (stale) {
+          // Preserve the unsent draft and present the newest copy side-by-side.
+          const latest = await db.entities.get(project.id).catch(() => undefined);
+          setConflict(contextDraft(readProjectContext(latest?.properties)));
+          setLegacyGoalConflict(legacyGoalForNotice(latest?.properties));
+          setState("conflict");
+        } else setState("error");
+      }
+    } finally {
+      pendingSaves.current -= 1;
+      if (pendingSaves.current === 0) setState((current) => (current === "saving" ? "idle" : current));
+    }
+  }
+
+  async function resolveConflict(keepMine: boolean) {
+    const latest = await db.entities.get(project.id).catch(() => undefined);
+    if (!latest) { setState("error"); return; }
+    const remote = readProjectContext(latest.properties);
+    baseRef.current = remote;
+    baseGoalRef.current = typeof latest.properties.goal === "string" ? latest.properties.goal : null;
+    savedRef.current = shownDraft(latest.properties);
+    setConflict(null);
+    setLegacyGoalConflict(null);
+    if (!keepMine) {
+      dropDraft();
+      dirty.current = false;
+      draftRef.current = shownDraft(latest.properties);
+      setDraft(draftRef.current);
+      setState("idle");
+      return;
+    }
+    // Explicit owner choice. Persist the new edit base *before* attempting the write,
+    // so a reload mid-flight can still offer this version and reject a newer remote update.
+    dirty.current = true;
+    keepDraft(draftRef.current, remote);
+    await save(true);
+  }
+
+  const empty = !draft.why.trim() && !draft.doneWhen.trim() && !draft.goals.some((goal) => goal.trim());
+  const approvedDate = stored.provenance === "lumi-approved" && stored.updatedAt > 0
+    ? new Intl.DateTimeFormat(app.language === "cs" ? "cs-CZ" : "en-GB", { day: "numeric", month: "numeric" }).format(new Date(stored.updatedAt))
+    : "";
+
+  return (
+    <section className="projectContext" aria-label={t.contextTitle} data-context-empty={empty ? "true" : "false"}>
+      <div
+        ref={container}
+        className="projectContextFields"
+        onFocus={() => { focused.current = true; }}
+        onBlur={(event) => {
+          // Every field is saved when it is left (an unchanged context writes nothing); moving between the fields
+          // of the context does not count as leaving it, so a save does not reset a field that is about to be typed in.
+          if (!container.current?.contains(event.relatedTarget as Node | null)) focused.current = false;
+          void save();
+        }}
+      >
+        <label className="projectContextField">
+          <span>{t.why}</span>
+          <GrowingTextarea
+            aria-label={t.why}
+            readOnly={readOnly}
+            value={draft.why}
+            placeholder={t.whyHint}
+            rows={2}
+            maxLength={contextLimits.why}
+            onChange={(event) => edit({ ...draft, why: event.target.value })}
+          />
+        </label>
+        <div className="projectContextField" role="group" aria-label={t.goals}>
+          <span>{t.goals}</span>
+          {draft.goals.map((goal, index) => (
+            <div className="projectGoalRow" key={index}>
+              <span aria-hidden="true">•</span>
+              <input
+                ref={(element) => { goalInputs.current[index] = element; }}
+                aria-label={`${t.goals} ${index + 1}`}
+                readOnly={readOnly}
+                value={goal}
+                placeholder={t.goalPlaceholder}
+                maxLength={contextLimits.goal}
+                onChange={(event) => edit({ ...draft, goals: draft.goals.map((item, at) => at === index ? event.target.value : item) })}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || readOnly) return;
+                  event.preventDefault();
+                  if (goal.trim() && draft.goals.length < contextLimits.goals) {
+                    focusGoal.current = index + 1;
+                    edit({ ...draft, goals: [...draft.goals.slice(0, index + 1), "", ...draft.goals.slice(index + 1)] });
+                  }
+                }}
+              />
+              {!readOnly && (
+                <button type="button" className="projectGoalRemove" aria-label={t.removeGoal(index + 1)}
+                  onClick={() => { edit({ ...draft, goals: draft.goals.filter((_, at) => at !== index) }); void save(); }}>×</button>
+              )}
+            </div>
+          ))}
+          {!readOnly && draft.goals.length < contextLimits.goals && (
+            <button type="button" className="projectGoalAdd"
+              onClick={() => { focusGoal.current = draft.goals.length; focused.current = true; edit({ ...draft, goals: [...draft.goals, ""] }); }}>
+              ＋ {t.addGoal}
+            </button>
+          )}
+        </div>
+        <label className="projectContextField">
+          <span>{t.doneWhen}</span>
+          <GrowingTextarea
+            aria-label={t.doneWhen}
+            readOnly={readOnly}
+            value={draft.doneWhen}
+            placeholder={t.doneWhenHint}
+            rows={2}
+            maxLength={contextLimits.doneWhen}
+            onChange={(event) => edit({ ...draft, doneWhen: event.target.value })}
+          />
+        </label>
+      </div>
+      <div className="projectContextFoot">
+        <small className="projectContextHint">{readOnly ? t.readOnly : t.help}</small>
+        {approvedDate && <small className="projectContextProvenance">{t.approved(approvedDate)}</small>}
+        {state === "saving" && <small role="status" className="projectContextState">{t.saving}</small>}
+        {state === "saved" && <small role="status" className="projectContextState saved">{t.saved}</small>}
+        {state === "tooLong" && <small role="alert" className="projectContextState error">{problem?.field === "goals" ? t.tooMany(problem.limit) : t.tooLong(problem?.limit ?? contextLimits.doneWhen)}</small>}
+        {state === "error" && <small role="alert" className="projectContextState error">{t.saveError}</small>}
+        {recovered && !conflict && <small role="status" className="projectContextState">{t.contextRecovered}</small>}
+      </div>
+      {conflict && <div className="projectContextConflict" role="alert" aria-label={t.contextConflict}>
+        <p>{t.contextConflict}</p>
+        <strong>{t.contextRemote}</strong>
+        <dl>
+          <dt>{t.why}</dt><dd>{conflict.why || "—"}</dd>
+          <dt>{t.goals}</dt><dd>{conflict.goals.join("; ") || "—"}</dd>
+          <dt>{t.doneWhen}</dt><dd>{conflict.doneWhen || "—"}</dd>
+          {legacyGoalConflict !== null && <>
+            <dt>{app.language === "cs" ? "Cíl změněný ve starší verzi" : "Goal changed in an older version"}</dt>
+            <dd>{legacyGoalConflict || "—"}</dd>
+          </>}
+        </dl>
+        <div className="projectContextConflictActions">
+          <button type="button" onClick={() => { void resolveConflict(false); }}>{t.contextLoadRemote}</button>
+          <button type="button" onClick={() => { void resolveConflict(true); }}>{t.contextKeepMine}</button>
+        </div>
+      </div>}
+    </section>
+  );
+}

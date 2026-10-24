@@ -85,8 +85,10 @@ test("active projects are listed under the navigation and open like in the Proje
     const row = list.locator("button", { hasText: title });
     await expect(row).toBeVisible();
     await row.click();
-    await expect(page.locator("aside.detail .projectActions")).toBeVisible();
-    await expect(page.locator("aside.detail")).toHaveAttribute("aria-label", `Projekt: ${title}`);
+    // B1: a project opens as the main view of Projects, not as an inspector.
+    await expect(page.locator(".projectPage .projectActions")).toBeVisible();
+    await expect(page.locator(".projectPage")).toHaveAttribute("aria-label", `Stránka projektu: ${title}`);
+    await expect(page.locator("aside.detail")).toHaveCount(0);
     // The aggregate has no list: projects of several workspaces under one heading would be confusing.
     await page.locator("aside .workspaceButton").click();
     // Other scenarios leave many shared workspaces behind, so this menu can be taller than the window: click in the page.

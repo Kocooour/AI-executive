@@ -1,5 +1,6 @@
 import { DECISIONS_PROPERTY, validDecisionsValue } from "./calendar-decisions";
 import type { Entity, Relation } from "./db";
+import { validProjectContext } from "./project-context";
 
 // What the server accepts as a record (validateSnapshot in lib/server-store.ts). A record it would
 // refuse makes the server refuse the whole save, so such a record is held back on this device
@@ -7,7 +8,7 @@ import type { Entity, Relation } from "./db";
 
 const entityTypes = new Set(["area", "project", "task", "note", "workspace"]);
 
-export type HeldBackReason = "noTitle" | "longTitle" | "longContent" | "longNotes" | "tooLarge" | "invalid" | "workspace";
+export type HeldBackReason = "noTitle" | "longTitle" | "longContent" | "longNotes" | "tooLarge" | "invalid" | "workspace" | "context";
 
 // Why the server would refuse this record on its own, or null when it would accept it.
 function ownProblem(entity: Entity): HeldBackReason | null {
@@ -23,6 +24,8 @@ function ownProblem(entity: Entity): HeldBackReason | null {
   if (JSON.stringify(entity.properties).length > 250_000) {
     return typeof entity.properties.notes === "string" && entity.properties.notes.length > 200_000 ? "longNotes" : "tooLarge";
   }
+  // The context of a project has limits of its own (lib/project-context.ts); the server refuses a longer one.
+  if (entity.type === "project" && entity.properties.context !== undefined && !validProjectContext(entity.properties.context)) return "context";
   if (entity.type === "workspace") {
     const { kind, role, members } = entity.properties as { kind?: unknown; role?: unknown; members?: unknown };
     if (entity.id !== `workspace:${entity.workspaceId}` || entity.title.trim().length === 0) return "invalid";

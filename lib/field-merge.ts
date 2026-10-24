@@ -1,4 +1,5 @@
 import type { Entity, Relation } from "./db";
+import { reconcileDoneWhen, syncGoalIntoContext } from "./project-context";
 
 // Three-way merge of one record: the version this device last had in common with the server
 // (`base`), the device's version (`local`) and the server's version (`server`). A field changed on
@@ -45,6 +46,8 @@ const unreported = new Set([
   "properties.manualOrders",
   "properties.calendarDecisions",
   "properties.manualOrder",
+  // The old project goal mirrors context.doneWhen; the one notice of a concurrent edit is the one for the context.
+  "properties.goal",
   "properties.relationsUpdatedAt",
   "properties.completedAt",
   "properties.recurrenceSeriesId",
@@ -211,6 +214,35 @@ export function limitConflicts(entities: Entity[], limit = maxConflictsTotal): E
 }
 
 export function mergeEntity(base: Entity, local: Entity, server: Entity, now = Date.now()): Entity {
+  // One side unchanged: that side's record is the other one as it is; only the goal/context mirror is settled.
+  if (same(local, base) || same(server, base)) return syncGoalIntoContext(base, mergeFields(base, local, server, now));
+  const { merged, lost } = reconcileDoneWhen(base, local, server, mergeFields(base, local, server, now), local.updatedAt > server.updatedAt);
+  if (!lost) return merged;
+  // Two sides may have edited context as well as the old goal. In that case mergeFields already created
+  // a context notice, but its lostValue can carry the obsolete doneWhen instead of the old client's
+  // actual goal. Enrich only a NEW notice: pre-existing unresolved notices must never be rewritten.
+  if (lost.field === "properties.context") {
+    const existingIds = new Set([...entityConflicts(local), ...entityConflicts(server)].map((item) => item.id));
+    const notices = entityConflicts(merged);
+    const index = notices.findIndex((item) => item.field === "properties.context" && !existingIds.has(item.id));
+    if (index !== -1) {
+      const replacement = lost.value as { doneWhen: string };
+      const original = notices[index].lostValue;
+      // A previous-version client may have dropped the context object entirely. Its generic
+      // conflict then contains null, which cannot be restored as a valid project context.
+      const snapshot = original && typeof original === "object" && !Array.isArray(original)
+        ? { ...original as Record<string, unknown>, doneWhen: replacement.doneWhen }
+        : lost.value;
+      notices[index] = { ...notices[index], lostValue: snapshot };
+      return { ...merged, properties: { ...merged.properties, [conflictsKey]: notices } };
+    }
+  }
+  // No context conflict was recorded by the generic merge (or the losing goal exceeds the context
+  // limit): keep the semantic conflict separately instead of dropping the old client's words.
+  return withConflicts(merged, [{ id: conflictId(now), field: lost.field, lostValue: lost.value, at: now }]);
+}
+
+function mergeFields(base: Entity, local: Entity, server: Entity, now: number): Entity {
   // A side that did not change the record takes the other as it is. This compares content: a
   // merged record keeps the larger of the two timestamps, so an equal updatedAt does not prove
   // that nothing changed.
