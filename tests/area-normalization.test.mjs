@@ -306,3 +306,97 @@ test("legacy Area without kind is reported as an explicit unresolved authorizati
   assert.deepEqual(classified.report.existingAreaKindBackfillIds, []);
   assert.equal(classified.report.areaKindBackfillRequired, false);
 });
+
+test("archived Area rejects active tasks/projects via label, property and relation", () => {
+  const archived = { ...entity("area-archived", "area", "personal", { kind: "private" }, "Rodina"),
+    status: "archived" };
+  const combinations = [
+    ["task", "open"],
+    ["project", "active"],
+  ];
+  for (const [type, status] of combinations) {
+    for (const reference of ["label", "property", "relation"]) {
+      const item = { ...entity("item", type, "personal",
+        reference === "label" ? { area: "Rodina" }
+          : reference === "property" ? { areaId: archived.id } : {}), status };
+      const snapshot = { entities: [workspace("personal", "personal"), archived, item],
+        relations: reference === "relation" ? [link("prior", item.id, archived.id)] : [] };
+      const before = structuredClone(snapshot);
+      expectsBlocked(() => planAreaNormalization(snapshot, 100),
+        "archived-area-for-active-item:item:area-archived");
+      assert.deepEqual(snapshot, before);
+    }
+  }
+  // An archived fallback is not a valid assignment for new unclassified work.
+  const fallback = { ...entity("old-default", "area", "personal",
+    { kind: "private" }, "Nezařazeno"), status: "archived" };
+  expectsBlocked(() => planAreaNormalization({
+    entities: [workspace("personal", "personal"), fallback, entity("t", "task", "personal")],
+    relations: [],
+  }, 100), "archived-area-for-active-item:t:old-default");
+});
+
+test("archived historical projects and tasks preserve their archived Area", () => {
+  const archivedArea = { ...entity("a", "area", "personal", { kind: "private" }, "History"),
+    status: "archived" };
+  const oldProject = { ...entity("p", "project", "personal", { areaId: "a" }), status: "archived" };
+  const oldTask = { ...entity("t", "task", "personal", { area: "History" }), status: "archived" };
+  const snapshot = {
+    entities: [workspace("personal", "personal"), archivedArea, oldProject, oldTask],
+    relations: [],
+  };
+  const result = planAreaNormalization(snapshot, 100);
+  assert.equal(areaFor(result, "p")[0].targetEntityId, "a");
+  assert.equal(areaFor(result, "t")[0].targetEntityId, "a");
+  assert.deepEqual(planAreaNormalization(result, 101).relations, result.relations);
+});
+
+test("workspace preflight rejects duplicate scopes and noncanonical workspace IDs", () => {
+  const valid = workspace("personal", "personal");
+  const duplicateScope = entity("workspace:alternate", "workspace", "personal",
+    { kind: "personal", role: "owner", members: [] });
+  const invalidId = entity("wrong", "workspace", "shared-area",
+    { kind: "shared", role: "owner", members: [] });
+  const illegalKind = workspace("unrelated", "personal");
+  expectsBlocked(() => planAreaNormalization({
+    entities: [valid, duplicateScope, entity("p", "project", "personal")],
+    relations: [],
+  }, 100), "duplicate-workspace:personal");
+  expectsBlocked(() => planAreaNormalization({
+    entities: [invalidId, entity("p", "project", "shared-area")],
+    relations: [],
+  }, 100), "noncanonical-workspace-id:wrong");
+  expectsBlocked(() => planAreaNormalization({
+    entities: [illegalKind, entity("p", "project", "unrelated")],
+    relations: [],
+  }, 100), "nonpersonal-workspace-kind-mismatch:workspace:unrelated");
+  // Old snapshots without an explicit personal workspace remain supported.
+  const implicit = planAreaNormalization({
+    entities: [entity("p", "project", "personal")], relations: [],
+  }, 100);
+  assert.equal(implicit.report.createdAreaIds.length, 1);
+});
+
+test("added Area and legacy project relation audit IDs are sorted across permutations", () => {
+  const projects = [entity("project-z", "project", "personal"),
+    entity("project-a", "project", "personal")];
+  const tasks = [entity("task-z", "task", "personal"),
+    entity("task-a", "task", "personal"),
+    entity("project-task-z", "task", "personal", { projectId: "project-z" }),
+    entity("project-task-a", "task", "personal", { projectId: "project-a" })];
+  const one = planAreaNormalization({
+    entities: [workspace("personal", "personal"), ...projects, ...tasks], relations: [],
+  }, 100);
+  const two = planAreaNormalization({
+    entities: [...tasks].reverse().concat([...projects].reverse(), workspace("personal", "personal")),
+    relations: [],
+  }, 100);
+  const sorted = (ids) => [...ids].sort();
+  assert.deepEqual(one.report.addedRelationIds, sorted(one.report.addedRelationIds));
+  assert.deepEqual(one.report.addedLegacyProjectRelationIds, sorted(one.report.addedLegacyProjectRelationIds));
+  assert.deepEqual(one.report.addedRelationIds, two.report.addedRelationIds);
+  assert.deepEqual(one.report.addedLegacyProjectRelationIds, two.report.addedLegacyProjectRelationIds);
+  assert.equal(one.report.addedLegacyProjectRelationIds.length, 2);
+  assert.equal(one.report.addedRelationIds.length, 4);
+  assert.deepEqual(one.report.createdAreaIds, two.report.createdAreaIds);
+});
