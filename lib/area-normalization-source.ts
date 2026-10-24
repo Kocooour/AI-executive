@@ -25,7 +25,7 @@ export function readAreaNormalizationSource(db: DatabaseSync): AreaNormalization
   if ((db.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check !== "ok" ||
       db.prepare("PRAGMA foreign_key_check").all().length > 0)
     throw new AreaNormalizationBlocked(["offline-integrity-failed"]);
-  // Both mirror timestamps are written with the payload by replaceUnchecked
+  // Both mirror timestamps are written with the payload by writeSnapshotRows
   // (lib/server-store.ts); they must agree, or the store is inconsistent.
   const entities = (db.prepare("SELECT id, payload, updated_at FROM entities ORDER BY id").all() as Array<{ id: string; payload: string; updated_at: number }>).map(row => {
     const e = JSON.parse(row.payload) as Entity;

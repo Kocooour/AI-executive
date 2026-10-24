@@ -716,7 +716,11 @@ export function readSnapshot(): StoreSnapshot {
   };
 }
 
-function replaceUnchecked(database: DatabaseSync, snapshot: StoreSnapshot) {
+/**
+ * INTERNAL: writes the store rows of a snapshot with the store's row conventions. No transaction, backup, revision
+ * check or safety net: the caller owns all of these (restore, migrations, the 2a Area applicator).
+ */
+export function writeSnapshotRows(database: DatabaseSync, snapshot: StoreSnapshot) {
   const setMetadata = database.prepare(`
     INSERT INTO metadata (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -870,7 +874,7 @@ export function replaceSnapshot(
       tombstones: [...tombstones.values()],
       updatedAt: Date.now(),
     };
-    replaceUnchecked(database, next);
+    writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "edited", next.revision);
     database.exec("COMMIT");
     return { conflict: false as const, snapshot: next };
@@ -1109,7 +1113,7 @@ function restoreLegacyBackup(name: string) {
   try {
     const current = readSnapshot();
     const next = nextSnapshotAfterRestore(current, restored);
-    replaceUnchecked(database, next);
+    writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "backup_restore", next.revision);
     bumpRestoreGeneration(database);
     database.exec("COMMIT");
@@ -1127,6 +1131,8 @@ function nextSnapshotAfterRestore(current: StoreSnapshot, restored: StoreSnapsho
   const restoredIds = new Set(restored.entities.map((entity) => entity.id));
   const tombstones = new Map((current.tombstones || []).map((item) => [item.id, item]));
   for (const id of restoredIds) tombstones.delete(id);
+  // A restored link must not stay beside a tombstone of its own ID (e.g. one a later migration left for it).
+  for (const relation of restored.relations) tombstones.delete(relation.id);
   for (const entity of current.entities) {
     if (!restoredIds.has(entity.id)) tombstones.set(entity.id, { id: entity.id, deletedAt: Date.now() });
   }
@@ -1222,7 +1228,7 @@ export function restoreDatabaseFile(file: string) {
       try {
         const current = readSnapshot();
         const next = nextSnapshotAfterRestore(current, restored);
-        replaceUnchecked(database, next);
+        writeSnapshotRows(database, next);
         replaceTablesFromAttached(database, "restore_source", replacedTables, excludedClearedTables, (table) => {
           if (restoreFaultForTests === table) throw new Error("Restore failed (test)");
         });
@@ -1278,7 +1284,7 @@ function migrateLegacyStore(database: DatabaseSync) {
     const legacy = JSON.parse(readFileSync(legacyStorePath, "utf8")) as StoreSnapshot;
     if (!Array.isArray(legacy.entities) || !Array.isArray(legacy.relations)) return;
     database.exec("BEGIN IMMEDIATE");
-    replaceUnchecked(database, {
+    writeSnapshotRows(database, {
       revision: Number(legacy.revision) || 0,
       entities: legacy.entities,
       relations: legacy.relations,
