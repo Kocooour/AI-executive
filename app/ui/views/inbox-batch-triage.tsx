@@ -44,8 +44,11 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
   const projectChoices = projects.filter(x => x.workspaceId === activeWorkspaceId && x.status === "active");
   const areaChoices = areas.filter(x => x.workspaceId === activeWorkspaceId && x.status === "active");
   const project = projectChoices.find(x => x.id === projectId);
-  const area = areaChoices.find(x => x.id === areaId);
-  const readyToReview = batchIds.length > 0 && (action !== "organize" || Boolean(project || area));
+  // 2a part 4: a task in a project has no Area of its own, so an Area is only offered while no project is chosen, and
+  // not for a selection that contains a task which is already in a project.
+  const area = project ? undefined : areaChoices.find(x => x.id === areaId);
+  const areaBlockedByProject = Boolean(area) && batchIds.some(id => app.targets(id, "belongs_to_project").length > 0);
+  const readyToReview = batchIds.length > 0 && (action !== "organize" || Boolean(project || area)) && !areaBlockedByProject;
   const actionLabel = action === "today" ? tr("triageToday") :
     action === "tomorrow" ? tr("triageTomorrow") :
     action === "someday" ? tr("triageSomeday") :
@@ -123,18 +126,21 @@ export function InboxBatchTriage({ app }: { app: LumiApp }) {
         {action === "organize" && <div className="batchTriageDestinations">
           <label>{tr("triageProject")}
             <select aria-label={tr("triageProject")} value={projectId}
-              disabled={busy || !projectChoices.length} onChange={e => setProjectId(e.target.value)}>
+              disabled={busy || !projectChoices.length}
+              onChange={e => { setProjectId(e.target.value); if (e.target.value) setAreaId(""); }}>
               <option value="">{tr("triageChooseProject")}</option>
               {projectChoices.map(p => <option value={p.id} key={p.id}>{p.title}</option>)}
             </select>
           </label>
           <label>{tr("triageArea")}
-            <select aria-label={tr("triageArea")} value={areaId}
-              disabled={busy || !areaChoices.length} onChange={e => setAreaId(e.target.value)}>
+            <select aria-label={tr("triageArea")} value={project ? "" : areaId}
+              disabled={busy || !areaChoices.length || Boolean(project)} onChange={e => setAreaId(e.target.value)}>
               <option value="">{tr("triageChooseArea")}</option>
               {areaChoices.map(a => <option value={a.id} key={a.id}>{a.title}</option>)}
             </select>
           </label>
+          {project && <p className="batchTriageHint" data-testid="batch-area-inherited">{tr("triageAreaInherited")}</p>}
+          {areaBlockedByProject && <p className="batchTriageHint" role="status">{tr("batchAreaInProject")}</p>}
         </div>}
         <button type="button" className="batchReview" disabled={!readyToReview || busy}
           onClick={prepare}>{tr("batchReview")}</button>

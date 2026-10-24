@@ -27,7 +27,10 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
   const areaChoices = areas.filter((area) =>
     area.workspaceId === task.workspaceId && area.status === "active");
   const selectedProject = projectChoices.find((project) => project.id === projectId);
-  const selectedArea = areaChoices.find((area) => area.id === areaId);
+  // 2a part 4: a task in a project inherits its Area, so an Area is only chosen while no project is.
+  const taskHasProject = app.targets(task.id, "belongs_to_project").length > 0;
+  const areaLocked = Boolean(selectedProject) || taskHasProject;
+  const selectedArea = areaLocked ? undefined : areaChoices.find((area) => area.id === areaId);
   const canOrganize = Boolean(selectedProject || selectedArea);
   const marks = recordMarkState(app, task);
   const pendingStatus = marks.heldBack ? tr("heldBackBadge")
@@ -61,7 +64,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
 
   const blocked = busy || !inScope;
   const organize = () => void act(() => triageInbox(task, "organize", {
-    projectId: selectedProject?.id, areaId: selectedArea?.id,
+    projectId: selectedProject?.id, areaId: selectedProject ? undefined : selectedArea?.id,
   }));
 
   return <section className="inboxTriage" aria-label={tr("triageTitle")}>
@@ -118,7 +121,7 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
         <span className="inboxTriageField">
           <select aria-label={tr("triageProject")} value={projectId}
             disabled={blocked || projectChoices.length === 0}
-            onChange={(event) => setProjectId(event.target.value)}>
+            onChange={(event) => { setProjectId(event.target.value); if (event.target.value) setAreaId(""); }}>
             <option value="">{tr("triageChooseProject")}</option>
             {projectChoices.map((project) =>
               <option key={project.id} value={project.id}>{project.title}</option>)}
@@ -130,17 +133,18 @@ export function InboxTriage({ app, task }: { app: LumiApp; task: Entity }) {
       <label>
         {tr("triageArea")}
         <span className="inboxTriageField">
-          <select aria-label={tr("triageArea")} value={areaId}
-            disabled={blocked || areaChoices.length === 0}
+          <select aria-label={tr("triageArea")} value={areaLocked ? "" : areaId}
+            disabled={blocked || areaChoices.length === 0 || areaLocked}
             onChange={(event) => setAreaId(event.target.value)}>
             <option value="">{tr("triageChooseArea")}</option>
             {areaChoices.map((area) =>
               <option key={area.id} value={area.id}>{area.title}</option>)}
           </select>
-          <button type="button" disabled={blocked || !canOrganize}
+          <button type="button" disabled={blocked || !canOrganize || areaLocked}
             onClick={organize}>{tr("triageApply")}</button>
         </span>
       </label>
+      {areaLocked && <p className="inboxTriageHint" data-testid="triage-area-inherited">{tr("triageAreaInherited")}</p>}
       {canOrganize && <p className="inboxTriagePreview" role="status">
         {tr("triageAssignPreview")}: {[selectedProject?.title, selectedArea?.title].filter(Boolean).join(" · ")}
       </p>}

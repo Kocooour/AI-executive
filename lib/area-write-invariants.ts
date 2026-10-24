@@ -126,6 +126,14 @@ export function fallbackRelationId(
   return undefined;
 }
 
+/**
+ * The load-time migration of a legacy `properties.areaId` (migratePropertyRelations in lib/db.ts): a task that is in a
+ * project inherits the Area of its project, so the property is dropped WITHOUT creating a task-level link.
+ */
+export function legacyAreaIdBecomesRelation(entityType: string, inProject: boolean) {
+  return !(entityType === "task" && inProject);
+}
+
 export function enforceAreaWriteInvariants(input: {
   current: AreaWriteState;
   next: AreaWriteState;

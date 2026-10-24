@@ -1,5 +1,6 @@
 import { buildContext } from "./context";
 import { db, personalWorkspaceId, type Entity, type EntityType } from "./db";
+import { areaKindOf, assignFallbackArea, taskIsInProject } from "./area-write-client";
 
 export type ToolName =
   | "search_entities"
@@ -79,7 +80,17 @@ export async function runTool(call: ToolCall): Promise<ToolResult> {
         if (entity.type === "workspace") {
           return { ok: false, error: "Workspace creation is not an agent tool" };
         }
-        await db.entities.add(entity);
+        // 2a part 4: an Area carries its workspace's kind; a project or standalone task gets the fallback Area.
+        await db.transaction("rw", db.entities, db.relations, async () => {
+          if (entity.type === "area") {
+            const kind = await areaKindOf(entity.workspaceId);
+            if (kind) entity.properties = { ...entity.properties, kind };
+          }
+          await db.entities.add(entity);
+          if (entity.type === "project" || (entity.type === "task" && !(await taskIsInProject(entity)))) {
+            await assignFallbackArea(entity, now);
+          }
+        });
         return { ok: true, data: entity };
       }
       case "update_entity": {

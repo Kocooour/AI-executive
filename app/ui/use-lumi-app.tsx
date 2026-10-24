@@ -1,5 +1,6 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { areaKindOf, assignFallbackArea, dropTaskAreaLinks, taskIsInProject } from "../../lib/area-write-client";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
 import { runSignOut } from "../../lib/sign-out";
@@ -2197,6 +2198,11 @@ export function useLumiApp() {
     delete properties.newProjectTitle;
     // A creation-time control flag must not become canonical task metadata.
     delete properties.literalTaskTitle;
+    // 2a part 4: an Area always carries the visibility of its workspace.
+    if (type === "area") {
+      const kind = await areaKindOf(creationWorkspaceId);
+      if (kind) properties.kind = kind;
+    }
     localDataVersion.current += 1;
     let created = false;
     try {
@@ -2208,7 +2214,7 @@ export function useLumiApp() {
       }
       const createdProjectId = newProjectTitle ? crypto.randomUUID() : "";
       if (createdProjectId) {
-        await db.entities.add({
+        const createdProject: Entity = {
           id: createdProjectId,
           type: "project",
           title: newProjectTitle,
@@ -2217,7 +2223,9 @@ export function useLumiApp() {
           properties: {},
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        await db.entities.add(createdProject);
+        // A project has exactly one Area: the chosen one, otherwise the workspace's fallback.
         if (areaId) {
           await db.relations.add({
             id: crypto.randomUUID(),
@@ -2227,9 +2235,11 @@ export function useLumiApp() {
             relationType: "belongs_to_area",
             createdAt: now,
           });
+        } else {
+          await assignFallbackArea(createdProject, now);
         }
       }
-      await db.entities.add({
+      const createdEntity: Entity = {
         id,
         type,
         title: parsed.title,
@@ -2246,9 +2256,11 @@ export function useLumiApp() {
             : properties,
         createdAt: now,
         updatedAt: now,
-      });
+      };
+      await db.entities.add(createdEntity);
       created = true;
-      if (projectId || createdProjectId) {
+      const inProject = Boolean(projectId || createdProjectId);
+      if (inProject) {
         await db.relations.add({
           id: crypto.randomUUID(),
           workspaceId: creationWorkspaceId,
@@ -2258,7 +2270,9 @@ export function useLumiApp() {
           createdAt: now,
         });
       }
-      if (areaId) {
+      // A task in a project has no Area of its own (it inherits the project's), so a chosen Area is not stored for it.
+      const ownArea = Boolean(areaId) && !(type === "task" && inProject);
+      if (ownArea) {
         await db.relations.add({
           id: crypto.randomUUID(),
           workspaceId: creationWorkspaceId,
@@ -2267,9 +2281,12 @@ export function useLumiApp() {
           relationType: "belongs_to_area",
           createdAt: now,
         });
+      } else if (!inProject) {
+        // A project or standalone task without a chosen Area gets the fallback Area (no-op for other types).
+        await assignFallbackArea(createdEntity, now);
       }
     });
-    } finally {
+        } finally {
       // Also when the write is refused: an odd version means "a write is in progress".
       localDataVersion.current += 1;
     }
@@ -2541,12 +2558,18 @@ export function useLumiApp() {
             activeWorkspaceId !== latest.workspaceId || writeWorkspaceId !== latest.workspaceId)) {
           throw new Error("Inbox triage target or workspace changed");
         }
+        // 2a part 4: a task in a project inherits the Area of its project and has none of its own.
+        if (relationType === "belongs_to_area" && targetId && latest.type === "task" && await taskIsInProject(latest)) {
+          throw new Error("A task in a project inherits the Area of its project");
+        }
         const existing = await db.relations
           .where("sourceEntityId")
           .equals(sourceId)
           .filter((relation) => relation.relationType === relationType)
           .toArray();
         await db.relations.bulkDelete(existing.map((relation) => relation.id));
+        const joinsProject = relationType === "belongs_to_project" && latest.type === "task" && Boolean(targetId);
+        if (joinsProject) await dropTaskAreaLinks(sourceId);
         if (targetId) {
           await db.relations.add({
             id: crypto.randomUUID(),
@@ -2557,20 +2580,27 @@ export function useLumiApp() {
             createdAt: relationTimestamp,
           });
         }
-        await db.entities.update(sourceId, {
-          properties: {
-            ...latest.properties,
-            ...(clearInbox ? { inbox: false } : {}),
-            relationsUpdatedAt: relationTimestamp,
-            ...(clearInbox ? {
-              activity: [
-                ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
-                { at: relationTimestamp, action: "triaged to project" },
-              ].slice(-50),
-            } : {}),
-          },
-          updatedAt: relationTimestamp,
-        });
+        const updatedProperties: Record<string, unknown> = {
+          ...latest.properties,
+          ...(clearInbox ? { inbox: false } : {}),
+          relationsUpdatedAt: relationTimestamp,
+          ...(clearInbox ? {
+            activity: [
+              ...(Array.isArray(latest.properties.activity) ? latest.properties.activity : []),
+              { at: relationTimestamp, action: "triaged to project" },
+            ].slice(-50),
+          } : {}),
+        };
+        if (joinsProject) delete updatedProperties.areaId;
+        await db.entities.update(sourceId, { properties: updatedProperties, updatedAt: relationTimestamp });
+        // Leaving a project, or clearing the Area of a project / standalone task, never leaves it without an Area: the
+        // workspace's fallback Area is the default.
+        if (!targetId && (relationType === "belongs_to_project" || relationType === "belongs_to_area")) {
+          const updated = await db.entities.get(sourceId);
+          if (updated && !(relationType === "belongs_to_area" && updated.type === "task" && await taskIsInProject(updated))) {
+            await assignFallbackArea(updated, relationTimestamp);
+          }
+        }
       });
     } finally {
       // An aborted transaction must not leave the app in a write-in-progress state.
@@ -2617,6 +2647,7 @@ export function useLumiApp() {
           discarded.relations = linked;
           return;
         }
+        let joinsProject = false;
         if (destination === "project" || destination === "organize") {
           // B4 combines project and area into one single-use decision: both
           // memberships and Inbox exit commit in the *same* transaction.
@@ -2629,6 +2660,14 @@ export function useLumiApp() {
             { id: chosen.areaId || "", type: "area", relation: "belongs_to_area" },
           ].filter((assignment) => assignment.id);
           if (!assignments.length) throw new Error("Inbox triage needs a project or an area");
+          // 2a part 4: a task in a project has no Area of its own; the UI offers either a project or an Area.
+          if (chosen.projectId && chosen.areaId) {
+            throw new Error("Inbox triage takes a project or an area, not both: the task inherits its project's Area");
+          }
+          if (chosen.areaId && await taskIsInProject(latest)) {
+            throw new Error("A task in a project inherits the Area of its project");
+          }
+          joinsProject = Boolean(chosen.projectId);
           // Validate all targets before deleting *any* pre-existing relations.
           const targets = await Promise.all(assignments.map(async ({ id, type, relation }) => {
             const target = await db.entities.get(id);
@@ -2648,6 +2687,8 @@ export function useLumiApp() {
               relationType: target.relation, createdAt: timestamp,
             });
           }
+          // The task now inherits the Area of its project (a standalone Inbox task had the fallback Area).
+          if (joinsProject) await dropTaskAreaLinks(task.id);
         }
         if (destination === "plan" && (typeof value !== "string" || !/^20\d{2}-\d{2}-\d{2}$/.test(value))) {
           throw new Error("Invalid Inbox scheduling date");
@@ -2665,15 +2706,14 @@ export function useLumiApp() {
               ? { waiting: true, waitingSince: Date.now(), waitingFor: "", followUpDate: "" }
               : destination === "project" || destination === "organize" ? { relationsUpdatedAt: timestamp } : {};
         const activity = Array.isArray(latest.properties.activity) ? latest.properties.activity : [];
-        await db.entities.update(task.id, {
-          properties: {
-            ...latest.properties,
-            ...actionProperties,
-            inbox: false,
-            activity: [...activity, { at: timestamp, action: "inbox triaged: " + destination }].slice(-50),
-          },
-          updatedAt: timestamp,
-        });
+        const triagedProperties: Record<string, unknown> = {
+          ...latest.properties,
+          ...actionProperties,
+          inbox: false,
+          activity: [...activity, { at: timestamp, action: "inbox triaged: " + destination }].slice(-50),
+        };
+        if (joinsProject) delete triagedProperties.areaId;
+        await db.entities.update(task.id, { properties: triagedProperties, updatedAt: timestamp });
       });
     } finally {
       localDataVersion.current += 1;
@@ -2724,6 +2764,7 @@ export function useLumiApp() {
         updatedAt: assignment.areaRevision, title: assignment.areaTitle }] : []),
     ] : [];
     if (destination === "organize" && targets.length === 0) throw new Error("Select a project or area");
+    if (targets.length > 1) throw new Error("Select a project or an area, not both: a task in a project inherits its Area");
     // Also protect against changes in a second tab of *this browser* before
     // reaching the server. Canonical CAS alone would not notice these while
     // their local snapshot is still waiting to sync.
@@ -3708,7 +3749,8 @@ export function useLumiApp() {
     } else if (source.type === "project" && targetEntity.type === "area") {
       await relate(source.id, targetEntity.id, "belongs_to_area");
     } else if (source.type === "task" && targetEntity.type === "area") {
-      await relate(source.id, targetEntity.id, "belongs_to_area");
+      // A task in a project inherits its project's Area: dropping it on another Area is not a valid move.
+      if (!(await taskIsInProject(source))) await relate(source.id, targetEntity.id, "belongs_to_area");
     }
   }
 

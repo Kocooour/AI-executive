@@ -3,6 +3,7 @@ import { handleOverlayKeys } from "../focus";
 import { type CaptureSuggestion } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import { DurationInput } from "./duration-input";
+import { fallbackAreaTitle } from "../../../lib/area-ids";
 
 export function CaptureDialog({ app }: { app: LumiApp }) {
   const {
@@ -91,11 +92,12 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                 captureType === "note" ? tr("noteTitle") : tr("taskPrompt")
               }
             />
-            {captureType === "task" && (
+            {captureType === "task" && !captureProjectId && (
               <label className="captureArea">
                 {tr("area")}
                 <select value={captureAreaId} onChange={(event) => chooseCaptureArea(event.target.value)}>
-                  <option value="">{tr("none")}</option>
+                  {/* 2a part 4: without a choice a standalone task goes to the workspace's fallback Area. */}
+                  <option value="">{fallbackAreaTitle(workspaces.find((workspace) => workspace.workspaceId === captureWorkspaceId)?.properties.kind === "shared" ? "shared" : "personal")}</option>
                   {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === captureWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                     <option key={item.id} value={item.id}>{item.title}</option>
                   ))}

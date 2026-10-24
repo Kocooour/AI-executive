@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import test from "node:test";
-import { enforceAreaWriteInvariants, planFallbackArea, fallbackRelationId, workspaceKinds } from "../lib/area-write-invariants.ts";
+import { enforceAreaWriteInvariants, planFallbackArea, fallbackRelationId, workspaceKinds, legacyAreaIdBecomesRelation } from "../lib/area-write-invariants.ts";
 import { generatedAreaId, generatedRelationId, normalizedLabel } from "../lib/area-normalization.ts";
 import { sha256Hex } from "../lib/sha256.ts";
 import { planAreaNormalization } from "../lib/area-normalization.ts";
@@ -312,4 +312,11 @@ test("an output the invariants produced is accepted by the audited planner as al
   const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
   assert.deepEqual(plan.report.addedRelationIds, []);
   assert.deepEqual(plan.report.createdAreaIds, []);
+});
+
+test("migratePropertyRelations rule: a legacy areaId on a task in a project is dropped without a task-level link", () => {
+  assert.equal(legacyAreaIdBecomesRelation("task", true), false);
+  assert.equal(legacyAreaIdBecomesRelation("task", false), true);
+  assert.equal(legacyAreaIdBecomesRelation("project", true), true, "only tasks inherit");
+  assert.equal(legacyAreaIdBecomesRelation("project", false), true);
 });
