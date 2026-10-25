@@ -283,6 +283,34 @@ test("AI actions: moving a standalone task into a project drops its Area link; u
   assert.deepEqual(links("ai-mv").map((r) => r.targetEntityId), [FALLBACK]);
 });
 
+test("AI project move and Undo tombstone the old links and restore via a fresh link ID", async () => {
+  const binding = "binding-" + randomUUID();
+  save((current) => ({
+    ...current,
+    entities: [...current.entities,
+      ent("undo-source", "project", {}, { title: "Původní projekt" }),
+      ent("undo-dest", "project", {}, { title: "Nový projekt" }),
+      ent("undo-task", "task", {}, { title: "Přesunout kontrolní úkol" })],
+    relations: [...current.relations,
+      rel("undo-original-link", "undo-task", "undo-source", "belongs_to_project")],
+  }));
+  const planned = await ai.planAIRequest({
+    message: "Přesuň úkol Přesunout kontrolní úkol do projektu Nový projekt",
+    readWorkspaceId: "personal", writeWorkspaceId: "personal", sessionBinding: binding,
+  });
+  assert.ok(planned.proposal, planned.message);
+  const applied = ai.confirmAIProposal(planned.proposal.id, binding);
+  assert.deepEqual(links("undo-task", "belongs_to_project").map((r) => r.targetEntityId), ["undo-dest"]);
+  const movedId = links("undo-task", "belongs_to_project")[0].id;
+  assert.ok(snap().tombstones.some((t) => t.id === "undo-original-link"));
+  ai.undoAIAction(applied.actionId, binding);
+  const restored = links("undo-task", "belongs_to_project");
+  assert.deepEqual(restored.map((r) => r.targetEntityId), ["undo-source"]);
+  assert.notEqual(restored[0].id, "undo-original-link", "Undo does not revive the tombstoned ID");
+  assert.ok(snap().tombstones.some((t) => t.id === movedId), "undo tombstones the replaced project link");
+  assert.equal(preflight().noChanges, true);
+});
+
 // ---- Work sessions: recurring occurrence --------------------------------------------------------------------------
 function finish(task) {
   let now = Date.parse("2026-10-03T10:00:00Z");
