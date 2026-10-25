@@ -1,6 +1,6 @@
 import { forServer } from "./sendable";
 import { db, readSyncBase } from "./db";
-import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
+import { offlineRecoveryIsHeld, withOfflineRecoveryDataLock } from "./d2b-recovery-hold";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
@@ -63,6 +63,10 @@ export async function hasUnsentChanges() {
 // A wipe that cannot finish (for example a database held by another tab) stays marked and is
 // completed by finishInterruptedWipe() on the next start.
 export async function clearLocalData(timeoutMs = 4000) {
+  // Hold installation and ALL destructive cleanup share a cross-tab exclusive Web Lock.
+  // A tab which already holds the lock completes before a new hold is finalized;
+  // a wipe which acquires it later sees the durable intent and is refused.
+  return withOfflineRecoveryDataLock(async () => {
   // IndexedDB deletion and direct localStorage removal bypass the ordinary write fence.
   // A crashed/interrupted sign-out must not erase the owner's recovery source.
   if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
@@ -88,6 +92,7 @@ export async function clearLocalData(timeoutMs = 4000) {
     new Promise((_, reject) => setTimeout(() => reject(new Error("Local data wipe timed out")), timeoutMs)),
   ]);
   localStorage.removeItem(wipePendingKey);
+  }, true);
 }
 
 export async function finishInterruptedWipe() {
