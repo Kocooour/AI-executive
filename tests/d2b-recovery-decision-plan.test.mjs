@@ -129,7 +129,7 @@ test("D2b/6 fails closed on foreign hold, corrupt content, missing server revisi
   assert.throws(() => draftOfflineRecoveryDecisions(bytes, server([], [], { revision: undefined }), hold()), OfflineRecoveryInvalid);
   assert.throws(() => draftOfflineRecoveryDecisions(bytes, server([], [], { revision: -1 }), hold()), OfflineRecoveryInvalid);
   assert.throws(() => draftOfflineRecoveryDecisions(bytes, server([], [], { restoreGeneration: 1 }), hold()), OfflineRecoveryInvalid);
-  const corrupted = new TextEncoder().encode(new TextDecoder().decode(bytes).replace('"revision"', '"replaced"') + " ");
+  const corrupted = new TextEncoder().encode(new TextDecoder().decode(bytes).replace('"automaticReplayAllowed":false', '"automaticReplayAllowed":true'));
   assert.throws(() => draftOfflineRecoveryDecisions(corrupted, s, hold()), OfflineRecoveryInvalid);
 });
 
