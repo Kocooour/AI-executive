@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prepareOfflineRecovery, assessOfflineRecovery, OfflineRecoveryInvalid, offlineRecoveryLimits } from "../lib/d2b-offline-reconciliation.ts";
+import { sha256Hex } from "../lib/sha256.ts";
 
 const workspace = "shared-legacy";
 const entity = (id, title, wid = workspace) => ({
