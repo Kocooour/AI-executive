@@ -18,7 +18,7 @@
 // Browser-safe: no node-only imports (the client uses planFallbackArea too).
 import type { Entity, Relation } from "./db";
 import {
-  areaKindForWorkspace, fallbackAreaTitle, generatedAreaId, normalizedLabel, writeRelationId,
+  areaKindForWorkspace, displayLabel, fallbackAreaTitle, generatedAreaId, normalizedLabel, writeRelationId,
   type WorkspaceKind,
 } from "./area-ids";
 
@@ -161,16 +161,29 @@ export function enforceAreaWriteInvariants(input: {
   current: AreaWriteState;
   next: AreaWriteState;
   tombstones: readonly { id: string }[];
+  /** Tombstones before this write; a revived old relation is not a new Area choice. */
+  previousTombstones?: readonly { id: string }[];
   now: number;
 }): AreaWriteResult {
   const { current, next, now } = input;
   const tombstoned = new Set(input.tombstones.map((item) => item.id));
+  const previouslyTombstoned = new Set((input.previousTombstones ?? input.tombstones).map((item) => item.id));
   const report: AreaWriteReport = {
     droppedProjectTaskAreaLinks: 0, tasksInheritingFromProject: 0, fallbackAssigned: 0,
     fallbackAreasCreated: 0, duplicateAreaLinksDropped: 0, legacyAreaIdsCanonicalized: 0,
     areaKindsRestored: 0, fallbackUnavailable: 0,
   };
   const currentEntities = new Map(current.entities.map((entity) => [entity.id, entity]));
+  const nextEntities = new Map(next.entities.map((entity) => [entity.id, entity]));
+  // A raw full-snapshot write must not rename/archive/delete the system fallback Area.
+  // An invalid deletion would tombstone its deterministic ID and permanently block 2a.
+  for (const area of current.entities) {
+    if (!isFallbackArea(area, current.entities)) continue;
+    const after = nextEntities.get(area.id);
+    if (!after || after.type !== "area" || after.workspaceId !== area.workspaceId ||
+        after.title !== area.title || after.status !== area.status || after.status !== "active" ||
+        tombstoned.has(area.id)) throw new AreaWriteInvalid();
+  }
   const currentRelations = new Map(current.relations.map((relation) => [relation.id, relation]));
   // The kind of a workspace that already exists comes from the STORED record, so a write cannot redeclare a shared
   // workspace as personal (and get a private "Nezařazeno" in it); only a workspace new in this write uses its own.
@@ -303,18 +316,70 @@ export function enforceAreaWriteInvariants(input: {
     report.legacyAreaIdsCanonicalized += 1;
   }
 
+  // Normalize legacy free-text Areas introduced by new writes. The offline 2a planner
+  // uses the same normalizedLabel/generatedAreaId rules; ambiguous or deleted labels
+  // fail closed rather than silently leaving a new record requiring migration.
+  for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
+    if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
+    const label = item.properties.area;
+    if (label === undefined || label === null) continue;
+    const before = currentEntities.get(item.id);
+    if (before && before.properties.area === label) continue;
+    if (typeof label !== "string" || !displayLabel(label) || displayLabel(label).length > 1000) {
+      throw new AreaWriteInvalid();
+    }
+    // An explicit link/ID wins over the obsolete label; R4 and the final cleanup
+    // below remove its old property, preserving the user's current explicit choice.
+    if (textValue(item.properties.areaId) || liveLinks(item.id).length) continue;
+    const matching = [...entities.values(), ...createdAreas].filter((candidate) =>
+      candidate.type === "area" && candidate.workspaceId === item.workspaceId &&
+      normalizedLabel(candidate.title) === normalizedLabel(label));
+    if (matching.length > 1 || matching.some((area) => area.status !== "active")) throw new AreaWriteInvalid();
+    let area = matching[0];
+    if (!area) {
+      const kind = kinds.get(item.workspaceId);
+      if (!kind) throw new AreaWriteInvalid();
+      const title = displayLabel(label);
+      const id = generatedAreaId(item.workspaceId, title);
+      if (tombstoned.has(id) || takenIds.has(id)) throw new AreaWriteInvalid();
+      area = { id, type: "area", title, status: "active", workspaceId: item.workspaceId,
+        properties: { kind: areaKindForWorkspace(kind) }, createdAt: now, updatedAt: now };
+      createdAreas.push(area);
+      takenIds.add(id);
+      report.fallbackAreasCreated += 1;
+    }
+    const relationId = fallbackRelationId(item.id, area.id, (candidate) => takenIds.has(candidate));
+    if (!relationId) throw new AreaWriteInvalid();
+    takenIds.add(relationId);
+    const canonical: Relation = {
+      id: relationId, workspaceId: item.workspaceId, sourceEntityId: item.id,
+      targetEntityId: area.id, relationType: "belongs_to_area", createdAt: now,
+    };
+    added.push(canonical);
+    areaLinksOf.set(item.id, [...(areaLinksOf.get(item.id) ?? []), canonical]);
+    touch(item.id, true);
+    edit(item.id, (entity) => {
+      const properties = { ...entity.properties };
+      delete properties.area;
+      return { ...entity, properties };
+    });
+    touch(item.id, false);
+  }
+
   // R4: an explicit new Area choice replaces previous links, including older
   // existing links. Multiple pre-existing legacy links are untouched unless
   // this write has introduced a new choice.
   for (const id of [...areaLinksOf.keys()].sort(compare)) {
     const links = liveLinks(id);
     if (links.length < 2) continue;
-    const fresh = links.filter(isNewRelation);
-    if (!fresh.length && !explicitChoices.has(id)) continue;
+    const fresh = links.filter((link) => isNewRelation(link) && !previouslyTombstoned.has(link.id));
+    const revived = links.filter((link) => previouslyTombstoned.has(link.id) && !currentRelations.has(link.id));
+    if (!fresh.length && !revived.length && !explicitChoices.has(id)) continue;
     // The user's new choice wins regardless of clock skew on an old link.
+    const stillCurrent = links.filter((link) => currentRelations.has(link.id));
     const candidates = explicitChoices.has(id)
       ? links.filter((link) => link.targetEntityId === explicitChoices.get(id))
-      : fresh;
+      : fresh.length ? fresh : stillCurrent.length ? stillCurrent : revived;
     const newest = [...candidates].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
     if (!newest) throw new AreaWriteInvalid();
     for (const relation of links) {
@@ -329,7 +394,7 @@ export function enforceAreaWriteInvariants(input: {
   // Do not change untouched legacy properties in unrelated saves.
   for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
     if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
-    if (!liveLinks(item.id).some(isNewRelation)) continue;
+    if (!liveLinks(item.id).some((link) => isNewRelation(link) && !previouslyTombstoned.has(link.id))) continue;
     const currentItem = entities.get(item.id);
     if (!currentItem || (currentItem.properties.areaId === undefined &&
         currentItem.properties.area === undefined)) continue;
