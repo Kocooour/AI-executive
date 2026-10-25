@@ -180,6 +180,110 @@ function assertDrafts(drafts: readonly unknown[], budget: PortableBudget): void 
   }
 }
 
+// A checksum confirms bytes, not their meaning. An imported v1 bundle must
+// satisfy this entire contract before any part reaches the classifier. In
+// particular, a self-consistent rehashed file must not bypass schema checks.
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): void {
+  const keys = Object.keys(value);
+  if (keys.length !== expected.length ||
+      keys.some((key) => !expected.includes(key))) throw new OfflineRecoveryInvalid();
+}
+
+function validateChangeRecord(value: unknown, id: string, kind: "entity" | "relation"): void {
+  if (!record(value) || value.id !== id || !validId(value.id) ||
+      !validId(value.workspaceId)) throw new OfflineRecoveryInvalid();
+  if (kind === "entity") {
+    if (!["area", "project", "task", "note", "workspace"].includes(String(value.type)) ||
+        typeof value.title !== "string" || typeof value.status !== "string" ||
+        !record(value.properties) || !validCounter(value.createdAt as number) ||
+        !validCounter(value.updatedAt as number) ||
+        (value.content !== undefined && typeof value.content !== "string")) {
+      throw new OfflineRecoveryInvalid();
+    }
+  } else if (!validId(value.sourceEntityId) || !validId(value.targetEntityId) ||
+             typeof value.relationType !== "string" || !value.relationType ||
+             !validCounter(value.createdAt as number)) {
+    throw new OfflineRecoveryInvalid();
+  }
+}
+
+function validateChangeEntries(value: unknown, kind: "entity" | "relation"): Set<string> {
+  const max = kind === "entity" ? 2 * offlineRecoveryLimits.maxEntitiesPerSnapshot
+    : 2 * offlineRecoveryLimits.maxRelationsPerSnapshot;
+  if (!Array.isArray(value) || value.length > max) throw new OfflineRecoveryInvalid();
+  const ids = new Set<string>();
+  let last = "";
+  for (const entry of value) {
+    if (!record(entry)) throw new OfflineRecoveryInvalid();
+    exactKeys(entry, ["id", "before", "after"]);
+    const id = entry.id;
+    if (!validId(id) || ids.has(id) || (last && id <= last) ||
+        !Object.hasOwn(entry, "before") || !Object.hasOwn(entry, "after")) {
+      throw new OfflineRecoveryInvalid();
+    }
+    if ((entry.before === null && entry.after === null) ||
+        (entry.before !== null && !record(entry.before)) ||
+        (entry.after !== null && !record(entry.after))) throw new OfflineRecoveryInvalid();
+    if (entry.before !== null) validateChangeRecord(entry.before, id, kind);
+    if (entry.after !== null) validateChangeRecord(entry.after, id, kind);
+    if (entry.before !== null && entry.after !== null) {
+      const before = entry.before as Record<string, unknown>;
+      const after = entry.after as Record<string, unknown>;
+      if (kind === "entity" && before.type !== after.type) throw new OfflineRecoveryInvalid();
+    }
+    if (sameValue(entry.before, entry.after)) throw new OfflineRecoveryInvalid();
+    ids.add(id);
+    last = id;
+  }
+  return ids;
+}
+
+function validateImportedMarkers(value: unknown): Set<string> {
+  if (!Array.isArray(value) || value.length > offlineRecoveryLimits.maxMarkersPerKind)
+    throw new OfflineRecoveryInvalid();
+  const ids = new Set<string>();
+  let last = "";
+  for (const id of value) {
+    if (!validId(id) || ids.has(id) || (last && id <= last)) throw new OfflineRecoveryInvalid();
+    ids.add(id);
+    last = id;
+  }
+  return ids;
+}
+
+function validateImportedBundleShape(bundle: OfflineRecoveryBundle): void {
+  if (!record(bundle)) throw new OfflineRecoveryInvalid();
+  exactKeys(bundle, ["format", "version", "sensitiveOwnerData", "automaticReplayAllowed",
+    "oldRestoreGeneration", "observedRestoreGeneration", "baseRevision", "createdAt", "changes",
+    "contentSha256"]);
+  if (bundle.format !== "lumi-d2b-offline-recovery" || bundle.version !== 1 ||
+      bundle.sensitiveOwnerData !== true || bundle.automaticReplayAllowed !== false ||
+      !validCounter(bundle.oldRestoreGeneration) ||
+      !validCounter(bundle.observedRestoreGeneration) ||
+      bundle.oldRestoreGeneration >= bundle.observedRestoreGeneration ||
+      !validCounter(bundle.baseRevision) || !validCounter(bundle.createdAt) ||
+      !record(bundle.changes)) throw new OfflineRecoveryInvalid();
+  const changes = bundle.changes;
+  exactKeys(changes, ["entities", "relations", "pendingDeletedIds", "pendingRevivedIds",
+    "noteDrafts", "projectContextDrafts", "pendingSync"]);
+  if (typeof changes.pendingSync !== "boolean") throw new OfflineRecoveryInvalid();
+  const entityIds = validateChangeEntries(changes.entities, "entity");
+  const relationIds = validateChangeEntries(changes.relations, "relation");
+  for (const id of relationIds) if (entityIds.has(id)) throw new OfflineRecoveryInvalid();
+  const deleted = validateImportedMarkers(changes.pendingDeletedIds);
+  const revived = validateImportedMarkers(changes.pendingRevivedIds);
+  for (const id of deleted) if (revived.has(id)) throw new OfflineRecoveryInvalid();
+  // Keep both per-kind draft count and per-draft serialized size bounds even
+  // when the outer JSON and SHA appear perfectly valid.
+  const budget: PortableBudget = { nodes: 0, chars: 0 };
+  assertDrafts(changes.noteDrafts, budget);
+  assertDrafts(changes.projectContextDrafts, budget);
+}
+
 export function prepareOfflineRecovery(input: OfflineRecoveryInput, now: number): OfflineRecoveryBundle {
   if (!validCounter(now) || !validCounter(input.baseRevision) ||
       !validCounter(input.oldRestoreGeneration) || !validCounter(input.newRestoreGeneration) ||
@@ -234,21 +338,17 @@ export function assessOfflineRecovery(
   bundle: OfflineRecoveryBundle,
   server: { restoreGeneration: number; entities: readonly Entity[]; relations: readonly Relation[] },
 ): OfflineRecoveryAssessment {
-  if (bundle.format !== "lumi-d2b-offline-recovery" || bundle.version !== 1 ||
-      bundle.automaticReplayAllowed !== false || bundle.sensitiveOwnerData !== true ||
-      !validCounter(server.restoreGeneration) ||
-      server.restoreGeneration < bundle.observedRestoreGeneration ||
-      bundle.oldRestoreGeneration >= bundle.observedRestoreGeneration) throw new OfflineRecoveryInvalid();
-  // Tampered/exported bundles must never be accepted as trusted input.
+  validateImportedBundleShape(bundle);
+  if (!server || !validCounter(server.restoreGeneration) ||
+      server.restoreGeneration < bundle.observedRestoreGeneration)
+    throw new OfflineRecoveryInvalid();
+  // A checksum is NOT authorization and not a substitute for shape validation.
+  // Bound traversal, serialization and hashing before touching server records.
   const { contentSha256, ...value } = bundle;
-  // Apply the same bounded validation to potentially imported bundles before hashing.
   const budget: PortableBudget = { nodes: 0, chars: 0 };
   assertPortable(value, budget);
-  if (typeof contentSha256 !== "string" || !/^[0-9a-f]{64}$/.test(contentSha256) ||
-      !value.changes || !Array.isArray(value.changes.entities) ||
-      !Array.isArray(value.changes.relations) ||
-      !Array.isArray(value.changes.pendingDeletedIds) ||
-      !Array.isArray(value.changes.pendingRevivedIds)) throw new OfflineRecoveryInvalid();
+  if (typeof contentSha256 !== "string" || !/^[0-9a-f]{64}$/.test(contentSha256))
+    throw new OfflineRecoveryInvalid();
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { throw new OfflineRecoveryInvalid(); }
   if (serialized.length > offlineRecoveryLimits.maxBundleJsonChars ||
