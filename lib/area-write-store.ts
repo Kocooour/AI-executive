@@ -25,9 +25,19 @@ export function enforceAreaWritesInTransaction(
   now: number,
 ): AreaWriteReport & { changed: boolean } {
   const after = readAreaRows(database);
+  // Relations deleted by the operation itself are absent from 'after' and thus invisible
+  // to the invariant's droppedRelationIds. Tombstone these changes in the SAME transaction,
+  // otherwise stale/offline snapshots could restore the previous Area or project membership.
+  const currentIds = new Set(after.relations.map((relation) => relation.id));
+  const removedByOperation = before.relations.filter((relation) => !currentIds.has(relation.id));
+  const tombstone = database.prepare(`INSERT INTO tombstones (id, deleted_at) VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at`);
+  for (const relation of removedByOperation) tombstone.run(relation.id, now);
   const tombstones = (database.prepare("SELECT id FROM tombstones").all() as Array<{ id: string }>)
     .map((row) => ({ id: String(row.id) }));
-  const result = enforceAreaWriteInvariants({ current: before, next: after, tombstones, now });
+  const result = enforceAreaWriteInvariants({
+    current: before, next: after, tombstones, previousTombstones: tombstones, now,
+  });
   if (result.changed) {
     const stored = new Map(after.entities.map((entity) => [entity.id, JSON.stringify(entity)]));
     const upsert = database.prepare(`INSERT INTO entities (id, payload, updated_at) VALUES (?, ?, ?)
@@ -37,8 +47,6 @@ export function enforceAreaWritesInTransaction(
       if (stored.get(entity.id) !== payload) upsert.run(entity.id, payload, entity.updatedAt || 0);
     }
     const removeRelation = database.prepare("DELETE FROM relations WHERE id = ?");
-    const tombstone = database.prepare(`INSERT INTO tombstones (id, deleted_at) VALUES (?, ?)
-      ON CONFLICT(id) DO UPDATE SET deleted_at = excluded.deleted_at`);
     for (const id of result.droppedRelationIds) {
       removeRelation.run(id);
       tombstone.run(id, now);
