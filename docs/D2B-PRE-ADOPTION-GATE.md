@@ -1,0 +1,24 @@
+# D2b part 4 — fail-closed recovery hold before restore adoption
+
+**Scope:** First client-side pre-adoption safety gate and private owner-initiated export UI. This does **not** activate 2b partition, server ACL, import/replay or automatic reconciliation.
+
+## Behavior
+
+- On a mismatch between the browser's known `restoreGeneration` and the server's, `adoptServerCopy` must first write an opaque `ai-executive-offline-recovery-hold` marker to `localStorage`, then return **without** clearing any Dexie tables, merge base, marker or draft. The marker stores only numbers (known/observed generation and creation time), not record IDs or content.
+- The marker persists across tab reloads and browser restarts. Its presence makes the Dexie middleware refuse writes in **all** tabs and makes the client refuse same-origin mutating APIs (other than the three narrowly defined sign-in routes). A storage/marker error fails closed; it does not permit destructive adoption.
+- A non-dismissible modal explains the freeze. The owner deliberately chooses **Prepare recovery file**, then **Download file**. Preparation reads server state with GET, then takes two matching local DB/draft/marker snapshots. It uses the canonical D2b v1 recovery bundle and bounded UTF-8 codec from PR #111/#112. Invalid/over-limit input refuses the whole export: no truncation, no cleaned-up drafts, no adoption.
+- Notes and project-context drafts are captured as **raw storage keys and values**, including entries the normal draft readers would otherwise ignore. Pending deleted/revived markers are read without legacy migration or deletion, respecting newest intent; corrupt/ambiguous legacy markers cause an error.
+- The second click triggers the browser download immediately from already prepared private bytes; it is not proof a file was actually saved. No automatic replay, server upload, telemetry, local public cache or URL parameters.
+
+## Explicitly not finished
+
+1. **No release/continue button yet.** The persistent hold can only be resolved by a future audited workflow that verifies a recovery file and obtains explicit owner consent to adopt or reconcile. Do not manually delete the hold or clear browser site data before independently preserving all owner work. Because of this limitation, this implementation remains a **draft, not suitable for merging/deployment** as a completed restore workflow.
+2. In-flight local transactions from before the hold must be subjected to browser-focused concurrency/crash testing beyond the current double-read check. Multi-tab race, tab closure, reload, missing localStorage, expired sign-in, malformed drafts and >12 MiB data must be covered in a future dedicated integration/release test. An export is a safety copy, not proof that the source was never modified before the hold.
+3. A local file is sensitive, unencrypted JSON. Users must keep it secure. Server-side membership/Area ACL verification remains required before any future recovery.
+4. Server 2b migration, workspace partition, `restoreGeneration` bump, 2c assignment backfill and D3 view enablement remain blocked.
+
+## Validation
+
+The targeted node tests in `tests/d2b-pre-adoption-recovery.test.mjs` exercise persistency, raw legacy storage, malformed entries and fail-closed rejection. PR Checks must independently pass on the final HEAD: deployment shell syntax, typecheck, complete unit suite and production build. Dedicated focused Playwright restore scenarios are required before merge. The **full browser E2E suite remains a pre-deployment release gate for exact main SHA only**, per AGENTS.md.
+
+Branch: `codex/d2b-pre-adoption-recovery-gate-20261025`; stack base: PR #112; local isolated instance would use port 3001, state prefix `lumi_codex_pre_adoption`. No local/production service or data is accessed by this change.
