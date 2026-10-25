@@ -1,5 +1,6 @@
 import { forServer } from "./sendable";
 import { db, readSyncBase } from "./db";
+import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
@@ -62,6 +63,9 @@ export async function hasUnsentChanges() {
 // A wipe that cannot finish (for example a database held by another tab) stays marked and is
 // completed by finishInterruptedWipe() on the next start.
 export async function clearLocalData(timeoutMs = 4000) {
+  // IndexedDB deletion and direct localStorage removal bypass the ordinary write fence.
+  // A crashed/interrupted sign-out must not erase the owner's recovery source.
+  if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
   localStorage.setItem(wipePendingKey, "1");
   localStorage.setItem(signedOutKey, "1");
   localDataKeys.forEach((key) => localStorage.removeItem(key));
@@ -87,6 +91,7 @@ export async function clearLocalData(timeoutMs = 4000) {
 }
 
 export async function finishInterruptedWipe() {
+  if (offlineRecoveryIsHeld()) return;
   if (localStorage.getItem(wipePendingKey) !== "1") return;
   await clearLocalData().catch(() => undefined);
 }
