@@ -911,8 +911,11 @@ export function undoAIAction(actionId: string, sessionBinding: string) {
         for (const relation of currentRelations) database.prepare("DELETE FROM relations WHERE id = ?").run(relation.id);
         const previousRelations = "relations" in beforeRecord && Array.isArray(beforeRecord.relations) ? beforeRecord.relations : [];
         for (const relation of previousRelations) {
+          // The original link ID was tombstoned by the confirmed move. Undo restores
+          // membership using a NEW ID so stale clients cannot revive that old ID.
+          const restoredLink: Relation = { ...relation, id: randomUUID(), createdAt: now };
           database.prepare("INSERT INTO relations (id, payload, created_at) VALUES (?, ?, ?)")
-            .run(relation.id, JSON.stringify(relation), relation.createdAt);
+            .run(restoredLink.id, JSON.stringify(restoredLink), restoredLink.createdAt);
         }
       }
       const restored = { ...before, updatedAt: now };
