@@ -18,7 +18,7 @@
 // Browser-safe: no node-only imports (the client uses planFallbackArea too).
 import type { Entity, Relation } from "./db";
 import {
-  areaKindForWorkspace, displayLabel, fallbackAreaTitle, generatedAreaId, normalizedLabel, writeRelationId,
+  areaKindForWorkspace, displayLabel, fallbackAreaTitle, generatedAreaId, generatedProjectRelationId, normalizedLabel, writeRelationId,
   type WorkspaceKind,
 } from "./area-ids";
 
@@ -177,14 +177,41 @@ export function enforceAreaWriteInvariants(input: {
   };
   const currentEntities = new Map(current.entities.map((entity) => [entity.id, entity]));
   const nextEntities = new Map(next.entities.map((entity) => [entity.id, entity]));
-  // A raw full-snapshot write must not rename/archive/delete the system fallback Area.
-  // An invalid deletion would tombstone its deterministic ID and permanently block 2a.
+  // Protect the system Area by either its reserved ID or its normalized label.
+  // Do not rely on a UNIQUE label: an older snapshot may contain duplicates.
+  // Protecting every old matching Area prevents duplicate-then-delete attacks.
+  const beforeKinds = workspaceKinds(current.entities);
+  const afterKinds = workspaceKinds(next.entities);
   for (const area of current.entities) {
-    if (!isFallbackArea(area, current.entities)) continue;
+    if (area.type !== "area") continue;
+    const kind = beforeKinds.get(area.workspaceId);
+    if (!kind) continue;
+    const title = fallbackAreaTitle(kind);
+    if (area.id !== generatedAreaId(area.workspaceId, title) &&
+        normalizedLabel(area.title) !== normalizedLabel(title)) continue;
     const after = nextEntities.get(area.id);
     if (!after || after.type !== "area" || after.workspaceId !== area.workspaceId ||
-        after.title !== area.title || after.status !== area.status || after.status !== "active" ||
+        after.title !== area.title || after.status !== area.status ||
         tombstoned.has(area.id)) throw new AreaWriteInvalid();
+  }
+  // No new write may introduce an ambiguous fallback label, or occupy the
+  // deterministic system ID with a non-fallback Area. Old untouched duplicate
+  // labels remain for the audited 2a preflight rather than failing every save.
+  const checkedKinds = new Map([...afterKinds, ...beforeKinds]);
+  for (const [workspaceId, kind] of checkedKinds) {
+    const label = normalizedLabel(fallbackAreaTitle(kind));
+    const previousCount = current.entities.filter((item) => item.type === "area" &&
+      item.workspaceId === workspaceId && normalizedLabel(item.title) === label).length;
+    const nextCount = next.entities.filter((item) => item.type === "area" &&
+      item.workspaceId === workspaceId && normalizedLabel(item.title) === label).length;
+    if (nextCount > 1 && nextCount > previousCount) throw new AreaWriteInvalid();
+    const reservedId = generatedAreaId(workspaceId, fallbackAreaTitle(kind));
+    const newReserved = nextEntities.get(reservedId);
+    if (newReserved && !current.entities.some((item) => item.id === reservedId) &&
+        (newReserved.type !== "area" || newReserved.workspaceId !== workspaceId ||
+         normalizedLabel(newReserved.title) !== label || newReserved.status !== "active")) {
+      throw new AreaWriteInvalid();
+    }
   }
   const currentRelations = new Map(current.relations.map((relation) => [relation.id, relation]));
   // The kind of a workspace that already exists comes from the STORED record, so a write cannot redeclare a shared
@@ -262,6 +289,50 @@ export function enforceAreaWriteInvariants(input: {
     });
     touch(id, false);
   };
+
+  // R0: legacy clients may express project membership only as properties.projectId.
+  // Make every newly introduced/changed property a canonical project relation now,
+  // with a deterministic ID compatible with the offline 2a planner. No untouched
+  // old property is rewritten by unrelated writes.
+  for (const task of [...next.entities].filter((item) => item.type === "task")
+    .sort((a, b) => compare(a.id, b.id))) {
+    const raw = task.properties.projectId;
+    const old = currentEntities.get(task.id);
+    const changedProperty = raw !== undefined && (!old || old.properties.projectId !== raw);
+    const projectLinks = next.relations.filter((link) =>
+      link.sourceEntityId === task.id && link.relationType === "belongs_to_project" && !dropped.has(link.id));
+    const newCanonical = projectLinks.some(isNewRelation);
+    if (!changedProperty && !newCanonical) continue;
+    // A newly supplied invalid target cannot be silently converted into a
+    // fallback Area; doing so would disguise an unintended project move.
+    if (changedProperty && textValue(raw)) {
+      const target = entities.get(String(raw));
+      if (!target || target.type !== "project" || target.workspaceId !== task.workspaceId ||
+          target.status !== "active" || tombstoned.has(target.id)) throw new AreaWriteInvalid();
+      const chosen = projectLinks.filter((link) => link.targetEntityId === target.id);
+      if (!chosen.length) {
+        const base = generatedProjectRelationId(task.id, target.id);
+        const id = !takenIds.has(base) ? base :
+          fallbackRelationId("project:" + task.id, target.id, (candidate) => takenIds.has(candidate));
+        if (!id) throw new AreaWriteInvalid();
+        takenIds.add(id);
+        added.push({ id, workspaceId: task.workspaceId, sourceEntityId: task.id,
+          targetEntityId: target.id, relationType: "belongs_to_project", createdAt: now });
+        touch(task.id, true);
+      }
+      for (const link of projectLinks) if (link.targetEntityId !== target.id) drop(link);
+    }
+    // If the new canonical link conflicts with an unchanged old property,
+    // the canonical link is the latest explicit choice.
+    if (raw !== undefined && (changedProperty || newCanonical)) {
+      edit(task.id, (record) => {
+        const properties = { ...record.properties };
+        delete properties.projectId;
+        return { ...record, properties };
+      });
+      touch(task.id, false);
+    }
+  }
 
   const sortedTasks = next.entities.filter((entity) => entity.type === "task")
     .sort((a, b) => compare(a.id, b.id));
@@ -352,9 +423,18 @@ export function enforceAreaWriteInvariants(input: {
       touch(item.id, false);
       continue;
     }
-    // An explicit link/ID wins over the obsolete label; R4 and the final cleanup
-    // below remove its old property, preserving the user's current explicit choice.
-    if (textValue(item.properties.areaId) || liveLinks(item.id).length) continue;
+    // A canonical Area link / explicit areaId already determines the destination.
+    // Drop NEW legacy text rather than preserving a contradictory label that would
+    // block the audited 2a planner as conflicting-legacy-area-label.
+    if (textValue(item.properties.areaId) || liveLinks(item.id).length) {
+      edit(item.id, (record) => {
+        const properties = { ...record.properties };
+        delete properties.area;
+        return { ...record, properties };
+      });
+      touch(item.id, false);
+      continue;
+    }
     const matching = [...entities.values(), ...createdAreas].filter((candidate) =>
       candidate.type === "area" && candidate.workspaceId === item.workspaceId &&
       normalizedLabel(candidate.title) === normalizedLabel(label));
