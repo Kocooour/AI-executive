@@ -87,6 +87,11 @@ export function beginOfflineRecoveryHold(
   return marker;
 }
 
+export function offlineRecoveryWipeSupported(): boolean {
+  return typeof window === "undefined" || (typeof navigator !== "undefined" &&
+    typeof (navigator as Navigator & { locks?: { request?: unknown } }).locks?.request === "function");
+}
+
 // Every destructive browser wipe and recovery-hold installation uses the SAME
 // exclusive browser lock. No step of a wipe may execute after a finalized hold.
 // Without Web Locks we fail closed on destructive wipes in real browsers.
