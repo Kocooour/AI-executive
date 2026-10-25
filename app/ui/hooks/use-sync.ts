@@ -617,7 +617,10 @@ export function useSync() {
         const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
         if (response.ok) {
           const server = (await response.json()) as ServerSnapshot;
-          remoteGeneration = server.restoreGeneration;
+          // Missing/malformed generation from an otherwise successful GET is
+          // invalid evidence, not an excuse to silently claim offline status.
+          remoteGeneration = typeof server.restoreGeneration === "number"
+            ? server.restoreGeneration : Number.NaN;
         }
       } catch { /* unreachable or invalid response: use the older known hold only */ }
       // A successful response with invalid/backwards generation still fails
