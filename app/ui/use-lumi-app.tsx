@@ -10,6 +10,7 @@ import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
+import { offlineRecoveryIsHeld } from "../../lib/d2b-recovery-hold";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
 import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
@@ -1169,7 +1170,13 @@ export function useLumiApp() {
     );
     async function initialize() {
       const initializationVersion = localDataVersion.current;
-      await finishInterruptedWipe();
+      // A persisted hold must survive reloads even when an older sign-out wipe was interrupted.
+      // Do not migrate, seed, or clean any local data while rescue is required.
+      if (offlineRecoveryIsHeld()) {
+        await load();
+        setSyncStatus("offline");
+        return;
+      }
       // Given up once the access check finds no connection, so a stalled request does not keep the
       // offline view empty: the data kept in this browser is shown instead (catch below).
       const storeRequest = new AbortController();
@@ -1179,6 +1186,21 @@ export function useLumiApp() {
         const response = await fetch("/api/store", { cache: "no-store", signal: storeRequest.signal });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
+        // This is the earliest safe point to compare generations: no local write, migration
+        // or interrupted wipe may happen before the persistent recovery marker is recorded.
+        if (restoredSinceKnown(snapshot.restoreGeneration)) {
+          await replaceLocalWithServer(snapshot, true);
+          await load();
+          setSyncStatus("offline");
+          return;
+        }
+        // A sibling may have installed a hold while the GET was outstanding.
+        if (offlineRecoveryIsHeld()) {
+          await load();
+          setSyncStatus("offline");
+          return;
+        }
+        await finishInterruptedWipe();
         await ensureDefaultWorkspace();
         let localEntities = await db.entities.toArray();
         let localRelations = await db.relations.toArray();
@@ -1312,7 +1334,7 @@ export function useLumiApp() {
         localStorage.setItem("ai-executive-server-synced", "1");
         markSignedIn();
         clearSentMarkers(sentMarkers);
-        setSyncStatus("synced");
+        setSyncStatus(offlineRecoveryIsHeld() ? "offline" : "synced");
       } catch {
         await ensureDefaultWorkspace();
         await load();
