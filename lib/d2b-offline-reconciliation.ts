@@ -355,23 +355,30 @@ export function assessOfflineRecovery(
       sha256Hex(serialized) !== contentSha256) throw new OfflineRecoveryInvalid();
   snapshotIds(server);
   const serverEntities = index(server.entities), serverRelations = index(server.relations);
-  const classify = <T extends WithId & { workspaceId: string }>(entry: OfflineChange<T>, serverIndex: Map<string, T>) => {
+  const classify = <T extends WithId & { workspaceId: string }>(
+    entry: OfflineChange<T>, serverIndex: Map<string, T>, otherKindIndex: ReadonlyMap<string, WithId>,
+  ) => {
     const remote = serverIndex.get(entry.id), edited = entry.after, before = entry.before;
-    // A completed deletion is not a missing remote record; it was already
-    // applied. A new local ID appearing remotely is a collision unless identical.
+    // Entity and relation IDs share one namespace. A same-ID record of another
+    // kind cannot be mistaken for an absent record or an already-applied deletion.
+    if (otherKindIndex.has(entry.id)) return "id-collision" as const;
+    // A completed deletion is not a missing remote record; it was already applied.
     if (before && !edited && !remote) return "already-deleted" as const;
     if (!remote) return "remote-missing" as const;
-    if ((edited?.workspaceId ?? before?.workspaceId) !== remote.workspaceId) return "workspace-changed" as const;
-    if (before === null && edited) {
+    // For a newly created record, an occupied ID is a collision irrespective
+    // of workspace. Existing records can still be classified as scope moves.
+    if (before === null && edited)
       return sameValue(remote, edited) ? "already-present" as const : "id-collision" as const;
-    }
+    if ((edited?.workspaceId ?? before?.workspaceId) !== remote.workspaceId) return "workspace-changed" as const;
     if (sameValue(remote, edited)) return "already-present" as const;
     if (before && !sameValue(before, remote)) return "remote-diverged" as const;
     return "local-change" as const;
   };
   const candidates: OfflineRecoveryAssessment["candidates"] = [
-    ...bundle.changes.entities.map((x) => ({ id: x.id, kind: "entity" as const, reason: classify(x, serverEntities) })),
-    ...bundle.changes.relations.map((x) => ({ id: x.id, kind: "relation" as const, reason: classify(x, serverRelations) })),
+    ...bundle.changes.entities.map((x) => ({ id: x.id, kind: "entity" as const,
+      reason: classify(x, serverEntities, serverRelations) })),
+    ...bundle.changes.relations.map((x) => ({ id: x.id, kind: "relation" as const,
+      reason: classify(x, serverRelations, serverEntities) })),
   ];
   const c = bundle.changes;
   const hasLocalChanges = c.pendingSync || c.entities.length > 0 || c.relations.length > 0 ||
