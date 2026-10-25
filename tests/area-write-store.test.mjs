@@ -50,6 +50,45 @@ test("a new project and a new standalone task are stored with the fallback Area 
   assert.equal(preflight().noChanges, true, "everything written so far is already normalized");
 });
 
+test("PUT: assigning Area B replaces existing Area A; the 2a preflight remains clear", () => {
+  save((before) => ({ ...before,
+    entities: [...before.entities, ent("move-area-b", "area", { kind: "private" }), ent("reassign-task", "task")],
+  }));
+  assert.deepEqual(links("reassign-task").map((link) => link.targetEntityId), [FALLBACK]);
+  const oldId = links("reassign-task")[0].id;
+  const response = save((before) => ({
+    ...before,
+    relations: [...before.relations, rel("r:reassign-b", "reassign-task", "move-area-b", "belongs_to_area", 90)],
+  }));
+  assert.deepEqual(links("reassign-task").map((link) => link.targetEntityId), ["move-area-b"]);
+  assert.ok(response.tombstones.some((entry) => entry.id === oldId), "previous Area link must be tombstoned");
+  assert.equal(preflight().noChanges, true);
+});
+
+test("PUT: a new project and task with legacy areaId are canonical without a 2a follow-up", () => {
+  save((before) => ({
+    ...before, entities: [...before.entities,
+      ent("legacy-area-task", "task", { areaId: "move-area-b" }),
+      ent("legacy-area-project", "project", { areaId: "move-area-b" }),
+    ],
+  }));
+  for (const id of ["legacy-area-task", "legacy-area-project"]) {
+    assert.deepEqual(links(id).map((link) => link.targetEntityId), ["move-area-b"]);
+    assert.equal("areaId" in get(id).properties, false);
+  }
+  assert.equal(preflight().noChanges, true);
+});
+
+test("PUT: invalid explicit Area references rollback without modifying the store", () => {
+  const before = snap();
+  assert.throws(() => save((s) => ({ ...s,
+    entities: [...s.entities, ent("invalid-area-item", "task", { areaId: "missing-area" })],
+  })), /Invalid Area assignment/);
+  assert.equal(snap().revision, before.revision);
+  assert.equal(get("invalid-area-item"), undefined);
+  assert.equal(preflight().noChanges, true);
+});
+
 test("an old client that adds a task-level Area to a task in a project is stored without it", () => {
   save((s) => ({ ...s, entities: [...s.entities, ent("area:work", "area", { kind: "private" }), ent("tp", "task", { areaId: "area:work" })],
     relations: [...s.relations, rel("r:tp-proj", "tp", "p1", "belongs_to_project"), rel("r:tp-area", "tp", "area:work", "belongs_to_area")] }));
