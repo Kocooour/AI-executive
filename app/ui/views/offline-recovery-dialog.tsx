@@ -78,6 +78,13 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             accept=".json,application/json"
             aria-label={cs ? "Vybrat záchranný JSON soubor" : "Choose recovery JSON file"}
             disabled={app.recoveryInspecting}
+            // Native file-picker dismissal emits "cancel", not "change".
+            // Keep this separate from the dialog's non-dismissible Escape guard.
+            onCancel={(event) => {
+              event.stopPropagation();
+              event.currentTarget.value = "";
+              void app.inspectOfflineRecoveryFile(null);
+            }}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0] ?? null;
               event.currentTarget.value = "";
