@@ -338,15 +338,17 @@ export function assessOfflineRecovery(
   bundle: OfflineRecoveryBundle,
   server: { restoreGeneration: number; entities: readonly Entity[]; relations: readonly Relation[] },
 ): OfflineRecoveryAssessment {
+  // Validate and bound potentially imported JSON BEFORE any deep comparisons
+  // in the structural validator, to avoid expensive traversal of hostile data.
+  if (!record(bundle)) throw new OfflineRecoveryInvalid();
+  const { contentSha256, ...value } = bundle;
+  const budget: PortableBudget = { nodes: 0, chars: 0 };
+  assertPortable(value, budget);
   validateImportedBundleShape(bundle);
   if (!server || !validCounter(server.restoreGeneration) ||
       server.restoreGeneration < bundle.observedRestoreGeneration)
     throw new OfflineRecoveryInvalid();
   // A checksum is NOT authorization and not a substitute for shape validation.
-  // Bound traversal, serialization and hashing before touching server records.
-  const { contentSha256, ...value } = bundle;
-  const budget: PortableBudget = { nodes: 0, chars: 0 };
-  assertPortable(value, budget);
   if (typeof contentSha256 !== "string" || !/^[0-9a-f]{64}$/.test(contentSha256))
     throw new OfflineRecoveryInvalid();
   let serialized: string;
