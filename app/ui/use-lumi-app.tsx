@@ -180,7 +180,9 @@ export function useLumiApp() {
   const assistantRequestVersion = useRef(0);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
-    pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
+    pullFromServer, tabId, captureMarkers, clearSentMarkers,
+    recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -4001,6 +4003,13 @@ export function useLumiApp() {
     backupFailed,
     restoredNotice,
     dismissRestoredNotice,
+    recoveryHeld,
+    recoveryPreparing,
+    recoveryReady,
+    recoveryError,
+    recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload,
+    downloadOfflineRecovery,
     downloadExport,
     importExport,
     createSuggestedTarget,
