@@ -49,8 +49,13 @@ export function readOfflineRecoveryHold(storage: RecoveryStorage | null = browse
 // A malformed persisted marker ALSO blocks writes. Never silently clear corruption.
 export function offlineRecoveryIsHeld(storage: RecoveryStorage | null = browserStorage()): boolean {
   if (heldInThisTab) return true;
-  try { return storage === null || storage.getItem(offlineRecoveryHoldKey) !== null ||
-    storage.getItem(offlineRecoveryIntentKey) !== null; }
+  try {
+    // Node tests have no browser storage by design. A real browser where storage
+    // is unavailable must still refuse writes instead of assuming no hold.
+    if (storage === null) return typeof window !== "undefined";
+    return storage.getItem(offlineRecoveryHoldKey) !== null ||
+      storage.getItem(offlineRecoveryIntentKey) !== null;
+  }
   catch { return true; }
 }
 
