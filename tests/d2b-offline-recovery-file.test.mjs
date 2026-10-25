@@ -16,7 +16,7 @@ const input = () => ({
   base: { entities: [ownerEntity("Private original")], relations: [] },
   local: { entities: [ownerEntity("Changed locally: private")], relations: [] },
   pendingDeletedIds: [], pendingRevivedIds: [],
-  noteDrafts: [{ page: "tab-a", id: "task-1", text: "Unsent private note", base: "", at: 3 }],
+  noteDrafts: [{ page: "tab-a", id: "task-1", text: "Neodeslaná soukromá poznámka", base: "", at: 3 }],
   projectContextDrafts: [],
   pendingSync: true, oldRestoreGeneration: 1, newRestoreGeneration: 2, baseRevision: 7,
 });
@@ -42,14 +42,14 @@ test("D2b: local rescue file round-trips as UTF-8 without importing any changes"
   ]);
   assert.equal(JSON.stringify(server), serverBefore, "the server snapshot is never modified");
   assert.equal(offlineRecoveryFile.filename, "lumi-offline-recovery.json");
-  assert.match(offlineRecoveryFile.mimeType, /^application\\/json/);
+  assert.ok(offlineRecoveryFile.mimeType.startsWith("application/json"));
 });
 
 test("D2b: imported file checksum and server generation must be valid", () => {
   const bytes = encodeOfflineRecoveryFile(bundle());
   assert.throws(() => decodeOfflineRecoveryFile(bytes, { ...remote(), restoreGeneration: 1 }), OfflineRecoveryInvalid);
   const text = new TextDecoder().decode(bytes);
-  const changed = new TextEncoder().encode(text.replace("Unsent private note", "Altered private note"));
+  const changed = new TextEncoder().encode(text.replace("Neodeslaná soukromá poznámka", "Pozměněná soukromá poznámka"));
   assert.throws(() => decodeOfflineRecoveryFile(changed, remote()), OfflineRecoveryInvalid);
 });
 
