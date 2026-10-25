@@ -12,6 +12,7 @@ import {
 } from "../../../lib/http-security";
 import { recordSecurityEvent } from "../../../lib/security-audit";
 import { isAuthenticated } from "../../../lib/auth";
+import { AreaWriteInvalid } from "../../../lib/area-write-invariants";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,14 +93,23 @@ export async function PUT(request: Request) {
     );
   }
   const generation = Number.isSafeInteger(body.restoreGeneration) ? Number(body.restoreGeneration) : undefined;
-  const result = replaceSnapshot(
-    baseRevision,
-    body.entities,
-    body.relations,
-    deletedIds,
-    revivedIds,
-    generation,
-  );
+  let result: ReturnType<typeof replaceSnapshot>;
+  try {
+    result = replaceSnapshot(
+      baseRevision,
+      body.entities,
+      body.relations,
+      deletedIds,
+      revivedIds,
+      generation,
+    );
+  } catch (error) {
+    if (!(error instanceof AreaWriteInvalid)) throw error;
+    recordSecurityEvent(request, "store.write", "rejected", { reason: "invalid-area-assignment" });
+    return NextResponse.json({ error: "Invalid Area assignment" }, {
+      status: 400, headers: { "cache-control": "no-store" },
+    });
+  }
   recordSecurityEvent(request, "store.write", "allowed", {
     conflict: result.conflict,
     entityCount: body.entities.length,
