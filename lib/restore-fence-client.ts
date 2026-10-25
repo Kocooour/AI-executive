@@ -1,3 +1,4 @@
+import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 // The client half of the restore fence (lib/restore-fence.ts): one wrapper around fetch, installed once at app start, adds the
 // restore generation this page knows to every non-GET same-origin request to /api/*, so no call site can miss it, and hands a
 // 409 `restored` answer to the single adoption path (a reload with the restored data). `/api/store` carries the generation in
@@ -15,8 +16,16 @@ export function installRestoreFence(hooks: Hooks) {
     let url: URL;
     try { url = new URL(input instanceof Request ? input.url : String(input), window.location.href); } catch { return original(input, init); }
     const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
-    const guarded = url.origin === window.location.origin && url.pathname.startsWith("/api/") && url.pathname !== "/api/store"
+    const mutatingApi = url.origin === window.location.origin && url.pathname.startsWith("/api/")
       && !["GET", "HEAD", "OPTIONS"].includes(method);
+    // Sign-in (password/passkey) must still work after a reload or session expiry,
+    // otherwise the owner could not download locally preserved recovery data.
+    const recoveryLogin = method === "POST" && [
+      "/api/auth/login", "/api/auth/passkeys/login/options", "/api/auth/passkeys/login/verify",
+    ].includes(url.pathname);
+    if (mutatingApi && offlineRecoveryIsHeld() && !recoveryLogin)
+      throw new Error("OFFLINE_RECOVERY_HELD");
+    const guarded = mutatingApi && url.pathname !== "/api/store";
     if (!guarded) return original(input, init);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     const generation = hooks.generation();
