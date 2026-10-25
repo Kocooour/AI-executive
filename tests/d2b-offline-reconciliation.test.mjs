@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prepareOfflineRecovery, assessOfflineRecovery, OfflineRecoveryInvalid } from "../lib/d2b-offline-reconciliation.ts";
+import { prepareOfflineRecovery, assessOfflineRecovery, OfflineRecoveryInvalid, offlineRecoveryLimits } from "../lib/d2b-offline-reconciliation.ts";
 
 const workspace = "shared-legacy";
 const entity = (id, title, wid = workspace) => ({
@@ -150,6 +150,93 @@ test("D2b: tampered owner recovery bundle and rolled-back generation are rejecte
   const forged = { ...bundle, changes: { ...bundle.changes, pendingDeletedIds: ["other-record"] } };
   assert.throws(() => assessOfflineRecovery(forged, remote), OfflineRecoveryInvalid);
   assert.throws(() => assessOfflineRecovery(bundle, { ...remote, restoreGeneration: 2 }), OfflineRecoveryInvalid);
+});
+
+test("D2b: same-scope new IDs with different remote payloads are collisions, including relations", () => {
+  const i = initial();
+  const bundle = prepareOfflineRecovery(i, 99);
+  const server = {
+    restoreGeneration: 3,
+    entities: [
+      entity("new", "Different owner's existing ID"),
+      entity("task", "Edited private details"),
+    ],
+    relations: [relation("extra-link", "different-area")],
+  };
+  const r = assessOfflineRecovery(bundle, server);
+  assert.deepEqual(r.candidates.filter((x) => x.reason === "id-collision"), [
+    { id: "new", kind: "entity", reason: "id-collision" },
+    { id: "extra-link", kind: "relation", reason: "id-collision" },
+  ]);
+  assert.equal(r.automaticReplayAllowed, false);
+});
+
+test("D2b: already applied deletions are not misreported as remote-missing", () => {
+  const i = initial();
+  const bundle = prepareOfflineRecovery({
+    ...i,
+    local: { entities: [entity("task", "My private details")], relations: [] },
+    pendingDeletedIds: ["unchanged", "area-link"],
+    pendingRevivedIds: [], noteDrafts: [], projectContextDrafts: [], pendingSync: true,
+  }, 99);
+  const r = assessOfflineRecovery(bundle, {
+    restoreGeneration: 3,
+    entities: [entity("task", "My private details")],
+    relations: [],
+  });
+  assert.deepEqual(r.candidates, [
+    { id: "unchanged", kind: "entity", reason: "already-deleted" },
+    { id: "area-link", kind: "relation", reason: "already-deleted" },
+  ]);
+  assert.equal(r.automaticReplayAllowed, false);
+});
+
+test("D2b: shared namespace rejects entity/relation collisions in both snapshots", () => {
+  const i = initial();
+  assert.throws(() => prepare({
+    base: { ...i.base, relations: [...i.base.relations, relation("task", "old-area")] },
+  }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({
+    local: { ...i.local, relations: [...i.local.relations, relation("new", "another-area")] },
+  }), OfflineRecoveryInvalid);
+});
+
+test("D2b: rejects oversized drafts, markers and snapshots without touching sources", () => {
+  const i = initial();
+  const before = JSON.stringify(i);
+  const bigDraft = { text: "x".repeat(offlineRecoveryLimits.maxDraftJsonChars + 1) };
+  assert.throws(() => prepare({ noteDrafts: [bigDraft] }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ projectContextDrafts: [bigDraft] }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({
+    noteDrafts: Array.from({ length: offlineRecoveryLimits.maxDraftsPerKind + 1 }, () => ({})),
+  }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({
+    pendingDeletedIds: Array.from({ length: offlineRecoveryLimits.maxMarkersPerKind + 1 },
+      (_, index) => "delete-" + index),
+  }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({
+    local: {
+      ...i.local,
+      entities: Array.from({ length: offlineRecoveryLimits.maxEntitiesPerSnapshot + 1 },
+        (_, index) => entity("task-" + index, "short")),
+    },
+  }), OfflineRecoveryInvalid);
+  assert.equal(JSON.stringify(i), before, "overlimit rescue never mutates source records, drafts or markers");
+});
+
+test("D2b: rejects oversized serialized rescue atomically without silent truncation", () => {
+  const largeText = "x".repeat(180 * 1024);
+  const baseline = Array.from({ length: 25 }, (_, index) =>
+    entity("large-" + index, "old-" + largeText));
+  const local = baseline.map((item) => ({ ...item, title: "new-" + largeText }));
+  assert.throws(() => prepare({
+    base: { entities: baseline, relations: [] },
+    local: { entities: local, relations: [] },
+    noteDrafts: [], projectContextDrafts: [],
+    pendingDeletedIds: [], pendingRevivedIds: [],
+  }), OfflineRecoveryInvalid);
+  assert.equal(baseline[0].title, "old-" + largeText);
+  assert.equal(local[0].title, "new-" + largeText);
 });
 
 test("D2b: divergent remote content remains manual review even when Area does not change", () => {
