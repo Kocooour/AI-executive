@@ -34,7 +34,7 @@ test("D2b rescue inspection shows only bounded aggregate diagnostics; never priv
   assert.equal(result.reasons["remote-diverged"], 1);
   assert.equal(result.reasons["remote-missing"], 1);
   const summaryText = JSON.stringify(result);
-  for (const privateValue of ["edited", "missing", "Secret owner draft", "Private local edit", "Remote changed"])
+  for (const privateValue of ['"id":"edited"', '"id":"missing"', "Secret owner draft", "Private local edit", "Remote changed"])
     assert.equal(summaryText.includes(privateValue), false);
   assert.equal(JSON.stringify(server), originalServer, "inspection must not change server data");
 });
