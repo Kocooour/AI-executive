@@ -60,6 +60,9 @@ export function useSync() {
   const [recoveryError, setRecoveryError] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
   const recoveryFileBytes = useRef<Uint8Array | null>(null);
+  // A prepared download is valid only for the exact captured localStorage state.
+  // A late old-tab cleanup or out-of-band edit must invalidate it, never silently omit work.
+  const recoveryStorageSnapshot = useRef<string | null>(null);
   useEffect(() => { if (offlineRecoveryIsHeld()) setRecoveryHeld(true); }, []);
   // Whether the server's data was restored since this browser last held it, so that what it holds (or waits to send) was made
   // against data that no longer exists. A browser that never stored a generation but has synchronized before (last used
@@ -262,6 +265,13 @@ export function useSync() {
           if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
         });
       } catch (error) {
+        // A different tab could have persisted a hold while this adoption transaction
+        // was pending. Never fall back to a destructive wipe in that case.
+        if (offlineRecoveryIsHeld()) {
+          setRecoveryHeld(true);
+          setSyncStatus("offline");
+          return false;
+        }
         // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
         // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
         console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
@@ -281,12 +291,16 @@ export function useSync() {
       serverRevision.current = source.revision;
       rememberGeneration(source.restoreGeneration);
     } finally {
-      // Whatever happened above, the page reloads and starts from the server's data; the tab never stays write-blocked.
-      setAfterRestoreFlag(notice ? "remote" : "sibling");
-      postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
-      window.location.reload();
+      if (offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      } else {
+        setAfterRestoreFlag(notice ? "remote" : "sibling");
+        postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+        window.location.reload();
+      }
     }
-    return true;
+    return !offlineRecoveryIsHeld();
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;
@@ -485,6 +499,11 @@ export function useSync() {
   // once that copy is taken over, the local copy counts as synchronized (see below).
   async function pullFromServer(afterSignIn = false) {
     await syncQueue.current;
+    if (offlineRecoveryIsHeld()) {
+      setRecoveryHeld(true);
+      setSyncStatus("offline");
+      return;
+    }
     if (localStorage.getItem(pendingKey) === "1") {
       await syncToServer();
       return;
@@ -500,11 +519,12 @@ export function useSync() {
         const snapshot = (await response.json()) as ServerSnapshot;
         // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
+        if (offlineRecoveryIsHeld()) return "held" as const;
         if (snapshot.revision <= serverRevision.current) return "synced" as const;
         // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
         if (restoredSinceKnown(snapshot.restoreGeneration)) {
-          await adoptServerCopy(snapshot, heldBack.length > 0);
-          return "synced" as const;
+          const adopted = await adoptServerCopy(snapshot, heldBack.length > 0);
+          return adopted ? "synced" as const : "held" as const;
         }
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
@@ -522,6 +542,11 @@ export function useSync() {
         return "synced" as const;
       });
       if (outcome === "save") { await syncToServer(); return; }
+      if (outcome === "held" || offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+        return;
+      }
       if (outcome === "synced") setSyncStatus("synced");
       // The local copy holds something the server does not have yet: send it. (Usually the change
       // that got in the way brings its own save; one more is harmless.)
@@ -539,6 +564,7 @@ export function useSync() {
     setRecoveryReady(false);
     setRecoveryError(false);
     recoveryFileBytes.current = null;
+    recoveryStorageSnapshot.current = null;
     try {
       const hold = readOfflineRecoveryHold();
       if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
@@ -548,6 +574,8 @@ export function useSync() {
       const server = (await response.json()) as ServerSnapshot;
       if (server.restoreGeneration !== hold.observedGeneration)
         throw new Error("OFFLINE_RECOVERY_GENERATION_CHANGED");
+      // IndexedDB read transaction queues behind all earlier conflicting writes,
+      // including writes from other tabs. The persistent middleware blocks later mutations.
       const [localEntities, localRelations, base] = await readLocalWithBase();
       const drafts = readRawRecoveryDrafts(localStorage);
       const markers = readRawRecoveryMarkers(localStorage);
@@ -570,17 +598,38 @@ export function useSync() {
         newRestoreGeneration: hold.observedGeneration,
         baseRevision: serverRevision.current,
       }, Date.now());
-      recoveryFileBytes.current = encodeOfflineRecoveryFile(bundle);
+      const bytes = encodeOfflineRecoveryFile(bundle);
+      if (!offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HOLD_LOST");
+      const sameHold = readOfflineRecoveryHold();
+      if (!sameHold || JSON.stringify(sameHold) !== JSON.stringify(hold))
+        throw new Error("OFFLINE_RECOVERY_HOLD_CHANGED");
+      // Record only a private in-memory snapshot, not a new localStorage key.
+      recoveryStorageSnapshot.current = JSON.stringify([sameHold, nextDrafts, nextMarkers]);
+      recoveryFileBytes.current = bytes;
       setRecoveryReady(true);
     } catch {
       // No sensitive data (including errors containing IDs) escapes to logs.
       recoveryFileBytes.current = null;
+      recoveryStorageSnapshot.current = null;
       setRecoveryError(true);
     } finally { setRecoveryPreparing(false); }
   }
   function downloadOfflineRecovery() {
     const bytes = recoveryFileBytes.current;
     if (!recoveryHeld || !offlineRecoveryIsHeld() || !bytes) return;
+    // localStorage reads are synchronous, so this check remains in the user's
+    // direct click activation (required by mobile Safari). Reject stale bundles.
+    try {
+      const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
+      if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
+        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+    } catch {
+      recoveryFileBytes.current = null;
+      recoveryStorageSnapshot.current = null;
+      setRecoveryReady(false);
+      setRecoveryError(true);
+      return;
+    }
     const blob = new Blob([new Uint8Array(bytes).buffer], { type: offlineRecoveryFile.mimeType });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
