@@ -1409,7 +1409,7 @@ export function useLumiApp() {
         unblock: () => { signedOut.current = false; document.body.inert = false; },
         endSession: () => fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
-        wipe: () => clearLocalData().catch(() => undefined),
+        wipe: () => clearLocalData(),
       });
       if (result !== "signed-out") {
         postToTabs({ type: "sign-out-cancelled", from: tabId.current });
