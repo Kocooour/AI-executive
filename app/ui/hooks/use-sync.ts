@@ -247,7 +247,15 @@ export function useSync() {
       setRecoveryHeld(true);
       try {
         await beginOfflineRecoveryHoldSafely(restoreGeneration.current, source.restoreGeneration);
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
+          // Another tab finished an owner-approved sign-out before this hold
+          // acquired its lock. The old data was intentionally purged: never
+          // offer a misleading rescue file for that now-empty local database.
+          signedOut.current = true;
+          window.location.replace("/");
+          return false;
+        }
         // A failed/corrupt localStorage hold is still a hard stop in this tab.
         setRecoveryError(true);
       }
