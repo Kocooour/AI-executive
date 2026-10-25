@@ -77,6 +77,88 @@ test("2b audit: unassigned standalone note and dangling relation are flagged", (
   assert.ok(issue(r, "2a-preflight-blocked") > 0);
 });
 
+test("2b audit: legacy note projectId inherits the project Area even without a canonical link", () => {
+  const s = input();
+  const note = s.entities.find(e => e.id === "n-project");
+  note.properties.projectId = "p-one";
+  s.relations = s.relations.filter(r => r.id !== "r-np");
+  s.relations.push(link("legacy-project-note-edge", "n-project", "n-standalone", "related"));
+  const r = audit(s);
+  assert.equal(issue(r, "ambiguous-note-project-membership"), 0);
+  assert.equal(issue(r, "unassigned-standalone-note"), 0);
+  assert.equal(issue(r, "cross-area-relation"), 1, "legacy projectId must route the note through Area A");
+  assert.equal(r.summary.crossAreaRelations, 1);
+  assert.equal(r.executable, false);
+});
+
+test("2b audit: conflicting legacy projectId and canonical Area must block partition", () => {
+  const s = input();
+  const note = s.entities.find(e => e.id === "n-project");
+  note.properties.projectId = "p-one";
+  s.relations = s.relations.filter(r => r.id !== "r-np");
+  s.relations.push(link("r-note-wrong-area", "n-project", "a-two", "belongs_to_area"));
+  const r = audit(s);
+  assert.equal(issue(r, "project-note-area-disagrees"), 1);
+  assert.equal(issue(r, "unassigned-standalone-note"), 0);
+  assert.ok(issue(r, "unroutable-shared-relation") > 0);
+  assert.equal(r.executable, false);
+});
+
+test("2b audit: legacy note areaId routes a standalone note without a canonical link", () => {
+  const s = input();
+  const note = s.entities.find(e => e.id === "n-standalone");
+  note.properties.areaId = "a-two";
+  s.relations = s.relations.filter(r => r.id !== "r-ns");
+  s.relations.push(link("legacy-area-note-edge", "t-in", "n-standalone", "related"));
+  const r = audit(s);
+  assert.equal(issue(r, "unassigned-standalone-note"), 0);
+  assert.equal(issue(r, "invalid-area-target"), 0);
+  assert.equal(issue(r, "cross-area-relation"), 1);
+  assert.equal(r.summary.crossAreaRelations, 1);
+});
+
+test("2b audit: conflicting note areaId and canonical Area fail closed", () => {
+  const s = input();
+  s.entities.find(e => e.id === "n-standalone").properties.areaId = "a-one";
+  const r = audit(s);
+  assert.equal(issue(r, "ambiguous-note-area-membership"), 1);
+  assert.ok(issue(r, "unroutable-shared-relation") > 0);
+});
+
+test("2b audit: legacy note projectId and canonical project membership cannot disagree", () => {
+  const s = input();
+  const note = s.entities.find(e => e.id === "n-project");
+  note.properties.projectId = "p-other";
+  s.entities.push(entity("p-other", "project"));
+  s.relations.push(link("r-p-other", "p-other", "a-two", "belongs_to_area"));
+  const r = audit(s);
+  assert.equal(issue(r, "ambiguous-note-project-membership"), 1);
+  assert.ok(issue(r, "unroutable-shared-relation") > 0);
+});
+
+test("2b audit: active standalone note in archived Area is blocked despite clean 2a", () => {
+  const s = input();
+  s.entities.push({ ...entity("archived-note-area", "area", { kind: "shared" }), status: "archived" });
+  s.relations = s.relations.map(r => r.id === "r-ns"
+    ? { ...r, targetEntityId: "archived-note-area" } : r);
+  const r = audit(s);
+  assert.equal(issue(r, "2a-not-normalized"), 0, "2a does not enforce note Areas");
+  assert.equal(issue(r, "2a-preflight-blocked"), 0, "2a does not enforce note Areas");
+  assert.equal(issue(r, "inactive-area-for-active-item"), 1);
+  assert.equal(issue(r, "unassigned-standalone-note"), 0);
+  assert.ok(issue(r, "unroutable-shared-relation") > 0);
+  assert.equal(r.executable, false);
+});
+
+test("2b audit: active note inheriting an archived project Area is blocked", () => {
+  const s = input();
+  s.entities.find(e => e.id === "p-one").status = "archived";
+  s.entities.find(e => e.id === "a-one").status = "archived";
+  const r = audit(s);
+  assert.ok(issue(r, "inactive-area-for-active-item") > 0);
+  assert.equal(r.executable, false);
+});
+
 test("2b audit: pending 2a and occupied ancillary tables remain explicit blockers", () => {
   const s = input();
   s.relations = s.relations.filter(x => x.id !== "r-p");
