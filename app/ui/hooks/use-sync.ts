@@ -737,7 +737,13 @@ export function useSync() {
             !Array.isArray(server.entities) || !Array.isArray(server.relations))
           throw new Error("OFFLINE_REVIEW_SERVER");
       } catch { throw new Error("OFFLINE_REVIEW_SERVER"); }
-      const summary = inspectOfflineRecoveryBytes(bytes, server);
+      const summary = inspectOfflineRecoveryBytes(bytes, {
+        // Runtime-validated above; a ServerSnapshot otherwise declares this
+        // field optional for older server responses.
+        restoreGeneration: server.restoreGeneration as number,
+        entities: server.entities,
+        relations: server.relations,
+      });
       if (requestId !== recoveryInspectRequest.current) return;
       const latestHold = readOfflineRecoveryHold();
       if (!offlineRecoveryIsHeld() || !latestHold ||
