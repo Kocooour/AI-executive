@@ -538,12 +538,13 @@ export function useSync() {
         // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
         if (offlineRecoveryIsHeld()) return "held" as const;
-        if (snapshot.revision <= serverRevision.current) return "synced" as const;
-        // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
+        // Restore generations are authoritative even when a backup rolls the
+        // server revision backwards (or keeps the same number).
         if (restoredSinceKnown(snapshot.restoreGeneration)) {
           const adopted = await adoptServerCopy(snapshot, heldBack.length > 0);
           return adopted ? "synced" as const : "held" as const;
         }
+        if (snapshot.revision <= serverRevision.current) return "synced" as const;
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
