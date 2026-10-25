@@ -277,9 +277,21 @@ export function enforceAreaWriteInvariants(input: {
     const areaIdProperty = task.properties.areaId;
     const propertyIsNew = areaIdProperty !== undefined && (gainsProject || !before || before.properties.areaId !== areaIdProperty);
     if (propertyIsNew) removeAreaIdProperty(task.id);
-    if (toDrop.length || propertyIsNew) {
+    // Also strip newly supplied legacy free-text labels: a task that enters a
+    // project inherits the project Area even when a legacy client sent a label.
+    const areaLabel = task.properties.area;
+    const labelIsNew = areaLabel !== undefined && (gainsProject || !before || before.properties.area !== areaLabel);
+    if (labelIsNew) {
+      edit(task.id, (entity) => {
+        const properties = { ...entity.properties };
+        delete properties.area;
+        return { ...entity, properties };
+      });
+      touch(task.id, false);
+    }
+    if (toDrop.length || propertyIsNew || labelIsNew) {
       if (gainsProject) report.tasksInheritingFromProject += 1;
-      else report.droppedProjectTaskAreaLinks += toDrop.length + (propertyIsNew ? 1 : 0);
+      else report.droppedProjectTaskAreaLinks += toDrop.length + (propertyIsNew ? 1 : 0) + (labelIsNew ? 1 : 0);
     }
   }
 
@@ -327,8 +339,18 @@ export function enforceAreaWriteInvariants(input: {
     if (label === undefined || label === null) continue;
     const before = currentEntities.get(item.id);
     if (before && before.properties.area === label) continue;
-    if (typeof label !== "string" || !displayLabel(label) || displayLabel(label).length > 1000) {
+    if (typeof label !== "string" || displayLabel(label).length > 1000) {
       throw new AreaWriteInvalid();
+    }
+    if (!displayLabel(label)) {
+      // The offline planner treats an empty legacy label as unassigned.
+      edit(item.id, (entity) => {
+        const properties = { ...entity.properties };
+        delete properties.area;
+        return { ...entity, properties };
+      });
+      touch(item.id, false);
+      continue;
     }
     // An explicit link/ID wins over the obsolete label; R4 and the final cleanup
     // below remove its old property, preserving the user's current explicit choice.
