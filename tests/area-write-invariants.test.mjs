@@ -64,6 +64,21 @@ test("R1: a new properties.areaId on a project task is removed; an unchanged leg
   assert.equal(out.report.droppedProjectTaskAreaLinks, 1);
 });
 
+test("R1: a newly created project task discards legacy free-text Area; a blank standalone label gets fallback", () => {
+  const current = state(baseEntities(), baseRelations());
+  const next = state([...current.entities,
+    ent("project-label", "task", "personal", { area: "Other area" }),
+    ent("blank-label", "task", "personal", { area: "  " }),
+  ], [...current.relations, rel("r:project-label", "project-label", "proj", "belongs_to_project")]);
+  const out = run(current, next);
+  assert.equal("area" in entity(out, "project-label").properties, false);
+  assert.deepEqual(areaLinks(out, "project-label"), []);
+  assert.equal("area" in entity(out, "blank-label").properties, false);
+  assert.deepEqual(areaLinks(out, "blank-label").map((r) => r.targetEntityId), [FALLBACK]);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+});
+
 test("R1: a brand-new task created inside a project never keeps a task-level Area link or areaId", () => {
   const current = state(baseEntities(), baseRelations());
   const next = state([...current.entities, ent("n", "task", "personal", { areaId: "area:b" })],
