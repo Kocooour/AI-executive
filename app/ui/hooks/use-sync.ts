@@ -12,6 +12,10 @@ import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/ado
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
+import { beginOfflineRecoveryHold, offlineRecoveryIsHeld, offlineRecoveryHoldKey, readOfflineRecoveryHold } from "../../../lib/d2b-recovery-hold";
+import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
+import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
+import { readRawRecoveryDrafts } from "../../../lib/d2b-recovery-local";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -48,6 +52,15 @@ export function useSync() {
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
+  // D2b: restoration must never erase offline work before an explicit recovery.
+  // A storage-backed hold also survives tab crashes, reloads and other open tabs.
+  const [recoveryHeld, setRecoveryHeld] = useState(false);
+  const [recoveryPreparing, setRecoveryPreparing] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryError, setRecoveryError] = useState(false);
+  const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
+  const recoveryFileBytes = useRef<Uint8Array | null>(null);
+  useEffect(() => { if (offlineRecoveryIsHeld()) setRecoveryHeld(true); }, []);
   // Whether the server's data was restored since this browser last held it, so that what it holds (or waits to send) was made
   // against data that no longer exists. A browser that never stored a generation but has synchronized before (last used
   // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
@@ -221,6 +234,19 @@ export function useSync() {
   // other tabs told to reload, and this one reloads and starts from the restored state. `notice`: the restore happened
   // elsewhere, say so after the reload. The caller holds the sync lock (or is in the queue); replaceLocalWithServer takes them.
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
+    // The generation mismatch is a STOP, not permission to wipe local data.
+    // Persist synchronously before the first await so other tabs cannot write.
+    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration)) {
+      setRecoveryHeld(true);
+      try {
+        beginOfflineRecoveryHold(restoreGeneration.current, source.restoreGeneration);
+      } catch {
+        // A failed/corrupt localStorage hold is still a hard stop in this tab.
+        setRecoveryError(true);
+      }
+      setSyncStatus("offline");
+      return false;
+    }
     if (isAdopting()) return true;
     beginAdoption();
     try {
@@ -293,6 +319,7 @@ export function useSync() {
   }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
+      if (event.key === offlineRecoveryHoldKey && event.newValue !== null) setRecoveryHeld(true);
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
     };
     window.addEventListener("storage", onStorage);
@@ -316,6 +343,7 @@ export function useSync() {
     revivedIds: string[] = [],
     generation: number | undefined = restoreGeneration.current,
   ) {
+    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
     return fetch("/api/store", {
       signal: requestTimeout(),
       method: "PUT",
@@ -503,7 +531,82 @@ export function useSync() {
     }
   }
 
+  // TWO explicit steps: prepare a private byte array, then download from the
+  // next direct button click. A delayed synthetic click is unreliable on iOS.
+  async function prepareOfflineRecoveryDownload() {
+    if (!offlineRecoveryIsHeld() || recoveryPreparing) return;
+    setRecoveryPreparing(true);
+    setRecoveryReady(false);
+    setRecoveryError(false);
+    recoveryFileBytes.current = null;
+    try {
+      const hold = readOfflineRecoveryHold();
+      if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
+      // GET only: do not sync, merge, normalize, clean local storage or adopt.
+      const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+      if (!response.ok) throw new Error("OFFLINE_RECOVERY_SERVER_UNAVAILABLE");
+      const server = (await response.json()) as ServerSnapshot;
+      if (server.restoreGeneration !== hold.observedGeneration)
+        throw new Error("OFFLINE_RECOVERY_GENERATION_CHANGED");
+      const [localEntities, localRelations, base] = await readLocalWithBase();
+      const drafts = readRawRecoveryDrafts(localStorage);
+      const deleted = pendingDeletedIdsIn(localStorage);
+      const revived = pendingRevivedIdsIn(localStorage);
+      const pendingSync = localStorage.getItem(pendingKey) !== null;
+      // In-flight transactions started before the hold may finish. Double-read
+      // and refuse export if their snapshot changed; never silently truncate.
+      const [nextEntities, nextRelations, nextBase] = await readLocalWithBase();
+      const nextDrafts = readRawRecoveryDrafts(localStorage);
+      if (JSON.stringify([localEntities, localRelations, base, drafts]) !==
+          JSON.stringify([nextEntities, nextRelations, nextBase, nextDrafts]))
+        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      const bundle = prepareOfflineRecovery({
+        base: base ?? { entities: [], relations: [] },
+        local: { entities: localEntities, relations: localRelations },
+        pendingDeletedIds: deleted, pendingRevivedIds: revived,
+        noteDrafts: drafts.noteDrafts,
+        projectContextDrafts: drafts.projectContextDrafts,
+        pendingSync,
+        oldRestoreGeneration: hold.knownGeneration ?? 0,
+        newRestoreGeneration: hold.observedGeneration,
+        baseRevision: serverRevision.current,
+      }, Date.now());
+      recoveryFileBytes.current = encodeOfflineRecoveryFile(bundle);
+      setRecoveryReady(true);
+    } catch {
+      // No sensitive data (including errors containing IDs) escapes to logs.
+      recoveryFileBytes.current = null;
+      setRecoveryError(true);
+    } finally { setRecoveryPreparing(false); }
+  }
+  function downloadOfflineRecovery() {
+    const bytes = recoveryFileBytes.current;
+    if (!recoveryHeld || !offlineRecoveryIsHeld() || !bytes) return;
+    const blob = new Blob([new Uint8Array(bytes).buffer], { type: offlineRecoveryFile.mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = offlineRecoveryFile.filename;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    try {
+      anchor.click();
+      // This records a REQUEST, not proof the browser saved the file.
+      setRecoveryDownloadRequested(true);
+    } finally {
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+  }
+
   return {
+    recoveryHeld,
+    recoveryPreparing,
+    recoveryReady,
+    recoveryError,
+    recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload,
+    downloadOfflineRecovery,
     items,
     relations,
     unsent,
