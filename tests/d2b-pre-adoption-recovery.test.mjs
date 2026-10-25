@@ -3,9 +3,10 @@ import test from "node:test";
 import { offlineRecoveryHoldKey, beginOfflineRecoveryHold, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../lib/d2b-recovery-local.ts";
 import { OfflineRecoveryInvalid } from "../lib/d2b-offline-reconciliation.ts";
-import { deletedKey, revivedKey, pendingKey } from "../lib/pending-markers.ts";
-import { notesDraftsKey } from "../lib/notes-drafts.ts";
-import { projectContextDraftPrefix } from "../lib/project-context-drafts.ts";
+import { deletedKey, revivedKey, pendingKey, pendingSeqKey, captureMarkers, clearSentMarkers, clearAllMarkers } from "../lib/pending-markers.ts";
+import { notesDraftsKey, clearNotesDrafts, settleNotesDraft, dropNotesDraft } from "../lib/notes-drafts.ts";
+import { projectContextDraftPrefix, clearProjectContextDrafts, dropProjectContextDraft } from "../lib/project-context-drafts.ts";
+import { adoptionWriteGuard, allowAdoptionWrites, AdoptionWriteRefused } from "../lib/adoption.ts";
 
 const storage = (pairs = []) => {
   const data = new Map(pairs);
@@ -88,4 +89,53 @@ test("D2b: corrupt legacy markers and contradictory intents fail closed", () => 
 test("D2b: drafts above per-record cap are rejected instead of truncated", () => {
   const s = storage([[notesDraftsKey + ":one:two", "x".repeat(128 * 1024 + 1)]]);
   assert.throws(() => readRawRecoveryDrafts(s), OfflineRecoveryInvalid);
+});
+
+test("D2b: an old in-flight save cannot clear pending markers after a sibling holds recovery", () => {
+  // The persistent hold was installed by earlier tests; these are precisely the
+  // cleanup calls made when a request started before the hold eventually returns.
+  const s = storage([
+    [pendingKey, "1"],
+    [pendingSeqKey, "000001-old-save"],
+    [deletedKey + ":0000000000010-tab-old", "deleted-record"],
+    [revivedKey + ":0000000000011-tab-old", "revived-record"],
+    [deletedKey, '["legacy-record"]'],
+  ]);
+  const oldSave = captureMarkers(s);
+  const before = s.snapshot();
+  clearSentMarkers(s, oldSave);
+  clearAllMarkers(s);
+  assert.deepEqual(s.snapshot(), before, "the recovery file still needs the raw intent markers");
+  assert.deepEqual(readRawRecoveryMarkers(s), {
+    pendingDeletedIds: ["deleted-record", "legacy-record"],
+    pendingRevivedIds: ["revived-record"],
+    pendingSync: true,
+  });
+});
+
+test("D2b: late note/project draft settlement and cleanup cannot remove rescue data", () => {
+  const note = { id: "task-1", text: "typed text", base: "", at: 101, page: "tab-1" };
+  const noteKey = notesDraftsKey + ":tab-1:task-1";
+  const contextKey = projectContextDraftPrefix + ":tab-1:personal:project-1";
+  const s = storage([[noteKey, JSON.stringify(note)], [contextKey, "raw context draft"]]);
+  const before = s.snapshot();
+  settleNotesDraft(s, note.page, note.id, note.text);
+  dropNotesDraft(s, note);
+  clearNotesDrafts(s);
+  dropProjectContextDraft(s, "tab-1", "personal", "project-1");
+  clearProjectContextDrafts(s);
+  assert.deepEqual(s.snapshot(), before);
+});
+
+test("D2b: even a pre-authorized adoption transaction may not mutate under recovery hold", async () => {
+  const transaction = {};
+  allowAdoptionWrites(transaction);
+  let mutationCount = 0;
+  const core = adoptionWriteGuard({
+    table() {
+      return { mutate: async () => { mutationCount += 1; } };
+    },
+  });
+  await assert.rejects(core.table("entities").mutate({ trans: transaction }), AdoptionWriteRefused);
+  assert.equal(mutationCount, 0);
 });
