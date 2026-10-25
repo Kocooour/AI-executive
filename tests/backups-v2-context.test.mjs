@@ -32,7 +32,14 @@ const task = (id, title = id) => ({ id, type: "task", title, status: "open", wor
 const note = (id, title, content) => ({ id, type: "note", title, content, status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 2 });
 const setEntities = (entities, deleted = []) => {
   const current = store.readSnapshot();
-  const result = store.replaceSnapshot(current.revision, [current.entities.find((entity) => entity.id === "workspace:personal"), ...entities], [], deleted, [], current.restoreGeneration);
+  // Preserve protected system Areas and their surviving links while reseeding
+  // the unrelated backup fixtures. Dropping them would be a forbidden raw PUT.
+  const protectedAreas = current.entities.filter((entity) => entity.type === "area");
+  const nextEntities = [current.entities.find((entity) => entity.id === "workspace:personal"), ...protectedAreas, ...entities];
+  const keptIds = new Set(nextEntities.map((entity) => entity.id));
+  const links = current.relations.filter((link) =>
+    keptIds.has(link.sourceEntityId) && keptIds.has(link.targetEntityId));
+  const result = store.replaceSnapshot(current.revision, nextEntities, links, deleted, [], current.restoreGeneration);
   assert.equal(result.conflict, false);
 };
 const makeClaim = (value) => claims.createOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: randomUUID(), expectedRevision: 0,
