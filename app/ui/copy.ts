@@ -752,6 +752,7 @@ export const copy: Record<Language, Record<string, string>> = {
     serverError_hermesProviderReturnedStatus: "Hermes provider returned {status}",
     serverError_openaiProviderReturnedStatus: "OpenAI provider returned {status}",
     invalidBackup: "Invalid backup",
+    workScopeGroup: "Work scope", workScopeMyPlan: "My plan", workScopePersonal: "Personal", workScopeShared: "Shared",
   },
   cs: {
     settingsMail: "Pošta", mailInfo: "Připojení osobních účtů Gmail v jednotlivých prostorech. Pouze oprávnění ke čtení.", mailChooseWorkspace: "Nejprve vyber konkrétní prostor. Pohled Všechny nemá přístup k poště.", mailConnectGmail: "Připojit Gmail", mailNoAccounts: "Žádný Gmail není připojený.", mailInbox: "Doručené", mailSent: "Odeslané", mailSearch: "Hledat v Gmailu", mailNoMessages: "V náhledu nejsou žádné zprávy.", mailLoadFailed: "Nepodařilo se načíst účty.", mailConnectFailed: "Připojení Gmailu nelze zahájit. Ověř nastavení OAuth na serveru.", mailReadFailed: "Gmail nelze načíst. Ověř přístup a připojení.", mailDisconnectTitle: "Odpojit Gmail?", mailDisconnectConfirm: "Odebrat tento Gmail a jeho uložený přístupový token z Lumi?", mailDisconnectFailed: "Gmail se nepodařilo odpojit.",
@@ -1504,5 +1505,6 @@ export const copy: Record<Language, Record<string, string>> = {
     serverError_hermesProviderReturnedStatus: "Poskytovatel AI odpověděl chybou {status}.",
     serverError_openaiProviderReturnedStatus: "Poskytovatel AI odpověděl chybou {status}.",
     invalidBackup: "Neplatná záloha",
+    workScopeGroup: "Rozsah práce", workScopeMyPlan: "Můj plán", workScopePersonal: "Osobní", workScopeShared: "Sdílené",
   },
 };

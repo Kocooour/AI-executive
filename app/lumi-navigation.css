@@ -181,6 +181,42 @@
 .appShell > aside > nav button[data-nav-view="Calendar"] .navLabel > span { color: var(--icon-calendar); }
 .appShell > aside > nav button[data-nav-view="Search"] .navLabel > span { color: var(--icon-search); }
 
+/* D3 scope switcher Můj plán / Osobní / Sdílené (app/ui/views/work-scope-switcher-controls.ts). Prepared,
+   not mounted yet; three equal columns that wrap their label rather than overflow on a 320px screen. */
+.appShell .workScopeSwitcher {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+.appShell .workScopeOption {
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  background: transparent;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: center;
+  cursor: pointer;
+}
+.appShell .workScopeOption:hover { background: var(--hover); }
+.appShell .workScopeOption[aria-pressed="true"] { background: var(--workspace-soft); font-weight: 700; }
+@media (max-width: 359px) {
+  .appShell .workScopeSwitcher { gap: 2px; padding: 2px; }
+  .appShell .workScopeOption { padding-inline: 3px; }
+}
+
+.appShell .workScopeOption:focus-visible,
 .appShell .workspaceButton:focus-visible,
 .appShell .mobileWorkspaceButton:focus-visible,
 .appShell .workspaceMenu button:focus-visible,

@@ -5,10 +5,12 @@ import test from "node:test";
 import { createElement, Children } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WorkScopeSwitcherControls } from "../app/ui/views/work-scope-switcher-controls.ts";
+import { copy } from "../app/ui/copy.ts";
 
-const classes = { group: "group", option: "option", active: "active" };
+// The app's tr() looks keys up in app/ui/copy.ts the same way.
+const trFor = (language) => (key) => copy[language][key] ?? key;
 const props = (overrides = {}) => ({
-  enabled: true, language: "cs", value: "my-plan", onChange: () => {}, classes, ...overrides,
+  enabled: true, tr: trFor("cs"), value: "my-plan", onChange: () => {}, ...overrides,
 });
 const buttons = (rendered) => Children.toArray(rendered.props.children);
 
@@ -27,7 +29,7 @@ test("rendered control presents exactly three labeled native buttons and their s
   assert.ok(!markup.includes("workspace:personal"), "do not show internal workspaces");
 
   const english = renderToStaticMarkup(createElement(WorkScopeSwitcherControls, props({
-    value: "shared", language: "en",
+    value: "shared", tr: trFor("en"),
   })));
   assert.match(english, /aria-label="Work scope"/);
   assert.match(english, /data-work-read-scope="shared" aria-pressed="true"/);
@@ -74,26 +76,41 @@ test("scope controls use browser-native accessible keyboard controls and narrow-
     assert.equal(option.props.disabled, undefined);
   }
 
-  const css = readFileSync("app/ui/views/work-scope-switcher.module.css", "utf8");
-  assert.match(css, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(css, /min-height:\s*44px/);
-  assert.match(css, /overflow-wrap:\s*anywhere/);
-  assert.match(css, /:focus-visible/);
-  assert.match(css, /max-width:\s*359px/);
+  assert.ok(options.every((option) => option.props.className === "workScopeOption"));
+
+  // Styles live with the rest of the navigation (the repository has no CSS modules).
+  const css = readFileSync("app/lumi-navigation.css", "utf8");
+  const rule = (selector) => css.match(new RegExp(selector.replace(/[.[\]"=]/g, "\\$&") + "\\s*\\{([^}]*)\\}"))?.[1] ?? "";
+  assert.match(rule(".appShell .workScopeSwitcher"), /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(rule(".appShell .workScopeOption"), /min-height:\s*44px/);
+  assert.match(rule(".appShell .workScopeOption"), /overflow-wrap:\s*anywhere/);
+  // The selected option is told apart by weight too, not by color alone.
+  assert.match(rule('.appShell .workScopeOption[aria-pressed="true"]'), /font-weight:\s*700/);
+  const focus = css.match(/\.appShell \.workScopeOption:focus-visible,[^{]*\{([^}]*)\}/)?.[1] ?? "";
+  assert.match(focus, /outline:\s*2px solid var\(--focus-ring\)/);
+  assert.match(css, /@media \(max-width: 359px\)\s*\{\s*\.appShell \.workScopeSwitcher/);
 });
 
-test("activation gate: prepared switcher stays disconnected from all app entrypoints", () => {
+test("activation gate: prepared switcher stays disconnected from the app and lib source", () => {
   // This is a temporary, deliberately strict safeguard. Replace it with real
   // authorization and legacy-preservation integration tests *after* 2a–2c.
+  const own = new Set([
+    path.join("app", "ui", "views", "work-scope-switcher.tsx"),
+    path.join("app", "ui", "views", "work-scope-switcher-controls.ts"),
+  ]);
   const files = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return files(full);
-    return /\.(?:tsx?|jsx?)$/.test(entry.name) ? [full] : [];
+    return /\.(?:[cm]?[jt]sx?)$/.test(entry.name) ? [full] : [];
   });
-  for (const file of files("app")) {
-    if (file.endsWith("work-scope-switcher.tsx") || file.endsWith("work-scope-switcher-controls.ts")) continue;
-    const source = readFileSync(file, "utf8");
-    assert.doesNotMatch(source, /\b(?:WorkScopeSwitcher|WorkScopeSwitcherControls)\b|["']\S*work-scope-switcher(?:-controls)?["']/,
-      `premature D3 activation from ${file}`);
+  // The identifier, or any module specifier naming the switcher files (with or without an extension:
+  // static, side-effect, re-export or dynamic import).
+  const use = /\b(?:WorkScopeSwitcher|WorkScopeSwitcherControls)\b|["'`][^"'`\n]*work-scope-switcher(?:-controls)?(?:\.[cm]?[jt]sx?)?["'`]/;
+  for (const file of [...files("app"), ...files("lib")]) {
+    if (own.has(file)) continue;
+    assert.doesNotMatch(readFileSync(file, "utf8"), use, `premature D3 activation from ${file}`);
   }
+  // The pattern itself catches the forms that bypassed an earlier version.
+  for (const sample of ['import "./work-scope-switcher.tsx";', 'export * from "./views/work-scope-switcher.js";',
+    'await import("../ui/views/work-scope-switcher-controls.ts")']) assert.match(sample, use);
 });

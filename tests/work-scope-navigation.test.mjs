@@ -4,9 +4,11 @@ import test from "node:test";
 const {
   DEFAULT_WORK_READ_SCOPE,
   WORK_READ_SCOPE_ORDER,
-  WORK_READ_SCOPE_TEXT,
+  WORK_SCOPE_GROUP_COPY_KEY,
+  workScopeCopyKey,
   parseWorkReadScope,
 } = await import("../lib/work-scope-navigation.ts");
+const { copy } = await import("../app/ui/copy.ts");
 
 test("D3 scope navigation has exactly the approved three read-only scopes", () => {
   assert.deepEqual([...WORK_READ_SCOPE_ORDER], ["my-plan", "personal", "shared"]);
@@ -20,11 +22,13 @@ test("internal workspaces and malformed values are not user-visible read scopes"
   }
 });
 
-test("both languages label all scopes without inventing a third workspace", () => {
-  assert.equal(WORK_READ_SCOPE_TEXT.cs.labels["my-plan"], "Můj plán");
+test("both languages label all scopes in the app copy without inventing a third workspace", () => {
+  assert.equal(copy.cs[workScopeCopyKey("my-plan")], "Můj plán");
+  assert.equal(copy.en[workScopeCopyKey("my-plan")], "My plan");
   for (const language of ["cs", "en"]) {
-    assert.ok(WORK_READ_SCOPE_TEXT[language].group);
-    assert.deepEqual(Object.keys(WORK_READ_SCOPE_TEXT[language].labels), [...WORK_READ_SCOPE_ORDER]);
-    assert.ok(WORK_READ_SCOPE_ORDER.every((scope) => WORK_READ_SCOPE_TEXT[language].labels[scope]));
+    assert.ok(copy[language][WORK_SCOPE_GROUP_COPY_KEY]);
+    assert.ok(WORK_READ_SCOPE_ORDER.every((scope) => copy[language][workScopeCopyKey(scope)]));
+    assert.deepEqual(Object.keys(copy[language]).filter((key) => key.startsWith("workScope") && key !== WORK_SCOPE_GROUP_COPY_KEY).sort(),
+      WORK_READ_SCOPE_ORDER.map(workScopeCopyKey).sort());
   }
 });
