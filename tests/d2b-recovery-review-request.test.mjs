@@ -64,3 +64,19 @@ test("D2b: stale errors and stale completions never lock the picker", async () =
   await runLatestRecoveryInspection(sequence, null, async () => null, publish);
   assert.deepEqual(updates.at(-1), { busy: false, result: null, failure: null });
 });
+
+test("D2b: cancelling the file picker clears a previously completed inspection", async () => {
+  const sequence = { current: 0 };
+  const updates = [];
+  const publish = (state) => updates.push(state);
+  await runLatestRecoveryInspection(sequence, "valid-file", async () => ({
+    totalCandidates: 3,
+  }), publish);
+  assert.deepEqual(updates.at(-1), {
+    busy: false, result: { totalCandidates: 3 }, failure: null,
+  });
+  await runLatestRecoveryInspection(sequence, null, async () => {
+    throw Error("a cancelled selection must not inspect data");
+  }, publish);
+  assert.deepEqual(updates.at(-1), { busy: false, result: null, failure: null });
+});
