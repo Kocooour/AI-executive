@@ -1336,8 +1336,9 @@ export function useLumiApp() {
         clearSentMarkers(sentMarkers);
         setSyncStatus(offlineRecoveryIsHeld() ? "offline" : "synced");
       } catch {
-        await ensureDefaultWorkspace();
-        await load();
+        // If a sibling activated recovery during startup, even fallback seeding is forbidden.
+        if (!offlineRecoveryIsHeld()) await ensureDefaultWorkspace().catch(() => undefined);
+        await load().catch(() => undefined);
         setSyncStatus("offline");
       } finally {
         if (startupStoreRequest.current === storeRequest) startupStoreRequest.current = null;
