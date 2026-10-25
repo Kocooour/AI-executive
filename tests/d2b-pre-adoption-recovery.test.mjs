@@ -287,10 +287,13 @@ test("D2b: a wipe holding the cross-tab lock finishes before a later restore; no
     }, true);
     await Promise.resolve(); // Let the wipe acquire the exclusive lock first.
     const delayedHold = beginOfflineRecoveryHoldSafely(2, 3);
+    // Attach the rejection handler immediately: the hold may reject in the
+    // same microtask as the earlier wipe's completion.
+    const rejected = assert.rejects(delayedHold, /OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD/);
     assert.equal(s.getItem(offlineRecoveryHoldKey), null, "no shared hold during an authorized wipe");
     unlock();
     await wipe;
-    await assert.rejects(delayedHold, /OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD/);
+    await rejected;
     assert.equal(s.getItem(offlineRecoveryHoldKey), null, "do not advertise a rescue for deleted data");
     assert.equal(s.getItem("ai-executive-signed-out"), "1");
   } finally {
