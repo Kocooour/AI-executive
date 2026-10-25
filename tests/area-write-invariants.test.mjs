@@ -221,6 +221,18 @@ test("R3: a new standalone task or project with legacy areaId gains one canonica
   assert.deepEqual(plan.report.addedRelationIds, []);
 });
 
+test("R4: a new canonical relation supersedes an unchanged stale areaId and label", () => {
+  const current = state([...baseEntities(),
+    ent("t", "task", "personal", { areaId: "area:a", area: "Earlier Area" })], baseRelations());
+  const next = state(current.entities, [
+    ...current.relations, rel("r:t-choice", "t", "area:b", "belongs_to_area"),
+  ]);
+  const out = run(current, next);
+  assert.deepEqual(areaLinks(out, "t").map((link) => link.targetEntityId), ["area:b"]);
+  assert.equal("areaId" in entity(out, "t").properties, false);
+  assert.equal("area" in entity(out, "t").properties, false);
+});
+
 test("R4: explicitly changing areaId to an existing link drops other historical links", () => {
   const current = state([...baseEntities(), ent("t", "task", "personal", { areaId: "area:a" })],
     [rel("r:old-a", "t", "area:a", "belongs_to_area"), rel("r:old-b", "t", "area:b", "belongs_to_area")]);
