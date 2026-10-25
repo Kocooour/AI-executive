@@ -53,13 +53,3 @@ jobs:
       - name: Production build
         run: pnpm build
 
-      # Focused PR-only browser verification, not the release-only full E2E suite.
-      - name: Install Chromium for D2b focused regression
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 114
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Run D2b picker cancellation browser regression
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 114
-        env:
-          E2E_SKIP_BUILD: "1"
-        run: pnpm exec playwright test e2e/app.spec.ts --grep "native recovery file-picker cancel"
