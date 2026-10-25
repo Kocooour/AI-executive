@@ -153,6 +153,20 @@ export function recoveryPullDecision(generationChanged: boolean, serverRevision:
   return serverRevision <= knownRevision ? "synced" : "apply";
 }
 
+// A local rescue remains possible with no network: the marker itself contains
+// the first generation observed from the server. An online verification must
+// still reject invalid or older generations (never fall back on bad evidence).
+export function recoveryExportPlan(hold: OfflineRecoveryHold, liveGeneration: number | null):
+  { generation: number; verifiedNow: boolean } {
+  if (liveGeneration === null) {
+    if (!validNumber(hold.observedGeneration) ||
+        hold.observedGeneration <= (hold.knownGeneration ?? 0))
+      throw new Error("OFFLINE_RECOVERY_GENERATION_INVALID");
+    return { generation: hold.observedGeneration, verifiedNow: false };
+  }
+  return { generation: recoveryExportGeneration(hold, liveGeneration), verifiedNow: true };
+}
+
 export function recoveryExportGeneration(hold: OfflineRecoveryHold, current: number): number {
   if (!validNumber(current) || current < hold.observedGeneration ||
       current <= (hold.knownGeneration ?? 0))
