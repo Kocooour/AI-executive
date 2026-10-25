@@ -108,10 +108,18 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
               {" · "}{cs ? "obnovení" : "pending revivals"}: {app.recoveryInspection.counts.revivals}
             </p>
             <p>
+              {cs ? "Celkem posouzených změn položek a vazeb" : "Total classified entity and relation changes"}: {app.recoveryInspection.totalCandidates}
+            </p>
+            <p>
               {cs ? "Změněno i na serveru" : "Also changed on server"}: {app.recoveryInspection.reasons["remote-diverged"]}
               {" · "}{cs ? "chybí na serveru" : "Missing on server"}: {app.recoveryInspection.reasons["remote-missing"]}
               {" · "}{cs ? "kolize ID" : "ID collisions"}: {app.recoveryInspection.reasons["id-collision"]}
-              {" · "}{cs ? "jiná oblast dat" : "Changed workspace"}: {app.recoveryInspection.reasons["workspace-changed"]}
+              {" · "}{cs ? "jiný pracovní prostor" : "Changed workspace"}: {app.recoveryInspection.reasons["workspace-changed"]}
+            </p>
+            <p>
+              {cs ? "Pouze místní změna" : "Local change only"}: {app.recoveryInspection.reasons["local-change"]}
+              {" · "}{cs ? "již odpovídá serveru" : "Already matches server"}: {app.recoveryInspection.reasons["already-present"]}
+              {" · "}{cs ? "již smazáno na serveru" : "Already deleted on server"}: {app.recoveryInspection.reasons["already-deleted"]}
             </p>
             <p>
               {cs
