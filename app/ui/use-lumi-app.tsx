@@ -1189,7 +1189,8 @@ export function useLumiApp() {
         // This is the earliest safe point to compare generations: no local write, migration
         // or interrupted wipe may happen before the persistent recovery marker is recorded.
         if (restoredSinceKnown(snapshot.restoreGeneration)) {
-          await replaceLocalWithServer(snapshot, true);
+          // Adopt's mismatch branch persists the hold synchronously before the first await.
+          await adoptServerCopy(snapshot, true);
           await load();
           setSyncStatus("offline");
           return;
