@@ -120,9 +120,9 @@ test("D2b: manual reconciliation identifies scope movement and concurrent server
   assert.equal(report.requiresSeparateMembershipReview, true);
   assert.deepEqual(report.counts, { entities: 2, relations: 1, deletions: 1, revivals: 1, drafts: 2 });
   assert.deepEqual(report.candidates, [
-    { id: "new", kind: "entity", reason: "workspace-changed" },
+    { id: "new", kind: "entity", reason: "id-collision" },
     { id: "task", kind: "entity", reason: "workspace-changed" },
-    { id: "extra-link", kind: "relation", reason: "workspace-changed" },
+    { id: "extra-link", kind: "relation", reason: "id-collision" },
   ]);
   assert.equal(JSON.stringify(remote), before, "no replay or mutations");
 });
@@ -169,6 +169,55 @@ test("D2b: same-scope new IDs with different remote payloads are collisions, inc
     { id: "extra-link", kind: "relation", reason: "id-collision" },
   ]);
   assert.equal(r.automaticReplayAllowed, false);
+});
+
+test("D2b: collisions take precedence over missing IDs and workspace movement across both record kinds", () => {
+  const i = initial();
+  const bundle = prepareOfflineRecovery({
+    ...i,
+    base: { entities: [entity("existing", "Original")], relations: [] },
+    local: {
+      entities: [
+        entity("cross-kind-entity", "New local task"),
+        entity("cross-workspace-entity", "New in this space"),
+        entity("existing", "Local edit"),
+        entity("already-present", "Identical on server"),
+      ],
+      relations: [
+        relation("cross-kind-relation", "local-target"),
+        relation("cross-workspace-relation", "other-local-target"),
+      ],
+    },
+    pendingDeletedIds: [], pendingRevivedIds: [],
+    noteDrafts: [], projectContextDrafts: [],
+  }, 99);
+  const server = {
+    restoreGeneration: 3,
+    entities: [
+      entity("cross-kind-relation", "Remote entity with relation ID"),
+      entity("cross-workspace-entity", "Existing remote task", "another-workspace"),
+      entity("existing", "Remote edit", "another-workspace"),
+      entity("already-present", "Identical on server"),
+    ],
+    relations: [
+      relation("cross-kind-entity", "remote-target"),
+      relation("cross-workspace-relation", "remote-target", "another-workspace"),
+    ],
+  };
+  const before = JSON.stringify(server);
+  const report = assessOfflineRecovery(bundle, server);
+  const byId = Object.fromEntries(report.candidates.map(({ id, reason }) => [id, reason]));
+  assert.deepEqual(byId, {
+    "cross-kind-entity": "id-collision",
+    "cross-workspace-entity": "id-collision",
+    "existing": "workspace-changed",
+    "already-present": "already-present",
+    "cross-kind-relation": "id-collision",
+    "cross-workspace-relation": "id-collision",
+  });
+  assert.equal(report.candidates.filter((candidate) => candidate.reason === "id-collision").length, 4);
+  assert.equal(report.automaticReplayAllowed, false);
+  assert.equal(JSON.stringify(server), before, "collision checks must remain read-only");
 });
 
 test("D2b: already applied deletions are not misreported as remote-missing", () => {
