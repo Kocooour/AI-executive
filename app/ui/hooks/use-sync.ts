@@ -15,7 +15,7 @@ import { installRestoreFence } from "../../../lib/restore-fence-client";
 import { beginOfflineRecoveryHold, offlineRecoveryIsHeld, offlineRecoveryHoldKey, readOfflineRecoveryHold } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
-import { readRawRecoveryDrafts } from "../../../lib/d2b-recovery-local";
+import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -550,23 +550,22 @@ export function useSync() {
         throw new Error("OFFLINE_RECOVERY_GENERATION_CHANGED");
       const [localEntities, localRelations, base] = await readLocalWithBase();
       const drafts = readRawRecoveryDrafts(localStorage);
-      const deleted = pendingDeletedIdsIn(localStorage);
-      const revived = pendingRevivedIdsIn(localStorage);
-      const pendingSync = localStorage.getItem(pendingKey) !== null;
+      const markers = readRawRecoveryMarkers(localStorage);
       // In-flight transactions started before the hold may finish. Double-read
       // and refuse export if their snapshot changed; never silently truncate.
       const [nextEntities, nextRelations, nextBase] = await readLocalWithBase();
       const nextDrafts = readRawRecoveryDrafts(localStorage);
-      if (JSON.stringify([localEntities, localRelations, base, drafts]) !==
-          JSON.stringify([nextEntities, nextRelations, nextBase, nextDrafts]))
+      const nextMarkers = readRawRecoveryMarkers(localStorage);
+      if (JSON.stringify([localEntities, localRelations, base, drafts, markers]) !==
+          JSON.stringify([nextEntities, nextRelations, nextBase, nextDrafts, nextMarkers]))
         throw new Error("OFFLINE_RECOVERY_UNSTABLE");
       const bundle = prepareOfflineRecovery({
         base: base ?? { entities: [], relations: [] },
         local: { entities: localEntities, relations: localRelations },
-        pendingDeletedIds: deleted, pendingRevivedIds: revived,
+        pendingDeletedIds: markers.pendingDeletedIds, pendingRevivedIds: markers.pendingRevivedIds,
         noteDrafts: drafts.noteDrafts,
         projectContextDrafts: drafts.projectContextDrafts,
-        pendingSync,
+        pendingSync: markers.pendingSync,
         oldRestoreGeneration: hold.knownGeneration ?? 0,
         newRestoreGeneration: hold.observedGeneration,
         baseRevision: serverRevision.current,
