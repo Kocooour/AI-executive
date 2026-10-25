@@ -45,7 +45,14 @@ export async function runSignOut(steps: SignOutSteps, options: { writeTimeoutMs?
       steps.unblock();
       return ended;
     }
-    await steps.wipe();
+    try {
+      await steps.wipe();
+    } catch {
+      // The server session may already have ended. Never report that local
+      // private data was purged when the recovery hold or IndexedDB refused it.
+      // Keep input blocked until the browser reloads or owner recovery proceeds.
+      return "failed";
+    }
     return "signed-out";
   }
   return "writing";
