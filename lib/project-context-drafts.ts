@@ -3,6 +3,7 @@
 // Keys are per tab, project and workspace, never sent to the server or embedded in URLs.
 // All keys are purged by sign-out and restore adoption alongside notes drafts.
 import { isAdopting } from "./adoption";
+import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 import type { ProjectContext } from "./project-context";
 import type { DraftStorage } from "./notes-drafts";
 
@@ -89,12 +90,14 @@ export function keepProjectContextDraft(storage: DraftStorage, entry: KeptProjec
   } catch { return false; }
 }
 export function dropProjectContextDraft(storage: DraftStorage, page: string, workspaceId: string, projectId: string) {
+  if (offlineRecoveryIsHeld()) return;
   try { storage.removeItem(keyOf(page, workspaceId, projectId)); } catch { /* read-only browser storage */ }
 }
 
 // An in-flight save must not remove a newer draft typed while it was awaiting the server.
 export function settleProjectContextDraft(storage: DraftStorage, page: string, workspaceId: string,
   projectId: string, saved: ProjectContextText, newBase: ProjectContext) {
+  if (offlineRecoveryIsHeld()) return;
   const key = keyOf(page, workspaceId, projectId);
   let current: KeptProjectContextDraft | null = null;
   try { current = parse(storage.getItem(key)); } catch { /* unavailable */ }
@@ -108,6 +111,7 @@ export function settleProjectContextDraft(storage: DraftStorage, page: string, w
   }
 }
 export function clearProjectContextDrafts(storage: DraftStorage) {
+  if (offlineRecoveryIsHeld()) return;
   for (const key of keys(storage)) {
     try { storage.removeItem(key); } catch { /* best effort, same as notes drafts */ }
   }
