@@ -31,7 +31,9 @@ export function adoptionWriteGuard(down: DBCore): DBCore {
       return {
         ...table,
         mutate(request: DBCoreMutateRequest) {
-          if ((adopting || offlineRecoveryIsHeld()) && !adoptionTransactions.has(request.trans)) return Promise.reject(new AdoptionWriteRefused());
+          // A sibling can engage the persistent hold after an adoption transaction began.
+          // In that case even adoption-authorized writes must abort and roll back.
+          if (offlineRecoveryIsHeld() || (adopting && !adoptionTransactions.has(request.trans))) return Promise.reject(new AdoptionWriteRefused());
           return table.mutate(request);
         },
       };
