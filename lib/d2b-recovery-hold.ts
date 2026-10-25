@@ -122,8 +122,24 @@ export async function beginOfflineRecoveryHoldSafely(
   knownGeneration: number | undefined, observedGeneration: number | undefined,
 ): Promise<OfflineRecoveryHold> {
   heldInThisTab = true;
-  return withOfflineRecoveryDataLock(async () =>
-    beginOfflineRecoveryHold(knownGeneration, observedGeneration));
+  return withOfflineRecoveryDataLock(async () => {
+    // A different tab may have acquired this lock for an owner-approved sign-out
+    // before this restore was noticed. That wipe must finish atomically. Do not
+    // create an exportable recovery hold over the subsequently emptied store.
+    // A crashed/partial wipe is not a valid rescue snapshot either.
+    const storage = browserStorage();
+    if (!storage) throw new Error("OFFLINE_RECOVERY_HOLD_UNAVAILABLE");
+    try {
+      if (storage.getItem("ai-executive-signed-out") === "1" ||
+          storage.getItem("ai-executive-wipe-pending") === "1")
+        throw new Error("OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD");
+    } catch (error) {
+      if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD")
+        throw error;
+      throw new Error("OFFLINE_RECOVERY_HOLD_UNAVAILABLE");
+    }
+    return beginOfflineRecoveryHold(knownGeneration, observedGeneration);
+  });
 }
 
 // Generations can advance through multiple server restores while a browser is
