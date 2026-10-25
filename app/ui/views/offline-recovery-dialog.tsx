@@ -54,6 +54,11 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
             ? "Soubor se nepodařilo bezpečně připravit. Místní data zůstala beze změny. Nevypínejte úložiště prohlížeče ani nemažte data webu."
             : "The file could not be prepared safely. Your local data has been preserved. Do not clear browser storage or site data."}
         </p>}
+        {app.recoveryReady && app.recoveryOffline && !app.recoveryError && <p role="status">
+          {cs
+            ? "Soubor je připraven pouze z lokálních dat. Aktuální stav serveru nešlo ověřit; soubor bude označen jako neověřený a nesmí se automaticky importovat ani sloučit."
+            : "This file was prepared using local data only. The current server state could not be verified. The download is labeled unverified and must never be replayed or merged automatically."}
+        </p>}
         {app.recoveryReady && !app.recoveryError && <p role="status">
           {cs
             ? "Soubor je připravený. Klikněte na Stáhnout soubor; samotné připravení nic neukládá."
