@@ -183,6 +183,7 @@ export function useLumiApp() {
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
     pullFromServer, tabId, captureMarkers, clearSentMarkers,
     recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
+    recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
@@ -4061,6 +4062,10 @@ export function useLumiApp() {
     recoveryError,
     recoveryOffline,
     recoveryDownloadRequested,
+    recoveryInspecting,
+    recoveryInspection,
+    recoveryInspectionError,
+    inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload,
     downloadOfflineRecovery,
     downloadExport,
