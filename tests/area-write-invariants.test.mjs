@@ -284,6 +284,23 @@ test("P2: an explicitly changed legacy projectId supersedes an old project membe
   assert.deepEqual(plan.report.addedLegacyProjectRelationIds, []);
 });
 
+test("P2: new canonical project link removes the old project link and stale projectId", () => {
+  const current = state([...baseEntities(), ent("dest", "project"),
+    ent("t:fresh-project", "task", "personal", { projectId: "proj" })],
+  [...baseRelations(), rel("r:dest-area", "dest", "area:a", "belongs_to_area"),
+    rel("r:old-project", "t:fresh-project", "proj", "belongs_to_project")]);
+  const next = state(current.entities, [...current.relations,
+    rel("r:new-project", "t:fresh-project", "dest", "belongs_to_project", "personal", 90)]);
+  const out = run(current, next);
+  assert.deepEqual(out.relations.filter((r) =>
+    r.sourceEntityId === "t:fresh-project" && r.relationType === "belongs_to_project")
+    .map((r) => r.targetEntityId), ["dest"]);
+  assert.deepEqual(out.droppedRelationIds, ["r:old-project"]);
+  assert.equal("projectId" in entity(out, "t:fresh-project").properties, false);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedLegacyProjectRelationIds, []);
+});
+
 test("P2: an invalid new legacy projectId is rejected", () => {
   const current = state(baseEntities(), baseRelations());
   for (const bad of ["missing", "area:a", "area:t"]) {
