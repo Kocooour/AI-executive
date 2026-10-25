@@ -18,10 +18,13 @@
 | R1 | Nová vazba `belongs_to_area` (nebo nově nastavené `properties.areaId`) u úkolu, který je v projektu, se zahodí. |
 | R2 | Úkol, který v tomto zápisu získá projekt, přijde o **všechny** vlastní Oblasti a `areaId` (přesun do projektu = dědění). |
 | R3 | Nový projekt, nový samostatný úkol nebo úkol, který projekt opustil, a nemá Oblast → záložní Oblast (vytvoří se i s `kind`). Opouštějící úkol dostane záložní, ne Oblast bývalého projektu. |
-| R4 | Entita, která získala druhou Oblast: ponechá se nejnovější nová vazba (`createdAt`, pak ID), ostatní nové se zahodí; několik vazeb, které všechny existovaly dřív, je legacy a zůstává. |
+| R4 | Při novém přiřazení Oblasti vyhraje nově zvolená vazba a odstraní se i předchozí vazby na jinou Oblast (tombstones). Několik nedotčených historických vazeb se nemění a zůstává pro auditovaný aplikátor. |
 | R5 | Oblast nová nebo změněná v zápisu dostane `kind` podle workspace (obnoví také `kind` smazaný starým klientem bez sync base — dřívější „KNOWN GAP“). |
+| R6 | Nový projekt / samostatný úkol s `properties.areaId` od legacy klienta převede platný odkaz do kanonické `belongs_to_area`, odstraní legacy property a ponechá jedinou Oblast. Neplatný, archivovaný nebo meziscope odkaz odmítne jako HTTP 400 (atomicky). |
 
 Upravené entity dostanou `updatedAt = max(now, starý + 1)` a tam, kde se změnily vazby, `properties.relationsUpdatedAt` stejně (aby oprava vyhrála i bázi-prosté slučování starého klienta). Funkce je idempotentní (aplikace na vlastní výstup nic nemění) a nezávislá na pořadí vstupu.
+
+Nová explicitní změna `properties.areaId` na existující entitě se stejně převede na kanonickou relaci. Nedotčená stará `areaId` se nemění. `PUT /api/store` odmítá neplatný nový odkaz jako 400 bez částečného zápisu. Regresní testy `tests/area-write-invariants.test.mjs` a `tests/area-write-store.test.mjs` zahrnují přímé `PUT → 2a preflight` pro změnu Oblasti A→B i legacy property.
 
 Vyvolává ji každá serverová zápisová cesta:
 
