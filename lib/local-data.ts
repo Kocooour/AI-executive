@@ -69,18 +69,34 @@ export async function clearLocalData(timeoutMs = 4000) {
   return withOfflineRecoveryDataLock(async () => {
   // IndexedDB deletion and direct localStorage removal bypass the ordinary write fence.
   // A crashed/interrupted sign-out must not erase the owner's recovery source.
-  if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
+  const assertNotHeld = () => {
+    // An already-running wipe acquired the lock before the recovery request.
+    // The request nevertheless persists an intent immediately; stop the wipe
+    // as soon as that intent becomes visible, not just on initial entry.
+    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
+  };
+  assertNotHeld();
   localStorage.setItem(wipePendingKey, "1");
+  assertNotHeld();
   localStorage.setItem(signedOutKey, "1");
-  localDataKeys.forEach((key) => localStorage.removeItem(key));
+  localDataKeys.forEach((key) => {
+    assertNotHeld();
+    localStorage.removeItem(key);
+  });
   // Deletions and restorations waiting to be sent are one key each (lib/pending-markers.ts).
+  assertNotHeld();
   clearAllMarkers(localStorage);
   // So are notes drafts and the notes of open texts, one per tab.
+  assertNotHeld();
   clearNotesDrafts(localStorage);
+  assertNotHeld();
   clearProjectContextDrafts(localStorage);
+  assertNotHeld();
   clearOpenTexts(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
+  assertNotHeld();
   localStorage.setItem(serverSyncedKey, "1");
+  assertNotHeld();
   const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
     await db.entities.clear();
     await db.relations.clear();
