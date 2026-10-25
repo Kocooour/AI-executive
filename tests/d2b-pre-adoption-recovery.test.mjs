@@ -7,6 +7,7 @@ import { deletedKey, revivedKey, pendingKey, pendingSeqKey, captureMarkers, clea
 import { notesDraftsKey, clearNotesDrafts, settleNotesDraft, dropNotesDraft } from "../lib/notes-drafts.ts";
 import { projectContextDraftPrefix, clearProjectContextDrafts, dropProjectContextDraft } from "../lib/project-context-drafts.ts";
 import { adoptionWriteGuard, allowAdoptionWrites, AdoptionWriteRefused } from "../lib/adoption.ts";
+import { clearLocalData, finishInterruptedWipe } from "../lib/local-data.ts";
 
 const storage = (pairs = []) => {
   const data = new Map(pairs);
@@ -138,4 +139,11 @@ test("D2b: even a pre-authorized adoption transaction may not mutate under recov
   });
   await assert.rejects(core.table("entities").mutate({ trans: transaction }), AdoptionWriteRefused);
   assert.equal(mutationCount, 0);
+});
+
+test("D2b: interrupted sign-out cleanup and explicit wipe are forbidden while recovery is held", async () => {
+  // The prior tests installed a sticky hold in this process. No localStorage
+  // or IndexedDB cleanup may start, including after a crashed sign-out.
+  await finishInterruptedWipe();
+  await assert.rejects(clearLocalData(), /OFFLINE_RECOVERY_HELD/);
 });
