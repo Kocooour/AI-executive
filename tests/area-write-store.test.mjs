@@ -13,7 +13,7 @@ const store = await import("../lib/server-store.ts");
 const { mergeSnapshots } = await import("../lib/server-sync.ts");
 const { createAreaPreflight } = await import("../lib/area-normalization-preflight.ts");
 const { readAreaNormalizationSource } = await import("../lib/area-normalization-source.ts");
-const { generatedAreaId } = await import("../lib/area-normalization.ts");
+const { generatedAreaId, generatedRelationId } = await import("../lib/area-normalization.ts");
 const { commitInboxBatch, InboxBatchInvalid, validateInboxBatch } = await import("../lib/inbox-batch-store.ts");
 const ai = await import("../lib/ai-actions.ts");
 const work = await import("../lib/work-sessions.ts");
@@ -91,12 +91,9 @@ test("PUT: invalid explicit Area references rollback without modifying the store
 
 test("PUT: reviving the tombstoned original Area link does not override the newer Area", () => {
   const current = snap();
-  const old = current.tombstones.find((t) => t.id === current.tombstones.find((t) => t.id?.startsWith("relation:2a:"))?.id);
-  const original = old && current.relations.find((r) => r.id === old.id);
-  assert.equal(original, undefined, "the tombstoned link must be absent");
   // This test uses the task previously moved from the fallback Area to move-area-b.
-  const id = [...current.tombstones].reverse().find((t) => t.id.startsWith("relation:2a:"))?.id;
-  assert.ok(id);
+  const id = generatedRelationId("reassign-task", FALLBACK);
+  assert.ok(current.tombstones.some((t) => t.id === id), "the old Area link was tombstoned");
   const task = get("reassign-task");
   const area = get(FALLBACK);
   assert.ok(task && area);
