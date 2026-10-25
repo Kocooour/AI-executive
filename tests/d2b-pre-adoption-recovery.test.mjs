@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { offlineRecoveryHoldKey, offlineRecoveryIntentKey, beginOfflineRecoveryHold, beginOfflineRecoveryHoldSafely, withOfflineRecoveryDataLock, recoveryExportGeneration, recoveryPullDecision, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
+import { offlineRecoveryHoldKey, offlineRecoveryIntentKey, beginOfflineRecoveryHold, beginOfflineRecoveryHoldSafely, withOfflineRecoveryDataLock, recoveryExportGeneration, recoveryExportPlan, recoveryPullDecision, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../lib/d2b-recovery-local.ts";
 import { OfflineRecoveryInvalid } from "../lib/d2b-offline-reconciliation.ts";
 import { deletedKey, revivedKey, pendingKey, pendingSeqKey, captureMarkers, clearSentMarkers, clearAllMarkers } from "../lib/pending-markers.ts";
 import { notesDraftsKey, clearNotesDrafts, settleNotesDraft, dropNotesDraft } from "../lib/notes-drafts.ts";
 import { projectContextDraftPrefix, clearProjectContextDrafts, dropProjectContextDraft } from "../lib/project-context-drafts.ts";
 import { adoptionWriteGuard, allowAdoptionWrites, AdoptionWriteRefused } from "../lib/adoption.ts";
-import { clearLocalData, finishInterruptedWipe } from "../lib/local-data.ts";
+import { clearLocalData, clearPurgedRestoreBaseline, finishInterruptedWipe, restoreGenerationKey } from "../lib/local-data.ts";
 
 const storage = (pairs = []) => {
   const data = new Map(pairs);
@@ -317,4 +317,33 @@ test("D2b: an interrupted prior wipe is never declared a valid recovery source",
     Object.defineProperty(globalThis, "localStorage", { value: priorStorage, configurable: true });
     Object.defineProperty(globalThis, "navigator", { value: priorNavigator, configurable: true });
   }
+});
+
+test("D2b: successful full sign-out removes both old restore baseline markers", () => {
+  const s = storage([
+    [restoreGenerationKey, "2"],
+    ["ai-executive-server-synced", "1"],
+    ["ai-executive-signed-out", "1"],
+    ["ai-executive-wipe-pending", "1"],
+    ["ui-theme", "dark"],
+  ]);
+  clearPurgedRestoreBaseline(s);
+  assert.equal(s.getItem(restoreGenerationKey), null);
+  assert.equal(s.getItem("ai-executive-server-synced"), null);
+  assert.equal(s.getItem("ai-executive-signed-out"), "1");
+  assert.equal(s.getItem("ai-executive-wipe-pending"), "1", "still pending until the caller commits full wipe");
+  assert.equal(s.getItem("ui-theme"), "dark");
+  // At the next login a server generation 3 is not a restore against
+  // deleted data: no stale generation or synced baseline remains.
+  assert.equal(s.getItem(restoreGenerationKey), null);
+  assert.notEqual(s.getItem("ai-executive-server-synced"), "1");
+});
+
+test("D2b: recovery export works with no fresh server access, but flags lack of verification", () => {
+  const hold = { version: 1, knownGeneration: 2, observedGeneration: 3, createdAt: 100 };
+  assert.deepEqual(recoveryExportPlan(hold, null), { generation: 3, verifiedNow: false });
+  assert.deepEqual(recoveryExportPlan(hold, 4), { generation: 4, verifiedNow: true });
+  assert.throws(() => recoveryExportPlan(hold, 1), /OFFLINE_RECOVERY_GENERATION_INVALID/);
+  assert.throws(() => recoveryExportPlan(hold, Number.NaN), /OFFLINE_RECOVERY_GENERATION_INVALID/);
+  assert.throws(() => recoveryExportPlan({ ...hold, observedGeneration: 1 }, null), /OFFLINE_RECOVERY_GENERATION_INVALID/);
 });
