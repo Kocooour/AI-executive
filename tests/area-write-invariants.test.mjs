@@ -20,8 +20,8 @@ const baseEntities = () => [workspace("personal", "personal"), workspace("team",
   ent("area:a", "area", "personal", { kind: "private" }), ent("area:b", "area", "personal", { kind: "private" }),
   ent("proj", "project", "personal"), ent("area:t", "area", "team", { kind: "shared" })];
 const baseRelations = () => [rel("r:proj-area", "proj", "area:a", "belongs_to_area")];
-const run = (current, next, tombstones = [], now = NOW) =>
-  enforceAreaWriteInvariants({ current, next, tombstones, now });
+const run = (current, next, tombstones = [], now = NOW, previousTombstones = tombstones) =>
+  enforceAreaWriteInvariants({ current, next, tombstones, previousTombstones, now });
 const state = (entities, relations) => ({ entities, relations });
 const byId = (list) => [...list].sort((a, b) => (a.id < b.id ? -1 : 1));
 const areaLinks = (result, id) => result.relations.filter((r) => r.sourceEntityId === id && r.relationType === "belongs_to_area");
@@ -183,8 +183,62 @@ test("R3: an item that already has an Area (link, areaId or legacy label) is lef
   const out = run(current, next);
   assert.deepEqual(areaLinks(out, "p").map((r) => r.id), ["r:p"]);
   assert.deepEqual(areaLinks(out, "t1").map((r) => r.targetEntityId), ["area:a"]);
-  assert.deepEqual(areaLinks(out, "t2"), []);
+  assert.deepEqual(areaLinks(out, "t2").map((r) => r.targetEntityId), [generatedAreaId("personal", "Domov")]);
+  assert.equal("area" in entity(out, "t2").properties, false);
   assert.deepEqual(areaLinks(out, "t3").map((r) => r.targetEntityId), [FALLBACK]);
+});
+
+test("R4: restoring a tombstoned old Area relation must not override the current assignment", () => {
+  const current = state([...baseEntities(), ent("t", "task")],
+    [...baseRelations(), rel("r:new-b", "t", "area:b", "belongs_to_area", "personal", 200)]);
+  const next = state(current.entities, [...current.relations,
+    rel("r:revived-a", "t", "area:a", "belongs_to_area", "personal", 50)]);
+  const out = run(current, next, [], NOW, [{ id: "r:revived-a" }]);
+  assert.deepEqual(areaLinks(out, "t").map((r) => r.targetEntityId), ["area:b"]);
+  assert.deepEqual(out.droppedRelationIds, ["r:revived-a"]);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+});
+
+test("R3: legacy text-only Area on a new task gets a canonical Area and relation", () => {
+  const current = state([workspace("personal", "personal")], []);
+  const next = state([...current.entities,
+    ent("label-task", "task", "personal", { area: "  Rodina " }),
+    ent("label-proj", "project", "personal", { area: "rodina" }),
+  ], []);
+  const out = run(current, next);
+  const areaId = generatedAreaId("personal", "Rodina");
+  assert.deepEqual(areaLinks(out, "label-task").map((r) => r.targetEntityId), [areaId]);
+  assert.deepEqual(areaLinks(out, "label-proj").map((r) => r.targetEntityId), [areaId]);
+  assert.equal(out.entities.filter((e) => e.id === areaId).length, 1);
+  assert.equal(entity(out, areaId).properties.kind, "private");
+  assert.equal("area" in entity(out, "label-task").properties, false);
+  assert.equal(out.report.legacyAreaLabelsCanonicalized, 2);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+  assert.deepEqual(plan.report.createdAreaIds, []);
+});
+
+test("R3: ambiguous, archived or tombstoned free-text Area is rejected atomically", () => {
+  const base = state([workspace("personal", "personal")], []);
+  const incoming = (current) => state([...current.entities, ent("text-only", "task", "personal", { area: "Rodina" })], []);
+  const dup = state([...base.entities,
+    ent("area:x", "area", "personal", { kind: "private" }, { title: "Rodina" }),
+    ent("area:y", "area", "personal", { kind: "private" }, { title: " RODINA " })], []);
+  assert.throws(() => run(dup, incoming(dup)), /Invalid Area assignment/);
+  const archived = state([...base.entities, ent("area:old", "area", "personal", { kind: "private" }, { title: "Rodina", status: "archived" })], []);
+  assert.throws(() => run(archived, incoming(archived)), /Invalid Area assignment/);
+  assert.throws(() => run(base, incoming(base), [{ id: generatedAreaId("personal", "Rodina") }]), /Invalid Area assignment/);
+});
+
+test("system fallback Area cannot be renamed, archived or removed by a new write", () => {
+  const fallback = ent(FALLBACK, "area", "personal", { kind: "private" }, { title: "Nezařazeno" });
+  const current = state([workspace("personal", "personal"), fallback], []);
+  for (const next of [
+    state([workspace("personal", "personal")], []),
+    state([workspace("personal", "personal"), { ...fallback, title: "Changed" }], []),
+    state([workspace("personal", "personal"), { ...fallback, status: "archived" }], []),
+  ]) assert.throws(() => run(current, next), /Invalid Area assignment/);
 });
 
 test("R4: a second Area on an entity keeps the newest new link and drops the other new ones", () => {
