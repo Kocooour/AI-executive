@@ -182,7 +182,7 @@ test("R3: an item that already has an Area (link, areaId or legacy label) is lef
   [rel("r:p", "p", "area:a", "belongs_to_area")]);
   const out = run(current, next);
   assert.deepEqual(areaLinks(out, "p").map((r) => r.id), ["r:p"]);
-  assert.deepEqual(areaLinks(out, "t1"), []);
+  assert.deepEqual(areaLinks(out, "t1").map((r) => r.targetEntityId), ["area:a"]);
   assert.deepEqual(areaLinks(out, "t2"), []);
   assert.deepEqual(areaLinks(out, "t3").map((r) => r.targetEntityId), [FALLBACK]);
 });
@@ -195,14 +195,49 @@ test("R4: a second Area on an entity keeps the newest new link and drops the oth
     rel("r:t-b2", "t", "area:b", "belongs_to_area", "personal", 85),
   ]);
   const out = run(current, next);
-  assert.deepEqual(byId(areaLinks(out, "t")).map((r) => r.id), ["r:t-a", "r:t-b2"], "the pre-existing link is legacy and stays");
-  assert.deepEqual(out.droppedRelationIds, ["r:t-b"]);
-  assert.equal(out.report.duplicateAreaLinksDropped, 1);
+  assert.deepEqual(byId(areaLinks(out, "t")).map((r) => r.id), ["r:t-b2"], "the new assignment replaces the previous Area");
+  assert.deepEqual(out.droppedRelationIds, ["r:t-a", "r:t-b"]);
+  assert.equal(out.report.duplicateAreaLinksDropped, 2);
   // ties on createdAt are broken by ID
   const tie = state(current.entities, [
     rel("r:z1", "t", "area:a", "belongs_to_area", "personal", 90), rel("r:z2", "t", "area:b", "belongs_to_area", "personal", 90),
   ]);
   assert.deepEqual(areaLinks(run(state(current.entities, []), tie), "t").map((r) => r.id), ["r:z2"]);
+});
+
+test("R3: a new standalone task or project with legacy areaId gains one canonical Area link", () => {
+  const current = state(baseEntities(), baseRelations());
+  const next = state([...current.entities,
+    ent("legacy-task", "task", "personal", { areaId: "area:b" }),
+    ent("legacy-proj", "project", "personal", { areaId: "area:a" }),
+  ], current.relations);
+  const out = run(current, next);
+  assert.deepEqual(areaLinks(out, "legacy-task").map((link) => link.targetEntityId), ["area:b"]);
+  assert.deepEqual(areaLinks(out, "legacy-proj").map((link) => link.targetEntityId), ["area:a"]);
+  assert.equal("areaId" in entity(out, "legacy-task").properties, false);
+  assert.equal("areaId" in entity(out, "legacy-proj").properties, false);
+  assert.equal(out.report.legacyAreaIdsCanonicalized, 2);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+});
+
+test("R4: explicitly changing areaId to an existing link drops other historical links", () => {
+  const current = state([...baseEntities(), ent("t", "task", "personal", { areaId: "area:a" })],
+    [rel("r:old-a", "t", "area:a", "belongs_to_area"), rel("r:old-b", "t", "area:b", "belongs_to_area")]);
+  const next = state(current.entities.map((item) =>
+    item.id === "t" ? { ...item, properties: { areaId: "area:b" } } : item), current.relations);
+  const out = run(current, next);
+  assert.deepEqual(areaLinks(out, "t").map((link) => link.id), ["r:old-b"]);
+  assert.deepEqual(out.droppedRelationIds, ["r:old-a"]);
+  assert.equal(entity(out, "t").properties.areaId, undefined);
+});
+
+test("new invalid legacy areaId is rejected instead of persisting a broken reference", () => {
+  const current = state(baseEntities(), baseRelations());
+  for (const areaId of ["absent", "area:t"]) {
+    const next = state([...current.entities, ent("invalid", "task", "personal", { areaId })], current.relations);
+    assert.throws(() => run(current, next), /Invalid Area assignment/);
+  }
 });
 
 test("R4: several links that all pre-existed are legacy and stay untouched", () => {
@@ -275,7 +310,7 @@ test("idempotent: applying to its own output changes nothing (also against the s
 
 test("deterministic and independent of input order", () => {
   const current = state([workspace("personal", "personal"), workspace("team", "shared"), ent("area:a", "area", "personal", { kind: "private" })], []);
-  const items = [ent("p", "project"), ent("t1", "task"), ent("t2", "task"), ent("sp", "project", "team"), ent("st", "task", "team", { areaId: "area:a" })];
+  const items = [ent("p", "project"), ent("t1", "task"), ent("t2", "task"), ent("sp", "project", "team"), ent("st", "task", "team", { areaId: "area:team" }), ent("area:team", "area", "team", { kind: "shared" })];
   const links = [rel("r1", "t1", "area:a", "belongs_to_area", "personal", 70), rel("r2", "t1", "area:a", "belongs_to_area", "personal", 71)];
   const forward = run(current, state([...current.entities, ...items], links));
   const backward = run(current, state([...current.entities, ...[...items].reverse()], [...links].reverse()));
@@ -336,11 +371,12 @@ test("deleting a project: member tasks lose the dangling projectId and get the f
   assert.deepEqual(plan.report.addedRelationIds, []);
 });
 
-test("R4 compares only the links new in this write (a skewed clock cannot drop the user's choice)", () => {
+test("R4 newly assigned Area replaces the old one despite skewed clocks", () => {
   const current = state([...baseEntities(), ent("t", "task")], [rel("r:old", "t", "area:a", "belongs_to_area", "personal", 9_999_999)]);
   const next = state(current.entities, [...current.relations, rel("r:new", "t", "area:b", "belongs_to_area", "personal", 70)]);
   const out = run(current, next);
-  assert.deepEqual(out.droppedRelationIds, [], "the new link is the only new one; the legacy link is untouched");
+  assert.deepEqual(out.droppedRelationIds, ["r:old"], "the old link must be tombstoned when a new assignment arrives");
+  assert.deepEqual(areaLinks(out, "t").map((link) => link.targetEntityId), ["area:b"]);
 });
 
 test("the workspace kind comes from the stored record: redeclaring shared as personal creates no private fallback", () => {
