@@ -261,3 +261,57 @@ test("D2b: a new restore generation wins over an equal or lower server revision"
   assert.equal(recoveryPullDecision(false, 17, 17), "synced");
   assert.equal(recoveryPullDecision(false, 18, 17), "apply");
 });
+
+test("D2b: a wipe holding the cross-tab lock finishes before a later restore; no empty rescue marker", async () => {
+  const priorStorage = globalThis.localStorage;
+  const priorNavigator = globalThis.navigator;
+  const s = storage([["ai-executive-pending-sync", "1"], ["ai-executive-notes-drafts:tab:owner", "private"]]);
+  let unlock;
+  const wipeGate = new Promise((resolve) => { unlock = resolve; });
+  let queue = Promise.resolve();
+  const locks = { request: (_name, callback) => {
+    const next = queue.then(callback);
+    queue = next.then(() => undefined, () => undefined);
+    return next;
+  } };
+  try {
+    Object.defineProperty(globalThis, "localStorage", { value: s, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+    const wipe = withOfflineRecoveryDataLock(async () => {
+      s.setItem("ai-executive-wipe-pending", "1");
+      await wipeGate;
+      s.removeItem("ai-executive-pending-sync");
+      s.removeItem("ai-executive-notes-drafts:tab:owner");
+      s.setItem("ai-executive-signed-out", "1");
+      s.removeItem("ai-executive-wipe-pending");
+    }, true);
+    await Promise.resolve(); // Let the wipe acquire the exclusive lock first.
+    const delayedHold = beginOfflineRecoveryHoldSafely(2, 3);
+    assert.equal(s.getItem(offlineRecoveryHoldKey), null, "no shared hold during an authorized wipe");
+    unlock();
+    await wipe;
+    await assert.rejects(delayedHold, /OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD/);
+    assert.equal(s.getItem(offlineRecoveryHoldKey), null, "do not advertise a rescue for deleted data");
+    assert.equal(s.getItem("ai-executive-signed-out"), "1");
+  } finally {
+    unlock();
+    Object.defineProperty(globalThis, "localStorage", { value: priorStorage, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: priorNavigator, configurable: true });
+  }
+});
+
+test("D2b: an interrupted prior wipe is never declared a valid recovery source", async () => {
+  const priorStorage = globalThis.localStorage;
+  const priorNavigator = globalThis.navigator;
+  const s = storage([["ai-executive-wipe-pending", "1"]]);
+  const locks = { request: async (_name, callback) => callback() };
+  try {
+    Object.defineProperty(globalThis, "localStorage", { value: s, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+    await assert.rejects(beginOfflineRecoveryHoldSafely(2, 3), /OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD/);
+    assert.equal(s.getItem(offlineRecoveryHoldKey), null);
+  } finally {
+    Object.defineProperty(globalThis, "localStorage", { value: priorStorage, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: priorNavigator, configurable: true });
+  }
+});
