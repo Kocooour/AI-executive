@@ -114,9 +114,11 @@ test("D2b/6 cannot mistake already-applied work for permission to finish the res
   });
   const p = draftOfflineRecoveryDecisions(bytes, server(), hold());
   assert.equal(p.candidates[0].reason, "already-deleted");
-  assert.deepEqual(p.candidates[0].availablePreferences, ["defer", "prefer-server"]);
+  assert.deepEqual(p.candidates[0].availablePreferences, ["defer"],
+    "destructive record removal remains a manual scope-sensitive review");
   assert.equal(p.unresolvedNonRecordWork, true);
-  const q = preferOfflineRecoveryOutcome(p, "entity", "removed", "prefer-server");
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "removed", "prefer-server"), OfflineRecoveryInvalid);
+  const q = preferOfflineRecoveryOutcome(p, "entity", "removed", "defer");
   assert.equal(q.canReleaseHold, false);
   assert.equal(q.canApply, false);
 });
@@ -139,4 +141,103 @@ test("D2b/6 rejects tampered plan safety fields even when expressing a preferenc
   }), server(), hold());
   assert.throws(() => preferOfflineRecoveryOutcome({ ...p, canApply: true }, "entity", "new", "defer"), OfflineRecoveryInvalid);
   assert.throws(() => preferOfflineRecoveryOutcome({ ...p, membership: "verified" }, "entity", "new", "defer"), OfflineRecoveryInvalid);
+});
+
+const areaRelation = (id, sourceEntityId, targetEntityId) => ({
+  id, sourceEntityId, targetEntityId, relationType: "belongs_to_area",
+  workspaceId: "personal", createdAt: 1,
+});
+
+test("D2b/6 P2: within-workspace Area reassignment and a new Area link are always deferred", () => {
+  const bytes = rescue({
+    base: { entities: [], relations: [areaRelation("existing-link", "task", "area-a")] },
+    local: { entities: [], relations: [
+      areaRelation("existing-link", "task", "area-b"),
+      areaRelation("new-link", "task-2", "area-b"),
+    ] },
+  });
+  const p = draftOfflineRecoveryDecisions(bytes,
+    server([], [areaRelation("existing-link", "task", "area-a")]), hold());
+  assert.deepEqual(p.candidates.map(({ id, reason, availablePreferences }) =>
+    [id, reason, availablePreferences]), [
+    ["existing-link", "local-change", ["defer"]],
+    ["new-link", "remote-missing", ["defer"]],
+  ]);
+  for (const id of ["existing-link", "new-link"]) {
+    assert.throws(() => preferOfflineRecoveryOutcome(p, "relation", id, "prefer-local"), OfflineRecoveryInvalid);
+    assert.throws(() => preferOfflineRecoveryOutcome(p, "relation", id, "prefer-server"), OfflineRecoveryInvalid);
+  }
+  assert.equal(p.canReleaseHold, false);
+  assert.equal(p.areaPermission, "unverified");
+});
+
+test("D2b/6 P2: related task edits and property or remote scope changes remain deferred", () => {
+  const before = entity("task", "Original");
+  const local = entity("task", "Edited");
+  const link = areaRelation("area-link", "task", "area-a");
+  const affected = draftOfflineRecoveryDecisions(rescue({
+    base: { entities: [before], relations: [link] },
+    local: { entities: [local], relations: [areaRelation("area-link", "task", "area-b")] },
+  }), server([before], [link]), hold());
+  assert.deepEqual(affected.candidates.map(x => [x.id, x.availablePreferences]), [
+    ["task", ["defer"]], ["area-link", ["defer"]],
+  ]);
+  const withArea = (title, areaId) => ({ ...entity("task", title), properties: { areaId } });
+  const localPropertyMove = draftOfflineRecoveryDecisions(rescue({
+    base: { entities: [withArea("Before", "area-a")], relations: [] },
+    local: { entities: [withArea("After", "area-b")], relations: [] },
+  }), server([withArea("Before", "area-a")]), hold());
+  assert.deepEqual(localPropertyMove.candidates[0].availablePreferences, ["defer"]);
+  const remotePropertyMove = draftOfflineRecoveryDecisions(rescue({
+    base: { entities: [withArea("Before", "area-a")], relations: [] },
+    local: { entities: [withArea("After", "area-a")], relations: [] },
+  }), server([withArea("Remote title", "area-b")]), hold());
+  assert.equal(remotePropertyMove.candidates[0].reason, "remote-diverged");
+  assert.deepEqual(remotePropertyMove.candidates[0].availablePreferences, ["defer"]);
+  for (const candidate of [affected.candidates[0], localPropertyMove.candidates[0], remotePropertyMove.candidates[0]]) {
+    assert.deepEqual(candidate.availablePreferences, ["defer"]);
+  }
+});
+
+test("D2b/6 P2: untrusted plan clones and forged classifications cannot expand permissions", () => {
+  const p = draftOfflineRecoveryDecisions(rescue({
+    local: { entities: [entity("occupied", "Local new item")], relations: [] },
+  }), server([entity("occupied", "Existing server record")]), hold());
+  assert.equal(p.candidates[0].reason, "id-collision");
+  assert.equal(Object.isFrozen(p), true);
+  assert.equal(Object.isFrozen(p.candidates), true);
+  assert.equal(Object.isFrozen(p.candidates[0]), true);
+  assert.equal(Object.isFrozen(p.candidates[0].availablePreferences), true);
+  const forged = { ...p, candidates: p.candidates.map(x => ({
+    ...x, reason: "remote-diverged", availablePreferences: ["defer", "prefer-local"],
+  })) };
+  assert.throws(() =>
+    preferOfflineRecoveryOutcome(forged, "entity", "occupied", "prefer-local"),
+    OfflineRecoveryInvalid,
+  );
+  assert.throws(() =>
+    preferOfflineRecoveryOutcome({ ...p, sourceSha256: "0".repeat(64) }, "entity", "occupied", "defer"),
+    OfflineRecoveryInvalid,
+  );
+  assert.throws(() => { p.candidates[0].reason = "remote-diverged"; }, TypeError);
+  assert.throws(() => { p.candidates[0].availablePreferences.push("prefer-local"); }, TypeError);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "occupied", "prefer-local"), OfflineRecoveryInvalid);
+  const accepted = preferOfflineRecoveryOutcome(p, "entity", "occupied", "defer");
+  assert.equal(accepted.canApply, false);
+  assert.equal(accepted.canReleaseHold, false);
+  assert.deepEqual(accepted.candidates[0].availablePreferences, ["defer"]);
+  assert.equal(Object.isFrozen(accepted), true);
+});
+
+test("D2b/6 new records and project-context edits are conservatively deferred", () => {
+  const newTask = draftOfflineRecoveryDecisions(rescue({
+    local: { entities: [entity("new-task", "Unassigned new task")], relations: [] },
+  }), server(), hold());
+  assert.deepEqual(newTask.candidates[0].availablePreferences, ["defer"]);
+  const project = (title) => ({ ...entity("project", title), type: "project" });
+  const projectEdit = draftOfflineRecoveryDecisions(rescue({
+    base: { entities: [project("Old")], relations: [] },
+    local: { entities: [project("New")], relations: [] },
+  }), server([project("Old")]), hold());
+  assert.deepEqual(projectEdit.candidates[0].availablePreferences, ["defer"]);
 });
