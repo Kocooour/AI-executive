@@ -214,6 +214,10 @@ export function enforceAreaWriteInvariants(input: {
     }
   }
   const currentRelations = new Map(current.relations.map((relation) => [relation.id, relation]));
+  const takenIds = new Set<string>([
+    ...currentRelations.keys(), ...next.relations.map((relation) => relation.id),
+    ...next.entities.map((entity) => entity.id), ...tombstoned,
+  ]);
   // The kind of a workspace that already exists comes from the STORED record, so a write cannot redeclare a shared
   // workspace as personal (and get a private "Nezařazeno" in it); only a workspace new in this write uses its own.
   const kinds = workspaceKinds(next.entities);
@@ -369,10 +373,6 @@ export function enforceAreaWriteInvariants(input: {
   // Canonicalize an areaId newly supplied by a legacy client, but do not touch
   // unchanged historical properties during unrelated writes. A project task has
   // already had its invalid task-level areaId removed by R1/R2 above.
-  const takenIds = new Set<string>([
-    ...currentRelations.keys(), ...next.relations.map((relation) => relation.id),
-    ...entities.keys(), ...tombstoned,
-  ]);
   const explicitChoices = new Map<string, string>();
   for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
     if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
