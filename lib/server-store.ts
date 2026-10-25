@@ -834,9 +834,10 @@ export function replaceSnapshot(
     }
     // Never allow a raw deletion to tombstone the reserved fallback ID, even when
     // the fallback Area does not yet exist. A tombstone here permanently blocks 2a.
-    const kinds = workspaceKinds(current.entities);
-    const protectedIds = new Set([...kinds].map(([id, kind]) =>
-      generatedAreaId(id, fallbackAreaTitle(kind))));
+    // Include both persisted and newly requested workspace kinds, so a write
+    // cannot pre-tombstone a fallback ID for a workspace it creates in this PUT.
+    const protectedIds = new Set([...workspaceKinds(current.entities), ...workspaceKinds(entities)]
+      .map(([id, kind]) => generatedAreaId(id, fallbackAreaTitle(kind))));
     if (deletedIds.some((id) => protectedIds.has(id))) throw new AreaWriteInvalid();
     // Safety net. A save at the current revision replaces everything, so a device that lost or
     // never had its local copy could erase the store with one request. Records may disappear
