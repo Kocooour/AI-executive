@@ -12,7 +12,7 @@ import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/ado
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportGeneration, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
@@ -61,6 +61,8 @@ export function useSync() {
   const [recoveryPreparing, setRecoveryPreparing] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [recoveryError, setRecoveryError] = useState(false);
+  // A local-only rescue does not claim fresh verification of the current server.
+  const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
   const recoveryFileBytes = useRef<Uint8Array | null>(null);
   // A prepared download is valid only for the exact captured localStorage state.
@@ -240,28 +242,29 @@ export function useSync() {
   // pending flags and every persisted note draft (all pages) are dropped, the snapshot and its generation adopted, the
   // other tabs told to reload, and this one reloads and starts from the restored state. `notice`: the restore happened
   // elsewhere, say so after the reload. The caller holds the sync lock (or is in the queue); replaceLocalWithServer takes them.
+  // This is called *directly* on a generation-bearing 409 refusal, before
+  // another GET, the sync queue or a cross-tab sync lock. The hold helper
+  // engages the in-tab write fence synchronously, then serializes the durable
+  // cross-tab marker with any already-authorized local wipe.
+  async function engageRecoveryForGeneration(observedGeneration: number | undefined) {
+    setRecoveryHeld(true);
+    setSyncStatus("offline");
+    try {
+      await beginOfflineRecoveryHoldSafely(restoreGeneration.current, observedGeneration);
+    } catch (error) {
+      if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
+        signedOut.current = true;
+        window.location.replace("/");
+        return false;
+      }
+      setRecoveryError(true); // No writable fallback on missing/corrupt metadata.
+    }
+    return false;
+  }
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
     // The generation mismatch is a STOP, not permission to wipe local data.
-    // Persist synchronously before the first await so other tabs cannot write.
-    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration)) {
-      setRecoveryHeld(true);
-      try {
-        await beginOfflineRecoveryHoldSafely(restoreGeneration.current, source.restoreGeneration);
-      } catch (error) {
-        if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
-          // Another tab finished an owner-approved sign-out before this hold
-          // acquired its lock. The old data was intentionally purged: never
-          // offer a misleading rescue file for that now-empty local database.
-          signedOut.current = true;
-          window.location.replace("/");
-          return false;
-        }
-        // A failed/corrupt localStorage hold is still a hard stop in this tab.
-        setRecoveryError(true);
-      }
-      setSyncStatus("offline");
-      return false;
-    }
+    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration))
+      return engageRecoveryForGeneration(source.restoreGeneration);
     if (isAdopting()) return true;
     beginAdoption();
     try {
@@ -346,7 +349,13 @@ export function useSync() {
   }
   // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
   useEffect(() => {
-    installRestoreFence({ generation: () => restoreGeneration.current, onRestored: () => { void replaceLocalWithServer(undefined, true).catch(() => undefined); } });
+    installRestoreFence({ generation: () => restoreGeneration.current,
+      onRestored: (observedGeneration) => {
+        // The 409 already supplies the new generation. Do not wait for a
+        // failing follow-up network request before freezing local writes.
+        void engageRecoveryForGeneration(observedGeneration);
+      },
+    });
   }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -593,18 +602,28 @@ export function useSync() {
     setRecoveryPreparing(true);
     setRecoveryReady(false);
     setRecoveryError(false);
+    setRecoveryOffline(false);
     recoveryFileBytes.current = null;
     recoveryStorageSnapshot.current = null;
     try {
       const hold = readOfflineRecoveryHold();
       if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
-      // GET only: do not sync, merge, normalize, clean local storage or adopt.
-      const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
-      if (!response.ok) throw new Error("OFFLINE_RECOVERY_SERVER_UNAVAILABLE");
-      const server = (await response.json()) as ServerSnapshot;
-      // Another backup restore may have advanced the server while our own old data
-      // was frozen. Export still works, but must cite the newest observed generation.
-      const exportGeneration = recoveryExportGeneration(hold, server.restoreGeneration);
+      // Online validation is best effort. Even if the owner is signed out or
+      // the server is down, the persisted hold records a previously observed
+      // generation and permits an explicitly UNVERIFIED, local-only rescue.
+      // No network failure may force the owner to discard their local edits.
+      let remoteGeneration: number | null = null;
+      try {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (response.ok) {
+          const server = (await response.json()) as ServerSnapshot;
+          remoteGeneration = server.restoreGeneration;
+        }
+      } catch { /* unreachable or invalid response: use the older known hold only */ }
+      // A successful response with invalid/backwards generation still fails
+      // closed; it must NOT silently turn into a trusted online snapshot.
+      const exportPlan = recoveryExportPlan(hold, remoteGeneration);
+      const exportGeneration = exportPlan.generation;
       // IndexedDB read transaction queues behind all earlier conflicting writes,
       // including writes from other tabs. The persistent middleware blocks later mutations.
       const [localEntities, localRelations, base] = await readLocalWithBase();
@@ -637,6 +656,7 @@ export function useSync() {
       // Record only a private in-memory snapshot, not a new localStorage key.
       recoveryStorageSnapshot.current = JSON.stringify([sameHold, nextDrafts, nextMarkers]);
       recoveryFileBytes.current = bytes;
+      setRecoveryOffline(!exportPlan.verifiedNow);
       setRecoveryReady(true);
     } catch {
       // No sensitive data (including errors containing IDs) escapes to logs.
@@ -665,7 +685,7 @@ export function useSync() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = offlineRecoveryFile.filename;
+    anchor.download = recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
     anchor.style.display = "none";
     document.body.appendChild(anchor);
     try {
@@ -683,6 +703,7 @@ export function useSync() {
     recoveryPreparing,
     recoveryReady,
     recoveryError,
+    recoveryOffline,
     recoveryDownloadRequested,
     prepareOfflineRecoveryDownload,
     downloadOfflineRecovery,
