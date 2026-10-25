@@ -1,7 +1,7 @@
 # D2b, část 3 — soukromý souborový formát pro offline záchranu
 
 **Stav: čistá knihovna a regresní testy, nikoli funkční export v UI ani migrace databáze.**
-Navazuje na [kontrakt offline rekonsiliace](D2B-OFFLINE-RECOVERY.md) z PR #111; změna je záměrně izolovaná a musí být integrována až po bezpečném uzavření jeho review.
+Navazuje na [kontrakt offline rekonsiliace](D2B-OFFLINE-RECOVERY.md) z již sloučeného PR #111. Tato iterace je izolovaná a nenapojuje kodek na runtime.
 
 ## Kontrakt
 
