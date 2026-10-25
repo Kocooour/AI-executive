@@ -67,7 +67,7 @@ export function useSync() {
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
   const [recoveryReview, setRecoveryReview] = useState<RecoveryInspectionState<OfflineRecoveryReviewSummary>>({
-    busy: false, result: null, error: null,
+    busy: false, result: null, failure: null,
   });
   const recoveryInspectRequest = useRef(0);
   const recoveryFileBytes = useRef<Uint8Array | null>(null);
