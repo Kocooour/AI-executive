@@ -2,8 +2,8 @@
 // This marker carries only counters; never private tasks, drafts, titles or IDs.
 // Do not clear it during this phase: recovery and consent to discard are distinct.
 export const offlineRecoveryHoldKey = "ai-executive-offline-recovery-hold";
-// Durable intent closes the cross-tab write fence while we wait for the browser-wide
-// exclusive lock. The final hold and any sign-out wipe are serialized by that lock.
+// Compatibility with recovery intents left by earlier drafts: such a marker
+// remains a strict stop. New holds serialize their persistence with local wipes.
 export const offlineRecoveryIntentKey = "ai-executive-offline-recovery-intent";
 const recoveryDataLockName = "ai-executive-recovery-data";
 
@@ -98,7 +98,10 @@ export function offlineRecoveryWipeSupported(): boolean {
 }
 
 // Every destructive browser wipe and recovery-hold installation uses the SAME
-// exclusive browser lock. No step of a wipe may execute after a finalized hold.
+// exclusive browser lock. Neither operation may interrupt the other halfway.
+// If a user-authorized sign-out has already acquired the lock, it commits before
+// a subsequently detected restore can persist its stop; if the hold wins, the
+// subsequent wipe is blocked before deleting anything.
 // Without Web Locks we fail closed on destructive wipes in real browsers.
 export async function withOfflineRecoveryDataLock<T>(work: () => Promise<T>, destructive = false): Promise<T> {
   const locks = typeof navigator !== "undefined"
@@ -111,36 +114,16 @@ export async function withOfflineRecoveryDataLock<T>(work: () => Promise<T>, des
   return work(); // Non-browser tests; recovery hold remains fail-closed if storage fails.
 }
 
-// Persist the intent *synchronously*, before any await for another tab's lock.
-// Even if the tab crashes before finalizing the marker, the intent persists and
-// blocks subsequent writes and allows an owner-only export after reload.
-function stageOfflineRecoveryIntent(knownGeneration: number | undefined, observedGeneration: number | undefined) {
-  heldInThisTab = true;
-  const storage = browserStorage();
-  if (!storage || !(knownGeneration === undefined || validNumber(knownGeneration)) ||
-      !validNumber(observedGeneration)) throw new Error("OFFLINE_RECOVERY_HOLD_UNAVAILABLE");
-  const current = storage.getItem(offlineRecoveryHoldKey) ?? storage.getItem(offlineRecoveryIntentKey);
-  if (current !== null) {
-    const parsed = parseOfflineRecoveryHold(current);
-    if (!parsed) throw new Error("OFFLINE_RECOVERY_HOLD_CORRUPT");
-    return parsed;
-  }
-  const marker: OfflineRecoveryHold = {
-    version: 1, knownGeneration: knownGeneration ?? null,
-    observedGeneration, createdAt: Date.now(),
-  };
-  storage.setItem(offlineRecoveryIntentKey, JSON.stringify(marker));
-  if (storage.getItem(offlineRecoveryIntentKey) !== JSON.stringify(marker))
-    throw new Error("OFFLINE_RECOVERY_HOLD_UNAVAILABLE");
-  return marker;
-}
-
+// Stop writes in this tab immediately. Other tabs receive the persistent stop
+// only after taking the same lock that guards local-data deletion. This gives
+// a total order to the two destructive/locking transitions: there can be no
+// visible recovery hold inserted halfway through a multi-key wipe.
 export async function beginOfflineRecoveryHoldSafely(
   knownGeneration: number | undefined, observedGeneration: number | undefined,
 ): Promise<OfflineRecoveryHold> {
-  const intent = stageOfflineRecoveryIntent(knownGeneration, observedGeneration);
+  heldInThisTab = true;
   return withOfflineRecoveryDataLock(async () =>
-    beginOfflineRecoveryHold(intent.knownGeneration ?? undefined, intent.observedGeneration));
+    beginOfflineRecoveryHold(knownGeneration, observedGeneration));
 }
 
 // Generations can advance through multiple server restores while a browser is
