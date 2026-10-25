@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { runSignOut } = await import("../lib/sign-out.ts");
+const { runSignOut, failedSignOutNeedsReload, incompleteSignOutNoticeKey } = await import("../lib/sign-out.ts");
 
 // A scripted browser: `version` is odd while a local write is in progress.
 function scenario(overrides = {}) {
@@ -116,4 +116,12 @@ test("a failed IndexedDB purge is not reported as signed-out", async () => {
   const run = scenario();
   run.steps.wipe = async () => { run.calls.push("wipe"); throw new Error("IndexedDB unavailable"); };
   assert.equal(await runSignOut(run.steps), "failed");
+});
+
+test("a failed purge after server logout requires an actionable fresh sign-in/recovery page", () => {
+  assert.equal(failedSignOutNeedsReload("failed", true), true);
+  assert.equal(failedSignOutNeedsReload("failed", false), false);
+  for (const status of ["signed-out", "writing", "offline", "kept"])
+    assert.equal(failedSignOutNeedsReload(status, true), false);
+  assert.equal(incompleteSignOutNoticeKey, "ai-executive-incomplete-signout");
 });
