@@ -99,3 +99,21 @@ test("a synchronization that settles only on the second attempt does not raise t
   assert.equal(await runSignOut(run.steps), "signed-out");
   assert.deepEqual(run.calls, ["drain", "sync", "sync", "block", "end", "wipe"]);
 });
+
+test("a recovery hold appearing after server logout refuses the wipe without claiming success", async () => {
+  const run = scenario();
+  const calls = run.calls;
+  run.steps.wipe = async () => {
+    calls.push("wipe");
+    throw new Error("OFFLINE_RECOVERY_HELD");
+  };
+  assert.equal(await runSignOut(run.steps), "failed");
+  assert.deepEqual(calls, ["drain", "block", "end", "wipe"]);
+  assert.ok(!calls.includes("unblock"), "an ended session must not reactivate the old UI");
+});
+
+test("a failed IndexedDB purge is not reported as signed-out", async () => {
+  const run = scenario();
+  run.steps.wipe = async () => { run.calls.push("wipe"); throw new Error("IndexedDB unavailable"); };
+  assert.equal(await runSignOut(run.steps), "failed");
+});
