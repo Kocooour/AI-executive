@@ -573,6 +573,32 @@ test("a title being edited when the sign-in expires is saved and sent after sign
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.title === title, true);
 });
 
+test("native recovery file-picker cancel clears the stale inspection without closing the safety dialog", async ({ page }) => {
+  // Fresh isolated page/context with synthetic recovery state, not production data.
+  // This creates no server restore and never deletes or imports local work.
+  await page.addInitScript(() => {
+    localStorage.setItem("ai-executive-offline-recovery-hold", JSON.stringify({
+      version: 1, knownGeneration: 0, observedGeneration: 1, createdAt: Date.now(),
+    }));
+  });
+  await page.goto("/");
+  const recovery = page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+  await expect(recovery).toBeVisible();
+  const picker = recovery.locator('input[type="file"]');
+  await expect(picker).toBeEnabled();
+
+  // An invalid file leaves a visible diagnosis error after a read-only server GET.
+  await picker.setInputFiles({ name: "invalid-recovery.json", mimeType: "application/json", buffer: Buffer.from("{bad json") });
+  await expect(recovery.getByText("Soubor neprošel kontrolou obsahu", { exact: false })).toBeVisible();
+
+  // The native file chooser dispatches a bubbling "cancel", not "change".
+  // Dispatching the exact DOM event tests the React handler without opening OS UI.
+  await picker.dispatchEvent("cancel", { bubbles: true, cancelable: true });
+  await expect(recovery.getByText("Soubor neprošel kontrolou obsahu", { exact: false })).toHaveCount(0);
+  await expect(picker).toBeEnabled();
+  await expect(recovery).toBeVisible(); // Input cancel must not reach/close the outer dialog.
+});
+
 test("signing out after the sign-in has expired does not leave a question behind", async ({ page, context }) => {
   await page.goto("/?view=Settings");
   await waitUntilSynced(page);
