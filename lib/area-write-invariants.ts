@@ -11,8 +11,8 @@
 //  R2  a task that gains a project in this write loses ALL its own Area links and properties.areaId.
 //  R3  a project / standalone task that is new, or a task that leaves its project, and has no Area gets the
 //      workspace's fallback Area (created when missing, with `kind`).
-//  R4  an entity that gains an additional Area link (so it has more than one) keeps the newest new link; the
-//      other new links are dropped. Several links that all pre-existed are legacy and stay.
+//  R4  an explicit new Area choice replaces previous links, including old ones.
+//      Several links that all pre-existed are legacy and stay untouched.
 //  R5  an Area entity that is new or changed gets properties.kind = its workspace kind.
 //
 // Browser-safe: no node-only imports (the client uses planFallbackArea too).
@@ -34,6 +34,7 @@ export interface AreaWriteReport {
   fallbackAssigned: number;
   fallbackAreasCreated: number;
   duplicateAreaLinksDropped: number;
+  legacyAreaIdsCanonicalized: number;
   areaKindsRestored: number;
   fallbackUnavailable: number;
 }
@@ -50,6 +51,11 @@ export interface AreaWriteResult {
 
 const textValue = (value: unknown) => typeof value === "string" && value.trim() !== "";
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** A new invalid Area reference must fail atomically rather than corrupt the 2a preflight. */
+export class AreaWriteInvalid extends Error {
+  constructor() { super("Invalid Area assignment"); this.name = "AreaWriteInvalid"; }
+}
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(stable).join(",") + "]";
@@ -161,7 +167,8 @@ export function enforceAreaWriteInvariants(input: {
   const tombstoned = new Set(input.tombstones.map((item) => item.id));
   const report: AreaWriteReport = {
     droppedProjectTaskAreaLinks: 0, tasksInheritingFromProject: 0, fallbackAssigned: 0,
-    fallbackAreasCreated: 0, duplicateAreaLinksDropped: 0, areaKindsRestored: 0, fallbackUnavailable: 0,
+    fallbackAreasCreated: 0, duplicateAreaLinksDropped: 0, legacyAreaIdsCanonicalized: 0,
+    areaKindsRestored: 0, fallbackUnavailable: 0,
   };
   const currentEntities = new Map(current.entities.map((entity) => [entity.id, entity]));
   const currentRelations = new Map(current.relations.map((relation) => [relation.id, relation]));
@@ -261,15 +268,56 @@ export function enforceAreaWriteInvariants(input: {
     }
   }
 
-  // R4: more than one Area after this write, at least one of them new -> the newest new link wins.
+  // Canonicalize an areaId newly supplied by a legacy client, but do not touch
+  // unchanged historical properties during unrelated writes. A project task has
+  // already had its invalid task-level areaId removed by R1/R2 above.
+  const takenIds = new Set<string>([
+    ...currentRelations.keys(), ...next.relations.map((relation) => relation.id),
+    ...entities.keys(), ...tombstoned,
+  ]);
+  const explicitChoices = new Map<string, string>();
+  for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
+    if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
+    const raw = item.properties.areaId;
+    if (raw === undefined) continue;
+    const before = currentEntities.get(item.id);
+    if (before && before.properties.areaId === raw) continue;
+    if (!textValue(raw)) throw new AreaWriteInvalid();
+    const area = entities.get(String(raw));
+    if (!area || area.type !== "area" || area.workspaceId !== item.workspaceId ||
+        area.status !== "active" || tombstoned.has(area.id)) throw new AreaWriteInvalid();
+    explicitChoices.set(item.id, area.id);
+    if (!liveLinks(item.id).some((link) => link.targetEntityId === area.id)) {
+      const id = fallbackRelationId(item.id, area.id, (candidate) => takenIds.has(candidate));
+      if (!id) throw new AreaWriteInvalid();
+      takenIds.add(id);
+      const canonical: Relation = {
+        id, workspaceId: item.workspaceId, sourceEntityId: item.id,
+        targetEntityId: area.id, relationType: "belongs_to_area", createdAt: now,
+      };
+      added.push(canonical);
+      areaLinksOf.set(item.id, [...(areaLinksOf.get(item.id) ?? []), canonical]);
+      touch(item.id, true);
+    }
+    removeAreaIdProperty(item.id);
+    report.legacyAreaIdsCanonicalized += 1;
+  }
+
+  // R4: an explicit new Area choice replaces previous links, including older
+  // existing links. Multiple pre-existing legacy links are untouched unless
+  // this write has introduced a new choice.
   for (const id of [...areaLinksOf.keys()].sort(compare)) {
     const links = liveLinks(id);
     if (links.length < 2) continue;
     const fresh = links.filter(isNewRelation);
-    if (!fresh.length) continue;
-    // The user's choice is the newest among the NEW links; legacy links are never compared (clock skew).
-    const newest = [...fresh].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
-    for (const relation of fresh) {
+    if (!fresh.length && !explicitChoices.has(id)) continue;
+    // The user's new choice wins regardless of clock skew on an old link.
+    const candidates = explicitChoices.has(id)
+      ? links.filter((link) => link.targetEntityId === explicitChoices.get(id))
+      : fresh;
+    const newest = [...candidates].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
+    if (!newest) throw new AreaWriteInvalid();
+    for (const relation of links) {
       if (relation.id === newest.id) continue;
       drop(relation);
       report.duplicateAreaLinksDropped += 1;
@@ -288,7 +336,6 @@ export function enforceAreaWriteInvariants(input: {
     }
   }
   needsFallback.sort((a, b) => compare(a.id, b.id));
-  const takenIds = new Set<string>([...currentRelations.keys(), ...next.relations.map((relation) => relation.id)]);
   // One fallback decision per workspace (the plan does not depend on the item), made when first needed.
   const fallbackFor = new Map<string, Entity | undefined>();
   const fallbackOf = (workspaceId: string): Entity | undefined => {
@@ -354,7 +401,7 @@ export function enforceAreaWriteInvariants(input: {
   const resultEntities = [...entities.values(), ...addedAreas];
   const resultRelations = [
     ...next.relations.filter((relation) => !dropped.has(relation.id)),
-    ...added.sort((a, b) => compare(a.id, b.id)),
+    ...added.filter((relation) => !dropped.has(relation.id)).sort((a, b) => compare(a.id, b.id)),
   ];
   const changed = dropped.size > 0 || added.length > 0 || addedAreas.length > 0 || touched.size > 0;
   return {
