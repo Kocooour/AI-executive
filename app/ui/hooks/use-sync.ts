@@ -16,6 +16,8 @@ import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryH
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
+import { inspectOfflineRecoveryBytes, type OfflineRecoveryReviewSummary } from "../../../lib/d2b-recovery-review";
+import { runLatestRecoveryInspection, type RecoveryInspectionState } from "../../../lib/d2b-recovery-review-request";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -64,6 +66,10 @@ export function useSync() {
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
+  const [recoveryReview, setRecoveryReview] = useState<RecoveryInspectionState<OfflineRecoveryReviewSummary>>({
+    busy: false, result: null, failure: null,
+  });
+  const recoveryInspectRequest = useRef(0);
   const recoveryFileBytes = useRef<Uint8Array | null>(null);
   // A prepared download is valid only for the exact captured localStorage state.
   // A late old-tab cleanup or out-of-band edit must invalidate it, never silently omit work.
@@ -701,6 +707,48 @@ export function useSync() {
     }
   }
 
+  // Owner-selected local files are inspected read-only against a fresh server
+  // snapshot. No file bytes, record IDs or private drafts are sent to the server,
+  // stored, logged or exposed in the returned aggregate UI summary.
+  async function inspectOfflineRecoveryFile(file: File | null) {
+    await runLatestRecoveryInspection(recoveryInspectRequest, file, async (selectedFile) => {
+      if (!offlineRecoveryIsHeld() || !recoveryHeld)
+        throw new Error("OFFLINE_REVIEW_INVALID");
+      const initialHold = readOfflineRecoveryHold();
+      if (!initialHold || selectedFile.size === 0 || selectedFile.size > offlineRecoveryFile.maxUtf8Bytes)
+        throw new Error("OFFLINE_REVIEW_INVALID");
+      const bytes = new Uint8Array(await selectedFile.arrayBuffer());
+      if (bytes.byteLength !== selectedFile.size || bytes.byteLength > offlineRecoveryFile.maxUtf8Bytes)
+        throw new Error("OFFLINE_REVIEW_INVALID");
+
+      // A CURRENT authenticated server snapshot is necessary for comparison.
+      // No selected file bytes, IDs or drafts are sent to the server.
+      let server: ServerSnapshot;
+      try {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (!response.ok) throw new Error("OFFLINE_REVIEW_SERVER");
+        server = (await response.json()) as ServerSnapshot;
+        if (!Number.isSafeInteger(server.restoreGeneration) ||
+            !Array.isArray(server.entities) || !Array.isArray(server.relations))
+          throw new Error("OFFLINE_REVIEW_SERVER");
+      } catch { throw new Error("OFFLINE_REVIEW_SERVER"); }
+
+      const summary = inspectOfflineRecoveryBytes(bytes, {
+        // The GET generation was validated at runtime above.
+        restoreGeneration: server.restoreGeneration as number,
+        entities: server.entities,
+        relations: server.relations,
+      }, initialHold);
+
+      // The hold must not change while a File API read or server GET is pending.
+      const latestHold = readOfflineRecoveryHold();
+      if (!offlineRecoveryIsHeld() || !latestHold ||
+          JSON.stringify(latestHold) !== JSON.stringify(initialHold))
+        throw new Error("OFFLINE_REVIEW_INVALID");
+      return summary;
+    }, setRecoveryReview);
+  }
+
   return {
     recoveryHeld,
     recoveryPreparing,
@@ -708,6 +756,10 @@ export function useSync() {
     recoveryError,
     recoveryOffline,
     recoveryDownloadRequested,
+    recoveryInspecting: recoveryReview.busy,
+    recoveryInspection: recoveryReview.result,
+    recoveryInspectionError: recoveryReview.failure,
+    inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload,
     downloadOfflineRecovery,
     items,

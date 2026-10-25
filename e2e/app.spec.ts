@@ -1,4 +1,6 @@
 import { expect, test } from "./fixtures";
+import { prepareOfflineRecovery } from "../lib/d2b-offline-reconciliation";
+import { encodeOfflineRecoveryFile } from "../lib/d2b-offline-recovery-file";
 import { confirmDialog, expectOnServer, heading, seeded, serverEntities, settingsSections, sidebarView, signIn, waitUntilSynced } from "./helpers";
 
 // The scenarios share one instance and run in this order, one at a time (see the config).
@@ -571,6 +573,75 @@ test("a title being edited when the sign-in expires is saved and sent after sign
   await expect(page.locator(".authCard .authNotice")).toBeVisible();
   await signIn(page);
   await expectOnServer(page, (entity) => entity.id === "e2e-rename" && entity.title === title, true);
+});
+
+test("native recovery file-picker cancel clears the stale inspection without closing the safety dialog", async ({ page }) => {
+  // An isolated, authenticated Playwright server and browser context are used.
+  // This introduces a synthetic recovery hold, with no restore, import or write.
+  await page.addInitScript(() => {
+    localStorage.setItem("ai-executive-offline-recovery-hold", JSON.stringify({
+      version: 1, knownGeneration: 0, observedGeneration: 1, createdAt: Date.now(),
+    }));
+  });
+  await page.goto("/");
+  const recovery = page.getByRole("alertdialog", { name: "Lokální změny jsou chráněné" });
+  await expect(recovery).toBeVisible();
+  const picker = recovery.locator('input[type="file"]');
+  await expect(picker).toBeEnabled();
+
+  // The v1 rescue's SHA and shape must be real so the UI renders a successful
+  // aggregate diagnostic; the earlier test covered only an invalid-file alert.
+  const holdCreatedAt = await page.evaluate(() => {
+    const raw = localStorage.getItem("ai-executive-offline-recovery-hold");
+    if (!raw) throw new Error("Expected recovery hold");
+    return (JSON.parse(raw) as { createdAt: number }).createdAt;
+  });
+  const rescue = encodeOfflineRecoveryFile(prepareOfflineRecovery({
+    base: { entities: [], relations: [] },
+    local: { entities: [{
+      id: "e2e-only-offline-task", type: "task", title: "Private recovery test only",
+      status: "open", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 2,
+    }], relations: [] },
+    pendingDeletedIds: [], pendingRevivedIds: [], noteDrafts: [], projectContextDrafts: [],
+    pendingSync: true, oldRestoreGeneration: 0, newRestoreGeneration: 1, baseRevision: null,
+  }, holdCreatedAt + 1));
+
+  // Only a synthetic GET response is substituted, after the held dialog has opened.
+  // No file bytes leave the browser; other requests retain the test server behavior.
+  await page.route("**/api/store", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ revision: 0, restoreGeneration: 1, entities: [], relations: [] }),
+    });
+  });
+  await picker.setInputFiles({
+    name: "synthetic-rescue.json", mimeType: "application/json", buffer: Buffer.from(rescue),
+  });
+  const summary = recovery.getByText("Celkem posouzených změn položek a vazeb:", { exact: false });
+  await expect(summary).toBeVisible();
+  await expect(summary).toContainText("1");
+  await expect(recovery.getByText("Výsledek pouze pro ruční posouzení", { exact: false })).toBeVisible();
+
+  // Reopening the native chooser and cancelling must clear the PREVIOUS SUCCESS.
+  // Dispatch the real bubbling DOM cancel event; no OS file picker is needed.
+  await picker.dispatchEvent("cancel", { bubbles: true, cancelable: true });
+  await expect(summary).toHaveCount(0);
+  await expect(recovery.getByText("Výsledek pouze pro ruční posouzení", { exact: false })).toHaveCount(0);
+  await expect(picker).toBeEnabled();
+  await expect(recovery).toBeVisible(); // The safety dialog stays non-dismissible.
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("ai-executive-offline-recovery-hold") !== null)).toBe(true);
+
+  // Keep the invalid-file regression too: a second failed inspection is
+  // independently reset by another native cancellation.
+  await picker.setInputFiles({
+    name: "invalid-recovery.json", mimeType: "application/json", buffer: Buffer.from("{bad json"),
+  });
+  const invalid = recovery.getByText("Soubor neprošel kontrolou obsahu", { exact: false });
+  await expect(invalid).toBeVisible();
+  await picker.dispatchEvent("cancel", { bubbles: true, cancelable: true });
+  await expect(invalid).toHaveCount(0);
+  await expect(recovery).toBeVisible();
 });
 
 test("signing out after the sign-in has expired does not leave a question behind", async ({ page, context }) => {
