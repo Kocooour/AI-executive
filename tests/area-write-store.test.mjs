@@ -89,6 +89,42 @@ test("PUT: invalid explicit Area references rollback without modifying the store
   assert.equal(preflight().noChanges, true);
 });
 
+test("PUT: reviving the tombstoned original Area link does not override the newer Area", () => {
+  const current = snap();
+  const old = current.tombstones.find((t) => t.id === current.tombstones.find((t) => t.id?.startsWith("relation:2a:"))?.id);
+  const original = old && current.relations.find((r) => r.id === old.id);
+  assert.equal(original, undefined, "the tombstoned link must be absent");
+  // This test uses the task previously moved from the fallback Area to move-area-b.
+  const id = [...current.tombstones].reverse().find((t) => t.id.startsWith("relation:2a:"))?.id;
+  assert.ok(id);
+  const task = get("reassign-task");
+  const area = get(FALLBACK);
+  assert.ok(task && area);
+  const revived = rel(id, task.id, area.id, "belongs_to_area", 40);
+  const attempt = store.replaceSnapshot(current.revision, current.entities,
+    [...current.relations, revived], [], [id], current.restoreGeneration);
+  assert.equal(attempt.conflict, false);
+  assert.deepEqual(links(task.id).map((r) => r.targetEntityId), ["move-area-b"]);
+  assert.ok(snap().tombstones.some((t) => t.id === id), "stale old link is tombstoned again");
+  assert.equal(preflight().noChanges, true);
+});
+
+test("PUT: free-text legacy Area becomes a canonical Area and link immediately", () => {
+  save((before) => ({ ...before,
+    entities: [...before.entities,
+      ent("legacy-label-task", "task", { area: "   Rodina  " }),
+      ent("legacy-label-project", "project", { area: "rodina" }),
+    ],
+  }));
+  const areaId = generatedAreaId("personal", "Rodina");
+  assert.equal(get(areaId).properties.kind, "private");
+  for (const id of ["legacy-label-task", "legacy-label-project"]) {
+    assert.deepEqual(links(id).map((r) => r.targetEntityId), [areaId]);
+    assert.equal("area" in get(id).properties, false);
+  }
+  assert.equal(preflight().noChanges, true);
+});
+
 test("an old client that adds a task-level Area to a task in a project is stored without it", () => {
   save((s) => ({ ...s, entities: [...s.entities, ent("area:work", "area", { kind: "private" }), ent("tp", "task", { areaId: "area:work" })],
     relations: [...s.relations, rel("r:tp-proj", "tp", "p1", "belongs_to_project"), rel("r:tp-area", "tp", "area:work", "belongs_to_area")] }));
@@ -189,8 +225,15 @@ test("Inbox batch: organize into a project removes the tasks' own Area link (the
     assert.equal(get(id).properties.inbox, false);
   }
   save((s) => ({ ...s, entities: [...s.entities, ent("ib3", "task", { inbox: true })] }));
+  const staleDevice = snap();
+  const oldAreaLinkId = links("ib3")[0].id;
   commitInboxBatch(batch([get("ib3")], "organize", [{ id: "ib-area", type: "area" }]));
   assert.deepEqual(links("ib3").map((r) => r.targetEntityId), ["ib-area"]);
+  assert.ok(snap().tombstones.some((t) => t.id === oldAreaLinkId), "SQL deletion must tombstone its old Area link");
+  const stale = mergeSnapshots(snap(), staleDevice.entities, staleDevice.relations, {
+    entities: staleDevice.entities, relations: staleDevice.relations,
+  });
+  assert.equal(stale.relations.some((r) => r.id === oldAreaLinkId), false, "stale device cannot restore old Area");
   assert.equal(preflight().noChanges, true);
 });
 
@@ -236,6 +279,7 @@ test("AI actions: moving a standalone task into a project drops its Area link; u
   assert.ok(planned.proposal, planned.message);
   const applied = ai.confirmAIProposal(planned.proposal.id, binding);
   assert.deepEqual(links("ai-mv"), []);
+  assert.ok(snap().tombstones.some((t) => t.id === "r:ai-mv-keep"), "AI move tombstones the prior Area link");
   assert.equal(links("ai-mv", "belongs_to_project").length, 1);
   ai.undoAIAction(applied.actionId, binding);
   assert.equal(links("ai-mv", "belongs_to_project").length, 0);
@@ -295,12 +339,17 @@ test("a task joining and leaving a project many times is never left without an A
   }
 });
 
-// Last: it permanently tombstones the fallback Area of this store.
-test("a tombstoned fallback Area is not recreated and the item is stored unassigned", () => {
-  // Delete the fallback (announced), then create a task: nothing may revive its deterministic ID.
-  save((s) => ({ ...s, entities: s.entities.filter((e) => e.id !== FALLBACK), relations: s.relations.filter((r) => r.targetEntityId !== FALLBACK) }), { deletedIds: [FALLBACK, ...snap().relations.filter((r) => r.targetEntityId === FALLBACK).map((r) => r.id)] });
-  save((s) => ({ ...s, entities: [...s.entities, ent("orphan", "task")] }));
-  assert.equal(get(FALLBACK), undefined);
-  assert.deepEqual(links("orphan"), []);
-  assert.equal(get("orphan").title, "T orphan");
+test("a raw PUT cannot rename or delete the protected system fallback Area", () => {
+  const before = snap();
+  assert.ok(get(FALLBACK));
+  assert.throws(() => save((s) => ({ ...s,
+    entities: s.entities.filter((e) => e.id !== FALLBACK),
+    relations: s.relations.filter((r) => r.targetEntityId !== FALLBACK),
+  }), { deletedIds: [FALLBACK, ...before.relations.filter((r) => r.targetEntityId === FALLBACK).map((r) => r.id)] }), /Invalid Area assignment/);
+  assert.throws(() => save((s) => ({ ...s,
+    entities: s.entities.map((e) => e.id === FALLBACK ? { ...e, title: "Deleted via rename" } : e),
+  })), /Invalid Area assignment/);
+  assert.equal(snap().revision, before.revision);
+  assert.ok(get(FALLBACK));
+  assert.equal(preflight().noChanges, true);
 });
