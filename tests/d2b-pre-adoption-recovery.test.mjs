@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { offlineRecoveryHoldKey, offlineRecoveryIntentKey, beginOfflineRecoveryHold, beginOfflineRecoveryHoldSafely, withOfflineRecoveryDataLock, recoveryExportGeneration, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
+import { offlineRecoveryHoldKey, offlineRecoveryIntentKey, beginOfflineRecoveryHold, beginOfflineRecoveryHoldSafely, withOfflineRecoveryDataLock, recoveryExportGeneration, recoveryPullDecision, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../lib/d2b-recovery-local.ts";
 import { OfflineRecoveryInvalid } from "../lib/d2b-offline-reconciliation.ts";
 import { deletedKey, revivedKey, pendingKey, pendingSeqKey, captureMarkers, clearSentMarkers, clearAllMarkers } from "../lib/pending-markers.ts";
@@ -249,4 +249,15 @@ test("D2b: queued local wipe observes the hold and must not erase rescue data", 
     Object.defineProperty(globalThis, "localStorage", { value: priorStorage, configurable: true });
     Object.defineProperty(globalThis, "navigator", { value: priorNavigator, configurable: true });
   }
+});
+
+test("D2b: a new restore generation wins over an equal or lower server revision", () => {
+  // A server restored to an older backup commonly comes back with a lower
+  // revision: do NOT return synced before comparing generations.
+  assert.equal(recoveryPullDecision(true, 3, 17), "restore");
+  assert.equal(recoveryPullDecision(true, 17, 17), "restore");
+  assert.equal(recoveryPullDecision(true, 18, 17), "restore");
+  assert.equal(recoveryPullDecision(false, 16, 17), "synced");
+  assert.equal(recoveryPullDecision(false, 17, 17), "synced");
+  assert.equal(recoveryPullDecision(false, 18, 17), "apply");
 });
