@@ -10,9 +10,23 @@ restore hold remains active**. This adds a diagnostic step, not release.
   unlike the export, a comparative inspection is never labelled verified
   without a current server response.
 - The existing bounded UTF-8/schema/SHA validator compares with that snapshot.
-  The owner sees only aggregate counts of changed entities, relations, drafts,
-  pending intents and classification reasons, with **no titles, IDs or draft
-  bodies** in the UI, URL, storage, server requests or logs.
+  Before showing counts, the inspected v1 bundle must match the active browser
+  recovery hold: its old generation equals the hold's known generation (or 0
+  for an unknown one), its observed generation is not older than the first
+  observed mismatch, and its creation time is not earlier than the hold.
+  Multi-restore exports are allowed when these conditions and the current
+  server generation checks all pass. A v1 file has no signed hold ID, so
+  matching metadata only establishes consistency, **not identity, authorship,
+  authenticity, current Area membership or authorization**.
+- The owner sees only aggregate counts of changed entities, relations, drafts,
+  pending intents and all seven classification reasons (including already
+  present/deleted and local-only), with **no titles, IDs or draft bodies** in
+  the UI, URL, storage, server requests or logs. All reason counts add up to
+  the number of classified entity/relation changes; pending markers and
+  drafts are separate, non-classified counts.
+- New file selections or cancellations immediately clear the previous summary
+  and busy state. A late file read or server response cannot publish stale
+  results or re-disable the picker.
 - The assessment is provisional: server state can change after GET, the hash
   checks integrity rather than authenticity, and neither file inspection nor
   a "no-local-changes" result establishes current Area permissions, workspace
@@ -22,8 +36,10 @@ restore hold remains active**. This adds a diagnostic step, not release.
   membership/ownership review and a crash-safe owner decision are still needed.
 
 Validation: unit tests in `tests/d2b-recovery-review.test.mjs` cover private
-data redaction, counts, corrupted files, generation rejection and the no-change
-case. PR Checks must run typecheck, tests and build on the exact PR head.
+data redaction, exhaustive classifications, hold mismatches, later restores,
+corrupted files, generation rejection and the no-change case.
+`tests/d2b-recovery-review-request.test.mjs` covers cancelled and overlapping
+file reads, late results, and stale/active errors. PR Checks must run typecheck, tests and build on the exact PR head.
 Focused multi-tab/browser recovery tests and independent security review are
 required before this UI can be considered merge-ready. Full browser E2E is
 reserved for the exact-SHA pre-deployment gate.
