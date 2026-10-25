@@ -10,8 +10,27 @@ Server již odmítá zápisy ze staré generace (`409 code:restored`) a obdobnou
 
 - `lib/d2b-offline-reconciliation.ts` nabízí `prepareOfflineRecovery(input, now)`. Je to čistá deterministická funkce: ze známé společné `base` a lokální verze vybere **jen změněné/nové/smazané entity a relace**; připojí pending deletion/revival marker IDs a obě sady per-tab rozepsaných draftů. Zahrne původní i místní podobu každé změny. Neposílá nic přes síť, nemanipuluje s browser storage ani nevytvoří soubor sama.
 - Balíček deklaruje `format: lumi-d2b-offline-recovery`, `version:1`, `sensitiveOwnerData:true`, `automaticReplayAllowed:false` a obsahuje generation/revision. Výstup je soukromý: může obsahovat texty úkolů a poznámek, a proto **se nesmí logovat, poslat do AI, uložit do veřejné cache, do URL nebo exportovat bez vědomého rozhodnutí vlastníka**.
-- `assessOfflineRecovery(bundle, currentServer)` kontroluje integritu obsahu (SHA-256 pouze proti náhodné změně, **ne autentizace ani podpis**) a vrací důvody k ruční rekonsiliaci, např. `workspace-changed`, `remote-diverged`, `remote-missing`. **Nepovoluje žádný automatický replay**; po 2b změně oprávnění musí ještě samostatná autorizační vrstva zkontrolovat cílovou Oblast a aktéra.
+- `assessOfflineRecovery(bundle, currentServer)` kontroluje integritu obsahu (SHA-256 pouze proti náhodné změně, **ne autentizace ani podpis**) a vrací důvody k ruční rekonsiliaci, např. `workspace-changed`, `remote-diverged`, `remote-missing`, `id-collision` (nový lokální záznam s kolidujícím serverovým ID) a `already-deleted` (lokální smazání již odpovídá serveru). Kontrolují se **entity i relace** a společný ID namespace napříč jejich typy na base/local snapshotu. **Nepovoluje žádný automatický replay**; po 2b změně oprávnění musí ještě samostatná autorizační vrstva zkontrolovat cílovou Oblast a aktéra.
 - Regresní testy ověřují, že nezmizí lokální smazání, oživení ani drafty, že export neobsahuje nezměněné entity, že pořadí zdrojových polí nemění deterministický výsledek, že balíček není ovlivněný pozdější změnou vstupního objektu a že konfliktní/poškozené balíčky nejsou přijaty.
+
+## Bezpečnostní limity diagnostiky
+
+Čistá synchronní implementace `prepareOfflineRecovery` a `assessOfflineRecovery` je **fail-closed**. Při překročení limitu odmítne celý balíček jako `OfflineRecoveryInvalid`; žádný záznam, draft ani marker se **nezkracuje, neodstraňuje a nezapisuje zpět**. Limity jsou definovány v `offlineRecoveryLimits`:
+
+| Prvek | Limit |
+| --- | ---: |
+| Entity na snapshot (base nebo local) | 20 000 |
+| Relace na snapshot (base nebo local) | 50 000 |
+| Pending smazání/obnovení každého typu | 20 000 |
+| Návrhy poznámek a kontextu každého typu | 512 |
+| Jednotlivý draft po serializaci (JSON znaky) | 128 Ki znaků |
+| Jednotlivý textový řetězec | 256 Ki znaků |
+| Součet textových znaků ve validovaných vstupních snímcích a draftech | 32 Mi znaků |
+| Navštívené hodnoty/klíče při každé validaci | 500 000 |
+| Hloubka vnoření | 32 |
+| Celý vytvořený/ověřovaný balíček bez hashe (JSON znaky) | 8 Mi znaků |
+
+Toto jsou **limity počtu znaků**, nikoliv garantovaný limit počtu bytů UTF-8; pro skutečný export do souboru musí následná UI iterace uplatnit ještě bytový limit a vědomé potvrzení vlastníka. Synchronní průchod probíhá jen nad rozsahem, který prošel předběžnou kontrolou počtů; před přidáním na pre-adoption cestu je nutné ověřit latenci a případně přesunout těžkou práci mimo hlavní UI vlákno. Překročení znamená **stop a zachování lokálních dat**, nikoli automatickou adopci.
 
 ## Co to zatím záměrně NEřeší
 
