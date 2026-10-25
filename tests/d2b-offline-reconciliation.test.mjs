@@ -51,6 +51,19 @@ test("D2b: the offline recovery package captures only deltas, markers and unsent
   assert.equal(JSON.stringify(value).includes("Same"), false, "unchanged records are not exported");
 });
 
+test("D2b: recovery payload cannot lose data through caller mutation or undefined fields", () => {
+  const i = initial();
+  const value = prepareOfflineRecovery(i, 100);
+  const before = value.contentSha256;
+  i.local.entities[0].title = "Later edit";
+  i.noteDrafts[0].text = "Later different draft";
+  assert.equal(value.changes.entities.find(x => x.id === "task").after.title, "Edited private details");
+  assert.equal(value.changes.noteDrafts[0].text, "Draft with sensitive content");
+  assert.equal(value.contentSha256, before);
+  assert.throws(() => prepare({ noteDrafts: [{ id: "note", text: undefined }] }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ projectContextDrafts: [{ at: Number.NaN }] }), OfflineRecoveryInvalid);
+});
+
 test("D2b: baseline-only removals and changed relations remain recoverable", () => {
   const start = initial();
   const value = prepare({
