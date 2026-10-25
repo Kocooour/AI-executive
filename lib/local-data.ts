@@ -11,6 +11,7 @@ import { attentionCacheKey } from "./attention-cache";
 // Device preferences (theme, language, start view) are not user data and stay.
 const pendingSyncKey = "ai-executive-pending-sync";
 const serverSyncedKey = "ai-executive-server-synced";
+export const restoreGenerationKey = "ai-executive-restore-generation";
 const wipePendingKey = "ai-executive-wipe-pending";
 // Set once this browser has completed a synchronization with the server, removed by signing out: a start without a
 // connection then shows the data kept here (owner decision 2026-10-09), also when there is none yet.
@@ -107,8 +108,18 @@ export async function clearLocalData(timeoutMs = 4000) {
     wipe,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Local data wipe timed out")), timeoutMs)),
   ]);
+  // After a COMPLETE purge the browser no longer owns a copy of the old
+  // generation. Retaining either marker would falsely freeze its next login
+  // after an unrelated restore, despite there being nothing local to recover.
+  // Keep wipePending until these removals succeed (crash-safe retry).
+  clearPurgedRestoreBaseline(localStorage);
   localStorage.removeItem(wipePendingKey);
   }, true);
+}
+
+export function clearPurgedRestoreBaseline(storage: Pick<Storage, "removeItem">) {
+  storage.removeItem(restoreGenerationKey);
+  storage.removeItem(serverSyncedKey);
 }
 
 export async function finishInterruptedWipe() {
