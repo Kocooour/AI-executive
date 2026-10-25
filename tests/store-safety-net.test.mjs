@@ -75,9 +75,12 @@ test("a save that silently drops the links between records that stay is refused 
   const project = { ...task("project-x"), type: "project", status: "active" };
   const current = store.readSnapshot();
   const workspaces = current.entities.filter((entity) => entity.type === "workspace");
+  const areas = current.entities.filter((entity) => entity.type === "area");
   const tasks = Array.from({ length: 20 }, (_, index) => task(`link-task-${index}`));
   const links = Array.from({ length: 12 }, (_, index) => relation(index));
-  assert.equal(store.replaceSnapshot(current.revision, [...workspaces, ...tasks, project], links, []).conflict, false);
+  // The fallback Area is an immutable system record; don't drop it when seeding
+  // an otherwise unrelated set of links for this safety-net test.
+  assert.equal(store.replaceSnapshot(current.revision, [...workspaces, ...areas, ...tasks, project], links, []).conflict, false);
   const before = store.readSnapshot();
   // The tasks also got fallback Area links (2a part 4); count the links this test is about.
   const projectLinks = (snapshot) => snapshot.relations.filter((link) => link.relationType === "belongs_to_project");
