@@ -6,11 +6,27 @@ import type { LumiApp } from "../use-lumi-app";
 // a modal, reloading the page or acknowledging a download prompt.
 export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const inspectRef = useRef(app.inspectOfflineRecoveryFile);
+  inspectRef.current = app.inspectOfflineRecoveryFile;
   const cs = app.language === "cs";
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog || !app.recoveryHeld) return;
     if (!dialog.open) dialog.showModal();
+  }, [app.recoveryHeld]);
+  // React's input props do not expose a typed onCancel. Listen for the native
+  // file-picker event and stop it before it reaches the non-dismissible dialog.
+  useLayoutEffect(() => {
+    const input = fileInputRef.current;
+    if (!input || !app.recoveryHeld) return;
+    const onFilePickerCancel = (event: Event) => {
+      event.stopPropagation();
+      input.value = "";
+      void inspectRef.current(null);
+    };
+    input.addEventListener("cancel", onFilePickerCancel);
+    return () => input.removeEventListener("cancel", onFilePickerCancel);
   }, [app.recoveryHeld]);
   if (!app.recoveryHeld) return null;
   return (
@@ -74,17 +90,11 @@ export function OfflineRecoveryDialog({ app }: { app: LumiApp }) {
               : "Select a rescue JSON file from this device. Lumi checks it locally against a fresh server snapshot; it is never uploaded."}
           </p>
           <input
+            ref={fileInputRef}
             type="file"
             accept=".json,application/json"
             aria-label={cs ? "Vybrat záchranný JSON soubor" : "Choose recovery JSON file"}
             disabled={app.recoveryInspecting}
-            // Native file-picker dismissal emits "cancel", not "change".
-            // Keep this separate from the dialog's non-dismissible Escape guard.
-            onCancel={(event) => {
-              event.stopPropagation();
-              event.currentTarget.value = "";
-              void app.inspectOfflineRecoveryFile(null);
-            }}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0] ?? null;
               event.currentTarget.value = "";
