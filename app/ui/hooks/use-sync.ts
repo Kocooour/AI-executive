@@ -12,7 +12,7 @@ import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/ado
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportGeneration } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportGeneration, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
@@ -540,11 +540,14 @@ export function useSync() {
         if (offlineRecoveryIsHeld()) return "held" as const;
         // Restore generations are authoritative even when a backup rolls the
         // server revision backwards (or keeps the same number).
-        if (restoredSinceKnown(snapshot.restoreGeneration)) {
+        const decision = recoveryPullDecision(
+          restoredSinceKnown(snapshot.restoreGeneration), snapshot.revision, serverRevision.current,
+        );
+        if (decision === "restore") {
           const adopted = await adoptServerCopy(snapshot, heldBack.length > 0);
           return adopted ? "synced" as const : "held" as const;
         }
-        if (snapshot.revision <= serverRevision.current) return "synced" as const;
+        if (decision === "synced") return "synced" as const;
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
