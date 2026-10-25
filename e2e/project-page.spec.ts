@@ -71,7 +71,8 @@ async function seedWorld(page: Page, stamp: number) {
       entity(id.rich, "project", `Projekt B1${R} s kontextem`, {
         context: { why: "Současný web neprodává. Brzdí také nábor.", goals: ["Spustit do 30. 11.", "Udržet SEO"], doneWhen: "Web běží na produkční doméně", provenance: "owner", updatedAt: stamp } }),
       entity(id.bare, "project", `Projekt B1${R} bez kontextu`),
-      entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět" }),
+      // A legacy project: free-text area label and no Area link (a new project without an Area would get "Nezařazeno").
+      entity(id.old, "project", `Projekt B1${R} starý cíl`, { goal: "Starý cíl projektu zůstane vidět", area: "Starý štítek" }),
       entity(id.t1, "task", `Úkol B1${R} první`, { deadline: day }),
       entity(id.t2, "task", `Úkol B1${R} druhý`),
       entity(id.done, "task", `Úkol B1${R} hotový`, {}, "completed"),

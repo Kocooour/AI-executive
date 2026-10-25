@@ -147,7 +147,9 @@ test("ordinary full-snapshot save queues only changed entities, not a global reb
   const created = store.replaceSnapshot(initial.revision,
     [...initial.entities, ...bulk], initial.relations, [], [], initial.restoreGeneration);
   assert.equal(created.conflict, false);
-  assert.equal(queued(), 550, "initial creation queues each new entity exactly once");
+  // 550 tasks plus the fallback Area the server created for them (2a part 4), each exactly once.
+  assert.equal(queued(), 551, "initial creation queues each new entity exactly once");
+  assert.equal(created.snapshot.relations.filter((link) => link.relationType === "belongs_to_area" && link.sourceEntityId.startsWith("snapshot-unchanged-")).length, 550);
   semantic.reconcileSemanticManifest();
   assert.equal(queued(), 0);
 

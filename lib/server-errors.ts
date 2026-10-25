@@ -140,6 +140,7 @@ export const serverErrorKeys: Record<string, string> = {
   "A message is invalid": "serverError_aMessageIsInvalid",
   "Messages are invalid": "serverError_messagesAreInvalid",
   "Invalid request": "serverError_invalidRequest",
+  "Invalid Area assignment": "serverError_invalidAreaAssignment",
 };
 
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
@@ -197,6 +198,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Invalid Inbox batch date",
   "Invalid Inbox batch targets",
   "Invalid Inbox batch destination",
+  "Inbox batch cannot be applied",
   "Cross-origin request rejected",
   "Entity not found",
   "Exactly one literal or target is required",

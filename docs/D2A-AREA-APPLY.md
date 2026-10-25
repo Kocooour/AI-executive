@@ -51,10 +51,15 @@ Služba musí být zastavená při rollbacku; zastavit ji doporučujeme i při a
 4. Ověřit: `check-data` nad živým store, čerstvý preflight (`noChanges: true`), spuštění služby a kontrola čitelnosti `GET /api/store`.
 5. Rollback (služba zastavená): `... scripts/apply-area-normalization.mjs --rollback applied.json --confirm <resultSha256>`. Při selhání viz výše (`post-migration-changes`, `backup-mismatch`); v takovém případě se rozhoduje ručně z uložené zálohy, nic se nepřepisuje automaticky.
 
-## NENÍ aktivováno — brány pro část 4
-Produkční běh je zakázán, dokud:
-- Zápisové cesty klienta i serveru stále vytvářejí task-level vazby na Oblast, `properties.areaId` a položky bez Oblasti (ověřeno grepem `belongs_to_area` / `areaId` / Oblast `kind`), takže by se normalizovaný stav rozpadal: `lib/db.ts` (`migratePropertyRelations` — spouští se při každém načtení klienta a z `properties.areaId` vytváří `belongs_to_area`), `app/ui/views/detail-panel.tsx` (výběr Oblasti u úkolu), `app/ui/views/project-page.tsx`, `lib/inbox-batch-store.ts`, `app/ui/use-lumi-app.tsx` (`relate(... "belongs_to_area")`, zakládání položek s Oblastí; také vytváření nových Oblastí bez `kind`), `lib/task-suggestions.ts` (návrh Oblasti pro úkol z `properties.areaId`). `lib/ai-actions.ts` žádné zápisy Oblasti neobsahuje (ověřeno) a v seznamu není. Nové zápisy musí být normalizovány/validovány (část 4).
-- Serverová zápisová cesta musí zachovat/doplňovat `kind` Oblasti. Starý zařízení **bez sync base**, jehož lokální kopie Oblasti má novější `updatedAt` než čas aplikace, vyhraje slučování (`lib/server-sync.ts`, `entity.updatedAt > current.updatedAt`) a `kind` odstraní. Je to fail-closed (preflight znovu hlásí `pendingAreaKindBackfills`, takže autorizace Oblastí není aktivní), ale musí být vyřešeno před aktivací; chování dokumentuje test „KNOWN GAP“ v `tests/area-normalization-apply.test.mjs`.
+## NENÍ aktivováno — stav bran pro část 4
+**Hotovo (část 4, viz [D2A-AREA-WRITES.md](D2A-AREA-WRITES.md)):**
+- Serverová autorita `lib/area-write-invariants.ts` je zapojena do `replaceSnapshot` (PUT /api/store), Inbox batch, AI akcí a opakovaných výskytů; nové zápisy tedy nevytvářejí task-level vazby na Oblast u úkolů v projektu, nezanechávají projekty a samostatné úkoly bez Oblasti (záložní Oblast) a Oblasti mají vždy `kind`. Dříve zdokumentovaná mezera („KNOWN GAP“: starý klient bez sync base smazal `kind`) je opravena a test přepsán.
+- Klient: `migratePropertyRelations` už nevytváří `belongs_to_area` pro úkol v projektu, `create`/`relate`/Inbox triage/dávka/detail/stránka projektu/Quick Capture/událost kalendáře → úkol/přetažení dodržují model; Oblasti vznikají s `kind`.
+- Odpověď PUT (opravený snímek) klient převezme; opravená relace se neposílá znovu (testy round trip s bází i bez ní).
+
+**Zbývá před produkčním spuštěním aplikátoru (nic z toho tato iterace nedělá):**
+- Výslovné schválení vlastníkem projektu.
+- Provozní postup v tomto dokumentu (záloha, preflight nad offline kopií, zastavená služba, `--confirm`, ověření, rollback) nad skutečnými daty; po aplikaci nová device base klientů.
+- Stará (legacy) porušení, kterých se nové zápisy nedotkly, řeší právě aplikátor; do jeho spuštění preflight správně hlásí `pending…` položky.
 - Jsou dokončeny části 2b/2c a serverová autorizace Oblastí.
-- Produkční spuštění proběhne až po části 4 a po výslovném schválení vlastníkem projektu.
-- Plná browser E2E sada se spouští jen jako release gate bezprostředně před nasazením na přesný SHA (viz AGENTS.md), nikoli během vývoje tohoto nástroje.
+- Plná browser E2E sada jako release gate na přesný SHA nasazení (AGENTS.md). Pozn.: pomocné čištění ve specifikacích E2E (`e2e/helpers.ts` aj.) musí mazat i vazby smazaných záznamů, protože nové úkoly a projekty mají vazbu na Oblast.

@@ -63,11 +63,8 @@ const blocked = (fn, reason) => assert.throws(fn, x => x instanceof AreaNormaliz
 const NOW = () => Date.now() + 1000;
 
 test("happy path: personal + shared workspace, kind backfill, tombstoned redundant links, backup, idempotent", () => {
-  // Seed through the real client write path first.
-  const base = legacy();
-  const current = store.readSnapshot();
-  const saved = store.replaceSnapshot(current.revision, base.entities, base.relations, [], [], current.restoreGeneration);
-  assert.equal(saved.conflict, false);
+  // Legacy data is seeded as rows: since 2a part 4 the real write path (replaceSnapshot) no longer stores it.
+  seed(legacy());
   const before = store.readSnapshot();
   const manifest = preflight();
   assert.equal(manifest.noChanges, false);
@@ -454,20 +451,23 @@ test("rollback is refused after a later write to another restorable table, and t
   assert.equal(apply.rollbackAreaNormalization(applied).status, "rolled-back");
 });
 
-test("KNOWN GAP (documents current behaviour): a legacy device without a base can strip an Area's kind", () => {
+test("a legacy device without a base cannot strip an Area's kind: the write invariants restore it (formerly the KNOWN GAP)", () => {
   seed(legacy());
   const pre = store.readSnapshot();
   const applied = apply.applyAreaNormalization(preflight(), { now: NOW() });
-  // The device's local Area copy is newer than the apply time, so it wins the base-less merge (lib/server-sync.ts).
+  // The device's local Area copy is newer than the apply time, so it wins the base-less merge (lib/server-sync.ts) ...
   const device = pre.entities.map(e => e.id === "area:old" ? { ...e, updatedAt: applied.appliedAt + 10000 } : e);
   const server = store.readSnapshot();
   const merged = mergeSnapshots(server, device, pre.relations, null);
   assert.equal(merged.entities.find(e => e.id === "area:old").properties.kind, undefined);
-  assert.equal(store.replaceSnapshot(server.revision, merged.entities, merged.relations, [], [], pre.restoreGeneration).conflict, false);
-  // Fail-closed: the preflight shows the pending backfill again, so Area authorization stays inactive.
+  // ... and loses the kind in the payload it sends, but the server restores it before storing.
+  const saved = store.replaceSnapshot(server.revision, merged.entities, merged.relations, [], [], pre.restoreGeneration);
+  assert.equal(saved.conflict, false);
+  assert.equal(saved.snapshot.entities.find(e => e.id === "area:old").properties.kind, "private");
+  assert.equal(store.readSnapshot().entities.find(e => e.id === "area:old").properties.kind, "private");
   const again = preflight();
-  assert.equal(again.noChanges, false);
-  assert.equal(again.pendingAreaKindBackfills, 1);
+  assert.equal(again.pendingAreaKindBackfills, 0);
+  assert.equal(again.noChanges, true);
 });
 
 // ---- owner review: backup must equal the live other tables; no store mutation before verification ----------------

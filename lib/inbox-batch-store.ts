@@ -1,6 +1,7 @@
 import { ensureDailyBackup, getDatabase } from "./server-store";
 import type { Entity, Relation } from "./db";
 import { randomUUID } from "node:crypto";
+import { enforceAreaWritesInTransaction, readAreaRows } from "./area-write-store";
 
 // The batch MUST NOT be implemented as a full-snapshot PUT followed by a
 // three-way merge: a remotely removed member could otherwise be dropped while
@@ -17,6 +18,11 @@ export interface InboxBatchRequest {
 
 export class InboxBatchStale extends Error {
   constructor() { super("Inbox batch changed; review the current selection again"); }
+}
+
+// The request itself cannot be applied under the Area model (not a stale selection).
+export class InboxBatchInvalid extends Error {
+  constructor() { super("Inbox batch cannot be applied; review the selection and destination"); }
 }
 
 const validId = (id: unknown): id is string =>
@@ -51,6 +57,8 @@ export function validateInboxBatch(value: unknown): asserts value is InboxBatchR
   if (b.action === "organize" ? !b.targets?.length : Boolean(b.targets?.length)) {
     throw new Error("Invalid Inbox batch destination");
   }
+  // 2a part 4: a task in a project has no Area of its own, so one batch never sets both (the UI offers one).
+  if (b.targets && b.targets.length > 1) throw new Error("Invalid Inbox batch targets");
 }
 
 export function commitInboxBatch(batch: InboxBatchRequest) {
@@ -88,12 +96,23 @@ export function commitInboxBatch(batch: InboxBatchRequest) {
       return { ...target, relationType: target.type === "project" ? "belongs_to_project" : "belongs_to_area" };
     });
     const now = Date.now();
+    const areaBefore = readAreaRows(database);
     const updateEntity = database.prepare("UPDATE entities SET payload = ?, updated_at = ? WHERE id = ?");
     const deleteRelation = database.prepare("DELETE FROM relations WHERE id = ?");
     const insertRelation = database.prepare("INSERT INTO relations (id, payload, created_at) VALUES (?, ?, ?)");
     const relations = targets.length
       ? database.prepare("SELECT id, payload FROM relations").all() as Array<{ id: string; payload: string }>
       : [];
+    // An Area chosen for a task that is already in a project would be a task-level Area link, which the model
+    // forbids (the task inherits its project's Area). The whole batch is refused instead of silently skipping tasks,
+    // so the reviewed selection is applied completely or not at all.
+    if (targets.some(target => target.relationType === "belongs_to_area")) {
+      const inProject = new Set(areaBefore.relations
+        .filter(link => link.relationType === "belongs_to_project").map(link => link.sourceEntityId));
+      if (tasks.some(task => inProject.has(task.id) || typeof task.properties.projectId === "string" && task.properties.projectId)) {
+        throw new InboxBatchInvalid();
+      }
+    }
     for (const task of tasks) {
       for (const target of targets) {
         for (const row of relations) {
@@ -122,6 +141,9 @@ export function commitInboxBatch(batch: InboxBatchRequest) {
       };
       updateEntity.run(JSON.stringify(next), next.updatedAt, task.id);
     }
+    // Choosing a project removes the tasks' own Area links (they inherit); a task that ends up without any Area
+    // keeps the workspace fallback. Only what this batch changed is touched.
+    enforceAreaWritesInTransaction(database, areaBefore, now);
     const revision = Number((meta.get("revision") as { value?: string } | undefined)?.value ?? 0) + 1;
     const setMeta = database.prepare("INSERT INTO metadata (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
     setMeta.run("revision", String(revision));

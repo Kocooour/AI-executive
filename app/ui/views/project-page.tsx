@@ -120,7 +120,8 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
               value={String(targets(project.id, "belongs_to_area")[0] || "")}
               onChange={async (event) => { await relate(project.id, event.target.value, "belongs_to_area"); }}
             >
-              <option value="">{tr("none")}</option>
+              {/* A project has exactly one Area; a legacy project without one shows as unassigned and cannot be cleared. */}
+              {!targets(project.id, "belongs_to_area")[0] && <option value="" disabled>{tr("none")}</option>}
               {areas.filter((area) => area.workspaceId === project.workspaceId).map((area) => (
                 <option value={area.id} key={area.id}>{area.title}</option>
               ))}

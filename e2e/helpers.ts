@@ -113,7 +113,10 @@ export async function removeTasks(page: Page, ids: string[]) {
   await expect.poll(() => page.evaluate(async (gone) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const response = await fetch("/api/store", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-      entities: snapshot.entities.filter((row: { id: string }) => !gone.includes(row.id)), relations: snapshot.relations, deletedIds: gone, revivedIds: [] }) });
+      entities: snapshot.entities.filter((row: { id: string }) => !gone.includes(row.id)),
+      // Tasks now carry an Area (or project) link: it goes with the task.
+      relations: snapshot.relations.filter((link: { sourceEntityId: string; targetEntityId: string }) => !gone.includes(link.sourceEntityId) && !gone.includes(link.targetEntityId)),
+      deletedIds: gone, revivedIds: [] }) });
     return response.status;
   }, ids), { timeout: 15_000 }).toBe(200);
 }

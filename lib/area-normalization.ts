@@ -1,8 +1,17 @@
 // 2a: deterministic, offline-only preparation. Do not use this as an authorization
 // resolver or write it to a live store until the migration/sync review is complete.
-import { createHash } from "node:crypto";
 import type { Entity, Relation } from "./db";
 import { validateSnapshotStructure } from "./snapshot-validation";
+import {
+  areaKindForWorkspace, displayLabel, fallbackAreaTitle, generatedAreaId, generatedProjectRelationId,
+  generatedRelationId, normalizedLabel,
+} from "./area-ids";
+
+// The label / ID rules live in the browser-safe ./area-ids so the write invariants and the client share them.
+export {
+  areaKindForWorkspace, displayLabel, fallbackAreaTitle, generatedAreaId, generatedProjectRelationId,
+  generatedRelationId, normalizedLabel,
+};
 
 export interface AreaNormalizationSnapshot {
   entities: readonly Entity[];
@@ -38,15 +47,6 @@ export class AreaNormalizationBlocked extends Error {
     this.issues = issues;
   }
 }
-
-const displayLabel = (label: string) => label.trim().normalize("NFC").replace(/\s+/g, " ");
-const normalizedLabel = (label: string) => displayLabel(label).toLocaleLowerCase("cs");
-const digest = (...parts: string[]) =>
-  createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 32);
-const generatedAreaId = (workspaceId: string, label: string) =>
-  "area:2a:" + digest(workspaceId, normalizedLabel(label));
-const generatedRelationId = (entityId: string, areaId: string) =>
-  "relation:2a:" + digest(entityId, areaId);
 
 function textId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -145,7 +145,7 @@ export function planAreaNormalization(
       }
     }
     if (entity.type === "area") {
-      const expectedKind = workspaceKind.get(entity.workspaceId) === "personal" ? "private" : "shared";
+      const expectedKind = areaKindForWorkspace(workspaceKind.get(entity.workspaceId) === "personal" ? "personal" : "shared");
       const existingKind = entity.properties.kind;
       // An explicitly classified Area must never disagree with its legacy
       // workspace. Older Areas without this property retain their old data.
@@ -206,8 +206,7 @@ export function planAreaNormalization(
     }
     if (existing.length === 1) return existing[0];
     const key = workspaceId + "\0" + normalizedLabel(label);
-    const defaultTitle = workspaceKind.get(workspaceId) === "shared"
-      ? "Nezařazeno (původní sdílené)" : "Nezařazeno";
+    const defaultTitle = fallbackAreaTitle(workspaceKind.get(workspaceId) === "shared" ? "shared" : "personal");
     const title = normalizedLabel(label) === normalizedLabel(defaultTitle)
       ? defaultTitle : (preferredTitles.get(key) ?? displayLabel(label));
     if (!title || title.length > 1000) {
@@ -230,7 +229,7 @@ export function planAreaNormalization(
     }
     const area: Entity = {
       id, type: "area", title, status: "active", workspaceId,
-      properties: { kind: kind === "personal" ? "private" : "shared" },
+      properties: { kind: areaKindForWorkspace(kind) },
       createdAt: at, updatedAt: at,
     };
     newAreas.set(id, area);
@@ -264,8 +263,7 @@ export function planAreaNormalization(
     return label ? createArea(entity.workspaceId, label) : undefined;
   }
   const fallback = (workspaceId: string) =>
-    createArea(workspaceId, workspaceKind.get(workspaceId) === "shared"
-      ? "Nezařazeno (původní sdílené)" : "Nezařazeno");
+    createArea(workspaceId, fallbackAreaTitle(workspaceKind.get(workspaceId) === "shared" ? "shared" : "personal"));
 
   const projectAreas = new Map<string, Entity>();
   for (const entity of snapshot.entities) {
@@ -365,7 +363,7 @@ export function planAreaNormalization(
       // A legacy property-only project membership must not disappear when
       // normalization becomes the canonical relational representation.
       if (oldProject && projectRelations.length === 0) {
-        const id = "relation:2a:" + digest("project", entity.id, projectId);
+        const id = generatedProjectRelationId(entity.id, projectId);
         if (tombstonedIds.has(id)) {
           issues.push("tombstoned-generated-project-relation-id:" + id);
           continue;

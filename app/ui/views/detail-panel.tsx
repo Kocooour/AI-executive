@@ -1,6 +1,7 @@
 "use client";
 import { byManualOrder, taskDueTone } from "../../../lib/task-views";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../../lib/local-dates";
+import { isFallbackArea } from "../../../lib/area-write-invariants";
 import type { LumiApp } from "../use-lumi-app";
 import { ProjectIcon } from "./project-icon";
 import { DurationInput } from "./duration-input";
@@ -154,6 +155,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             <p className="eyebrow">{tr(selected.type)}</p>
             <input
               className="titleEdit"
+              readOnly={isFallbackArea(selected, app.items)}
               maxLength={1000}
               value={selected.title}
               onChange={(e) => {
@@ -177,6 +179,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             {heldBack.some((entity) => entity.id === selected.id)
               ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, selected))}</p>
               : unsent.has(selected.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
+            {isFallbackArea(selected, app.items) && <p className="recordState" role="status" data-testid="fallback-area-note">{tr("fallbackAreaProtected")}</p>}
             <SyncConflicts app={app} entity={selected} />
             {context && (
               <div className="contextStrip">
@@ -384,29 +387,40 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     ))}
                   </select>
                 </label>
-                <label>
-                  {tr("area")}
-                  <select
-                    aria-label={tr("area")}
-                    value={String(
-                      targets(selected.id, "belongs_to_area")[0] || "",
-                    )}
-                    onChange={async (e) => {
-                      await relate(
-                        selected.id,
-                        e.target.value,
-                        "belongs_to_area",
-                      );
-                    }}
-                  >
-                    <option value="">{tr("none")}</option>
-                    {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
-                      <option value={a.id} key={a.id}>
-                        {a.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {targets(selected.id, "belongs_to_project").length > 0 ? (
+                  // 2a part 4: a task in a project has no Area of its own, it inherits the project's.
+                  <p className="inheritedArea" id="inherited-area-note" data-testid="inherited-area">
+                    {tr("areaFromProject").replace("{name}", (() => {
+                      const projectArea = areas.find((area) => area.id === targets(targets(selected.id, "belongs_to_project")[0], "belongs_to_area")[0]);
+                      return projectArea?.title || "—";
+                    })())}
+                  </p>
+                ) : (
+                  <label>
+                    {tr("area")}
+                    <select
+                      aria-label={tr("area")}
+                      value={String(
+                        targets(selected.id, "belongs_to_area")[0] || "",
+                      )}
+                      onChange={async (e) => {
+                        await relate(
+                          selected.id,
+                          e.target.value,
+                          "belongs_to_area",
+                        );
+                      }}
+                    >
+                      {/* A legacy task without an Area is shown as unassigned; an Area cannot be cleared. */}
+                      {!targets(selected.id, "belongs_to_area")[0] && <option value="" disabled>{tr("none")}</option>}
+                      {areas.filter((area) => area.workspaceId === selected.workspaceId).map((a) => (
+                        <option value={a.id} key={a.id}>
+                          {a.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label>
                   {tr("priority")}
                   <select
@@ -699,7 +713,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
                   </>
                 )}
-                <button className="danger" onClick={() => remove(selected)}>
+                <button className="danger" disabled={isFallbackArea(selected, app.items)} onClick={() => remove(selected)}>
                   {tr("delete")}
                 </button>
               </div>

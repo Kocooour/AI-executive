@@ -1,5 +1,6 @@
 import Dexie, { type Table } from "dexie";
 import { adoptionWriteGuard, allowAdoptionWrites } from "./adoption";
+import { legacyAreaIdBecomesRelation } from "./area-write-invariants";
 
 export type EntityType = "area" | "project" | "task" | "note" | "workspace";
 
@@ -99,13 +100,17 @@ export async function seed() {
   }
   const now = Date.now();
   const area = crypto.randomUUID();
+  const carsArea = crypto.randomUUID();
   const project = crypto.randomUUID();
+  // Example data follows the Area model (2a part 4): an Area carries its workspace's kind, a project has one Area and
+  // a task in a project none of its own. The legacy areaId properties become relations in migratePropertyRelations.
   await db.entities.bulkAdd([
-    { id: area, type: "area", title: "Work", status: "active", workspaceId: personalWorkspaceId, properties: {}, createdAt: now, updatedAt: now },
+    { id: area, type: "area", title: "Work", status: "active", workspaceId: personalWorkspaceId, properties: { kind: "private" }, createdAt: now, updatedAt: now },
+    { id: carsArea, type: "area", title: "Cars", status: "active", workspaceId: personalWorkspaceId, properties: { kind: "private" }, createdAt: now, updatedAt: now },
     { id: project, type: "project", title: "Lumi", status: "active", workspaceId: personalWorkspaceId, properties: { areaId: area }, createdAt: now, updatedAt: now },
     { id: crypto.randomUUID(), type: "note", title: "Product direction", content: "Local-first, calm and extensible.", status: "active", workspaceId: personalWorkspaceId, properties: { projectId: project }, createdAt: now, updatedAt: now },
-    { id: crypto.randomUUID(), type: "task", title: "Zavolat Petrovi", status: "open", workspaceId: personalWorkspaceId, properties: { area: "Work", projectId: project, today: true, inbox: false }, createdAt: now, updatedAt: now },
-    { id: crypto.randomUUID(), type: "task", title: "Objednat servis", status: "open", workspaceId: personalWorkspaceId, properties: { area: "Cars", today: true, inbox: false }, createdAt: now, updatedAt: now },
+    { id: crypto.randomUUID(), type: "task", title: "Zavolat Petrovi", status: "open", workspaceId: personalWorkspaceId, properties: { projectId: project, today: true, inbox: false }, createdAt: now, updatedAt: now },
+    { id: crypto.randomUUID(), type: "task", title: "Objednat servis", status: "open", workspaceId: personalWorkspaceId, properties: { areaId: carsArea, today: true, inbox: false }, createdAt: now, updatedAt: now },
   ]);
   await ensureDefaultWorkspace();
 }
@@ -122,7 +127,14 @@ export async function migratePropertyRelations() {
       ] as const) {
         const target = properties[key];
         if (typeof target !== "string" || !target) continue;
-        const exists = await db.relations
+        // 2a part 4: a task in a project (already, or from this very migration) inherits its project's Area; its
+        // legacy areaId is dropped without becoming a task-level link.
+        const inProject = key === "areaId" && (await db.relations
+          .where("sourceEntityId")
+          .equals(entity.id)
+          .filter((relation) => relation.relationType === "belongs_to_project")
+          .count()) > 0;
+        const skipLink = !legacyAreaIdBecomesRelation(entity.type, inProject) || await db.relations
           .where("sourceEntityId")
           .equals(entity.id)
           .filter(
@@ -131,7 +143,7 @@ export async function migratePropertyRelations() {
               relation.targetEntityId === target,
           )
           .first();
-        if (!exists) {
+        if (!skipLink) {
           await db.relations.add({
             id: crypto.randomUUID(),
             workspaceId: entity.workspaceId,

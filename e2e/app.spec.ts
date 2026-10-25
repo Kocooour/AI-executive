@@ -139,7 +139,7 @@ test("capture switches destination and area to the selected workspace", async ({
   await expect(page.locator("aside.detail").getByLabel("Oblast", { exact: true })).toHaveValue(ids.targetAreaId);
 });
 
-test("a task added from a project in another workspace offers that workspace's areas", async ({ page }) => {
+test("a task added from a project in another workspace goes to that workspace and inherits the project's area", async ({ page }) => {
   const title = `Úkol do projektu jiného prostoru ${Date.now()}`;
   await page.goto("/");
   await waitUntilSynced(page);
@@ -178,21 +178,21 @@ test("a task added from a project in another workspace offers that workspace's a
   });
   await page.locator(".projectPage").getByRole("button", { name: /Přidat úkol/ }).click();
   const modal = page.locator(".captureModal");
-  const area = modal.getByLabel("Oblast");
-  await expect(area.locator(`option[value="${ids.otherAreaId}"]`)).toHaveCount(1);
-  await expect(area.locator(`option[value="${ids.personalAreaId}"]`)).toHaveCount(0);
+  // A task in a project has no area of its own (it inherits the project's), so no area is offered.
+  await expect(modal.getByLabel("Oblast")).toHaveCount(0);
   await modal.getByLabel("Název úkolu").fill(title);
-  // Suggestions (area, calendar window) are asked for in the project's workspace.
+  // Suggestions (calendar window) are asked for in the project's workspace.
   await expect.poll(() => suggestedFor).toBe(ids.workspaceId);
-  await area.selectOption(ids.otherAreaId);
   await modal.getByRole("button", { name: "Přidat úkol" }).click();
   await expect(modal).toHaveCount(0);
-  await expect.poll(async () => page.evaluate(async (name) => {
+  await expect.poll(async () => page.evaluate(async ({ name, projectId }) => {
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
     const task = snapshot.entities.find((entity: { title: string }) => entity.title === name);
-    return { workspaceId: task?.workspaceId, areaId: snapshot.relations.find((relation: { sourceEntityId: string; relationType: string }) =>
-      relation.sourceEntityId === task?.id && relation.relationType === "belongs_to_area")?.targetEntityId };
-  }, title)).toEqual({ workspaceId: ids.workspaceId, areaId: ids.otherAreaId });
+    const links = snapshot.relations.filter((relation: { sourceEntityId: string }) => relation.sourceEntityId === task?.id);
+    return { workspaceId: task?.workspaceId,
+      areaLinks: links.filter((relation: { relationType: string }) => relation.relationType === "belongs_to_area").length,
+      project: links.find((relation: { relationType: string }) => relation.relationType === "belongs_to_project")?.targetEntityId === projectId };
+  }, { name: title, projectId: ids.projectId })).toEqual({ workspaceId: ids.workspaceId, areaLinks: 0, project: true });
 });
 
 test("a task typed into the row of Someday or Upcoming stays in that view", async ({ page }) => {

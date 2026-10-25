@@ -32,7 +32,14 @@ const task = (id, title = id) => ({ id, type: "task", title, status: "open", wor
 const note = (id, title, content) => ({ id, type: "note", title, content, status: "active", workspaceId: "personal", properties: {}, createdAt: 1, updatedAt: 2 });
 const setEntities = (entities, deleted = []) => {
   const current = store.readSnapshot();
-  const result = store.replaceSnapshot(current.revision, [current.entities.find((entity) => entity.id === "workspace:personal"), ...entities], [], deleted, [], current.restoreGeneration);
+  // Preserve protected system Areas and their surviving links while reseeding
+  // the unrelated backup fixtures. Dropping them would be a forbidden raw PUT.
+  const protectedAreas = current.entities.filter((entity) => entity.type === "area");
+  const nextEntities = [current.entities.find((entity) => entity.id === "workspace:personal"), ...protectedAreas, ...entities];
+  const keptIds = new Set(nextEntities.map((entity) => entity.id));
+  const links = current.relations.filter((link) =>
+    keptIds.has(link.sourceEntityId) && keptIds.has(link.targetEntityId));
+  const result = store.replaceSnapshot(current.revision, nextEntities, links, deleted, [], current.restoreGeneration);
   assert.equal(result.conflict, false);
 };
 const makeClaim = (value) => claims.createOwnerClaim({ commandId: randomUUID(), workspaceId: ws, id: randomUUID(), expectedRevision: 0,
@@ -85,7 +92,8 @@ test("restore returns Context, its Undo and Redo steps and the note versions to 
   undo();
   setEntities([task("task:1", "One"), task("task:2", "Two"), note("note:1", "Note", "third text"), note("note:2", "New note", "x")]);
   work.transitionWorkSession({ workspaceId: ws, action: "start", idempotencyKey: randomUUID(), taskId: "task:2",
-    expectedTaskUpdatedAt: 1, expectedRevision: 0, expectedState: "idle" });
+    // The server files a new standalone task under the fallback Area (2a part 4), which moves its version on.
+    expectedTaskUpdatedAt: store.readSnapshot().entities.find((entity) => entity.id === "task:2").updatedAt, expectedRevision: 0, expectedState: "idle" });
   assert.notDeepEqual(state(), atBackup);
   assert.equal(db().prepare("SELECT COUNT(*) AS value FROM work_sessions").get().value, 1);
 
@@ -95,7 +103,8 @@ test("restore returns Context, its Undo and Redo steps and the note versions to 
   assert.equal(db().prepare("SELECT COUNT(*) AS value FROM work_session_commands").get().value, 0);
   assert.equal(noteRevisions.listNoteRevisions(db(), "note:1").length, 2);
   assert.equal(db().prepare("SELECT COUNT(*) AS value FROM note_revisions WHERE note_id = 'note:2'").get().value, 0);
-  assert.deepEqual(store.readSnapshot().entities.map((entity) => entity.id).sort(), ["note:1", "task:1", "workspace:personal"]);
+  // (The fallback Area the server created for the standalone task is a record of its own.)
+  assert.deepEqual(store.readSnapshot().entities.filter((entity) => entity.type !== "area").map((entity) => entity.id).sort(), ["note:1", "task:1", "workspace:personal"]);
 
   // Undo and Redo work on the restored stacks.
   const top = history.readHistoryStacks(ws).redo[0];

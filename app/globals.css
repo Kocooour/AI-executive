@@ -3659,6 +3659,7 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 /* Records not on the server yet, and records the server would refuse (lib/sendable.ts). */
 .unsentMark { color: var(--muted); font-weight: 600; }
 .heldBackMark { color: var(--danger); }
+.inheritedArea { margin: 0; font-size: 14px; color: var(--muted); }
 .recordState { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
 .recordState.recordHeldBack { color: var(--danger); }
 .heldBack { margin: 0 0 16px; padding: 12px; border-radius: 12px; border: 1px solid var(--danger); background: var(--surface); }

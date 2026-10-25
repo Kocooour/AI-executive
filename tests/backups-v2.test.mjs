@@ -28,7 +28,14 @@ const project = { id: "project:p", type: "project", title: "P", status: "active"
 const workspaceEntity = () => store.readSnapshot().entities.find((entity) => entity.id === "workspace:personal");
 const setEntities = (entities, deleted = []) => {
   const current = store.readSnapshot();
-  const result = store.replaceSnapshot(current.revision, [workspaceEntity(), ...entities], [], deleted, [], current.restoreGeneration);
+  // Preserve protected system Areas and their surviving links while reseeding
+  // the unrelated backup fixtures. Dropping them would be a forbidden raw PUT.
+  const protectedAreas = current.entities.filter((entity) => entity.type === "area");
+  const nextEntities = [workspaceEntity(), ...protectedAreas, ...entities];
+  const keptIds = new Set(nextEntities.map((entity) => entity.id));
+  const links = current.relations.filter((link) =>
+    keptIds.has(link.sourceEntityId) && keptIds.has(link.targetEntityId));
+  const result = store.replaceSnapshot(current.revision, nextEntities, links, deleted, [], current.restoreGeneration);
   assert.equal(result.conflict, false);
 };
 const dump = (database, table) => JSON.stringify(database.prepare(`SELECT * FROM ${quote(table)} ORDER BY rowid`).all(), (_key, value) => value instanceof Uint8Array ? `blob:${Buffer.from(value).toString("hex")}` : value);

@@ -321,7 +321,7 @@ test.describe("B1 Inbox triage", () => {
     }, { timeout: 20_000 }).toEqual({ inbox: false, when: nextDay });
   });
 
-  test("B4 assigns project and area in the same Inbox decision without leaking other workspaces", async ({ page }) => {
+  test("B4 files a task into a project (it inherits the area) or into an area, never both, without leaking other workspaces", async ({ page }) => {
     await page.goto("/?view=Inbox");
     await waitUntilSynced(page);
     const names = await page.evaluate(async () => {
@@ -348,18 +348,7 @@ test.describe("B1 Inbox triage", () => {
     });
     await page.reload();
     await waitUntilSynced(page);
-    const title = await openNewInboxTask(page);
-    const triage = page.locator(".inboxTriage");
-    const projectField = triage.locator("label", { hasText: "Do projektu" });
-    const areaField = triage.locator("label", { hasText: "Do oblasti" });
-    await expect(areaField.locator("select")).toBeVisible();
-    await expect(areaField.locator("select")).not.toContainText(names.hidden);
-    await projectField.locator("select").selectOption(names.projectId);
-    await areaField.locator("select").selectOption(names.areaId);
-    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.project);
-    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.area);
-    await projectField.getByRole("button", { name: "Použít" }).click();
-    await expect.poll(async () => page.evaluate(async ({ title, projectId, areaId }) => {
+    const linksOf = (title: string, projectId: string, areaId: string) => page.evaluate(async ({ title, projectId, areaId }) => {
       const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
       const task = snapshot.entities.find((item: { title: string; type: string }) => item.type === "task" && item.title === title);
       const links = snapshot.relations.filter((relation: { sourceEntityId: string }) => relation.sourceEntityId === task?.id);
@@ -367,10 +356,35 @@ test.describe("B1 Inbox triage", () => {
         inbox: task?.properties?.inbox,
         projectLinks: links.filter((link: { targetEntityId: string; relationType: string }) =>
           link.relationType === "belongs_to_project" && link.targetEntityId === projectId).length,
-        areaLinks: links.filter((link: { targetEntityId: string; relationType: string }) =>
+        chosenAreaLinks: links.filter((link: { targetEntityId: string; relationType: string }) =>
           link.relationType === "belongs_to_area" && link.targetEntityId === areaId).length,
+        allAreaLinks: links.filter((link: { relationType: string }) => link.relationType === "belongs_to_area").length,
       };
-    }, { title, projectId: names.projectId, areaId: names.areaId }), { timeout: 20_000 })
-      .toEqual({ inbox: false, projectLinks: 1, areaLinks: 1 });
+    }, { title, projectId, areaId });
+    // 1. Into an area only: the quick-capture fallback area is replaced by exactly the chosen one.
+    const areaTitle = await openNewInboxTask(page);
+    let triage = page.locator(".inboxTriage");
+    let projectField = triage.locator("label", { hasText: "Do projektu" });
+    let areaField = triage.locator("label", { hasText: "Do oblasti" });
+    await expect(areaField.locator("select")).toBeVisible();
+    await expect(areaField.locator("select")).not.toContainText(names.hidden);
+    await areaField.locator("select").selectOption(names.areaId);
+    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.area);
+    await areaField.getByRole("button", { name: "Použít" }).click();
+    await expect.poll(() => linksOf(areaTitle, names.projectId, names.areaId), { timeout: 20_000 })
+      .toEqual({ inbox: false, projectLinks: 0, chosenAreaLinks: 1, allAreaLinks: 1 });
+    // 2. Into a project: the area select is locked (the task inherits the project's area) and no own area link remains.
+    const projectTitle = await openNewInboxTask(page);
+    triage = page.locator(".inboxTriage");
+    projectField = triage.locator("label", { hasText: "Do projektu" });
+    areaField = triage.locator("label", { hasText: "Do oblasti" });
+    await projectField.locator("select").selectOption(names.projectId);
+    await expect(areaField.locator("select")).toBeDisabled();
+    await expect(triage.getByTestId("triage-area-inherited")).toBeVisible();
+    await expect(triage.locator(".inboxTriagePreview")).toContainText(names.project);
+    await expect(triage.locator(".inboxTriagePreview")).not.toContainText(names.area);
+    await projectField.getByRole("button", { name: "Použít" }).click();
+    await expect.poll(() => linksOf(projectTitle, names.projectId, names.areaId), { timeout: 20_000 })
+      .toEqual({ inbox: false, projectLinks: 1, chosenAreaLinks: 0, allAreaLinks: 0 });
   });
 });

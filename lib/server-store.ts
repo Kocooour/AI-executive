@@ -24,6 +24,8 @@ import { validateSnapshotStructure } from "./snapshot-validation";
 import type { Entity, Relation } from "./db";
 import { resolveDataDirectory } from "./data-dir";
 import { baselineNoteRevisions, recordNoteRevisions } from "./note-revisions";
+import { AreaWriteInvalid, enforceAreaWriteInvariants, workspaceKinds } from "./area-write-invariants";
+import { fallbackAreaTitle, generatedAreaId } from "./area-ids";
 
 export interface StoreSnapshot {
   revision: number;
@@ -830,6 +832,13 @@ export function replaceSnapshot(
       database.exec("ROLLBACK");
       return { conflict: true as const, snapshot: current };
     }
+    // Never allow a raw deletion to tombstone the reserved fallback ID, even when
+    // the fallback Area does not yet exist. A tombstone here permanently blocks 2a.
+    // Include both persisted and newly requested workspace kinds, so a write
+    // cannot pre-tombstone a fallback ID for a workspace it creates in this PUT.
+    const protectedIds = new Set([...workspaceKinds(current.entities), ...workspaceKinds(entities)]
+      .map(([id, kind]) => generatedAreaId(id, fallbackAreaTitle(kind))));
+    if (deletedIds.some((id) => protectedIds.has(id))) throw new AreaWriteInvalid();
     // Safety net. A save at the current revision replaces everything, so a device that lost or
     // never had its local copy could erase the store with one request. Records may disappear
     // only when the device names them as deleted. A save that silently drops a large part of
@@ -874,6 +883,20 @@ export function replaceSnapshot(
       tombstones: [...tombstones.values()],
       updatedAt: Date.now(),
     };
+    // 2a part 4: this write may not introduce a state the audited Area applicator would have to fix again
+    // (lib/area-write-invariants.ts). Only what this write changed is corrected, never legacy data it left alone.
+    const writtenAt = Date.now();
+    const enforced = enforceAreaWriteInvariants({
+      current, next, tombstones: next.tombstones || [],
+      previousTombstones: current.tombstones || [], now: writtenAt,
+    });
+    if (enforced.changed) {
+      next.entities = enforced.entities;
+      next.relations = enforced.relations;
+      // A removed relation is announced like any deletion, so an old device cannot send it back.
+      next.tombstones = [...(next.tombstones || []), ...enforced.droppedRelationIds
+        .filter((id) => !tombstonedIds.has(id)).map((id) => ({ id, deletedAt: writtenAt }))];
+    }
     writeSnapshotRows(database, next);
     recordNoteRevisions(database, current.entities, next.entities, "edited", next.revision);
     database.exec("COMMIT");
