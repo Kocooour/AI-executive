@@ -17,6 +17,7 @@ import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation"
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
 import { inspectOfflineRecoveryBytes, type OfflineRecoveryReviewSummary } from "../../../lib/d2b-recovery-review";
+import { runLatestRecoveryInspection, type RecoveryInspectionState } from "../../../lib/d2b-recovery-review-request";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -65,9 +66,9 @@ export function useSync() {
   // A local-only rescue does not claim fresh verification of the current server.
   const [recoveryOffline, setRecoveryOffline] = useState(false);
   const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
-  const [recoveryInspecting, setRecoveryInspecting] = useState(false);
-  const [recoveryInspection, setRecoveryInspection] = useState<OfflineRecoveryReviewSummary | null>(null);
-  const [recoveryInspectionError, setRecoveryInspectionError] = useState<"invalid" | "server" | null>(null);
+  const [recoveryReview, setRecoveryReview] = useState<RecoveryInspectionState<OfflineRecoveryReviewSummary>>({
+    busy: false, result: null, error: null,
+  });
   const recoveryInspectRequest = useRef(0);
   const recoveryFileBytes = useRef<Uint8Array | null>(null);
   // A prepared download is valid only for the exact captured localStorage state.
@@ -710,24 +711,18 @@ export function useSync() {
   // snapshot. No file bytes, record IDs or private drafts are sent to the server,
   // stored, logged or exposed in the returned aggregate UI summary.
   async function inspectOfflineRecoveryFile(file: File | null) {
-    const requestId = ++recoveryInspectRequest.current;
-    setRecoveryInspection(null);
-    setRecoveryInspectionError(null);
-    if (!file) return;
-    if (!offlineRecoveryIsHeld() || !recoveryHeld) {
-      setRecoveryInspectionError("invalid");
-      return;
-    }
-    setRecoveryInspecting(true);
-    try {
+    await runLatestRecoveryInspection(recoveryInspectRequest, file, async (selectedFile) => {
+      if (!offlineRecoveryIsHeld() || !recoveryHeld)
+        throw new Error("OFFLINE_REVIEW_INVALID");
       const initialHold = readOfflineRecoveryHold();
-      if (!initialHold || file.size === 0 || file.size > offlineRecoveryFile.maxUtf8Bytes)
+      if (!initialHold || selectedFile.size === 0 || selectedFile.size > offlineRecoveryFile.maxUtf8Bytes)
         throw new Error("OFFLINE_REVIEW_INVALID");
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (bytes.byteLength !== file.size || bytes.byteLength > offlineRecoveryFile.maxUtf8Bytes)
+      const bytes = new Uint8Array(await selectedFile.arrayBuffer());
+      if (bytes.byteLength !== selectedFile.size || bytes.byteLength > offlineRecoveryFile.maxUtf8Bytes)
         throw new Error("OFFLINE_REVIEW_INVALID");
-      // A current, authenticated GET is required for a comparison. Unlike
-      // exporting a local rescue, an offline comparison is not possible.
+
+      // A CURRENT authenticated server snapshot is necessary for comparison.
+      // No selected file bytes, IDs or drafts are sent to the server.
       let server: ServerSnapshot;
       try {
         const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
@@ -737,27 +732,21 @@ export function useSync() {
             !Array.isArray(server.entities) || !Array.isArray(server.relations))
           throw new Error("OFFLINE_REVIEW_SERVER");
       } catch { throw new Error("OFFLINE_REVIEW_SERVER"); }
+
       const summary = inspectOfflineRecoveryBytes(bytes, {
-        // Runtime-validated above; a ServerSnapshot otherwise declares this
-        // field optional for older server responses.
+        // The GET generation was validated at runtime above.
         restoreGeneration: server.restoreGeneration as number,
         entities: server.entities,
         relations: server.relations,
-      });
-      if (requestId !== recoveryInspectRequest.current) return;
+      }, initialHold);
+
+      // The hold must not change while a File API read or server GET is pending.
       const latestHold = readOfflineRecoveryHold();
       if (!offlineRecoveryIsHeld() || !latestHold ||
           JSON.stringify(latestHold) !== JSON.stringify(initialHold))
         throw new Error("OFFLINE_REVIEW_INVALID");
-      setRecoveryInspection(summary);
-    } catch (error) {
-      if (requestId === recoveryInspectRequest.current) {
-        setRecoveryInspection(null);
-        setRecoveryInspectionError(error instanceof Error && error.message === "OFFLINE_REVIEW_SERVER" ? "server" : "invalid");
-      }
-    } finally {
-      if (requestId === recoveryInspectRequest.current) setRecoveryInspecting(false);
-    }
+      return summary;
+    }, setRecoveryReview);
   }
 
   return {
@@ -767,9 +756,9 @@ export function useSync() {
     recoveryError,
     recoveryOffline,
     recoveryDownloadRequested,
-    recoveryInspecting,
-    recoveryInspection,
-    recoveryInspectionError,
+    recoveryInspecting: recoveryReview.busy,
+    recoveryInspection: recoveryReview.result,
+    recoveryInspectionError: recoveryReview.error,
     inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload,
     downloadOfflineRecovery,
