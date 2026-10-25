@@ -13,6 +13,7 @@ import type { Entity, Relation } from "./db";
 // Bound the actual byte array before handing it to a browser download or JSON parser.
 export const offlineRecoveryFile = Object.freeze({
   filename: "lumi-offline-recovery.json", // no entity/user names in file names
+  unverifiedFilename: "lumi-offline-recovery-unverified.json", // no fresh server verification; same strict v1 schema
   mimeType: "application/json;charset=utf-8",
   maxUtf8Bytes: 12 * 1024 * 1024,
 });

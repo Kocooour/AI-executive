@@ -12,6 +12,10 @@ import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/ado
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportPlan, recoveryPullDecision } from "../../../lib/d2b-recovery-hold";
+import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
+import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
+import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
 
 // The local copy of the data and its synchronization with the server: the records on screen,
 // the sync status, the revision of the server copy this device knows, the counter of local writes
@@ -33,6 +37,9 @@ export function useSync() {
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting");
   const serverRevision = useRef(0);
+  // An in-memory serverRevision of 0 after reload is not evidence of the
+  // original base revision. Only record a value after this tab verified it.
+  const recoveryBaseRevision = useRef<number | null>(null);
   // The restore generation of the server data this device last held (lib/server-store.ts), kept across reloads. Sent with
   // every save; a save from before a restore is refused by the server, and then this device replaces its copy.
   const generationKey = "ai-executive-restore-generation";
@@ -48,6 +55,20 @@ export function useSync() {
   }
   // Shown after the data was restored from a backup elsewhere and this device's unsent changes were discarded.
   const [restoredNotice, setRestoredNotice] = useState(false);
+  // D2b: restoration must never erase offline work before an explicit recovery.
+  // A storage-backed hold also survives tab crashes, reloads and other open tabs.
+  const [recoveryHeld, setRecoveryHeld] = useState(false);
+  const [recoveryPreparing, setRecoveryPreparing] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryError, setRecoveryError] = useState(false);
+  // A local-only rescue does not claim fresh verification of the current server.
+  const [recoveryOffline, setRecoveryOffline] = useState(false);
+  const [recoveryDownloadRequested, setRecoveryDownloadRequested] = useState(false);
+  const recoveryFileBytes = useRef<Uint8Array | null>(null);
+  // A prepared download is valid only for the exact captured localStorage state.
+  // A late old-tab cleanup or out-of-band edit must invalidate it, never silently omit work.
+  const recoveryStorageSnapshot = useRef<string | null>(null);
+  useEffect(() => { if (offlineRecoveryIsHeld()) setRecoveryHeld(true); }, []);
   // Whether the server's data was restored since this browser last held it, so that what it holds (or waits to send) was made
   // against data that no longer exists. A browser that never stored a generation but has synchronized before (last used
   // before generations were tracked, or dormant) is treated the same once the server's generation is above 0: there is no way
@@ -200,6 +221,7 @@ export function useSync() {
       }
     });
     serverRevision.current = snapshot.revision;
+    recoveryBaseRevision.current = snapshot.revision;
     rememberGeneration(snapshot.restoreGeneration);
     await load();
     postToTabs({ type: "changed", from: tabId.current });
@@ -220,7 +242,29 @@ export function useSync() {
   // pending flags and every persisted note draft (all pages) are dropped, the snapshot and its generation adopted, the
   // other tabs told to reload, and this one reloads and starts from the restored state. `notice`: the restore happened
   // elsewhere, say so after the reload. The caller holds the sync lock (or is in the queue); replaceLocalWithServer takes them.
+  // This is called *directly* on a generation-bearing 409 refusal, before
+  // another GET, the sync queue or a cross-tab sync lock. The hold helper
+  // engages the in-tab write fence synchronously, then serializes the durable
+  // cross-tab marker with any already-authorized local wipe.
+  async function engageRecoveryForGeneration(observedGeneration: number | undefined) {
+    setRecoveryHeld(true);
+    setSyncStatus("offline");
+    try {
+      await beginOfflineRecoveryHoldSafely(restoreGeneration.current, observedGeneration);
+    } catch (error) {
+      if (error instanceof Error && error.message === "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD") {
+        signedOut.current = true;
+        window.location.replace("/");
+        return false;
+      }
+      setRecoveryError(true); // No writable fallback on missing/corrupt metadata.
+    }
+    return false;
+  }
   async function adoptServerCopy(source: ServerSnapshot, notice = false) {
+    // The generation mismatch is a STOP, not permission to wipe local data.
+    if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration))
+      return engageRecoveryForGeneration(source.restoreGeneration);
     if (isAdopting()) return true;
     beginAdoption();
     try {
@@ -236,6 +280,13 @@ export function useSync() {
           if (source.relations.length) { await db.relations.bulkAdd(source.relations); await db.baseRelations.bulkAdd(source.relations); }
         });
       } catch (error) {
+        // A different tab could have persisted a hold while this adoption transaction
+        // was pending. Never fall back to a destructive wipe in that case.
+        if (offlineRecoveryIsHeld()) {
+          setRecoveryHeld(true);
+          setSyncStatus("offline");
+          return false;
+        }
         // The local copy could not be replaced (storage full or refused): it must not stay as it is, so it is emptied; the
         // reloaded page then takes the server's data as a first synchronization. As a last resort the database is deleted.
         console.error("Replacing the local copy failed; it is emptied instead:", error instanceof Error ? error.message : error);
@@ -253,17 +304,26 @@ export function useSync() {
       attempt(() => clearProjectContextDrafts(localStorage));
       attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
       serverRevision.current = source.revision;
+      recoveryBaseRevision.current = source.revision;
       rememberGeneration(source.restoreGeneration);
     } finally {
-      // Whatever happened above, the page reloads and starts from the server's data; the tab never stays write-blocked.
-      setAfterRestoreFlag(notice ? "remote" : "sibling");
-      postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
-      window.location.reload();
+      if (offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      } else {
+        setAfterRestoreFlag(notice ? "remote" : "sibling");
+        postToTabs({ type: "restore-adopted", from: tabId.current, generation: source.restoreGeneration });
+        window.location.reload();
+      }
     }
-    return true;
+    return !offlineRecoveryIsHeld();
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;
+    // A known generation mismatch must stop writes synchronously, *before* waiting
+    // for a queued save or a cross-tab lock. Neither may delay the safety marker.
+    if (snapshot && (offlineRecoveryIsHeld() || restoredSinceKnown(snapshot.restoreGeneration)))
+      return adoptServerCopy(snapshot, notice);
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       let source = snapshot;
       if (!source) {
@@ -289,10 +349,20 @@ export function useSync() {
   }
   // Every mutation of the app carries the generation it knows; a refusal because of a restore adopts the restored data.
   useEffect(() => {
-    installRestoreFence({ generation: () => restoreGeneration.current, onRestored: () => { void replaceLocalWithServer(undefined, true).catch(() => undefined); } });
+    installRestoreFence({ generation: () => restoreGeneration.current,
+      onRestored: (observedGeneration) => {
+        // The 409 already supplies the new generation. Do not wait for a
+        // failing follow-up network request before freezing local writes.
+        void engageRecoveryForGeneration(observedGeneration);
+      },
+    });
   }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
+      if ((event.key === offlineRecoveryHoldKey || event.key === offlineRecoveryIntentKey) && event.newValue !== null) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      }
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
     };
     window.addEventListener("storage", onStorage);
@@ -316,6 +386,7 @@ export function useSync() {
     revivedIds: string[] = [],
     generation: number | undefined = restoreGeneration.current,
   ) {
+    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
     return fetch("/api/store", {
       signal: requestTimeout(),
       method: "PUT",
@@ -427,7 +498,10 @@ export function useSync() {
         // known revision may advance only when the server holds exactly what was sent. After a
         // merge it also holds records this device does not have; claiming its revision would
         // make the next save replace them. Keeping the old revision makes that save merge again.
-        if (!mergedWithServer) serverRevision.current = saved.revision;
+        if (!mergedWithServer) {
+          serverRevision.current = saved.revision;
+          recoveryBaseRevision.current = saved.revision;
+        }
         // What this device sent is now part of the server copy (merged or not), so it is the
         // common version of what the device had then; later local edits are changes against it.
         if (!signedOut.current) {
@@ -446,7 +520,10 @@ export function useSync() {
       localStorage.setItem("ai-executive-server-synced", "1");
       markSignedIn();
       clearSentMarkers(sentMarkers);
-      setSyncStatus("synced");
+      if (offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      } else setSyncStatus("synced");
     }));
     syncQueue.current = operation.catch(() => {
       setSyncStatus("offline");
@@ -457,6 +534,11 @@ export function useSync() {
   // once that copy is taken over, the local copy counts as synchronized (see below).
   async function pullFromServer(afterSignIn = false) {
     await syncQueue.current;
+    if (offlineRecoveryIsHeld()) {
+      setRecoveryHeld(true);
+      setSyncStatus("offline");
+      return;
+    }
     if (localStorage.getItem(pendingKey) === "1") {
       await syncToServer();
       return;
@@ -472,12 +554,17 @@ export function useSync() {
         const snapshot = (await response.json()) as ServerSnapshot;
         // A change waiting to be sent (from any tab) is saved instead, outside the lock.
         if (localStorage.getItem(pendingKey) === "1") return "save" as const;
-        if (snapshot.revision <= serverRevision.current) return "synced" as const;
-        // The data was restored from a backup elsewhere: the local copy (held-back records included) is replaced, not merged.
-        if (restoredSinceKnown(snapshot.restoreGeneration)) {
-          await adoptServerCopy(snapshot, heldBack.length > 0);
-          return "synced" as const;
+        if (offlineRecoveryIsHeld()) return "held" as const;
+        // Restore generations are authoritative even when a backup rolls the
+        // server revision backwards (or keeps the same number).
+        const decision = recoveryPullDecision(
+          restoredSinceKnown(snapshot.restoreGeneration), snapshot.revision, serverRevision.current,
+        );
+        if (decision === "restore") {
+          const adopted = await adoptServerCopy(snapshot, heldBack.length > 0);
+          return adopted ? "synced" as const : "held" as const;
         }
+        if (decision === "synced") return "synced" as const;
         // "Synced" means the local copy holds the server's state. If a local change got in the
         // way, the copy was not taken over; that change's own save sets the status when it is done.
         try {
@@ -494,6 +581,11 @@ export function useSync() {
         return "synced" as const;
       });
       if (outcome === "save") { await syncToServer(); return; }
+      if (outcome === "held" || offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+        return;
+      }
       if (outcome === "synced") setSyncStatus("synced");
       // The local copy holds something the server does not have yet: send it. (Usually the change
       // that got in the way brings its own save; one more is harmless.)
@@ -503,7 +595,121 @@ export function useSync() {
     }
   }
 
+  // TWO explicit steps: prepare a private byte array, then download from the
+  // next direct button click. A delayed synthetic click is unreliable on iOS.
+  async function prepareOfflineRecoveryDownload() {
+    if (!offlineRecoveryIsHeld() || recoveryPreparing) return;
+    setRecoveryPreparing(true);
+    setRecoveryReady(false);
+    setRecoveryError(false);
+    setRecoveryOffline(false);
+    recoveryFileBytes.current = null;
+    recoveryStorageSnapshot.current = null;
+    try {
+      const hold = readOfflineRecoveryHold();
+      if (!hold) throw new Error("OFFLINE_RECOVERY_HOLD_INVALID");
+      // Online validation is best effort. Even if the owner is signed out or
+      // the server is down, the persisted hold records a previously observed
+      // generation and permits an explicitly UNVERIFIED, local-only rescue.
+      // No network failure may force the owner to discard their local edits.
+      let remoteGeneration: number | null = null;
+      try {
+        const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
+        if (response.ok) {
+          const server = (await response.json()) as ServerSnapshot;
+          // Missing/malformed generation from an otherwise successful GET is
+          // invalid evidence, not an excuse to silently claim offline status.
+          remoteGeneration = typeof server.restoreGeneration === "number"
+            ? server.restoreGeneration : Number.NaN;
+        }
+      } catch { /* unreachable or invalid response: use the older known hold only */ }
+      // A successful response with invalid/backwards generation still fails
+      // closed; it must NOT silently turn into a trusted online snapshot.
+      const exportPlan = recoveryExportPlan(hold, remoteGeneration);
+      const exportGeneration = exportPlan.generation;
+      // IndexedDB read transaction queues behind all earlier conflicting writes,
+      // including writes from other tabs. The persistent middleware blocks later mutations.
+      const [localEntities, localRelations, base] = await readLocalWithBase();
+      const drafts = readRawRecoveryDrafts(localStorage);
+      const markers = readRawRecoveryMarkers(localStorage);
+      // In-flight transactions started before the hold may finish. Double-read
+      // and refuse export if their snapshot changed; never silently truncate.
+      const [nextEntities, nextRelations, nextBase] = await readLocalWithBase();
+      const nextDrafts = readRawRecoveryDrafts(localStorage);
+      const nextMarkers = readRawRecoveryMarkers(localStorage);
+      if (JSON.stringify([localEntities, localRelations, base, drafts, markers]) !==
+          JSON.stringify([nextEntities, nextRelations, nextBase, nextDrafts, nextMarkers]))
+        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+      const bundle = prepareOfflineRecovery({
+        base: base ?? { entities: [], relations: [] },
+        local: { entities: localEntities, relations: localRelations },
+        pendingDeletedIds: markers.pendingDeletedIds, pendingRevivedIds: markers.pendingRevivedIds,
+        noteDrafts: drafts.noteDrafts,
+        projectContextDrafts: drafts.projectContextDrafts,
+        pendingSync: markers.pendingSync,
+        oldRestoreGeneration: hold.knownGeneration ?? 0,
+        newRestoreGeneration: exportGeneration,
+        baseRevision: recoveryBaseRevision.current,
+      }, Date.now());
+      const bytes = encodeOfflineRecoveryFile(bundle);
+      if (!offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HOLD_LOST");
+      const sameHold = readOfflineRecoveryHold();
+      if (!sameHold || JSON.stringify(sameHold) !== JSON.stringify(hold))
+        throw new Error("OFFLINE_RECOVERY_HOLD_CHANGED");
+      // Record only a private in-memory snapshot, not a new localStorage key.
+      recoveryStorageSnapshot.current = JSON.stringify([sameHold, nextDrafts, nextMarkers]);
+      recoveryFileBytes.current = bytes;
+      setRecoveryOffline(!exportPlan.verifiedNow);
+      setRecoveryReady(true);
+    } catch {
+      // No sensitive data (including errors containing IDs) escapes to logs.
+      recoveryFileBytes.current = null;
+      recoveryStorageSnapshot.current = null;
+      setRecoveryError(true);
+    } finally { setRecoveryPreparing(false); }
+  }
+  function downloadOfflineRecovery() {
+    const bytes = recoveryFileBytes.current;
+    if (!recoveryHeld || !offlineRecoveryIsHeld() || !bytes) return;
+    // localStorage reads are synchronous, so this check remains in the user's
+    // direct click activation (required by mobile Safari). Reject stale bundles.
+    try {
+      const current = JSON.stringify([readOfflineRecoveryHold(), readRawRecoveryDrafts(localStorage), readRawRecoveryMarkers(localStorage)]);
+      if (!recoveryStorageSnapshot.current || current !== recoveryStorageSnapshot.current)
+        throw new Error("OFFLINE_RECOVERY_UNSTABLE");
+    } catch {
+      recoveryFileBytes.current = null;
+      recoveryStorageSnapshot.current = null;
+      setRecoveryReady(false);
+      setRecoveryError(true);
+      return;
+    }
+    const blob = new Blob([new Uint8Array(bytes).buffer], { type: offlineRecoveryFile.mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = recoveryOffline ? offlineRecoveryFile.unverifiedFilename : offlineRecoveryFile.filename;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    try {
+      anchor.click();
+      // This records a REQUEST, not proof the browser saved the file.
+      setRecoveryDownloadRequested(true);
+    } finally {
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    }
+  }
+
   return {
+    recoveryHeld,
+    recoveryPreparing,
+    recoveryReady,
+    recoveryError,
+    recoveryOffline,
+    recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload,
+    downloadOfflineRecovery,
     items,
     relations,
     unsent,

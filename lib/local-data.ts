@@ -1,5 +1,6 @@
 import { forServer } from "./sendable";
 import { db, readSyncBase } from "./db";
+import { offlineRecoveryIsHeld, withOfflineRecoveryDataLock } from "./d2b-recovery-hold";
 import { clearAllMarkers, pendingDeletedIds, pendingRevivedIds } from "./pending-markers";
 import { clearNotesDrafts, keptNotesDrafts, notesDraftsKey } from "./notes-drafts";
 import { clearProjectContextDrafts, keptProjectContextDrafts } from "./project-context-drafts";
@@ -10,6 +11,7 @@ import { attentionCacheKey } from "./attention-cache";
 // Device preferences (theme, language, start view) are not user data and stay.
 const pendingSyncKey = "ai-executive-pending-sync";
 const serverSyncedKey = "ai-executive-server-synced";
+export const restoreGenerationKey = "ai-executive-restore-generation";
 const wipePendingKey = "ai-executive-wipe-pending";
 // Set once this browser has completed a synchronization with the server, removed by signing out: a start without a
 // connection then shows the data kept here (owner decision 2026-10-09), also when there is none yet.
@@ -62,17 +64,40 @@ export async function hasUnsentChanges() {
 // A wipe that cannot finish (for example a database held by another tab) stays marked and is
 // completed by finishInterruptedWipe() on the next start.
 export async function clearLocalData(timeoutMs = 4000) {
+  // Hold installation and ALL destructive cleanup share a cross-tab exclusive Web Lock.
+  // A tab which already holds the lock completes before a new hold is finalized;
+  // a wipe which acquires it later sees the durable intent and is refused.
+  return withOfflineRecoveryDataLock(async () => {
+  // IndexedDB deletion and direct localStorage removal bypass the ordinary write fence.
+  // A crashed/interrupted sign-out must not erase the owner's recovery source.
+  const assertNotHeld = () => {
+    // An already-running wipe acquired the lock before the recovery request.
+    // The request nevertheless persists an intent immediately; stop the wipe
+    // as soon as that intent becomes visible, not just on initial entry.
+    if (offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HELD");
+  };
+  assertNotHeld();
   localStorage.setItem(wipePendingKey, "1");
+  assertNotHeld();
   localStorage.setItem(signedOutKey, "1");
-  localDataKeys.forEach((key) => localStorage.removeItem(key));
+  localDataKeys.forEach((key) => {
+    assertNotHeld();
+    localStorage.removeItem(key);
+  });
   // Deletions and restorations waiting to be sent are one key each (lib/pending-markers.ts).
+  assertNotHeld();
   clearAllMarkers(localStorage);
   // So are notes drafts and the notes of open texts, one per tab.
+  assertNotHeld();
   clearNotesDrafts(localStorage);
+  assertNotHeld();
   clearProjectContextDrafts(localStorage);
+  assertNotHeld();
   clearOpenTexts(localStorage);
   // Nothing local is left to push: the next start must take the server copy as it is, not merge.
+  assertNotHeld();
   localStorage.setItem(serverSyncedKey, "1");
+  assertNotHeld();
   const wipe = db.transaction("rw", [db.entities, db.relations, db.baseEntities, db.baseRelations], async () => {
     await db.entities.clear();
     await db.relations.clear();
@@ -83,10 +108,22 @@ export async function clearLocalData(timeoutMs = 4000) {
     wipe,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Local data wipe timed out")), timeoutMs)),
   ]);
+  // After a COMPLETE purge the browser no longer owns a copy of the old
+  // generation. Retaining either marker would falsely freeze its next login
+  // after an unrelated restore, despite there being nothing local to recover.
+  // Keep wipePending until these removals succeed (crash-safe retry).
+  clearPurgedRestoreBaseline(localStorage);
   localStorage.removeItem(wipePendingKey);
+  }, true);
+}
+
+export function clearPurgedRestoreBaseline(storage: Pick<Storage, "removeItem">) {
+  storage.removeItem(restoreGenerationKey);
+  storage.removeItem(serverSyncedKey);
 }
 
 export async function finishInterruptedWipe() {
+  if (offlineRecoveryIsHeld()) return;
   if (localStorage.getItem(wipePendingKey) !== "1") return;
   await clearLocalData().catch(() => undefined);
 }

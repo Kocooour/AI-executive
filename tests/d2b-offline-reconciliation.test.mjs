@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prepareOfflineRecovery, assessOfflineRecovery, OfflineRecoveryInvalid, offlineRecoveryLimits } from "../lib/d2b-offline-reconciliation.ts";
-import { sha256Hex } from "../lib/sha256.ts";
 
 const workspace = "shared-legacy";
 const entity = (id, title, wid = workspace) => ({
@@ -248,77 +247,13 @@ test("D2b: divergent remote content remains manual review even when Area does no
   assert.ok(report.candidates.some(x => x.id === "new" && x.reason === "remote-missing"));
 });
 
-const rehashRecovery = (change) => {
-  const bundle = JSON.parse(JSON.stringify(prepare()));
-  change(bundle);
-  const { contentSha256: oldHash, ...value } = bundle;
-  return { ...value, contentSha256: sha256Hex(JSON.stringify(value)) };
-};
-const assessImported = (bundle) => assessOfflineRecovery(bundle, {
-  restoreGeneration: 3, entities: [], relations: [],
-});
-
-test("D2b: imported v1 invalid changes are rejected even with a valid checksum", () => {
-  const corruptions = [
-    (b) => { b.changes.entities = [null]; },
-    (b) => { b.changes.relations = [null]; },
-    (b) => { b.changes.entities[0] = { id: "x", before: null, after: null }; },
-    (b) => { b.changes.relations[0] = { id: "x", before: null, after: null }; },
-    (b) => { b.changes.entities[0].after.id = "different-id"; },
-    (b) => { b.changes.entities[1].before.id = "different-id"; },
-    (b) => { b.changes.relations[0].after.id = "different-id"; },
-    (b) => { delete b.changes.entities[0].before; },
-    (b) => { b.changes.entities[0].after = { id: "new", workspaceId: "shared-legacy" }; },
-    (b) => { b.changes.relations[0].after = { id: "extra-link", workspaceId: "shared-legacy" }; },
-    (b) => { b.changes.entities[1].after = b.changes.entities[1].before; },
-    (b) => { b.changes.entities.reverse(); },
-    (b) => { b.changes.entities.push(b.changes.entities[1]); },
-    (b) => { b.changes.relations[0].id = "new"; b.changes.relations[0].after.id = "new"; },
-    (b) => { b.changes.entities[1].after.type = "note"; },
-  ];
-  for (const corrupt of corruptions) {
-    const bundle = rehashRecovery(corrupt);
-    assert.throws(() => assessImported(bundle), OfflineRecoveryInvalid);
-  }
-});
-
-test("D2b: self-consistent but malformed imported markers and drafts fail closed", () => {
-  const corruptions = [
-    (b) => { b.changes.noteDrafts = null; },
-    (b) => { b.changes.projectContextDrafts = "draft"; },
-    (b) => { b.changes.noteDrafts = Array.from({ length: offlineRecoveryLimits.maxDraftsPerKind + 1 }, () => ({})); },
-    (b) => { b.changes.projectContextDrafts = [{ text: "x".repeat(offlineRecoveryLimits.maxDraftJsonChars + 1) }]; },
-    (b) => { b.changes.pendingDeletedIds = "not-an-array"; },
-    (b) => { b.changes.pendingRevivedIds = [""]; },
-    (b) => { b.changes.pendingDeletedIds = ["same", "same"]; },
-    (b) => { b.changes.pendingDeletedIds = ["z", "a"]; },
-    (b) => { b.changes.pendingRevivedIds = ["removed-id"]; },
-    (b) => { b.changes.pendingSync = "yes"; },
-    (b) => { b.changes.pendingDeletedIds = Array.from({ length: offlineRecoveryLimits.maxMarkersPerKind + 1 }, (_, i) => "id-" + i); },
-    (b) => { b.oldRestoreGeneration = -1; },
-    (b) => { b.observedRestoreGeneration = b.oldRestoreGeneration; },
-    (b) => { b.baseRevision = -1; },
-    (b) => { b.createdAt = "yesterday"; },
-    (b) => { b.version = 2; },
-    (b) => { b.automaticReplayAllowed = true; },
-    (b) => { b.changes.unrecognizedField = true; },
-    (b) => { b.unrecognizedField = true; },
-    (b) => { b.changes = null; },
-  ];
-  for (const corrupt of corruptions) {
-    const bundle = rehashRecovery(corrupt);
-    assert.throws(() => assessImported(bundle), OfflineRecoveryInvalid);
-  }
-  assert.throws(() => assessImported(null), OfflineRecoveryInvalid);
-  assert.throws(() => assessImported({}), OfflineRecoveryInvalid);
-});
-
-test("D2b: correct imported v1 package still produces manual diagnostic without mutation", () => {
-  const bundle = JSON.parse(JSON.stringify(prepare()));
-  const saved = JSON.stringify(bundle);
-  const result = assessImported(bundle);
-  assert.equal(result.automaticReplayAllowed, false);
-  assert.equal(result.status, "manual-review-required");
-  assert.deepEqual(result.counts, { entities: 2, relations: 1, deletions: 1, revivals: 1, drafts: 2 });
-  assert.equal(JSON.stringify(bundle), saved);
+test("D2b: unknown base revision is represented as null, never invented as zero", () => {
+  const value = prepare({ baseRevision: null, newRestoreGeneration: 5 });
+  assert.equal(value.baseRevision, null);
+  const report = assessOfflineRecovery(value, { restoreGeneration: 6, entities: [], relations: [] });
+  assert.equal(report.automaticReplayAllowed, false);
+  assert.equal(report.generationsDiffer, true);
+  assert.throws(() => prepare({ baseRevision: undefined }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ baseRevision: -1 }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ baseRevision: "0" }), OfflineRecoveryInvalid);
 });

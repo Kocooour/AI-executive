@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { runSignOut } = await import("../lib/sign-out.ts");
+const { runSignOut, failedSignOutNeedsReload, incompleteSignOutNoticeKey } = await import("../lib/sign-out.ts");
 
 // A scripted browser: `version` is odd while a local write is in progress.
 function scenario(overrides = {}) {
@@ -98,4 +98,30 @@ test("a synchronization that settles only on the second attempt does not raise t
   const run = scenario({ state: { unsent: true }, onSync: (state) => { attempts += 1; if (attempts === 2) state.unsent = false; } });
   assert.equal(await runSignOut(run.steps), "signed-out");
   assert.deepEqual(run.calls, ["drain", "sync", "sync", "block", "end", "wipe"]);
+});
+
+test("a recovery hold appearing after server logout refuses the wipe without claiming success", async () => {
+  const run = scenario();
+  const calls = run.calls;
+  run.steps.wipe = async () => {
+    calls.push("wipe");
+    throw new Error("OFFLINE_RECOVERY_HELD");
+  };
+  assert.equal(await runSignOut(run.steps), "failed");
+  assert.deepEqual(calls, ["drain", "block", "end", "wipe"]);
+  assert.ok(!calls.includes("unblock"), "an ended session must not reactivate the old UI");
+});
+
+test("a failed IndexedDB purge is not reported as signed-out", async () => {
+  const run = scenario();
+  run.steps.wipe = async () => { run.calls.push("wipe"); throw new Error("IndexedDB unavailable"); };
+  assert.equal(await runSignOut(run.steps), "failed");
+});
+
+test("a failed purge after server logout requires an actionable fresh sign-in/recovery page", () => {
+  assert.equal(failedSignOutNeedsReload("failed", true), true);
+  assert.equal(failedSignOutNeedsReload("failed", false), false);
+  for (const status of ["signed-out", "writing", "offline", "kept"])
+    assert.equal(failedSignOutNeedsReload(status, true), false);
+  assert.equal(incompleteSignOutNoticeKey, "ai-executive-incomplete-signout");
 });

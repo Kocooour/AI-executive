@@ -18,6 +18,7 @@ import { AssistantPanel } from "./ui/views/assistant-panel";
 import { ConfirmDialog } from "./ui/views/confirm-dialog";
 import { DeferPopover } from "./ui/views/defer-popover";
 import { HeldBack } from "./ui/views/held-back";
+import { OfflineRecoveryDialog } from "./ui/views/offline-recovery-dialog";
 
 export default function App() {
   const app = useLumiApp();
@@ -85,6 +86,7 @@ export default function App() {
       <AssistantPanel app={app} />
       <DeferPopover app={app} />
       <ConfirmDialog app={app} />
+      <OfflineRecoveryDialog app={app} />
       {app.signingOutElsewhere && <div className="tabNotice" role="status">{app.tr("signingOutElsewhere")}</div>}
       {undo && (
         <div className="undo">

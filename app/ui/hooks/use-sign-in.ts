@@ -4,6 +4,7 @@ import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/br
 import { fetchClientAuthStatus } from "../../../lib/client-auth-status";
 import { failWhileOffline, watchSession } from "../../../lib/session-watch";
 import { clearSignedOut } from "../../../lib/local-data";
+import { incompleteSignOutNoticeKey } from "../../../lib/sign-out";
 import { localizeServerError } from "../../../lib/server-errors";
 
 // Signing in: the access check on start, sign-in with the password or a passkey, and returning to
@@ -67,6 +68,14 @@ export function useSignIn({ tr, language, answerConfirm, isSignedOut, showsOffli
     return () => { if (window.fetch === watched) window.fetch = original; };
   }, []);
   useEffect(() => { if (authState === "ready") { setAuthNotice(""); sessionEndedHere.current = false; } }, [authState]);
+  useEffect(() => {
+    if (authState !== "required") return;
+    try {
+      if (sessionStorage.getItem(incompleteSignOutNoticeKey) !== "1") return;
+      sessionStorage.removeItem(incompleteSignOutNoticeKey);
+      setAuthNotice(tr("signOutFailed"));
+    } catch { /* optional one-shot notice, no impact on local recovery */ }
+  }, [authState, language]);
   // `quiet`: a check in the background keeps the screen as it is until there is an answer.
   // Returns the state this check found, or nothing when a newer check replaced it.
   async function checkAccess(quiet = false) {

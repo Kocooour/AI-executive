@@ -1,11 +1,13 @@
 import type { DBCore, DBCoreMutateRequest } from "dexie";
+import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 
 // Adopting restored server data ends in a page reload (hooks/use-sync.ts). From the moment it starts, nothing of the
 // replaced data may be written: the save paths check this flag and do nothing, so a blur or pagehide between the
 // adoption and the reload cannot put a stale title, note or draft back over the restored record.
 let adopting = false;
 export const beginAdoption = () => { adopting = true; };
-export const isAdopting = () => adopting;
+// A persistent recovery hold blocks writes across tabs and reloads, not just during adoption.
+export const isAdopting = () => adopting || offlineRecoveryIsHeld();
 
 // A save path checks the flag when it starts, then waits (a read, an earlier save). Its write may therefore come after
 // adoption has replaced the local copy, and would put the replaced data back over the restored record, from where the
@@ -29,7 +31,9 @@ export function adoptionWriteGuard(down: DBCore): DBCore {
       return {
         ...table,
         mutate(request: DBCoreMutateRequest) {
-          if (adopting && !adoptionTransactions.has(request.trans)) return Promise.reject(new AdoptionWriteRefused());
+          // A sibling can engage the persistent hold after an adoption transaction began.
+          // In that case even adoption-authorized writes must abort and roll back.
+          if (offlineRecoveryIsHeld() || (adopting && !adoptionTransactions.has(request.trans))) return Promise.reject(new AdoptionWriteRefused());
           return table.mutate(request);
         },
       };

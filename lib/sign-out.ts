@@ -3,6 +3,10 @@
 // either reached the server or the user agreed to discard it.
 
 export type SignOutResult = "signed-out" | "writing" | "offline" | "kept" | "failed";
+// Carries no user content; one-shot warning on the next safe sign-in screen.
+export const incompleteSignOutNoticeKey = "ai-executive-incomplete-signout";
+export const failedSignOutNeedsReload = (result: SignOutResult, inputBlocked: boolean) =>
+  result === "failed" && inputBlocked;
 
 export interface SignOutSteps {
   // Counter of local writes: odd while a write is in progress, changed after every write.
@@ -45,7 +49,14 @@ export async function runSignOut(steps: SignOutSteps, options: { writeTimeoutMs?
       steps.unblock();
       return ended;
     }
-    await steps.wipe();
+    try {
+      await steps.wipe();
+    } catch {
+      // The server session may already have ended. Never report that local
+      // private data was purged when the recovery hold or IndexedDB refused it.
+      // Keep input blocked until the browser reloads or owner recovery proceeds.
+      return "failed";
+    }
     return "signed-out";
   }
   return "writing";

@@ -11,6 +11,7 @@
 // for a save replaces; a save removes the mark only if the token is still the one it saw.
 
 import { isAdopting } from "./adoption";
+import { offlineRecoveryIsHeld } from "./d2b-recovery-hold";
 
 export const pendingKey = "ai-executive-pending-sync";
 export const deletedKey = "ai-executive-pending-deletions";
@@ -49,6 +50,8 @@ function keysWithPrefix(storage: Store, prefix: string) {
 // moved to keys of their own; if two tabs do this at once an entry is there twice, which is
 // harmless (only the record ids are sent).
 function migrateLegacy(storage: Store) {
+  // Migration removes the legacy key; never change the rescue source after a hold.
+  if (offlineRecoveryIsHeld()) return;
   for (const listKey of [deletedKey, revivedKey]) {
     const raw = storage.getItem(listKey);
     if (raw === null) continue;
@@ -144,6 +147,9 @@ export function captureMarkers(storage: Store): SentMarkers {
 }
 
 export function clearSentMarkers(storage: Store, sent: SentMarkers) {
+  // A save started before another tab detected the restore may complete afterwards.
+  // Its acknowledgement must not erase the owner's pending delete/revival evidence.
+  if (offlineRecoveryIsHeld()) return;
   for (const marker of [...sent.deletedEntries, ...sent.revivedEntries]) storage.removeItem(marker.key);
   if ((storage.getItem(pendingSeqKey) || "") === sent.seq) {
     storage.removeItem(pendingKey);
@@ -153,6 +159,7 @@ export function clearSentMarkers(storage: Store, sent: SentMarkers) {
 
 // All of this bookkeeping (a restored backup replaces the data; signing out removes it).
 export function clearAllMarkers(storage: Store) {
+  if (offlineRecoveryIsHeld()) return;
   for (const listKey of [deletedKey, revivedKey]) {
     removeAllWithPrefix(storage, `${listKey}:`);
     storage.removeItem(listKey);
@@ -162,6 +169,7 @@ export function clearAllMarkers(storage: Store) {
 
 // Collects the keys first and repeats, so a key moved by another tab's removal is not skipped.
 export function removeAllWithPrefix(storage: Store, prefix: string) {
+  if (offlineRecoveryIsHeld()) return;
   for (let pass = 0; pass < 5; pass += 1) {
     const keys = keysWithPrefix(storage, prefix);
     if (!keys.length) return;

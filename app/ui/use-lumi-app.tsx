@@ -3,13 +3,14 @@ import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEven
 import { isFallbackArea } from "../../lib/area-write-invariants";
 import { areaKindOf, assignFallbackArea, dropTaskAreaLinks, taskIsInProject } from "../../lib/area-write-client";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
-import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, signedInKey, signedOutKey } from "../../lib/local-data";
-import { runSignOut } from "../../lib/sign-out";
+import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
+import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
+import { offlineRecoveryIsHeld, offlineRecoveryWipeSupported } from "../../lib/d2b-recovery-hold";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
 import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
@@ -180,7 +181,9 @@ export function useLumiApp() {
   const assistantRequestVersion = useRef(0);
   const { items, relations, unsent, heldBack, heldReasons, syncStatus, setSyncStatus, serverRevision, syncQueue, localDataVersion, signedOut, pendingKey,
     deletedKey, revivedKey, pendingDeletedIds, pendingRevivedIds, load, applySnapshot, replaceLocalWithServer, restoreGeneration, restoredSinceKnown, adoptServerCopy, showRestoredNotice, restoredNotice, dismissRestoredNotice, putSnapshot, syncToServer,
-    pullFromServer, tabId, captureMarkers, clearSentMarkers } = useSync();
+    pullFromServer, tabId, captureMarkers, clearSentMarkers,
+    recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -193,11 +196,23 @@ export function useLumiApp() {
     answerConfirm,
     isSignedOut: () => signedOut.current,
     showsOfflineView: () => offlineViewRef.current,
-    afterSignIn: () => {
-      // Whatever this page believed about the server before signing in is not to be trusted
-      // (the local copy may have been cleared by a sign-out in another tab).
+    afterSignIn: async () => {
+      // A completed local purge invalidates the old restore generation. A
+      // sibling may have purged after this tab initialized its own ref.
+      if (localStorage.getItem(restoreGenerationKey) === null)
+        restoreGeneration.current = undefined;
+      // A crash midway through local sign-out must settle before a later
+      // sign-in can mistake partially deleted rows for new user changes.
+      if (localStorage.getItem("ai-executive-wipe-pending") === "1") {
+        await finishInterruptedWipe();
+        if (localStorage.getItem("ai-executive-wipe-pending") === "1") {
+          setSyncStatus("offline");
+          return;
+        }
+        restoreGeneration.current = undefined;
+      }
       serverRevision.current = 0;
-      return pullFromServer(true);
+      await pullFromServer(true);
     },
   });
   // Relation and change labels in Context: `predicate_<name>` in the dictionary; an unknown one is
@@ -1167,7 +1182,13 @@ export function useLumiApp() {
     );
     async function initialize() {
       const initializationVersion = localDataVersion.current;
-      await finishInterruptedWipe();
+      // A persisted hold must survive reloads even when an older sign-out wipe was interrupted.
+      // Do not migrate, seed, or clean any local data while rescue is required.
+      if (offlineRecoveryIsHeld()) {
+        await load();
+        setSyncStatus("offline");
+        return;
+      }
       // Given up once the access check finds no connection, so a stalled request does not keep the
       // offline view empty: the data kept in this browser is shown instead (catch below).
       const storeRequest = new AbortController();
@@ -1177,6 +1198,22 @@ export function useLumiApp() {
         const response = await fetch("/api/store", { cache: "no-store", signal: storeRequest.signal });
         if (!response.ok) throw new Error("Server synchronization failed");
         let snapshot = (await response.json()) as ServerSnapshot;
+        // This is the earliest safe point to compare generations: no local write, migration
+        // or interrupted wipe may happen before the persistent recovery marker is recorded.
+        if (restoredSinceKnown(snapshot.restoreGeneration)) {
+          // Adopt's mismatch branch persists the hold synchronously before the first await.
+          await adoptServerCopy(snapshot, true);
+          await load();
+          setSyncStatus("offline");
+          return;
+        }
+        // A sibling may have installed a hold while the GET was outstanding.
+        if (offlineRecoveryIsHeld()) {
+          await load();
+          setSyncStatus("offline");
+          return;
+        }
+        await finishInterruptedWipe();
         await ensureDefaultWorkspace();
         let localEntities = await db.entities.toArray();
         let localRelations = await db.relations.toArray();
@@ -1310,10 +1347,11 @@ export function useLumiApp() {
         localStorage.setItem("ai-executive-server-synced", "1");
         markSignedIn();
         clearSentMarkers(sentMarkers);
-        setSyncStatus("synced");
+        setSyncStatus(offlineRecoveryIsHeld() ? "offline" : "synced");
       } catch {
-        await ensureDefaultWorkspace();
-        await load();
+        // If a sibling activated recovery during startup, even fallback seeding is forbidden.
+        if (!offlineRecoveryIsHeld()) await ensureDefaultWorkspace().catch(() => undefined);
+        await load().catch(() => undefined);
         setSyncStatus("offline");
       } finally {
         if (startupStoreRequest.current === storeRequest) startupStoreRequest.current = null;
@@ -1334,6 +1372,13 @@ export function useLumiApp() {
   // the session cookie cannot be cleared from here.
   async function logout() {
     if (logoutBusy) return;
+    // Never end the server session before confirming this browser can perform
+    // a serialized local purge. Otherwise a Web-Locks-less browser would claim
+    // sign-out succeeded while leaving private data accessible on the device.
+    if (offlineRecoveryIsHeld() || !offlineRecoveryWipeSupported()) {
+      setLogoutError(tr("signOutFailed"));
+      return;
+    }
     setLogoutBusy(true);
     setLogoutError("");
     // Started offline: access is checked again first, so changes made meanwhile are sent if the
@@ -1376,9 +1421,18 @@ export function useLumiApp() {
         unblock: () => { signedOut.current = false; document.body.inert = false; },
         endSession: () => fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(10_000) }).then((response) => (response.ok ? "ok" : "failed") as "ok" | "failed", () => "offline" as const),
         // If the wipe cannot finish now it stays marked and is completed when the page starts again.
-        wipe: () => clearLocalData().catch(() => undefined),
+        wipe: () => clearLocalData(),
       });
       if (result !== "signed-out") {
+        if (failedSignOutNeedsReload(result, document.body.inert)) {
+          // Server logout completed, but private local data was not verified
+          // removed. This page is inert; redirect to an actionable signed-out
+          // or recovery view, never claim a successful local purge.
+          try { sessionStorage.setItem(incompleteSignOutNoticeKey, "1"); } catch { /* optional warning */ }
+          leaving = true;
+          window.location.replace("/");
+          return;
+        }
         postToTabs({ type: "sign-out-cancelled", from: tabId.current });
         setLogoutError(tr(result === "writing" ? "signOutBusy" : result === "offline" ? "signOutOffline" : result === "kept" ? "signOutKept" : "signOutFailed"));
         return;
@@ -4001,6 +4055,14 @@ export function useLumiApp() {
     backupFailed,
     restoredNotice,
     dismissRestoredNotice,
+    recoveryHeld,
+    recoveryPreparing,
+    recoveryReady,
+    recoveryError,
+    recoveryOffline,
+    recoveryDownloadRequested,
+    prepareOfflineRecoveryDownload,
+    downloadOfflineRecovery,
     downloadExport,
     importExport,
     createSuggestedTarget,
