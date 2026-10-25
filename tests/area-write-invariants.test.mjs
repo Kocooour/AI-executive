@@ -234,6 +234,64 @@ test("R3: legacy text-only Area on a new task gets a canonical Area and relation
   assert.deepEqual(plan.report.createdAreaIds, []);
 });
 
+test("P1: newly written legacy Area text cannot contradict an unchanged canonical link", () => {
+  const current = state([...baseEntities(), ent("t:label", "task"),
+    ent("p:label", "project")],
+  [...baseRelations(), rel("r:t:label", "t:label", "area:b", "belongs_to_area"),
+    rel("r:p:label", "p:label", "area:a", "belongs_to_area")]);
+  const next = state(current.entities.map((e) => e.id === "t:label" || e.id === "p:label"
+    ? { ...e, properties: { ...e.properties, area: "Other area" } } : e), current.relations);
+  const out = run(current, next);
+  assert.deepEqual(areaLinks(out, "t:label").map((r) => r.targetEntityId), ["area:b"]);
+  assert.deepEqual(areaLinks(out, "p:label").map((r) => r.targetEntityId), ["area:a"]);
+  assert.equal("area" in entity(out, "t:label").properties, false);
+  assert.equal("area" in entity(out, "p:label").properties, false);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+  assert.deepEqual(plan.report.createdAreaIds, []);
+});
+
+test("P2: a new task with only legacy projectId gets a canonical project link immediately", () => {
+  const current = state(baseEntities(), baseRelations());
+  const next = state([...current.entities,
+    ent("t:legacy-proj", "task", "personal", { projectId: "proj" }),
+    ent("t:with-link", "task", "personal", { projectId: "proj" })],
+  [...current.relations, rel("r:t:with-link", "t:with-link", "proj", "belongs_to_project")]);
+  const out = run(current, next);
+  for (const id of ["t:legacy-proj", "t:with-link"]) {
+    assert.deepEqual(out.relations.filter((r) => r.sourceEntityId === id && r.relationType === "belongs_to_project")
+      .map((r) => r.targetEntityId), ["proj"]);
+    assert.deepEqual(areaLinks(out, id), []);
+    assert.equal("projectId" in entity(out, id).properties, false);
+  }
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedLegacyProjectRelationIds, []);
+  assert.deepEqual(plan.report.addedRelationIds, []);
+});
+
+test("P2: an explicitly changed legacy projectId supersedes an old project membership", () => {
+  const current = state([...baseEntities(), ent("dest", "project"), ent("t:move", "task")],
+    [...baseRelations(), rel("r:dest-a", "dest", "area:a", "belongs_to_area"),
+      rel("r:old-proj", "t:move", "proj", "belongs_to_project")]);
+  const next = state(current.entities.map((e) => e.id === "t:move"
+    ? { ...e, properties: { projectId: "dest" } } : e), current.relations);
+  const out = run(current, next);
+  assert.deepEqual(out.relations.filter((r) => r.sourceEntityId === "t:move" && r.relationType === "belongs_to_project")
+    .map((r) => r.targetEntityId), ["dest"]);
+  assert.deepEqual(out.droppedRelationIds, ["r:old-proj"]);
+  assert.equal("projectId" in entity(out, "t:move").properties, false);
+  const plan = planAreaNormalization({ entities: out.entities, relations: out.relations, tombstones: [] }, NOW + 1);
+  assert.deepEqual(plan.report.addedLegacyProjectRelationIds, []);
+});
+
+test("P2: an invalid new legacy projectId is rejected", () => {
+  const current = state(baseEntities(), baseRelations());
+  for (const bad of ["missing", "area:a", "area:t"]) {
+    const next = state([...current.entities, ent("t:invalid-proj", "task", "personal", { projectId: bad })], current.relations);
+    assert.throws(() => run(current, next), /Invalid Area assignment/);
+  }
+});
+
 test("R3: ambiguous, archived or tombstoned free-text Area is rejected atomically", () => {
   const base = state([workspace("personal", "personal")], []);
   const incoming = (current) => state([...current.entities, ent("text-only", "task", "personal", { area: "Rodina" })], []);
@@ -254,6 +312,24 @@ test("system fallback Area cannot be renamed, archived or removed by a new write
     state([workspace("personal", "personal"), { ...fallback, title: "Changed" }], []),
     state([workspace("personal", "personal"), { ...fallback, status: "archived" }], []),
   ]) assert.throws(() => run(current, next), /Invalid Area assignment/);
+});
+
+test("P1: cannot add a duplicate of the system fallback or occupy its reserved ID", () => {
+  const base = state([workspace("personal", "personal")], []);
+  const legacyFallback = ent("area:legacy-default", "area", "personal", { kind: "private" }, { title: "Nezařazeno" });
+  const current = state([...base.entities, legacyFallback], []);
+  const duplicate = ent("area:duplicate", "area", "personal", { kind: "private" }, { title: " NEZAŘAZENO " });
+  assert.throws(() => run(current, state([...current.entities, duplicate], [])), /Invalid Area assignment/);
+  // Protect a legacy non-deterministic fallback even if an old snapshot already has duplicates.
+  const legacyDuplicate = state([...current.entities, duplicate], []);
+  assert.equal(run(legacyDuplicate, legacyDuplicate).changed, false);
+  assert.throws(() => run(legacyDuplicate, state([base.entities[0], duplicate], [])), /Invalid Area assignment/);
+  // No record may occupy the generated system ID with a different title.
+  const impostor = ent(FALLBACK, "area", "personal", { kind: "private" }, { title: "Unrelated area" });
+  assert.throws(() => run(base, state([...base.entities, impostor], [])), /Invalid Area assignment/);
+  // The first fallback-labeled Area is allowed and becomes protected.
+  const first = run(base, current);
+  assert.equal(first.changed, false);
 });
 
 test("R4: a second Area on an entity keeps the newest new link and drops the other new ones", () => {
