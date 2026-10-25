@@ -25,8 +25,10 @@ restore hold remains active**. This adds a diagnostic step, not release.
   the number of classified entity/relation changes; pending markers and
   drafts are separate, non-classified counts.
 - New file selections or cancellations immediately clear the previous summary
-  and busy state. A late file read or server response cannot publish stale
-  results or re-disable the picker.
+  and busy state. The native file input's `cancel` event is handled explicitly:
+  it clears the previous diagnosis without bubbling into the outer non-dismissible
+  recovery dialog's `cancel` handler. A late file read or server response
+  cannot publish stale results or re-disable the picker.
 - The assessment is provisional: server state can change after GET, the hash
   checks integrity rather than authenticity, and neither file inspection nor
   a "no-local-changes" result establishes current Area permissions, workspace
@@ -39,7 +41,12 @@ Validation: unit tests in `tests/d2b-recovery-review.test.mjs` cover private
 data redaction, exhaustive classifications, hold mismatches, later restores,
 corrupted files, generation rejection and the no-change case.
 `tests/d2b-recovery-review-request.test.mjs` covers cancelled and overlapping
-file reads, late results, and stale/active errors. PR Checks must run typecheck, tests and build on the exact PR head.
+file reads, late results, stale/active errors, and cancellation following a
+completed diagnosis. `e2e/app.spec.ts` includes a **focused** Playwright scenario
+for the actual input `cancel` event, old-error clearing, and the still-open safety
+dialog; run it with `pnpm test:e2e -g "native recovery file-picker cancel"`
+using isolated synthetic data. PR Checks must run typecheck, tests and build on
+the exact PR head.
 Focused multi-tab/browser recovery tests and independent security review are
 required before this UI can be considered merge-ready. Full browser E2E is
 reserved for the exact-SHA pre-deployment gate.
