@@ -122,6 +122,46 @@ test("PUT: free-text legacy Area becomes a canonical Area and link immediately",
   assert.equal(preflight().noChanges, true);
 });
 
+test("PUT → preflight: newly changed legacy Area text never conflicts with canonical link", () => {
+  const before = snap();
+  const chosen = links("reassign-task")[0];
+  assert.equal(chosen.targetEntityId, "move-area-b");
+  save((s) => ({ ...s, entities: s.entities.map((e) => e.id === "reassign-task"
+    ? { ...e, properties: { ...e.properties, area: "Some older category" } } : e) }));
+  assert.deepEqual(links("reassign-task").map((r) => r.id), [chosen.id]);
+  assert.equal("area" in get("reassign-task").properties, false);
+  assert.ok(snap().revision > before.revision);
+  assert.equal(preflight().noChanges, true);
+});
+
+test("PUT → preflight: legacy projectId is canonicalized to belongs_to_project", () => {
+  save((s) => ({ ...s, entities: [...s.entities, ent("legacy-only-project-task", "task", { projectId: "p1" })] }));
+  assert.deepEqual(links("legacy-only-project-task"), [], "project members inherit the Area");
+  assert.deepEqual(links("legacy-only-project-task", "belongs_to_project").map((r) => r.targetEntityId), ["p1"]);
+  assert.equal("projectId" in get("legacy-only-project-task").properties, false);
+  assert.equal(preflight().noChanges, true);
+});
+
+test("PUT: duplicate fallback Area and malformed reserved ID are rejected atomically", () => {
+  const previous = snap();
+  assert.ok(get(FALLBACK));
+  assert.throws(() => save((s) => ({ ...s, entities: [
+    ...s.entities, ent("duplicate-fallback-209", "area", { kind: "private" }, { title: " NEZAŘAZENO " }),
+  ] })), /Invalid Area assignment/);
+  assert.equal(snap().revision, previous.revision);
+  assert.equal(get("duplicate-fallback-209"), undefined);
+  // A new Area claiming the protected deterministic ID in another workspace
+  // must not be allowed to bypass the same-workspace check.
+  const otherWs = { ...ent("workspace:other", "workspace", { kind: "shared" }),
+    workspaceId: "other", title: "Other" };
+  const impostor = { ...ent(generatedAreaId("other", "Nezařazeno (původní sdílené)"),
+    "area", { kind: "shared" }, { title: "Not fallback" }), workspaceId: "other" };
+  assert.throws(() => save((s) => ({ ...s, entities: [...s.entities, otherWs, impostor] })),
+    /Invalid Area assignment/);
+  assert.equal(snap().revision, previous.revision);
+  assert.equal(preflight().noChanges, true);
+});
+
 test("an old client that adds a task-level Area to a task in a project is stored without it", () => {
   save((s) => ({ ...s, entities: [...s.entities, ent("area:work", "area", { kind: "private" }), ent("tp", "task", { areaId: "area:work" })],
     relations: [...s.relations, rel("r:tp-proj", "tp", "p1", "belongs_to_project"), rel("r:tp-area", "tp", "area:work", "belongs_to_area")] }));
