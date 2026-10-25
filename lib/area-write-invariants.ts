@@ -35,6 +35,7 @@ export interface AreaWriteReport {
   fallbackAreasCreated: number;
   duplicateAreaLinksDropped: number;
   legacyAreaIdsCanonicalized: number;
+  legacyAreaLabelsCanonicalized: number;
   areaKindsRestored: number;
   fallbackUnavailable: number;
 }
@@ -171,6 +172,7 @@ export function enforceAreaWriteInvariants(input: {
   const report: AreaWriteReport = {
     droppedProjectTaskAreaLinks: 0, tasksInheritingFromProject: 0, fallbackAssigned: 0,
     fallbackAreasCreated: 0, duplicateAreaLinksDropped: 0, legacyAreaIdsCanonicalized: 0,
+    legacyAreaLabelsCanonicalized: 0,
     areaKindsRestored: 0, fallbackUnavailable: 0,
   };
   const currentEntities = new Map(current.entities.map((entity) => [entity.id, entity]));
@@ -346,7 +348,6 @@ export function enforceAreaWriteInvariants(input: {
         properties: { kind: areaKindForWorkspace(kind) }, createdAt: now, updatedAt: now };
       createdAreas.push(area);
       takenIds.add(id);
-      report.fallbackAreasCreated += 1;
     }
     const relationId = fallbackRelationId(item.id, area.id, (candidate) => takenIds.has(candidate));
     if (!relationId) throw new AreaWriteInvalid();
@@ -364,6 +365,7 @@ export function enforceAreaWriteInvariants(input: {
       return { ...entity, properties };
     });
     touch(item.id, false);
+    report.legacyAreaLabelsCanonicalized += 1;
   }
 
   // R4: an explicit new Area choice replaces previous links, including older
@@ -394,7 +396,8 @@ export function enforceAreaWriteInvariants(input: {
   // Do not change untouched legacy properties in unrelated saves.
   for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
     if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
-    if (!liveLinks(item.id).some((link) => isNewRelation(link) && !previouslyTombstoned.has(link.id))) continue;
+    if (!explicitChoices.has(item.id) &&
+        !liveLinks(item.id).some((link) => isNewRelation(link) && !previouslyTombstoned.has(link.id))) continue;
     const currentItem = entities.get(item.id);
     if (!currentItem || (currentItem.properties.areaId === undefined &&
         currentItem.properties.area === undefined)) continue;
@@ -425,7 +428,8 @@ export function enforceAreaWriteInvariants(input: {
     if (fallbackFor.has(workspaceId)) return fallbackFor.get(workspaceId);
     const plan = planFallbackArea({
       workspaceId, kind: kinds.get(workspaceId),
-      entities: [...entities.values()].filter((item) => item.type === "area"), tombstonedIds: tombstoned, now,
+      entities: [...entities.values(), ...createdAreas].filter((item) => item.type === "area"),
+      tombstonedIds: tombstoned, now,
     });
     let area: Entity | undefined;
     if (plan.status === "existing") area = plan.area;
