@@ -27,7 +27,7 @@ export type OfflineRecoveryInput = {
   pendingSync: boolean;
   oldRestoreGeneration: number;
   newRestoreGeneration: number;
-  baseRevision: number;
+  baseRevision: number | null;
 };
 
 export type OfflineRecoveryBundle = Readonly<{
@@ -37,7 +37,7 @@ export type OfflineRecoveryBundle = Readonly<{
   automaticReplayAllowed: false;
   oldRestoreGeneration: number;
   observedRestoreGeneration: number;
-  baseRevision: number;
+  baseRevision: number | null;
   createdAt: number;
   changes: {
     entities: OfflineChange<Entity>[];
@@ -265,7 +265,7 @@ function validateImportedBundleShape(bundle: OfflineRecoveryBundle): void {
       !validCounter(bundle.oldRestoreGeneration) ||
       !validCounter(bundle.observedRestoreGeneration) ||
       bundle.oldRestoreGeneration >= bundle.observedRestoreGeneration ||
-      !validCounter(bundle.baseRevision) || !validCounter(bundle.createdAt) ||
+      !(bundle.baseRevision === null || validCounter(bundle.baseRevision)) || !validCounter(bundle.createdAt) ||
       !record(bundle.changes)) throw new OfflineRecoveryInvalid();
   const changes = bundle.changes;
   exactKeys(changes, ["entities", "relations", "pendingDeletedIds", "pendingRevivedIds",
@@ -285,7 +285,7 @@ function validateImportedBundleShape(bundle: OfflineRecoveryBundle): void {
 }
 
 export function prepareOfflineRecovery(input: OfflineRecoveryInput, now: number): OfflineRecoveryBundle {
-  if (!validCounter(now) || !validCounter(input.baseRevision) ||
+  if (!validCounter(now) || !(input.baseRevision === null || validCounter(input.baseRevision)) ||
       !validCounter(input.oldRestoreGeneration) || !validCounter(input.newRestoreGeneration) ||
       input.newRestoreGeneration <= input.oldRestoreGeneration ||
       typeof input.pendingSync !== "boolean" ||
