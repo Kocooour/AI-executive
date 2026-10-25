@@ -19,12 +19,22 @@ replay, import, discard, merge, resume or removal of the recovery hold.
   existing seven reasons and a default `defer` preference for every item.
   The result contains no titles, properties, note/project drafts, before/after
   record bodies, credentials, tokens or pending-marker IDs.
-- Cross-kind ID collision and cross-workspace movement **only** offer
-  `defer`. Other items allow provisional `prefer-local` and/or
-  `prefer-server` where the diagnostic category makes a comparison possible.
+- All relation changes (including new or moved `belongs_to_area` links),
+  Area/workspace/project entity edits, new/deleted entities, and existing
+  task/note records with changed `areaId`, `projectId`, workspace or type
+  **only** offer `defer`. This also applies when the *server* changed a
+  stored scope and when a changed relation directly references the record.
+  Only existing task/note content edits with unchanged stored scope can
+  express provisional `prefer-local` or `prefer-server`; this does not
+  verify their *effective* Area and never authorizes replay.
   `preferOfflineRecoveryOutcome` changes **only** an in-memory preference
-  list, not any source data or persisted state. It rejects a nonexistent
-  candidate and preferences that the classifier does not offer.
+  list, not any source data or persisted state. It rejects unknown candidates
+  and unavailable preferences.
+- Decision drafts are recursively frozen across their mutable surface and
+  marked with module-private WeakSet identity; cloned, deserialized or altered
+  plans fail closed instead of permitting a forged reason or expanded options.
+  This identity exists only in the current runtime and is **not** a credential
+  or server-side ACL token.
 - Drafts, pending deletion/revival markers and pending sync are not lost:
   aggregate counts and `unresolvedNonRecordWork` explicitly keep them
   outside individual record preferences and mark them for separate review.
