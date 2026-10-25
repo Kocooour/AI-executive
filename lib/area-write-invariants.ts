@@ -324,6 +324,24 @@ export function enforceAreaWriteInvariants(input: {
     }
   }
 
+  // A newly assigned canonical link also supersedes stale legacy areaId/area
+  // properties, even if that entity had no previous canonical link at all.
+  // Do not change untouched legacy properties in unrelated saves.
+  for (const item of [...next.entities].sort((a, b) => compare(a.id, b.id))) {
+    if (item.type !== "project" && (item.type !== "task" || projectAfter.has(item.id))) continue;
+    if (!liveLinks(item.id).some(isNewRelation)) continue;
+    const currentItem = entities.get(item.id);
+    if (!currentItem || (currentItem.properties.areaId === undefined &&
+        currentItem.properties.area === undefined)) continue;
+    edit(item.id, (entity) => {
+      const properties = { ...entity.properties };
+      delete properties.areaId;
+      delete properties.area;
+      return { ...entity, properties };
+    });
+    touch(item.id, false);
+  }
+
   // R3: new projects, new standalone tasks and tasks that leave their project get the fallback Area.
   const hasArea = (entity: Entity) =>
     liveLinks(entity.id).length > 0 || textValue(entity.properties.areaId) || textValue(entity.properties.area);
