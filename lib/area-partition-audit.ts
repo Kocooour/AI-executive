@@ -73,29 +73,81 @@ export function auditAreaPartition(
     list.push(r);
     relsBySource.set(r.sourceEntityId, list);
   }
-  const projectMembership = (e: Entity) => (relsBySource.get(e.id) ?? [])
+  const directProjectLinks = (e: Entity) => (relsBySource.get(e.id) ?? [])
     .filter((r) => r.relationType === "belongs_to_project")
     .map((r) => r.targetEntityId);
-  const ownArea = (e: Entity) => (relsBySource.get(e.id) ?? [])
+  const directAreaLinks = (e: Entity) => (relsBySource.get(e.id) ?? [])
     .filter((r) => r.relationType === "belongs_to_area")
     .map((r) => r.targetEntityId);
 
-  const oneArea = (e: Entity, code: string): string | undefined => {
-    const links = ownArea(e);
-    if (links.length !== 1) { add(code); return; }
-    const target = entities.get(links[0]);
-    if (target?.type !== "area" || target.workspaceId !== e.workspaceId) {
-      add("invalid-area-target"); return;
+  // D2a normalizes projects and tasks, but intentionally leaves notes alone.
+  // Older clients also store note ownership in these two properties. Resolve
+  // them here rather than incorrectly treating the notes as standalone.
+  const noteReference = (note: Entity, key: "projectId" | "areaId"): string | undefined => {
+    const raw = note.properties[key];
+    if (raw === undefined || raw === null || raw === "") return undefined;
+    if (typeof raw !== "string" || !raw.trim()) {
+      add(key === "projectId" ? "invalid-note-project-reference" : "invalid-note-area-reference");
+      return undefined;
     }
-    return target.id;
+    return raw;
+  };
+  const noteProject = (note: Entity) => {
+    const links = directProjectLinks(note);
+    const legacy = noteReference(note, "projectId");
+    const choices = new Set([...links, ...(legacy ? [legacy] : [])]);
+    if (links.length > 1 || choices.size > 1) {
+      add("ambiguous-note-project-membership");
+      return { blocked: true, target: undefined as string | undefined };
+    }
+    if (note.properties.projectId != null && note.properties.projectId !== "" && !legacy)
+      return { blocked: true, target: undefined as string | undefined };
+    return { blocked: false, target: [...choices][0] };
+  };
+  const noteOwnArea = (note: Entity) => {
+    const links = directAreaLinks(note);
+    const legacy = noteReference(note, "areaId");
+    const choices = new Set([...links, ...(legacy ? [legacy] : [])]);
+    if (links.length > 1 || choices.size > 1) {
+      add("ambiguous-note-area-membership");
+      return { blocked: true, target: undefined as string | undefined };
+    }
+    if (note.properties.areaId != null && note.properties.areaId !== "" && !legacy)
+      return { blocked: true, target: undefined as string | undefined };
+    return { blocked: false, target: [...choices][0] };
+  };
+  const validArea = (item: Entity, id: string): boolean => {
+    const target = entities.get(id);
+    if (target?.type !== "area" || target.workspaceId !== item.workspaceId) {
+      add("invalid-area-target");
+      return false;
+    }
+    if (item.status !== "archived" && target.status !== "active") {
+      add("inactive-area-for-active-item");
+      return false;
+    }
+    return true;
+  };
+
+  const oneArea = (e: Entity, code: string): string | undefined => {
+    const links = directAreaLinks(e);
+    if (links.length !== 1) { add(code); return; }
+    return validArea(e, links[0]) ? links[0] : undefined;
   };
   for (const project of sharedProjects) {
     const area = oneArea(project, "project-without-unique-area");
     if (area) areaOf.set(project.id, area);
   }
-  // Both tasks and notes directly inside a project inherit its single Area.
+  // Project members inherit their parent's Area. A direct note membership
+  // and its legacy property must agree; otherwise partitioning is blocked.
   for (const item of [...sharedTasks, ...sharedNotes]) {
-    const memberships = projectMembership(item);
+    const isNote = item.type === "note";
+    const noteProjectRef = isNote ? noteProject(item) : undefined;
+    const noteAreaRef = isNote ? noteOwnArea(item) : undefined;
+    if (noteProjectRef?.blocked || noteAreaRef?.blocked) continue;
+    const memberships = isNote
+      ? (noteProjectRef?.target ? [noteProjectRef.target] : [])
+      : directProjectLinks(item);
     if (memberships.length > 1) { add("ambiguous-project-membership"); continue; }
     if (memberships.length === 1) {
       const parent = entities.get(memberships[0]);
@@ -104,10 +156,22 @@ export function auditAreaPartition(
       }
       const inherited = areaOf.get(parent.id);
       if (!inherited) { add("unroutable-project-member"); continue; }
-      if (ownArea(item).length) { add("project-member-has-own-area"); continue; }
+      const own = isNote ? noteAreaRef?.target : directAreaLinks(item)[0];
+      if (isNote) {
+        if (own && own !== inherited) { add("project-note-area-disagrees"); continue; }
+        if (own && !validArea(item, own)) continue;
+        if (own) { add("project-member-has-own-area"); continue; }
+      } else if (directAreaLinks(item).length) {
+        add("project-member-has-own-area"); continue;
+      }
+      if (!validArea(item, inherited)) continue;
       areaOf.set(item.id, inherited);
+    } else if (isNote) {
+      const chosen = noteAreaRef?.target;
+      if (!chosen) { add("unassigned-standalone-note"); continue; }
+      if (validArea(item, chosen)) areaOf.set(item.id, chosen);
     } else {
-      const area = oneArea(item, item.type === "note" ? "unassigned-standalone-note" : "unassigned-standalone-task");
+      const area = oneArea(item, "unassigned-standalone-task");
       if (area) areaOf.set(item.id, area);
     }
   }
