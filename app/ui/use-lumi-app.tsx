@@ -1360,6 +1360,13 @@ export function useLumiApp() {
   // the session cookie cannot be cleared from here.
   async function logout() {
     if (logoutBusy) return;
+    // Never end the server session before confirming this browser can perform
+    // a serialized local purge. Otherwise a Web-Locks-less browser would claim
+    // sign-out succeeded while leaving private data accessible on the device.
+    if (offlineRecoveryIsHeld() || !offlineRecoveryWipeSupported()) {
+      setLogoutError(tr("signOutFailed"));
+      return;
+    }
     setLogoutBusy(true);
     setLogoutError("");
     // Started offline: access is checked again first, so changes made meanwhile are sent if the
