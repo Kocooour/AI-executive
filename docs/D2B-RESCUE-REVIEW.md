@@ -23,7 +23,11 @@ restore hold remains active**. This adds a diagnostic step, not release.
   present/deleted and local-only), with **no titles, IDs or draft bodies** in
   the UI, URL, storage, server requests or logs. All reason counts add up to
   the number of classified entity/relation changes; pending markers and
-  drafts are separate, non-classified counts.
+  drafts are separate, non-classified counts. The shared entity/relation ID
+  namespace is checked for conflicts across both record kinds. A new record
+  with an existing remote ID is a collision (unless the exact same record is
+  already present), even when the remote record belongs to another workspace.
+  Workspace-change diagnostics apply to previously existing local records.
 - New file selections or cancellations immediately clear the previous summary
   and busy state. The native file input's `cancel` event is handled explicitly:
   it clears the previous diagnosis without bubbling into the outer non-dismissible
