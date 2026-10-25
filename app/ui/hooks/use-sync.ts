@@ -304,6 +304,10 @@ export function useSync() {
   }
   async function replaceLocalWithServer(snapshot?: ServerSnapshot, notice = false) {
     if (signedOut.current) return false;
+    // A known generation mismatch must stop writes synchronously, *before* waiting
+    // for a queued save or a cross-tab lock. Neither may delay the safety marker.
+    if (snapshot && (offlineRecoveryIsHeld() || restoredSinceKnown(snapshot.restoreGeneration)))
+      return adoptServerCopy(snapshot, notice);
     const operation = syncQueue.current.then(() => withSyncLock(async () => {
       let source = snapshot;
       if (!source) {
