@@ -758,7 +758,7 @@ export function useSync() {
     recoveryDownloadRequested,
     recoveryInspecting: recoveryReview.busy,
     recoveryInspection: recoveryReview.result,
-    recoveryInspectionError: recoveryReview.error,
+    recoveryInspectionError: recoveryReview.failure,
     inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload,
     downloadOfflineRecovery,
