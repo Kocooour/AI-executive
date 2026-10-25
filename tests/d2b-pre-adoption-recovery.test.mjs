@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { offlineRecoveryHoldKey, beginOfflineRecoveryHold, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
+import { offlineRecoveryHoldKey, offlineRecoveryIntentKey, beginOfflineRecoveryHold, beginOfflineRecoveryHoldSafely, withOfflineRecoveryDataLock, recoveryExportGeneration, offlineRecoveryIsHeld, parseOfflineRecoveryHold, readOfflineRecoveryHold } from "../lib/d2b-recovery-hold.ts";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../lib/d2b-recovery-local.ts";
 import { OfflineRecoveryInvalid } from "../lib/d2b-offline-reconciliation.ts";
 import { deletedKey, revivedKey, pendingKey, pendingSeqKey, captureMarkers, clearSentMarkers, clearAllMarkers } from "../lib/pending-markers.ts";
@@ -146,4 +146,77 @@ test("D2b: interrupted sign-out cleanup and explicit wipe are forbidden while re
   // or IndexedDB cleanup may start, including after a crashed sign-out.
   await finishInterruptedWipe();
   await assert.rejects(clearLocalData(), /OFFLINE_RECOVERY_HELD/);
+});
+
+test("D2b: multiple server restores still allow a recovery export without changing the first hold", () => {
+  const first = { version: 1, knownGeneration: 2, observedGeneration: 3, createdAt: 100 };
+  assert.equal(recoveryExportGeneration(first, 3), 3);
+  assert.equal(recoveryExportGeneration(first, 4), 4);
+  assert.throws(() => recoveryExportGeneration(first, 1), /OFFLINE_RECOVERY_GENERATION_INVALID/);
+  assert.throws(() => recoveryExportGeneration(first, 2), /OFFLINE_RECOVERY_GENERATION_INVALID/);
+  assert.throws(() => recoveryExportGeneration(first, Number.NaN), /OFFLINE_RECOVERY_GENERATION_INVALID/);
+});
+
+test("D2b: a durable pending intent survives a tab crash and blocks writes until final hold", async () => {
+  const previousStorage = globalThis.localStorage;
+  const previousNavigator = globalThis.navigator;
+  const s = storage();
+  let unlock;
+  let entered = false;
+  const gate = new Promise((resolve) => { unlock = resolve; });
+  const locks = { request: async (_name, callback) => {
+    entered = true;
+    await gate;
+    return callback();
+  } };
+  try {
+    Object.defineProperty(globalThis, "localStorage", { value: s, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+    const promise = beginOfflineRecoveryHoldSafely(2, 3);
+    assert.equal(entered, true, "hold waits for the shared lock");
+    assert.equal(offlineRecoveryIsHeld(s), true, "intent blocks writes before the lock is granted");
+    assert.equal(s.getItem(offlineRecoveryHoldKey), null);
+    assert.deepEqual(readOfflineRecoveryHold(s), {
+      version: 1, knownGeneration: 2, observedGeneration: 3,
+      createdAt: parseOfflineRecoveryHold(s.getItem(offlineRecoveryIntentKey)).createdAt,
+    });
+    unlock();
+    const hold = await promise;
+    assert.equal(readOfflineRecoveryHold(s).observedGeneration, 3);
+    assert.deepEqual(hold, readOfflineRecoveryHold(s));
+  } finally {
+    unlock();
+    Object.defineProperty(globalThis, "localStorage", { value: previousStorage, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: previousNavigator, configurable: true });
+  }
+});
+
+test("D2b: the recovery-data lock runs critical sections serially", async () => {
+  const previousNavigator = globalThis.navigator;
+  let queue = Promise.resolve();
+  const locks = { request: (_name, callback) => {
+    const current = queue.then(callback);
+    queue = current.then(() => undefined, () => undefined);
+    return current;
+  } };
+  const order = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  try {
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+    const first = withOfflineRecoveryDataLock(async () => {
+      order.push("wipe-start");
+      await gate;
+      order.push("wipe-end");
+    });
+    const second = withOfflineRecoveryDataLock(async () => { order.push("final-hold"); });
+    await Promise.resolve();
+    assert.deepEqual(order, ["wipe-start"]);
+    release();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["wipe-start", "wipe-end", "final-hold"]);
+  } finally {
+    release();
+    Object.defineProperty(globalThis, "navigator", { value: previousNavigator, configurable: true });
+  }
 });
