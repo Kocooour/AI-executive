@@ -309,6 +309,21 @@ export function enforceAreaWriteInvariants(input: {
     if (!changedProperty && !newCanonical) continue;
     // A newly supplied invalid target cannot be silently converted into a
     // fallback Area; doing so would disguise an unintended project move.
+    if (!changedProperty && projectLinks.length > 1) {
+      // A fresh canonical project link is an explicit move. As with an Area
+      // reassignment, leaving an old project link would block the 2a planner.
+      // Reviving a tombstoned old ID is not an explicit new choice.
+      const fresh = projectLinks.filter((link) =>
+        isNewRelation(link) && !previouslyTombstoned.has(link.id));
+      const revived = projectLinks.filter((link) =>
+        previouslyTombstoned.has(link.id) && !currentRelations.has(link.id));
+      if (fresh.length || revived.length) {
+        const kept = projectLinks.filter((link) => currentRelations.has(link.id));
+        const candidates = fresh.length ? fresh : kept.length ? kept : revived;
+        const winner = [...candidates].sort((a, b) => b.createdAt - a.createdAt || compare(b.id, a.id))[0];
+        for (const link of projectLinks) if (link.id !== winner.id) drop(link);
+      }
+    }
     if (changedProperty && textValue(raw)) {
       const target = entities.get(String(raw));
       if (!target || target.type !== "project" || target.workspaceId !== task.workspaceId ||
