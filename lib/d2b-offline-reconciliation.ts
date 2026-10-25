@@ -126,6 +126,10 @@ export function prepareOfflineRecovery(input: OfflineRecoveryInput, now: number)
       !Array.isArray(input.noteDrafts) || !Array.isArray(input.projectContextDrafts)) {
     throw new OfflineRecoveryInvalid();
   }
+  // Validate full snapshots, including unchanged records: a non-portable field
+  // must never disappear silently merely because its record was not edited.
+  assertPortable(input.base);
+  assertPortable(input.local);
   const changeset = {
     entities: changes(input.base.entities, input.local.entities),
     relations: changes(input.base.relations, input.local.relations),
