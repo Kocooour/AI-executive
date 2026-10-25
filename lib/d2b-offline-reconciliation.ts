@@ -99,6 +99,25 @@ function markers(ids: readonly string[]): string[] {
   return [...new Set(ids)].sort();
 }
 
+function assertPortable(value: unknown, ancestors = new Set<object>()): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new OfflineRecoveryInvalid();
+    return;
+  }
+  if (typeof value !== "object" || ancestors.has(value)) throw new OfflineRecoveryInvalid();
+  const proto = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && proto !== Object.prototype && proto !== null)
+    throw new OfflineRecoveryInvalid();
+  ancestors.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) assertPortable(entry, ancestors);
+  } else {
+    for (const entry of Object.values(value)) assertPortable(entry, ancestors);
+  }
+  ancestors.delete(value);
+}
+
 export function prepareOfflineRecovery(input: OfflineRecoveryInput, now: number): OfflineRecoveryBundle {
   if (!validCounter(now) || !validCounter(input.baseRevision) ||
       !validCounter(input.oldRestoreGeneration) || !validCounter(input.newRestoreGeneration) ||
@@ -126,16 +145,14 @@ export function prepareOfflineRecovery(input: OfflineRecoveryInput, now: number)
     baseRevision: input.baseRevision, createdAt: now,
     changes: changeset,
   };
-  // JSON serialization also fails closed on cycles, BigInt, or non-serializable
-  // bytes. Reject instead of exporting an incomplete/damaged draft silently.
+  // Reject undefined, functions, NaN, cycles and non-JSON prototypes rather
+  // than silently losing any part of a local draft in the rescue package.
+  assertPortable(value);
   let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
-    if (JSON.stringify(JSON.parse(serialized)) !== serialized) throw new Error("Non-portable JSON");
-  } catch {
-    throw new OfflineRecoveryInvalid();
-  }
-  return { ...value, contentSha256: sha256Hex(serialized) };
+  try { serialized = JSON.stringify(value); } catch { throw new OfflineRecoveryInvalid(); }
+  // Make a detached copy: another tab or caller mutating its input later must
+  // not change the already fingerprinted rescue object.
+  return { ...JSON.parse(serialized) as typeof value, contentSha256: sha256Hex(serialized) };
 }
 
 export function assessOfflineRecovery(
