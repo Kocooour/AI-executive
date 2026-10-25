@@ -129,6 +129,14 @@ export async function beginOfflineRecoveryHoldSafely(
 // Generations can advance through multiple server restores while a browser is
 // frozen. Preserve the FIRST observed mismatch in the hold; export against the
 // CURRENT server generation as long as it has not moved backward.
+// The restore generation takes precedence over revisions: a rollback often
+// lowers the server revision and must never be mistaken for an up-to-date pull.
+export function recoveryPullDecision(generationChanged: boolean, serverRevision: number, knownRevision: number):
+  "restore" | "synced" | "apply" {
+  if (generationChanged) return "restore";
+  return serverRevision <= knownRevision ? "synced" : "apply";
+}
+
 export function recoveryExportGeneration(hold: OfflineRecoveryHold, current: number): number {
   if (!validNumber(current) || current < hold.observedGeneration ||
       current <= (hold.knownGeneration ?? 0))
