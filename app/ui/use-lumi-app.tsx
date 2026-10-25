@@ -10,7 +10,7 @@ import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
-import { offlineRecoveryIsHeld } from "../../lib/d2b-recovery-hold";
+import { offlineRecoveryIsHeld, offlineRecoveryWipeSupported } from "../../lib/d2b-recovery-hold";
 import { recordDeleted, recordRevived } from "../../lib/pending-markers";
 import { writeTime } from "../../lib/clock";
 import { otherOpenTexts, renewOpenTexts, setOpenTexts, type OpenTextKind } from "../../lib/open-texts";
