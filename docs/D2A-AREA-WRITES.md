@@ -11,7 +11,7 @@
 
 ## Serverová autorita: `lib/area-write-invariants.ts`
 
-Čistá deterministická funkce `enforceAreaWriteInvariants({ current, next, tombstones, now })`; `current` = uložený stav před zápisem, `next` = stav, který se má uložit. Vrací opravený `next`, ID odstraněných relací (zapisují se jako tombstones) a **report jen s počty** (bez titulků a ID). Zasahuje **jen do změn, které zápis sám přinesl**; staré porušení, kterých se zápis nedotkl, zůstávají (patří auditovanému aplikátoru).
+Čistá deterministická funkce `enforceAreaWriteInvariants({ current, next, tombstones, previousTombstones?, now })`; `current` = uložený stav před zápisem, `next` = stav, který se má uložit. Vrací opravený `next`, ID odstraněných relací (zapisují se jako tombstones) a **report jen s počty** (bez titulků a ID). Zasahuje **jen do změn, které zápis sám přinesl**; staré porušení, kterých se zápis nedotkl, zůstávají (patří auditovanému aplikátoru).
 
 | Pravidlo | Význam |
 |---|---|
@@ -21,10 +21,12 @@
 | R4 | Při novém přiřazení Oblasti vyhraje nově zvolená vazba a odstraní se i předchozí vazby na jinou Oblast (tombstones). Několik nedotčených historických vazeb se nemění a zůstává pro auditovaný aplikátor. |
 | R5 | Oblast nová nebo změněná v zápisu dostane `kind` podle workspace (obnoví také `kind` smazaný starým klientem bez sync base — dřívější „KNOWN GAP“). |
 | R6 | Nový projekt / samostatný úkol s `properties.areaId` od legacy klienta převede platný odkaz do kanonické `belongs_to_area`, odstraní legacy property a ponechá jedinou Oblast. Neplatný, archivovaný nebo meziscope odkaz odmítne jako HTTP 400 (atomicky). |
+| R7 | Nový `properties.area` (legacy text) vytvoří/recykluje jednoznačnou Oblast s ID podle 2a planneru, přidá `belongs_to_area` a text odstraní. Nejednoznačné/archivované/smazané názvy jsou atomicky odmítnuty. |
+| R8 | Stávající systémovou Oblast `Nezařazeno` nelze přes PUT ani přímou normalizovanou zápisovou cestu smazat, archivovat nebo přejmenovat. Smazání rezervovaného deterministického ID je odmítnuto, i když Oblast ještě neexistuje. |
 
 Upravené entity dostanou `updatedAt = max(now, starý + 1)` a tam, kde se změnily vazby, `properties.relationsUpdatedAt` stejně (aby oprava vyhrála i bázi-prosté slučování starého klienta). Funkce je idempotentní (aplikace na vlastní výstup nic nemění) a nezávislá na pořadí vstupu.
 
-Nová explicitní změna `properties.areaId` na existující entitě se stejně převede na kanonickou relaci. Nedotčená stará `areaId` se nemění. `PUT /api/store` odmítá neplatný nový odkaz jako 400 bez částečného zápisu. Regresní testy `tests/area-write-invariants.test.mjs` a `tests/area-write-store.test.mjs` zahrnují přímé `PUT → 2a preflight` pro změnu Oblasti A→B i legacy property.
+Nová explicitní změna `properties.areaId` na existující entitě se stejně převede na kanonickou relaci. Nedotčená stará `areaId` se nemění. Nová explicitní volba také odstraní případné konfliktní staré `properties.area`. Obnovení relace se starým tombstonovaným ID není nová volba: pokud existuje aktuální kanonická Oblast, vyhrává aktuální vazba a obnovená je znovu tombstone. V případě řádného Undo AI přesunu projektu vzniká čerstvé ID obnovené relace; staré zůstává tombstonované. `PUT /api/store` odmítá neplatný nový odkaz jako 400 bez částečného zápisu. Regresní testy `tests/area-write-invariants.test.mjs` a `tests/area-write-store.test.mjs` zahrnují přímé `PUT → 2a preflight` pro změnu Oblasti A→B i legacy property.
 
 Vyvolává ji každá serverová zápisová cesta:
 
@@ -33,7 +35,7 @@ Vyvolává ji každá serverová zápisová cesta:
 - AI akce (`lib/ai-actions.ts`): vytvořený samostatný úkol dostane záložní Oblast, přesun do projektu odstraní vlastní Oblast; záznam historie obsahuje skutečně uložené relace, takže Undo funguje. Undo přesunu do projektu vrací úkol bez projektu → dostane záložní Oblast (původní vlastní Oblast se neobnovuje).
 - Další výskyt opakovaného úkolu (`lib/work-sessions.ts`): zachová projekt (Oblast dědí) nebo zkopíruje Oblast samostatného úkolu; samostatný výskyt bez Oblasti dostane záložní.
 
-Server-side helper pro přímé zápisy do SQLite: `lib/area-write-store.ts` (`readAreaRows` před mutací, `enforceAreaWritesInTransaction` po ní, ve stejné transakci).
+Server-side helper pro přímé zápisy do SQLite: `lib/area-write-store.ts` (`readAreaRows` před mutací, `enforceAreaWritesInTransaction` po ní, ve stejné transakci). **Tombstony ukládá i pro relace smazané samotnou SQL operací před normalizací**, nejen pro relace, které odstraní normalizační funkce; atomicky s daty.
 
 ## Klient (okamžitá konzistence; server zůstává autoritou)
 
@@ -47,17 +49,17 @@ Server-side helper pro přímé zápisy do SQLite: `lib/area-write-store.ts` (`r
 ## Záměrné odchylky a hranice
 
 - **ID relace záložní Oblasti.** Planner používá `relation:2a:<digest>`. Zrušená relace má natrvalo tombstone (`R2` ji například odstraní, když úkol vstoupí do projektu), proto by úkol, který projekt později opustí, jinak zůstal bez Oblasti. Zápis proto zkusí deterministicky `relation:2a:…`, a je-li zablokované/obsazené, `relation:2w:<digest>` s počitadlem. ID **Oblasti** zůstává výhradně plannerovo; tombstone na něm položku nechá bez Oblasti.
-- Štítek `properties.area` (legacy text) a `properties.projectId` (legacy property) se počítají jako „má Oblast“, resp. „je v projektu“, ve shodě s plannerem; záložní Oblast se v takovém případě nepřidá, aby aplikátor nenarazil na `conflicting-legacy-area-label`.
+- Nový legacy textový `properties.area` je okamžitě normalizován na kanonickou Oblast a vazbu, nebo atomicky odmítnut při nejednoznačnosti/tombstone. **Nedotčené staré štítky** zůstávají auditovanému 2a aplikátoru. `properties.projectId` u úkolu odkazující na existující projekt znamená, že úkol oblast dědí.
 - Mimo rozsah (nejsou „nové zápisy“): restore/import zálohy, schématické migrace, poznámky a kontextové záznamy, a staré porušení, kterých se zápis nedotkl.
-- Server po oprávněném smazání záložní Oblasti (tombstone) další položky nezařazuje; zůstávají bez Oblasti, dokud je nenormalizuje aplikátor / vlastník.
+- Systémovou záložní Oblast server již nedovolí smazat/archivovat/přejmenovat; blokuje také smazání rezervovaného deterministického ID. Pokud historický tombstone z období před opravou už existuje, zůstává fail-closed a vyžaduje auditovanou opravu. Nelze takový tombstone automaticky obejít.
 
 ## Doplnění po revizi testery
 
 - **Smazaný projekt.** Úkol je „v projektu“ jen přes `belongs_to_project` nebo `properties.projectId` na **živý** projekt daného snímku. Když zápis způsobí, že projekt úkolu zmizí, odstraní se visící `projectId` a úkol dostane záložní Oblast (R3). Visící `projectId` u úkolů, kterých se zápis netýká, zůstávají (legacy, řeší aplikátor). Klient `remove(projekt)` dělá totéž lokálně.
-- **R4** porovnává jen vazby nové v zápisu (nikoli legacy), takže posun hodin neshodí volbu uživatele.
+- **R4** považuje skutečně nové vazby za explicitní volbu bez ohledu na čas staré vazby, ale tombstonovanou **obnovenou** vazbu za novou volbu nepovažuje. Nedotčený historický stav nemění.
 - **Druh workspace** (a tím název záložní Oblasti) se u existujícího workspace bere z **uloženého** záznamu; zápis ho nemůže přepsat. Nový workspace použije vlastní záznam.
 - **Relace při přesunu mezi cykly**: hranice pokusů o ID záložní vazby je 1000.
-- **Záložní Oblast je systémová.** Klient (`isFallbackArea`) odmítne její přejmenování a smazání a v detailu to vysvětlí. Server to zatím **nevynucuje**: surový PUT, který ji smaže, projde (tombstone pak trvale blokuje 2a preflight `tombstoned-generated-area-id`). Důvod, proč server nic nepřidává: ochrana „ponechat smazanou, dokud na ni odkazují živé položky“ by měnila význam úmyslného smazání a patří do serverové autorizace Oblastí (2b/2c), ne do tohoto kroku.
+- **Záložní Oblast je systémová.** Klient (`isFallbackArea`) i server odmítají její přejmenování, archivaci nebo smazání; `PUT` blokuje navíc tombstone rezervovaného ID (`400 Invalid Area assignment`). Podrobnější per-user autorizace Oblastí nadále patří do 2b/2c a následných bezpečnostních bran.
 - **Tombstones na klientovi.** Klient serverové tombstones nedrží (`applySnapshot` je zahazuje), proto je `planFallbackArea` na klientu nedostává. Je to bezpečné: server entitu s tombstonovaným ID zahodí a nahlásí `fallbackUnavailable`.
 - **Surový PUT nesmí poslat relaci na smazanou entitu** (400 „Snapshot contains a relation to a missing entity“). Aplikace to řeší v `forServer`; skripty/testy musí relace smazaných záznamů odstranit samy (nové úkoly a projekty mají vazbu na Oblast).
 - **Souběh** „nastavit Oblast“ × „přesunout do projektu“ na dvou zařízeních vede k projektu (úkol dědí); nahrazená volba Oblasti zůstane jako značka sync-konfliktu.
