@@ -12,7 +12,7 @@ import { beginAdoption, isAdopting, setAfterRestoreFlag } from "../../../lib/ado
 import { clearNotesDrafts } from "../../../lib/notes-drafts";
 import { clearProjectContextDrafts } from "../../../lib/project-context-drafts";
 import { installRestoreFence } from "../../../lib/restore-fence-client";
-import { beginOfflineRecoveryHold, offlineRecoveryIsHeld, offlineRecoveryHoldKey, readOfflineRecoveryHold } from "../../../lib/d2b-recovery-hold";
+import { beginOfflineRecoveryHoldSafely, offlineRecoveryIsHeld, offlineRecoveryHoldKey, offlineRecoveryIntentKey, readOfflineRecoveryHold, recoveryExportGeneration } from "../../../lib/d2b-recovery-hold";
 import { prepareOfflineRecovery } from "../../../lib/d2b-offline-reconciliation";
 import { encodeOfflineRecoveryFile, offlineRecoveryFile } from "../../../lib/d2b-offline-recovery-file";
 import { readRawRecoveryDrafts, readRawRecoveryMarkers } from "../../../lib/d2b-recovery-local";
@@ -37,6 +37,9 @@ export function useSync() {
       "connecting" | "synced" | "syncing" | "offline"
     >("connecting");
   const serverRevision = useRef(0);
+  // An in-memory serverRevision of 0 after reload is not evidence of the
+  // original base revision. Only record a value after this tab verified it.
+  const recoveryBaseRevision = useRef<number | null>(null);
   // The restore generation of the server data this device last held (lib/server-store.ts), kept across reloads. Sent with
   // every save; a save from before a restore is refused by the server, and then this device replaces its copy.
   const generationKey = "ai-executive-restore-generation";
@@ -216,6 +219,7 @@ export function useSync() {
       }
     });
     serverRevision.current = snapshot.revision;
+    recoveryBaseRevision.current = snapshot.revision;
     rememberGeneration(snapshot.restoreGeneration);
     await load();
     postToTabs({ type: "changed", from: tabId.current });
@@ -242,7 +246,7 @@ export function useSync() {
     if (offlineRecoveryIsHeld() || restoredSinceKnown(source.restoreGeneration)) {
       setRecoveryHeld(true);
       try {
-        beginOfflineRecoveryHold(restoreGeneration.current, source.restoreGeneration);
+        await beginOfflineRecoveryHoldSafely(restoreGeneration.current, source.restoreGeneration);
       } catch {
         // A failed/corrupt localStorage hold is still a hard stop in this tab.
         setRecoveryError(true);
@@ -289,6 +293,7 @@ export function useSync() {
       attempt(() => clearProjectContextDrafts(localStorage));
       attempt(() => { localStorage.removeItem(pendingKey); localStorage.setItem("ai-executive-server-synced", "1"); });
       serverRevision.current = source.revision;
+      recoveryBaseRevision.current = source.revision;
       rememberGeneration(source.restoreGeneration);
     } finally {
       if (offlineRecoveryIsHeld()) {
@@ -337,7 +342,10 @@ export function useSync() {
   }, []);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === offlineRecoveryHoldKey && event.newValue !== null) setRecoveryHeld(true);
+      if ((event.key === offlineRecoveryHoldKey || event.key === offlineRecoveryIntentKey) && event.newValue !== null) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      }
       if (event.key === generationKey && event.newValue !== null) reloadForRestore(Number(event.newValue), true);
     };
     window.addEventListener("storage", onStorage);
@@ -473,7 +481,10 @@ export function useSync() {
         // known revision may advance only when the server holds exactly what was sent. After a
         // merge it also holds records this device does not have; claiming its revision would
         // make the next save replace them. Keeping the old revision makes that save merge again.
-        if (!mergedWithServer) serverRevision.current = saved.revision;
+        if (!mergedWithServer) {
+          serverRevision.current = saved.revision;
+          recoveryBaseRevision.current = saved.revision;
+        }
         // What this device sent is now part of the server copy (merged or not), so it is the
         // common version of what the device had then; later local edits are changes against it.
         if (!signedOut.current) {
@@ -492,7 +503,10 @@ export function useSync() {
       localStorage.setItem("ai-executive-server-synced", "1");
       markSignedIn();
       clearSentMarkers(sentMarkers);
-      setSyncStatus("synced");
+      if (offlineRecoveryIsHeld()) {
+        setRecoveryHeld(true);
+        setSyncStatus("offline");
+      } else setSyncStatus("synced");
     }));
     syncQueue.current = operation.catch(() => {
       setSyncStatus("offline");
@@ -576,8 +590,9 @@ export function useSync() {
       const response = await fetch("/api/store", { cache: "no-store", signal: requestTimeout() });
       if (!response.ok) throw new Error("OFFLINE_RECOVERY_SERVER_UNAVAILABLE");
       const server = (await response.json()) as ServerSnapshot;
-      if (server.restoreGeneration !== hold.observedGeneration)
-        throw new Error("OFFLINE_RECOVERY_GENERATION_CHANGED");
+      // Another backup restore may have advanced the server while our own old data
+      // was frozen. Export still works, but must cite the newest observed generation.
+      const exportGeneration = recoveryExportGeneration(hold, server.restoreGeneration);
       // IndexedDB read transaction queues behind all earlier conflicting writes,
       // including writes from other tabs. The persistent middleware blocks later mutations.
       const [localEntities, localRelations, base] = await readLocalWithBase();
@@ -599,8 +614,8 @@ export function useSync() {
         projectContextDrafts: drafts.projectContextDrafts,
         pendingSync: markers.pendingSync,
         oldRestoreGeneration: hold.knownGeneration ?? 0,
-        newRestoreGeneration: hold.observedGeneration,
-        baseRevision: serverRevision.current,
+        newRestoreGeneration: exportGeneration,
+        baseRevision: recoveryBaseRevision.current,
       }, Date.now());
       const bytes = encodeOfflineRecoveryFile(bundle);
       if (!offlineRecoveryIsHeld()) throw new Error("OFFLINE_RECOVERY_HOLD_LOST");
