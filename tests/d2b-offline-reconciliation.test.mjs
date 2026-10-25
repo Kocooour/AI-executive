@@ -246,3 +246,14 @@ test("D2b: divergent remote content remains manual review even when Area does no
   assert.ok(report.candidates.some(x => x.id === "task" && x.reason === "remote-diverged"));
   assert.ok(report.candidates.some(x => x.id === "new" && x.reason === "remote-missing"));
 });
+
+test("D2b: unknown base revision is represented as null, never invented as zero", () => {
+  const value = prepare({ baseRevision: null, newRestoreGeneration: 5 });
+  assert.equal(value.baseRevision, null);
+  const report = assessOfflineRecovery(value, { restoreGeneration: 6, entities: [], relations: [] });
+  assert.equal(report.automaticReplayAllowed, false);
+  assert.equal(report.generationsDiffer, true);
+  assert.throws(() => prepare({ baseRevision: undefined }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ baseRevision: -1 }), OfflineRecoveryInvalid);
+  assert.throws(() => prepare({ baseRevision: "0" }), OfflineRecoveryInvalid);
+});
