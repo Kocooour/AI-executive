@@ -157,7 +157,7 @@ test("D2b: multiple server restores still allow a recovery export without changi
   assert.throws(() => recoveryExportGeneration(first, Number.NaN), /OFFLINE_RECOVERY_GENERATION_INVALID/);
 });
 
-test("D2b: a durable pending intent survives a tab crash and blocks writes until final hold", async () => {
+test("D2b: recovery hold waits for an existing wipe before becoming browser-wide", async () => {
   const previousStorage = globalThis.localStorage;
   const previousNavigator = globalThis.navigator;
   const s = storage();
@@ -174,12 +174,10 @@ test("D2b: a durable pending intent survives a tab crash and blocks writes until
     Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
     const promise = beginOfflineRecoveryHoldSafely(2, 3);
     assert.equal(entered, true, "hold waits for the shared lock");
-    assert.equal(offlineRecoveryIsHeld(s), true, "intent blocks writes before the lock is granted");
+    assert.equal(offlineRecoveryIsHeld(s), true, "the restoring tab stops its own writes immediately");
     assert.equal(s.getItem(offlineRecoveryHoldKey), null);
-    assert.deepEqual(readOfflineRecoveryHold(s), {
-      version: 1, knownGeneration: 2, observedGeneration: 3,
-      createdAt: parseOfflineRecoveryHold(s.getItem(offlineRecoveryIntentKey)).createdAt,
-    });
+    assert.equal(s.getItem(offlineRecoveryIntentKey), null);
+    assert.equal(readOfflineRecoveryHold(s), null, "a sibling's authorized wipe cannot be interrupted mid-deletion");
     unlock();
     const hold = await promise;
     assert.equal(readOfflineRecoveryHold(s).observedGeneration, 3);
@@ -218,5 +216,37 @@ test("D2b: the recovery-data lock runs critical sections serially", async () => 
   } finally {
     release();
     Object.defineProperty(globalThis, "navigator", { value: previousNavigator, configurable: true });
+  }
+});
+
+test("D2b: existing legacy recovery intents remain sticky after a crash", () => {
+  const held = { version: 1, knownGeneration: 2, observedGeneration: 3, createdAt: 100 };
+  const storageWithIntent = storage([[offlineRecoveryIntentKey, JSON.stringify(held)]]);
+  assert.equal(offlineRecoveryIsHeld(storageWithIntent), true);
+  assert.deepEqual(readOfflineRecoveryHold(storageWithIntent), held);
+  assert.deepEqual(beginOfflineRecoveryHold(2, 3, storageWithIntent), held);
+  assert.deepEqual(readOfflineRecoveryHold(storageWithIntent), held);
+});
+
+test("D2b: queued local wipe observes the hold and must not erase rescue data", async () => {
+  const priorStorage = globalThis.localStorage;
+  const priorNavigator = globalThis.navigator;
+  const s = storage([["ai-executive-pending-sync", "1"], ["ai-executive-notes-drafts:tab:id", "raw-owner-draft"]]);
+  let queue = Promise.resolve();
+  const locks = { request: (_name, callback) => {
+    const run = queue.then(callback);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  } };
+  try {
+    Object.defineProperty(globalThis, "localStorage", { value: s, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: { locks }, configurable: true });
+    await beginOfflineRecoveryHoldSafely(2, 3);
+    const before = s.snapshot();
+    await assert.rejects(clearLocalData(), /OFFLINE_RECOVERY_HELD/);
+    assert.deepEqual(s.snapshot(), before);
+  } finally {
+    Object.defineProperty(globalThis, "localStorage", { value: priorStorage, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: priorNavigator, configurable: true });
   }
 });
