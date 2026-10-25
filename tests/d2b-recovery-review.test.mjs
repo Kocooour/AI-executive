@@ -123,3 +123,47 @@ test("D2b breakdown accounts for every classified entity, including already-appl
   assert.equal(Object.values(result.reasons).reduce((sum, n) => sum + n, 0), result.totalCandidates);
   assert.equal(result.autoResumeAllowed, false);
 });
+
+test("D2b aggregate summary counts cross-kind and cross-workspace new IDs as collisions", () => {
+  const relation = (id, target, workspaceId = "personal") => ({
+    id, sourceEntityId: "source", targetEntityId: target,
+    relationType: "belongs_to_area", workspaceId, createdAt: 1,
+  });
+  const bytes = rescue({
+    base: { entities: [], relations: [] },
+    local: {
+      entities: [
+        entity("entity-reuses-relation", "Private local new"),
+        entity("entity-other-workspace", "Private local new"),
+      ],
+      relations: [
+        relation("relation-reuses-entity", "local"),
+        relation("relation-other-workspace", "local"),
+      ],
+    },
+    noteDrafts: [], projectContextDrafts: [], pendingDeletedIds: [], pendingRevivedIds: [],
+  });
+  const server = {
+    restoreGeneration: 2,
+    entities: [
+      entity("relation-reuses-entity", "Existing server entity"),
+      entity("entity-other-workspace", "Server task", "shared"),
+    ],
+    relations: [
+      relation("entity-reuses-relation", "server"),
+      relation("relation-other-workspace", "server", "shared"),
+    ],
+  };
+  const result = inspectOfflineRecoveryBytes(bytes, server, hold());
+  assert.equal(result.totalCandidates, 4);
+  assert.equal(result.counts.entities, 2);
+  assert.equal(result.counts.relations, 2);
+  assert.equal(result.reasons["id-collision"], 4);
+  assert.equal(result.reasons["remote-missing"], 0);
+  assert.equal(result.reasons["workspace-changed"], 0);
+  assert.equal(Object.values(result.reasons).reduce((sum, count) => sum + count, 0), 4);
+  assert.equal(result.autoResumeAllowed, false);
+  const summary = JSON.stringify(result);
+  assert.equal(summary.includes("entity-reuses-relation"), false);
+  assert.equal(summary.includes("Existing server entity"), false);
+});
