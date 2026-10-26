@@ -51,7 +51,7 @@ function plainData(value: unknown, fields: readonly string[]): Record<string, un
   if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || Array.isArray(value)) blocked();
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) blocked();
-  const keys = Reflect.ownKeys(value);
+  const keys = Reflect.ownKeys(value as object);
   if (keys.length !== fields.length ||
       keys.some(key => typeof key !== "string" || !fields.includes(key))) blocked();
   const result: Record<string, unknown> = Object.create(null);
@@ -74,9 +74,10 @@ function denseArray(value: unknown, max: number): unknown[] {
   if (!Array.isArray(value) || nodeTypes.isProxy(value) ||
       Object.getPrototypeOf(value) !== Array.prototype || value.length > max ||
       Reflect.ownKeys(value).length !== value.length + 1) blocked();
+  const array = value as unknown[];
   const entries: unknown[] = [];
-  for (let i = 0; i < value.length; i++) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+  for (let i = 0; i < array.length; i++) {
+    const descriptor = Object.getOwnPropertyDescriptor(array, String(i));
     if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) blocked();
     entries.push(descriptor.value);
   }
@@ -90,7 +91,7 @@ function contextSignature(value: unknown): string {
     const text = fields[field];
     if (typeof text !== "string" || !text.trim() ||
         text.length > MAX_CONTEXT_FIELD_CHARS) blocked();
-    parts.push(text);
+    parts.push(text as string);
   }
   // Collision-free framing; no custom delimiter can be forged by a field.
   return JSON.stringify(parts);
