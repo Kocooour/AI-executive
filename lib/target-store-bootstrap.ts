@@ -72,6 +72,9 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
   if (typeof stagingDirectory !== "string" || !path.isAbsolute(stagingDirectory)) {
     throw new Error("R1 staging directory must be absolute");
   }
+  // A missing component before `..` still makes the requested parent unusable;
+  // do not silently create a different normalized destination instead.
+  if (!existsSync(path.dirname(stagingDirectory))) throw new Error("R1 staging parent does not exist");
   const destination = canonicalProspectivePath(stagingDirectory);
   if (existsSync(destination)) throw new Error("R1 staging directory already exists");
   // Require its actual immediate parent to exist; never invent a directory tree.
