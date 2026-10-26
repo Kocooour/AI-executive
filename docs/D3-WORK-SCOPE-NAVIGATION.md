@@ -11,20 +11,20 @@
 - Styly `.workScopeSwitcher` / `.workScopeOption` jsou podle konvence repozitáře v `app/lumi-navigation.css` (žádné CSS moduly); proměnná `--workspace-soft` je definovaná na `.appShell`, kam bude přepínač vložen.
 - `tests/work-scope-navigation.test.mjs`: kontrola pořadí, výchozího rozsahu, odmítnutí legacy ID a popisků v obou jazycích v `copy.ts`.
 - `tests/work-scope-switcher.test.mjs`: reálné server-side React vykreslení ovládacích prvků, jejich `aria-pressed` stavu, změn po kliknutí a no-op aktivní volby, `enabled=false`, nativních klávesnicových button sémantik a responsive/focus pravidel v `lumi-navigation.css`.
-- **Regresní aktivační pojistka:** unit test prohledává soubory `app/` a `lib/` a odmítne import (i s příponou, side-effect, re-export a dynamický) či užití nového přepínače mimo jeho vlastní dva soubory. Až budou splněny brány 2a–2c a serverový read-scope authorization gate, tento test se musí vědomě nahradit integračními testy. Nejde o serverovou bezpečnostní hranici.
+- **Regresní aktivační pojistka:** unit test prohledává soubory `app/` a `lib/` a odmítne import (i s příponou, side-effect, re-export a dynamický) či užití nového přepínače mimo jeho vlastní dva soubory. Až budou splněny brány aktuální clean-start roadmapy a serverový read-scope authorization gate, tento test se musí vědomě nahradit integračními testy. Nejde o serverovou bezpečnostní hranici.
 
-## Brány před aktivací
+## Brány před aktivací — aktuální clean-start varianta
 
-1. Sloučit **2a, část 4** (#109): zápisy klienta i serveru zachovávají normalizaci Oblastí. Bez ní by se normalizovaný stav po spuštění 2a postupně rozpadl.
-2. Bezpečně dokončit a ověřit **2a normalizaci** na produkčních datech (`docs/D2A-AREA-APPLY.md`), ne pouze existenci CLI; předem mít ověřenou zálohu.
-3. Dokončit **2b rozdělení legacy sdílených Oblastí** do interních workspace 1:1 včetně integrity vztahů a rollbacku.
-4. Dokončit **2c atribut `assigneeUserId` a backfill** otevřených legacy sdílených úkolů jediného vlastníka. Porovnat Home/Today/Inbox před a po; nesmí zmizet žádný dosavadní úkol.
-5. Zavést autoritativní **server-side** filtrované čtení a aktéra; klientský `selectScopedWork` v `lib/work-read-scope.ts` je jen pomocný read-model, ne ACL. Revokované položky nesmějí uniknout přes cache, vyhledávání, attention, notifikace ani počty.
-6. Bezpečně oddělit `readScope` od `writeAreaId`. Z agregátu nevzniká právo zápisu; nové samostatné položky standardně do soukromého Nezařazeno.
-7. Teprve potom napojit komponentu do desktopové a mobilní navigace, zachovat Home jako výchozí obrazovku, upravit Home/Inbox/Today/Upcoming/Projects/Search a při otevření detailu sdíleného projektu číst všechna oprávněná data.
-8. Otestovat na reálném UI **320px iPhone, dynamické písmo/zoom a VoiceOver**, klávesnici, offline a URL navigaci, prázdné stavy, zachování ID a revizí, rušení oprávnění a více uživatelů. Současný PR ověřuje jen native button semantiku a responsive CSS kontrakt bez browseru. **Plná browser E2E** až těsně před nasazením jako release gate dle AGENTS.md.
+Aktuální [roadmapa](ROADMAP.md) a [rozhodnutí 2026-10-26](decisions/2026-10-26-cisty-start-d3.md) **nahrazují původní povinnou sekvenci legacy migrací 2a–2c** při zvolení čistého úložiště. Funkční kontrakt komponenty se nemění.
 
-Tyto brány jsou závazně popsané v `docs/ARCHITECTURE.md`, `docs/PRODUCT.md` a `docs/UX-UI.md`. Přidání přepínače bez nich by především mohlo zneviditelnit starší sdílené úkoly vlastníka a vyvolat nepravdivý pocit izolace dat.
+1. Cílové Oblasti, dědění, soukromé Nezařazeno a nový assignee model musí být vytvořeny a prověřeny v izolovaném novém store. Bez přesouvání starých dat není podmínkou spuštění 2a aplikátoru, 2b legacy partition ani 2c owner backfillu.
+2. Zavést autoritativní **server-side** identity a filtrované čtení i pro Home/Inbox/Today/Upcoming/Projects/Search/counts/attention. Žádný klientský `enabled` ani `readScope` není serverová autorizace.
+3. Zápisy musí směřovat do explicitního `writeAreaId` a respektovat revize/role; staré `GET/PUT /api/store` snapshots a offline fronty nesmějí přepsat ani přenést obsah nového store. Revokace práv musí okamžitě blokovat serverový výdej a při spojení odstranit klientské cache.
+4. Teprve potom komponentu zapojit do desktopové i mobilní navigace. Home zůstane první obrazovka, Můj plán výchozí datový rozsah, Sdílené obsahuje i nepřidělené oprávněné úkoly. Reálné víceuživatelské pozvánky zatím zůstanou vypnuté do dokončení samostatných bezpečnostních podmínek.
+5. Cílené scénáře: **320px iPhone, VoiceOver, zoom, klávesnice, URL, offline, více identit, konflikty a rušení oprávnění**. Plné Browser E2E pouze při release gate před produkčním deployem, nikoli při každém PR.
+6. Žádné přepsání/smazání stávajícího provozního store bez **samostatného výslovného schválení**, inventury a ověřené archivní zálohy s plánem obnovy. Pouhá úprava roadmapy neschvaluje odstranění dat.
+
+Při dodatečně schváleném **převodu starých dat** zůstává původní konzervativní postup 2a–2c relevantní; pro čistý start není podmínkou D3. Tato dokumentační změna **nespouští migraci, nezapíná komponentu ani sdílení**.
 
 ## Prostředí
 
