@@ -46,6 +46,7 @@ const blocked = (): never => { throw new LegacyAssigneeReadModelMatrixBlocked();
 const MAX_CONTEXTS = 16;
 const MAX_CONTEXT_FIELD_CHARS = 512;
 const MAX_LEGACY_WORKSPACES = 20_000;
+const MAX_LEGACY_ID_CHARS = 256;
 // All view contexts in one matrix must compare the same claimed store transition.
 const STABLE_REPORT_FIELDS = [
   "sourceRevision", "resultRevision", "restoreGeneration", "checkedEntityCount",
@@ -127,7 +128,7 @@ export function checkLegacyAssigneeReadModelMatrixPreservation(
     const cases = denseArray(root.cases, MAX_CONTEXTS);
     const legacyIds = denseArray(root.legacySharedWorkspaceIds, MAX_LEGACY_WORKSPACES);
     if (!expected.length || cases.length !== expected.length ||
-        legacyIds.some(id => typeof id !== "string" || !id.trim())) blocked();
+        legacyIds.some(id => typeof id !== "string" || id.length > MAX_LEGACY_ID_CHARS || !id.trim())) blocked();
 
     const expectedKeys = new Set<string>();
     for (const context of expected) {
