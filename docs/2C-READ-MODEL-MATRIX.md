@@ -28,7 +28,7 @@ The helper first checks that the expected contexts are unique, that every expect
 
 ## Hard boundaries
 
-- Requires **1–16** distinct contexts, **1–16** equally many cases, and at most 20,000 legacy workspace IDs. All arrays must be dense, plain arrays with no extra own keys or accessors.
+- Requires **1–16** distinct contexts, **1–16** equally many cases, and at most 20,000 legacy workspace IDs of at most 256 UTF-16 code units each. All arrays must be dense, plain arrays with no extra own keys or accessors.
 - Every context field must be nonblank and at most **512 UTF-16 code units**. Context objects and case envelopes have exactly the required own enumerable data fields, with no symbols or extra properties.
 - Rejects JS Proxy objects at the matrix, case, snapshot, read-model envelope and context layers **before executing proxy traps**; rejects inherited or accessor fields at those layers. Nested views are validated by part 6, including size, cycle, exotic and proxy checks.
 - On any failure, throws the single `LegacyAssigneeReadModelMatrixBlocked` error without leaking payloads. Success only returns `checkedContextCount`, `comparedReadModelCount` (3 per context) and the existing literal-false verification and authorization flags.
