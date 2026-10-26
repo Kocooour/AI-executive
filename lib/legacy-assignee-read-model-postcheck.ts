@@ -60,7 +60,7 @@ const MAX_KEY_CHARS = 256;
 
 function ownValues(value: unknown, required: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) blocked();
-  const prototype = Object.getPrototypeOf(value);
+  const prototype = Object.getPrototypeOf(value as object);
   if (prototype !== Object.prototype && prototype !== null) blocked();
   const keys = Reflect.ownKeys(value);
   if (keys.length !== required.length ||
@@ -85,7 +85,7 @@ function readModels(value: unknown): {
     const fieldValue = rawContext[field];
     if (typeof fieldValue !== "string" || !fieldValue.trim() ||
         fieldValue.length > MAX_STRING_CHARS) blocked();
-    context[field] = fieldValue;
+    context[field] = fieldValue as string;
   }
   const views = Object.create(null) as Record<ViewName, unknown>;
   for (const view of VIEW_NAMES) {
