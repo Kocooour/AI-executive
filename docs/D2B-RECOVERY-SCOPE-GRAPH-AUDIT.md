@@ -13,6 +13,8 @@ It rejects:
 - unknown workspace, incorrect Area kind or cross-workspace/dangling relation endpoints;
 - multiple parents or Area links, conflicting legacy areaId/projectId references;
 - direct Area links on project members, inactive Area for active content, or an unassigned project/standalone task/note;
+- non-membership relations whose endpoints cannot both resolve to an Area (including workspace-level endpoints); these never silently disappear from diagnostic counts;
+- reuse of one canonical ID for a different entity type, or between an entity and a relation, across the two generations, even if its effective Area is unchanged;
 - invalid revisions/generations or a target generation that is not newer.
 
 The result contains **aggregate counts only** (sameScope, movedArea, movedWorkspace, absentOnOneSide, cross-Area links), no record IDs, titles, drafts, contents, tokens or raw scope maps. The result and summary are frozen; inputs remain unchanged.
@@ -37,6 +39,6 @@ The audit is **not connected to UI, sync or the D2b/6 preference API**. Never us
 
 ## Validation and isolation
 
-tests/d2b-recovery-scope-audit.test.mjs covers unchanged graphs, server-only parent Area moves with inherited task/note scope, workspace moves, missing records, ambiguous/dangling/cross-workspace relations, inconsistent legacy references, archived Areas, bounds and fake client ACL assertions.
+tests/d2b-recovery-scope-audit.test.mjs covers unchanged graphs, server-only parent Area moves with inherited task/note scope, workspace moves, missing records, ambiguous/dangling/cross-workspace relations, workspace-to-work non-membership edges, cross-generation project/task/note type changes and entity/relation ID recycling, inconsistent legacy references, archived Areas, bounds and fake client ACL assertions.
 
 Branch: codex/d2b-scope-graph-audit-20261026 from main 0e7a46126fa443c39b15662381beb242a5130865. Pure diagnostic change: no local server instance, database, caches, storage or credentials; no integration branch. If later needed, synthetic preview on port 3001 with prefix lumi_codex_d2b_scope. Standard PR Checks on exact HEAD must pass (pnpm typecheck, pnpm test, pnpm build, deployment script syntax). No full browser E2E during PR review.
