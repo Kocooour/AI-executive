@@ -9,9 +9,11 @@
 - Both snapshots are internally acceptable to the original preflight, with the same explicit current single-owner legacy shared workspace selection.
 - Every entity ID and entity count is identical; no record may be added, removed, renamed, reassigned to a workspace, converted to another type or otherwise modified.
 - Each **open and previously unassigned** candidate task has `assigneeUserId: "owner"`. Its `updatedAt` may increase or remain the same but may **not decrease**. All other fields, including deadline, priority, Inbox, `today/when`, manual order, status and timestamps, must remain identical.
-- An existing assignment, a completed task, any personal/unrelated task, the workspace membership list and all other entities are byte-content-equivalent under canonical field comparison (object key order is not material). Any difference blocks the entire check.
+- An existing assignment, a completed task, any personal/unrelated task, the workspace membership list and all other entities are structurally identical under strict JSON field comparison (object key order is not material). Any difference blocks the entire check.
 - The after snapshot's `restoreGeneration` is unchanged. Revision increases by **exactly one** if any candidate changes; a no-op requires no revision change. Counter overflow is blocked.
 - No candidates remain to be assigned in the selected legacy scope.
+
+Both entity collections must contain **plain JSON data only** before preflight or comparison. Reject `Date` or other non-plain objects, non-finite numbers (`NaN`, infinity), `undefined`, functions, symbols, BigInt, array holes or extra array fields, non-enumerable/accessor properties and cycles. This is intentional fail-closed behavior: generic field-merge equality can treat different non-JSON values as identical. Object field order remains insignificant, while arrays preserve order and length.
 
 Successful output includes only revisions and aggregate counts: `phase: "legacy-assignee-postcheck-only"`, `verifiedPersistedState: false`, `canApply: false`, `canActivateMyPlan: false`, `canEnableSharing: false`. It includes neither entity content nor candidate IDs and is frozen. Input snapshots are not mutated.
 
@@ -25,6 +27,6 @@ A real executor still requires completed and independently reviewed 2a and 2b ga
 
 ## Validation and isolation
 
-`tests/legacy-assignee-postcheck.test.mjs` exercises the allowed assignment shape, null/absent assignees, deterministic order independence, no-op, full-data immutability, private redaction, conflicting assignments, membership changes, every relevant placement field, task identity/metadata drift, missing/duplicate/retyped records, revision/generation drift and overflow, multi-member selections.
+`tests/legacy-assignee-postcheck.test.mjs` exercises the allowed assignment shape, null/absent assignees, deterministic order independence, no-op, full-data immutability, private redaction, conflicting assignments, membership changes, strict JSON payload validation (Date, NaN, sparse arrays, accessors, cycles), every relevant placement field, task identity/metadata drift, missing/duplicate/retyped records, revision/generation drift and overflow, multi-member selections.
 
 Branch `codex/2c-assignee-postcheck-20261026` from main `aaf99402853120e74bbf55f71e50d480710f6732`. GitHub-only editing; no local worktree, port, running app, DB, mutable storage or secrets used. If a local synthetic instance is needed later, isolate it on port 3001 and prefix `lumi_codex_2c_postcheck`. No parallel implementation branches need integration. Run `PR Checks` on the final head (deployment script syntax, `pnpm typecheck`, `pnpm test`, `pnpm build`). Full browser E2E stays the exact-main-SHA **predeployment** gate only.
