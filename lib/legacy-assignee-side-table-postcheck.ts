@@ -2,7 +2,6 @@
 // Never consume live SQLite, store raw records in results, write data or authorize
 // a migration, recovery hold release, My Plan activation or sharing.
 import { classifiedTables, storeTables } from "./backup-scope";
-import { isJsonData } from "./legacy-assignee-json";
 import {
   checkLegacyAssigneeStorePreservation,
   type LegacyAssigneeStoreSnapshot,
