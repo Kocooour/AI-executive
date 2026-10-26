@@ -46,6 +46,12 @@ const blocked = (): never => { throw new LegacyAssigneeReadModelMatrixBlocked();
 const MAX_CONTEXTS = 16;
 const MAX_CONTEXT_FIELD_CHARS = 512;
 const MAX_LEGACY_WORKSPACES = 20_000;
+// All view contexts in one matrix must compare the same claimed store transition.
+const STABLE_REPORT_FIELDS = [
+  "sourceRevision", "resultRevision", "restoreGeneration", "checkedEntityCount",
+  "assignedTaskCount", "checkedRelationCount", "checkedTombstoneCount",
+  "comparedSideTableCount", "comparedSideTableRowCount", "comparedMetadataKeyCount",
+] as const;
 
 function plainData(value: unknown, fields: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || Array.isArray(value)) blocked();
@@ -144,11 +150,19 @@ export function checkLegacyAssigneeReadModelMatrixPreservation(
     }
     if (seen.size !== expectedKeys.size) blocked();
 
+    let baseline: ReturnType<typeof checkLegacyAssigneeReadModelPreservation> | undefined;
     for (const pair of pairs) {
-      checkLegacyAssigneeReadModelPreservation({
+      const report = checkLegacyAssigneeReadModelPreservation({
         before: pair.before, after: pair.after,
         legacySharedWorkspaceIds: legacyIds as string[],
       });
+      if (baseline) {
+        for (const field of STABLE_REPORT_FIELDS) {
+          if (baseline[field] !== report[field]) blocked();
+        }
+      } else {
+        baseline = report;
+      }
     }
     return Object.freeze({
       phase: "legacy-assignee-read-model-matrix-postcheck-only" as const,
