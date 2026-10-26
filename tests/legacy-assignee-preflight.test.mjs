@@ -127,6 +127,24 @@ test("2c/1 rejects guessed, duplicate, private and unknown legacy workspace sets
   }
 });
 
+test("2c/1 accepts valid counters without claiming snapshot freshness", () => {
+  const s = source();
+  s.revision = 0;
+  s.restoreGeneration = 0;
+  const original = structuredClone(s);
+  // These values are structurally valid but may be stale; no trusted current
+  // revision/generation is available to this diagnostic-only planner.
+  const p = plan(s);
+  assert.deepEqual(p.candidateTaskIds, ["a-unassigned", "z-unassigned"]);
+  assert.equal(p.sourceRevision, 0);
+  assert.equal(p.sourceRestoreGeneration, 0);
+  assert.equal(p.membershipEvidence, "unverified");
+  assert.equal(p.legacyOriginEvidence, "unverified");
+  assert.equal(p.canApply, false);
+  assert.equal(p.canActivateMyPlan, false);
+  assert.deepEqual(s, original);
+});
+
 test("2c/1 rejects duplicate IDs, invalid workspace records, revisions and oversized snapshots", () => {
   const duplicate = source();
   duplicate.entities.push(structuredClone(duplicate.entities[3]));
