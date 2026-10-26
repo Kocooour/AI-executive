@@ -375,6 +375,75 @@ test("2c/7 blocks nested proxy traps in every delegated data layer", () => {
   }
 });
 
+test("2c/8 rejects different canonical records even when every aggregate count agrees", () => {
+  const input = fixture();
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].entities.find(row => row.id === "private-task").title =
+      "SECRET-different-private-task";
+  }
+  rejects(input);
+});
+
+test("2c/8 rejects different side-table row content with matching counts", () => {
+  const input = fixture();
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push({ account: "same", encrypted: "SECRET-original" });
+    }
+  }
+  assert.equal(check(input).checkedContextCount, 3);
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].sideTables.mail_accounts[0].encrypted = "SECRET-different";
+  }
+  rejects(input);
+});
+
+test("2c/8 rejects different unchanged metadata values across contexts", () => {
+  const input = fixture();
+  for (const side of ["before", "after"]) {
+    input.cases[1][side].metadata.find(row => row.key === "vapidKeys").value =
+      "SECRET-different-but-consistent-within-pair";
+  }
+  rejects(input);
+});
+
+test("2c/8 permits reordering of canonical rows, metadata and side-table multisets", () => {
+  const input = fixture();
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push(
+        { id: "x", payload: { b: [1, 2], a: "unchanged" } },
+        { id: "y", payload: { a: null, b: 3 } },
+      );
+    }
+  }
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.entities.reverse();
+    snapshot.metadata.reverse();
+    snapshot.sideTables.mail_accounts.reverse();
+    snapshot.sideTables.mail_accounts[0] = {
+      payload: { b: 3, a: null }, id: "y",
+    };
+    snapshot.sideTables.mail_accounts[1] = {
+      payload: { a: "unchanged", b: [1, 2] }, id: "x",
+    };
+  }
+  const result = check(input);
+  assert.equal(result.checkedContextCount, 3);
+  assert.equal(result.canApply, false);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET|digest|fingerprint|metadata/);
+});
+
+test("2c/8 fails closed on an over-depth cross-context fingerprint input", () => {
+  const input = fixture();
+  let nested = { flag: "safe" };
+  for (let i = 0; i < 100; i++) nested = { child: nested };
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].entities.find(row => row.id === "private-task").properties.deep = nested;
+  }
+  rejects(input);
+});
+
 test("2c/7 rejects malformed context text and unexpected shell keys", () => {
   const blank = fixture();
   blank.expectedContexts[0].actorUserId = "   ";
