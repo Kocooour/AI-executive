@@ -6,7 +6,7 @@
  * R2 must provide authenticated, per-item server commands before this store is used.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
@@ -36,13 +36,32 @@ function containsPath(ancestor: string, candidate: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative));
 }
 
-/** Resolve the nearest existing parent before comparing symlink-aware paths. */
+/**
+ * Walk components in filesystem order. path.resolve (and realpathSync on a whole
+ * path) normalize `link/..` before following `link`, which can change its meaning.
+ * Preserve a non-existing suffix for the legacy directory without creating it.
+ */
 function canonicalProspectivePath(input: string): string {
-  const absolute = path.resolve(input);
-  if (existsSync(absolute)) return realpathSync(absolute);
-  const parent = path.dirname(absolute);
-  if (parent === absolute) throw new Error("Cannot resolve a safe staging path");
-  return path.join(canonicalProspectivePath(parent), path.basename(absolute));
+  if (!path.isAbsolute(input)) throw new Error("Cannot resolve a safe staging path");
+  let current = path.parse(input).root;
+  for (const part of input.slice(current.length).split(path.sep)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      current = path.dirname(current);
+      continue;
+    }
+    const next = path.join(current, part);
+    try {
+      lstatSync(next);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      current = next;
+      continue;
+    }
+    // A dangling symlink must fail closed, not appear absent.
+    current = realpathSync(next);
+  }
+  return current;
 }
 
 /**
@@ -53,17 +72,14 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
   if (typeof stagingDirectory !== "string" || !path.isAbsolute(stagingDirectory)) {
     throw new Error("R1 staging directory must be absolute");
   }
-  // A lexical alias or existing symlink must never be accepted as an empty new directory.
-  if (existsSync(stagingDirectory)) throw new Error("R1 staging directory already exists");
-  const directory = path.resolve(stagingDirectory);
-  // Require its immediate parent to exist, so mkdir cannot invent a directory tree.
-  const parent = realpathSync(path.dirname(directory));
-  const destination = path.join(parent, path.basename(directory));
+  const destination = canonicalProspectivePath(stagingDirectory);
+  if (existsSync(destination)) throw new Error("R1 staging directory already exists");
+  // Require its actual immediate parent to exist; never invent a directory tree.
+  if (!existsSync(path.dirname(destination))) throw new Error("R1 staging parent does not exist");
   const production = canonicalProspectivePath(resolveDataDirectory());
   if (containsPath(production, destination) || containsPath(destination, production)) {
     throw new Error("R1 staging directory overlaps the current legacy data directory");
   }
-  if (existsSync(destination)) throw new Error("R1 staging directory already exists");
   return destination;
 }
 
@@ -94,6 +110,9 @@ CREATE TABLE areas (
     REFERENCES workspaces(id, kind, owner_user_id),
   CHECK(kind = 'private' OR system_key IS NULL)
 );
+-- At most one Area per shared workspace. An orphan workspace is a staging-only
+-- intermediate state; R2 must validate a complete 1:1 mapping and active admin
+-- membership before activation or any actor-accessible write.
 CREATE UNIQUE INDEX one_area_per_shared_workspace ON areas(workspace_id) WHERE kind = 'shared';
 CREATE UNIQUE INDEX one_private_unassigned_per_owner ON areas(owner_user_id)
   WHERE system_key = 'unassigned';
@@ -124,6 +143,36 @@ CREATE VIEW task_effective_areas AS
          t.assignee_user_id AS assignee_user_id
     FROM tasks t LEFT JOIN projects p ON p.id = t.project_id;
 
+-- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
+-- recursive_triggers is OFF (SQLite's default). Reject boundary replacements in
+-- BEFORE INSERT, including conflicts on alternate unique indexes.
+CREATE TRIGGER workspace_conflict_guard BEFORE INSERT ON workspaces
+WHEN EXISTS(SELECT 1 FROM workspaces WHERE id = NEW.id)
+  OR (NEW.kind = 'personal' AND EXISTS(
+    SELECT 1 FROM workspaces WHERE owner_user_id = NEW.owner_user_id AND kind = 'personal'))
+BEGIN SELECT RAISE(ABORT, 'workspace replacement is not allowed in R1'); END;
+CREATE TRIGGER area_conflict_guard BEFORE INSERT ON areas
+WHEN EXISTS(SELECT 1 FROM areas WHERE id = NEW.id)
+  OR (NEW.kind = 'shared' AND EXISTS(
+    SELECT 1 FROM areas WHERE workspace_id = NEW.workspace_id AND kind = 'shared'))
+  OR (NEW.system_key = 'unassigned' AND EXISTS(
+    SELECT 1 FROM areas WHERE owner_user_id = NEW.owner_user_id AND system_key = 'unassigned'))
+BEGIN SELECT RAISE(ABORT, 'Area replacement is not allowed in R1'); END;
+CREATE TRIGGER member_conflict_guard BEFORE INSERT ON area_members
+WHEN EXISTS(
+  SELECT 1 FROM area_members m
+  WHERE m.area_id = NEW.area_id AND m.user_id = NEW.user_id
+    AND m.role IN ('editor','admin') AND NEW.role = 'viewer'
+    AND EXISTS(SELECT 1 FROM task_effective_areas t
+      WHERE t.effective_area_id = m.area_id AND t.assignee_user_id = m.user_id)
+)
+BEGIN SELECT RAISE(ABORT, 'unassign tasks before downgrading membership'); END;
+CREATE TRIGGER project_conflict_guard BEFORE INSERT ON projects
+WHEN EXISTS(
+  SELECT 1 FROM projects p WHERE p.id = NEW.id AND p.area_id <> NEW.area_id
+)
+BEGIN SELECT RAISE(ABORT, 'project move requires R2 confirmation'); END;
+
 CREATE TRIGGER shared_members_only_insert BEFORE INSERT ON area_members
 WHEN NOT EXISTS(SELECT 1 FROM areas WHERE id = NEW.area_id AND kind = 'shared')
 BEGIN SELECT RAISE(ABORT, 'membership requires a shared area'); END;
@@ -146,15 +195,8 @@ WHEN NEW.assignee_user_id IS NOT NULL AND NOT EXISTS(
 )
 BEGIN SELECT RAISE(ABORT, 'assignee must be a shared-area editor or admin'); END;
 CREATE TRIGGER project_area_assignment_guard BEFORE UPDATE OF area_id ON projects
-WHEN EXISTS(
-  SELECT 1 FROM tasks t WHERE t.project_id = NEW.id AND t.assignee_user_id IS NOT NULL
-    AND NOT EXISTS(
-      SELECT 1 FROM areas a JOIN area_members m ON m.area_id = a.id
-      WHERE a.id = NEW.area_id AND a.kind = 'shared'
-        AND m.user_id = t.assignee_user_id AND m.role IN ('editor','admin')
-    )
-)
-BEGIN SELECT RAISE(ABORT, 'project move would invalidate an assignee'); END;
+WHEN NEW.area_id <> OLD.area_id
+BEGIN SELECT RAISE(ABORT, 'project move requires R2 confirmation'); END;
 CREATE TRIGGER member_revocation_guard BEFORE DELETE ON area_members
 WHEN EXISTS(
   SELECT 1 FROM task_effective_areas t
@@ -162,11 +204,8 @@ WHEN EXISTS(
 )
 BEGIN SELECT RAISE(ABORT, 'unassign tasks before removing membership'); END;
 CREATE TRIGGER member_identity_or_area_move_guard BEFORE UPDATE OF area_id, user_id ON area_members
-WHEN (NEW.area_id <> OLD.area_id OR NEW.user_id <> OLD.user_id) AND EXISTS(
-  SELECT 1 FROM task_effective_areas t
-  WHERE t.effective_area_id = OLD.area_id AND t.assignee_user_id = OLD.user_id
-)
-BEGIN SELECT RAISE(ABORT, 'unassign tasks before moving membership'); END;
+WHEN NEW.area_id <> OLD.area_id OR NEW.user_id <> OLD.user_id
+BEGIN SELECT RAISE(ABORT, 'membership identity is immutable in R1'); END;
 CREATE TRIGGER member_role_downgrade_guard BEFORE UPDATE OF role ON area_members
 WHEN NEW.role = 'viewer' AND OLD.role IN ('editor','admin') AND EXISTS(
   SELECT 1 FROM task_effective_areas t
@@ -175,8 +214,17 @@ WHEN NEW.role = 'viewer' AND OLD.role IN ('editor','admin') AND EXISTS(
 BEGIN SELECT RAISE(ABORT, 'unassign tasks before downgrading membership'); END;
 CREATE TRIGGER immutable_area_boundary BEFORE UPDATE OF kind, workspace_id, owner_user_id, system_key ON areas
 BEGIN SELECT RAISE(ABORT, 'Area security boundary is immutable in R1'); END;
+CREATE TRIGGER immutable_area_id BEFORE UPDATE OF id ON areas
+WHEN NEW.id <> OLD.id
+BEGIN SELECT RAISE(ABORT, 'Area ID is immutable in R1'); END;
 CREATE TRIGGER immutable_workspace_boundary BEFORE UPDATE OF kind, owner_user_id ON workspaces
 BEGIN SELECT RAISE(ABORT, 'workspace security boundary is immutable in R1'); END;
+CREATE TRIGGER immutable_workspace_id BEFORE UPDATE OF id ON workspaces
+WHEN NEW.id <> OLD.id
+BEGIN SELECT RAISE(ABORT, 'workspace ID is immutable in R1'); END;
+CREATE TRIGGER immutable_project_id BEFORE UPDATE OF id ON projects
+WHEN NEW.id <> OLD.id
+BEGIN SELECT RAISE(ABORT, 'project ID is immutable in R1'); END;
 CREATE TRIGGER protected_private_fallback BEFORE DELETE ON areas
 WHEN OLD.system_key = 'unassigned'
 BEGIN SELECT RAISE(ABORT, 'cannot delete private Unassigned'); END;
