@@ -265,4 +265,7 @@ test("2c/7 rejects malformed context text and unexpected shell keys", () => {
   const legacyId = fixture();
   legacyId.legacySharedWorkspaceIds = ["legacy", ""];
   rejects(legacyId);
+  const hugeId = fixture();
+  hugeId.legacySharedWorkspaceIds = ["x".repeat(257)];
+  rejects(hugeId);
 });
