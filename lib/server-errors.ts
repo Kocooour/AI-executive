@@ -149,6 +149,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
   "Cannot resolve a safe staging path",
   "R1 staging directory must be absolute",
+  "R1 staging path is not a directory",
   "R1 staging directory already exists",
   "R1 staging parent does not exist",
   "R1 staging directory overlaps the current legacy data directory",
