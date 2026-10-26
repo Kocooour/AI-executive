@@ -24,7 +24,7 @@ Part 6 compares one claimed authenticated actor, instant, timezone and query con
 }
 ```
 
-The helper first checks that the expected contexts are unique, that every expected context appears **exactly once** among the cases, and that each pair's before/after context matches its expected context without reordering ambiguity. A context is identified by collision-free JSON framing of its four strings; no input identifiers or data are returned. Cases may appear in any order. Each case then invokes the full part 6 comparator, which includes all canonical entity/relation/tombstone, side-table, metadata and read-model checks from parts 1–5.
+The helper first checks that the expected contexts are unique, that every expected context appears **exactly once** among the cases, and that each pair's before/after context matches its expected context without reordering ambiguity. A context is identified by collision-free JSON framing of its four strings; no input identifiers or data are returned. Cases may appear in any order. Each case then invokes the full part 6 comparator, which includes all canonical entity/relation/tombstone, side-table, metadata and read-model checks from parts 1–5. All cases must also agree on their claimed before/after revisions, restore generation, assignment count and prior-stage aggregate counts so the matrix cannot silently combine different store transitions. Aggregate agreement still does **not** authenticate identical underlying records.
 
 ## Hard boundaries
 
