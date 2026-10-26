@@ -3,7 +3,7 @@ import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath,
+  TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -30,18 +30,19 @@ export interface TargetPreflightResult {
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const requiredSchema: Record<string, string[]> = {
-  table: ["metadata", "identities", "workspaces", "areas", "area_members", "projects", "tasks"],
-  view: ["task_effective_areas"],
-  index: ["one_personal_workspace_per_user", "one_area_per_shared_workspace",
-    "one_private_unassigned_per_owner", "tasks_by_project", "tasks_by_area"],
-  trigger: ["workspace_conflict_guard", "area_conflict_guard", "member_conflict_guard",
-    "project_conflict_guard", "shared_members_only_insert", "shared_members_only_update",
-    "task_assignee_insert", "task_assignee_update", "project_area_assignment_guard",
-    "member_revocation_guard", "member_identity_or_area_move_guard", "member_role_downgrade_guard",
-    "immutable_area_boundary", "immutable_area_id", "immutable_workspace_boundary",
-    "immutable_workspace_id", "immutable_project_id", "protected_private_fallback"],
-};
+/** Compare the complete stored DDL, not just names: a same-name no-op trigger is unsafe. */
+function matchesCanonicalSchema(actual: DatabaseSync): boolean {
+  const expected = new DatabaseSync(":memory:");
+  try {
+    expected.exec(TARGET_SCHEMA_SQL);
+    const schema = (db: DatabaseSync) => db.prepare(
+      "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name, tbl_name",
+    ).all();
+    return JSON.stringify(schema(actual)) === JSON.stringify(schema(expected));
+  } finally {
+    expected.close();
+  }
+}
 
 /** No task content, IDs, paths or raw SQLite messages are returned or logged. */
 export function inspectIsolatedTargetStore(options: TargetPreflightOptions): TargetPreflightResult {
@@ -75,11 +76,7 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
     const all = (sql: string) => db.prepare(sql).all();
     const count = (sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
     try {
-      const objects = new Set((all("SELECT type, name FROM sqlite_schema") as { type: string; name: string }[])
-        .map(row => `${row.type}:${row.name}`));
-      for (const [type, names] of Object.entries(requiredSchema)) {
-        for (const name of names) if (!objects.has(`${type}:${name}`)) fail("schema_invalid");
-      }
+      if (!matchesCanonicalSchema(db)) fail("schema_invalid");
     } catch { fail("schema_invalid"); }
     try {
       const quick = all("PRAGMA quick_check");
