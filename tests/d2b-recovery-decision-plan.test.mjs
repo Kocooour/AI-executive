@@ -63,20 +63,23 @@ test("D2b/6 keeps private titles, raw drafts and record bodies out of decision e
   assert.equal(JSON.stringify(s), old);
 });
 
-test("D2b/6 suggests choices only in volatile memory; conflict stays unresolved", () => {
+test("D2b/6 keeps diverged content on a sealed volatile defer-only plan", () => {
   const bytes = rescue({
     base: { entities: [entity("conflict", "Before")], relations: [] },
     local: { entities: [entity("conflict", "Owner new")], relations: [] },
   });
   const p = draftOfflineRecoveryDecisions(bytes, server([entity("conflict", "Server new")]), hold());
   assert.equal(p.candidates[0].reason, "remote-diverged");
-  const suggested = preferOfflineRecoveryOutcome(p, "entity", "conflict", "prefer-local");
-  assert.equal(suggested.candidates[0].preference, "prefer-local");
+  assert.deepEqual(p.candidates[0].availablePreferences, ["defer"]);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "conflict", "prefer-local"), OfflineRecoveryInvalid);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "conflict", "prefer-server"), OfflineRecoveryInvalid);
+  const suggested = preferOfflineRecoveryOutcome(p, "entity", "conflict", "defer");
+  assert.equal(suggested.candidates[0].preference, "defer");
   assert.equal(p.candidates[0].preference, "defer", "original input is immutable");
   assert.equal(suggested.canApply, false);
   assert.equal(suggested.consent, "not-requested");
   assert.equal(suggested.canReleaseHold, false);
-  assert.throws(() => preferOfflineRecoveryOutcome(suggested, "relation", "conflict", "prefer-server"), OfflineRecoveryInvalid);
+  assert.throws(() => preferOfflineRecoveryOutcome(suggested, "relation", "conflict", "defer"), OfflineRecoveryInvalid);
   assert.throws(() => preferOfflineRecoveryOutcome(suggested, "entity", "missing", "defer"), OfflineRecoveryInvalid);
 });
 
@@ -240,4 +243,97 @@ test("D2b/6 new records and project-context edits are conservatively deferred", 
     local: { entities: [project("New")], relations: [] },
   }), server([project("Old")]), hold());
   assert.deepEqual(projectEdit.candidates[0].availablePreferences, ["defer"]);
+});
+
+test("D2b/6 P2: a project's local Area move holds a child task even with identical projectId", () => {
+  const taskBefore = { ...entity("child", "Before"), properties: { projectId: "project" } };
+  const taskLocal = { ...entity("child", "Local text"), properties: { projectId: "project" } };
+  const link = areaRelation("parent-area", "project", "area-a");
+  const bytes = rescue({
+    base: {
+      entities: [taskBefore],
+      relations: [link],
+    },
+    local: {
+      entities: [taskLocal],
+      relations: [areaRelation("parent-area", "project", "area-b")],
+    },
+  });
+  const p = draftOfflineRecoveryDecisions(bytes, server([taskBefore], [link]), hold());
+  assert.deepEqual(p.candidates.map(x => [x.id, x.reason, x.availablePreferences]), [
+    ["child", "local-change", ["defer"]],
+    ["parent-area", "local-change", ["defer"]],
+  ]);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "child", "prefer-local"), OfflineRecoveryInvalid);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "child", "prefer-server"), OfflineRecoveryInvalid);
+  assert.equal(p.areaPermission, "unverified");
+  assert.equal(p.canApply, false);
+});
+
+test("D2b/6 P2: server-only project Area move cannot be inferred from delta-only v1 export", () => {
+  const before = { ...entity("child", "Before"), properties: { projectId: "project" } };
+  const locallyChanged = { ...entity("child", "Local edit"), properties: { projectId: "project" } };
+  // v1 file has just the changed task; both project membership and Area links
+  // were unchanged on the client and are absent from the export.
+  const bytes = rescue({
+    base: { entities: [before], relations: [] },
+    local: { entities: [locallyChanged], relations: [] },
+  });
+  const p = draftOfflineRecoveryDecisions(bytes,
+    server([before], [areaRelation("parent-area", "project", "area-b")]), hold());
+  assert.deepEqual(p.candidates.map(x => [x.reason, x.availablePreferences]), [
+    ["local-change", ["defer"]],
+  ]);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "child", "prefer-local"), OfflineRecoveryInvalid);
+  assert.equal(p.canReleaseHold, false);
+});
+
+test("D2b/6 P2: an unchanged membership relation removed on server cannot accidentally enable replay preference", () => {
+  // Historical belongs_to_project edges are also absent in v1 when unchanged
+  // at export; a server-only removal can erase the only remaining membership
+  // evidence. Absence of projectId and current server edge is NOT scope proof.
+  const before = entity("orphan", "Before");
+  const changed = entity("orphan", "Local text");
+  const bundle = rescue({
+    base: { entities: [before], relations: [] },
+    local: { entities: [changed], relations: [] },
+  });
+  const p = draftOfflineRecoveryDecisions(bundle, server([before], []), hold());
+  assert.deepEqual(p.candidates[0].availablePreferences, ["defer"]);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "orphan", "prefer-local"), OfflineRecoveryInvalid);
+});
+
+test("D2b/6 P2: note inheriting a project Area is also deferred", () => {
+  const before = {
+    ...entity("project-note", "Old note"),
+    type: "note",
+    properties: { projectId: "project" },
+  };
+  const changed = { ...before, title: "Private local note" };
+  const p = draftOfflineRecoveryDecisions(rescue({
+    base: { entities: [before], relations: [] },
+    local: { entities: [changed], relations: [] },
+  }), server([before], [areaRelation("project-area", "project", "shared-area")]), hold());
+  assert.equal(p.candidates[0].reason, "local-change");
+  assert.deepEqual(p.candidates[0].availablePreferences, ["defer"]);
+  assert.throws(() => preferOfflineRecoveryOutcome(p, "entity", "project-note", "prefer-server"), OfflineRecoveryInvalid);
+});
+
+test("D2b/6 P2: all v1 candidate kinds and reasons remain defer-only without verified scope graph", () => {
+  const changes = {
+    base: { entities: [entity("existing", "Before"), entity("deleted", "Prior")], relations: [] },
+    local: { entities: [entity("existing", "Local change"), entity("new", "New")], relations: [] },
+  };
+  const p = draftOfflineRecoveryDecisions(rescue(changes),
+    server([entity("existing", "Remote change")]), hold());
+  assert.deepEqual(p.candidates.map(x => [x.id, x.reason]), [
+    ["deleted", "already-deleted"], ["existing", "remote-diverged"], ["new", "remote-missing"],
+  ]);
+  for (const item of p.candidates) {
+    assert.deepEqual(item.availablePreferences, ["defer"]);
+    assert.throws(() => preferOfflineRecoveryOutcome(p, item.kind, item.id, "prefer-local"), OfflineRecoveryInvalid);
+    assert.throws(() => preferOfflineRecoveryOutcome(p, item.kind, item.id, "prefer-server"), OfflineRecoveryInvalid);
+  }
+  assert.equal(p.automaticReplayAllowed, false);
+  assert.equal(p.canReleaseHold, false);
 });
