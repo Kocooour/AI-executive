@@ -76,6 +76,7 @@ test("R1 refuses existing, overlapping, relative, symlink or invalid target path
     stagingDirectory: legacy, ownerUserId: "owner",
   }), /already exists/);
   assert.throws(() => verifyTargetStagingPath("./relative"), /absolute/);
+  assert.throws(() => verifyTargetStagingPath(`${root}/missing-parent/../unexpected`), /parent does not exist/);
   assert.throws(() => bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "bad-id"), ownerUserId: " owner ",
   }), /stable owner/);
