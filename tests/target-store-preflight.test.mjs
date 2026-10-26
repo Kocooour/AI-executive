@@ -39,6 +39,47 @@ test("clean inactive bootstrap passes stage and R2-model inspection without touc
   assert.deepEqual(readdirSync(store.directory), filesBefore);
 });
 
+test("closed WAL database with no sidecars is rejected without creating files", () => {
+  const store = fresh("closed-wal");
+  tamper(store, "PRAGMA journal_mode=WAL");
+  const before = readFileSync(store.databasePath);
+  const filesBefore = readdirSync(store.directory);
+  assert.equal(before[18], 2);
+  assert.equal(before[19], 2);
+  assert.deepEqual(filesBefore, ["lumi-target.sqlite"]);
+  has(check(store), "database_open_failed");
+  assert.deepEqual(readFileSync(store.databasePath), before);
+  assert.deepEqual(readdirSync(store.directory), filesBefore);
+});
+
+test("a WAL sidecar without SHM is rejected and left unchanged", () => {
+  const store = fresh("wal-no-shm");
+  tamper(store, "PRAGMA journal_mode=WAL");
+  const walPath = store.databasePath + "-wal";
+  writeFileSync(walPath, "stale WAL sentinel");
+  const before = readFileSync(store.databasePath);
+  const walBefore = readFileSync(walPath);
+  const filesBefore = readdirSync(store.directory);
+  assert.ok(filesBefore.includes("lumi-target.sqlite-wal"));
+  assert.ok(!filesBefore.includes("lumi-target.sqlite-shm"));
+  has(check(store), "database_open_failed");
+  assert.deepEqual(readFileSync(store.databasePath), before);
+  assert.deepEqual(readFileSync(walPath), walBefore);
+  assert.deepEqual(readdirSync(store.directory), filesBefore);
+});
+
+test("unexpected sidecar on a rollback database is rejected before SQLite opens", () => {
+  const store = fresh("rollback-sidecar");
+  writeFileSync(store.databasePath + "-wal", "stale WAL sentinel");
+  const before = readFileSync(store.databasePath);
+  const filesBefore = readdirSync(store.directory);
+  assert.equal(before[18], 1);
+  assert.equal(before[19], 1);
+  has(check(store), "database_open_failed");
+  assert.deepEqual(readFileSync(store.databasePath), before);
+  assert.deepEqual(readdirSync(store.directory), filesBefore);
+});
+
 test("reject unsafe, missing, aliased and corrupt stores without creating files", () => {
   const store = fresh("path-safe");
   const alias = path.join(root, "legacy-alias");

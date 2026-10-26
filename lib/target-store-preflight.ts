@@ -1,5 +1,5 @@
 /** Explicit, read-only inspection of an existing R1 target staging database. */
-import { lstatSync, statSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -65,6 +65,31 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
       return { ok: false, mode, issues: ["missing_database"] };
     }
   } catch { return { ok: false, mode, issues: ["missing_database"] }; }
+
+  // A read-only SQLite connection can still create -wal/-shm files. Reject WAL
+  // databases even after a clean close has removed both sidecars, and reject
+  // any existing sidecar before handing the path to SQLite at all.
+  try {
+    for (const suffix of ["-wal", "-shm"]) {
+      try {
+        lstatSync(databasePath + suffix);
+        return { ok: false, mode, issues: ["database_open_failed"] };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    const fd = openSync(databasePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const header = Buffer.alloc(20);
+    let bytesRead: number;
+    try { bytesRead = readSync(fd, header, 0, header.length, 0); }
+    finally { closeSync(fd); }
+    if (bytesRead !== header.length || header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
+        header[18] !== 1 || header[19] !== 1) {
+      return { ok: false, mode, issues: ["database_open_failed"] };
+    }
+  } catch {
+    return { ok: false, mode, issues: ["database_open_failed"] };
+  }
 
   let db: DatabaseSync;
   try {
