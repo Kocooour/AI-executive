@@ -9,6 +9,7 @@
 | Dokument | Co určuje |
 |---|---|
 | [Produktové zadání](docs/PRODUCT.md) | Vizi, uživatelské přínosy, funkční požadavky, proaktivitu, bezpečné akce, priority a produktovou roadmapu. |
+| [Aktuální roadmapa](docs/ROADMAP.md) | Schválené pořadí dalších implementačních milníků R0–R5, clean-start přechod a bezpečnostní brány. |
 | [UX/UI specifikace](docs/UX-UI.md) | Cílových 15 obrazovek, desktop/iPhone navigaci, hlavní interakce, přístupnost a akceptační kritéria. |
 | [Technická architektura](docs/ARCHITECTURE.md) | Aktuální implementaci i cílové kontrakty: PACT, Context Graph, bezpečnost, integrace, provoz, zálohy a implementační plán. |
 
