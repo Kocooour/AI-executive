@@ -159,3 +159,64 @@ test("2c/2 remains strictly diagnostic and refuses unauthenticated/multi-user se
   changed.entities[0].properties.members = [{ id: "partner", role: "owner" }];
   assert.throws(() => audit(changed, after(changed)), LegacyAssigneePostcheckBlocked);
 });
+
+test("2c/2 rejects Date drift even when field-merge considers both dates equal", () => {
+  for (const id of ["z-open", "owned", "private"]) {
+    const old = before();
+    old.entities.find(e => e.id === id).properties.auditTime = new Date("2026-10-25T00:00:00Z");
+    const current = after(old);
+    current.entities.find(e => e.id === id).properties.auditTime = new Date("2026-10-26T00:00:00Z");
+    assert.throws(() => audit(old, current), LegacyAssigneePostcheckBlocked);
+    // Unsupported objects are blocked even if their values have not changed.
+    assert.throws(() => audit(old, after(old)), LegacyAssigneePostcheckBlocked);
+  }
+});
+
+test("2c/2 rejects non-finite numbers and sparse arrays for candidate and noncandidate tasks", () => {
+  for (const id of ["a-open", "owned", "partner-task"]) {
+    const nonFinite = before();
+    nonFinite.entities.find(e => e.id === id).properties.estimate = Number.NaN;
+    const rewritten = after(nonFinite);
+    rewritten.entities.find(e => e.id === id).properties.estimate = null;
+    assert.throws(() => audit(nonFinite, rewritten), LegacyAssigneePostcheckBlocked);
+
+    const old = before();
+    old.entities.find(e => e.id === id).properties.checklist = [];
+    const current = after(old);
+    current.entities.find(e => e.id === id).properties.checklist = new Array(1);
+    assert.throws(() => audit(old, current), LegacyAssigneePostcheckBlocked);
+  }
+});
+
+test("2c/2 fails closed on other non-JSON entity data and properties", () => {
+  const unsupported = [
+    e => { e.properties.unsupported = undefined; },
+    e => { e.properties.unsupported = BigInt(3); },
+    e => { e.properties.unsupported = Symbol("secret"); },
+    e => { e.properties.unsupported = Infinity; },
+    e => { e.properties.unsupported = new Map([["x", 1]]); },
+    e => { e.properties.unsupported = [1, , 3]; },
+    e => { e.properties.unsupported = [1]; e.properties.unsupported.extra = "secret"; },
+    e => { e.properties.unsupported = {}; e.properties.unsupported.self = e.properties.unsupported; },
+    e => { Object.defineProperty(e.properties, "hidden", { value: 1 }); },
+    e => { Object.defineProperty(e.properties, "accessor", { enumerable: true, get() { return 1; } }); },
+    e => { e.properties[Symbol("hidden")] = 1; },
+  ];
+  for (const mutate of unsupported) {
+    for (const id of ["z-open", "private"]) {
+      const old = before(), current = after(old);
+      mutate(current.entities.find(e => e.id === id));
+      assert.throws(() => audit(old, current), LegacyAssigneePostcheckBlocked);
+    }
+  }
+});
+
+test("2c/2 accepts reorderings of JSON object keys but still protects nested contents", () => {
+  const old = before();
+  old.entities.find(e => e.id === "private").properties.nested = { a: 1, b: { c: [1, 2] } };
+  const current = after(old);
+  current.entities.find(e => e.id === "private").properties.nested = { b: { c: [1, 2] }, a: 1 };
+  assert.equal(audit(old, current).assignedTaskCount, 2);
+  current.entities.find(e => e.id === "private").properties.nested.b.c.reverse();
+  assert.throws(() => audit(old, current), LegacyAssigneePostcheckBlocked);
+});
