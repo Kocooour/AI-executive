@@ -245,7 +245,23 @@ Změna osobního `when`, `priority` či `effort` jednoho uživatele nemění spo
 - Notifikace k sdíleným úkolům se cílí na jejich řešitele (nebo admina u nepřidělených actionable položek) dle osobního stavu a platných oprávnění; při revokaci se zastaví nové doručování a vymažou související subscriptions/queue. Dřívější oznámení na cizím zamčeném zařízení nelze vrátit; obsah zohledňuje soukromí a nastavení. 
 - Serverový export pro člena obsahuje jen aktuálně povolené položky; privilegovaná záloha celé instance je administrátorská operace, která nesmí být vystavena běžným členům ani přes integrační token. Je nutné definovat obnovu admin přístupu a zachování historie, aniž by restore vrátil revokované členství. Pro změny s dopadem na bezpečnost je nutný audit aktéra, okamžiku, revizí, nové/odebrané množiny členů a úspěchu/odmítnutí bez volného exportu soukromého textu do operačních logů.
 
-### Bezpečný migrační a implementační plán
+### Aktuální implementační plán pro čistý start (rozhodnutí 2026-10-26)
+
+**Priorita pro další vývoj:** [ROADMAP.md](ROADMAP.md) a [rozhodnutí vlastníka](decisions/2026-10-26-cisty-start-d3.md) nahrazují povinnost **převádět převážně testovací legacy data** jako blokátor D3. Funkční a bezpečnostní kontrakt dvou prostorů a Oblastí výše **zůstává nezměněn**. Toto rozhodnutí **není povolení resetu produkční databáze**.
+
+1. **Nový izolovaný kanonický model:** zavést nedestruktivně nový prázdný store/staging s cílovou strukturou: soukromé Oblasti vlastníka a samostatné 1:1 interní workspace pro sdílené Oblasti, právě jedna efektivní Oblast na projekt/samostatný úkol, dědění v projektových úkolech, výchozí soukromé Nezařazeno, explicitní assignee na nových sdílených úkolech. Znovu využít stávající invarianty nových zápisů; žádné automatické spuštění starého migračního aplikátoru.
+2. **Serverové oprávnění před aktivací:** per-user identita/sessions/tokeny, scope podle členství/rolí a policy revize, autorizovaný read-model (Home/Inbox/Today/Upcoming/Projects/Search/attention/counts/AI), jednoznačný `writeAreaId` pro zápisy, per-item autorizované příkazy namísto globálního full-snapshot PUT, individuální plánovací stavy a bezpečná revokace.
+3. **Sync a klienti:** verzování protokolu a restore generace, odmítnutí starých celosnímkových zápisů před mutací, nepropustné oddělení cache podle identity a Oblasti; staré Dexie/offline fronty se nesmějí potichu ztratit ani znovu importovat do nové DB. Před přepnutím inventarizovat zařízení a rozhodnout o exportu/odmítnutí starého obsahu; nerozhodnuté stavy blokují cutover.
+4. **Aktivace D3:** již sloučené selektory a UI komponenty #103/#108 integrovat až s autoritativním zdrojem dat a bezpečnostními testy. Home zůstává výchozí obrazovka, Můj plán je pouze datový rozsah. Víceuživatelské pozvánky zůstávají vypnuté až do dokončení všech odpovídajících ACL/sync/identity/visibility/recovery bran.
+5. **Volitelný produkční cutover až po samostatném souhlasu:** nejprve klasifikovat reálná data versus testovací obsah včetně auth, pošty, kalendáře, tokenů, historie, notifikací, offline front, zařízení a konfigurace; vytvořit a **ověřit archivní konzistentní zálohu a obnovu**. Přesně pojmenovaný destruktivní rozsah musí vlastník dodatečně výslovně schválit. Bez něj lze pracovat pouze na odděleném store. Žádná dřívější schválení PR ani toto rozhodnutí reset nepovolují.
+6. **Test/release:** unit, integrační a negativní ACL testy pro 2–3 identity, offline/revokaci a restart; standardní PR Checks a review. Celé Browser E2E až před nasazením na přesném SHA podle `AGENTS.md`; deploy a feature gate vyžadují samostatné provozní rozhodnutí.
+
+Staré diagnostiky a zachovávací kontroly 2a–2c **zůstávají v kódu a testech** pro případ cíleného převodu později nalezených hodnotných dat, ale jejich zdokonalování není na kritické cestě. Nesmí se tím oslabit současná ochrana dat nebo bezpečnost nové architektury.
+
+### Historická plná migrace 2a–2c — jen pokud bude zvoleno zachování legacy dat
+
+**Podmíněná referenční specifikace, nikoli současná povinná cesta:** následující postup se použije pouze při samostatném schválení převodu starých dat. Pro čistý start platí výše uvedený aktuální plán; zejména není nutné historické backfillovat úkoly ani dokazovat identitu starých Home/Today/Inbox výsledků.
+
 
 **Přípravná inventura a tři kontrolované migrační kroky (2a–2c):** `pnpm check-data` / `scripts/check-data.mjs` na ověřené kopii, inventář entit, relací, legacy `belongs_to_area` u úkolů v projektech, projektů bez Oblasti, textových `properties.area`, aktuálních `members`, zdrojů, historie, otevřených úkolů a offline front. Zdrojová data zachovat a vytvořit ověřenou konzistentní zálohu.
 
@@ -264,7 +280,7 @@ Změna osobního `when`, `priority` či `effort` jednoho uživatele nemění spo
 
 Normalizace, rozdělení a backfill proběhnou v **single-user režimu bez pozvánek**; žádná historická data se tak sama o sobě nezpřístupní dalšímu uživateli. Migrace je vratná z ověřené zálohy; následný multi-user režim má oddělený feature gate.
 
-**Fáze / navržené PR, každé samostatně kontrolovatelné:**
+**Historické fáze pro variantu zachování legacy dat (nejsou aktuální roadmapa):**
 1. **Spec-only PR:** zapsat rozhodnutí a nový produktový, UX a bezpečnostní kontrakt (tento krok; žádný runtime).
 2. **Povinné Oblasti + kompatibilní assignee:** normalizace 2a, **předmigrační sync/restoreGeneration bariéra a offline konfliktový postup**, samostatná auditovaná partition 2b do 1:1 interních workspaces a backfill `assigneeUserId` otevřených legacy sdílených úkolů 2c **před UX**, s kontrolou zachování Home/Today/Inbox. Bez dalších identit a bez sdílení.
 3. **UX rozsahů:** přepínač Můj plán / Osobní / Sdílené až po 2a–2c a ověření, že nic z dosavadního plánu vlastníka nezmizelo; Home zůstává výchozí.
