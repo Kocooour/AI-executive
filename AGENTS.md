@@ -31,6 +31,7 @@ Do not treat an implementation as complete before both independent testers have 
 
 - Validate every iteration against the canonical Lumi product specification in docs/PRODUCT.md, relevant UX in docs/UX-UI.md and technical requirements in docs/ARCHITECTURE.md and the user's latest requirements.
 - Preserve existing work and data. Do not remove or overwrite unrelated behavior.
+- Owner decision 2026-10-26 prefers a fresh target data model to legacy 2a–2c backfill for predominantly test content ([roadmap](docs/ROADMAP.md)). This reprioritization is **not** authorization to delete, reset or replace any database, local cache, backup, integration credential or persisted state. Require an explicit separate owner approval for the precise production data cutover/reset scope after verified archival backup and restore preparation. The new architecture still requires identity-bound server ACL, synchronization and security tests.
 - If a proposed change materially diverges from the canonical docs/PRODUCT.md specification or requires a product decision, ask the user before implementing that divergence.
 - Testers must inspect the implemented result independently; they must not merely restate the implementation agent's report.
 - The primary model remains accountable for the delivered result and must not accept agent findings without review.
