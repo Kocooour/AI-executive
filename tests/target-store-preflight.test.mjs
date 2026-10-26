@@ -29,12 +29,14 @@ const has = (result, code) => assert.ok(!result.ok && result.issues.includes(cod
 test("clean inactive bootstrap passes stage and R2-model inspection without touching bytes", () => {
   const store = fresh("clean");
   const before = readFileSync(store.databasePath);
+  const filesBefore = readdirSync(store.directory);
   assert.deepEqual(check(store, { expectedOwnerUserId: "owner", expectedRestoreGeneration: store.restoreGeneration }),
     { ok: true, mode: "stage", issues: [] });
   assert.deepEqual(check(store, { mode: "r2-model" }), { ok: true, mode: "r2-model", issues: [] });
   has(check(store, { expectedOwnerUserId: "other" }), "expected_owner_mismatch");
   has(check(store, { expectedRestoreGeneration: "wrong" }), "expected_generation_mismatch");
   assert.deepEqual(readFileSync(store.databasePath), before);
+  assert.deepEqual(readdirSync(store.directory), filesBefore);
 });
 
 test("reject unsafe, missing, aliased and corrupt stores without creating files", () => {
@@ -81,6 +83,10 @@ test("tampered metadata, foreign keys, schema and model relations fail closed", 
   const noTrigger = fresh("no-trigger");
   tamper(noTrigger, "DROP TRIGGER area_conflict_guard");
   has(check(noTrigger), "schema_invalid");
+  const forgedTrigger = fresh("forged-trigger");
+  tamper(forgedTrigger, `DROP TRIGGER task_assignee_insert;
+    CREATE TRIGGER task_assignee_insert BEFORE INSERT ON tasks BEGIN SELECT 1; END;`);
+  has(check(forgedTrigger), "schema_invalid");
   const task = fresh("task");
   tamper(task, `PRAGMA foreign_keys=OFF;
     INSERT INTO tasks(id,area_id,title) VALUES ('t','missing','Secret title')`);
