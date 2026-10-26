@@ -210,7 +210,7 @@ export function bootstrapIsolatedTargetStore(
         .run(personalWorkspaceId, owner);
       db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES (?, 'Nezařazeno', 'private', ?, ?, 'unassigned')")
         .run(unassignedAreaId, personalWorkspaceId, owner);
-      if (db.pragma("foreign_key_check").length !== 0) throw new Error("R1 foreign-key validation failed");
+      if (db.prepare("PRAGMA foreign_key_check").all().length !== 0) throw new Error("R1 foreign-key validation failed");
       db.exec("COMMIT;");
     } catch (error) {
       db.exec("ROLLBACK;");
