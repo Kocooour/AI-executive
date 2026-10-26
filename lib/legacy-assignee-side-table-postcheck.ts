@@ -1,6 +1,7 @@
 // 2c, part 4: pure snapshot-only side-table preservation diagnostic.
 // Never consume live SQLite, store raw records in results, write data or authorize
 // a migration, recovery hold release, My Plan activation or sharing.
+import { types as nodeTypes } from "node:util";
 import { classifiedTables, storeTables } from "./backup-scope";
 import {
   checkLegacyAssigneeStorePreservation,
@@ -90,7 +91,7 @@ function canonicalJson(row: Readonly<Record<string, unknown>>, budget: { remaini
       append(Object.is(value, -0) ? "n-0" : "n" + JSON.stringify(value));
       return;
     }
-    if (typeof value !== "object") blocked();
+    if (typeof value !== "object" || nodeTypes.isProxy(value)) blocked();
     const objectValue = value as object;
     const array = Array.isArray(value);
     const prototype = Object.getPrototypeOf(objectValue);
@@ -132,7 +133,7 @@ function canonicalJson(row: Readonly<Record<string, unknown>>, budget: { remaini
       ancestors.delete(objectValue);
     }
   };
-  if (!row || typeof row !== "object" || Array.isArray(row)) blocked();
+  if (!row || typeof row !== "object" || nodeTypes.isProxy(row) || Array.isArray(row)) blocked();
   encode(row, 0);
   return parts.join("");
 }
@@ -177,7 +178,8 @@ export function checkLegacyAssigneeSideTablePreservation(
     const budget = { remaining: MAX_TOTAL_CHARS };
     for (const snapshot of [before, after]) {
       const tables = snapshot.sideTables;
-      if (!tables || typeof tables !== "object" || Array.isArray(tables) ||
+      if (!tables || typeof tables !== "object" || nodeTypes.isProxy(tables) ||
+          Array.isArray(tables) ||
           (Object.getPrototypeOf(tables) !== Object.prototype && Object.getPrototypeOf(tables) !== null)) blocked();
       const keys = Reflect.ownKeys(tables);
       if (keys.length !== expected.length ||
@@ -188,7 +190,8 @@ export function checkLegacyAssigneeSideTablePreservation(
         const property = Object.getOwnPropertyDescriptor(tables, name);
         if (!property || !property.enumerable || !("value" in property)) blocked();
         const table = property.value;
-        if (!Array.isArray(table) || Object.getPrototypeOf(table) !== Array.prototype ||
+        if (nodeTypes.isProxy(table) || !Array.isArray(table) ||
+            Object.getPrototypeOf(table) !== Array.prototype ||
             table.length > MAX_ROWS_PER_TABLE) blocked();
         rows += table.length;
         if (rows > MAX_ROWS_PER_SNAPSHOT || Reflect.ownKeys(table).length !== table.length + 1) blocked();
