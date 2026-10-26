@@ -6,7 +6,7 @@
  * R2 must provide authenticated, per-item server commands before this store is used.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
@@ -64,6 +64,24 @@ function canonicalProspectivePath(input: string): string {
   return current;
 }
 
+function rejectLegacyOverlap(destination: string): void {
+  const production = canonicalProspectivePath(resolveDataDirectory());
+  if (containsPath(production, destination) || containsPath(destination, production)) {
+    throw new Error("R1 staging directory overlaps the current legacy data directory");
+  }
+}
+
+/** Existing-directory counterpart used by the read-only preflight. */
+export function verifyExistingTargetStagingPath(stagingDirectory: string): string {
+  if (typeof stagingDirectory !== "string" || !path.isAbsolute(stagingDirectory)) {
+    throw new Error("R1 staging directory must be absolute");
+  }
+  if (!statSync(stagingDirectory).isDirectory()) throw new Error("R1 staging path is not a directory");
+  const destination = canonicalProspectivePath(stagingDirectory);
+  rejectLegacyOverlap(destination);
+  return destination;
+}
+
 /**
  * Deliberately accepts no existing directory. This fails closed even if the existing
  * directory is an abandoned bootstrap: recovery requires a new staging directory.
@@ -79,14 +97,11 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
   if (existsSync(destination)) throw new Error("R1 staging directory already exists");
   // Require its actual immediate parent to exist; never invent a directory tree.
   if (!existsSync(path.dirname(destination))) throw new Error("R1 staging parent does not exist");
-  const production = canonicalProspectivePath(resolveDataDirectory());
-  if (containsPath(production, destination) || containsPath(destination, production)) {
-    throw new Error("R1 staging directory overlaps the current legacy data directory");
-  }
+  rejectLegacyOverlap(destination);
   return destination;
 }
 
-const TARGET_SCHEMA_SQL = `
+export const TARGET_SCHEMA_SQL = `
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE identities (
   id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0)
