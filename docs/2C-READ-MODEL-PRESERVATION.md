@@ -22,7 +22,7 @@ readModels: {
 }
 ```
 
-The concrete read-model payloads are **opaque**: they may be arrays or plain objects, but must be complete, JSON-compatible ordered responses. Arrays are compared in order (presentation order matters); object-key order does not matter. Every nested value, identifier, count, flag, grouping and timestamp is compared. Missing/extra envelope fields, mutated context, getters, symbols, sparse arrays, unsupported values, unsafe integers, cycles and over-budget values fail closed.
+The concrete read-model payloads are **opaque**: they may be arrays or plain objects, but must be complete, JSON-compatible ordered responses. Arrays are compared in order (presentation order matters); object-key order does not matter. Every nested value, identifier, count, flag, grouping and timestamp is compared. Missing/extra envelope fields, mutated context, getters, inherited or non-enumerable `readModels`, Proxy-wrapped values (including the input and snapshots), symbols, sparse arrays, unsupported values, unsafe integers, cycles and over-budget values fail closed. Snapshots must expose `readModels` as their own enumerable data property; no accessor or Proxy trap is invoked during read-model validation. Proxy detection uses Node.js `node:util` and this helper must run in a Node.js environment.
 
 The `context` **must be byte-for-byte identical** before and after. A real extractor would need to derive it from the same authenticated actor, instant, timezone, visibility/ACL, route version, filters, sort and query configuration. `queryFingerprint` is caller-supplied text here, **not** cryptographic proof or independently verified provenance.
 
