@@ -6,7 +6,7 @@
 
 The future My Plan read model includes private work plus shared tasks with an explicit `assigneeUserId` equal to the actor. Older shared workspace tasks often have no assignee. Activating My Plan first would hide that existing work.
 
-`planLegacyOwnerAssignees({ source, legacySharedWorkspaceIds })` reviews a caller-supplied snapshot plus an **explicit legacy-workspace designation**. For an active shared workspace whose current `properties.members` is exactly `[{ id: "owner", role: "owner" }]`, it proposes **only open, unassigned** task IDs for future backfill to `owner`. Already-owned open tasks remain unchanged. Completed/non-open, personal and unrelated multiuser tasks are never candidates. Malformed assignees, unexpected assignees, missing/ambiguous membership, duplicate IDs and stale/invalid snapshot counters block the whole preflight.
+`planLegacyOwnerAssignees({ source, legacySharedWorkspaceIds })` reviews a caller-supplied snapshot plus an **explicit legacy-workspace designation**. For an active shared workspace whose current `properties.members` is exactly `[{ id: "owner", role: "owner" }]`, it proposes **only open, unassigned** task IDs for future backfill to `owner`. Already-owned open tasks remain unchanged. Completed/non-open, personal and unrelated multiuser tasks are never candidates. Malformed assignees, unexpected assignees, missing/ambiguous membership, duplicate IDs and **invalid** snapshot counters block the whole preflight. Revisions and restore generations are checked only as nonnegative safe integers; without an authoritative current snapshot, this diagnostic **cannot detect a well-formed but stale source**.
 
 The output is deterministic, sorted and immutable: candidate task IDs and aggregate counts only, no titles, fields, drafts or proposed mutated entities. The input is not modified.
 
@@ -27,7 +27,7 @@ Do not use its result as authority for editing tasks or permission to release re
 1. The audited, backed-up 2a normalization must run successfully and stay invariant.
 2. 2b must complete its independently reviewed Area partition, full side-table routing, offline preservation and authorization barriers, with recoverable rollback.
 3. Establish trusted server-side single-owner and historical legacy-workspace provenance evidence; do not infer legacy status from `kind=shared` alone or from input supplied by the client.
-4. Introduce a transactionally guarded 2c executor using current revision/restoreGeneration and membership-policy checks, preserving task IDs and all fields beyond `assigneeUserId`. Re-audit after any concurrent change; abort on conflicting owner/assignment/membership.
+4. Introduce a transactionally guarded 2c executor that compares revision/restoreGeneration against the authoritative current state under CAS and rechecks membership policy, preserving task IDs and all fields beyond `assigneeUserId`. Re-audit after any concurrent change; abort on conflicting owner/assignment/membership.
 5. Before enabling My Plan, verify **the actual Home / Today / Inbox identities, order and counts** on the resulting state; the test-only projection with `selectScopedWork` is *not* a substitute. Shared Area with two or more members must never have unassigned tasks backfilled by this rule.
 6. Complete server-side authorized read scopes, cache invalidation/revocation, and multiuser data isolation before activating the scope switcher or sharing.
 
