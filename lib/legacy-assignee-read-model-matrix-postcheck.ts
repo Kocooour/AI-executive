@@ -8,6 +8,7 @@ import {
 } from "./legacy-assignee-matrix-state-fingerprint";
 import {
   checkLegacyAssigneeReadModelPreservation,
+  legacyAssigneeMatrixViewBudget,
   type LegacyAssigneeReadModelSnapshot,
 } from "./legacy-assignee-read-model-postcheck";
 
@@ -165,11 +166,12 @@ export function checkLegacyAssigneeReadModelMatrixPreservation(
     let baseline: ReturnType<typeof checkLegacyAssigneeReadModelPreservation> | undefined;
     let baselineStateFingerprint: string | undefined;
     const stateBudget = matrixFingerprintBudget();
+    const viewBudget = legacyAssigneeMatrixViewBudget();
     for (const pair of pairs) {
       const report = checkLegacyAssigneeReadModelPreservation({
         before: pair.before, after: pair.after,
         legacySharedWorkspaceIds: legacyIds as string[],
-      });
+      }, viewBudget);
       // Prior stages prove pairwise preservation on caller assertions. Also
       // require every actor/time/query case to describe the *same* claimed
       // persisted before/after transition, not merely matching row counts.

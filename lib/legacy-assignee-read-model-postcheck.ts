@@ -54,6 +54,13 @@ const blocked = (): never => { throw new LegacyAssigneeReadModelPostcheckBlocked
 const MAX_VIEW_CHARS = 2_000_000;
 const MAX_TOTAL_CHARS = 8_000_000;
 const MAX_NODES = 120_000;
+// Part 9: a matrix must not multiply the per-case read-model work 16-fold.
+// These limits are shared across all before/after Home/Today/Inbox views.
+export type LegacyAssigneeViewBudget = { remainingChars: number; remainingNodes: number };
+export const legacyAssigneeMatrixViewBudget = (): LegacyAssigneeViewBudget => ({
+  remainingChars: 32_000_000,
+  remainingNodes: 480_000,
+});
 const MAX_CONTAINER_MEMBERS = 20_000;
 const MAX_DEPTH = 48;
 const MAX_STRING_CHARS = 500_000;
@@ -109,7 +116,8 @@ function readModels(value: unknown): {
 
 function canonicalView(
   value: unknown,
-  budget: { remainingChars: number; remainingNodes: number },
+  budget: LegacyAssigneeViewBudget,
+  matrixBudget?: LegacyAssigneeViewBudget,
 ): string {
   const parts: string[] = [];
   const ancestors = new WeakSet<object>();
@@ -118,19 +126,24 @@ function canonicalView(
   const append = (part: string): void => {
     viewChars += part.length;
     budget.remainingChars -= part.length;
-    if (viewChars > MAX_VIEW_CHARS || budget.remainingChars < 0) blocked();
+    if (matrixBudget) matrixBudget.remainingChars -= part.length;
+    if (viewChars > MAX_VIEW_CHARS || budget.remainingChars < 0 ||
+        (matrixBudget && matrixBudget.remainingChars < 0)) blocked();
     parts.push(part);
   };
 
   const walk = (item: unknown, depth: number): void => {
     budget.remainingNodes--;
-    if (budget.remainingNodes < 0 || depth > MAX_DEPTH) blocked();
+    if (matrixBudget) matrixBudget.remainingNodes--;
+    if (budget.remainingNodes < 0 || depth > MAX_DEPTH ||
+        (matrixBudget && matrixBudget.remainingNodes < 0)) blocked();
 
     if (item === null) { append("null"); return; }
     if (typeof item === "string") {
       if (item.length > MAX_STRING_CHARS ||
           item.length > MAX_VIEW_CHARS - viewChars ||
-          item.length > budget.remainingChars) blocked();
+          item.length > budget.remainingChars ||
+          (matrixBudget && item.length > matrixBudget.remainingChars)) blocked();
       append("s");
       append(JSON.stringify(item));
       return;
@@ -198,6 +211,8 @@ function canonicalView(
  */
 export function checkLegacyAssigneeReadModelPreservation(
   input: LegacyAssigneeReadModelPostcheckInput,
+  // Internal to the matrix caller; standalone checks retain their original caps.
+  matrixBudget?: LegacyAssigneeViewBudget,
 ): LegacyAssigneeReadModelPostcheck {
   try {
     // Read required fields through own data descriptors only: no inherited
@@ -213,8 +228,8 @@ export function checkLegacyAssigneeReadModelPreservation(
 
     const budget = { remainingChars: MAX_TOTAL_CHARS, remainingNodes: MAX_NODES };
     for (const name of VIEW_NAMES) {
-      const original = canonicalView(before.views[name], budget);
-      const result = canonicalView(after.views[name], budget);
+      const original = canonicalView(before.views[name], budget, matrixBudget);
+      const result = canonicalView(after.views[name], budget, matrixBudget);
       if (original !== result) blocked();
     }
 

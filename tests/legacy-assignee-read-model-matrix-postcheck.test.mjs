@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifiedTables, storeTables } from "../lib/backup-scope.ts";
 import {
+  checkLegacyAssigneeReadModelPreservation,
+  legacyAssigneeMatrixViewBudget,
+  LegacyAssigneeReadModelPostcheckBlocked,
+} from "../lib/legacy-assignee-read-model-postcheck.ts";
+import {
   matrixFingerprintBudget,
   matrixStoreTransitionFingerprint,
 } from "../lib/legacy-assignee-matrix-state-fingerprint.ts";
@@ -510,6 +515,66 @@ test("2c/8 fails closed on an over-depth cross-context fingerprint input", () =>
     input.cases[0][side].entities.find(row => row.id === "private-task").properties.deep = nested;
   }
   rejects(input);
+});
+
+
+test("2c/9 preserves standalone caps and exactly spends shared view budgets", () => {
+  const [first, second] = fixture().cases;
+  const run = (pair, budget) => checkLegacyAssigneeReadModelPreservation({
+    before: pair.before, after: pair.after, legacySharedWorkspaceIds: ["legacy"],
+  }, budget);
+  const measured = legacyAssigneeMatrixViewBudget();
+  assert.deepEqual(measured, { remainingChars: 32_000_000, remainingNodes: 480_000 });
+  assert.equal(run(first, measured).canApply, false);
+  const usedChars = 32_000_000 - measured.remainingChars;
+  const usedNodes = 480_000 - measured.remainingNodes;
+  assert.ok(usedChars > 0 && usedNodes > 0);
+  assert.equal(checkLegacyAssigneeReadModelPreservation({
+    before: first.before, after: first.after, legacySharedWorkspaceIds: ["legacy"],
+  }).comparedReadModelCount, 3);
+
+  for (const field of ["remainingChars", "remainingNodes"]) {
+    const exact = { remainingChars: usedChars * 2, remainingNodes: usedNodes * 2 };
+    assert.equal(run(first, exact).canApply, false);
+    assert.equal(run(second, exact).canApply, false);
+    assert.deepEqual(exact, { remainingChars: 0, remainingNodes: 0 });
+
+    const oneShort = { remainingChars: usedChars * 2, remainingNodes: usedNodes * 2 };
+    oneShort[field]--;
+    assert.equal(run(first, oneShort).canApply, false);
+    assert.throws(() => run(second, oneShort), LegacyAssigneeReadModelPostcheckBlocked);
+    assert.ok(oneShort[field] < 0);
+  }
+});
+
+const matrixWithViews = (count, views) => {
+  const expectedContexts = Array.from({ length: count }, (_, i) => context("actor-" + i));
+  const cases = expectedContexts.map(ctx => {
+    const pair = scenario(ctx);
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.readModels.home = views.home;
+      snapshot.readModels.today = views.today;
+      snapshot.readModels.inbox = views.inbox;
+    }
+    return pair;
+  });
+  return { expectedContexts, cases, legacySharedWorkspaceIds: ["legacy"] };
+};
+
+test("2c/9 caps cumulative serialized view characters through the public matrix API", () => {
+  // Every case stays below the original 8M-character part-6 cap.
+  // The views exclude persisted fields and therefore do not use part-8's hash budget.
+  const payload = { text: "x".repeat(480_000) };
+  const views = { home: payload, today: payload, inbox: payload };
+  assert.equal(check(matrixWithViews(11, views)).checkedContextCount, 11);
+  rejects(matrixWithViews(12, views)); // 12 * six 480k views exceeds 32M.
+});
+
+test("2c/9 caps cumulative view nodes through the public matrix API", () => {
+  const items = Array(16_000).fill(null); // 16k nodes per view, below per-view cap.
+  const views = { home: items, today: { empty: true }, inbox: { empty: true } };
+  assert.equal(check(matrixWithViews(14, views)).checkedContextCount, 14);
+  rejects(matrixWithViews(16, views)); // two 16k-node views per context exceed 480k.
 });
 
 test("2c/7 rejects malformed context text and unexpected shell keys", () => {
