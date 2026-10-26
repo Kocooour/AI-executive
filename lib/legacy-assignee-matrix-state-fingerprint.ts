@@ -18,7 +18,8 @@ export const matrixFingerprintBudget = (): MatrixFingerprintBudget => ({
 
 const MAX_DEPTH = 96;
 const MAX_MEMBERS = 100_000;
-const invalid = (): never => { throw new Error("Invalid matrix state fingerprint input"); };
+// The public matrix wrapper catches and replaces this with its existing opaque error.
+const invalid = (): never => { throw new Error(); };
 
 function spend(budget: MatrixFingerprintBudget, nodes: number, chars = 0): void {
   budget.remainingNodes -= nodes;
