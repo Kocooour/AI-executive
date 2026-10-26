@@ -172,6 +172,21 @@ test("2c/7 propagates view and prior-stage failures across the whole matrix", ()
   rejects(changedSideTable);
 });
 
+test("2c/7 rejects otherwise valid cases with divergent claimed store transitions", () => {
+  const differentRevisions = fixture();
+  const caseWithDifferentRevisions = differentRevisions.cases[1];
+  caseWithDifferentRevisions.before.revision = 25;
+  caseWithDifferentRevisions.after.revision = 26;
+  caseWithDifferentRevisions.before.metadata.find(row => row.key === "revision").value = "25";
+  caseWithDifferentRevisions.after.metadata.find(row => row.key === "revision").value = "26";
+  rejects(differentRevisions);
+
+  const differentSideTableCount = fixture();
+  differentSideTableCount.cases[0].before.sideTables.attention_history.push({ id: "shared" });
+  differentSideTableCount.cases[0].after.sideTables.attention_history.push({ id: "shared" });
+  rejects(differentSideTableCount);
+});
+
 test("2c/7 rejects getters, non-data fields, sparse arrays, symbols and proxies without running traps", () => {
   let getterCalls = 0, trapCalls = 0;
   const wrap = target => new Proxy(target, {
