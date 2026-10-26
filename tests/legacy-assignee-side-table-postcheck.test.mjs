@@ -194,3 +194,67 @@ test("2c/4 requires an unchanged revision for a legitimate no-op", () => {
   current.revision += 1;
   rejected(old, current);
 });
+
+test("2c/4 checks table row-count and accessor shape before deep traversal", () => {
+  const old = before(), current = after(old);
+  current.sideTables.context_claims = Array.from({ length: 20_001 }, () => ({}));
+  rejected(old, current);
+
+  const injected = after(old);
+  Object.defineProperty(injected.sideTables, "context_claims", {
+    enumerable: true, get() { throw new Error("must not invoke accessor"); },
+  });
+  rejected(old, injected);
+
+  const sparseTable = after(old);
+  sparseTable.sideTables.context_claims = new Array(1);
+  rejected(old, sparseTable);
+});
+
+test("2c/4 enforces row size and nesting limits during encoding", () => {
+  const old = before(), current = after(old);
+  current.sideTables.context_claims.push({ oversized: "x".repeat(1_000_001) });
+  rejected(old, current);
+
+  const nested = after(old);
+  let root = {};
+  let pointer = root;
+  for (let i = 0; i < 70; i++) {
+    pointer.child = {};
+    pointer = pointer.child;
+  }
+  nested.sideTables.context_claims.push(root);
+  rejected(old, nested);
+
+  const budgetBefore = before();
+  const payload = "x".repeat(900_000);
+  for (let i = 0; i < 20; i++) {
+    budgetBefore.sideTables.attention_history.push({ id: i, payload });
+  }
+  // Each side is below 32M by itself, but the combined signature budget is not.
+  rejected(budgetBefore, after(budgetBefore));
+});
+
+test("2c/4 rejects unsafe integer numbers and compares lossless tagged SQLite INTEGERs", () => {
+  const old = before();
+  old.sideTables.context_claims.push({ maxSafe: Number.MAX_SAFE_INTEGER });
+  assert.equal(audit(old, after(old)).comparedSideTableRowCount, 1);
+
+  for (const unsafe of [Number.MAX_SAFE_INTEGER + 1, -(Number.MAX_SAFE_INTEGER + 1)]) {
+    const beforeUnsafe = before();
+    beforeUnsafe.sideTables.context_claims.push({ integer: unsafe });
+    rejected(beforeUnsafe, after(beforeUnsafe));
+    const validBefore = before(), invalidAfter = after(validBefore);
+    invalidAfter.sideTables.context_claims.push({ integer: unsafe });
+    rejected(validBefore, invalidAfter);
+  }
+
+  const exact = before();
+  exact.sideTables.context_claims.push({
+    integer: { $sqliteInteger: "9007199254740992" },
+  });
+  const unchanged = after(exact);
+  assert.equal(audit(exact, unchanged).comparedSideTableRowCount, 1);
+  unchanged.sideTables.context_claims[0].integer.$sqliteInteger = "9007199254740993";
+  rejected(exact, unchanged);
+});
