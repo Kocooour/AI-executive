@@ -1,6 +1,7 @@
 // 2c, part 6: pure, caller-supplied Home/Today/Inbox read-model preservation check.
 // No SQLite reads, view queries, writes, migration authorization, hold release,
 // My Plan activation, sharing or attestation of authoritative persisted state.
+import { types as nodeTypes } from "node:util";
 import {
   checkLegacyAssigneeMetadataPreservation,
   type LegacyAssigneeMetadataPostcheck,
@@ -58,8 +59,18 @@ const MAX_DEPTH = 48;
 const MAX_STRING_CHARS = 500_000;
 const MAX_KEY_CHARS = 256;
 
+// No JavaScript traps may run while inspecting untrusted read-model data.
+// Node\'s proxy identity check does not invoke proxy handlers, unlike
+// Object.getPrototypeOf, Reflect.ownKeys and property descriptor lookups.
+function ownDataValue(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object" || nodeTypes.isProxy(value)) blocked();
+  const property = Object.getOwnPropertyDescriptor(value, key);
+  if (!property || !property.enumerable || !("value" in property)) blocked();
+  return property.value;
+}
+
 function ownValues(value: unknown, required: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) blocked();
+  if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || Array.isArray(value)) blocked();
   const prototype = Object.getPrototypeOf(value as object);
   if (prototype !== Object.prototype && prototype !== null) blocked();
   const keys = Reflect.ownKeys(value as object);
@@ -133,6 +144,7 @@ function canonicalView(
     }
     if (!item || typeof item !== "object") blocked();
     const object = item as object;
+    if (nodeTypes.isProxy(object)) blocked();
     const isArray = Array.isArray(item);
     const prototype = Object.getPrototypeOf(object);
     if (isArray ? prototype !== Array.prototype :
@@ -188,10 +200,13 @@ export function checkLegacyAssigneeReadModelPreservation(
   input: LegacyAssigneeReadModelPostcheckInput,
 ): LegacyAssigneeReadModelPostcheck {
   try {
-    if (!input || !input.before || !input.after) blocked();
-
-    const before = readModels(input.before.readModels);
-    const after = readModels(input.after.readModels);
+    // Read required fields through own data descriptors only: no inherited
+    // values, accessors or Proxy traps on the input, snapshots or envelopes.
+    const originalSnapshot = ownDataValue(input, "before") as LegacyAssigneeReadModelSnapshot;
+    const updatedSnapshot = ownDataValue(input, "after") as LegacyAssigneeReadModelSnapshot;
+    const legacySharedWorkspaceIds = ownDataValue(input, "legacySharedWorkspaceIds") as readonly string[];
+    const before = readModels(ownDataValue(originalSnapshot, "readModels"));
+    const after = readModels(ownDataValue(updatedSnapshot, "readModels"));
     for (const field of CONTEXT_FIELDS) {
       if (before.context[field] !== after.context[field]) blocked();
     }
@@ -204,9 +219,9 @@ export function checkLegacyAssigneeReadModelPreservation(
     }
 
     const prior = checkLegacyAssigneeMetadataPreservation({
-      before: input.before,
-      after: input.after,
-      legacySharedWorkspaceIds: input.legacySharedWorkspaceIds,
+      before: originalSnapshot,
+      after: updatedSnapshot,
+      legacySharedWorkspaceIds,
     });
     return Object.freeze({
       ...prior,
