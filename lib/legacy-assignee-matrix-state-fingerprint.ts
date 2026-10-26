@@ -49,13 +49,14 @@ function valueFingerprint(value: unknown, budget: MatrixFingerprintBudget): stri
       return;
     }
     if (!item || typeof item !== "object" || nodeTypes.isProxy(item)) invalid();
-    const array = Array.isArray(item);
-    const prototype = Object.getPrototypeOf(item);
+    const object = item as object;
+    const array = Array.isArray(object);
+    const prototype = Object.getPrototypeOf(object);
     if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) invalid();
-    if (ancestors.has(item)) invalid();
-    ancestors.add(item);
+    if (ancestors.has(object)) invalid();
+    ancestors.add(object);
     try {
-      const keys = Reflect.ownKeys(item);
+      const keys = Reflect.ownKeys(object);
       if (keys.length > MAX_MEMBERS || keys.some(key => typeof key !== "string")) invalid();
       if (array) {
         const values = item as unknown[];
@@ -71,7 +72,7 @@ function valueFingerprint(value: unknown, budget: MatrixFingerprintBudget): stri
         const ordered = (keys as string[]).sort();
         hash.update("o" + ordered.length + ":");
         for (const key of ordered) {
-          const entry = Object.getOwnPropertyDescriptor(item, key);
+          const entry = Object.getOwnPropertyDescriptor(object, key);
           if (!entry || !entry.enumerable || !("value" in entry)) invalid();
           stringPart(hash, key, budget);
           visit(entry.value, depth + 1);
@@ -79,7 +80,7 @@ function valueFingerprint(value: unknown, budget: MatrixFingerprintBudget): stri
         hash.update("}");
       }
     } finally {
-      ancestors.delete(item);
+      ancestors.delete(object);
     }
   };
   visit(value, 0);
@@ -89,12 +90,13 @@ function valueFingerprint(value: unknown, budget: MatrixFingerprintBudget): stri
 // Canonical store collections and SQLite side tables have no row order;
 // preserve every duplicate by sorting all per-row digests (a multiset).
 function rowMultisetFingerprint(rows: unknown, budget: MatrixFingerprintBudget): string {
-  if (nodeTypes.isProxy(rows) || !Array.isArray(rows) ||
-      Object.getPrototypeOf(rows) !== Array.prototype ||
-      rows.length > MAX_MEMBERS || Reflect.ownKeys(rows).length !== rows.length + 1) invalid();
+  if (nodeTypes.isProxy(rows) || !Array.isArray(rows)) invalid();
+  const array = rows as unknown[];
+  if (Object.getPrototypeOf(array) !== Array.prototype ||
+      array.length > MAX_MEMBERS || Reflect.ownKeys(array).length !== array.length + 1) invalid();
   const digests: string[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    const entry = Object.getOwnPropertyDescriptor(rows, String(i));
+  for (let i = 0; i < array.length; i++) {
+    const entry = Object.getOwnPropertyDescriptor(array, String(i));
     if (!entry || !entry.enumerable || !("value" in entry)) invalid();
     digests.push(valueFingerprint(entry.value, budget));
   }
