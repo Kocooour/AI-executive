@@ -6,10 +6,9 @@
 import type { OfflineRecoveryHold } from "./d2b-recovery-hold";
 import { decodeOfflineRecoveryFile, type OfflineRecoveryServer } from "./d2b-offline-recovery-file";
 import {
-  OfflineRecoveryInvalid, type OfflineRecoveryAssessment, type OfflineChange,
+  OfflineRecoveryInvalid, type OfflineRecoveryAssessment,
 } from "./d2b-offline-reconciliation";
 import { assertOfflineRecoveryBundleMatchesHold } from "./d2b-recovery-review";
-import type { Entity } from "./db";
 
 export type RecoveryPreference = "defer" | "prefer-local" | "prefer-server";
 export type RecoveryReason = OfflineRecoveryAssessment["candidates"][number]["reason"];
@@ -40,17 +39,22 @@ export type OfflineRecoveryDecisionPlan = Readonly<{
   unresolvedNonRecordWork: boolean;
 }>;
 
+// v1 rescue files contain ONLY changed records and changed relations. Even if
+// a task's projectId and areaId are unchanged, an unchanged belongs_to_project
+// link can make it inherit the Area of a project whose belongs_to_area link
+// changed locally or only on the server. Neither the old full relationship
+// graph nor authoritative Area/membership evidence is available here.
+//
+// Therefore NO v1 candidate may express prefer-local/prefer-server yet.
+// Adding selective preferences requires a versioned, authenticated *complete*
+// before/after scope witness, with inherited Area and relation comparisons.
+// This explicitly sacrifices convenience to avoid a misleading ACL-sensitive
+// draft. It does not discard the export, permit execution or release the hold.
 const HOLD: readonly RecoveryPreference[] = Object.freeze(["defer"]);
-const ALREADY: readonly RecoveryPreference[] = Object.freeze(["defer", "prefer-server"]);
-const EDITED: readonly RecoveryPreference[] = Object.freeze(["defer", "prefer-local", "prefer-server"]);
 
-/** An issued draft is a volatile capability for editing *preferences only*.
- * Object identity plus deep freezing of the plan's mutable surface prevents
- * callers from reclassifying a collision by cloning/editing the plan.
- * This is NOT a credential, ACL proof or permission to execute a recovery.
- */
 const issuedPlans = new WeakSet<OfflineRecoveryDecisionPlan>();
 
+/** Freeze the private preference draft and refuse any caller-edited clone. */
 function issuePlan(plan: OfflineRecoveryDecisionPlan): OfflineRecoveryDecisionPlan {
   Object.freeze(plan.counts);
   for (const candidate of plan.candidates) Object.freeze(candidate);
@@ -58,44 +62,6 @@ function issuePlan(plan: OfflineRecoveryDecisionPlan): OfflineRecoveryDecisionPl
   Object.freeze(plan);
   issuedPlans.add(plan);
   return plan;
-}
-
-/** Without a proven Area membership map, changes to scopes/relationships
- * remain deferred, including reassignment within the SAME workspace.
- * Even text edits are deferred if the server changed the stored scope in
- * parallel. Other preferences are provisional and never executable.
- */
-function needsScopeReview(change: OfflineChange<Entity>, remote?: Entity): boolean {
-  const { before, after } = change;
-  if (!before || !after || !remote) return true;
-  if (before.type !== after.type || before.type !== remote.type) return true;
-  if (before.type !== "task" && before.type !== "note") return true;
-  if (before.workspaceId !== after.workspaceId || before.workspaceId !== remote.workspaceId) return true;
-  if (!before.properties || !after.properties || !remote.properties) return true;
-  return (["projectId", "areaId"] as const).some((key) =>
-    !Object.is(before.properties[key], after.properties[key]) ||
-    !Object.is(before.properties[key], remote.properties[key]));
-}
-
-
-function optionsFor(reason: RecoveryReason): readonly RecoveryPreference[] {
-  switch (reason) {
-    // A collision or workspace move cannot be solved by picking a value.
-    // It needs ID mapping / Area boundary / ownership review first.
-    case "id-collision":
-    case "workspace-changed":
-      return HOLD;
-    case "already-present":
-    case "already-deleted":
-      return ALREADY;
-    case "remote-missing":
-    case "remote-diverged":
-    case "local-change":
-      return EDITED;
-    default:
-      // Exhaustiveness at compile time, and fail closed at runtime.
-      throw new OfflineRecoveryInvalid();
-  }
 }
 
 /**
@@ -115,34 +81,16 @@ export function draftOfflineRecoveryDecisions(
   const { bundle, assessment } = decodeOfflineRecoveryFile(bytes, server);
   assertOfflineRecoveryBundleMatchesHold(bundle, hold);
   const c = assessment.counts;
-  const remoteEntities = new Map(server.entities.map((entity) => [entity.id, entity]));
-  const scopeAffectedIds = new Set<string>();
-  // A changed edge may change effective Area without touching the entity.
-  // Hold all relation decisions and their directly referenced entities.
-  for (const change of bundle.changes.relations) {
-    for (const edge of [change.before, change.after]) {
-      if (edge) {
-        scopeAffectedIds.add(edge.sourceEntityId);
-        scopeAffectedIds.add(edge.targetEntityId);
-      }
-    }
-  }
-  const candidates = assessment.candidates.map((candidate, index) => {
-    const change = candidate.kind === "entity"
-      ? bundle.changes.entities[index]
-      : bundle.changes.relations[index - bundle.changes.entities.length];
-    if (!change || change.id !== candidate.id) throw new OfflineRecoveryInvalid();
-    const requiresReview = candidate.kind === "relation" ||
-      scopeAffectedIds.has(candidate.id) ||
-      needsScopeReview(change as OfflineChange<Entity>, remoteEntities.get(candidate.id));
-    return {
-      id: candidate.id,
-      kind: candidate.kind,
-      reason: candidate.reason,
-      preference: "defer" as const,
-      availablePreferences: requiresReview ? HOLD : optionsFor(candidate.reason),
-    };
-  });
+  // No known-complete pre-restore relation graph is present in v1. A changed
+  // project/Area relationship can affect ANY task/note (including an unchanged
+  // membership edge removed by a server-only move). Fail closed for all items.
+  const candidates = assessment.candidates.map((candidate) => ({
+    id: candidate.id,
+    kind: candidate.kind,
+    reason: candidate.reason,
+    preference: "defer" as const,
+    availablePreferences: HOLD,
+  }));
   return issuePlan({
     phase: "local-preferences-only",
     identity: "unverified",
@@ -182,7 +130,7 @@ export function preferOfflineRecoveryOutcome(
   const candidates = plan.candidates.map((item) => {
     if (item.id !== id || item.kind !== kind) return item;
     found++;
-    // Only the frozen options derived from the validated bundle are permitted.
+    // Only options from the frozen, issued plan are permitted; v1 is defer-only.
     if (!item.availablePreferences.includes(preference))
       throw new OfflineRecoveryInvalid();
     return { ...item, preference };
