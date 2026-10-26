@@ -26,6 +26,7 @@ function open(result) {
   db.exec("PRAGMA foreign_keys = ON");
   return db;
 }
+const plainRows = (rows) => rows.map((row) => ({ ...row }));
 function seedShared(db, owner, suffix) {
   const workspace = "workspace:shared:" + suffix;
   const area = "area:shared:" + suffix;
@@ -53,9 +54,9 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
     assert.equal(metadata.activated, "false");
     assert.equal(metadata.restore_generation, result.restoreGeneration);
     assert.ok(result.restoreGeneration.length > 16);
-    assert.deepEqual(db.prepare("SELECT id, kind, owner_user_id FROM workspaces").all(),
+    assert.deepEqual(plainRows(db.prepare("SELECT id, kind, owner_user_id FROM workspaces").all()),
       [{ id: result.personalWorkspaceId, kind: "personal", owner_user_id: "owner" }]);
-    assert.deepEqual(db.prepare("SELECT id, title, kind, system_key FROM areas").all(),
+    assert.deepEqual(plainRows(db.prepare("SELECT id, title, kind, system_key FROM areas").all()),
       [{ id: result.unassignedAreaId, title: "Nezařazeno", kind: "private", system_key: "unassigned" }]);
     for (const table of ["area_members", "projects", "tasks"]) {
       assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0);
@@ -91,7 +92,7 @@ test("R1 enforces project inheritance and exactly one effective Area for each ta
     db.prepare("INSERT INTO projects(id, area_id, title) VALUES (?, ?, ?)").run("p1", result.unassignedAreaId, "P");
     db.prepare("INSERT INTO tasks(id, project_id, title) VALUES (?, ?, ?)").run("t-project", "p1", "In project");
     db.prepare("INSERT INTO tasks(id, area_id, title) VALUES (?, ?, ?)").run("t-standalone", result.unassignedAreaId, "Standalone");
-    assert.deepEqual(db.prepare("SELECT task_id, effective_area_id FROM task_effective_areas ORDER BY task_id").all(), [
+    assert.deepEqual(plainRows(db.prepare("SELECT task_id, effective_area_id FROM task_effective_areas ORDER BY task_id").all()), [
       { task_id: "t-project", effective_area_id: result.unassignedAreaId },
       { task_id: "t-standalone", effective_area_id: result.unassignedAreaId },
     ]);
@@ -140,7 +141,7 @@ test("R1 only permits assignment to current shared editors/admins, including inh
     assert.throws(() => db.prepare("INSERT INTO tasks(id, area_id, title, assignee_user_id) VALUES ('viewer-task', ?, 'No', 'viewer')")
       .run(shared.area), /assignee must be a shared-area editor/);
     db.prepare("INSERT INTO tasks(id, project_id, title, assignee_user_id) VALUES ('assigned', 'p', 'Yes', 'member')").run();
-    assert.deepEqual(db.prepare("SELECT task_id, effective_area_id, assignee_user_id FROM task_effective_areas").all(),
+    assert.deepEqual(plainRows(db.prepare("SELECT task_id, effective_area_id, assignee_user_id FROM task_effective_areas").all()),
       [{ task_id: "assigned", effective_area_id: shared.area, assignee_user_id: "member" }]);
     assert.throws(() => db.prepare("UPDATE projects SET area_id = ? WHERE id = 'p'").run(result.unassignedAreaId),
       /project move would invalidate an assignee/);
