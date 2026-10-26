@@ -62,7 +62,7 @@ function ownValues(value: unknown, required: readonly string[]): Record<string, 
   if (!value || typeof value !== "object" || Array.isArray(value)) blocked();
   const prototype = Object.getPrototypeOf(value as object);
   if (prototype !== Object.prototype && prototype !== null) blocked();
-  const keys = Reflect.ownKeys(value);
+  const keys = Reflect.ownKeys(value as object);
   if (keys.length !== required.length ||
       keys.some(key => typeof key !== "string" || !required.includes(key))) blocked();
   const values: Record<string, unknown> = Object.create(null);
