@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifiedTables, storeTables } from "../lib/backup-scope.ts";
 import {
+  matrixFingerprintBudget,
+  matrixStoreTransitionFingerprint,
+} from "../lib/legacy-assignee-matrix-state-fingerprint.ts";
+import {
   checkLegacyAssigneeReadModelMatrixPreservation,
   LegacyAssigneeReadModelMatrixBlocked,
 } from "../lib/legacy-assignee-read-model-matrix-postcheck.ts";
@@ -373,6 +377,139 @@ test("2c/7 blocks nested proxy traps in every delegated data layer", () => {
       assert.equal(trapCalls, 0, `${label} (${side}) must not run proxy traps`);
     }
   }
+});
+
+test("2c/8 rejects different canonical records even when every aggregate count agrees", () => {
+  const input = fixture();
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].entities.find(row => row.id === "private-task").title =
+      "SECRET-different-private-task";
+  }
+  rejects(input);
+});
+
+test("2c/8 rejects different side-table row content with matching counts", () => {
+  const input = fixture();
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push({ account: "same", encrypted: "SECRET-original" });
+    }
+  }
+  assert.equal(check(input).checkedContextCount, 3);
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].sideTables.mail_accounts[0].encrypted = "SECRET-different";
+  }
+  rejects(input);
+});
+
+test("2c/8 rejects different unchanged metadata values across contexts", () => {
+  const input = fixture();
+  for (const side of ["before", "after"]) {
+    input.cases[1][side].metadata.find(row => row.key === "vapidKeys").value =
+      "SECRET-different-but-consistent-within-pair";
+  }
+  rejects(input);
+});
+
+test("2c/8 permits reordering of canonical rows, metadata and side-table multisets", () => {
+  const input = fixture();
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push(
+        { id: "x", payload: { b: [1, 2], a: "unchanged" } },
+        { id: "y", payload: { a: null, b: 3 } },
+      );
+    }
+  }
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.entities.reverse();
+    snapshot.metadata.reverse();
+    snapshot.sideTables.mail_accounts.reverse();
+    snapshot.sideTables.mail_accounts[0] = {
+      payload: { b: 3, a: null }, id: "y",
+    };
+    snapshot.sideTables.mail_accounts[1] = {
+      payload: { a: "unchanged", b: [1, 2] }, id: "x",
+    };
+  }
+  const result = check(input);
+  assert.equal(result.checkedContextCount, 3);
+  assert.equal(result.canApply, false);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET|digest|fingerprint|metadata/);
+});
+
+test("2c/8 preserves duplicate side-table row multiplicity across contexts", () => {
+  const input = fixture();
+  const aRow = { id: "A", encrypted: "SECRET-A" };
+  const bRow = { id: "B", encrypted: "SECRET-B" };
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push(
+        structuredClone(aRow), structuredClone(aRow), structuredClone(bRow));
+    }
+  }
+
+  // The first context has [B, A, A], all others have [A, A, B].
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.sideTables.mail_accounts.reverse();
+  }
+  assert.equal(check(input).checkedContextCount, 3);
+
+  // Now the first context has [B, B, A], with the same total row count
+  // and an identical before/after pair; only cross-context multiplicity differs.
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.sideTables.mail_accounts[1] = structuredClone(bRow);
+  }
+  rejects(input);
+});
+
+test("2c/8 enforces exact and one-over node/UTF-16 budgets shared across contexts", () => {
+  const factoryBudget = matrixFingerprintBudget();
+  assert.deepEqual(factoryBudget, {
+    remainingNodes: 1_000_000,
+    remainingStringChars: 64_000_000,
+  });
+
+  // Calibrate a complete transition, not a partial row. The fixture has two
+  // distinct actor/query contexts but the identical claimed persisted state.
+  const [first, second] = fixture().cases;
+  const fingerprint = matrixStoreTransitionFingerprint(
+    first.before, first.after, factoryBudget);
+  const perTransitionNodes = 1_000_000 - factoryBudget.remainingNodes;
+  const perTransitionChars = 64_000_000 - factoryBudget.remainingStringChars;
+  assert.ok(perTransitionNodes > 0);
+  assert.ok(perTransitionChars > 0);
+
+  for (const field of ["remainingNodes", "remainingStringChars"]) {
+    const atLimit = {
+      remainingNodes: 2 * perTransitionNodes,
+      remainingStringChars: 2 * perTransitionChars,
+    };
+    assert.equal(matrixStoreTransitionFingerprint(first.before, first.after, atLimit), fingerprint);
+    assert.equal(matrixStoreTransitionFingerprint(second.before, second.after, atLimit), fingerprint);
+    assert.deepEqual(atLimit, { remainingNodes: 0, remainingStringChars: 0 });
+
+    // One code unit or node short: first transition succeeds; the second
+    // fails solely because it shares the remaining budget with the first.
+    const oneOver = {
+      remainingNodes: 2 * perTransitionNodes,
+      remainingStringChars: 2 * perTransitionChars,
+    };
+    oneOver[field]--;
+    assert.equal(matrixStoreTransitionFingerprint(first.before, first.after, oneOver), fingerprint);
+    assert.throws(() => matrixStoreTransitionFingerprint(second.before, second.after, oneOver));
+    assert.ok(oneOver[field] < 0);
+  }
+});
+
+test("2c/8 fails closed on an over-depth cross-context fingerprint input", () => {
+  const input = fixture();
+  let nested = { flag: "safe" };
+  for (let i = 0; i < 100; i++) nested = { child: nested };
+  for (const side of ["before", "after"]) {
+    input.cases[0][side].entities.find(row => row.id === "private-task").properties.deep = nested;
+  }
+  rejects(input);
 });
 
 test("2c/7 rejects malformed context text and unexpected shell keys", () => {

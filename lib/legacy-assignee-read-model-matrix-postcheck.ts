@@ -3,6 +3,10 @@
 // authorize a migration, release a hold, activate My Plan or enable sharing.
 import { types as nodeTypes } from "node:util";
 import {
+  matrixFingerprintBudget,
+  matrixStoreTransitionFingerprint,
+} from "./legacy-assignee-matrix-state-fingerprint";
+import {
   checkLegacyAssigneeReadModelPreservation,
   type LegacyAssigneeReadModelSnapshot,
 } from "./legacy-assignee-read-model-postcheck";
@@ -159,17 +163,27 @@ export function checkLegacyAssigneeReadModelMatrixPreservation(
     if (seen.size !== expectedKeys.size) blocked();
 
     let baseline: ReturnType<typeof checkLegacyAssigneeReadModelPreservation> | undefined;
+    let baselineStateFingerprint: string | undefined;
+    const stateBudget = matrixFingerprintBudget();
     for (const pair of pairs) {
       const report = checkLegacyAssigneeReadModelPreservation({
         before: pair.before, after: pair.after,
         legacySharedWorkspaceIds: legacyIds as string[],
       });
+      // Prior stages prove pairwise preservation on caller assertions. Also
+      // require every actor/time/query case to describe the *same* claimed
+      // persisted before/after transition, not merely matching row counts.
+      const stateFingerprint = matrixStoreTransitionFingerprint(
+        pair.before, pair.after, stateBudget,
+      );
       if (baseline) {
         for (const field of STABLE_REPORT_FIELDS) {
           if (baseline[field] !== report[field]) blocked();
         }
+        if (stateFingerprint !== baselineStateFingerprint) blocked();
       } else {
         baseline = report;
+        baselineStateFingerprint = stateFingerprint;
       }
     }
     return Object.freeze({
