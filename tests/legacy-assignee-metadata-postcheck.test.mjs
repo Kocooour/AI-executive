@@ -215,6 +215,30 @@ test("2c/5 rejects over-budget rows, values and metadata snapshots", () => {
   rejects(budgetBefore, budgetAfter);
 });
 
+test("2c/5 rejects metadata proxies before invoking traps", () => {
+  let trapCalls = 0;
+  const wrap = object => new Proxy(object, {
+    get(target, key, receiver) { trapCalls++; return Reflect.get(target, key, receiver); },
+    getPrototypeOf(target) { trapCalls++; return Reflect.getPrototypeOf(target); },
+    ownKeys(target) { trapCalls++; return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      trapCalls++;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  for (const side of ["before", "after"]) {
+    for (const change of [
+      snapshot => { snapshot.metadata = wrap(snapshot.metadata); },
+      snapshot => { snapshot.metadata[0] = wrap(snapshot.metadata[0]); },
+    ]) {
+      const old = initial(), current = next(old);
+      change(side === "before" ? old : current);
+      rejects(old, current);
+      assert.equal(trapCalls, 0, "metadata proxy trap must not run");
+    }
+  }
+});
+
 test("2c/5 inherits canonical and side-table fail-closed checks", () => {
   const before = initial();
   before.sideTables.mail_accounts.push({ credential: "SECRET" });

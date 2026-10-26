@@ -242,6 +242,46 @@ test("2c/4 enforces row size and nesting limits during encoding", () => {
   rejected(budgetBefore, after(budgetBefore));
 });
 
+test("2c/4 rejects nested side-table proxies without handler execution", () => {
+  let traps = 0;
+  const wrap = object => new Proxy(object, {
+    get(target, key, receiver) { traps++; return Reflect.get(target, key, receiver); },
+    getPrototypeOf(target) { traps++; return Reflect.getPrototypeOf(target); },
+    ownKeys(target) { traps++; return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      traps++;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const variants = [
+    snapshot => { snapshot.sideTables = wrap(snapshot.sideTables); },
+    snapshot => {
+      snapshot.sideTables.context_claims = wrap(snapshot.sideTables.context_claims);
+    },
+    snapshot => {
+      snapshot.sideTables.context_claims[0] = wrap(snapshot.sideTables.context_claims[0]);
+    },
+    snapshot => {
+      const row = snapshot.sideTables.context_claims[0];
+      row.payload = wrap(row.payload);
+    },
+    snapshot => {
+      const row = snapshot.sideTables.context_claims[0];
+      row.payload.items = wrap(row.payload.items);
+    },
+  ];
+  for (const mutate of variants) {
+    for (const side of ["before", "after"]) {
+      const old = before();
+      old.sideTables.context_claims.push({ payload: { items: [{ confidential: "SECRET" }] } });
+      const current = after(old);
+      mutate(side === "before" ? old : current);
+      rejected(old, current);
+      assert.equal(traps, 0, "proxy traps must not run on either snapshot");
+    }
+  }
+});
+
 test("2c/4 rejects unsafe integer numbers and compares lossless tagged SQLite INTEGERs", () => {
   const old = before();
   old.sideTables.context_claims.push({ maxSafe: Number.MAX_SAFE_INTEGER });

@@ -312,6 +312,69 @@ test("2c/7 rejects inherited, missing, additional and exotic snapshot fields", (
   }
 });
 
+test("2c/7 blocks nested proxy traps in every delegated data layer", () => {
+  let trapCalls = 0;
+  const wrap = target => new Proxy(target, {
+    get(target, key, receiver) { trapCalls++; return Reflect.get(target, key, receiver); },
+    getPrototypeOf(target) { trapCalls++; return Reflect.getPrototypeOf(target); },
+    ownKeys(target) { trapCalls++; return Reflect.ownKeys(target); },
+    getOwnPropertyDescriptor(target, key) {
+      trapCalls++;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+  });
+  const withRows = () => {
+    const input = fixture();
+    for (const pair of input.cases) {
+      for (const snapshot of [pair.before, pair.after]) {
+        snapshot.sideTables.mail_accounts.push({ nested: { items: [{ token: "SECRET" }] } });
+      }
+    }
+    return input;
+  };
+  assert.equal(check(withRows()).checkedContextCount, 3);
+  const mutate = [
+    ["metadata array", snapshot => { snapshot.metadata = wrap(snapshot.metadata); }],
+    ["metadata row", snapshot => { snapshot.metadata[0] = wrap(snapshot.metadata[0]); }],
+    ["side-table envelope", snapshot => { snapshot.sideTables = wrap(snapshot.sideTables); }],
+    ["side-table array", snapshot => {
+      snapshot.sideTables.mail_accounts = wrap(snapshot.sideTables.mail_accounts);
+    }],
+    ["side-table row", snapshot => {
+      snapshot.sideTables.mail_accounts[0] = wrap(snapshot.sideTables.mail_accounts[0]);
+    }],
+    ["side-table nested object", snapshot => {
+      const row = snapshot.sideTables.mail_accounts[0];
+      row.nested = wrap(row.nested);
+    }],
+    ["side-table nested array", snapshot => {
+      const nested = snapshot.sideTables.mail_accounts[0].nested;
+      nested.items = wrap(nested.items);
+    }],
+    ["side-table deeply nested row", snapshot => {
+      const nested = snapshot.sideTables.mail_accounts[0].nested;
+      nested.items[0] = wrap(nested.items[0]);
+    }],
+    ["canonical entities array", snapshot => { snapshot.entities = wrap(snapshot.entities); }],
+    ["canonical entity", snapshot => { snapshot.entities[0] = wrap(snapshot.entities[0]); }],
+    ["canonical nested properties", snapshot => {
+      snapshot.entities[0].properties = wrap(snapshot.entities[0].properties);
+    }],
+    ["canonical nested members array", snapshot => {
+      const properties = snapshot.entities[0].properties;
+      properties.members = wrap(properties.members);
+    }],
+  ];
+  for (const [label, change] of mutate) {
+    for (const side of ["before", "after"]) {
+      const input = withRows();
+      change(input.cases[0][side]);
+      rejects(input);
+      assert.equal(trapCalls, 0, `${label} (${side}) must not run proxy traps`);
+    }
+  }
+});
+
 test("2c/7 rejects malformed context text and unexpected shell keys", () => {
   const blank = fixture();
   blank.expectedContexts[0].actorUserId = "   ";
