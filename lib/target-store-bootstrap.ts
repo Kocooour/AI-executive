@@ -101,7 +101,7 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
   return destination;
 }
 
-const TARGET_SCHEMA_SQL = `
+export const TARGET_SCHEMA_SQL = `
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE identities (
   id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0)
