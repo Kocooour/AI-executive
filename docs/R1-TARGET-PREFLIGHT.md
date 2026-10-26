@@ -11,7 +11,7 @@ does not create directories, databases or sidecar files. Its typed
 SQLite errors. `ok: false` fails closed.
 
 Default `mode: "stage"` verifies exact inactive metadata, optional expected owner
-and restore generation, expected tables/views/indexes/triggers, SQLite
+and restore generation, canonical SQL definitions of tables/views/indexes/triggers, SQLite
 quick/integrity and foreign-key checks, personal workspace and private
 `Nezařazeno` boundaries, task effective Areas and shared task assignees. An
 incomplete shared workspace can be a valid R1 staging intermediate state.
