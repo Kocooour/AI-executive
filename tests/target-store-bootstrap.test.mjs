@@ -149,6 +149,8 @@ test("R1 only permits assignment to current shared editors/admins, including inh
       /unassign tasks before removing membership/);
     assert.throws(() => db.prepare("UPDATE area_members SET role = 'viewer' WHERE area_id = ? AND user_id = 'member'").run(shared.area),
       /unassign tasks before downgrading membership/);
+    assert.throws(() => db.prepare("UPDATE area_members SET user_id = 'viewer' WHERE area_id = ? AND user_id = 'member'").run(shared.area),
+      /unassign tasks before moving membership/);
     db.prepare("UPDATE tasks SET assignee_user_id = NULL WHERE id = 'assigned'").run();
     db.prepare("DELETE FROM area_members WHERE area_id = ? AND user_id = 'member'").run(shared.area);
     assert.equal(db.prepare("SELECT assignee_user_id FROM tasks WHERE id = 'assigned'").get().assignee_user_id, null);
