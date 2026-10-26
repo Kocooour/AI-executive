@@ -120,7 +120,10 @@ test("2c/5 preserves exact metadata row set and confidential values", () => {
 
 test("2c/5 verifies exact canonical decimal revision and monotone updatedAt", () => {
   const before = initial();
-  for (const revision of ["14", "16", "015", "1e1", "-1", "", "9007199254740993"]) {
+  const valid = next(before);
+  assert.equal(check(before, valid).sourceRevision, 15);
+  assert.equal(check(before, valid).resultRevision, 16);
+  for (const revision of ["14", "15", "17", "015", "1e1", "-1", "", "9007199254740993"]) {
     const mutated = next(before);
     set(mutated.metadata, "revision", revision);
     rejects(before, mutated);
