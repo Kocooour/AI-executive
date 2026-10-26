@@ -156,12 +156,15 @@ test("2c/4 rejects malformed JSON rows, accessors, cycles and sparse arrays", ()
     row => { Object.defineProperty(row, "accessor", { enumerable: true, get() { return 1; } }); },
   ];
   for (const mutate of mutations) {
-    const old = before(), current = after(old);
-    current.sideTables.context_claims.push({ id: "x" });
+    const old = before();
+    old.sideTables.context_claims.push({ id: "x" });
+    const current = after(old);
     mutate(current.sideTables.context_claims[0]);
     rejected(old, current);
   }
-  const old = before(), current = after(old);
+  const old = before();
+  old.sideTables.context_claims.push({ id: "x" });
+  const current = after(old);
   current.sideTables.context_claims = [null];
   rejected(old, current);
   const sparse = after(old);
@@ -212,19 +215,23 @@ test("2c/4 checks table row-count and accessor shape before deep traversal", () 
 });
 
 test("2c/4 enforces row size and nesting limits during encoding", () => {
-  const old = before(), current = after(old);
-  current.sideTables.context_claims.push({ oversized: "x".repeat(1_000_001) });
+  const old = before();
+  old.sideTables.context_claims.push({ oversized: "within-limit" });
+  const current = after(old);
+  current.sideTables.context_claims[0].oversized = "x".repeat(1_000_001);
   rejected(old, current);
 
-  const nested = after(old);
+  const nestedBefore = before();
+  nestedBefore.sideTables.context_claims.push({ nested: {} });
+  const nested = after(nestedBefore);
   let root = {};
   let pointer = root;
   for (let i = 0; i < 70; i++) {
     pointer.child = {};
     pointer = pointer.child;
   }
-  nested.sideTables.context_claims.push(root);
-  rejected(old, nested);
+  nested.sideTables.context_claims[0].nested = root;
+  rejected(nestedBefore, nested);
 
   const budgetBefore = before();
   const payload = "x".repeat(900_000);
@@ -244,8 +251,10 @@ test("2c/4 rejects unsafe integer numbers and compares lossless tagged SQLite IN
     const beforeUnsafe = before();
     beforeUnsafe.sideTables.context_claims.push({ integer: unsafe });
     rejected(beforeUnsafe, after(beforeUnsafe));
-    const validBefore = before(), invalidAfter = after(validBefore);
-    invalidAfter.sideTables.context_claims.push({ integer: unsafe });
+    const validBefore = before();
+    validBefore.sideTables.context_claims.push({ integer: 1 });
+    const invalidAfter = after(validBefore);
+    invalidAfter.sideTables.context_claims[0].integer = unsafe;
     rejected(validBefore, invalidAfter);
   }
 
