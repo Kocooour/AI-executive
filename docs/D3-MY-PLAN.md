@@ -1,6 +1,6 @@
 # D3 — příprava datového rozsahu „Můj plán“
 
-Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený kontrakt [LUMI-FR-013](PRODUCT.md#lumi-fr-013) a migrační plán v [ARCHITECTURE.md](ARCHITECTURE.md#víceuživatelské-oblasti--cílový-bezpečnostní-kontrakt-2026-10-23).
+Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený kontrakt [LUMI-FR-013](PRODUCT.md#lumi-fr-013) a aktuální [clean-start roadmapu](ROADMAP.md) s povinnými bezpečnostními branami v [ARCHITECTURE.md](ARCHITECTURE.md). Historický migrační plán platí pouze při schváleném převodu legacy dat.
 
 ## Co obsahuje první D3 změna
 
@@ -21,7 +21,7 @@ Aktuální [roadmapa](ROADMAP.md) zvolila pro převážně testovací data **či
 5. Testovat izolaci více identit, nepřidělené vs. přidělené sdílené úkoly, prázdné stavy, konzistenci ID/revizí, detail oprávněného projektu, klávesnici/VoiceOver/úzký mobil, ztrátu práv, offline klienty a konflikty. Pozvánky pro další identity zůstávají vypnuté, dokud nejsou splněny všechny bezpečnostní brány.
 6. Produkční přepnutí do nového store **není tímto rozhodnutím povoleno**. Vyžaduje inventuru, ověřenou archivní zálohu + obnovu, plán pro staré klienty a samostatný výslovný souhlas vlastníka s přesným rozsahem změn.
 
-**Alternativa:** pokud bude dodatečně rozhodnuto zachovat legacy obsah, teprve pak platí dřívější [migrace 2a–2c](ARCHITECTURE.md) včetně backfillu starých úkolů a shody Home/Today/Inbox; nelze ji implicitně obejít při převodu skutečných dat.
+**Alternativa:** pokud bude dodatečně rozhodnuto zachovat legacy obsah, teprve pak platí dřívější [migrace 2a–2c](ARCHITECTURE.md#historicka-migrace-2a-2c) včetně backfillu starých úkolů a shody Home/Today/Inbox; nelze ji implicitně obejít při převodu skutečných dat.
 
 **Nezahrnuto v této změně:** migrace, assignee zápisy, oprávnění více identit, nové pozvánky, úprava současného workspace switcheru, aktivace Mého plánu, nasazení.
 
