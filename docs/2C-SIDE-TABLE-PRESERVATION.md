@@ -1,0 +1,28 @@
+# 2c, part 4 — read-only side-table preservation check
+
+**Status: pure, caller-supplied before/after diagnostic only. No migration, database reader, writes, feature activation or sharing.** Builds on entity-only preflight/postcheck (#117–118) and complete canonical entity/relation/tombstone postcheck (#119).
+
+## Coverage
+
+`checkLegacyAssigneeSideTablePreservation({ before, after, legacySharedWorkspaceIds })` first invokes the already-reviewed canonical store postcheck. It then verifies that both snapshots explicitly contain an array for **every table named by `classifiedTables()` except** the canonical `entities`, `relations`, `tombstones` arrays (covered by #119) and `metadata` (not yet covered).
+
+Both complete table sets are required, including tables classified as owner-data, excluded-kept and excluded-cleared in `lib/backup-scope.ts`. A table with no rows must be represented by `[]`; a missing table, extra table, or newly classified table not supplied by the caller blocks the check. This dependency intentionally forces any future schema extension in `backup-scope.ts` to expand the expected inventory. The **schema inventory itself still needs independent audit**: an unclassified live SQLite table cannot be detected from a caller-supplied snapshot.
+
+- Rows are compared as exact **multisets**, not by array order, `id`, a guessed composite primary key or simple row counts. Every column and nested value must agree, including duplicate multiplicity. JSON object key order is immaterial; nested array order is significant.
+- Non-JSON values, cycles, sparse arrays, hidden/accessor/symbol properties, null row values, row deletions, insertions, and rewrites all fail closed. Storage BLOBs must be represented by a lossless, caller-consistent encoding (for example base64). SQLite 64-bit INTEGERs **outside the JavaScript safe-integer range** must not be decoded into JS `number` (precision may already be lost); use a lossless, consistently tagged value such as `{ "$sqliteInteger": "9007199254740993" }`, distinct from ordinary TEXT. Unsafe integer `number` values are rejected, but **the caller/extractor must guarantee lossless typing before this diagnostic sees any data**. This pure library does not open SQLite or attest encoding.
+- Bounds: up to 20,000 rows per table, 100,000 rows per side-table snapshot, 20,000 members per nested JSON container, maximum nesting depth 64, at most 1 million canonicalized characters per row, and 32 million canonicalized characters across before/after combined. Table and row counts are checked **before** walking row data; encoding decrements character budgets incrementally, rejecting over-budget input before constructing a full row signature. Excessive or malformed inputs block without returning their contents. These are bounded-input safeguards for ordinary plain JS snapshot values, not a sandbox for malicious Proxies or an attestation of source completeness.
+- All original safeguards still apply: allowed legacy assignee updates only, unchanged canonical entity IDs/fields, relations and tombstones, matching restore generation, revision +1 for a change (or unchanged for a no-op), and single-owner legacy-only selection.
+
+A successful result is frozen and contains **only revisions and aggregate counts**. Flags `verifiedPersistedState`, `verifiedMetadata`, `verifiedSideTables`, `verifiedHomeTodayInbox`, `canApply`, `canReleaseHold`, `canActivateMyPlan` and `canEnableSharing` are always **false**. Never log, upload, link or persist the sensitive caller-supplied snapshots (mail, credentials, history, notes, contextual evidence and private work included).
+
+## What is *not* proved
+
+This cannot prove caller-supplied arrays are complete, authentic, fresh, transactionally locked, authorized or actually persisted. The `metadata` table is intentionally excluded because revision and `updatedAt` can change legitimately and require separately reviewed key-level policy and authoritative CAS. No claims are made about unclassified SQLite tables, sequences/indexes/triggers, server membership and lineage, queued offline changes, caches outside listed tables, verified backup/restore, actual Home/Today/Inbox identity/order/counts, or the 2a/2b release conditions. `verifiedSideTables:false` is deliberate: matching untrusted table snapshots is *not* evidence of authoritative preservation.
+
+A future executor must require 2a/2b deployment and proofs, trusted historical legacy designation and actor/Area ACL, transaction-level snapshot and compare-and-swap, explicit `metadata` change policy, all schema tables/side effects, crash-safe backup/rollback and an independent exact Home/Today/Inbox preservation gate. Never use this diagnostic as authority to apply mutations, unfreeze recovery, activate My Plan or enable sharing.
+
+## Validation and isolation
+
+`tests/legacy-assignee-side-table-postcheck.test.mjs` exercises classified coverage, missing/unknown/new fields, unknown schema tables, row reordering, duplicate multiplicity, changed secrets/attention/cache data, JSON edge cases, adversarial row/aggregate/depth limits, unsafe SQLite integers and losslessly tagged values, entity/tombstone drift, no-op and frozen non-authorizing outputs. CI: script syntax, `pnpm typecheck`, `pnpm test`, `pnpm build`; full browser E2E only before deployment on exact main SHA.
+
+Branch: `codex/2c-side-table-preservation-20261026` from main squash merge `1fe04c09e7b57fd0b8863d343a4782258bcbf498`. GitHub-only synthetic change; no local instance, database, secrets, external data, environment, deployment or conflicting branches. No preview URL is applicable.
