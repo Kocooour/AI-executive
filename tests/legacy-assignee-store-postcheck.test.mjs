@@ -179,6 +179,36 @@ test("2c/3 rejects non-JSON relation and tombstone fields even with matching val
   rejected(old, current);
 });
 
+test("2c/3 rejects proxy canonical collections before reading their lengths", () => {
+  let trapCalls = 0;
+  const wrap = target => new Proxy(target, {
+    get(object, key, receiver) { trapCalls++; return Reflect.get(object, key, receiver); },
+    getPrototypeOf(object) { trapCalls++; return Reflect.getPrototypeOf(object); },
+    ownKeys(object) { trapCalls++; return Reflect.ownKeys(object); },
+    getOwnPropertyDescriptor(object, key) {
+      trapCalls++;
+      return Reflect.getOwnPropertyDescriptor(object, key);
+    },
+  });
+  for (const side of ["before", "after"]) {
+    for (const field of ["entities", "relations", "tombstones"]) {
+      const old = before(), current = after(old);
+      const target = side === "before" ? old : current;
+      target[field] = wrap(target[field]);
+      rejected(old, current);
+      assert.equal(trapCalls, 0, `${side}.${field} must not execute proxy handlers`);
+
+      const revokedBefore = before(), revokedAfter = after(revokedBefore);
+      const revokedTarget = side === "before" ? revokedBefore : revokedAfter;
+      const revoked = Proxy.revocable(revokedTarget[field], {});
+      revoked.revoke();
+      revokedTarget[field] = revoked.proxy;
+      rejected(revokedBefore, revokedAfter);
+      assert.equal(trapCalls, 0);
+    }
+  }
+});
+
 test("2c/3 delegates entity-assignee and revision safety to 2c/2", () => {
   const old = before();
   const wrongAssignee = after(old);

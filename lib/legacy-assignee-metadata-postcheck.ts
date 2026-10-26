@@ -1,6 +1,7 @@
 // 2c, part 5: pure, caller-supplied metadata preservation diagnostic.
 // This is neither a SQLite reader nor permission to migrate, release holds,
 // activate My Plan, enable sharing, or assert persisted/attested integrity.
+import { types as nodeTypes } from "node:util";
 import {
   checkLegacyAssigneeSideTablePreservation,
   type LegacyAssigneeSideTablePostcheck,
@@ -42,7 +43,7 @@ const MAX_VALUE_LENGTH = 1_000_000;
 const MAX_TOTAL_CHARS = 4_000_000;
 
 function readRows(value: unknown, budget: { remaining: number }): Map<string, string> {
-  if (!Array.isArray(value)) blocked();
+  if (nodeTypes.isProxy(value) || !Array.isArray(value)) blocked();
   const rows = value as unknown[];
   if (Object.getPrototypeOf(rows) !== Array.prototype ||
       rows.length > MAX_METADATA_ROWS ||
@@ -52,7 +53,7 @@ function readRows(value: unknown, budget: { remaining: number }): Map<string, st
     const item = Object.getOwnPropertyDescriptor(rows, String(index));
     if (!item || !item.enumerable || !("value" in item)) blocked();
     const row: unknown = item.value;
-    if (!row || typeof row !== "object" || Array.isArray(row)) blocked();
+    if (!row || typeof row !== "object" || nodeTypes.isProxy(row) || Array.isArray(row)) blocked();
     const object = row as object;
     const prototype = Object.getPrototypeOf(object);
     if (prototype !== Object.prototype && prototype !== null) blocked();

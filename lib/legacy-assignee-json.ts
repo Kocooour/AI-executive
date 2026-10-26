@@ -3,10 +3,13 @@
 // These snapshots represent persisted JSON entities. Reject exotic in-memory
 // values instead of letting JSON serialization hide differences (for example,
 // Date objects stringify as {}, and NaN stringifies as null).
+import { types as nodeTypes } from "node:util";
+
 export function isJsonData(value: unknown, ancestors = new WeakSet<object>()): boolean {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object" || ancestors.has(value)) return false;
+  // Reject proxies (including revoked proxies) without running their handlers.
+  if (typeof value !== "object" || nodeTypes.isProxy(value) || ancestors.has(value)) return false;
 
   const array = Array.isArray(value);
   const prototype = Object.getPrototypeOf(value);

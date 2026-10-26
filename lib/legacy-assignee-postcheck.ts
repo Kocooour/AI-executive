@@ -1,6 +1,7 @@
 // 2c, part 2: pure before/after entity integrity check for a future,
 // separately authorized and transactionally guarded legacy assignee backfill.
 // This does NOT write data, attest provenance/freshness, or enable My Plan.
+import { types as nodeTypes } from "node:util";
 import type { Entity } from "./db";
 import { equalJsonData, isJsonData } from "./legacy-assignee-json";
 import { planLegacyOwnerAssignees, type LegacyAssigneeSource } from "./legacy-assignee-preflight";
@@ -60,7 +61,9 @@ export function checkLegacyOwnerAssigneeBackfill(input: LegacyAssigneePostcheckI
     // Validate both complete entity collections before calculating any plan.
     // Missing/undefined properties, non-finite numbers, exotic objects, array
     // holes, getters and cycles are not valid canonical persisted JSON.
-    if (!Array.isArray(input.before.entities) || !Array.isArray(input.after.entities) ||
+    // Direct callers need the same trap-free canonical boundary as part 3.
+    if (nodeTypes.isProxy(input.before.entities) || nodeTypes.isProxy(input.after.entities) ||
+        !Array.isArray(input.before.entities) || !Array.isArray(input.after.entities) ||
         input.before.entities.length > 20_000 || input.after.entities.length > 20_000 ||
         !isJsonData(input.before.entities) || !isJsonData(input.after.entities)) blocked();
     beforePlan = planLegacyOwnerAssignees({

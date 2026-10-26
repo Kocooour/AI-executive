@@ -1,5 +1,6 @@
 // 2c, part 3: pure, read-only canonical store preservation diagnostic.
 // Never authorize a migration, a write, a hold release, My Plan or sharing.
+import { types as nodeTypes } from "node:util";
 import type { Relation } from "./db";
 import { equalJsonData, isJsonData } from "./legacy-assignee-json";
 import {
@@ -74,6 +75,12 @@ export function checkLegacyAssigneeStorePreservation(
   try {
     if (!input || !input.before || !input.after) blocked();
     const { before, after, legacySharedWorkspaceIds } = input;
+
+    // Reject proxy arrays before reading their .length; even a harmless
+    // length read invokes attacker-controlled get traps on a Proxy.
+    if (nodeTypes.isProxy(before.entities) || nodeTypes.isProxy(after.entities) ||
+        nodeTypes.isProxy(before.relations) || nodeTypes.isProxy(after.relations) ||
+        nodeTypes.isProxy(before.tombstones) || nodeTypes.isProxy(after.tombstones)) blocked();
 
     // Required complete canonical collections, not optional arrays that could
     // accidentally be interpreted as empty and thus certified as unchanged.

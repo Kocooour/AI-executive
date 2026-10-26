@@ -160,6 +160,21 @@ test("2c/2 remains strictly diagnostic and refuses unauthenticated/multi-user se
   assert.throws(() => audit(changed, after(changed)), LegacyAssigneePostcheckBlocked);
 });
 
+test("2c/2 rejects canonical entity proxies without reading lengths or invoking handlers", () => {
+  let trapCalls = 0;
+  for (const side of ["before", "after"]) {
+    const old = before(), current = after(old);
+    const target = side === "before" ? old : current;
+    target.entities = new Proxy(target.entities, {
+      get(object, key, receiver) { trapCalls++; return Reflect.get(object, key, receiver); },
+      getPrototypeOf(object) { trapCalls++; return Reflect.getPrototypeOf(object); },
+      ownKeys(object) { trapCalls++; return Reflect.ownKeys(object); },
+    });
+    assert.throws(() => audit(old, current), LegacyAssigneePostcheckBlocked);
+    assert.equal(trapCalls, 0);
+  }
+});
+
 test("2c/2 rejects Date drift even when field-merge considers both dates equal", () => {
   for (const id of ["z-open", "owned", "private"]) {
     const old = before();
