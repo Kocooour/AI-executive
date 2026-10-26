@@ -41,7 +41,13 @@ export class RecoveryScopeGraphInvalid extends Error {
 }
 
 type Scope = Readonly<{ workspaceId: string; areaId: string }>;
-type Resolved = { scopes: Map<string, Scope>; crossAreaRelations: number };
+type Resolved = {
+  scopes: Map<string, Scope>;
+  // Preserve global canonical identity across graphs, including unscoped
+  // workspace records and entity/relation namespace changes.
+  kindsById: Map<string, Entity["type"] | "relation">;
+  crossAreaRelations: number;
+};
 type EntityRecord = Entity;
 
 const validId = (value: unknown): value is string =>
@@ -64,6 +70,7 @@ function resolveScopeGraph(snapshot: RecoveryScopeSnapshot): Resolved {
       snapshot.entities.length > 20_000 || snapshot.relations.length > 50_000) invalid();
 
   const entities = new Map<string, EntityRecord>();
+  const kindsById = new Map<string, Entity["type"] | "relation">();
   const taken = new Set<string>();
   const kinds = new Map<string, "personal" | "shared">([["personal", "personal"]]);
   const explicitWorkspaces = new Set<string>();
@@ -74,6 +81,7 @@ function resolveScopeGraph(snapshot: RecoveryScopeSnapshot): Resolved {
         typeof item.status !== "string") invalid();
     taken.add(item.id);
     entities.set(item.id, item);
+    kindsById.set(item.id, item.type);
     if (item.type === "workspace") {
       if (item.id !== "workspace:" + item.workspaceId || explicitWorkspaces.has(item.workspaceId) ||
           (item.workspaceId === "personal" ? item.properties.kind !== "personal"
@@ -97,6 +105,7 @@ function resolveScopeGraph(snapshot: RecoveryScopeSnapshot): Resolved {
         taken.has(edge.id) || typeof edge.relationType !== "string" || !edge.relationType)
       invalid();
     taken.add(edge.id);
+    kindsById.set(edge.id, "relation");
     const source = entities.get(edge.sourceEntityId);
     const target = entities.get(edge.targetEntityId);
     if (!source || !target || source.workspaceId !== target.workspaceId ||
@@ -163,10 +172,13 @@ function resolveScopeGraph(snapshot: RecoveryScopeSnapshot): Resolved {
     if (edge.relationType === "belongs_to_area" || edge.relationType === "belongs_to_project") continue;
     const a = scopes.get(edge.sourceEntityId);
     const b = scopes.get(edge.targetEntityId);
-    if (a && b && (a.workspaceId !== b.workspaceId || a.areaId !== b.areaId))
+    // Workspace entities intentionally have no effective Area. Their edges
+    // must block a complete Area-routing diagnostic, not silently disappear.
+    if (!a || !b) invalid();
+    if (a.workspaceId !== b.workspaceId || a.areaId !== b.areaId)
       crossAreaRelations++;
   }
-  return { scopes, crossAreaRelations };
+  return { scopes, kindsById, crossAreaRelations };
 }
 
 /**
@@ -186,6 +198,13 @@ export function auditOfflineRecoveryScopes(input: Readonly<{
       input.current.restoreGeneration <= input.before.restoreGeneration) invalid();
   const before = resolveScopeGraph(input.before);
   const current = resolveScopeGraph(input.current);
+  // The same canonical ID cannot silently switch project/task/note/Area/type,
+  // nor be recycled between an entity and a relation across generations.
+  // A matching Area does not make changed canonical identity "sameScope".
+  for (const [id, beforeKind] of before.kindsById) {
+    const currentKind = current.kindsById.get(id);
+    if (currentKind !== undefined && currentKind !== beforeKind) invalid();
+  }
   const ids = new Set([...before.scopes.keys(), ...current.scopes.keys()]);
   let sameScope = 0;
   let movedArea = 0;
