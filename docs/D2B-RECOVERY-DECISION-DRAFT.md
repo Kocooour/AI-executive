@@ -19,17 +19,23 @@ replay, import, discard, merge, resume or removal of the recovery hold.
   existing seven reasons and a default `defer` preference for every item.
   The result contains no titles, properties, note/project drafts, before/after
   record bodies, credentials, tokens or pending-marker IDs.
-- All relation changes (including new or moved `belongs_to_area` links),
-  Area/workspace/project entity edits, new/deleted entities, and existing
-  task/note records with changed `areaId`, `projectId`, workspace or type
-  **only** offer `defer`. This also applies when the *server* changed a
-  stored scope and when a changed relation directly references the record.
-  Only existing task/note content edits with unchanged stored scope can
-  express provisional `prefer-local` or `prefer-server`; this does not
-  verify their *effective* Area and never authorizes replay.
-  `preferOfflineRecoveryOutcome` changes **only** an in-memory preference
-  list, not any source data or persisted state. It rejects unknown candidates
-  and unavailable preferences.
+- **Every v1 candidate currently offers only `defer`.** The rescue
+  format stores *changed records and changed relations only*, not the full
+  pre-restore relation graph. A task or note may inherit Area permissions
+  through a `belongs_to_project` relation and its parent project's
+  `belongs_to_area` relation, neither of which must appear in the delta.
+  Project-area links may also change **only on the server**, leaving no
+  reliable before-state witness. Even a seemingly unrelated local title edit
+  cannot prove the effective Area was stable. Merely comparing a task's
+  `workspaceId`, `areaId` and `projectId` is insufficient.
+  `preferOfflineRecoveryOutcome` remains a sealed, local preference-only API
+  for future formats; it can currently only reaffirm `defer`. No lost export,
+  automatic replay, discard, hold release or server write follows.
+- Re-enable provisional `prefer-local`/`prefer-server` **only after** a
+  complete, versioned and authenticated scope witness has been designed and
+  checked for the original and current relation graphs (including inherited
+  Areas, server-only moves, memberships and ACL revocation). V1 digest or
+  server revision alone cannot satisfy this requirement.
 - Decision drafts are recursively frozen across their mutable surface and
   marked with module-private WeakSet identity; cloned, deserialized or altered
   plans fail closed instead of permitting a forged reason or expanded options.
@@ -85,8 +91,12 @@ surface; **this iteration does not wire the draft into the UI**.
 
 ## Validation and isolation
 
-Focused Node tests: `tests/d2b-recovery-decision-plan.test.mjs`. Standard
-PR Checks: deployment syntax, `pnpm typecheck`, `pnpm test`, `pnpm build`.
+Focused Node tests: `tests/d2b-recovery-decision-plan.test.mjs`.
+Regressions cover locally moved parent project Areas, server-only Area moves,
+notes inheriting project scope, deleted server membership edges absent from
+the rescue delta, and deny-by-default preferences even for ordinary task
+content changes. Standard PR Checks: deployment syntax, `pnpm typecheck`,
+`pnpm test`, `pnpm build`.
 
 No server, preview, DB or production state is needed for this pure-library
 change. Branch: `codex/d2b-owner-recovery-decision-plan-20261025`,
