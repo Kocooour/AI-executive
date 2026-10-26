@@ -26,3 +26,7 @@
 ## Stav rozhodnutí a PR
 
 Výše uvedený **funkční koncept byl vlastníkem schválen**. To samo o sobě **neautorizuje merge PR, nasazení ani změny runtime**. PR #101 slouží k nezávislému přezkumu dokumentace; sloučení musí stále splnit běžné kontroly a samostatný pokyn vlastníka.
+
+## Dodatek 2026-10-26 — změna postupu implementace
+
+Vlastník následně rozhodl, že současná data jsou převážně testovací a **zachování jejich historie nepodmiňuje další vývoj**. Preferuje [čistý start cílového modelu](2026-10-26-cisty-start-d3.md) podle [aktuální roadmapy](../ROADMAP.md) namísto komplikovaných legacy migrací 2a–2c. **Cílové funkční a bezpečnostní požadavky tohoto rozhodnutí zůstávají nezměněné**. Přechod na novou DB není autorizací k odstranění stávajících dat; vyžaduje novou explicitní autorizaci a zálohu. Původní požadavky na historickou migraci jsou nyní podmíněnou cestou pouze při zvolení zachování starých dat.
