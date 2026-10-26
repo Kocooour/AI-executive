@@ -141,8 +141,8 @@ test("D2b/7 validates Area kind, inactive Area, missing workspace and malformed 
   const noWorkspace = clone(before);
   noWorkspace.entities.find(e => e.id === "secret-task").workspaceId = "shared-unknown";
   assert.throws(() => inspect(before, noWorkspace), RecoveryScopeGraphInvalid);
-  assert.throws(() => inspect(before, { ...before, restoreGeneration: 0 }), RecoveryScopeGraphInvalid);
-  assert.throws(() => inspect(before, { ...before, revision: -1 }), RecoveryScopeGraphInvalid);
+  assert.throws(() => auditOfflineRecoveryScopes({ before, current: { ...before, restoreGeneration: 0 } }), RecoveryScopeGraphInvalid);
+  assert.throws(() => auditOfflineRecoveryScopes({ before, current: { ...before, restoreGeneration: 2, revision: -1 } }), RecoveryScopeGraphInvalid);
   assert.throws(() => inspect(before, { ...before, relations: new Array(50_001) }), RecoveryScopeGraphInvalid);
 });
 
