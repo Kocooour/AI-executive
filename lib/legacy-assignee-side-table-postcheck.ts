@@ -91,11 +91,12 @@ function canonicalJson(row: Readonly<Record<string, unknown>>, budget: { remaini
       return;
     }
     if (typeof value !== "object") blocked();
+    const objectValue = value as object;
     const array = Array.isArray(value);
-    const prototype = Object.getPrototypeOf(value);
+    const prototype = Object.getPrototypeOf(objectValue);
     if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) blocked();
-    if (ancestors.has(value)) blocked();
-    ancestors.add(value);
+    if (ancestors.has(objectValue)) blocked();
+    ancestors.add(objectValue);
     try {
       if (array) {
         const items = value as unknown[];
@@ -128,7 +129,7 @@ function canonicalJson(row: Readonly<Record<string, unknown>>, budget: { remaini
         append("}");
       }
     } finally {
-      ancestors.delete(value);
+      ancestors.delete(objectValue);
     }
   };
   if (!row || typeof row !== "object" || Array.isArray(row)) blocked();
