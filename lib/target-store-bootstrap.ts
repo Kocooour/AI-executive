@@ -161,6 +161,12 @@ WHEN EXISTS(
   WHERE t.effective_area_id = OLD.area_id AND t.assignee_user_id = OLD.user_id
 )
 BEGIN SELECT RAISE(ABORT, 'unassign tasks before removing membership'); END;
+CREATE TRIGGER member_identity_or_area_move_guard BEFORE UPDATE OF area_id, user_id ON area_members
+WHEN (NEW.area_id <> OLD.area_id OR NEW.user_id <> OLD.user_id) AND EXISTS(
+  SELECT 1 FROM task_effective_areas t
+  WHERE t.effective_area_id = OLD.area_id AND t.assignee_user_id = OLD.user_id
+)
+BEGIN SELECT RAISE(ABORT, 'unassign tasks before moving membership'); END;
 CREATE TRIGGER member_role_downgrade_guard BEFORE UPDATE OF role ON area_members
 WHEN NEW.role = 'viewer' AND OLD.role IN ('editor','admin') AND EXISTS(
   SELECT 1 FROM task_effective_areas t
