@@ -10,14 +10,18 @@ Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený 
 - Výstup neklonuje ani neupravuje úkol, projekt, ID, časové značky ani workspace; náhled projektu není autorizací detailu. Neplatné/cizí workspace relace se ignorují, konfliktní kanonické ID vyvolá chybu.
 - Selektor **není autorizační vrstva**. Parametry identita a `authorizedSharedWorkspaceIds` musí v budoucnu poskytovat ověřený server, ne volba klienta či obsah entity.
 
-## Před aktivací v UI (blokující požadavky)
+## Před aktivací v UI — aktuální clean-start brány (2026-10-26)
 
-1. Normalizace povinných Oblastí 2a.
-2. Auditované rozdělení sdílených interních workspaces podle Oblastí 2b, včetně synchronizační bariéry, záchrany offline změn a bezpečného rollbacku.
-3. `assigneeUserId` a deterministic backfill otevřených původních sdílených úkolů dosavadnímu `owner` (2c). Kontrola, že Home, Today, Inbox ani seznamy nepřišly o původní úkoly.
-4. Skutečný serverově autorizovaný zdroj všech čtených Oblastí, funkční oddělení osobních údajů a verzování syncu. Přepnutí UI není oprávněním.
-5. Následně připojit scope switcher v desktopu a mobilu a všechny výpisy Home/Inbox/Today/Upcoming/Projects/counts/search/attention k bezpečnému read-modelu. Home musí zůstat úvodem. Zápisy vždy cílí na jednu konkrétní Oblast, nikoliv agregát.
-6. Testovat prázdné stavy, konzistenci ID/revizí napříč scope, projektový detail se všemi autorizovanými úkoly, klávesnici/VoiceOver/mobil, ztrátu práv, offline a konflikt.
+Aktuální [roadmapa](ROADMAP.md) zvolila pro převážně testovací data **čistý start cílového modelu** místo povinné legacy migrace 2a–2c. Připravený selektor a přepínač zůstávají neaktivní do splnění bezpečnostních podmínek:
+
+1. Nedestruktivně vytvořit cílový **oddělený store** s platnými Oblastmi, děděním a `assigneeUserId` pro nové sdílené úkoly. Staré 2a normalizace/2b partition/2c owner-backfill nejsou nutné, **pokud stará data nepřenášíme**.
+2. Skutečná identita na serveru, příslušnost Oblastí a členství, filtrované autorizované čtení na Home/Inbox/Today/Upcoming/Projects/search/counts/attention/AI; `selectScopedWork` není autorizační vrstva.
+3. Nový bezpečný protokol zápisů do explicitní Oblasti, zneplatnění starých full-snapshot klientů, revokační a offline pravidla; ochrana osobních dat v cache a při změně identity.
+4. Teprve potom připojit desktopový a mobilní scope switcher; Home zůstane úvodní obrazovka a `Můj plán` agregovaným čtecím rozsahem, nikoli právem zápisu.
+5. Testovat izolaci více identit, nepřidělené vs. přidělené sdílené úkoly, prázdné stavy, konzistenci ID/revizí, detail oprávněného projektu, klávesnici/VoiceOver/úzký mobil, ztrátu práv, offline klienty a konflikty. Pozvánky pro další identity zůstávají vypnuté, dokud nejsou splněny všechny bezpečnostní brány.
+6. Produkční přepnutí do nového store **není tímto rozhodnutím povoleno**. Vyžaduje inventuru, ověřenou archivní zálohu + obnovu, plán pro staré klienty a samostatný výslovný souhlas vlastníka s přesným rozsahem změn.
+
+**Alternativa:** pokud bude dodatečně rozhodnuto zachovat legacy obsah, teprve pak platí dřívější [migrace 2a–2c](ARCHITECTURE.md) včetně backfillu starých úkolů a shody Home/Today/Inbox; nelze ji implicitně obejít při převodu skutečných dat.
 
 **Nezahrnuto v této změně:** migrace, assignee zápisy, oprávnění více identit, nové pozvánky, úprava současného workspace switcheru, aktivace Mého plánu, nasazení.
 
