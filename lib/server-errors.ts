@@ -146,6 +146,14 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
+  "Cannot resolve a safe staging path",
+  "R1 staging directory must be absolute",
+  "R1 staging directory already exists",
+  "R1 staging parent does not exist",
+  "R1 staging directory overlaps the current legacy data directory",
+  "R1 bootstrap requires a nonempty, stable owner user ID",
+  "R1 foreign-key validation failed",
   // D3 pre-activation read-selector guards: internal programmer/snapshot errors,
   // not surfaced by any live UI or route until the access-control gates ship.
   "Conflicting canonical entity ID in work scope snapshot",
