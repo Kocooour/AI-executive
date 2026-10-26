@@ -42,31 +42,36 @@ const MAX_VALUE_LENGTH = 1_000_000;
 const MAX_TOTAL_CHARS = 4_000_000;
 
 function readRows(value: unknown, budget: { remaining: number }): Map<string, string> {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype ||
-      value.length > MAX_METADATA_ROWS ||
-      Reflect.ownKeys(value).length !== value.length + 1) blocked();
+  if (!Array.isArray(value)) blocked();
+  const rows = value as unknown[];
+  if (Object.getPrototypeOf(rows) !== Array.prototype ||
+      rows.length > MAX_METADATA_ROWS ||
+      Reflect.ownKeys(rows).length !== rows.length + 1) blocked();
   const map = new Map<string, string>();
-  for (let index = 0; index < value.length; index++) {
-    const item = Object.getOwnPropertyDescriptor(value, String(index));
+  for (let index = 0; index < rows.length; index++) {
+    const item = Object.getOwnPropertyDescriptor(rows, String(index));
     if (!item || !item.enumerable || !("value" in item)) blocked();
     const row: unknown = item.value;
-    if (!row || typeof row !== "object" || Array.isArray(row) ||
-        (Object.getPrototypeOf(row) !== Object.prototype && Object.getPrototypeOf(row) !== null)) blocked();
-    const keys = Reflect.ownKeys(row);
+    if (!row || typeof row !== "object" || Array.isArray(row)) blocked();
+    const object = row as object;
+    const prototype = Object.getPrototypeOf(object);
+    if (prototype !== Object.prototype && prototype !== null) blocked();
+    const keys = Reflect.ownKeys(object);
     if (keys.length !== 2 || !keys.includes("key") || !keys.includes("value")) blocked();
-    const keyDescriptor = Object.getOwnPropertyDescriptor(row, "key");
-    const valueDescriptor = Object.getOwnPropertyDescriptor(row, "value");
+    const keyDescriptor = Object.getOwnPropertyDescriptor(object, "key");
+    const valueDescriptor = Object.getOwnPropertyDescriptor(object, "value");
     if (!keyDescriptor || !valueDescriptor ||
         !keyDescriptor.enumerable || !valueDescriptor.enumerable ||
         !("value" in keyDescriptor) || !("value" in valueDescriptor)) blocked();
     const key: unknown = keyDescriptor.value;
     const text: unknown = valueDescriptor.value;
-    if (typeof key !== "string" || typeof text !== "string" ||
-        !key.trim() || key.length > MAX_KEY_LENGTH ||
-        text.length > MAX_VALUE_LENGTH || map.has(key)) blocked();
-    budget.remaining -= key.length + text.length;
+    if (typeof key !== "string" || typeof text !== "string") blocked();
+    const keyString = key as string, valueString = text as string;
+    if (!keyString.trim() || keyString.length > MAX_KEY_LENGTH ||
+        valueString.length > MAX_VALUE_LENGTH || map.has(keyString)) blocked();
+    budget.remaining -= keyString.length + valueString.length;
     if (budget.remaining < 0) blocked();
-    map.set(key, text);
+    map.set(keyString, valueString);
   }
   return map;
 }
