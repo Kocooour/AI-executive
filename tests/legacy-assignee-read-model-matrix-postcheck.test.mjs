@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifiedTables, storeTables } from "../lib/backup-scope.ts";
 import {
+  matrixFingerprintBudget,
+  matrixStoreTransitionFingerprint,
+} from "../lib/legacy-assignee-matrix-state-fingerprint.ts";
+import {
   checkLegacyAssigneeReadModelMatrixPreservation,
   LegacyAssigneeReadModelMatrixBlocked,
 } from "../lib/legacy-assignee-read-model-matrix-postcheck.ts";
@@ -432,6 +436,70 @@ test("2c/8 permits reordering of canonical rows, metadata and side-table multise
   assert.equal(result.checkedContextCount, 3);
   assert.equal(result.canApply, false);
   assert.doesNotMatch(JSON.stringify(result), /SECRET|digest|fingerprint|metadata/);
+});
+
+test("2c/8 preserves duplicate side-table row multiplicity across contexts", () => {
+  const input = fixture();
+  const aRow = { id: "A", encrypted: "SECRET-A" };
+  const bRow = { id: "B", encrypted: "SECRET-B" };
+  for (const pair of input.cases) {
+    for (const snapshot of [pair.before, pair.after]) {
+      snapshot.sideTables.mail_accounts.push(
+        structuredClone(aRow), structuredClone(aRow), structuredClone(bRow));
+    }
+  }
+
+  // The first context has [B, A, A], all others have [A, A, B].
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.sideTables.mail_accounts.reverse();
+  }
+  assert.equal(check(input).checkedContextCount, 3);
+
+  // Now the first context has [B, B, A], with the same total row count
+  // and an identical before/after pair; only cross-context multiplicity differs.
+  for (const snapshot of [input.cases[0].before, input.cases[0].after]) {
+    snapshot.sideTables.mail_accounts[1] = structuredClone(bRow);
+  }
+  rejects(input);
+});
+
+test("2c/8 enforces exact and one-over node/UTF-16 budgets shared across contexts", () => {
+  const factoryBudget = matrixFingerprintBudget();
+  assert.deepEqual(factoryBudget, {
+    remainingNodes: 1_000_000,
+    remainingStringChars: 64_000_000,
+  });
+
+  // Calibrate a complete transition, not a partial row. The fixture has two
+  // distinct actor/query contexts but the identical claimed persisted state.
+  const [first, second] = fixture().cases;
+  const fingerprint = matrixStoreTransitionFingerprint(
+    first.before, first.after, factoryBudget);
+  const perTransitionNodes = 1_000_000 - factoryBudget.remainingNodes;
+  const perTransitionChars = 64_000_000 - factoryBudget.remainingStringChars;
+  assert.ok(perTransitionNodes > 0);
+  assert.ok(perTransitionChars > 0);
+
+  for (const field of ["remainingNodes", "remainingStringChars"]) {
+    const atLimit = {
+      remainingNodes: 2 * perTransitionNodes,
+      remainingStringChars: 2 * perTransitionChars,
+    };
+    assert.equal(matrixStoreTransitionFingerprint(first.before, first.after, atLimit), fingerprint);
+    assert.equal(matrixStoreTransitionFingerprint(second.before, second.after, atLimit), fingerprint);
+    assert.deepEqual(atLimit, { remainingNodes: 0, remainingStringChars: 0 });
+
+    // One code unit or node short: first transition succeeds; the second
+    // fails solely because it shares the remaining budget with the first.
+    const oneOver = {
+      remainingNodes: 2 * perTransitionNodes,
+      remainingStringChars: 2 * perTransitionChars,
+    };
+    oneOver[field]--;
+    assert.equal(matrixStoreTransitionFingerprint(first.before, first.after, oneOver), fingerprint);
+    assert.throws(() => matrixStoreTransitionFingerprint(second.before, second.after, oneOver));
+    assert.ok(oneOver[field] < 0);
+  }
 });
 
 test("2c/8 fails closed on an over-depth cross-context fingerprint input", () => {
