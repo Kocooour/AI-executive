@@ -202,6 +202,7 @@ test("2c/7 rejects getters, non-data fields, sparse arrays, symbols and proxies 
     input => { input.expectedContexts[0] = wrap(input.expectedContexts[0]); },
     input => { input.cases[0] = wrap(input.cases[0]); },
     input => { input.cases[0].before = wrap(input.cases[0].before); },
+    input => { input.cases[0].after = wrap(input.cases[0].after); },
     input => { input.cases[0].before.readModels = wrap(input.cases[0].before.readModels); },
     input => { input.cases[0].before.readModels.context =
       wrap(input.cases[0].before.readModels.context); },
@@ -246,6 +247,69 @@ test("2c/7 rejects getters, non-data fields, sparse arrays, symbols and proxies 
   const revokedInput = fixture();
   revokedInput.cases[0] = revoked.proxy;
   rejects(revokedInput);
+});
+
+test("2c/7 rejects snapshot field getters without executing them on either side", () => {
+  const fields = [
+    "revision", "restoreGeneration", "entities", "relations", "tombstones",
+    "sideTables", "metadata", "readModels",
+  ];
+  let getterCalls = 0;
+  for (const side of ["before", "after"]) {
+    for (const field of fields) {
+      const input = fixture();
+      const snapshot = input.cases[0][side];
+      const original = snapshot[field];
+      Object.defineProperty(snapshot, field, {
+        enumerable: true, configurable: true,
+        get() { getterCalls++; return original; },
+      });
+      rejects(input);
+      assert.equal(getterCalls, 0, `${side}.${field} getter must never run`);
+    }
+  }
+});
+
+test("2c/7 rejects inherited, missing, additional and exotic snapshot fields", () => {
+  let getterCalls = 0;
+  for (const side of ["before", "after"]) {
+    const inherited = fixture();
+    const target = inherited.cases[0][side];
+    const metadata = target.metadata;
+    delete target.metadata;
+    Object.setPrototypeOf(target, {
+      get metadata() { getterCalls++; return metadata; },
+    });
+    rejects(inherited);
+    assert.equal(getterCalls, 0, "inherited metadata getter must never run");
+
+    const missing = fixture();
+    delete missing.cases[0][side].metadata;
+    rejects(missing);
+
+    const extra = fixture();
+    extra.cases[0][side].untrusted = true;
+    rejects(extra);
+
+    const nonEnumerable = fixture();
+    Object.defineProperty(nonEnumerable.cases[0][side], "hidden", {
+      value: "SECRET", enumerable: false,
+    });
+    rejects(nonEnumerable);
+
+    const symbol = fixture();
+    symbol.cases[0][side][Symbol("hidden")] = "SECRET";
+    rejects(symbol);
+
+    const exotic = fixture();
+    Object.setPrototypeOf(exotic.cases[0][side], Date.prototype);
+    rejects(exotic);
+
+    // Plain objects with null prototypes remain valid inputs.
+    const nullPrototype = fixture();
+    Object.setPrototypeOf(nullPrototype.cases[0][side], null);
+    assert.equal(check(nullPrototype).checkedContextCount, 3);
+  }
 });
 
 test("2c/7 rejects malformed context text and unexpected shell keys", () => {
