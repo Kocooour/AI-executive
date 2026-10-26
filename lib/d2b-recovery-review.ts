@@ -2,7 +2,7 @@
 // NEVER replay, upload, cache or log the file. Even "no-local-changes" is
 // diagnostic only: membership, Area ACL and owner consent remain unresolved.
 import { decodeOfflineRecoveryFile, type OfflineRecoveryServer } from "./d2b-offline-recovery-file";
-import { OfflineRecoveryInvalid, type OfflineRecoveryAssessment } from "./d2b-offline-reconciliation";
+import { OfflineRecoveryInvalid, type OfflineRecoveryAssessment, type OfflineRecoveryBundle } from "./d2b-offline-reconciliation";
 import type { OfflineRecoveryHold } from "./d2b-recovery-hold";
 
 export type OfflineRecoveryReason = OfflineRecoveryAssessment["candidates"][number]["reason"];
@@ -16,6 +16,21 @@ export type OfflineRecoveryReviewSummary = Readonly<{
   reasons: Record<OfflineRecoveryReason, number>;
 }>;
 
+/** v1 carries no signed owner or hold identity. Metadata consistency is not authorization.
+ * Call only after strict validation of the bundle's schema, bounds and checksum.
+ */
+export function assertOfflineRecoveryBundleMatchesHold(
+  bundle: OfflineRecoveryBundle, hold: OfflineRecoveryHold,
+): void {
+  if (!hold || hold.version !== 1 ||
+      !(hold.knownGeneration === null || (Number.isSafeInteger(hold.knownGeneration) && hold.knownGeneration >= 0)) ||
+      !Number.isSafeInteger(hold.observedGeneration) || hold.observedGeneration < 0 ||
+      !Number.isSafeInteger(hold.createdAt) || hold.createdAt < 0 ||
+      bundle.oldRestoreGeneration !== (hold.knownGeneration ?? 0) ||
+      bundle.observedRestoreGeneration < hold.observedGeneration ||
+      bundle.createdAt < hold.createdAt) throw new OfflineRecoveryInvalid();
+}
+
 export function inspectOfflineRecoveryBytes(
   bytes: Uint8Array, server: OfflineRecoveryServer, hold: OfflineRecoveryHold,
 ): OfflineRecoveryReviewSummary {
@@ -24,14 +39,8 @@ export function inspectOfflineRecoveryBytes(
   // v1 bundles do not carry a signed hold identity. Refuse any file whose
   // generation and creation time cannot belong to the currently active hold.
   // This is a consistency check, NOT proof of file authenticity or ownership.
-  if (!hold || hold.version !== 1 ||
-      !(hold.knownGeneration === null || (Number.isSafeInteger(hold.knownGeneration) && hold.knownGeneration >= 0)) ||
-      !Number.isSafeInteger(hold.observedGeneration) || hold.observedGeneration < 0 ||
-      !Number.isSafeInteger(hold.createdAt) || hold.createdAt < 0) throw new OfflineRecoveryInvalid();
   const { bundle, assessment } = decodeOfflineRecoveryFile(bytes, server);
-  if (bundle.oldRestoreGeneration !== (hold.knownGeneration ?? 0) ||
-      bundle.observedRestoreGeneration < hold.observedGeneration ||
-      bundle.createdAt < hold.createdAt) throw new OfflineRecoveryInvalid();
+  assertOfflineRecoveryBundleMatchesHold(bundle, hold);
   const reasons: Record<OfflineRecoveryReason, number> = {
     "remote-missing": 0, "workspace-changed": 0, "remote-diverged": 0,
     "local-change": 0, "already-present": 0, "id-collision": 0,
