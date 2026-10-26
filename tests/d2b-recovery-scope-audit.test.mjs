@@ -117,6 +117,54 @@ test("D2b/7 rejects ambiguous, dangling, duplicate and cross-workspace edges", (
   assert.throws(() => inspect(before, foreign), RecoveryScopeGraphInvalid);
 });
 
+
+test("D2b/7 rejects unscoped workspace relationship endpoints in BOTH graphs", () => {
+  const before = sample();
+  before.entities.push(entity("workspace:personal", "workspace", { kind: "personal" }));
+  // Workspace entities exist for graph completeness but have no Area scope.
+  // Do not silently discard a workspace->task relation as a zero-risk graph.
+  const current = clone(before);
+  current.relations.push(edge("unroutable-current", "workspace:personal", "secret-task", "related"));
+  assert.throws(() => inspect(before, current), RecoveryScopeGraphInvalid);
+  const reversed = clone(before);
+  reversed.relations.push(edge("unroutable-before", "secret-task", "workspace:personal", "related"));
+  assert.throws(() => inspect(reversed, before), RecoveryScopeGraphInvalid);
+
+  const clean = inspect(before);
+  assert.equal(clean.summary.currentCrossAreaRelations, 0);
+  assert.equal(clean.canReleaseHold, false);
+});
+
+test("D2b/7 rejects same-ID task to note drift even when effective Area stays equal", () => {
+  const before = sample();
+  const current = clone(before);
+  const replacement = current.entities.find(e => e.id === "secret-standalone");
+  replacement.type = "note";
+  replacement.status = "active";
+  // Both standalone tasks and notes validly use the same direct Area link.
+  assert.throws(() => inspect(before, current), RecoveryScopeGraphInvalid);
+});
+
+test("D2b/7 rejects same-ID project to task drift and cross-kind ID recycling", () => {
+  const before = sample();
+  const current = clone(before);
+  const replacement = current.entities.find(e => e.id === "secret-project");
+  replacement.type = "task";
+  replacement.status = "open";
+  current.entities = current.entities.filter(e => e.id !== "secret-task" && e.id !== "secret-note");
+  current.relations = current.relations.filter(r => r.id !== "task-project" && r.id !== "note-project");
+  // The former project now has a valid standalone task Area; children were
+  // removed to avoid dangling edges. Type drift itself must still be rejected.
+  assert.throws(() => inspect(before, current), RecoveryScopeGraphInvalid);
+
+  const recycled = clone(before);
+  recycled.entities = recycled.entities.filter(e => e.id !== "secret-standalone");
+  recycled.relations = recycled.relations.filter(r => r.id !== "standalone-area");
+  recycled.relations.push(edge("secret-standalone", "secret-project", "secret-task", "related"));
+  // Previously an entity ID, now a relation ID in a self-consistent graph.
+  assert.throws(() => inspect(before, recycled), RecoveryScopeGraphInvalid);
+});
+
 test("D2b/7 refuses project task/note direct Area overrides and mismatched legacy fields", () => {
   const before = sample();
   const extra = clone(before);
