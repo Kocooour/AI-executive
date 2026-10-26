@@ -202,6 +202,114 @@ test("2c/6 rejects getters, symbols, array holes, exotic instances and non-JSON 
   }
 });
 
+test("2c/6 rejects own accessors and inherited readModels without invoking getters", () => {
+  const before = initial();
+  let getterCalls = 0;
+  const accessorAfter = next(before);
+  const envelope = accessorAfter.readModels;
+  Object.defineProperty(accessorAfter, "readModels", {
+    enumerable: true,
+    get() { getterCalls++; return envelope; },
+  });
+  rejects(before, accessorAfter);
+
+  const accessorBefore = initial();
+  const beforeEnvelope = accessorBefore.readModels;
+  Object.defineProperty(accessorBefore, "readModels", {
+    enumerable: true,
+    get() { getterCalls++; return beforeEnvelope; },
+  });
+  rejects(accessorBefore, next(initial()));
+  assert.equal(getterCalls, 0, "readModels getters must never execute");
+
+  const inheritedAfter = next(before);
+  const inheritedEnvelope = inheritedAfter.readModels;
+  delete inheritedAfter.readModels;
+  Object.setPrototypeOf(inheritedAfter, { readModels: inheritedEnvelope });
+  rejects(before, inheritedAfter);
+
+  const inheritedBefore = initial();
+  const inheritedBeforeEnvelope = inheritedBefore.readModels;
+  delete inheritedBefore.readModels;
+  Object.setPrototypeOf(inheritedBefore, { readModels: inheritedBeforeEnvelope });
+  rejects(inheritedBefore, next(initial()));
+
+  const hidden = next(before);
+  Object.defineProperty(hidden, "readModels", { value: hidden.readModels, enumerable: false });
+  rejects(before, hidden);
+});
+
+test("2c/6 rejects accessors and proxies at the input and snapshot boundaries", () => {
+  const before = initial(), after = next(before);
+  let getterCalls = 0, trapCalls = 0;
+  const accessorInput = { before, after, legacySharedWorkspaceIds: ["legacy"] };
+  Object.defineProperty(accessorInput, "before", {
+    enumerable: true,
+    get() { getterCalls++; return before; },
+  });
+  assert.throws(
+    () => checkLegacyAssigneeReadModelPreservation(accessorInput),
+    LegacyAssigneeReadModelPostcheckBlocked,
+  );
+  assert.equal(getterCalls, 0);
+
+  const trap = target => new Proxy(target, {
+    getPrototypeOf(value) { trapCalls++; return Reflect.getPrototypeOf(value); },
+    ownKeys(value) { trapCalls++; return Reflect.ownKeys(value); },
+    getOwnPropertyDescriptor(value, key) {
+      trapCalls++;
+      return Reflect.getOwnPropertyDescriptor(value, key);
+    },
+  });
+  rejects(before, trap(after));
+  assert.throws(
+    () => checkLegacyAssigneeReadModelPreservation(trap({
+      before, after, legacySharedWorkspaceIds: ["legacy"],
+    })),
+    LegacyAssigneeReadModelPostcheckBlocked,
+  );
+  assert.equal(trapCalls, 0, "proxy traps must not execute at entry boundaries");
+});
+
+test("2c/6 rejects proxy wrappers at every read-model level before any trap runs", () => {
+  let trapCalls = 0;
+  const wrap = target => new Proxy(target, {
+    getPrototypeOf(value) { trapCalls++; return Reflect.getPrototypeOf(value); },
+    ownKeys(value) { trapCalls++; return Reflect.ownKeys(value); },
+    getOwnPropertyDescriptor(value, key) {
+      trapCalls++;
+      return Reflect.getOwnPropertyDescriptor(value, key);
+    },
+  });
+  const placements = [
+    after => { after.readModels = wrap(after.readModels); },
+    after => { after.readModels.context = wrap(after.readModels.context); },
+    after => { after.readModels.home = wrap(after.readModels.home); },
+    after => { after.readModels.today = wrap(after.readModels.today); },
+    after => { after.readModels.today[0] = wrap(after.readModels.today[0]); },
+    after => { after.readModels.home.cards[0] = wrap(after.readModels.home.cards[0]); },
+    after => { after.readModels.inbox.items[0].nested = wrap({ id: "nested" }); },
+  ];
+  for (const place of placements) {
+    const before = initial();
+    const after = next(before);
+    place(after);
+    rejects(before, after);
+    assert.equal(trapCalls, 0, "no proxy traps should run during comparison");
+  }
+
+  const before = initial();
+  before.readModels.home = wrap(before.readModels.home);
+  rejects(before, next(initial()));
+  assert.equal(trapCalls, 0);
+
+  const revoked = Proxy.revocable({ cards: [] }, {});
+  revoked.revoke();
+  const after = next(initial());
+  after.readModels.home = revoked.proxy;
+  rejects(initial(), after);
+});
+
 test("2c/6 bounds string size, recursive nesting and total serialized view volume", () => {
   const before = initial();
   const tooLong = next(before);
