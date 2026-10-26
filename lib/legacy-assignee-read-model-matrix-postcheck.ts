@@ -70,13 +70,6 @@ function plainData(value: unknown, fields: readonly string[]): Record<string, un
   return result;
 }
 
-function ownData(value: unknown, field: string): unknown {
-  if (!value || typeof value !== "object" || nodeTypes.isProxy(value)) blocked();
-  const descriptor = Object.getOwnPropertyDescriptor(value, field);
-  if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) blocked();
-  return descriptor.value;
-}
-
 function denseArray(value: unknown, max: number): unknown[] {
   if (!Array.isArray(value) || nodeTypes.isProxy(value) ||
       Object.getPrototypeOf(value) !== Array.prototype || value.length > max ||
@@ -104,10 +97,24 @@ function contextSignature(value: unknown): string {
   return JSON.stringify(parts);
 }
 
-function snapshotContext(value: unknown): string {
-  const envelope = plainData(ownData(value, "readModels"),
-    ["context", "home", "today", "inbox"]);
-  return contextSignature(envelope.context);
+// Validate the complete snapshot shell, not just readModels. Parts 1–6
+// consume these other fields too, so never let a getter/inherited value reach
+// them. Copy descriptor values into a fresh plain data object before handing
+// snapshots to the older postcheck chain.
+const SNAPSHOT_FIELDS = [
+  "revision", "restoreGeneration", "entities", "relations", "tombstones",
+  "sideTables", "metadata", "readModels",
+] as const;
+
+function validatedSnapshot(value: unknown): {
+  snapshot: LegacyAssigneeReadModelSnapshot;
+  signature: string;
+} {
+  const snapshot = plainData(value, SNAPSHOT_FIELDS);
+  const readModels = plainData(snapshot.readModels, ["context", "home", "today", "inbox"]);
+  const signature = contextSignature(readModels.context);
+  snapshot.readModels = readModels;
+  return { snapshot: snapshot as unknown as LegacyAssigneeReadModelSnapshot, signature };
 }
 
 /**
@@ -142,12 +149,12 @@ export function checkLegacyAssigneeReadModelMatrixPreservation(
     const pairs: LegacyAssigneeReadModelCase[] = [];
     for (const candidate of cases) {
       const pair = plainData(candidate, ["before", "after"]);
-      const beforeKey = snapshotContext(pair.before);
-      const afterKey = snapshotContext(pair.after);
-      if (beforeKey !== afterKey || !expectedKeys.has(beforeKey) || seen.has(beforeKey)) blocked();
-      seen.add(beforeKey);
-      pairs.push({ before: pair.before as LegacyAssigneeReadModelSnapshot,
-        after: pair.after as LegacyAssigneeReadModelSnapshot });
+      const before = validatedSnapshot(pair.before);
+      const after = validatedSnapshot(pair.after);
+      if (before.signature !== after.signature ||
+          !expectedKeys.has(before.signature) || seen.has(before.signature)) blocked();
+      seen.add(before.signature);
+      pairs.push({ before: before.snapshot, after: after.snapshot });
     }
     if (seen.size !== expectedKeys.size) blocked();
 
