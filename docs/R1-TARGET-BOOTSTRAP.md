@@ -10,7 +10,7 @@
 - The call creates a new directory and `lumi-target.sqlite`. On failure it leaves any newly created staging directory for explicit investigation; it **never** removes any existing state.
 - The isolated schema begins with one owner identity, one internal personal workspace and the owner's private system Area `Nezařazeno`. No user tasks, projects, integrations, tokens, or old database rows are read or imported.
 - Schema metadata includes `activated=false`, `write_protocol=per-item-only` and a new `restore_generation`. These are markers for the future R2 protocol, **not** an active gate in the existing application.
-- Database constraints distinguish private Areas in personal workspaces from shared Areas in distinct 1:1 internal workspaces. Tasks contain **either** a standalone Area **or** a project ID; project tasks inherit their effective Area through a view. Optional assignees must be current `editor` or `admin` members of their shared Area; changes to project scope or member roles cannot silently invalidate existing assignments.
+- Database constraints distinguish private Areas in personal workspaces from shared Areas in dedicated shared internal workspaces. R1 enforces **at most one** shared Area per internal workspace; R2 must validate the complete 1:1 mapping and at least one active admin per shared Area before activation. Tasks contain **either** a standalone Area **or** a project ID; project tasks inherit their effective Area through a view. Optional assignees must be current `editor` or `admin` members of their shared Area. R1 rejects Area changes for existing projects until R2 implements confirmed, audited moves, and guards assigned members and private boundaries against conflicting SQLite writes.
 - No module imports this bootstrap into startup, routes, sync, UI or scheduled jobs. No production database, current Dexie schema, release flag or API behavior changes.
 
 ## Expected follow-up before any activation
@@ -21,6 +21,6 @@ In particular, creating the isolated database does **not** authorize a destructi
 
 ## Testing and environment
 
-`tests/target-store-bootstrap.test.mjs` uses a temporary synthetic `AI_EXECUTIVE_DATA_DIR` and fresh sibling staging directories, checks preservation of a legacy sentinel, then tests SQLite foreign keys, scope separation, single effective Areas, 1:1 shared workspace partition, and assignee/member constraints.
+`tests/target-store-bootstrap.test.mjs` uses a temporary synthetic `AI_EXECUTIVE_DATA_DIR` and fresh sibling staging directories, checks preservation of a legacy sentinel (including symlink/`..` aliases), then tests SQLite foreign keys, scope separation, single effective Areas, shared workspace partition, assignee/member constraints, and `INSERT OR REPLACE`/`UPDATE OR REPLACE` bypass attempts.
 
 The change uses a GitHub-only branch without a running app, local port, server data directory or preview deployment. Standard `PR Checks` must succeed on the PR's final head SHA. The full Browser E2E suite remains a pre-deployment release gate, not a PR gate.
