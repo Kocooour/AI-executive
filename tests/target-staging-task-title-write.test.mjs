@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -116,6 +116,34 @@ test("no-op mutations do not succeed or consume a byte-fingerprint revision", ()
     version.snapshotRevision), rejected("stale_revision"));
   assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
     "Changed");
+});
+
+test("staging writes reject public directories and database hardlinks", () => {
+  const { stage, authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const version = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(version.ok, true);
+  chmodSync(stage.directory, 0o755);
+  try {
+    assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Not allowed",
+      version.snapshotRevision), rejected("unauthorized"));
+  } finally {
+    chmodSync(stage.directory, 0o700);
+  }
+
+  const alias = path.join(root, randomUUID() + "-linked");
+  linkSync(stage.databasePath, alias);
+  try {
+    assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Not allowed",
+      version.snapshotRevision), rejected("unauthorized"));
+  } finally {
+    unlinkSync(alias);
+  }
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Team original");
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Allowed",
+    version.snapshotRevision), { ok: true });
 });
 
 test("stale revisions, including unrelated changes, never mutate a task", () => {
