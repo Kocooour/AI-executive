@@ -4,9 +4,11 @@ Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený 
 
 ## Implementační checkpoint 2026-10-27
 
-Podle aktuální [roadmapy](ROADMAP.md) je **R1 staging základ hotový** (PR #127–130), **R2 rozpracované**: PR #131–134 doplnily staging autentizované čtení, kontrolu read-only SQLite snapshotu, process-local session/revokaci a session-bound stránkování. [PR #135](https://github.com/Kocooour/AI-executive/pull/135) je rozpracovaný **read-only preflight** budoucího zápisu; žádný skutečný task mutation endpoint neexistuje.
+Podle aktuální [roadmapy](ROADMAP.md) je **R1 staging základ hotový** (PR #127–130) a **R2 rozpracované**. PR #131–134 dodaly izolované autentizované čtení, validovaný read-only SQLite snapshot, process-local sessions/revokaci a session-bound stránkování. [PR #135](https://github.com/Kocooour/AI-executive/pull/135) je **sloučené**; poskytuje pouze staging-only read-only preflight oprávnění a revize, nikoliv zápis.
 
-**Nejde o aktivované D3 ani produkční serverová oprávnění.** Staging identita není totožná s přihlášením Lumi; stávající Home/Inbox/Today/Projects/search/attention stále nejsou napojené na nový autorizovaný read model. Další pořadí: dokončit #135 → transakční per-item příkaz a identity-bound server API → sync/revokační brána a plné autorizované výpisy → potom integrace D3 do UI. Celé Browser E2E zůstává výhradně předprodukční release gate.
+[PR #137](https://github.com/Kocooour/AI-executive/pull/137) je **otevřený draft s úspěšným CI**. Obsahuje návrh první izolované transakční změny názvu úkolu, zatím bez produkčního HTTP API a bez durable idempotence, per-item revizí, synchronizačních bariér či uživatelské invalidace cache. Ani jeho případné sloučení samo neaktivuje běžný zápis v Lumi.
+
+**Nejde o aktivované D3 ani produkční serverová oprávnění.** Staging identita není totožná s přihlášením Lumi; stávající Home/Inbox/Today/Projects/search/attention stále nejsou napojené na nový autorizovaný read model. Další pořadí: dokončit review a bezpečnostní dopracování #137 → produkční serverová identita a autorizované API → durable revokace, sync/cache bariéry a kompletní autorizované výpisy → integrace D3 do UI. Celé Browser E2E zůstává výhradně předprodukční release gate.
 
 ## Co obsahuje první D3 změna
 
