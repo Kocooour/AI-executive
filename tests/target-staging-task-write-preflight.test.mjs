@@ -171,7 +171,7 @@ test("low-level title-edit authorization fails closed without mandatory prefligh
     gen: stage.restoreGeneration, iat: now, exp: now + 300 };
   const encoded = Buffer.from(JSON.stringify(claims)).toString("base64url");
   const signature = createHmac("sha256", signingKey)
-    .update("lumi:r2:target-task-read:staging:v1\\0").update(encoded).digest("base64url");
+    .update("lumi:r2:target-task-read:staging:v1\0").update(encoded).digest("base64url");
   const access = { sessionToken: encoded + "." + signature, signingKey };
   const request = { taskId: "team-task" };
   const db = new DatabaseSync(stage.databasePath, { readOnly: true });
