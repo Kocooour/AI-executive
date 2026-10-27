@@ -233,7 +233,7 @@ export class TargetStagingSessionAuthority {
     const page = listRevisionedPreflightedIsolatedTargetTasksAtOffset(this.#store, credential, {
       scope: request.scope, limit: request.limit, offset,
     });
-    if (!page.result.ok) return {
+    if (page.result.ok === false) return {
       ok: false, reason: page.result.reason, tasks: [], nextCursor: null,
     };
     if (!page.revision || (prior && prior.rev !== page.revision)) return staleList();
