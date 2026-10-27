@@ -9,7 +9,7 @@
  * server-controlled staging paths, generation values and signing keys belong
  * here; none may be populated from client request data.
  */
-import { lstatSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
@@ -36,40 +36,60 @@ const deniedDetail = (): AuthenticatedTargetTaskDetailResult =>
   ({ ok: false, reason: "unauthorized", task: null });
 
 /**
- * A new read-only connection is used for each call so a previous request can
- * never retain a stale Area ACL snapshot. The selector independently checks
- * activation, schema metadata, actor and generation inside its read snapshot.
+ * Every call pins the isolated directory and database by file descriptor and
+ * opens SQLite through that descriptor. This prevents path/symlink replacement
+ * between the path check and SQLite open. Canonical preflight, authentication,
+ * generation, and live Area ACLs execute within one SQLite read transaction.
  *
  * All preflight/path/open failures return the same content-free denial.
  */
 function withPreflightedStore<T>(
   store: TargetStagingReadStore,
   denied: () => T,
-  query: (db: DatabaseSync) => T,
+  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean) => T,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
       !UUID_PATTERN.test(store.expectedRestoreGeneration)) return denied();
 
+  // These paths refer to already-opened descriptors, not mutable staging names.
+  // On unsupported platforms, refuse reads rather than fall back to racy opens.
+  const descriptorRoot = process.platform === "linux" ? "/proc/self/fd"
+    : process.platform === "darwin" ? "/dev/fd" : null;
+  if (!descriptorRoot || constants.O_NOFOLLOW === undefined ||
+      constants.O_DIRECTORY === undefined) return denied();
+
   try {
-    const preflight = inspectIsolatedTargetStore({
-      stagingDirectory: store.stagingDirectory,
-      expectedRestoreGeneration: store.expectedRestoreGeneration,
-      mode: "r2-model",
-    });
-    if (!preflight.ok) return denied();
-
     const directory = verifyExistingTargetStagingPath(store.stagingDirectory);
-    const databasePath = path.join(directory, TARGET_STORE_FILENAME);
-    const file = lstatSync(databasePath);
-    if (!file.isFile() || file.isSymbolicLink()) return denied();
-
-    const db = new DatabaseSync(databasePath, { readOnly: true });
+    const directoryFd = openSync(directory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
-      db.exec("PRAGMA query_only = ON");
-      return query(db);
+      if (realpathSync(`${descriptorRoot}/${directoryFd}`) !== directory) return denied();
+      const databasePath = path.join(directory, TARGET_STORE_FILENAME);
+      const file = lstatSync(databasePath);
+      if (!file.isFile() || file.isSymbolicLink()) return denied();
+
+      const databaseFd = openSync(`${descriptorRoot}/${directoryFd}/${TARGET_STORE_FILENAME}`,
+        constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        if (!fstatSync(databaseFd).isFile()) return denied();
+        const db = new DatabaseSync(`${descriptorRoot}/${databaseFd}`, { readOnly: true });
+        try {
+          db.exec("PRAGMA query_only = ON");
+          const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
+            stagingDirectory: directory,
+            expectedRestoreGeneration: store.expectedRestoreGeneration,
+            mode: "r2-model",
+          }, { db: readDb, fd: databaseFd }).ok;
+          return query(db, preflight);
+        } finally {
+          db.close();
+        }
+      } finally {
+        closeSync(databaseFd);
+      }
     } finally {
-      db.close();
+      closeSync(directoryFd);
     }
   } catch {
     return denied();
@@ -82,8 +102,8 @@ export function listPreflightedIsolatedTargetTasks(
   access: TargetStagingReadCredential,
   request: TargetStagingTaskListRequest,
 ): AuthenticatedTargetTaskListResult {
-  return withPreflightedStore(store, deniedList, db =>
-    listAuthenticatedIsolatedTargetTasks(db, access, request));
+  return withPreflightedStore(store, deniedList, (db, preflight) =>
+    listAuthenticatedIsolatedTargetTasks(db, access, request, preflight));
 }
 
 /** Detail reads receive the same preflight and live membership enforcement. */
@@ -92,6 +112,6 @@ export function readPreflightedIsolatedTargetTask(
   access: TargetStagingReadCredential,
   request: TargetStagingTaskDetailRequest,
 ): AuthenticatedTargetTaskDetailResult {
-  return withPreflightedStore(store, deniedDetail, db =>
-    readAuthenticatedIsolatedTargetTask(db, access, request));
+  return withPreflightedStore(store, deniedDetail, (db, preflight) =>
+    readAuthenticatedIsolatedTargetTask(db, access, request, preflight));
 }
