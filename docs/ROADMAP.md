@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-27 podle sloučených PR #126–135 a rozpracovaného draftu PR #137.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-27 po sloučení PR #137–138.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–135 sloučeny; #137 draft, CI zelené) | Autentizované izolované čtení, preflight před budoucím zápisem, krátkodobé sessions/revokace a konzistentní stránkování jsou v `main`, ale pouze pro staging. #137 připravuje první izolovanou transakční změnu názvu úkolu; zatím není sloučené ani produkčně aktivní. Chybí durable idempotence/audit, per-item revize, produkční identita, durable revokace, HTTP a sync protokol, user-scoped cache a širší read model. |
+| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–138 sloučeny; další staging iterace v přípravě) | Autentizované izolované čtení, krátkodobé sessions/revokace, konzistentní stránkování, transakční změna názvu (#137) a trvalá potvrzení příkazů (#138) jsou v `main`, ale pouze pro staging. Chybí plnohodnotný audit, per-item revize, produkční identita, trvalá revokace, HTTP a sync protokol, user-scoped cache a širší read model. |
 | **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
@@ -26,7 +26,8 @@
 | [#133](https://github.com/Kocooour/AI-executive/pull/133) | Sloučeno | Dočasné staging sessions a okamžité lokální odvolání |
 | [#134](https://github.com/Kocooour/AI-executive/pull/134) | Sloučeno | Session-bound stránkovací kurzory a detekce změn mezi stránkami |
 | [#135](https://github.com/Kocooour/AI-executive/pull/135) | **Sloučeno** | Staging-only **read-only preflight** oprávnění a revize; nepovoluje ani neprovádí zápis |
-| [#137](https://github.com/Kocooour/AI-executive/pull/137) | **Draft; otevřeno, CI prošlo** | První staging-only transakční změna názvu úkolu s aktuální ACL a očekávanou revizí celého SQLite snapshotu; bez produkčního API, durable idempotence či sync bariér |
+| [#137](https://github.com/Kocooour/AI-executive/pull/137) | **Sloučeno** | První staging-only transakční změna názvu úkolu s aktuální ACL a revizí celého SQLite snapshotu |
+| [#138](https://github.com/Kocooour/AI-executive/pull/138) | **Sloučeno** | Atomická, trvalá a podle aktéra oddělená potvrzení úspěšných příkazů, bezpečné replay/konflikty; limit 4096 na staging store |
 
 Uvedená R2 implementace je **staging-only, process-local**. Testovací vydávání session není napojeno na skutečné přihlášení, passkeys, produkční cookies ani víceprocesovou správu. Zelené CI samo o sobě neznamená aktivaci nebo splnění produkčních ACL.
 
@@ -37,7 +38,7 @@ Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez v
 | Pořadí | Iterace | Požadovaný výsledek a brána |
 |---|---|---|
 | **1** | **PR #135 — hotovo** | Review i `PR Checks` dokončeny, sloučeno do `main` (`70558de6`). Předzápisový náhled zůstává staging-only a nezakládá právo provést mutaci. |
-| **2** | **R2a — PR #137 v review (draft)** | Návrh první staging transakční změny názvu úkolu s opětovným ověřením identity, Area role, restore generation a CAS vůči SHA-256 **celého SQLite snapshotu** ve write transakci. CI prošlo, PR dosud není sloučené. Pro úplné R2a dále dopracovat bezpečnostní review, skutečnou per-item/policy revizi, durable idempotenci a auditovatelný výsledek; testovat souběh, replay, rollback a izolaci legacy store. Preflight #135 není zapisovací capability. |
+| **2** | **R2a — #137 a #138 sloučeny, staging pokračuje** | Staging transakční zápis (#137) a durable idempotence (#138) jsou sloučené. Následuje pouze interní, ACL-gated kontrola výsledku nejistého zápisu; pro úplné R2a zbývá skutečná per-item/policy revize a audit s retenčním kontraktem. CAS je zatím vůči SHA-256 **celého SQLite snapshotu**, nikoli úkolu. Preflight #135 není zapisovací capability. |
 | **3** | **R2b — Runtime identita a serverové API** | Propojit skutečné serverem autentizované `userId` se čtením i příkazy. Žádný klientem dodaný aktér/Area jako důkaz oprávnění; role a členství vždy z autoritativního store. Navrhnout **durable revokaci a bezpečné chování ve více procesech** před produkčním použitím (dočasné session #133 nestačí). Testy přímého detailu, neoprávněného čtení a zápisu. |
 | **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
 | **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
@@ -61,4 +62,4 @@ Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
 - Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
 
-**Nejbližší práce: review a dotažení draftu #137 (R2a), následně durable idempotence/audit a per-item revize; teprve potom R2b serverová identita/API. PR #135 je už sloučené.**
+**Nejbližší práce: interní ověřování výsledku nejistého příkazu (staging-only), skutečná per-item/policy revize a auditovatelná historie; teprve potom R2b serverová identita/API. PR #137 a #138 jsou sloučené.**
