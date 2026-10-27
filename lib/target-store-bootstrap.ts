@@ -16,9 +16,11 @@ export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
  * migration or production activation: receipts are committed atomically with
- * their task mutation and are scoped by authenticated actor + command ID.
+ * their task mutation and are scoped by authenticated actor, task and command ID.
  */
-export const TARGET_STAGING_RECEIPT_PREFIX = "r2:task-title-receipt:";
+// Actor-only receipts from #138 cannot prove their original task ACL. Old staging
+// databases intentionally fail preflight; recreate test-only staging stores.
+export const TARGET_STAGING_RECEIPT_PREFIX = "r2:task-title-receipt-v2:";
 export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 
 export interface TargetStoreBootstrapOptions {

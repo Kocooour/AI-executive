@@ -491,12 +491,194 @@ test("malformed receipt namespace fails canonical staging preflight", () => {
   const token = authority.issueWritable("alice");
   assert.ok(token);
   writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
-    .run("r2:task-title-receipt:malformed", "not-a-hash");
+    .run(TARGET_STAGING_RECEIPT_PREFIX + "malformed", "not-a-hash");
   assert.deepEqual(preview(authority, token.sessionToken, "team-task"),
     { ok: false, reason: "unauthorized", snapshotRevision: null });
   const fakeRevision = "a".repeat(64);
   assert.deepEqual(writeTitle(authority, token.sessionToken, "team-task", "Denied", fakeRevision),
     rejected("unauthorized"));
+});
+
+test("old actor-only receipts fail closed instead of losing their idempotency history", () => {
+  const { stage, writer, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const rev = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const request = {
+    commandId: randomUUID(), taskId: "team-task", title: "Must not apply",
+    expectedRevision: rev.snapshotRevision,
+  };
+  // The actor-only namespace belongs to #138 and cannot prove the original
+  // task for ACL checks. An old staging DB must be re-bootstrapped, not reused.
+  writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+    .run("r2:task-title-receipt:" + "a".repeat(64), "b".repeat(64));
+  const previous = readFileSync(stage.databasePath);
+  assert.deepEqual(authority.taskTitleCommandStatus(alice.sessionToken, request),
+    rejected("unauthorized"));
+  assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, request),
+    rejected("unauthorized"));
+  assert.equal(authority.issueWritable("alice"), null);
+  assert.deepEqual(readFileSync(stage.databasePath), previous);
+});
+
+test("read-only command reconciliation is durable, actor/task-scoped and not a mutation", () => {
+  const { stage, authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  const bob = authority.issueWritable("bob");
+  const readOnly = authority.issue("alice");
+  assert.ok(alice && bob && readOnly);
+  const rev = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const request = {
+    commandId: randomUUID(), taskId: "team-task", title: "Committed", expectedRevision: rev.snapshotRevision,
+  };
+  const status = (session, input = request) => authority.taskTitleCommandStatus(session, input);
+  const untouched = readFileSync(stage.databasePath);
+  assert.deepEqual(status(alice.sessionToken), { ok: true, status: "not_recorded" });
+  assert.deepEqual(status(bob.sessionToken), { ok: true, status: "not_recorded" });
+  assert.deepEqual(status(readOnly.sessionToken), rejected("unauthorized"));
+  assert.deepEqual(status(alice.sessionToken, { ...request, commandId: "invalid" }),
+    rejected("invalid_request"));
+  assert.deepEqual(status(alice.sessionToken, { ...request, taskId: "missing-task" }),
+    rejected("unavailable"));
+  assert.deepEqual(readFileSync(stage.databasePath), untouched);
+
+  assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, request), { ok: true });
+  const committedBytes = readFileSync(stage.databasePath);
+  assert.deepEqual(status(alice.sessionToken), { ok: true, status: "committed" });
+  assert.deepEqual(status(alice.sessionToken, { ...request, title: "Changed" }),
+    rejected("idempotency_conflict"));
+  assert.deepEqual(status(bob.sessionToken), { ok: true, status: "not_recorded" });
+  assert.deepEqual(readFileSync(stage.databasePath), committedBytes);
+
+  // Confirmation remains about the original commit, not current task state.
+  const fresh = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(fresh.ok, true);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Later change",
+    fresh.snapshotRevision), { ok: true });
+  const laterBytes = readFileSync(stage.databasePath);
+  assert.deepEqual(status(alice.sessionToken), { ok: true, status: "committed" });
+  assert.deepEqual(readFileSync(stage.databasePath), laterBytes);
+});
+
+test("command status rechecks current ACL and session across restart", () => {
+  const { stage, authority, writer } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const rev = preview(authority, bob.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const request = {
+    commandId: randomUUID(), taskId: "team-task", title: "Bob committed",
+    expectedRevision: rev.snapshotRevision,
+  };
+  assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, request), { ok: true });
+  authority.close();
+  const freshAuthority = new TargetStagingSessionAuthority({
+    stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration,
+  });
+  try {
+    const next = freshAuthority.issueWritable("bob");
+    assert.ok(next);
+    assert.deepEqual(freshAuthority.taskTitleCommandStatus(next.sessionToken, request),
+      { ok: true, status: "committed" });
+    writer.prepare(
+      "UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'",
+    ).run();
+    const afterDowngrade = readFileSync(stage.databasePath);
+    assert.deepEqual(freshAuthority.taskTitleCommandStatus(next.sessionToken, request),
+      rejected("unavailable"));
+    assert.deepEqual(readFileSync(stage.databasePath), afterDowngrade);
+    writer.prepare(
+      "UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'",
+    ).run();
+    assert.deepEqual(freshAuthority.taskTitleCommandStatus(next.sessionToken, request),
+      { ok: true, status: "committed" });
+    freshAuthority.revoke(next.sessionToken);
+    assert.deepEqual(freshAuthority.taskTitleCommandStatus(next.sessionToken, request),
+      rejected("unauthorized"));
+  } finally {
+    freshAuthority.close();
+  }
+});
+
+test("rolled-back and stale writes remain unrecorded during reconciliation", () => {
+  const { stage, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const rev = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const request = {
+    commandId: randomUUID(), taskId: "team-task", title: "Blocked",
+    expectedRevision: rev.snapshotRevision,
+  };
+  const competing = new DatabaseSync(stage.databasePath);
+  try {
+    competing.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+    assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, request),
+      rejected("write_failed"));
+    competing.exec("ROLLBACK");
+  } finally {
+    competing.close();
+  }
+  const after = readFileSync(stage.databasePath);
+  assert.deepEqual(authority.taskTitleCommandStatus(alice.sessionToken, request),
+    { ok: true, status: "not_recorded" });
+  assert.deepEqual(readFileSync(stage.databasePath), after);
+  assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, request), { ok: true });
+  assert.deepEqual(authority.taskTitleCommandStatus(alice.sessionToken, request),
+    { ok: true, status: "committed" });
+
+  // A different UUID using the stale pre-write snapshot is not committed.
+  const stale = { ...request, commandId: randomUUID(), title: "Stale" };
+  assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, stale),
+    rejected("stale_revision"));
+  assert.deepEqual(authority.taskTitleCommandStatus(alice.sessionToken, stale),
+    { ok: true, status: "not_recorded" });
+});
+
+test("revoked command cannot be probed via another editable task", () => {
+  const { stage, writer, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const teamRev = preview(authority, bob.sessionToken, "team-task");
+  assert.equal(teamRev.ok, true);
+  const teamCommand = {
+    commandId: randomUUID(), taskId: "team-task", title: "Committed team",
+    expectedRevision: teamRev.snapshotRevision,
+  };
+  const status = input => authority.taskTitleCommandStatus(bob.sessionToken, input);
+  assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, teamCommand), { ok: true });
+  assert.deepEqual(status(teamCommand), { ok: true, status: "committed" });
+
+  writer.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(status(teamCommand), rejected("unavailable"));
+  const beforeProbe = readFileSync(stage.databasePath);
+  // Bob still owns bob-task. Swapping the request's taskId must not
+  // disclose the committed command for the now-inaccessible team-task.
+  assert.deepEqual(status({ ...teamCommand, taskId: "bob-task" }),
+    { ok: true, status: "not_recorded" });
+  assert.deepEqual(readFileSync(stage.databasePath), beforeProbe);
+
+  // UUID reuse across DIFFERENT tasks is independent; within the same task
+  // a changed payload still conflicts.
+  const personalRev = preview(authority, bob.sessionToken, "bob-task");
+  assert.equal(personalRev.ok, true);
+  const privateCommand = {
+    ...teamCommand, taskId: "bob-task", title: "Committed private",
+    expectedRevision: personalRev.snapshotRevision,
+  };
+  assert.deepEqual(status(privateCommand), { ok: true, status: "not_recorded" });
+  assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, privateCommand), { ok: true });
+  assert.deepEqual(status(privateCommand), { ok: true, status: "committed" });
+  assert.deepEqual(status({ ...privateCommand, title: "Modified" }),
+    rejected("idempotency_conflict"));
+  assert.deepEqual(authority.updateTaskTitle(bob.sessionToken,
+    { ...privateCommand, title: "Modified" }), rejected("idempotency_conflict"));
+
+  writer.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(status(teamCommand), { ok: true, status: "committed" });
+  assert.deepEqual(status(privateCommand), { ok: true, status: "committed" });
 });
 
 test("separate staging authorities cannot use each other's session tokens", () => {
