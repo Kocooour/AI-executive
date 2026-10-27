@@ -17,7 +17,7 @@ import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
-  previewAuthenticatedIsolatedTargetTaskTitleEdit, readAuthenticatedIsolatedTargetTask,
+  authorizeAuthenticatedIsolatedTargetTaskTitleEdit, readAuthenticatedIsolatedTargetTask,
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
@@ -255,7 +255,19 @@ export function previewPreflightedTargetTaskTitleEdit(
   return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
     () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
-    (db, preflight, revision) =>
-      previewAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, revision, preflight),
+    (db, preflight, revision): TargetTaskTitleEditPreviewResult => {
+      const authorization = authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
+        db, access, request, preflight,
+      );
+      if (!authorization.ok) {
+        return { ok: false, reason: authorization.reason, snapshotRevision: null };
+      }
+      // Only this facade receives the SHA-256 of the pinned snapshot bytes.
+      // Never let the lower-level authorization selector mint revision tokens.
+      if (request.expectedRevision !== undefined && request.expectedRevision !== revision) {
+        return { ok: false, reason: "stale_revision", snapshotRevision: null };
+      }
+      return { ok: true, snapshotRevision: revision };
+    },
   );
 }
