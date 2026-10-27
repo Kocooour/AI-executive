@@ -23,8 +23,10 @@ import type {
 import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
+  readPreflightedTargetTaskTitleCommandStatus,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
@@ -306,6 +308,23 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     }
     return writePreflightedTargetTaskTitle(this.#store, credential, request);
+  }
+
+  /**
+   * Read-only durable command reconciliation. A caller may ask whether its
+   * exact authorized write was committed without issuing a second mutation.
+   * The full write-audience token and live Area ACL are checked again.
+   */
+  taskTitleCommandStatus(
+    sessionToken: string,
+    request: TargetStagingTaskTitleWriteRequest,
+  ): TargetStagingTaskTitleCommandStatusResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTaskTitleWriteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return readPreflightedTargetTaskTitleCommandStatus(this.#store, credential, request);
   }
 
   detail(
