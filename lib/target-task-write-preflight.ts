@@ -7,6 +7,7 @@
  * inside its own write transaction; do not trust this preview as a capability.
  */
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 
 export interface TargetTaskTitleEditPreviewRequest {
   readonly taskId: string;
@@ -34,6 +35,41 @@ export function validTargetTaskTitleEditPreviewRequest(
     request.taskId.length <= 4096 &&
     (request.expectedRevision === undefined ||
       (typeof request.expectedRevision === "string" && REVISION.test(request.expectedRevision)));
+}
+
+/**
+ * R2a staging task + policy CAS token. Caller MUST first run canonical
+ * preflight, verify the write-audience session and check current task ACL.
+ * Task revisions and shared-Area membership epochs are monotonically bumped
+ * by canonical SQLite triggers, including when values change and then revert.
+ *
+ * The restore generation binds tokens to one bootstrap. The token does not
+ * expose title, actor or task content. This does NOT implement sync or audit.
+ */
+export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): string | null {
+  try {
+    const row = db.prepare(`
+      SELECT t.id AS id, t.revision AS task_revision,
+        t.project_id AS project_id, t.area_id AS area_id,
+        t.assignee_user_id AS assignee_user_id,
+        a.id AS effective_area_id, a.policy_revision AS policy_revision,
+        a.kind AS area_kind, a.workspace_id AS workspace_id, a.owner_user_id AS owner_user_id,
+        (SELECT value FROM metadata WHERE key='restore_generation') AS restore_generation
+      FROM tasks t
+      LEFT JOIN projects p ON p.id=t.project_id
+      JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+      WHERE t.id=?
+    `).get(taskId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return createHash("sha256").update(JSON.stringify([
+      "lumi:r2:task-title-cas:v2", row.restore_generation,
+      row.id, row.task_revision, row.project_id, row.area_id, row.assignee_user_id,
+      row.effective_area_id, row.policy_revision, row.area_kind,
+      row.workspace_id, row.owner_user_id,
+    ])).digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 /**
