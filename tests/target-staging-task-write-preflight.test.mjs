@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, constants, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -15,8 +15,7 @@ process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
-const { authorizeAuthenticatedIsolatedTargetTaskTitleEdit, TARGET_STAGING_TASK_READ_AUDIENCE } =
-  await import("../lib/target-task-authenticated-read.ts");
+const authenticatedRead = await import("../lib/target-task-authenticated-read.ts");
 const fixtures = [];
 
 function fixture() {
@@ -163,44 +162,45 @@ test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass p
   assert.deepEqual(preview(authority, bob.sessionToken, "private-alice"), denied("unavailable"));
 });
 
-test("low-level title edit requires canonical pinned SQLite preflight, never a callback", () => {
-  const { stage, writer } = fixture();
-  const signingKey = randomBytes(32);
-  const now = Math.floor(Date.now() / 1000);
-  const claims = { v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: "alice",
-    gen: stage.restoreGeneration, iat: now, exp: now + 300 };
-  const encoded = Buffer.from(JSON.stringify(claims)).toString("base64url");
-  const signature = createHmac("sha256", signingKey)
-    .update("lumi:r2:target-task-read:staging:v1\0").update(encoded).digest("base64url");
-  const access = { sessionToken: encoded + "." + signature, signingKey };
-  const request = { taskId: "team-task" };
-  const db = new DatabaseSync(stage.databasePath, { readOnly: true });
-  const snapshotFd = openSync(stage.databasePath, constants.O_RDONLY);
-  const wrongFd = openSync(path.join(legacy, "sentinel"), constants.O_RDONLY);
+test("two staging databases cannot swap authorization, generation or revision", () => {
+  const first = fixture();
+  const second = fixture();
+  second.writer.prepare(
+    "UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'",
+  ).run();
+  const viewer = first.authority.issue("bob");
+  const editor = second.authority.issue("bob");
+  assert.ok(viewer && editor);
+  assert.deepEqual(preview(first.authority, viewer.sessionToken, "team-task"), denied("unavailable"));
+  const allowed = preview(second.authority, editor.sessionToken, "team-task");
+  assert.equal(allowed.ok, true);
+  // Different credentials and pinned staging stores may not be interchanged.
+  assert.deepEqual(preview(first.authority, editor.sessionToken, "team-task"), denied("unauthorized"));
+  assert.deepEqual(preview(second.authority, viewer.sessionToken, "team-task"), denied("unauthorized"));
+  const wrongStore = new TargetStagingSessionAuthority({
+    stagingDirectory: first.stage.directory,
+    expectedRestoreGeneration: second.stage.restoreGeneration,
+  });
   try {
-    const pinned = { snapshotDirectory: stage.directory,
-      snapshotFd, expectedRestoreGeneration: stage.restoreGeneration };
-    const authorize = source =>
-      authorizeAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, source);
-    assert.deepEqual(authorize(undefined), { ok: false, reason: "unauthorized" });
-    assert.deepEqual(authorize(null), { ok: false, reason: "unauthorized" });
-    // A forged "always true" callback can no longer replace schema validation.
-    assert.deepEqual(authorize(() => true), { ok: false, reason: "unauthorized" });
-    assert.deepEqual(authorize({ ...pinned, snapshotFd: wrongFd }),
-      { ok: false, reason: "unauthorized" });
-    assert.deepEqual(authorize({ ...pinned, expectedRestoreGeneration: randomUUID() }),
-      { ok: false, reason: "unauthorized" });
-    const allowed = authorize(pinned);
-    assert.deepEqual(allowed, { ok: true });
-    assert.equal("snapshotRevision" in allowed, false);
-
-    // The canonical schema is validated again, even with a valid identity,
-    // generation, database handle and matching pinned file descriptor.
-    writer.exec("DROP TRIGGER protected_private_fallback");
-    assert.deepEqual(authorize(pinned), { ok: false, reason: "unauthorized" });
+    assert.equal(wrongStore.issue("bob"), null);
   } finally {
-    closeSync(wrongFd);
-    closeSync(snapshotFd);
-    db.close();
+    wrongStore.close();
   }
+  second.writer.prepare("UPDATE tasks SET title=? WHERE id='team-task'").run("Second changed");
+  assert.deepEqual(preview(second.authority, editor.sessionToken, "team-task", {
+    expectedRevision: allowed.snapshotRevision,
+  }), denied("stale_revision"));
+  assert.deepEqual(preview(first.authority, viewer.sessionToken, "team-task"), denied("unavailable"));
+  // No exported low-level title edit selector accepts an independently chosen
+  // SQLite connection and a file descriptor from another staging database.
+  assert.equal(Object.hasOwn(authenticatedRead, "authorizeAuthenticatedIsolatedTargetTaskTitleEdit"), false);
+});
+
+test("canonical schema tampering invalidates an authenticated preview", () => {
+  const { authority, writer } = fixture();
+  const alice = authority.issue("alice");
+  assert.ok(alice);
+  assert.equal(preview(authority, alice.sessionToken, "team-task").ok, true);
+  writer.exec("DROP TRIGGER protected_private_fallback");
+  assert.deepEqual(preview(authority, alice.sessionToken, "team-task"), denied("unauthorized"));
 });
