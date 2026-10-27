@@ -16,7 +16,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import {
+  TARGET_STORE_FILENAME, TARGET_STAGING_MAX_RECEIPTS,
+  TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
+} from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { verifiedActor } from "./target-task-authenticated-read";
 import type { TargetStagingReadCredential } from "./target-task-authenticated-read";
@@ -27,8 +30,11 @@ const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 const CHUNK_BYTES = 64 * 1024;
 const MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 4096;
+const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetStagingTaskTitleWriteRequest {
+  /** Fresh UUID for the logical command. Retries must reuse the same UUID. */
+  readonly commandId: string;
   readonly taskId: string;
   readonly title: string;
   /** Mandatory SHA-256 returned by a preview on this exact staging store. */
@@ -36,10 +42,10 @@ export interface TargetStagingTaskTitleWriteRequest {
 }
 
 export type TargetStagingTaskTitleWriteResult =
-  | { ok: true }
+  | { ok: true; replayed?: true }
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unavailable" |
-        "stale_revision" | "unchanged" | "write_failed" };
+        "stale_revision" | "unchanged" | "idempotency_conflict" | "write_failed" };
 
 const denied = (): TargetStagingTaskTitleWriteResult =>
   ({ ok: false, reason: "unauthorized" });
@@ -51,7 +57,8 @@ export function validTargetStagingTaskTitleWriteRequest(
 ): value is TargetStagingTaskTitleWriteRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).sort().join(",") !== "expectedRevision,taskId,title") return false;
+  if (Object.keys(input).sort().join(",") !== "commandId,expectedRevision,taskId,title" ||
+      typeof input.commandId !== "string" || !COMMAND_ID.test(input.commandId)) return false;
   if (typeof input.expectedRevision !== "string" ||
       !validTargetTaskTitleEditPreviewRequest({
         taskId: input.taskId, expectedRevision: input.expectedRevision,
@@ -195,6 +202,22 @@ export function writePreflightedTargetTaskTitle(
     if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
       return { ok: false, reason: "unavailable" };
     }
+    // Persist the receipt in the *same transaction* as the UPDATE. The actor
+    // and operation UUID are hashed into the key; only a request digest is
+    // stored (never the title or task content). Replays are checked after the
+    // current ACL, but before optimistic revision staleness.
+    const receiptKey = TARGET_STAGING_RECEIPT_PREFIX + createHash("sha256")
+      .update(actor).update("\0").update(request.commandId.toLowerCase()).digest("hex");
+    const receiptDigest = createHash("sha256")
+      .update(JSON.stringify([request.taskId, request.title, request.expectedRevision]))
+      .digest("hex");
+    const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
+      .get(receiptKey) as { value: string } | undefined;
+    if (prior) {
+      return prior.value === receiptDigest
+        ? { ok: true, replayed: true }
+        : { ok: false, reason: "idempotency_conflict" };
+    }
     if (fingerprint(databaseFd) !== request.expectedRevision) {
       return { ok: false, reason: "stale_revision" };
     }
@@ -206,9 +229,15 @@ export function writePreflightedTargetTaskTitle(
     if (!oldTitle) return failed();
     if (oldTitle.title === request.title) return { ok: false, reason: "unchanged" };
     if (!stillPinned() || !noSidecars(databasePath)) return denied();
+    const receiptCount = db.prepare(
+      "SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?",
+    ).get(TARGET_STAGING_RECEIPT_PREFIX + "%") as { n: number };
+    if (receiptCount.n >= TARGET_STAGING_MAX_RECEIPTS) return failed();
     const updated = db.prepare("UPDATE tasks SET title=? WHERE id=?")
       .run(request.title, request.taskId);
     if (updated.changes !== 1) return failed();
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+      .run(receiptKey, receiptDigest);
     db.exec("COMMIT");
     transaction = false;
     return { ok: true };
