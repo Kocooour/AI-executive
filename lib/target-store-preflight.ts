@@ -4,7 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
-  TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
+  TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS,
+  TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -13,6 +14,7 @@ export type TargetPreflightCode =
   | "metadata_invalid" | "schema_invalid" | "expected_owner_mismatch" | "expected_generation_mismatch"
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
+  | "audit_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
 
 export interface TargetPreflightOptions {
@@ -159,6 +161,15 @@ export function inspectIsolatedTargetStore(
           !uuid.test(meta.get("restore_generation") as string)) fail("metadata_invalid");
       if (options.expectedRestoreGeneration !== undefined &&
           meta.get("restore_generation") !== options.expectedRestoreGeneration) fail("expected_generation_mismatch");
+      const audit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_title_audit") as
+        { receipt_key: unknown; expected_revision: unknown; restore_generation: unknown }[];
+      if (audit.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          audit.some(row => typeof row.receipt_key !== "string" ||
+            !row.receipt_key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
+            !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_RECEIPT_PREFIX.length)) ||
+            typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
+            row.restore_generation !== meta.get("restore_generation") ||
+            !meta.has(row.receipt_key))) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
     try {
       const owners = all("SELECT w.owner_user_id AS owner FROM workspaces w WHERE w.kind = 'personal'") as { owner: string }[];

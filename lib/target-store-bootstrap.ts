@@ -11,7 +11,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-export const TARGET_STORE_SCHEMA_VERSION = 2;
+export const TARGET_STORE_SCHEMA_VERSION = 3;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -22,6 +22,9 @@ export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 // databases intentionally fail preflight; recreate test-only staging stores.
 export const TARGET_STAGING_RECEIPT_PREFIX = "r2:task-title-receipt-v2:";
 export const TARGET_STAGING_MAX_RECEIPTS = 4096;
+/** Provisional, isolated-staging audit policy; production retention is not approved. */
+export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
+export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
 
 export interface TargetStoreBootstrapOptions {
   /** Absolute path for a directory which MUST NOT exist yet. Its parent must exist. */
@@ -167,6 +170,40 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_by_project ON tasks(project_id);
 CREATE INDEX tasks_by_area ON tasks(area_id);
+
+-- Internal, content-free audit of committed title mutations only. The same
+-- transaction writes the task, idempotency receipt and this row. No API is
+-- exposed for reading historical data under a member's current Area ACL.
+CREATE TABLE task_title_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE,
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0),
+  revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before >= 0),
+  revision_after INTEGER NOT NULL CHECK(typeof(revision_after)='integer' AND revision_after = revision_before + 1),
+  expected_revision TEXT NOT NULL CHECK(length(expected_revision)=64),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+);
+CREATE INDEX task_title_audit_task_sequence ON task_title_audit(task_id, id);
+-- Rows may be removed only after the provisional 90-day minimum. This is not
+-- an automatic purge or a production maximum-retention policy.
+CREATE TRIGGER task_title_audit_no_update BEFORE UPDATE ON task_title_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER task_title_audit_retention BEFORE DELETE ON task_title_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'audit retention window is active'); END;
+-- SQLite REPLACE can bypass DELETE triggers; check every unique conflict
+-- before insertion, including an explicitly supplied rowid.
+CREATE TRIGGER task_title_audit_replace_guard BEFORE INSERT ON task_title_audit
+WHEN EXISTS(SELECT 1 FROM task_title_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
+CREATE TRIGGER task_title_audit_capacity BEFORE INSERT ON task_title_audit
+WHEN (SELECT COUNT(*) FROM task_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
          t.assignee_user_id AS assignee_user_id

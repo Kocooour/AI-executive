@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.schemaVersion, 3);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "2");
+    assert.equal(metadata.schema_version, "3");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
     assert.equal(metadata.restore_generation, result.restoreGeneration);
@@ -105,6 +105,42 @@ test("R2a revision counters increase monotonically and reject same-ID replacemen
     assert.throws(() => db.prepare("UPDATE areas SET policy_revision=0 WHERE id=?")
       .run(shared.area), /Area policy revision must increment by one/);
     assert.equal(version(), 3);
+  } finally {
+    db.close();
+  }
+});
+
+test("staging audit protects the minimum retention window but permits expired cleanup", () => {
+  const store = fresh("audit-retention");
+  const db = open(store);
+  try {
+    db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('audit-task',?,'Before')")
+      .run(store.unassignedAreaId);
+    db.prepare("UPDATE tasks SET title='After' WHERE id='audit-task'").run();
+    const put = (suffix, when) => {
+      const key = "r2:task-title-receipt-v2:" + suffix.repeat(64);
+      db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "f".repeat(64));
+      db.prepare(`
+        INSERT INTO task_title_audit(
+          receipt_key,actor_user_id,task_id,area_id,policy_revision,
+          revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+        ) VALUES (?,'owner','audit-task',?,0,0,1,?,?,?)
+      `).run(key, store.unassignedAreaId, "c".repeat(64), store.restoreGeneration, when);
+      return key;
+    };
+    const expiredKey = put("a", Date.now() - 91 * 86400000);
+    assert.throws(() => db.prepare("UPDATE task_title_audit SET task_id='changed'").run(),
+      /audit events are immutable/);
+    db.prepare("DELETE FROM task_title_audit WHERE receipt_key=?").run(expiredKey);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit").get().n, 0);
+    const recentKey = put("b", Date.now());
+    assert.throws(() => db.prepare("DELETE FROM task_title_audit WHERE receipt_key=?")
+      .run(recentKey), /audit retention window is active/);
+    assert.throws(() => db.prepare(
+      "INSERT OR REPLACE INTO task_title_audit(receipt_key,actor_user_id,task_id,area_id,policy_revision,revision_before,revision_after,expected_revision,restore_generation,committed_at_ms) VALUES (?,'owner','audit-task',?,0,0,1,?,?,?)",
+    ).run(recentKey, store.unassignedAreaId, "c".repeat(64), store.restoreGeneration, Date.now()),
+    /audit replacement is forbidden/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit").get().n, 1);
   } finally {
     db.close();
   }
