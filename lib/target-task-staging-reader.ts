@@ -328,7 +328,7 @@ export function readPreflightedTargetTaskTitleCommandStatus(
         return { ok: false, reason: "unavailable" };
       }
       const row = db.prepare("SELECT value FROM metadata WHERE key=?")
-        .get(targetTaskTitleReceiptKey(actor, request.commandId)) as
+        .get(targetTaskTitleReceiptKey(actor, request.taskId, request.commandId)) as
         { value: string } | undefined;
       if (!row) return { ok: true, status: "not_recorded" };
       if (row.value !== targetTaskTitleReceiptDigest(request)) {
