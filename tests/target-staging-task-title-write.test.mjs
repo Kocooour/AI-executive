@@ -13,7 +13,8 @@ writeFileSync(path.join(legacy, "sentinel"), "legacy unchanged");
 const oldDataDir = process.env.AI_EXECUTIVE_DATA_DIR;
 process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 
-const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
+const { bootstrapIsolatedTargetStore, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_RECEIPT_PREFIX } =
+  await import("../lib/target-store-bootstrap.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const fixtures = [];
 
@@ -289,7 +290,7 @@ test("competing BEGIN IMMEDIATE fails without altering bytes, generation or lock
   assertNoSidecars(stage.databasePath);
 });
 
-test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh write", () => {
+test("COMMIT SQLITE_BUSY rolls back title and receipt; identical command retry succeeds", () => {
   const { stage, authority, writer } = fixture();
   const alice = authority.issueWritable("alice");
   assert.ok(alice);
@@ -297,6 +298,8 @@ test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh 
   assert.equal(initial.ok, true);
   const before = readFileSync(stage.databasePath);
   const generation = writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+  const commandId = randomUUID();
+  const receipts = writer.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?");
   const competingReader = new DatabaseSync(stage.databasePath, { readOnly: true });
   try {
     competingReader.exec("PRAGMA query_only=ON; BEGIN");
@@ -307,8 +310,8 @@ test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh 
     try {
       // BEGIN IMMEDIATE and UPDATE can run, but COMMIT must fail SQLITE_BUSY.
       // The finally ROLLBACK must undo the task change and remove -journal.
-      assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Must roll back",
-        initial.snapshotRevision), rejected("write_failed"));
+      assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After reader release",
+        initial.snapshotRevision, commandId), rejected("write_failed"));
       assert.equal(competingReader.prepare("SELECT title FROM tasks WHERE id='team-task'")
         .get().title, "Team original");
     } finally {
@@ -322,14 +325,20 @@ test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh 
   assert.equal(writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value,
     generation);
   assert.deepEqual(readFileSync(stage.databasePath), before);
+  assert.equal(receipts.get(TARGET_STAGING_RECEIPT_PREFIX + "%").n, 0);
   assertNoSidecars(stage.databasePath);
   const next = preview(authority, alice.sessionToken, "team-task");
   assert.equal(next.ok, true);
   assert.equal(next.snapshotRevision, initial.snapshotRevision);
   assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After reader release",
-    next.snapshotRevision), { ok: true });
+    next.snapshotRevision, commandId), { ok: true });
   assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
     "After reader release");
+  assert.equal(receipts.get(TARGET_STAGING_RECEIPT_PREFIX + "%").n, 1);
+  const afterCommit = readFileSync(stage.databasePath);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After reader release",
+    initial.snapshotRevision, commandId), { ok: true, replayed: true });
+  assert.deepEqual(readFileSync(stage.databasePath), afterCommit);
   assertNoSidecars(stage.databasePath);
 });
 
@@ -359,9 +368,88 @@ test("successful task mutation has a durable actor-scoped receipt across authori
     assert.deepEqual(writeTitle(freshAuthority, next.sessionToken, "team-task", "Altered",
       rev.snapshotRevision, commandId), rejected("idempotency_conflict"));
     assert.deepEqual(readFileSync(stage.databasePath), afterCommit);
+    // Same command UUID is independent for a different authenticated actor.
+    const bob = freshAuthority.issueWritable("bob");
+    assert.ok(bob);
+    const bobRev = preview(freshAuthority, bob.sessionToken, "project-task");
+    assert.equal(bobRev.ok, true);
+    assert.deepEqual(writeTitle(freshAuthority, bob.sessionToken, "project-task", "Bob committed",
+      bobRev.snapshotRevision, commandId), { ok: true });
+    assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='project-task'").get().title,
+      "Bob committed");
+    assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
+      .get(TARGET_STAGING_RECEIPT_PREFIX + "%").n, 2);
+    assert.deepEqual(writeTitle(freshAuthority, bob.sessionToken, "project-task", "Bob committed",
+      bobRev.snapshotRevision, commandId), { ok: true, replayed: true });
+    assert.deepEqual(writeTitle(freshAuthority, next.sessionToken, "team-task", "Committed",
+      rev.snapshotRevision, commandId), { ok: true, replayed: true });
   } finally {
     freshAuthority.close();
   }
+});
+
+test("stored receipt cannot bypass a later Area downgrade or token revocation", () => {
+  const { stage, writer, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const rev = preview(authority, bob.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const commandId = randomUUID();
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Committed",
+    rev.snapshotRevision, commandId), { ok: true });
+  writer.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  const beforeDenied = readFileSync(stage.databasePath);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Committed",
+    rev.snapshotRevision, commandId), rejected("unavailable"));
+  assert.deepEqual(readFileSync(stage.databasePath), beforeDenied);
+  writer.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  const beforeReplay = readFileSync(stage.databasePath);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Committed",
+    rev.snapshotRevision, commandId), { ok: true, replayed: true });
+  assert.deepEqual(readFileSync(stage.databasePath), beforeReplay);
+  assert.equal(authority.revoke(bob.sessionToken), true);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Committed",
+    rev.snapshotRevision, commandId), rejected("unauthorized"));
+});
+
+test("receipt ledger permits its last slot but fails closed when full", () => {
+  const { stage, writer, authority } = fixture();
+  const insert = writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  // Seed canonical content-free hashes efficiently, without 4095 expensive
+  // per-command preflights; exercise the real writer at the capacity boundary.
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < TARGET_STAGING_MAX_RECEIPTS - 1; i++) {
+      const hash = i.toString(16).padStart(64, "0");
+      insert.run(TARGET_STAGING_RECEIPT_PREFIX + hash, hash);
+    }
+    writer.exec("COMMIT");
+  } catch (error) {
+    writer.exec("ROLLBACK");
+    throw error;
+  }
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const rev = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const commandId = randomUUID();
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Last slot",
+    rev.snapshotRevision, commandId), { ok: true });
+  const count = writer.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?");
+  assert.equal(count.get(TARGET_STAGING_RECEIPT_PREFIX + "%").n, TARGET_STAGING_MAX_RECEIPTS);
+  const current = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(current.ok, true);
+  const atCapacity = readFileSync(stage.databasePath);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Cannot append",
+    current.snapshotRevision, randomUUID()), rejected("write_failed"));
+  assert.deepEqual(readFileSync(stage.databasePath), atCapacity);
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Last slot");
+  assert.equal(count.get(TARGET_STAGING_RECEIPT_PREFIX + "%").n, TARGET_STAGING_MAX_RECEIPTS);
+  // Existing receipts remain replayable even when new writes are blocked.
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Last slot",
+    rev.snapshotRevision, commandId), { ok: true, replayed: true });
+  assert.deepEqual(readFileSync(stage.databasePath), atCapacity);
 });
 
 test("denied and rolled-back commands leave no durable receipt", () => {
