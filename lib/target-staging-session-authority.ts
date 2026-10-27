@@ -22,9 +22,11 @@ import type {
 } from "./target-task-authenticated-read";
 import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
-  readPreflightedIsolatedTargetTask,
+  previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
 const CURSOR_DOMAIN = "lumi:r2:target-task-page-cursor:staging:v2\0";
@@ -247,6 +249,24 @@ export class TargetStagingSessionAuthority {
       nextCursor: page.result.hasMore ?
         this.#signCursor(sessionToken, request.scope, page.revision, nextOffset) : null,
     };
+  }
+
+  /**
+   * Read-only preview of a future task title write. It can never authorize
+   * a subsequent write without an independent transactional recheck.
+   * Read-only viewers, nonexistent tasks and foreign private tasks all yield
+   * the same content-free unavailable result.
+   */
+  previewTaskTitleEdit(
+    sessionToken: string,
+    request: TargetTaskTitleEditPreviewRequest,
+  ): TargetTaskTitleEditPreviewResult {
+    const credential = this.#credential(sessionToken);
+    if (!credential) return { ok: false, reason: "unauthorized", snapshotRevision: null };
+    if (!validTargetTaskTitleEditPreviewRequest(request)) {
+      return { ok: false, reason: "invalid_request", snapshotRevision: null };
+    }
+    return previewPreflightedTargetTaskTitleEdit(this.#store, credential, request);
   }
 
   detail(
