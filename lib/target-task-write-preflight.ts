@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 
 export interface TargetTaskTitleEditPreviewRequest {
   readonly taskId: string;
-  /** SHA-256 fingerprint returned by a prior successful preview. */
+  /** SHA-256 of target task state, policy epoch and restore generation. */
   readonly expectedRevision?: string;
 }
 
