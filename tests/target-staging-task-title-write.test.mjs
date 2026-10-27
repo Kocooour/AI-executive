@@ -59,8 +59,8 @@ after(() => {
 const preview = (authority, token, taskId) =>
   authority.previewTaskTitleEdit(token, { taskId });
 
-const writeTitle = (authority, token, taskId, title, expectedRevision) =>
-  authority.updateTaskTitle(token, { taskId, title, expectedRevision });
+const writeTitle = (authority, token, taskId, title, expectedRevision, commandId = randomUUID()) =>
+  authority.updateTaskTitle(token, { commandId, taskId, title, expectedRevision });
 
 const rejected = reason => ({ ok: false, reason });
 
@@ -197,9 +197,11 @@ test("invalid title, actor overrides, missing revision and forged token fail clo
   const version = preview(authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
   const original = readFileSync(writer.prepare("PRAGMA database_list").all()[0].file);
-  const good = { taskId: "team-task", title: "Valid", expectedRevision: version.snapshotRevision };
+  const good = { commandId: randomUUID(), taskId: "team-task", title: "Valid",
+    expectedRevision: version.snapshotRevision };
   for (const bad of [
     { ...good, actorUserId: "alice" }, { ...good, workspaceId: "team" },
+    { ...good, commandId: undefined }, { ...good, commandId: "not-a-uuid" },
     { ...good, expectedRevision: undefined }, { ...good, expectedRevision: null },
     { ...good, expectedRevision: "a" }, { ...good, title: "" },
     { ...good, title: " " }, { ...good, title: " leading" },
@@ -329,6 +331,84 @@ test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh 
   assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
     "After reader release");
   assertNoSidecars(stage.databasePath);
+});
+
+test("successful task mutation has a durable actor-scoped receipt across authorities", () => {
+  const { stage, writer, authority } = fixture();
+  const first = authority.issueWritable("alice");
+  assert.ok(first);
+  const rev = preview(authority, first.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const commandId = randomUUID();
+  assert.deepEqual(writeTitle(authority, first.sessionToken, "team-task", "Committed", rev.snapshotRevision,
+    commandId), { ok: true });
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title, "Committed");
+  const afterCommit = readFileSync(stage.databasePath);
+  // Constructing a fresh authority produces a new key and cannot reuse the
+  // old session. The receipt must nevertheless survive in the SQLite store.
+  authority.close();
+  const freshAuthority = new TargetStagingSessionAuthority({
+    stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration,
+  });
+  try {
+    const next = freshAuthority.issueWritable("alice");
+    assert.ok(next);
+    assert.deepEqual(writeTitle(freshAuthority, next.sessionToken, "team-task", "Committed",
+      rev.snapshotRevision, commandId), { ok: true, replayed: true });
+    assert.deepEqual(readFileSync(stage.databasePath), afterCommit);
+    assert.deepEqual(writeTitle(freshAuthority, next.sessionToken, "team-task", "Altered",
+      rev.snapshotRevision, commandId), rejected("idempotency_conflict"));
+    assert.deepEqual(readFileSync(stage.databasePath), afterCommit);
+  } finally {
+    freshAuthority.close();
+  }
+});
+
+test("denied and rolled-back commands leave no durable receipt", () => {
+  const { stage, writer, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const allowed = preview(authority, bob.sessionToken, "team-task");
+  assert.equal(allowed.ok, true);
+  const commandId = randomUUID();
+  writer.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Denied",
+    allowed.snapshotRevision, commandId), rejected("unavailable"));
+  writer.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  const fresh = preview(authority, bob.sessionToken, "team-task");
+  assert.equal(fresh.ok, true);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Granted",
+    fresh.snapshotRevision, commandId), { ok: true });
+
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const next = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(next.ok, true);
+  const lockedCommand = randomUUID();
+  const competitor = new DatabaseSync(stage.databasePath);
+  try {
+    competitor.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+    assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Blocked",
+      next.snapshotRevision, lockedCommand), rejected("write_failed"));
+    competitor.exec("ROLLBACK");
+  } finally {
+    competitor.close();
+  }
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After lock",
+    next.snapshotRevision, lockedCommand), { ok: true });
+});
+
+test("malformed receipt namespace fails canonical staging preflight", () => {
+  const { writer, authority } = fixture();
+  const token = authority.issueWritable("alice");
+  assert.ok(token);
+  writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+    .run("r2:task-title-receipt:malformed", "not-a-hash");
+  assert.deepEqual(preview(authority, token.sessionToken, "team-task"),
+    rejected("unauthorized") && { ok: false, reason: "unauthorized", snapshotRevision: null });
+  const fakeRevision = "a".repeat(64);
+  assert.deepEqual(writeTitle(authority, token.sessionToken, "team-task", "Denied", fakeRevision),
+    rejected("unauthorized"));
 });
 
 test("separate staging authorities cannot use each other's session tokens", () => {
