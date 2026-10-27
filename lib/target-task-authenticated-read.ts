@@ -64,7 +64,7 @@ type ReadClaims = {
  * The metadata/identity lookup is not a substitute for staging path preflight.
  * No read is allowed from an activated or unknown-schema target store.
  */
-function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): string | null {
+export function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): string | null {
   if (!access || typeof access.sessionToken !== "string" ||
       !(access.signingKey instanceof Uint8Array) ||
       access.signingKey.byteLength < 32 || access.sessionToken.length > 4096 ||
@@ -119,7 +119,7 @@ function invalidActorOverride(request: unknown): boolean {
  * BEGIN/ROLLBACK on a preflighted, read-only handle never writes store data.
  * If another operation owns a transaction, fail closed without rolling it back.
  */
-function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T {
+export function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T {
   let started = false;
   try {
     db.exec("BEGIN");
@@ -199,4 +199,3 @@ export function listAuthenticatedIsolatedTargetTasksAtOffset(
     });
   }, denied);
 }
-

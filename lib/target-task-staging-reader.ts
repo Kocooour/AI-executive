@@ -17,9 +17,11 @@ import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
-  readAuthenticatedIsolatedTargetTask,
+  inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
+import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -240,3 +242,43 @@ export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
     });
 }
 
+
+/**
+ * Dry-run per-item write authorization on the same copied snapshot whose
+ * SHA-256 revision is returned. No source database write or new route.
+ * Actual mutations must independently recheck ACL + revision in a write TX.
+ */
+export function previewPreflightedTargetTaskTitleEdit(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetTaskTitleEditPreviewRequest,
+): TargetTaskTitleEditPreviewResult {
+  return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
+    store,
+    () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
+    (db, preflight, revision): TargetTaskTitleEditPreviewResult => {
+      const denied = (): TargetTaskTitleEditPreviewResult =>
+        ({ ok: false, reason: "unauthorized", snapshotRevision: null });
+      if (!validTargetTaskTitleEditPreviewRequest(request)) {
+        return { ok: false, reason: "invalid_request", snapshotRevision: null };
+      }
+      // The source fd, copied bytes, opened SQLite connection and canonical
+      // preflight all originate within this private withPreflightedStore scope.
+      // No public selector can mix db from one store with another store's fd.
+      return inReadSnapshot(db, () => {
+        if (!preflight(db)) return denied();
+        const actor = verifiedActor(db, access);
+        if (!actor) return denied();
+        // Always check live ACL before comparing revisions, so inaccessible
+        // tasks disclose neither existence nor staleness.
+        if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+          return { ok: false, reason: "unavailable", snapshotRevision: null };
+        }
+        if (request.expectedRevision !== undefined && request.expectedRevision !== revision) {
+          return { ok: false, reason: "stale_revision", snapshotRevision: null };
+        }
+        return { ok: true, snapshotRevision: revision };
+      }, denied);
+    },
+  );
+}
