@@ -153,6 +153,7 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Staging source changed during copy",
   "Could not copy staging data",
   "Invalid snapshot file",
+  "Source SQLite file identity mismatch",
   // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
   "Cannot resolve a safe staging path",
   "R1 staging directory must be absolute",
