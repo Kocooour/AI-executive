@@ -157,7 +157,13 @@ export class TargetStagingSessionAuthority {
     return this.#active.delete(digest(sessionToken));
   }
 
-  /** Server-side sign-out across all sessions bound to a verified actor. */
+  /**
+   * Server-side sign-out across all sessions bound to a verified actor.
+   *
+   * The caller must derive actorUserId from trusted server-side authentication,
+   * never directly from a user-controlled sign-out or revoke request.
+   * This staging-only primitive is not a public HTTP endpoint.
+   */
   revokeActor(actorUserId: string): number {
     if (this.#closed || typeof actorUserId !== "string") return 0;
     let count = 0;
