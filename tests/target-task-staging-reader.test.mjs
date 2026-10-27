@@ -213,6 +213,63 @@ test("staging file replacement before SQLite opens cannot redirect its database"
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy data unchanged");
 });
 
+test("an uncommitted rollback-journal writer is denied rather than exposing dirty task data", () => {
+  const txStage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "uncommitted-stage"), ownerUserId: "alice",
+  });
+  const txStore = { stagingDirectory: txStage.directory, expectedRestoreGeneration: txStage.restoreGeneration };
+  const txAccess = {
+    signingKey: key,
+    sessionToken: sign("alice", { gen: txStage.restoreGeneration }),
+  };
+  const read = () => listTasks(txStore, txAccess, { scope: "personal" });
+  const pending = new DatabaseSync(txStage.databasePath);
+  try {
+    pending.exec("PRAGMA journal_mode = DELETE");
+    pending.exec("PRAGMA cache_size = 10");
+    const add = pending.prepare(
+      "INSERT INTO tasks(id,project_id,area_id,title) VALUES (?,NULL,?,?)",
+    );
+    for (let i = 0; i < 240; i++) {
+      add.run(`tx-item-${String(i).padStart(3, "0")}`, txStage.unassignedAreaId, "committed");
+    }
+    assert.equal(read().ok, true);
+
+    pending.exec("BEGIN IMMEDIATE");
+    try {
+      const mutate = pending.prepare("UPDATE tasks SET title=? WHERE id=?");
+      for (let i = 0; i < 240; i++) {
+        mutate.run("uncommitted-" + "x".repeat(600),
+          `tx-item-${String(i).padStart(3, "0")}`);
+      }
+      assert.equal(existsSync(txStage.databasePath + "-journal"), true);
+      // A raw DB copy can include spilled uncommitted pages and still pass
+      // integrity_check. The actual staging facade must deny it entirely.
+      assert.deepEqual(read(), noList);
+      assert.deepEqual(
+        readTask(txStore, txAccess, { taskId: "tx-item-000" }),
+        noDetail,
+      );
+    } finally {
+      pending.exec("ROLLBACK");
+    }
+    const committed = read();
+    assert.equal(committed.ok, true);
+    assert.equal(committed.tasks[0].title, "committed");
+
+    // Fail closed on even an apparently stray rollback journal.
+    writeFileSync(txStage.databasePath + "-journal", "stray journal");
+    try {
+      assert.deepEqual(read(), noList);
+    } finally {
+      rmSync(txStage.databasePath + "-journal", { force: true });
+    }
+    assert.equal(read().ok, true);
+  } finally {
+    pending.close();
+  }
+});
+
 test("temporary snapshots are cleaned after a denied read", () => {
   const descriptor = openSync(stage.databasePath, constants.O_RDONLY | constants.O_NOFOLLOW);
   let temporaryDirectory;
