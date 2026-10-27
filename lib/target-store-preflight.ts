@@ -153,7 +153,6 @@ export function inspectIsolatedTargetStore(
           !rows.every(row => typeof row.key === "string" &&
             (CONTROL_METADATA_KEYS.has(row.key) ||
               row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX))) ||
-          CONTROL_METADATA_KEYS.size !== 4 ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("restore_generation") !== "string" ||
