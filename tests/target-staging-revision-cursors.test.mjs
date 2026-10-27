@@ -24,6 +24,8 @@ function fixture() {
   const writer = new DatabaseSync(stage.databasePath);
   writer.exec("PRAGMA foreign_keys = ON");
   writer.prepare("INSERT INTO identities(id) VALUES ('bob')").run();
+  writer.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bob-personal','personal','bob')").run();
+  writer.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES ('bob-private','Bob private','private','bob-personal','bob','unassigned')").run();
   writer.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('shared','shared','alice')").run();
   writer.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('area-shared','Shared','shared','shared','alice')").run();
   writer.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('area-shared','alice','admin')").run();
