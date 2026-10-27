@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmodSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -235,6 +235,100 @@ test("rotated generation and tampered canonical schema block a write", () => {
     fresh.snapshotRevision), rejected("unauthorized"));
   assert.equal(second.writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
     "Team original");
+});
+
+/**
+ * Two live SQLite connections are enough to exercise real file-lock
+ * contention. No timers, mocked exceptions, or write operations against the
+ * legacy sentinel: the locks belong to the isolated fixture database.
+ */
+const assertNoSidecars = databasePath => {
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    assert.equal(existsSync(databasePath + suffix), false,
+      `unexpected SQLite sidecar ${suffix}`);
+  }
+};
+
+test("competing BEGIN IMMEDIATE fails without altering bytes, generation or lock state", () => {
+  const { stage, authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const initial = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(initial.ok, true);
+  const before = readFileSync(stage.databasePath);
+  const generation = writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+  const competing = new DatabaseSync(stage.databasePath);
+  try {
+    competing.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+    try {
+      // The reserved write lock is real. Our command fails at its own
+      // BEGIN IMMEDIATE rather than reading ACL and writing without a lock.
+      assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Must not commit",
+        initial.snapshotRevision), rejected("write_failed"));
+      assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+        "Team original");
+      assert.equal(writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value,
+        generation);
+      assert.deepEqual(readFileSync(stage.databasePath), before);
+    } finally {
+      competing.exec("ROLLBACK");
+    }
+  } finally {
+    competing.close();
+  }
+  assertNoSidecars(stage.databasePath);
+  const next = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(next.ok, true);
+  assert.equal(next.snapshotRevision, initial.snapshotRevision);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After lock",
+    next.snapshotRevision), { ok: true });
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "After lock");
+  assertNoSidecars(stage.databasePath);
+});
+
+test("COMMIT blocked by a live reader rolls back its UPDATE and permits a fresh write", () => {
+  const { stage, authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const initial = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(initial.ok, true);
+  const before = readFileSync(stage.databasePath);
+  const generation = writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+  const competingReader = new DatabaseSync(stage.databasePath, { readOnly: true });
+  try {
+    competingReader.exec("PRAGMA query_only=ON; BEGIN");
+    // BEGIN alone is deferred: SELECT establishes the SHARED lock that blocks
+    // the staging writer's EXCLUSIVE lock at COMMIT in rollback-journal mode.
+    assert.equal(competingReader.prepare("SELECT title FROM tasks WHERE id='team-task'")
+      .get().title, "Team original");
+    try {
+      // BEGIN IMMEDIATE and UPDATE can run, but COMMIT must fail SQLITE_BUSY.
+      // The finally ROLLBACK must undo the task change and remove -journal.
+      assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Must roll back",
+        initial.snapshotRevision), rejected("write_failed"));
+      assert.equal(competingReader.prepare("SELECT title FROM tasks WHERE id='team-task'")
+        .get().title, "Team original");
+    } finally {
+      competingReader.exec("ROLLBACK");
+    }
+  } finally {
+    competingReader.close();
+  }
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Team original");
+  assert.equal(writer.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value,
+    generation);
+  assert.deepEqual(readFileSync(stage.databasePath), before);
+  assertNoSidecars(stage.databasePath);
+  const next = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(next.ok, true);
+  assert.equal(next.snapshotRevision, initial.snapshotRevision);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "After reader release",
+    next.snapshotRevision), { ok: true });
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "After reader release");
+  assertNoSidecars(stage.databasePath);
 });
 
 test("separate staging authorities cannot use each other's session tokens", () => {
