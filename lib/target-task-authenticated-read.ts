@@ -129,16 +129,21 @@ function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T 
   }
 }
 
+/** A trusted caller may require canonical preflight inside the very same read snapshot. */
+export type TargetReadSnapshotPreflight = (db: DatabaseSync) => boolean;
+
 /** Authenticate independently for each list page, then use current Area ACLs. */
 export function listAuthenticatedIsolatedTargetTasks(
   db: DatabaseSync,
   access: TargetStagingReadCredential,
   request: TargetStagingTaskListRequest,
+  preflight?: TargetReadSnapshotPreflight,
 ): AuthenticatedTargetTaskListResult {
   if (!request || typeof request !== "object" || invalidActorOverride(request)) {
     return { ok: false, reason: "invalid_request", tasks: [], nextCursor: null };
   }
   return inReadSnapshot(db, () => {
+    if (preflight && !preflight(db)) return unauthList();
     const actorUserId = verifiedActor(db, access);
     if (!actorUserId) return unauthList();
     return listIsolatedTargetTasks(db, {
@@ -152,11 +157,13 @@ export function readAuthenticatedIsolatedTargetTask(
   db: DatabaseSync,
   access: TargetStagingReadCredential,
   request: TargetStagingTaskDetailRequest,
+  preflight?: TargetReadSnapshotPreflight,
 ): AuthenticatedTargetTaskDetailResult {
   if (!request || typeof request !== "object" || invalidActorOverride(request)) {
     return { ok: false, reason: "invalid_request", task: null };
   }
   return inReadSnapshot(db, () => {
+    if (preflight && !preflight(db)) return unauthDetail();
     const actorUserId = verifiedActor(db, access);
     if (!actorUserId) return unauthDetail();
     return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId });
