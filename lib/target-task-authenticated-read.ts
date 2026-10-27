@@ -1,9 +1,9 @@
 /**
  * R2 staging-only authenticated boundary for the isolated task read model.
  *
- * This does NOT issue sessions, expose a route, or activate target storage.
- * A future server-only session issuer must sign these purpose-scoped claims
- * with a dedicated key; legacy owner cookies and passkeys are NOT R2 identities.
+ * This does NOT expose a route or activate target storage. A staging-only
+ * in-process session authority issues purpose-scoped claims with its own key;
+ * legacy owner cookies and passkeys are NOT R2 identities.
  * Callers must preflight the isolated database path with
  * inspectIsolatedTargetStore({ mode: "r2-model" }) before opening a read-only DB.
  *
@@ -50,7 +50,11 @@ const unauthList = (): AuthenticatedTargetTaskListResult =>
 const unauthDetail = (): AuthenticatedTargetTaskDetailResult =>
   ({ ok: false, reason: "unauthorized", task: null });
 
-type ReadClaims = { v: 1; aud: string; sub: string; gen: string; iat: number; exp: number };
+type ReadClaims = {
+  v: 1; aud: string; sub: string; gen: string; iat: number; exp: number;
+  /** Optional random session ID: legacy test-only credentials have no jti. */
+  jti?: string;
+};
 
 /**
  * Verify first, then bind the actor to an existing identity and the current
@@ -77,7 +81,10 @@ function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): s
 
     const claims: ReadClaims = JSON.parse(bytes.toString("utf8"));
     if (!claims || typeof claims !== "object" || Array.isArray(claims) ||
-        Object.keys(claims).sort().join(",") !== "aud,exp,gen,iat,sub,v" ||
+        !["aud,exp,gen,iat,sub,v", "aud,exp,gen,iat,jti,sub,v"]
+          .includes(Object.keys(claims).sort().join(",")) ||
+        (claims.jti !== undefined &&
+          (typeof claims.jti !== "string" || !UUID_PATTERN.test(claims.jti))) ||
         claims.v !== 1 || claims.aud !== TARGET_STAGING_TASK_READ_AUDIENCE ||
         typeof claims.sub !== "string" || !ID_PATTERN.test(claims.sub) ||
         typeof claims.gen !== "string" || !UUID_PATTERN.test(claims.gen) ||
