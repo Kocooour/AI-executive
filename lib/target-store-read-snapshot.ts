@@ -12,7 +12,7 @@
  * Staging-only: a copy is deliberately more expensive than ordinary reads.
  * Replace this with a proven fd-backed VFS before enabling production reads.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync,
   readSync, rmSync, statfsSync, writeSync,
@@ -118,7 +118,7 @@ function unchanged(a: ReturnType<typeof fstatSync>, b: ReturnType<typeof fstatSy
  */
 export function withPinnedTargetSnapshot<T>(
   sourceFd: number,
-  useSnapshot: (directory: string, snapshotFd: number) => T,
+  useSnapshot: (directory: string, snapshotFd: number, revision: string) => T,
 ): T {
   const source = fstatSync(sourceFd);
   if (!source.isFile() || source.nlink !== 1 || source.size < 100 ||
@@ -149,12 +149,16 @@ export function withPinnedTargetSnapshot<T>(
     writeFd = openSync(filename,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
       0o600);
+    // Hash the exact copied bytes to identify the snapshot across page requests.
+    // Every page re-opens and preflights the live staging store independently.
+    const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(CHUNK_BYTES);
     let position = 0;
     while (position < source.size) {
       const length = Math.min(buffer.length, source.size - position);
       const bytesRead = readSync(sourceFd, buffer, 0, length, position);
       if (bytesRead <= 0) throw new Error("Staging source changed during copy");
+      hash.update(buffer.subarray(0, bytesRead));
       let written = 0;
       while (written < bytesRead) {
         const count = writeSync(writeFd, buffer, written, bytesRead - written, position + written);
@@ -174,7 +178,7 @@ export function withPinnedTargetSnapshot<T>(
     if (!snapshotInfo.isFile() || snapshotInfo.size !== source.size) {
       throw new Error("Invalid snapshot file");
     }
-    return useSnapshot(directory, snapshotFd);
+    return useSnapshot(directory, snapshotFd, hash.digest("hex"));
   } finally {
     if (snapshotFd !== undefined) closeSync(snapshotFd);
     if (writeFd !== undefined) closeSync(writeFd);
