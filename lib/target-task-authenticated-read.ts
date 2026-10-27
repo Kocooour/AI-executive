@@ -12,6 +12,7 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
 import {
   listIsolatedTargetTasks, listIsolatedTargetTasksAtOffset, readIsolatedTargetTask,
 } from "./target-task-read-model";
@@ -113,7 +114,7 @@ export function verifiedActor(
     ).all() as { key: string; value: string }[];
     const values = new Map(metadata.map(row => [row.key, row.value]));
     if (metadata.length !== 4 || values.size !== 4 ||
-        values.get("schema_version") !== "1" ||
+        values.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
         values.get("write_protocol") !== "per-item-only" ||
         values.get("activated") !== "false" ||
         values.get("restore_generation") !== claims.gen) return null;
