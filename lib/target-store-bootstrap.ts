@@ -196,6 +196,18 @@ BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
 END;
 
+-- Guard monotonicity against manual counter resets and the SQLite REPLACE
+-- behavior that otherwise deletes/reinserts a same-ID task with revision 0.
+CREATE TRIGGER task_revision_guard BEFORE UPDATE OF revision ON tasks
+WHEN NEW.revision <> OLD.revision + 1
+BEGIN SELECT RAISE(ABORT, 'task revision must increment by one'); END;
+CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
+WHEN NEW.policy_revision <> OLD.policy_revision + 1
+BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
+CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
+WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
+
 -- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
 -- recursive_triggers is OFF (SQLite's default). Reject boundary replacements in
 -- BEFORE INSERT, including conflicts on alternate unique indexes.
