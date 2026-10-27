@@ -69,6 +69,19 @@ export function validTargetStagingTaskTitleWriteRequest(
     !input.title.includes("\0");
 }
 
+/** Opaque actor-scoped command key; never persist actor or UUID in plaintext. */
+export function targetTaskTitleReceiptKey(actor: string, commandId: string): string {
+  return TARGET_STAGING_RECEIPT_PREFIX + createHash("sha256")
+    .update(actor).update("\0").update(commandId.toLowerCase()).digest("hex");
+}
+
+/** Digest exact request semantics, including the preview revision. */
+export function targetTaskTitleReceiptDigest(request: TargetStagingTaskTitleWriteRequest): string {
+  return createHash("sha256")
+    .update(JSON.stringify([request.taskId, request.title, request.expectedRevision]))
+    .digest("hex");
+}
+
 function noSidecars(databasePath: string): boolean {
   for (const suffix of ["-journal", "-shm", "-wal"]) {
     try {
@@ -206,11 +219,8 @@ export function writePreflightedTargetTaskTitle(
     // and operation UUID are hashed into the key; only a request digest is
     // stored (never the title or task content). Replays are checked after the
     // current ACL, but before optimistic revision staleness.
-    const receiptKey = TARGET_STAGING_RECEIPT_PREFIX + createHash("sha256")
-      .update(actor).update("\0").update(request.commandId.toLowerCase()).digest("hex");
-    const receiptDigest = createHash("sha256")
-      .update(JSON.stringify([request.taskId, request.title, request.expectedRevision]))
-      .digest("hex");
+    const receiptKey = targetTaskTitleReceiptKey(actor, request.commandId);
+    const receiptDigest = targetTaskTitleReceiptDigest(request);
     const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
       .get(receiptKey) as { value: string } | undefined;
     if (prior) {
