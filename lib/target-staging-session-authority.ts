@@ -13,7 +13,7 @@
  */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
-  TARGET_STAGING_TASK_READ_AUDIENCE,
+  TARGET_STAGING_TASK_READ_AUDIENCE, TARGET_STAGING_TASK_WRITE_AUDIENCE,
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type {
@@ -26,9 +26,12 @@ import {
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
+const WRITE_TOKEN_DOMAIN = "lumi:r2:target-task-write:staging:v1\0";
 const CURSOR_DOMAIN = "lumi:r2:target-task-page-cursor:staging:v2\0";
 const CURSOR_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const REVISION_PATTERN = /^[a-f0-9]{64}$/;
@@ -41,6 +44,7 @@ const MAX_TOKEN_LENGTH = 4096;
 interface ActiveSession {
   readonly actor: string;
   readonly expiresAt: number;
+  readonly writable: boolean;
 }
 
 export interface IssuedTargetStagingSession {
@@ -115,6 +119,19 @@ export class TargetStagingSessionAuthority {
    * before issuing a session. All failure cases have the same null response.
    */
   issue(actorUserId: string, lifetimeSeconds = DEFAULT_SESSION_SECONDS): IssuedTargetStagingSession | null {
+    return this.#issue(actorUserId, lifetimeSeconds, false);
+  }
+
+  /**
+   * Explicit trusted-server issuance for staging mutations. A regular read
+   * session cannot be upgraded through a task request or a preview.
+   * This is not exposed as an HTTP or client-side token issuance endpoint.
+   */
+  issueWritable(actorUserId: string, lifetimeSeconds = DEFAULT_SESSION_SECONDS): IssuedTargetStagingSession | null {
+    return this.#issue(actorUserId, lifetimeSeconds, true);
+  }
+
+  #issue(actorUserId: string, lifetimeSeconds: number, writable: boolean): IssuedTargetStagingSession | null {
     if (this.#closed || typeof actorUserId !== "string" ||
         !ACTOR_PATTERN.test(actorUserId) ||
         !Number.isSafeInteger(lifetimeSeconds) || lifetimeSeconds < 1 ||
@@ -127,7 +144,7 @@ export class TargetStagingSessionAuthority {
     const expiresAt = now + lifetimeSeconds;
     const claims = {
       v: 1,
-      aud: TARGET_STAGING_TASK_READ_AUDIENCE,
+      aud: writable ? TARGET_STAGING_TASK_WRITE_AUDIENCE : TARGET_STAGING_TASK_READ_AUDIENCE,
       sub: actorUserId,
       gen: this.#store.expectedRestoreGeneration,
       iat: now,
@@ -137,7 +154,8 @@ export class TargetStagingSessionAuthority {
     try {
       const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
       const signature = createHmac("sha256", this.#key)
-        .update(TOKEN_DOMAIN).update(payload).digest("base64url");
+        .update(writable ? WRITE_TOKEN_DOMAIN : TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
       const sessionToken = payload + "." + signature;
 
       // The staging gateway performs canonical preflight, generation validation
@@ -148,19 +166,22 @@ export class TargetStagingSessionAuthority {
         { scope: "personal", limit: 1 });
       if (!check.ok) return null;
 
-      this.#active.set(digest(sessionToken), { actor: actorUserId, expiresAt });
+      this.#active.set(digest(sessionToken), { actor: actorUserId, expiresAt, writable });
       return { sessionToken, expiresAt };
     } catch {
       return null;
     }
   }
 
-  #credential(sessionToken: string): { signingKey: Uint8Array; sessionToken: string } | null {
+  #credential(
+    sessionToken: string, requireWrite = false,
+  ): { signingKey: Uint8Array; sessionToken: string } | null {
     if (this.#closed || typeof sessionToken !== "string" ||
         sessionToken.length === 0 || sessionToken.length > MAX_TOKEN_LENGTH) return null;
     const now = Math.floor(Date.now() / 1000);
     this.#pruneExpired(now);
-    if (!this.#active.has(digest(sessionToken))) return null;
+    const session = this.#active.get(digest(sessionToken));
+    if (!session || (requireWrite && !session.writable)) return null;
     return { signingKey: this.#key, sessionToken };
   }
 
@@ -267,6 +288,24 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request", snapshotRevision: null };
     }
     return previewPreflightedTargetTaskTitleEdit(this.#store, credential, request);
+  }
+
+  /**
+   * Explicit staging-only transactional mutation. Never accessible from a
+   * public route: the authority binds a process-local, revocable session and
+   * the writer revalidates identity, live Area ACL and expected revision under
+   * BEGIN IMMEDIATE. A preview alone cannot authorize this command.
+   */
+  updateTaskTitle(
+    sessionToken: string,
+    request: TargetStagingTaskTitleWriteRequest,
+  ): TargetStagingTaskTitleWriteResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTaskTitleWriteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return writePreflightedTargetTaskTitle(this.#store, credential, request);
   }
 
   detail(

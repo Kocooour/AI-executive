@@ -154,6 +154,11 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Could not copy staging data",
   "Invalid snapshot file",
   "Source SQLite file identity mismatch",
+  // R2 staging-only transactional writer guards: exceptions never leave the
+  // in-process writer and are converted to content-free write_failed results.
+  "Invalid staging database size",
+  "Short staging database read",
+  "Staging file changed",
   "Cannot establish snapshot directory ownership",
   "Staging snapshot requires Linux tmpfs",
   "Unsafe staging snapshot root",

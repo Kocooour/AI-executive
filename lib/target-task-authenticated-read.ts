@@ -20,7 +20,9 @@ import type {
 } from "./target-task-read-model";
 
 export const TARGET_STAGING_TASK_READ_AUDIENCE = "lumi-target-task-read-staging-v1";
+export const TARGET_STAGING_TASK_WRITE_AUDIENCE = "lumi-target-task-write-staging-v1";
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
+const WRITE_TOKEN_DOMAIN = "lumi:r2:target-task-write:staging:v1\0";
 const MAX_LIFETIME_SECONDS = 15 * 60;
 const ID_PATTERN = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -64,7 +66,10 @@ type ReadClaims = {
  * The metadata/identity lookup is not a substitute for staging path preflight.
  * No read is allowed from an activated or unknown-schema target store.
  */
-export function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): string | null {
+/** Write tokens can also read/preview, but read tokens never authorize mutations. */
+export function verifiedActor(
+  db: DatabaseSync, access: TargetStagingReadCredential, requireWrite = false,
+): string | null {
   if (!access || typeof access.sessionToken !== "string" ||
       !(access.signingKey instanceof Uint8Array) ||
       access.signingKey.byteLength < 32 || access.sessionToken.length > 4096 ||
@@ -75,9 +80,16 @@ export function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredent
     const actual = Buffer.from(signature, "base64url");
     if (encoded !== bytes.toString("base64url") ||
         signature !== actual.toString("base64url")) return null;
-    const expected = createHmac("sha256", access.signingKey)
+    // Distinct HMAC domains prevent a read credential being reinterpreted as a
+    // write credential merely by changing untrusted token claims.
+    const expectedRead = createHmac("sha256", access.signingKey)
       .update(TOKEN_DOMAIN).update(encoded).digest();
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const expectedWrite = createHmac("sha256", access.signingKey)
+      .update(WRITE_TOKEN_DOMAIN).update(encoded).digest();
+    if (actual.length !== expectedRead.length) return null;
+    const readSignature = timingSafeEqual(actual, expectedRead);
+    const writeSignature = timingSafeEqual(actual, expectedWrite);
+    if ((!readSignature && !writeSignature) || (requireWrite && !writeSignature)) return null;
 
     const claims: ReadClaims = JSON.parse(bytes.toString("utf8"));
     if (!claims || typeof claims !== "object" || Array.isArray(claims) ||
@@ -85,7 +97,9 @@ export function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredent
           .includes(Object.keys(claims).sort().join(",")) ||
         (claims.jti !== undefined &&
           (typeof claims.jti !== "string" || !UUID_PATTERN.test(claims.jti))) ||
-        claims.v !== 1 || claims.aud !== TARGET_STAGING_TASK_READ_AUDIENCE ||
+        claims.v !== 1 ||
+        claims.aud !== (writeSignature
+          ? TARGET_STAGING_TASK_WRITE_AUDIENCE : TARGET_STAGING_TASK_READ_AUDIENCE) ||
         typeof claims.sub !== "string" || !ID_PATTERN.test(claims.sub) ||
         typeof claims.gen !== "string" || !UUID_PATTERN.test(claims.gen) ||
         !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp)) return null;
