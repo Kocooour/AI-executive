@@ -29,7 +29,7 @@
 | [#137](https://github.com/Kocooour/AI-executive/pull/137) | **Sloučeno** | První staging-only transakční změna názvu úkolu s aktuální ACL a revizí celého SQLite snapshotu |
 | [#138](https://github.com/Kocooour/AI-executive/pull/138) | **Sloučeno** | Atomická, trvalá a podle aktéra oddělená potvrzení úspěšných příkazů, bezpečné replay/konflikty; limit 4096 na staging store |
 
-Uvedená R2 implementace je **staging-only, process-local**. Testovací vydávání session není napojeno na skutečné přihlášení, passkeys, produkční cookies ani víceprocesovou správu. Zelené CI samo o sobě neznamená aktivaci nebo splnění produkčních ACL.
+**Poznámka k receiptům od #139:** idempotence změny názvu je nově vázaná na kombinaci aktéra, úkolu a UUID příkazu. Příkazy pro jiné úkoly jsou nezávislé, zatímco změna payloadu se stejným UUID u stejného úkolu je konflikt. Staré actor-only receipty z #138 nejsou bezpečně převoditelné bez dohledání původního úkolu; jejich přítomnost vede k odmítnutí staging preflightu. Pro izolovaný testovací store je nutný nový bootstrap, nikoli migrace nebo reset produkčních dat.\n\nUvedená R2 implementace je **staging-only, process-local**. Testovací vydávání session není napojeno na skutečné přihlášení, passkeys, produkční cookies ani víceprocesovou správu. Zelené CI samo o sobě neznamená aktivaci nebo splnění produkčních ACL.
 
 ## Nejbližší vývoj — skutečná kritická cesta
 
