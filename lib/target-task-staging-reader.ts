@@ -17,14 +17,14 @@ import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
-  authorizeAuthenticatedIsolatedTargetTaskTitleEdit, readAuthenticatedIsolatedTargetTask,
+  inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
+import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
-  TargetTaskTitleEditPinnedSnapshot,
 } from "./target-task-authenticated-read";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -113,8 +113,7 @@ function withPinnedSourceReadLock<T>(
 function withPreflightedStore<T>(
   store: TargetStagingReadStore,
   denied: () => T,
-  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean,
-    revision: string, pinned: TargetTaskTitleEditPinnedSnapshot) => T,
+  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean, revision: string) => T,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
@@ -159,10 +158,7 @@ function withPreflightedStore<T>(
                 expectedRestoreGeneration: store.expectedRestoreGeneration,
                 mode: "r2-model",
               }, { db: readDb, fd: snapshotFd }).ok;
-              return query(db, preflight, revision, {
-                snapshotDirectory, snapshotFd,
-                expectedRestoreGeneration: store.expectedRestoreGeneration,
-              });
+              return query(db, preflight, revision);
             } finally {
               db.close();
             }
@@ -260,19 +256,29 @@ export function previewPreflightedTargetTaskTitleEdit(
   return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
     () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
-    (db, _preflight, revision, pinned): TargetTaskTitleEditPreviewResult => {
-      const authorization = authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
-        db, access, request, pinned,
-      );
-      if ("reason" in authorization) {
-        return { ok: false, reason: authorization.reason, snapshotRevision: null };
+    (db, preflight, revision): TargetTaskTitleEditPreviewResult => {
+      const denied = (): TargetTaskTitleEditPreviewResult =>
+        ({ ok: false, reason: "unauthorized", snapshotRevision: null });
+      if (!validTargetTaskTitleEditPreviewRequest(request)) {
+        return { ok: false, reason: "invalid_request", snapshotRevision: null };
       }
-      // Only this facade receives the SHA-256 of the pinned snapshot bytes.
-      // Never let the lower-level authorization selector mint revision tokens.
-      if (request.expectedRevision !== undefined && request.expectedRevision !== revision) {
-        return { ok: false, reason: "stale_revision", snapshotRevision: null };
-      }
-      return { ok: true, snapshotRevision: revision };
+      // The source fd, copied bytes, opened SQLite connection and canonical
+      // preflight all originate within this private withPreflightedStore scope.
+      // No public selector can mix db from one store with another store's fd.
+      return inReadSnapshot(db, () => {
+        if (!preflight(db)) return denied();
+        const actor = verifiedActor(db, access);
+        if (!actor) return denied();
+        // Always check live ACL before comparing revisions, so inaccessible
+        // tasks disclose neither existence nor staleness.
+        if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+          return { ok: false, reason: "unavailable", snapshotRevision: null };
+        }
+        if (request.expectedRevision !== undefined && request.expectedRevision !== revision) {
+          return { ok: false, reason: "stale_revision", snapshotRevision: null };
+        }
+        return { ok: true, snapshotRevision: revision };
+      }, denied);
     },
   );
 }
