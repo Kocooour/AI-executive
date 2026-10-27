@@ -85,6 +85,9 @@ test("R2a revision counters increase monotonically and reject same-ID replacemen
     assert.throws(() => db.prepare("INSERT OR REPLACE INTO tasks(id, area_id, title) VALUES ('t1', ?, 'Reset')")
       .run(store.unassignedAreaId), /task replacement is not allowed/);
     assert.equal(revision(), 2);
+    assert.throws(() => db.prepare("DELETE FROM tasks WHERE id='t1'").run(),
+      /task deletion requires tombstone protocol/);
+    assert.equal(revision(), 2);
 
     const shared = seedShared(db, "owner", "version");
     const version = () => db.prepare("SELECT policy_revision FROM areas WHERE id=?")
