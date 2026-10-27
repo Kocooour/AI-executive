@@ -11,7 +11,7 @@
  * An explicitly revoked token is rejected BEFORE entering the task gateway.
  * No signing key or unsigned credential is exposed by this class.
  */
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   TARGET_STAGING_TASK_READ_AUDIENCE,
 } from "./target-task-authenticated-read";
@@ -20,11 +20,15 @@ import type {
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
 } from "./target-task-authenticated-read";
 import {
-  listPreflightedIsolatedTargetTasks, readPreflightedIsolatedTargetTask,
+  listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasks,
+  readPreflightedIsolatedTargetTask,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
+const CURSOR_DOMAIN = "lumi:r2:target-task-page-cursor:staging:v1\0";
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const REVISION_PATTERN = /^[a-f0-9]{64}$/;
 const ACTOR_PATTERN = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const MAX_SESSION_SECONDS = 15 * 60;
 const DEFAULT_SESSION_SECONDS = 5 * 60;
@@ -47,6 +51,29 @@ const deniedList = (): AuthenticatedTargetTaskListResult =>
   ({ ok: false, reason: "unauthorized", tasks: [], nextCursor: null });
 const deniedDetail = (): AuthenticatedTargetTaskDetailResult =>
   ({ ok: false, reason: "unauthorized", task: null });
+const invalidList = (): AuthenticatedTargetTaskListResult =>
+  ({ ok: false, reason: "invalid_request", tasks: [], nextCursor: null });
+const staleList = (): StableStagingTaskListResult =>
+  ({ ok: false, reason: "stale_cursor", tasks: [], nextCursor: null });
+
+/** Public session-bound paging accepts signed cursors, never raw task IDs. */
+export type StableStagingTaskListRequest =
+  Omit<TargetStagingTaskListRequest, "afterTaskId"> & {
+    readonly cursor?: string | null;
+    readonly afterTaskId?: never;
+  };
+
+export type StableStagingTaskListResult = AuthenticatedTargetTaskListResult |
+  { ok: false; reason: "stale_cursor"; tasks: []; nextCursor: null };
+
+type CursorClaims = {
+  v: 1;
+  scope: TargetStagingTaskListRequest["scope"];
+  sid: string;
+  rev: string;
+  after: string;
+};
+
 
 const digest = (token: string): string =>
   createHash("sha256").update(token, "utf8").digest("hex");
@@ -133,13 +160,82 @@ export class TargetStagingSessionAuthority {
     return { signingKey: this.#key, sessionToken };
   }
 
-  /** Both read methods enforce revocation/expiry before the existing gateway. */
+  /**
+   * A cursor is signed for exactly one issued session and one scope. Hashing
+   * the preflighted source snapshot prevents inserts, deletions, edits or
+   * ACL changes between pages from being silently mixed into one traversal.
+   * Each new page still runs the full current Area ACL check.
+   */
+  #signCursor(sessionToken: string, scope: CursorClaims["scope"], rev: string, after: string): string {
+    const claims: CursorClaims = { v: 1, scope, sid: digest(sessionToken), rev, after };
+    const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+    const signature = createHmac("sha256", this.#key)
+      .update(CURSOR_DOMAIN).update(payload).digest("base64url");
+    return payload + "." + signature;
+  }
+
+  #verifyCursor(
+    cursor: string, sessionToken: string, scope: CursorClaims["scope"],
+  ): Pick<CursorClaims, "rev" | "after"> | null {
+    if (cursor.length === 0 || cursor.length > MAX_TOKEN_LENGTH || !CURSOR_PATTERN.test(cursor)) {
+      return null;
+    }
+    try {
+      const [payload, encodedSignature] = cursor.split(".");
+      const bytes = Buffer.from(payload, "base64url");
+      const actual = Buffer.from(encodedSignature, "base64url");
+      if (payload !== bytes.toString("base64url") ||
+          encodedSignature !== actual.toString("base64url")) return null;
+      const expected = createHmac("sha256", this.#key)
+        .update(CURSOR_DOMAIN).update(payload).digest();
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+      const claims: CursorClaims = JSON.parse(bytes.toString("utf8"));
+      if (!claims || typeof claims !== "object" || Array.isArray(claims) ||
+          Object.keys(claims).sort().join(",") !== "after,rev,scope,sid,v" ||
+          claims.v !== 1 || claims.scope !== scope ||
+          claims.sid !== digest(sessionToken) ||
+          typeof claims.rev !== "string" || !REVISION_PATTERN.test(claims.rev) ||
+          typeof claims.after !== "string" || !claims.after.length ||
+          claims.after.trim() !== claims.after) return null;
+      return { rev: claims.rev, after: claims.after };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The session authority deliberately forbids legacy raw afterTaskId paging.
+   * Any change to the staging snapshot makes the next page fail closed with
+   * stale_cursor and no task content; the client must restart from page one.
+   * Lower-level R1 fixture readers retain their existing keyset API.
+   */
   list(
     sessionToken: string,
-    request: TargetStagingTaskListRequest,
-  ): AuthenticatedTargetTaskListResult {
+    request: StableStagingTaskListRequest,
+  ): StableStagingTaskListResult {
     const credential = this.#credential(sessionToken);
-    return credential ? listPreflightedIsolatedTargetTasks(this.#store, credential, request) : deniedList();
+    if (!credential) return deniedList();
+    if (!request || typeof request !== "object" ||
+        "actorUserId" in request || "afterTaskId" in request ||
+        !["personal", "shared", "my-plan"].includes(request.scope) ||
+        (request.limit !== undefined &&
+          (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 100)) ||
+        (request.cursor !== undefined && request.cursor !== null &&
+          typeof request.cursor !== "string")) return invalidList();
+    const prior = request.cursor == null ? null :
+      this.#verifyCursor(request.cursor, sessionToken, request.scope);
+    if (request.cursor != null && !prior) return invalidList();
+
+    const page = listRevisionedPreflightedIsolatedTargetTasks(this.#store, credential, {
+      scope: request.scope, limit: request.limit, afterTaskId: prior?.after,
+    });
+    if (!page.result.ok) return page.result;
+    if (!page.revision || (prior && prior.rev !== page.revision)) return staleList();
+    return {
+      ...page.result,
+      nextCursor: page.result.nextCursor === null ? null :
+        this.#signCursor(sessionToken, request.scope, page.revision, page.result.nextCursor),
+    };
   }
 
   detail(
