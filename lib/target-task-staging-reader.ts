@@ -9,7 +9,7 @@
  * server-controlled staging paths, generation values and signing keys belong
  * here; none may be populated from client request data.
  */
-import { closeSync, constants, fstatSync, lstatSync, openSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
@@ -38,15 +38,16 @@ const deniedDetail = (): AuthenticatedTargetTaskDetailResult =>
 
 /**
  * Every call pins the isolated source database by a no-follow file descriptor,
- * copies only bytes read from that descriptor to a private temporary snapshot,
- * and asks SQLite to open ONLY the temporary copy. SQLite cannot safely adopt
- * an fd through a /proc/self/fd path (it may reopen the original pathname).
- * Canonical preflight, authentication and Area ACLs share one SQLite snapshot.
+ * starts a SQLite read transaction on the source, verifies that the actual
+ * SQLite-opened file descriptor identifies that same source inode, and holds
+ * the read lock while copying bytes from our pinned fd into a private snapshot.
+ * SQLite reads task content ONLY from that private copy. Canonical preflight,
+ * authentication and Area ACLs share the copied SQLite snapshot.
  *
  * All source/path/copy/open/preflight failures return a content-free denial.
  */
 function noSidecars(databasePath: string): boolean {
-  for (const suffix of ["-wal", "-shm"]) {
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
     try {
       lstatSync(databasePath + suffix);
       return false;
@@ -55,6 +56,48 @@ function noSidecars(databasePath: string): boolean {
     }
   }
   return true;
+}
+
+/**
+ * Node's SQLite API accepts only pathnames. SQLite may reopen paths after
+ * resolving /proc/self/fd/N, so opening the source through that alias would
+ * NOT prove the connection is using our pinned inode. Record pre-existing
+ * handles, open a read-only SQLite connection, start a real SHARED read
+ * transaction and verify the new underlying SQLite handle's inode.
+ *
+ * We deliberately fail closed if descriptor enumeration is unavailable.
+ * The transaction blocks rollback-journal writers from spilling pages into
+ * the main database while we copy its bytes outside SQLite.
+ */
+function withPinnedSourceReadLock<T>(
+  databasePath: string,
+  descriptorRoot: string,
+  sourceFd: number,
+  read: () => T,
+): T {
+  const alreadyOpen = new Set(readdirSync(descriptorRoot));
+  const sourceDb = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    sourceDb.exec("PRAGMA query_only = ON");
+    sourceDb.exec("BEGIN");
+    // BEGIN alone is deferred; an actual SELECT acquires SQLite's SHARED lock.
+    sourceDb.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
+    const original = fstatSync(sourceFd);
+    const matchingSQLiteFd = readdirSync(descriptorRoot).some(name => {
+      if (alreadyOpen.has(name) || !/^[0-9]+$/.test(name)) return false;
+      try {
+        const opened = fstatSync(Number(name));
+        return opened.isFile() && opened.dev === original.dev && opened.ino === original.ino;
+      } catch {
+        return false; // Descriptors opened by enumeration itself may close.
+      }
+    });
+    if (!matchingSQLiteFd) throw new Error("Source SQLite file identity mismatch");
+    return read();
+  } finally {
+    try { sourceDb.exec("ROLLBACK"); } catch { /* fail closed at caller */ }
+    sourceDb.close();
+  }
 }
 
 function withPreflightedStore<T>(
@@ -90,22 +133,26 @@ function withPreflightedStore<T>(
         if (!opened.isFile() || opened.nlink !== 1 ||
             opened.dev !== file.dev || opened.ino !== file.ino) return denied();
 
-        return withPinnedTargetSnapshot(databaseFd, (snapshotDirectory, snapshotFd) => {
-          // Reject newly introduced sidecars after copying the source too.
+        return withPinnedSourceReadLock(databasePath, descriptorRoot, databaseFd, () => {
+          // Keep the source SQLite SHARED lock across the raw descriptor copy.
+          // A writer transaction (and any hot rollback journal) must deny reads.
           if (!noSidecars(databasePath)) return denied();
-          const db = new DatabaseSync(path.join(snapshotDirectory, TARGET_STORE_FILENAME),
-            { readOnly: true });
-          try {
-            db.exec("PRAGMA query_only = ON");
-            const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
-              stagingDirectory: snapshotDirectory,
-              expectedRestoreGeneration: store.expectedRestoreGeneration,
-              mode: "r2-model",
-            }, { db: readDb, fd: snapshotFd }).ok;
-            return query(db, preflight);
-          } finally {
-            db.close();
-          }
+          return withPinnedTargetSnapshot(databaseFd, (snapshotDirectory, snapshotFd) => {
+            if (!noSidecars(databasePath)) return denied();
+            const db = new DatabaseSync(path.join(snapshotDirectory, TARGET_STORE_FILENAME),
+              { readOnly: true });
+            try {
+              db.exec("PRAGMA query_only = ON");
+              const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
+                stagingDirectory: snapshotDirectory,
+                expectedRestoreGeneration: store.expectedRestoreGeneration,
+                mode: "r2-model",
+              }, { db: readDb, fd: snapshotFd }).ok;
+              return query(db, preflight);
+            } finally {
+              db.close();
+            }
+          });
         });
       } finally {
         closeSync(databaseFd);
