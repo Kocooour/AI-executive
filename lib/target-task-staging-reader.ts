@@ -252,7 +252,7 @@ export function previewPreflightedTargetTaskTitleEdit(
   access: TargetStagingReadCredential,
   request: TargetTaskTitleEditPreviewRequest,
 ): TargetTaskTitleEditPreviewResult {
-  return withPreflightedStore(
+  return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
     () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
     (db, preflight, revision) =>
