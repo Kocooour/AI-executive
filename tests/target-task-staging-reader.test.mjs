@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, constants, copyFileSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,6 +21,7 @@ const {
 const { TARGET_STAGING_TASK_READ_AUDIENCE: audience, listAuthenticatedIsolatedTargetTasks } =
   await import("../lib/target-task-authenticated-read.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
+const { withPinnedTargetSnapshot } = await import("../lib/target-store-read-snapshot.ts");
 
 const stage = bootstrapIsolatedTargetStore({
   stagingDirectory: path.join(root, "stage"),
@@ -149,7 +150,7 @@ test("preflighted gateway rejects an otherwise valid SQLite file symlink", () =>
   assert.deepEqual(detail("alice", "alice-private", linkedStore), noDetail);
 });
 
-test("the validated read snapshot remains pinned when the database name is replaced", {
+test("staging file replacement before SQLite opens cannot redirect its database", {
   skip: !["linux", "darwin"].includes(process.platform),
 }, () => {
   const snapshotStage = bootstrapIsolatedTargetStore({
@@ -172,33 +173,35 @@ test("the validated read snapshot remains pinned when the database name is repla
       .run(replacementTitle);
   } finally { replacement.close(); }
 
-  const descriptorRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
   const descriptor = openSync(snapshotStage.databasePath, constants.O_RDONLY | constants.O_NOFOLLOW);
   let moved = false;
+  let temporaryDirectory;
   try {
-    const reader = new DatabaseSync(`${descriptorRoot}/${descriptor}`, { readOnly: true });
-    try {
-      reader.exec("PRAGMA query_only = ON");
-      const results = listAuthenticatedIsolatedTargetTasks(reader, {
-        signingKey: key, sessionToken: sign("alice", { gen: snapshotStage.restoreGeneration }),
-      }, { scope: "personal" }, readDb => {
-        const valid = inspectIsolatedTargetStore({
-          stagingDirectory: snapshotStage.directory,
+    withPinnedTargetSnapshot(descriptor, (snapshotDirectory, snapshotFd) => {
+      temporaryDirectory = snapshotDirectory;
+
+      // The critical attack window: replace the SOURCE pathname before SQLite
+      // opens any connection. The query must still use the original bytes.
+      renameSync(snapshotStage.databasePath, parkedPath);
+      renameSync(replacementPath, snapshotStage.databasePath);
+      moved = true;
+
+      const reader = new DatabaseSync(path.join(snapshotDirectory, "lumi-target.sqlite"),
+        { readOnly: true });
+      try {
+        reader.exec("PRAGMA query_only = ON");
+        const results = listAuthenticatedIsolatedTargetTasks(reader, {
+          signingKey: key, sessionToken: sign("alice", { gen: snapshotStage.restoreGeneration }),
+        }, { scope: "personal" }, readDb => inspectIsolatedTargetStore({
+          stagingDirectory: snapshotDirectory,
           expectedRestoreGeneration: snapshotStage.restoreGeneration,
           mode: "r2-model",
-        }, { db: readDb, fd: descriptor }).ok;
-        assert.equal(valid, true);
-
-        // Simulate filesystem replacement in the gap between validation and SELECT.
-        renameSync(snapshotStage.databasePath, parkedPath);
-        renameSync(replacementPath, snapshotStage.databasePath);
-        moved = true;
-        return true;
-      });
-      assert.equal(results.ok, true);
-      assert.equal(results.tasks.length, 1);
-      assert.equal(results.tasks[0].title, originalTitle);
-    } finally { reader.close(); }
+        }, { db: readDb, fd: snapshotFd }).ok);
+        assert.equal(results.ok, true);
+        assert.equal(results.tasks.length, 1);
+        assert.equal(results.tasks[0].title, originalTitle);
+      } finally { reader.close(); }
+    });
   } finally {
     closeSync(descriptor);
     if (moved) {
@@ -206,5 +209,20 @@ test("the validated read snapshot remains pinned when the database name is repla
       renameSync(parkedPath, snapshotStage.databasePath);
     }
   }
+  assert.equal(existsSync(temporaryDirectory), false);
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy data unchanged");
+});
+
+test("temporary snapshots are cleaned after a denied read", () => {
+  const descriptor = openSync(stage.databasePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let temporaryDirectory;
+  try {
+    assert.throws(() => withPinnedTargetSnapshot(descriptor, directory => {
+      temporaryDirectory = directory;
+      throw new Error("Simulated denied read");
+    }), /Simulated denied read/);
+  } finally {
+    closeSync(descriptor);
+  }
+  assert.equal(existsSync(temporaryDirectory), false);
 });
