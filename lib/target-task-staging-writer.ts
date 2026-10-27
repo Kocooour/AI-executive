@@ -24,7 +24,7 @@ import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { verifiedActor } from "./target-task-authenticated-read";
 import type { TargetStagingReadCredential } from "./target-task-authenticated-read";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
-import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 
 const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CHUNK_BYTES = 64 * 1024;
@@ -37,7 +37,7 @@ export interface TargetStagingTaskTitleWriteRequest {
   readonly commandId: string;
   readonly taskId: string;
   readonly title: string;
-  /** Mandatory SHA-256 returned by a preview on this exact staging store. */
+  /** Mandatory task + policy SHA-256 returned by the staging preview. */
   readonly expectedRevision: string;
 }
 
@@ -208,7 +208,7 @@ export function writePreflightedTargetTaskTitle(
         newlyOpened[0][1].ino !== pinned.ino ||
         !stillPinned() || !noSidecars(databasePath)) return denied();
 
-    // All checks, including current roles and the source-byte fingerprint,
+    // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
     const preflight = inspectIsolatedTargetStore({
       stagingDirectory: directory,
@@ -234,7 +234,10 @@ export function writePreflightedTargetTaskTitle(
         ? { ok: true, replayed: true }
         : { ok: false, reason: "idempotency_conflict" };
     }
-    if (fingerprint(databaseFd) !== request.expectedRevision) {
+    // Keep the pinned-source read/identity check; unrelated SQLite changes
+    // must not invalidate this task's optimistic CAS.
+    fingerprint(databaseFd);
+    if (targetTaskTitleEditRevision(db, request.taskId) !== request.expectedRevision) {
       return { ok: false, reason: "stale_revision" };
     }
     // SQLite can count an UPDATE of the existing value as one changed row
