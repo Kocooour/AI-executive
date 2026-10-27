@@ -21,6 +21,10 @@ import {
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import {
+  targetTaskTitleReceiptDigest, targetTaskTitleReceiptKey, validTargetStagingTaskTitleWriteRequest,
+} from "./target-task-staging-writer";
+import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
@@ -280,5 +284,57 @@ export function previewPreflightedTargetTaskTitleEdit(
         return { ok: true, snapshotRevision: revision };
       }, denied);
     },
+  );
+}
+
+
+/**
+ * Staging-only reconciliation after an uncertain title-write response.
+ *
+ * A "committed" result acknowledges the original command, NOT that its title
+ * is still the task's current title. "not_recorded" never authorizes retry:
+ * callers must still use the full write command with live ACL and revision CAS.
+ * There is no HTTP route, production identity bridge or client-side cache.
+ */
+export type TargetStagingTaskTitleCommandStatusResult =
+  | { ok: true; status: "committed" | "not_recorded" }
+  | { ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "idempotency_conflict" };
+
+/**
+ * Access requires a *current writable session*, the current task's write ACL,
+ * and the exact original command payload. Every lookup uses a canonical,
+ * pinned, read-only copy and a single authenticated SQLite snapshot.
+ *
+ * In particular, the commandId alone is NOT a capability or task locator.
+ */
+export function readPreflightedTargetTaskTitleCommandStatus(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetStagingTaskTitleWriteRequest,
+): TargetStagingTaskTitleCommandStatusResult {
+  if (!validTargetStagingTaskTitleWriteRequest(request)) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  const denied = (): TargetStagingTaskTitleCommandStatusResult =>
+    ({ ok: false, reason: "unauthorized" });
+  return withPreflightedStore<TargetStagingTaskTitleCommandStatusResult>(
+    store, denied, (db, preflight) => inReadSnapshot(db, () => {
+      if (!preflight(db)) return denied();
+      const actor = verifiedActor(db, access, true);
+      if (!actor) return denied();
+      // Recheck current Area membership before even querying the receipt so a
+      // former editor cannot infer whether an old command was committed.
+      if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+        return { ok: false, reason: "unavailable" };
+      }
+      const row = db.prepare("SELECT value FROM metadata WHERE key=?")
+        .get(targetTaskTitleReceiptKey(actor, request.commandId)) as
+        { value: string } | undefined;
+      if (!row) return { ok: true, status: "not_recorded" };
+      if (row.value !== targetTaskTitleReceiptDigest(request)) {
+        return { ok: false, reason: "idempotency_conflict" };
+      }
+      return { ok: true, status: "committed" };
+    }, denied),
   );
 }
