@@ -50,9 +50,10 @@ export function validTargetStagingTaskTitleWriteRequest(
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
   if (Object.keys(input).sort().join(",") !== "expectedRevision,taskId,title") return false;
-  if (!validTargetTaskTitleEditPreviewRequest({
-    taskId: input.taskId, expectedRevision: input.expectedRevision,
-  })) return false;
+  if (typeof input.expectedRevision !== "string" ||
+      !validTargetTaskTitleEditPreviewRequest({
+        taskId: input.taskId, expectedRevision: input.expectedRevision,
+      })) return false;
   return typeof input.title === "string" &&
     input.title.length > 0 && input.title.length <= MAX_TITLE_LENGTH &&
     input.title.trim().length > 0 && input.title.trim() === input.title &&
