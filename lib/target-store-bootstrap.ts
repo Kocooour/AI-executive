@@ -207,6 +207,10 @@ BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
+-- Until deletion tombstones are available, do not allow task IDs to be
+-- recycled: a delete + insert would reset revision 0 and allow ABA.
+CREATE TRIGGER task_deletion_guard BEFORE DELETE ON tasks
+BEGIN SELECT RAISE(ABORT, 'task deletion requires tombstone protocol'); END;
 
 -- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
 -- recursive_triggers is OFF (SQLite's default). Reject boundary replacements in
