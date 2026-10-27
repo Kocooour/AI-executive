@@ -154,7 +154,7 @@ test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass p
   writer.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
   const permitted = preview(authority, bob.sessionToken, "team-task");
   assert.equal(permitted.ok, true);
-  writer.prepare("UPDATE tasks SET title='Another owner\'s task' WHERE id='private-alice'").run();
+  writer.prepare("UPDATE tasks SET title=? WHERE id='private-alice'").run("Another task");
   assert.deepEqual(preview(authority, bob.sessionToken, "team-task", {
     expectedRevision: permitted.snapshotRevision,
   }), denied("stale_revision"));
