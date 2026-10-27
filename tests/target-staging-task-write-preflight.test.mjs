@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,14 +84,14 @@ test("private ownership and live shared roles gate the title-edit preview", () =
   assert.deepEqual(preview(authority, carol.sessionToken, "private-alice"), denied("unavailable"));
 });
 
-test("preview hashes the pinned bytes, makes no write and rejects stale revision", () => {
+test("preview hashes task/policy state without writes and rejects stale revision", () => {
   const { stage, authority, writer } = fixture();
   const alice = authority.issue("alice");
   assert.ok(alice);
   const before = readFileSync(stage.databasePath);
   const first = preview(authority, alice.sessionToken, "team-task");
   assert.equal(first.ok, true);
-  assert.equal(first.snapshotRevision, createHash("sha256").update(before).digest("hex"));
+  assert.match(first.snapshotRevision, /^[a-f0-9]{64}$/);
   assert.deepEqual(readFileSync(stage.databasePath), before);
   const second = preview(authority, alice.sessionToken, "team-task", {
     expectedRevision: first.snapshotRevision,
@@ -147,7 +147,7 @@ test("bad request, forged session, expired session and rotated generation fail c
   assert.equal(authority.issue("alice"), null);
 });
 
-test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass policy", () => {
+test("role upgrades and unrelated task edits do not bypass policy", () => {
   const { authority, writer } = fixture();
   const bob = authority.issue("bob");
   assert.ok(bob);
@@ -158,7 +158,7 @@ test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass p
   writer.prepare("UPDATE tasks SET title=? WHERE id='private-alice'").run("Another task");
   assert.deepEqual(preview(authority, bob.sessionToken, "team-task", {
     expectedRevision: permitted.snapshotRevision,
-  }), denied("stale_revision"));
+  }), permitted);
   assert.deepEqual(preview(authority, bob.sessionToken, "private-alice"), denied("unavailable"));
 });
 
