@@ -24,6 +24,7 @@ import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResul
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
+  TargetTaskTitleEditPinnedSnapshot,
 } from "./target-task-authenticated-read";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -112,7 +113,8 @@ function withPinnedSourceReadLock<T>(
 function withPreflightedStore<T>(
   store: TargetStagingReadStore,
   denied: () => T,
-  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean, revision: string) => T,
+  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean,
+    revision: string, pinned: TargetTaskTitleEditPinnedSnapshot) => T,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
@@ -157,7 +159,10 @@ function withPreflightedStore<T>(
                 expectedRestoreGeneration: store.expectedRestoreGeneration,
                 mode: "r2-model",
               }, { db: readDb, fd: snapshotFd }).ok;
-              return query(db, preflight, revision);
+              return query(db, preflight, revision, {
+                snapshotDirectory, snapshotFd,
+                expectedRestoreGeneration: store.expectedRestoreGeneration,
+              });
             } finally {
               db.close();
             }
@@ -255,9 +260,9 @@ export function previewPreflightedTargetTaskTitleEdit(
   return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
     () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
-    (db, preflight, revision): TargetTaskTitleEditPreviewResult => {
+    (db, _preflight, revision, pinned): TargetTaskTitleEditPreviewResult => {
       const authorization = authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
-        db, access, request, preflight,
+        db, access, request, pinned,
       );
       if ("reason" in authorization) {
         return { ok: false, reason: authorization.reason, snapshotRevision: null };
