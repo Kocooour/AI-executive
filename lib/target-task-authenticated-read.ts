@@ -18,6 +18,8 @@ import {
 import type {
   TargetTaskDetailResult, TargetTaskListResult, TargetTaskOffsetListResult, TargetTaskScope,
 } from "./target-task-read-model";
+import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 
 export const TARGET_STAGING_TASK_READ_AUDIENCE = "lumi-target-task-read-staging-v1";
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
@@ -200,3 +202,36 @@ export function listAuthenticatedIsolatedTargetTasksAtOffset(
   }, denied);
 }
 
+
+/**
+ * Staging-only read transaction: authenticate, preflight and check current
+ * task write policy on the SAME pinned snapshot as the revision fingerprint.
+ * This is a dry-run authorization hint, NOT permission to skip checks during
+ * a subsequent write transaction.
+ */
+export function previewAuthenticatedIsolatedTargetTaskTitleEdit(
+  db: DatabaseSync,
+  access: TargetStagingReadCredential,
+  request: TargetTaskTitleEditPreviewRequest,
+  snapshotRevision: string,
+  preflight?: TargetReadSnapshotPreflight,
+): TargetTaskTitleEditPreviewResult {
+  const denied = (): TargetTaskTitleEditPreviewResult =>
+    ({ ok: false, reason: "unauthorized", snapshotRevision: null });
+  if (!validTargetTaskTitleEditPreviewRequest(request)) {
+    return { ok: false, reason: "invalid_request", snapshotRevision: null };
+  }
+  return inReadSnapshot(db, () => {
+    if (preflight && !preflight(db)) return denied();
+    const actorUserId = verifiedActor(db, access);
+    if (!actorUserId) return denied();
+    if (!canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId)) {
+      return { ok: false, reason: "unavailable", snapshotRevision: null };
+    }
+    if (request.expectedRevision !== undefined &&
+        request.expectedRevision !== snapshotRevision) {
+      return { ok: false, reason: "stale_revision", snapshotRevision: null };
+    }
+    return { ok: true, snapshotRevision };
+  }, denied);
+}
