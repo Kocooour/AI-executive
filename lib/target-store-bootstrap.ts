@@ -11,7 +11,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-export const TARGET_STORE_SCHEMA_VERSION = 1;
+export const TARGET_STORE_SCHEMA_VERSION = 2;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -130,6 +130,7 @@ CREATE TABLE areas (
   workspace_id TEXT NOT NULL,
   owner_user_id TEXT NOT NULL,
   system_key TEXT CHECK(system_key IS NULL OR system_key = 'unassigned'),
+  policy_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0 AND policy_revision < 9007199254740991),
   workspace_kind TEXT GENERATED ALWAYS AS (
     CASE kind WHEN 'private' THEN 'personal' ELSE 'shared' END
   ) STORED,
@@ -161,6 +162,7 @@ CREATE TABLE tasks (
   area_id TEXT REFERENCES areas(id),
   title TEXT NOT NULL CHECK(length(trim(title)) > 0),
   assignee_user_id TEXT REFERENCES identities(id),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991),
   CHECK ((project_id IS NULL AND area_id IS NOT NULL) OR (project_id IS NOT NULL AND area_id IS NULL))
 );
 CREATE INDEX tasks_by_project ON tasks(project_id);
@@ -169,6 +171,30 @@ CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
          t.assignee_user_id AS assignee_user_id
     FROM tasks t LEFT JOIN projects p ON p.id = t.project_id;
+
+-- Monotonic task and Area-policy epochs are maintained by SQLite, including
+-- direct staging SQL changes. They make a reverted title/ACL policy (ABA)
+-- distinguishable from the original state. Unrelated task changes cannot
+-- invalidate a task's edit revision.
+CREATE TRIGGER task_revision_bump AFTER UPDATE OF title, project_id, area_id, assignee_user_id ON tasks
+WHEN NEW.title IS NOT OLD.title OR NEW.project_id IS NOT OLD.project_id
+  OR NEW.area_id IS NOT OLD.area_id OR NEW.assignee_user_id IS NOT OLD.assignee_user_id
+BEGIN
+  UPDATE tasks SET revision = OLD.revision + 1 WHERE id = NEW.id;
+END;
+CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
+BEGIN
+  UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
+END;
+CREATE TRIGGER area_policy_member_delete AFTER DELETE ON area_members
+BEGIN
+  UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = OLD.area_id;
+END;
+CREATE TRIGGER area_policy_member_role AFTER UPDATE OF role ON area_members
+WHEN NEW.role IS NOT OLD.role
+BEGIN
+  UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
+END;
 
 -- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
 -- recursive_triggers is OFF (SQLite's default). Reject boundary replacements in
