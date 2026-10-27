@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -163,8 +163,8 @@ test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass p
   assert.deepEqual(preview(authority, bob.sessionToken, "private-alice"), denied("unavailable"));
 });
 
-test("low-level title-edit authorization fails closed without mandatory preflight", () => {
-  const { stage } = fixture();
+test("low-level title edit requires canonical pinned SQLite preflight, never a callback", () => {
+  const { stage, writer } = fixture();
   const signingKey = randomBytes(32);
   const now = Math.floor(Date.now() / 1000);
   const claims = { v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: "alice",
@@ -175,18 +175,32 @@ test("low-level title-edit authorization fails closed without mandatory prefligh
   const access = { sessionToken: encoded + "." + signature, signingKey };
   const request = { taskId: "team-task" };
   const db = new DatabaseSync(stage.databasePath, { readOnly: true });
+  const snapshotFd = openSync(stage.databasePath, constants.O_RDONLY);
+  const wrongFd = openSync(path.join(legacy, "sentinel"), constants.O_RDONLY);
   try {
-    const authorize = (preflight) =>
-      authorizeAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, preflight);
+    const pinned = { snapshotDirectory: stage.directory,
+      snapshotFd, expectedRestoreGeneration: stage.restoreGeneration };
+    const authorize = source =>
+      authorizeAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, source);
     assert.deepEqual(authorize(undefined), { ok: false, reason: "unauthorized" });
     assert.deepEqual(authorize(null), { ok: false, reason: "unauthorized" });
-    assert.deepEqual(authorize(() => false), { ok: false, reason: "unauthorized" });
-    // Synthetic trusted preflight proves that even success cannot mint a
-    // revision token; only the pinned staging facade may return one.
-    const allowed = authorize(() => true);
+    // A forged "always true" callback can no longer replace schema validation.
+    assert.deepEqual(authorize(() => true), { ok: false, reason: "unauthorized" });
+    assert.deepEqual(authorize({ ...pinned, snapshotFd: wrongFd }),
+      { ok: false, reason: "unauthorized" });
+    assert.deepEqual(authorize({ ...pinned, expectedRestoreGeneration: randomUUID() }),
+      { ok: false, reason: "unauthorized" });
+    const allowed = authorize(pinned);
     assert.deepEqual(allowed, { ok: true });
     assert.equal("snapshotRevision" in allowed, false);
+
+    // The canonical schema is validated again, even with a valid identity,
+    // generation, database handle and matching pinned file descriptor.
+    writer.exec("DROP TRIGGER protected_private_fallback");
+    assert.deepEqual(authorize(pinned), { ok: false, reason: "unauthorized" });
   } finally {
+    closeSync(wrongFd);
+    closeSync(snapshotFd);
     db.close();
   }
 });
