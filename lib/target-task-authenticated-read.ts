@@ -107,6 +107,28 @@ function invalidActorOverride(request: unknown): boolean {
   return !!request && typeof request === "object" && "actorUserId" in request;
 }
 
+/**
+ * The generation check and ACL query must observe the same SQLite snapshot.
+ * BEGIN/ROLLBACK on a preflighted, read-only handle never writes store data.
+ * If another operation owns a transaction, fail closed without rolling it back.
+ */
+function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T {
+  let started = false;
+  try {
+    db.exec("BEGIN");
+    started = true;
+    const result = read();
+    db.exec("ROLLBACK");
+    started = false;
+    return result;
+  } catch {
+    if (started) {
+      try { db.exec("ROLLBACK"); } catch { /* fail closed */ }
+    }
+    return denied();
+  }
+}
+
 /** Authenticate independently for each list page, then use current Area ACLs. */
 export function listAuthenticatedIsolatedTargetTasks(
   db: DatabaseSync,
@@ -116,11 +138,13 @@ export function listAuthenticatedIsolatedTargetTasks(
   if (!request || typeof request !== "object" || invalidActorOverride(request)) {
     return { ok: false, reason: "invalid_request", tasks: [], nextCursor: null };
   }
-  const actorUserId = verifiedActor(db, access);
-  if (!actorUserId) return unauthList();
-  return listIsolatedTargetTasks(db, {
-    actorUserId, scope: request.scope, limit: request.limit, afterTaskId: request.afterTaskId,
-  });
+  return inReadSnapshot(db, () => {
+    const actorUserId = verifiedActor(db, access);
+    if (!actorUserId) return unauthList();
+    return listIsolatedTargetTasks(db, {
+      actorUserId, scope: request.scope, limit: request.limit, afterTaskId: request.afterTaskId,
+    });
+  }, unauthList);
 }
 
 /** Direct task reads have the same actor and Area boundary as lists. */
@@ -132,7 +156,9 @@ export function readAuthenticatedIsolatedTargetTask(
   if (!request || typeof request !== "object" || invalidActorOverride(request)) {
     return { ok: false, reason: "invalid_request", task: null };
   }
-  const actorUserId = verifiedActor(db, access);
-  if (!actorUserId) return unauthDetail();
-  return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId });
+  return inReadSnapshot(db, () => {
+    const actorUserId = verifiedActor(db, access);
+    if (!actorUserId) return unauthDetail();
+    return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId });
+  }, unauthDetail);
 }
