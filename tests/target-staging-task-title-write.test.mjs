@@ -499,7 +499,30 @@ test("malformed receipt namespace fails canonical staging preflight", () => {
     rejected("unauthorized"));
 });
 
-test("read-only command reconciliation is durable, actor-scoped and not a mutation", () => {
+test("old actor-only receipts fail closed instead of losing their idempotency history", () => {
+  const { stage, writer, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const rev = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(rev.ok, true);
+  const request = {
+    commandId: randomUUID(), taskId: "team-task", title: "Must not apply",
+    expectedRevision: rev.snapshotRevision,
+  };
+  // The actor-only namespace belongs to #138 and cannot prove the original
+  // task for ACL checks. An old staging DB must be re-bootstrapped, not reused.
+  writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
+    .run("r2:task-title-receipt:" + "a".repeat(64), "b".repeat(64));
+  const previous = readFileSync(stage.databasePath);
+  assert.deepEqual(authority.taskTitleCommandStatus(alice.sessionToken, request),
+    rejected("unauthorized"));
+  assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, request),
+    rejected("unauthorized"));
+  assert.equal(authority.issueWritable("alice"), null);
+  assert.deepEqual(readFileSync(stage.databasePath), previous);
+});
+
+test("read-only command reconciliation is durable, actor/task-scoped and not a mutation", () => {
   const { stage, authority, writer } = fixture();
   const alice = authority.issueWritable("alice");
   const bob = authority.issueWritable("bob");
@@ -638,7 +661,7 @@ test("revoked command cannot be probed via another editable task", () => {
   assert.deepEqual(readFileSync(stage.databasePath), beforeProbe);
 
   // UUID reuse across DIFFERENT tasks is independent; within the same task
-  // a changed payload still conflicts, including after a subsequent edit.
+  // a changed payload still conflicts.
   const personalRev = preview(authority, bob.sessionToken, "bob-task");
   assert.equal(personalRev.ok, true);
   const privateCommand = {
