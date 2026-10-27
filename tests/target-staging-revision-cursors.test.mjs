@@ -156,6 +156,9 @@ test("cursors reject tampering, scope changes, other sessions and raw keyset IDs
   assert.deepEqual(authority.list(alice.sessionToken, {
     scope: "personal", afterTaskId: "p-01",
   }), invalid);
+  assert.deepEqual(authority.list(alice.sessionToken, {
+    scope: "personal", offset: 1,
+  }), invalid);
 
   assert.equal(authority.revoke(alice.sessionToken), true);
   assert.deepEqual(authority.list(alice.sessionToken, {
@@ -177,3 +180,33 @@ test("restore-generation invalidation takes precedence over a matching old curso
   }), denied);
   assert.equal(authority.issue("alice"), null);
 });
+
+test("whitespace and 3000-character task IDs traverse with bounded signed cursors", () => {
+  const { authority, writer, stage } = fixture();
+  const spacedId = "  leading and trailing  ";
+  const longId = "z".repeat(3000);
+  const insert = writer.prepare("INSERT INTO tasks(id,project_id,area_id,title) VALUES (?,NULL,?,?)");
+  insert.run(spacedId, stage.unassignedAreaId, "Spaced ID");
+  insert.run(longId, stage.unassignedAreaId, "Long ID");
+  const alice = authority.issue("alice");
+  assert.ok(alice);
+  const seen = [];
+  let cursor = null;
+  const limits = [1, 2, 1, 3];
+  for (let page = 0; page < 10; page++) {
+    const result = authority.list(alice.sessionToken, {
+      scope: "personal", limit: limits[page % limits.length],
+      ...(cursor === null ? {} : { cursor }),
+    });
+    seen.push(...ids(result));
+    if (result.nextCursor === null) break;
+    assert.ok(result.nextCursor.length < 4096);
+    const claims = JSON.parse(Buffer.from(result.nextCursor.split(".")[0], "base64url"));
+    assert.equal(typeof claims.offset, "number");
+    assert.equal(claims.offset, seen.length);
+    assert.equal(Object.hasOwn(claims, "after"), false);
+    cursor = result.nextCursor;
+  }
+  assert.deepEqual(seen, [spacedId, "p-01", "p-02", "p-03", "p-04", longId]);
+});
+

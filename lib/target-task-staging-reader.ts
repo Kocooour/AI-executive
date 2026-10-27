@@ -16,8 +16,10 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
-  listAuthenticatedIsolatedTargetTasks, readAuthenticatedIsolatedTargetTask,
+  listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
+  readAuthenticatedIsolatedTargetTask,
 } from "./target-task-authenticated-read";
+import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -216,3 +218,25 @@ export function listRevisionedPreflightedIsolatedTargetTasks(
       return { result, revision: result.ok ? revision : null };
     });
 }
+
+/** Offset is supplied only by the in-process session authority after HMAC verification. */
+export interface RevisionedTargetTaskOffsetList {
+  readonly result: TargetTaskOffsetListResult |
+    { ok: false; reason: "unauthorized"; tasks: []; hasMore: false };
+  readonly revision: string | null;
+}
+
+export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: { scope: TargetTaskScope; limit?: number; offset: number },
+): RevisionedTargetTaskOffsetList {
+  return withPreflightedStore(store,
+    () => ({ result: { ok: false, reason: "unauthorized", tasks: [], hasMore: false },
+      revision: null } as RevisionedTargetTaskOffsetList),
+    (db, preflight, revision) => {
+      const result = listAuthenticatedIsolatedTargetTasksAtOffset(db, access, request, preflight);
+      return { result, revision: result.ok ? revision : null };
+    });
+}
+

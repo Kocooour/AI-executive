@@ -27,6 +27,20 @@ export interface TargetTaskListRequest {
   afterTaskId?: string | null;
 }
 
+export interface TargetTaskOffsetListRequest {
+  actorUserId: string;
+  scope: TargetTaskScope;
+  limit?: number;
+  offset: number;
+}
+
+export type TargetTaskOffsetListResult =
+  | { ok: true; tasks: TargetReadableTask[]; hasMore: boolean }
+  | { ok: false; reason: "invalid_request" | "query_failed"; tasks: []; hasMore: false };
+
+/** Bound the staging-only signed page position; never accept it from a client request. */
+export const MAX_STAGING_PAGE_OFFSET = 1_000_000;
+
 export type TargetTaskListResult =
   | { ok: true; tasks: TargetReadableTask[]; nextCursor: string | null }
   | { ok: false; reason: "invalid_request" | "query_failed"; tasks: []; nextCursor: null };
@@ -143,3 +157,40 @@ export function listIsolatedTargetTasks(
     return { ok: false, reason: "query_failed", tasks: [], nextCursor: null };
   }
 }
+
+/**
+ * Revision-stable staging pagination uses a bounded position, not a task ID.
+ * The caller must authenticate, preflight and pin the revision on each page.
+ * BINARY ID plus rowid breaks ties (including nullable TEXT PRIMARY KEY IDs)
+ * without excluding valid IDs containing whitespace or long text.
+ */
+export function listIsolatedTargetTasksAtOffset(
+  db: DatabaseSync, request: TargetTaskOffsetListRequest,
+): TargetTaskOffsetListResult {
+  if (!request || !validId(request.actorUserId) ||
+      !["my-plan", "personal", "shared"].includes(request.scope) ||
+      !Number.isSafeInteger(request.offset) || request.offset < 0 ||
+      request.offset > MAX_STAGING_PAGE_OFFSET ||
+      (request.limit !== undefined && (!Number.isInteger(request.limit) ||
+        request.limit < 1 || request.limit > 100))) {
+    return { ok: false, reason: "invalid_request", tasks: [], hasMore: false };
+  }
+  const limit = request.limit ?? 50;
+  try {
+    const rows = db.prepare(`${TASK_COLUMNS} ${AUTHORIZED_TASK_FROM}
+      AND ((? = 'personal' AND a.kind = 'private')
+        OR (? = 'shared' AND a.kind = 'shared')
+        OR (? = 'my-plan' AND (a.kind = 'private'
+          OR (a.kind = 'shared' AND t.assignee_user_id = actor.id
+            AND member.role IN ('editor', 'admin')))))
+      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC
+      LIMIT ? OFFSET ?`).all(
+      request.actorUserId, request.scope, request.scope, request.scope,
+      limit + 1, request.offset,
+    ) as TaskRow[];
+    return { ok: true, tasks: rows.slice(0, limit).map(toTask), hasMore: rows.length > limit };
+  } catch {
+    return { ok: false, reason: "query_failed", tasks: [], hasMore: false };
+  }
+}
+

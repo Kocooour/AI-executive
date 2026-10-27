@@ -13,10 +13,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  listIsolatedTargetTasks, readIsolatedTargetTask,
+  listIsolatedTargetTasks, listIsolatedTargetTasksAtOffset, readIsolatedTargetTask,
 } from "./target-task-read-model";
 import type {
-  TargetTaskDetailResult, TargetTaskListResult, TargetTaskScope,
+  TargetTaskDetailResult, TargetTaskListResult, TargetTaskOffsetListResult, TargetTaskScope,
 } from "./target-task-read-model";
 
 export const TARGET_STAGING_TASK_READ_AUDIENCE = "lumi-target-task-read-staging-v1";
@@ -176,3 +176,27 @@ export function readAuthenticatedIsolatedTargetTask(
     return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId });
   }, unauthDetail);
 }
+
+/** Separate trusted staging selector: offset must come from the session authority. */
+export function listAuthenticatedIsolatedTargetTasksAtOffset(
+  db: DatabaseSync,
+  access: TargetStagingReadCredential,
+  request: { scope: TargetTaskScope; limit?: number; offset: number },
+  preflight?: TargetReadSnapshotPreflight,
+): TargetTaskOffsetListResult | { ok: false; reason: "unauthorized"; tasks: []; hasMore: false } {
+  const denied = () => ({ ok: false as const, reason: "unauthorized" as const,
+    tasks: [] as [], hasMore: false as const });
+  if (!request || typeof request !== "object" || invalidActorOverride(request) ||
+      "afterTaskId" in request || "cursor" in request) {
+    return { ok: false, reason: "invalid_request", tasks: [], hasMore: false };
+  }
+  return inReadSnapshot(db, () => {
+    if (preflight && !preflight(db)) return denied();
+    const actorUserId = verifiedActor(db, access);
+    if (!actorUserId) return denied();
+    return listIsolatedTargetTasksAtOffset(db, {
+      actorUserId, scope: request.scope, limit: request.limit, offset: request.offset,
+    });
+  }, denied);
+}
+
