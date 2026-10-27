@@ -154,6 +154,9 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Could not copy staging data",
   "Invalid snapshot file",
   "Source SQLite file identity mismatch",
+  "Cannot establish snapshot directory ownership",
+  "Staging snapshot requires Linux tmpfs",
+  "Unsafe staging snapshot root",
   // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
   "Cannot resolve a safe staging path",
   "R1 staging directory must be absolute",
