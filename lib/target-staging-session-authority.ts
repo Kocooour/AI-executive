@@ -26,6 +26,8 @@ import {
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
@@ -267,6 +269,24 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request", snapshotRevision: null };
     }
     return previewPreflightedTargetTaskTitleEdit(this.#store, credential, request);
+  }
+
+  /**
+   * Explicit staging-only transactional mutation. Never accessible from a
+   * public route: the authority binds a process-local, revocable session and
+   * the writer revalidates identity, live Area ACL and expected revision under
+   * BEGIN IMMEDIATE. A preview alone cannot authorize this command.
+   */
+  updateTaskTitle(
+    sessionToken: string,
+    request: TargetStagingTaskTitleWriteRequest,
+  ): TargetStagingTaskTitleWriteResult {
+    const credential = this.#credential(sessionToken);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTaskTitleWriteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return writePreflightedTargetTaskTitle(this.#store, credential, request);
   }
 
   detail(
