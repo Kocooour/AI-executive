@@ -18,9 +18,6 @@ import {
 import type {
   TargetTaskDetailResult, TargetTaskListResult, TargetTaskOffsetListResult, TargetTaskScope,
 } from "./target-task-read-model";
-import { inspectIsolatedTargetStore } from "./target-store-preflight";
-import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
-import type { TargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 
 export const TARGET_STAGING_TASK_READ_AUDIENCE = "lumi-target-task-read-staging-v1";
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
@@ -67,7 +64,7 @@ type ReadClaims = {
  * The metadata/identity lookup is not a substitute for staging path preflight.
  * No read is allowed from an activated or unknown-schema target store.
  */
-function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): string | null {
+export function verifiedActor(db: DatabaseSync, access: TargetStagingReadCredential): string | null {
   if (!access || typeof access.sessionToken !== "string" ||
       !(access.signingKey instanceof Uint8Array) ||
       access.signingKey.byteLength < 32 || access.sessionToken.length > 4096 ||
@@ -122,7 +119,7 @@ function invalidActorOverride(request: unknown): boolean {
  * BEGIN/ROLLBACK on a preflighted, read-only handle never writes store data.
  * If another operation owns a transaction, fail closed without rolling it back.
  */
-function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T {
+export function inReadSnapshot<T>(db: DatabaseSync, read: () => T, denied: () => T): T {
   let started = false;
   try {
     db.exec("BEGIN");
@@ -200,57 +197,5 @@ export function listAuthenticatedIsolatedTargetTasksAtOffset(
     return listIsolatedTargetTasksAtOffset(db, {
       actorUserId, scope: request.scope, limit: request.limit, offset: request.offset,
     });
-  }, denied);
-}
-
-
-/**
- * Only the pinned snapshot facade constructs this server-side context.
- * This is NOT a client request or an authorization capability: the selector
- * independently verifies the canonical staging schema and exact file inode.
- */
-export interface TargetTaskTitleEditPinnedSnapshot {
-  readonly snapshotDirectory: string;
-  readonly snapshotFd: number;
-  readonly expectedRestoreGeneration: string;
-}
-
-/**
- * Internal authorization selector for staging task-title previews.
- * Never accept caller-provided preflight callbacks (including () => true).
- * Verify the canonical staging store on the same read transaction as session
- * identity and live Area ACLs. Revisions are solely owned by the pinned facade.
- */
-export type AuthenticatedTargetTaskTitleEditAuthorization =
-  | { ok: true }
-  | { ok: false; reason: "unauthorized" | "unavailable" | "invalid_request" };
-
-export function authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
-  db: DatabaseSync,
-  access: TargetStagingReadCredential,
-  request: TargetTaskTitleEditPreviewRequest,
-  snapshot: TargetTaskTitleEditPinnedSnapshot,
-): AuthenticatedTargetTaskTitleEditAuthorization {
-  const denied = (): AuthenticatedTargetTaskTitleEditAuthorization =>
-    ({ ok: false, reason: "unauthorized" });
-  if (!validTargetTaskTitleEditPreviewRequest(request)) {
-    return { ok: false, reason: "invalid_request" };
-  }
-  if (!snapshot || typeof snapshot.snapshotDirectory !== "string" ||
-      !Number.isSafeInteger(snapshot.snapshotFd) || snapshot.snapshotFd < 0 ||
-      typeof snapshot.expectedRestoreGeneration !== "string") return denied();
-  return inReadSnapshot(db, () => {
-    const canonical = inspectIsolatedTargetStore({
-      stagingDirectory: snapshot.snapshotDirectory,
-      expectedRestoreGeneration: snapshot.expectedRestoreGeneration,
-      mode: "r2-model",
-    }, { db, fd: snapshot.snapshotFd });
-    if (!canonical.ok) return denied();
-    const actorUserId = verifiedActor(db, access);
-    if (!actorUserId) return denied();
-    if (!canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId)) {
-      return { ok: false, reason: "unavailable" };
-    }
-    return { ok: true };
   }, denied);
 }
