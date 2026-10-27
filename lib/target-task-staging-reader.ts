@@ -17,9 +17,10 @@ import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
-  readAuthenticatedIsolatedTargetTask,
+  previewAuthenticatedIsolatedTargetTaskTitleEdit, readAuthenticatedIsolatedTargetTask,
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
+import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -240,3 +241,21 @@ export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
     });
 }
 
+
+/**
+ * Dry-run per-item write authorization on the same copied snapshot whose
+ * SHA-256 revision is returned. No source database write or new route.
+ * Actual mutations must independently recheck ACL + revision in a write TX.
+ */
+export function previewPreflightedTargetTaskTitleEdit(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetTaskTitleEditPreviewRequest,
+): TargetTaskTitleEditPreviewResult {
+  return withPreflightedStore(
+    store,
+    () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
+    (db, preflight, revision) =>
+      previewAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, revision, preflight),
+  );
+}
