@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -18,8 +18,9 @@ const {
   listPreflightedIsolatedTargetTasks: listTasks,
   readPreflightedIsolatedTargetTask: readTask,
 } = await import("../lib/target-task-staging-reader.ts");
-const { TARGET_STAGING_TASK_READ_AUDIENCE: audience } =
+const { TARGET_STAGING_TASK_READ_AUDIENCE: audience, listAuthenticatedIsolatedTargetTasks } =
   await import("../lib/target-task-authenticated-read.ts");
+const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
 
 const stage = bootstrapIsolatedTargetStore({
   stagingDirectory: path.join(root, "stage"),
@@ -136,5 +137,74 @@ test("a revoked membership is reflected on the next independently opened read", 
 });
 
 test("no legacy data files are changed by preflighted reads", () => {
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy data unchanged");
+});
+
+test("preflighted gateway rejects an otherwise valid SQLite file symlink", () => {
+  const linked = path.join(root, "linked-stage");
+  mkdirSync(linked);
+  symlinkSync(stage.databasePath, path.join(linked, "lumi-target.sqlite"));
+  const linkedStore = { ...store, stagingDirectory: linked };
+  assert.deepEqual(list("alice", "personal", linkedStore), noList);
+  assert.deepEqual(detail("alice", "alice-private", linkedStore), noDetail);
+});
+
+test("the validated read snapshot remains pinned when the database name is replaced", {
+  skip: !["linux", "darwin"].includes(process.platform),
+}, () => {
+  const snapshotStage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "swap-stage"), ownerUserId: "alice",
+  });
+  const originalTitle = "Pinned private title";
+  const replacementTitle = "Replacement private title";
+  const setup = new DatabaseSync(snapshotStage.databasePath);
+  try {
+    setup.prepare("INSERT INTO tasks(id,project_id,area_id,title) VALUES (?,NULL,?,?)")
+      .run("snapshot-private", snapshotStage.unassignedAreaId, originalTitle);
+  } finally { setup.close(); }
+
+  const replacementPath = snapshotStage.databasePath + ".replacement";
+  const parkedPath = snapshotStage.databasePath + ".parked";
+  copyFileSync(snapshotStage.databasePath, replacementPath);
+  const replacement = new DatabaseSync(replacementPath);
+  try {
+    replacement.prepare("UPDATE tasks SET title=? WHERE id='snapshot-private'")
+      .run(replacementTitle);
+  } finally { replacement.close(); }
+
+  const descriptorRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
+  const descriptor = openSync(snapshotStage.databasePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let moved = false;
+  try {
+    const reader = new DatabaseSync(`${descriptorRoot}/${descriptor}`, { readOnly: true });
+    try {
+      reader.exec("PRAGMA query_only = ON");
+      const results = listAuthenticatedIsolatedTargetTasks(reader, {
+        signingKey: key, sessionToken: sign("alice", { gen: snapshotStage.restoreGeneration }),
+      }, { scope: "personal" }, readDb => {
+        const valid = inspectIsolatedTargetStore({
+          stagingDirectory: snapshotStage.directory,
+          expectedRestoreGeneration: snapshotStage.restoreGeneration,
+          mode: "r2-model",
+        }, { db: readDb, fd: descriptor }).ok;
+        assert.equal(valid, true);
+
+        // Simulate filesystem replacement in the gap between validation and SELECT.
+        renameSync(snapshotStage.databasePath, parkedPath);
+        renameSync(replacementPath, snapshotStage.databasePath);
+        moved = true;
+        return true;
+      });
+      assert.equal(results.ok, true);
+      assert.equal(results.tasks.length, 1);
+      assert.equal(results.tasks[0].title, originalTitle);
+    } finally { reader.close(); }
+  } finally {
+    closeSync(descriptor);
+    if (moved) {
+      rmSync(snapshotStage.databasePath);
+      renameSync(parkedPath, snapshotStage.databasePath);
+    }
+  }
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy data unchanged");
 });
