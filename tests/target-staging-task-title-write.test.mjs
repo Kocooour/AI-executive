@@ -66,8 +66,8 @@ const rejected = reason => ({ ok: false, reason });
 
 test("session-bound transaction updates private and inherited-Area tasks only for writers", () => {
   const { authority, writer } = fixture();
-  const alice = authority.issue("alice");
-  const bob = authority.issue("bob");
+  const alice = authority.issueWritable("alice");
+  const bob = authority.issueWritable("bob");
   assert.ok(alice && bob);
   const own = preview(authority, alice.sessionToken, "private-task");
   assert.equal(own.ok, true);
@@ -89,9 +89,38 @@ test("session-bound transaction updates private and inherited-Area tasks only fo
     bobPrivate.snapshotRevision), { ok: true });
 });
 
+test("read-only staging tokens can preview but cannot mutate even editable tasks", () => {
+  const { authority, writer } = fixture();
+  const readOnly = authority.issue("alice");
+  assert.ok(readOnly);
+  const version = preview(authority, readOnly.sessionToken, "team-task");
+  assert.equal(version.ok, true);
+  assert.deepEqual(writeTitle(authority, readOnly.sessionToken, "team-task", "Unauthorized",
+    version.snapshotRevision), rejected("unauthorized"));
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Team original");
+});
+
+test("no-op mutations do not succeed or consume a byte-fingerprint revision", () => {
+  const { authority, writer } = fixture();
+  const actor = authority.issueWritable("alice");
+  assert.ok(actor);
+  const version = preview(authority, actor.sessionToken, "team-task");
+  assert.equal(version.ok, true);
+  assert.deepEqual(writeTitle(authority, actor.sessionToken, "team-task", "Team original",
+    version.snapshotRevision), rejected("unchanged"));
+  // A no-op is a rejected request, not a successful replayable mutation.
+  assert.deepEqual(writeTitle(authority, actor.sessionToken, "team-task", "Changed",
+    version.snapshotRevision), { ok: true });
+  assert.deepEqual(writeTitle(authority, actor.sessionToken, "team-task", "Replay",
+    version.snapshotRevision), rejected("stale_revision"));
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Changed");
+});
+
 test("stale revisions, including unrelated changes, never mutate a task", () => {
   const { authority, writer } = fixture();
-  const alice = authority.issue("alice");
+  const alice = authority.issueWritable("alice");
   assert.ok(alice);
   const version = preview(authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
@@ -112,7 +141,7 @@ test("stale revisions, including unrelated changes, never mutate a task", () => 
 
 test("revoked and downgraded members cannot replay an authorized preview", () => {
   const { authority, writer } = fixture();
-  const bob = authority.issue("bob");
+  const bob = authority.issueWritable("bob");
   assert.ok(bob);
   const allowed = preview(authority, bob.sessionToken, "team-task");
   assert.equal(allowed.ok, true);
@@ -135,7 +164,7 @@ test("revoked and downgraded members cannot replay an authorized preview", () =>
 
 test("invalid title, actor overrides, missing revision and forged token fail closed", () => {
   const { authority, writer } = fixture();
-  const alice = authority.issue("alice");
+  const alice = authority.issueWritable("alice");
   assert.ok(alice);
   const version = preview(authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
@@ -158,7 +187,7 @@ test("invalid title, actor overrides, missing revision and forged token fail clo
 
 test("rotated generation and tampered canonical schema block a write", () => {
   const first = fixture();
-  const alice = first.authority.issue("alice");
+  const alice = first.authority.issueWritable("alice");
   assert.ok(alice);
   const version = preview(first.authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
@@ -169,7 +198,7 @@ test("rotated generation and tampered canonical schema block a write", () => {
     "Team original");
 
   const second = fixture();
-  const newSession = second.authority.issue("alice");
+  const newSession = second.authority.issueWritable("alice");
   assert.ok(newSession);
   const fresh = preview(second.authority, newSession.sessionToken, "team-task");
   assert.equal(fresh.ok, true);
@@ -183,7 +212,7 @@ test("rotated generation and tampered canonical schema block a write", () => {
 test("separate staging authorities cannot use each other's session tokens", () => {
   const first = fixture();
   const second = fixture();
-  const alice = first.authority.issue("alice");
+  const alice = first.authority.issueWritable("alice");
   assert.ok(alice);
   const version = preview(first.authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
