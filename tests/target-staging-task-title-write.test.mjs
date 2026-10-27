@@ -187,6 +187,34 @@ test("task/policy CAS allows unrelated changes but detects same-task edits", () 
   assert.equal(taskRevision.get().revision, unchanged);
 });
 
+test("task primary keys cannot be renamed and reused to replay a preview", () => {
+  const { authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const original = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(original.ok, true);
+
+  // Without an UPDATE-of-id guard, the old ID can be reused with revision 0,
+  // making an old task/policy CAS token valid for a completely different task.
+  assert.throws(
+    () => writer.prepare("UPDATE tasks SET id='renamed-task' WHERE id='team-task'").run(),
+    /task ID is immutable/,
+  );
+  assert.equal(writer.prepare("SELECT 1 FROM tasks WHERE id='renamed-task'").get(), undefined);
+  assert.throws(
+    () => writer.prepare(
+      "INSERT INTO tasks(id,area_id,title) VALUES ('team-task','team-area','Replacement')",
+    ).run(),
+    /task replacement is not allowed/,
+  );
+  assert.equal(writer.prepare("SELECT revision FROM tasks WHERE id='team-task'").get().revision, 0);
+  assert.deepEqual(preview(authority, alice.sessionToken, "team-task"), original);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Legitimate edit",
+    original.snapshotRevision), { ok: true });
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Legitimate edit");
+});
+
 test("shared Area policy epochs detect revocation and restored permissions", () => {
   const { authority, writer } = fixture();
   const alice = authority.issueWritable("alice");

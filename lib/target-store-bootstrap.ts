@@ -207,6 +207,12 @@ BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
+-- A same-ID replacement can also be staged by renaming the original task's
+-- primary key, then inserting a new row with revision 0 under its old ID.
+-- Keep task identity stable until durable ID tombstones exist.
+CREATE TRIGGER immutable_task_id BEFORE UPDATE OF id ON tasks
+WHEN NEW.id IS NOT OLD.id
+BEGIN SELECT RAISE(ABORT, 'task ID is immutable until tombstones exist'); END;
 -- Until deletion tombstones are available, do not allow task IDs to be
 -- recycled: a delete + insert would reset revision 0 and allow ABA.
 CREATE TRIGGER task_deletion_guard BEFORE DELETE ON tasks
