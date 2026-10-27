@@ -259,7 +259,7 @@ export function previewPreflightedTargetTaskTitleEdit(
       const authorization = authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
         db, access, request, preflight,
       );
-      if (!authorization.ok) {
+      if ("reason" in authorization) {
         return { ok: false, reason: authorization.reason, snapshotRevision: null };
       }
       // Only this facade receives the SHA-256 of the pinned snapshot bytes.
