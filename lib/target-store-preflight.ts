@@ -3,7 +3,8 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSyn
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath,
+  TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -30,6 +31,10 @@ export interface TargetPreflightResult {
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const sha256Hex = /^[a-f0-9]{64}$/;
+const CONTROL_METADATA_KEYS = new Set([
+  "schema_version", "activated", "write_protocol", "restore_generation",
+]);
 /** Compare the complete stored DDL, not just names: a same-name no-op trigger is unsafe. */
 function matchesCanonicalSchema(actual: DatabaseSync): boolean {
   const expected = new DatabaseSync(":memory:");
@@ -133,7 +138,21 @@ export function inspectIsolatedTargetStore(
     try {
       const rows = all("SELECT key, value FROM metadata") as { key: unknown; value: unknown }[];
       const meta = new Map(rows.map(row => [row.key, row.value]));
-      if (rows.length !== 4 || meta.size !== 4 ||
+      const receipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX));
+      // The only extra metadata entries allowed are strictly validated,
+      // content-free, staging-only receipt hashes. Reject unknown metadata,
+      // malformed hashes and oversized ledgers; never expose receipt contents.
+      const receiptValid = receipts.every(row =>
+        typeof row.key === "string" &&
+        sha256Hex.test(row.key.slice(TARGET_STAGING_RECEIPT_PREFIX.length)) &&
+        typeof row.value === "string" && sha256Hex.test(row.value));
+      if (rows.length !== 4 + receipts.length ||
+          receipts.length > TARGET_STAGING_MAX_RECEIPTS || !receiptValid ||
+          meta.size !== rows.length ||
+          !rows.every(row => typeof row.key === "string" &&
+            (CONTROL_METADATA_KEYS.has(row.key) ||
+              row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX))) ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("restore_generation") !== "string" ||

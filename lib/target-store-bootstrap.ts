@@ -13,6 +13,13 @@ import { resolveDataDirectory } from "./data-dir";
 
 export const TARGET_STORE_SCHEMA_VERSION = 1;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
+/**
+ * Staging-only R2 receipt namespace in the existing metadata table. No schema
+ * migration or production activation: receipts are committed atomically with
+ * their task mutation and are scoped by authenticated actor + command ID.
+ */
+export const TARGET_STAGING_RECEIPT_PREFIX = "r2:task-title-receipt:";
+export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 
 export interface TargetStoreBootstrapOptions {
   /** Absolute path for a directory which MUST NOT exist yet. Its parent must exist. */
