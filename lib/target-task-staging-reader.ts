@@ -20,7 +20,7 @@ import {
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
-import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
   targetTaskTitleReceiptDigest, targetTaskTitleReceiptKey, validTargetStagingTaskTitleWriteRequest,
 } from "./target-task-staging-writer";
@@ -248,8 +248,9 @@ export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
 
 
 /**
- * Dry-run per-item write authorization on the same copied snapshot whose
- * SHA-256 revision is returned. No source database write or new route.
+ * Dry-run per-item write authorization on a pinned preflighted snapshot. The
+ * returned SHA-256 covers this task and its Area policy revision, not every
+ * SQLite byte. The snapshotRevision name is a staging compatibility alias. No source database write or new route.
  * Actual mutations must independently recheck ACL + revision in a write TX.
  */
 export function previewPreflightedTargetTaskTitleEdit(
@@ -260,7 +261,7 @@ export function previewPreflightedTargetTaskTitleEdit(
   return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
     () => ({ ok: false, reason: "unauthorized", snapshotRevision: null }),
-    (db, preflight, revision): TargetTaskTitleEditPreviewResult => {
+    (db, preflight): TargetTaskTitleEditPreviewResult => {
       const denied = (): TargetTaskTitleEditPreviewResult =>
         ({ ok: false, reason: "unauthorized", snapshotRevision: null });
       if (!validTargetTaskTitleEditPreviewRequest(request)) {
@@ -278,6 +279,8 @@ export function previewPreflightedTargetTaskTitleEdit(
         if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
           return { ok: false, reason: "unavailable", snapshotRevision: null };
         }
+        const revision = targetTaskTitleEditRevision(db, request.taskId);
+        if (!revision) return denied();
         if (request.expectedRevision !== undefined && request.expectedRevision !== revision) {
           return { ok: false, reason: "stale_revision", snapshotRevision: null };
         }

@@ -33,6 +33,8 @@
 
 Uvedená R2 implementace je **staging-only, process-local**. Testovací vydávání session není napojeno na skutečné přihlášení, passkeys, produkční cookies ani víceprocesovou správu. Zelené CI samo o sobě neznamená aktivaci nebo splnění produkčních ACL.
 
+**Nový staging kontrakt (rozpracovaná iterace):** schema v2 přidává `tasks.revision` a `areas.policy_revision`. SQLite triggery zvyšují revize při změnách úkolu, přidání/odebrání člena a změně role, a to i při návratu hodnoty do původního stavu. `snapshotRevision` v interním preview nyní představuje SHA-256 konkrétního úkolu, jeho efektivní Oblasti, policy epochy a `restoreGeneration`; název vlastnosti zůstává pouze kvůli staging kompatibilitě. Nový kontrakt dovoluje nezávislé změny jiných úkolů, ale stále ověřuje aktuální ACL a revizi uvnitř `BEGIN IMMEDIATE`. Stará schema v1 se **automaticky nemigruje**: izolované staging databáze se znovu vytvoří; produkční data nejsou dotčena. Smazání úkolu je v tomto staging schématu dočasně zakázáno, aby se ID nemohlo znovu použít s revizí 0; odstranění tohoto omezení vyžaduje nejprve trvalé tombstony. Stále nejsou implementované trvalé multi-process revokace, auditní retence ani sync.
+
 ## Nejbližší vývoj — skutečná kritická cesta
 
 Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez vazby na fungující bezpečný vertikální tok. Další implementace mají přidávat **ověřitelnou funkční schopnost** a negativní testy, nejdřív na izolovaném stagingu, teprve potom ve skutečném runtime.
@@ -40,7 +42,7 @@ Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez v
 | Pořadí | Iterace | Požadovaný výsledek a brána |
 |---|---|---|
 | **1** | **PR #135 — hotovo** | Review i `PR Checks` dokončeny, sloučeno do `main` (`70558de6`). Předzápisový náhled zůstává staging-only a nezakládá právo provést mutaci. |
-| **2** | **R2a — #137 a #138 sloučeny, staging pokračuje** | Staging transakční zápis (#137) a durable idempotence (#138) jsou sloučené. Následuje pouze interní, ACL-gated kontrola výsledku nejistého zápisu; pro úplné R2a zbývá skutečná per-item/policy revize a audit s retenčním kontraktem. CAS je zatím vůči SHA-256 **celého SQLite snapshotu**, nikoli úkolu. Preflight #135 není zapisovací capability. |
+| **2** | **R2a — #137–139 sloučeny, staging pokračuje** | Staging transakční zápis, durable idempotence a ověření výsledku nejistého příkazu (#137–139) jsou v `main`. Následující **izolovaná iterace** zavádí skutečné monotónní revize úkolů a membership policy ve staging modelu (schema v2), s task/policy-scoped CAS místo globálního SHA-256. Pro dokončení R2a stále chybí audit s retenčním kontraktem a nezávislé bezpečnostní review. Produkční aktivace není povolena. |
 | **3** | **R2b — Runtime identita a serverové API** | Propojit skutečné serverem autentizované `userId` se čtením i příkazy. Žádný klientem dodaný aktér/Area jako důkaz oprávnění; role a členství vždy z autoritativního store. Navrhnout **durable revokaci a bezpečné chování ve více procesech** před produkčním použitím (dočasné session #133 nestačí). Testy přímého detailu, neoprávněného čtení a zápisu. |
 | **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
 | **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
@@ -64,4 +66,4 @@ Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
 - Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
 
-**Nejbližší práce: interní ověřování výsledku nejistého příkazu (staging-only), skutečná per-item/policy revize a auditovatelná historie; teprve potom R2b serverová identita/API. PR #137 a #138 jsou sloučené.**
+**Nejbližší práce: dokončit a zrevidovat monotónní per-task/policy CAS (schema v2), poté auditovatelnou historii s retenčním kontraktem. Teprve potom R2b serverová identita/API. PR #137–139 jsou sloučené.**

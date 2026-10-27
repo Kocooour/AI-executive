@@ -147,25 +147,99 @@ test("staging writes reject public directories and database hardlinks", () => {
     version.snapshotRevision), { ok: true });
 });
 
-test("stale revisions, including unrelated changes, never mutate a task", () => {
+test("task/policy CAS allows unrelated changes but detects same-task edits", () => {
   const { authority, writer } = fixture();
   const alice = authority.issueWritable("alice");
   assert.ok(alice);
   const version = preview(authority, alice.sessionToken, "team-task");
   assert.equal(version.ok, true);
+  const taskRevision = writer.prepare("SELECT revision FROM tasks WHERE id='team-task'");
+  assert.equal(taskRevision.get().revision, 0);
   writer.prepare("UPDATE tasks SET title='Other change' WHERE id='private-task'").run();
-  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Unsafe",
+  // A write to an independent task no longer invalidates a valid preview.
+  assert.deepEqual(preview(authority, alice.sessionToken, "team-task"), version);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Independent",
+    version.snapshotRevision), { ok: true });
+  assert.equal(taskRevision.get().revision, 1);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Replay",
     version.snapshotRevision), rejected("stale_revision"));
-  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
-    "Team original");
+
   const fresh = preview(authority, alice.sessionToken, "team-task");
   assert.equal(fresh.ok, true);
-  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "First commit",
-    fresh.snapshotRevision), { ok: true });
-  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Replay",
+  // A value that changes and then reverts still advances the durable epoch.
+  writer.prepare("UPDATE tasks SET title='Transient' WHERE id='team-task'").run();
+  writer.prepare("UPDATE tasks SET title='Independent' WHERE id='team-task'").run();
+  assert.equal(taskRevision.get().revision, 3);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Unsafe",
     fresh.snapshotRevision), rejected("stale_revision"));
   assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
-    "First commit");
+    "Independent");
+
+  // No-op SQL UPDATE and a rolled-back edit must not consume revisions.
+  const unchanged = taskRevision.get().revision;
+  writer.prepare("UPDATE tasks SET title=title WHERE id='team-task'").run();
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    writer.prepare("UPDATE tasks SET title='Will rollback' WHERE id='team-task'").run();
+  } finally {
+    writer.exec("ROLLBACK");
+  }
+  assert.equal(taskRevision.get().revision, unchanged);
+});
+
+test("task primary keys cannot be renamed and reused to replay a preview", () => {
+  const { authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const original = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(original.ok, true);
+
+  // Without an UPDATE-of-id guard, the old ID can be reused with revision 0,
+  // making an old task/policy CAS token valid for a completely different task.
+  assert.throws(
+    () => writer.prepare("UPDATE tasks SET id='renamed-task' WHERE id='team-task'").run(),
+    /task ID is immutable/,
+  );
+  assert.equal(writer.prepare("SELECT 1 FROM tasks WHERE id='renamed-task'").get(), undefined);
+  assert.throws(
+    () => writer.prepare(
+      "INSERT INTO tasks(id,area_id,title) VALUES ('team-task','team-area','Replacement')",
+    ).run(),
+    /task replacement is not allowed/,
+  );
+  assert.equal(writer.prepare("SELECT revision FROM tasks WHERE id='team-task'").get().revision, 0);
+  assert.deepEqual(preview(authority, alice.sessionToken, "team-task"), original);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Legitimate edit",
+    original.snapshotRevision), { ok: true });
+  assert.equal(writer.prepare("SELECT title FROM tasks WHERE id='team-task'").get().title,
+    "Legitimate edit");
+});
+
+test("shared Area policy epochs detect revocation and restored permissions", () => {
+  const { authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  const bob = authority.issueWritable("bob");
+  assert.ok(alice && bob);
+  const first = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(first.ok, true);
+  const getPolicy = () => writer.prepare("SELECT policy_revision FROM areas WHERE id='team-area'")
+    .get().policy_revision;
+  const original = getPolicy();
+  writer.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.equal(getPolicy(), original + 1);
+  assert.deepEqual(preview(authority, bob.sessionToken, "team-task"),
+    { ok: false, reason: "unavailable", snapshotRevision: null });
+  writer.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.equal(getPolicy(), original + 2);
+  // Even though Bob has edit permission again, the original policy-bound
+  // preview cannot be replayed; permissions might have been revoked meanwhile.
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Stale",
+    first.snapshotRevision), rejected("stale_revision"));
+  const renewed = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(renewed.ok, true);
+  assert.notEqual(renewed.snapshotRevision, first.snapshotRevision);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "team-task", "Allowed",
+    renewed.snapshotRevision), { ok: true });
 });
 
 test("revoked and downgraded members cannot replay an authorized preview", () => {
