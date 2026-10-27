@@ -75,24 +75,30 @@ function withPinnedSourceReadLock<T>(
   sourceFd: number,
   read: () => T,
 ): T {
-  const alreadyOpen = new Set(readdirSync(descriptorRoot));
+  const original = fstatSync(sourceFd);
+  const matchingHandleCount = (): number => readdirSync(descriptorRoot).reduce((count, name) => {
+    if (!/^[0-9]+$/.test(name)) return count;
+    try {
+      const opened = fstatSync(Number(name));
+      return count + Number(opened.isFile() &&
+        opened.dev === original.dev && opened.ino === original.ino);
+    } catch {
+      return count; // The directory enumeration fd has already closed.
+    }
+  }, 0);
+  const countBeforeSQLiteOpen = matchingHandleCount();
   const sourceDb = new DatabaseSync(databasePath, { readOnly: true });
   try {
     sourceDb.exec("PRAGMA query_only = ON");
     sourceDb.exec("BEGIN");
     // BEGIN alone is deferred; an actual SELECT acquires SQLite's SHARED lock.
     sourceDb.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    const original = fstatSync(sourceFd);
-    const matchingSQLiteFd = readdirSync(descriptorRoot).some(name => {
-      if (alreadyOpen.has(name) || !/^[0-9]+$/.test(name)) return false;
-      try {
-        const opened = fstatSync(Number(name));
-        return opened.isFile() && opened.dev === original.dev && opened.ino === original.ino;
-      } catch {
-        return false; // Descriptors opened by enumeration itself may close.
-      }
-    });
-    if (!matchingSQLiteFd) throw new Error("Source SQLite file identity mismatch");
+    // Comparing only descriptor numbers is unsafe: readdirSync() temporarily
+    // opens the fd directory, and SQLite can reuse that just-closed fd number.
+    // Instead demand a net new open handle to the *pinned inode*.
+    if (matchingHandleCount() <= countBeforeSQLiteOpen) {
+      throw new Error("Source SQLite file identity mismatch");
+    }
     return read();
   } finally {
     try { sourceDb.exec("ROLLBACK"); } catch { /* fail closed at caller */ }
