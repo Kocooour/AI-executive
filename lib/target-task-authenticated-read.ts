@@ -18,6 +18,7 @@ import {
 import type {
   TargetTaskDetailResult, TargetTaskListResult, TargetTaskOffsetListResult, TargetTaskScope,
 } from "./target-task-read-model";
+import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { canEditIsolatedTargetTaskTitle, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import type { TargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 
@@ -204,11 +205,21 @@ export function listAuthenticatedIsolatedTargetTasksAtOffset(
 
 
 /**
+ * Only the pinned snapshot facade constructs this server-side context.
+ * This is NOT a client request or an authorization capability: the selector
+ * independently verifies the canonical staging schema and exact file inode.
+ */
+export interface TargetTaskTitleEditPinnedSnapshot {
+  readonly snapshotDirectory: string;
+  readonly snapshotFd: number;
+  readonly expectedRestoreGeneration: string;
+}
+
+/**
  * Internal authorization selector for staging task-title previews.
- * Unlike the session-bound facade this MUST NOT return a revision or accept
- * one from the caller. The facade alone binds the result to pinned bytes.
- * A canonical, snapshot-bound preflight is mandatory and checked in the
- * same read transaction as session identity and current Area permissions.
+ * Never accept caller-provided preflight callbacks (including () => true).
+ * Verify the canonical staging store on the same read transaction as session
+ * identity and live Area ACLs. Revisions are solely owned by the pinned facade.
  */
 export type AuthenticatedTargetTaskTitleEditAuthorization =
   | { ok: true }
@@ -218,17 +229,23 @@ export function authorizeAuthenticatedIsolatedTargetTaskTitleEdit(
   db: DatabaseSync,
   access: TargetStagingReadCredential,
   request: TargetTaskTitleEditPreviewRequest,
-  preflight: TargetReadSnapshotPreflight,
+  snapshot: TargetTaskTitleEditPinnedSnapshot,
 ): AuthenticatedTargetTaskTitleEditAuthorization {
   const denied = (): AuthenticatedTargetTaskTitleEditAuthorization =>
     ({ ok: false, reason: "unauthorized" });
   if (!validTargetTaskTitleEditPreviewRequest(request)) {
     return { ok: false, reason: "invalid_request" };
   }
-  // TypeScript's required parameter is not a runtime security boundary.
-  if (typeof preflight !== "function") return denied();
+  if (!snapshot || typeof snapshot.snapshotDirectory !== "string" ||
+      !Number.isSafeInteger(snapshot.snapshotFd) || snapshot.snapshotFd < 0 ||
+      typeof snapshot.expectedRestoreGeneration !== "string") return denied();
   return inReadSnapshot(db, () => {
-    if (!preflight(db)) return denied();
+    const canonical = inspectIsolatedTargetStore({
+      stagingDirectory: snapshot.snapshotDirectory,
+      expectedRestoreGeneration: snapshot.expectedRestoreGeneration,
+      mode: "r2-model",
+    }, { db, fd: snapshot.snapshotFd });
+    if (!canonical.ok) return denied();
     const actorUserId = verifiedActor(db, access);
     if (!actorUserId) return denied();
     if (!canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId)) {
