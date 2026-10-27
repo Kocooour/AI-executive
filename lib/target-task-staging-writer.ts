@@ -133,6 +133,12 @@ export function writePreflightedTargetTaskTitle(
     const pinned = fstatSync(databaseFd);
     if (!pinned.isFile() || pinned.nlink !== 1 ||
         pinned.dev !== info.dev || pinned.ino !== info.ino) return denied();
+    // A WAL-mode source may create -wal/-shm on a writable SQLite open even
+    // when no sidecars are present yet. Reject it from the pinned header first.
+    const header = Buffer.alloc(20);
+    if (readSync(databaseFd, header, 0, header.length, 0) !== header.length ||
+        header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
+        header[18] !== 1 || header[19] !== 1) return denied();
 
     // SQLite uses a pathname, so prove its newly opened handle refers to
     // the same pinned inode before allowing any write. This is also the
