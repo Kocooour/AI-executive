@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.schemaVersion, 2);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "1");
+    assert.equal(metadata.schema_version, "2");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
     assert.equal(metadata.restore_generation, result.restoreGeneration);
@@ -62,6 +62,46 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
       assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0);
     }
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    db.close();
+  }
+});
+
+test("R2a revision counters increase monotonically and reject same-ID replacement", () => {
+  const store = fresh("monotonic-revisions");
+  const db = open(store);
+  try {
+    db.prepare("INSERT INTO tasks(id, area_id, title) VALUES ('t1', ?, 'First')")
+      .run(store.unassignedAreaId);
+    const revision = () => db.prepare("SELECT revision FROM tasks WHERE id='t1'").get().revision;
+    assert.equal(revision(), 0);
+    db.prepare("UPDATE tasks SET title='Second' WHERE id='t1'").run();
+    db.prepare("UPDATE tasks SET title='First' WHERE id='t1'").run();
+    assert.equal(revision(), 2);
+    db.prepare("UPDATE tasks SET title=title WHERE id='t1'").run();
+    assert.equal(revision(), 2);
+    assert.throws(() => db.prepare("UPDATE tasks SET revision=0 WHERE id='t1'").run(),
+      /task revision must increment by one/);
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO tasks(id, area_id, title) VALUES ('t1', ?, 'Reset')")
+      .run(store.unassignedAreaId), /task replacement is not allowed/);
+    assert.equal(revision(), 2);
+
+    const shared = seedShared(db, "owner", "version");
+    const version = () => db.prepare("SELECT policy_revision FROM areas WHERE id=?")
+      .get(shared.area).policy_revision;
+    assert.equal(version(), 0);
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?, 'owner', 'admin')")
+      .run(shared.area);
+    assert.equal(version(), 1);
+    db.prepare("UPDATE area_members SET role='editor' WHERE area_id=? AND user_id='owner'")
+      .run(shared.area);
+    assert.equal(version(), 2);
+    db.prepare("UPDATE area_members SET role='admin' WHERE area_id=? AND user_id='owner'")
+      .run(shared.area);
+    assert.equal(version(), 3);
+    assert.throws(() => db.prepare("UPDATE areas SET policy_revision=0 WHERE id=?")
+      .run(shared.area), /Area policy revision must increment by one/);
+    assert.equal(version(), 3);
   } finally {
     db.close();
   }
