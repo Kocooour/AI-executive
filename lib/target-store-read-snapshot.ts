@@ -20,7 +20,7 @@ import { TARGET_STORE_FILENAME, verifyTargetStagingPath } from "./target-store-b
 
 const CHUNK_BYTES = 64 * 1024;
 /** Fail closed on unexpectedly large files rather than exhaust staging disk. */
-const MAX_SNAPSHOT_BYTES = 1024n * 1024n * 1024n;
+const MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024;
 
 function unchanged(a: ReturnType<typeof fstatSync>, b: ReturnType<typeof fstatSync>): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size &&
@@ -38,7 +38,7 @@ export function withPinnedTargetSnapshot<T>(
 ): T {
   const source = fstatSync(sourceFd);
   if (!source.isFile() || source.nlink !== 1 || source.size < 100 ||
-      BigInt(source.size) > MAX_SNAPSHOT_BYTES) {
+      source.size > MAX_SNAPSHOT_BYTES) {
     throw new Error("Unsafe staging source file");
   }
   const header = Buffer.alloc(20);
