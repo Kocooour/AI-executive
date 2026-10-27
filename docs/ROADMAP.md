@@ -1,42 +1,63 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-26.** Primární návaznost: [rozhodnutí o čistém startu](decisions/2026-10-26-cisty-start-d3.md), [produktový kontrakt LUMI-FR-013](PRODUCT.md#lumi-fr-013), [technické bezpečnostní hranice](ARCHITECTURE.md).
+**Aktualizováno 2026-10-27 podle sloučených PR #126–134 a otevřeného PR #135.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
-## Kde jsme
+## Aktuální pozice
 
-| Oblast | Ověřený stav k rozhodnutí | Význam pro nový plán |
+**Pracujeme na R2 — identita, serverová autorizace, zápisy a bezpečná synchronizace.** Izolovaný model R1 je připravený pro staging; zatím **není zapojen do běžících API, UI ani produkční databáze**. Připravená D3 logika a navigace nejsou aktivované.
+
+| Milník | Stav k 2026-10-27 | Výsledek / zbývající brána |
 |---|---|---|
-| D2a | Normalizační aplikátor a invarianty nových zápisů jsou připravené; aplikátor není produkčně spuštěný | **Znovu využít invarianty**; historickou normalizaci nevyžadovat při čistém startu |
-| D2b | Diagnostika rozdělení a ochrana offline změn existují, dělení starého obsahu není spuštěné | Nepokračovat v zachování legacy workspace rozložení; zachovat bezpečné pravidlo invalidace starých klientů |
-| D2c | Syntetické preflight/postcheck kontroly legacy řešitelství jsou rozpracované | Nenavazovat další migrační diagnostikou; u nového modelu řešitelství nastavit přímo |
-| D3 | Čtecí selektor `Můj plán / Osobní / Sdílené` (#103) a přepínač (#108) byly sloučeny, ale **nejsou aktivované v aplikaci** | Propojit je s autorizovaným read modelem po dokončení bezpečnostních bran |
+| **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
+| **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
+| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–134 sloučeny, #135 otevřen) | Autentizované izolované čtení, preflight, krátkodobé session/revokace a konzistentní stránkování existují pouze ve stagingu. Chybí skutečné autorizované transakční zápisy, produkční identity, durable revokace, HTTP a sync protokol, user-scoped cache a širší read model. |
+| **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
+| **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
+| **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
 
-Stav přípravných nástrojů není stav produkční aktivace.
+### Ověřený postup na PR
 
-## Nová kritická cesta
+| PR | Sloučeno / otevřeno | Co přineslo |
+|---|---|---|
+| [#126](https://github.com/Kocooour/AI-executive/pull/126) | Sloučeno | Rozhodnutí o čistém startu a první roadmapa |
+| [#127](https://github.com/Kocooour/AI-executive/pull/127) – [#130](https://github.com/Kocooour/AI-executive/pull/130) | Sloučeno | Izolované SQLite schéma, bezpečnostní preflight, Area role a filtrování úkolů |
+| [#131](https://github.com/Kocooour/AI-executive/pull/131) | Sloučeno | Ověřování aktéra při staging čtení |
+| [#132](https://github.com/Kocooour/AI-executive/pull/132) | Sloučeno | Autorizované čtení nad validovaným privátním read-only SQLite snapshotem |
+| [#133](https://github.com/Kocooour/AI-executive/pull/133) | Sloučeno | Dočasné staging sessions a okamžité lokální odvolání |
+| [#134](https://github.com/Kocooour/AI-executive/pull/134) | Sloučeno | Session-bound stránkovací kurzory a detekce změn mezi stránkami |
+| [#135](https://github.com/Kocooour/AI-executive/pull/135) | **Otevřeno — dokončit review/CI** | Pouze **read-only preflight** oprávnění/revize před budoucí změnou názvu úkolu; **nezapisuje** |
 
-| Milník | Priorita | Dodávka | Hotovo, když |
-|---|---|---|---|
-| **R0 — Uzavřít legacy migrační větev** | P0 | Zdokumentovat clean-start rozhodnutí, zrevidovat D3 aktivační brány, zachovat dřívější testy, inventarizovat data, cache, zařízení a externí integrace bez změny provozu | Legacy backfill 2a–2c již není předpokladem D3; seznam zachovávaných vs. případně zahazovaných údajů je výslovně sestaven |
-| **R1 — Cílový model na odděleném úložišti** | P0 | Nedestruktivní bootstrap nové prázdné DB/stagingu se dvěma uživatelskými prostory, přesnými Oblastmi a děděním; `assigneeUserId` v novém modelu; validace všech zápisových cest | Testy invariantu jedné Oblasti, bezpečného soukromého `Nezařazeno`, žádných implicitních publikací a stabilních ID procházejí; stávající DB zůstává nedotčena |
-| **R2 — Identity, serverová ACL a sync** | P0 | Aktér v sessions/token/API, serverové filtrování čtení a per-item autorizované zápisy, user-scoped cache/stav, verze sync protokolu, fail-closed obnova/revokace; starý full-snapshot klient nesmí zapsat do nové generace | Syntetická matice 2–3 identit pro čtení/zápis/AI/search/počty/notifikace/export projde; žádný cross-Area únik ani oživení starých dat |
-| **R3 — Aktivovat připravené D3** | P1 | Připojit #103/#108 do desktopového a mobilního UI; výchozí `Můj plán` jako datový rozsah pro Home, Inbox, Today, Upcoming, Projects, search a attention; zápisy jen do konkrétní Oblasti | Tři pohledy vracejí správné autorizované položky, nepřidělené sdílené úkoly zůstávají ve Sdílené; Home je úvodní obrazovka; mobilní přístupnost a offline scénáře ověřeny |
-| **R4 — Bezpečný cutover a release** | P1 | Operátorský plán přepnutí do cílového úložiště, archivní záloha, ověřený restore, upgrade/zneplatnění starých Dexie klientů, feature gates, smoke testy | **Výslovný separátní souhlas před resetem**, testy a kompletní Browser E2E release gate na přesném SHA, pak teprve případné produkční nasazení |
-| **R5 — Rozšíření spolupráce a asistence** | P1/P2 | Pozvánky a správa členů teprve po auditované ACL/revokační bráně; per-user plánování/push; další osobní mail/kalendářové integrace a proaktivní funkce | Sdílení nikdy nepřekročí práva Oblasti a soukromý zdroj se nezveřejní bez konkrétního potvrzení |
+Uvedená R2 implementace je **staging-only, process-local**. Testovací vydávání session není napojeno na skutečné přihlášení, passkeys, produkční cookies ani víceprocesovou správu. Zelené CI samo o sobě neznamená aktivaci nebo splnění produkčních ACL.
 
-R1–R3 lze vyvíjet a testovat izolovaně před jakýmkoli produkčním přepnutím. R3 nesmí aktivovat skutečné víceuživatelské sdílení bez všech potřebných částí R2 a příslušné části R5.
+## Nejbližší vývoj — skutečná kritická cesta
 
-## Neobejitelné bezpečnostní brány
+Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez vazby na fungující bezpečný vertikální tok. Další implementace mají přidávat **ověřitelnou funkční schopnost** a negativní testy, nejdřív na izolovaném stagingu, teprve potom ve skutečném runtime.
 
-- Žádné destruktivní operace bez **nového, konkrétního souhlasu**. Souhlas se zjednodušením migrace není souhlas se smazáním dat.
-- Před cutoverem inventura živých databázových záznamů, přihlašování/passkeys, integračních tokenů a nastavení, mailu, kalendáře, kontextu, pozornosti, push, záloh, klientských Dexie cache, offline front a dalších připojených zařízení. Zachovat vše neoznačené výslovně jako postradatelné.
-- Ověřená konzistentní archivní záloha **včetně potřebných souvisejících údajů** a zkouška obnovy; čistý start nesmí vypnout běžné zálohy ani rollback.
-- Oddělit nový datový prostor a synchronizační generaci od staré. Stará offline fronta nesmí vložit znovu obsah, přepsat nová oprávnění ani být potichu zahozená; nevyřešený stav blokuje přepnutí a vyžaduje rozhodnutí o exportu/odmítnutí.
-- Server vždy kontroluje **identitu, Oblast, roli, revizi a konkrétní cílovou Oblast zápisu**. Klientský filtr ani přepínač není ACL. Soukromé `Nezařazeno` je bezpečný default; zveřejnění vyžaduje potvrzení.
-- Všechny PR mají standardní PR Checks a review; **úplné browser E2E výhradně jako release gate bezprostředně před produkčním deployem** podle [AGENTS.md](../AGENTS.md). Žádné změny produkčních dat, přepínání flagů či nasazení nejsou součástí této změny plánu.
+| Pořadí | Iterace | Požadovaný výsledek a brána |
+|---|---|---|
+| **1** | **Uzavřít PR #135** | Review a úspěšné `PR Checks` na finálním SHA. Je to kontrola před zápisem, nikoli schválení zápisu. |
+| **2** | **R2a — První skutečný per-item příkaz** | Staging transakční změna názvu úkolu s **opětovným ověřením aktéra, Area role, policy revize, `restoreGeneration` a aktuální revize úkolu uvnitř zápisové transakce**, compare-and-swap, idempotencí a auditovatelným výsledkem. Preflight #135 nesmí být použito jako trvalý autorizační token. Testovat i změnu role, souběh, replay a rollback bez změny legacy store. |
+| **3** | **R2b — Runtime identita a serverové API** | Propojit skutečné serverem autentizované `userId` se čtením i příkazy. Žádný klientem dodaný aktér/Area jako důkaz oprávnění; role a členství vždy z autoritativního store. Navrhnout **durable revokaci a bezpečné chování ve více procesech** před produkčním použitím (dočasné session #133 nestačí). Testy přímého detailu, neoprávněného čtení a zápisu. |
+| **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
+| **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
+| **6** | **R3 — Propojit D3 s UI** | Zapojit existující #103/#108 do desktopu a mobilu; Home zůstane úvodní obrazovkou a Můj plán výchozím **čtecím rozsahem**. Zápisy mají vždy jednu viditelnou cílovou Oblast; `Nezařazeno` je soukromé; sdílení vyžaduje souhlas. Ověřit 2–3 identity, mobil, klávesnici/VoiceOver a offline/revokační případy. |
+| **7** | **R4 — Produkční připravenost a cutover** | Nejdřív inventura, recoverable archivní záloha a **otestovaný restore**, plán pro stávající klienty/integrační tajemství; teprve po **samostatném souhlasu vlastníka** přepnutí do nového úložiště. Produkční nasazení až po povinné plné Browser E2E release gate na **přesném SHA**. |
 
-## Co se odsouvá mimo kritickou cestu
+Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsledek se má posuzovat podle konkrétních akceptačních scénářů, **ne podle počtu PR**. Staging helper není prod-ready endpoint; přepnutí `enabled` v UI není serverové oprávnění.
 
-Těžký převod historických `workspaceId`, perfektní zachování ID/tombstonů/pořadí starých testovacích úkolů, staré `owner` assignee backfilly, matice před/po legacy Home/Today/Inbox a detailní reconciliace testovacích obsahů. Dosavadní kód a testy se **nemažou**. Pokud se později ukáže skutečně hodnotný záznam, převede se cíleně pouze na základě samostatného schválení; nikdy automatickou publikací do Sdíleného.
+## Kritéria dokončení R2 před D3
 
-**Další implementační iterace:** R1 — návrh a nedestruktivní bootstrap cílového modelu v izolovaném prostředí, souběžně s návrhem R2 serverových ACL. Není to příkaz k produkčnímu resetu.
+- **Read/write bezpečnost:** neautorizovaný aktér nemůže číst ani upravit osobní či cizí sdílenou Oblast; viewer nezapisuje, editor/admin jen dle aktuálního členství, projektové děti vždy dědí Oblast.
+- **Transakční konzistence:** souběžná změna oprávnění/revize/generace během zápisu vede k bezpečnému zamítnutí; opakování příkazu nezpůsobí dvojí změnu, audit a Undo neobejdou ACL.
+- **Synchronizace a revokace:** starý snapshot/pozdní offline fronta nemění novou generaci, po revokaci nevytéká obsah ani přes cache či odvozené kanály; uživatelské profily oddělené. Offline ztracená práva nelze zpětně odebrat již zkopírovanému obsahu, ale server musí po připojení přístup odmítnout.
+- **Funkční úplnost:** autorizované task/project/detail a Home/Today/Inbox/Upcoming/search výsledky jsou vzájemně konzistentní. `Můj plán` obsahuje soukromé a mně přidělené sdílené úkoly, `Sdílené` také nepřidělené oprávněné položky.
+- **Testování:** syntetické 2–3 identity, pozitivní i negativní scénáře pro čtení/zápis/souběh/offline/revokaci, pravidelné `PR Checks`, nezávislé review. Celá Browser E2E sada **jen před nasazením** dle [AGENTS.md](../AGENTS.md).
+
+## Co se nemění
+
+- **D2a–D2c legacy migrace a historické backfilly nejsou na kritické cestě.** Dosavadní implementace/testy se nemažou; pokud se později objeví hodnotná data, rozhodne se o jejich konkrétním převodu samostatně.
+- Připravovaný čistý model lze vytvářet a testovat pouze v **odděleném úložišti**. Žádná změna roadmapy ani merge PR nedává souhlas ke smazání/nahrazení aktuální produkční DB, účtů, mailu, kalendáře, tokenů či offline cache.
+- Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
+- Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
+
+**Další implementační iterace po sloučení #135: R2a – první autorizovaný transakční per-item příkaz s testy souběhu a idempotence.**
