@@ -197,3 +197,81 @@ test("Area membership revocation applies on next read to an already issued sessi
     { ok: false, reason: "unavailable", task: null });
   assert.deepEqual(ids(sessions.list(bob.sessionToken, { scope: "personal" })), ["private-bob"]);
 });
+
+test("active-session cap rejects session 257 and reclaims slots on revoke and expiry", () => {
+  const originalNow = Date.now;
+  const start = Math.floor(originalNow() / 1000) * 1000;
+  const sessions = authority();
+  try {
+    Date.now = () => start;
+    const tokens = [];
+    for (let i = 0; i < 256; i++) {
+      const issued = sessions.issue("alice", 2);
+      assert.ok(issued, `expected session ${i + 1} to be issued`);
+      tokens.push(issued.sessionToken);
+    }
+    assert.equal(new Set(tokens).size, 256);
+    assert.equal(sessions.issue("bob", 2), null, "the 257th session must be rejected");
+
+    assert.equal(sessions.revoke(tokens[0]), true);
+    const replacement = sessions.issue("bob", 2);
+    assert.ok(replacement, "revocation must release a session slot immediately");
+    assert.equal(sessions.issue("alice", 2), null, "the cap still applies after replacement");
+
+    Date.now = () => start + 2000;
+    assert.deepEqual(sessions.list(tokens[1], { scope: "personal" }), noList);
+    assert.deepEqual(sessions.detail(replacement.sessionToken, { taskId: "private-bob" }), noDetail);
+    assert.ok(sessions.issue("alice", 2), "expiry must release slots without manual revocation");
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("one-second, default and 900-second TTLs expire at their exact second boundaries", () => {
+  const originalNow = Date.now;
+  const start = Math.floor(originalNow() / 1000) * 1000;
+  const sessions = authority();
+  const claims = issued => JSON.parse(Buffer.from(
+    issued.sessionToken.split(".")[0], "base64url"));
+  try {
+    Date.now = () => start;
+    const oneSecond = sessions.issue("alice", 1);
+    const defaultTtl = sessions.issue("alice");
+    const maximum = sessions.issue("alice", 900);
+    assert.ok(oneSecond && defaultTtl && maximum);
+    assert.equal(claims(oneSecond).exp - claims(oneSecond).iat, 1);
+    assert.equal(claims(defaultTtl).exp - claims(defaultTtl).iat, 300);
+    assert.equal(claims(maximum).exp - claims(maximum).iat, 900);
+
+    Date.now = () => start + 999;
+    assert.equal(sessions.list(oneSecond.sessionToken, { scope: "personal" }).ok, true);
+    Date.now = () => start + 1000;
+    assert.deepEqual(sessions.list(oneSecond.sessionToken, { scope: "personal" }), noList);
+    Date.now = () => start + 299000;
+    assert.equal(sessions.list(defaultTtl.sessionToken, { scope: "personal" }).ok, true);
+    Date.now = () => start + 300000;
+    assert.deepEqual(sessions.list(defaultTtl.sessionToken, { scope: "personal" }), noList);
+    Date.now = () => start + 899000;
+    assert.equal(sessions.list(maximum.sessionToken, { scope: "personal" }).ok, true);
+    Date.now = () => start + 900000;
+    assert.deepEqual(sessions.list(maximum.sessionToken, { scope: "personal" }), noList);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("authority keeps construction-time staging path and restore generation", () => {
+  const mutableStore = { ...store };
+  const sessions = new TargetStagingSessionAuthority(mutableStore);
+  authorities.push(sessions);
+  const issued = sessions.issue("alice");
+  assert.ok(issued);
+
+  mutableStore.stagingDirectory = path.join(root, "redirected-nonexistent-stage");
+  mutableStore.expectedRestoreGeneration = randomUUID();
+
+  assert.deepEqual(ids(sessions.list(issued.sessionToken, { scope: "personal" })),
+    ["private-alice"]);
+  assert.equal(sessions.detail(issued.sessionToken, { taskId: "private-alice" }).ok, true);
+  assert.ok(sessions.issue("alice"), "mutating caller config must not break new issuance");
+});
