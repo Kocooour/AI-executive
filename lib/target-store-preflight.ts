@@ -1,5 +1,5 @@
 /** Explicit, read-only inspection of an existing R1 target staging database. */
-import { closeSync, constants, lstatSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -45,7 +45,16 @@ function matchesCanonicalSchema(actual: DatabaseSync): boolean {
 }
 
 /** No task content, IDs, paths or raw SQLite messages are returned or logged. */
-export function inspectIsolatedTargetStore(options: TargetPreflightOptions): TargetPreflightResult {
+/** Validate the same pinned file/SQLite snapshot later used for an authorized read. */
+export interface TargetPinnedPreflightConnection {
+  readonly db: DatabaseSync;
+  readonly fd: number;
+}
+
+export function inspectIsolatedTargetStore(
+  options: TargetPreflightOptions,
+  pinned?: TargetPinnedPreflightConnection,
+): TargetPreflightResult {
   const mode = options?.mode === "r2-model" ? "r2-model" : "stage";
   const issues: TargetPreflightCode[] = [];
   const fail = (code: TargetPreflightCode) => { if (!issues.includes(code)) issues.push(code); };
@@ -61,8 +70,15 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
   }
   try {
     // Never follow a database-file symlink (including one targeting legacy data).
-    if (lstatSync(databasePath).isSymbolicLink() || !statSync(databasePath).isFile()) {
+    const pathInfo = statSync(databasePath);
+    if (lstatSync(databasePath).isSymbolicLink() || !pathInfo.isFile()) {
       return { ok: false, mode, issues: ["missing_database"] };
+    }
+    if (pinned) {
+      const openedInfo = fstatSync(pinned.fd);
+      if (!openedInfo.isFile() || pathInfo.dev !== openedInfo.dev || pathInfo.ino !== openedInfo.ino) {
+        return { ok: false, mode, issues: ["database_open_failed"] };
+      }
     }
   } catch { return { ok: false, mode, issues: ["missing_database"] }; }
 
@@ -78,11 +94,11 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    const fd = openSync(databasePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const fd = pinned?.fd ?? openSync(databasePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const header = Buffer.alloc(20);
     let bytesRead: number;
     try { bytesRead = readSync(fd, header, 0, header.length, 0); }
-    finally { closeSync(fd); }
+    finally { if (!pinned) closeSync(fd); }
     if (bytesRead !== header.length || header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
         header[18] !== 1 || header[19] !== 1) {
       return { ok: false, mode, issues: ["database_open_failed"] };
@@ -93,7 +109,7 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
 
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(databasePath, { readOnly: true });
+    db = pinned?.db ?? new DatabaseSync(databasePath, { readOnly: true });
   } catch {
     return { ok: false, mode, issues: ["database_open_failed"] };
   }
@@ -174,7 +190,9 @@ export function inspectIsolatedTargetStore(options: TargetPreflightOptions): Tar
   } catch {
     fail("database_query_failed");
   } finally {
-    try { db.close(); } catch { fail("database_query_failed"); }
+    if (!pinned) {
+      try { db.close(); } catch { fail("database_query_failed"); }
+    }
   }
   return { ok: issues.length === 0, mode, issues };
 }
