@@ -14,6 +14,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
+import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, readAuthenticatedIsolatedTargetTask,
 } from "./target-task-authenticated-read";
@@ -36,13 +37,26 @@ const deniedDetail = (): AuthenticatedTargetTaskDetailResult =>
   ({ ok: false, reason: "unauthorized", task: null });
 
 /**
- * Every call pins the isolated directory and database by file descriptor and
- * opens SQLite through that descriptor. This prevents path/symlink replacement
- * between the path check and SQLite open. Canonical preflight, authentication,
- * generation, and live Area ACLs execute within one SQLite read transaction.
+ * Every call pins the isolated source database by a no-follow file descriptor,
+ * copies only bytes read from that descriptor to a private temporary snapshot,
+ * and asks SQLite to open ONLY the temporary copy. SQLite cannot safely adopt
+ * an fd through a /proc/self/fd path (it may reopen the original pathname).
+ * Canonical preflight, authentication and Area ACLs share one SQLite snapshot.
  *
- * All preflight/path/open failures return the same content-free denial.
+ * All source/path/copy/open/preflight failures return a content-free denial.
  */
+function noSidecars(databasePath: string): boolean {
+  for (const suffix of ["-wal", "-shm"]) {
+    try {
+      lstatSync(databasePath + suffix);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    }
+  }
+  return true;
+}
+
 function withPreflightedStore<T>(
   store: TargetStagingReadStore,
   denied: () => T,
@@ -52,8 +66,8 @@ function withPreflightedStore<T>(
       typeof store.expectedRestoreGeneration !== "string" ||
       !UUID_PATTERN.test(store.expectedRestoreGeneration)) return denied();
 
-  // These paths refer to already-opened descriptors, not mutable staging names.
-  // On unsupported platforms, refuse reads rather than fall back to racy opens.
+  // Resolve the source under an opened directory descriptor. This is a source
+  // copy only: SQLite never opens or follows the original staging pathname.
   const descriptorRoot = process.platform === "linux" ? "/proc/self/fd"
     : process.platform === "darwin" ? "/dev/fd" : null;
   if (!descriptorRoot || constants.O_NOFOLLOW === undefined ||
@@ -67,24 +81,32 @@ function withPreflightedStore<T>(
       if (realpathSync(`${descriptorRoot}/${directoryFd}`) !== directory) return denied();
       const databasePath = path.join(directory, TARGET_STORE_FILENAME);
       const file = lstatSync(databasePath);
-      if (!file.isFile() || file.isSymbolicLink()) return denied();
+      if (!file.isFile() || file.isSymbolicLink() || !noSidecars(databasePath)) return denied();
 
       const databaseFd = openSync(`${descriptorRoot}/${directoryFd}/${TARGET_STORE_FILENAME}`,
         constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
-        if (!fstatSync(databaseFd).isFile()) return denied();
-        const db = new DatabaseSync(`${descriptorRoot}/${databaseFd}`, { readOnly: true });
-        try {
-          db.exec("PRAGMA query_only = ON");
-          const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
-            stagingDirectory: directory,
-            expectedRestoreGeneration: store.expectedRestoreGeneration,
-            mode: "r2-model",
-          }, { db: readDb, fd: databaseFd }).ok;
-          return query(db, preflight);
-        } finally {
-          db.close();
-        }
+        const opened = fstatSync(databaseFd);
+        if (!opened.isFile() || opened.nlink !== 1 ||
+            opened.dev !== file.dev || opened.ino !== file.ino) return denied();
+
+        return withPinnedTargetSnapshot(databaseFd, (snapshotDirectory, snapshotFd) => {
+          // Reject newly introduced sidecars after copying the source too.
+          if (!noSidecars(databasePath)) return denied();
+          const db = new DatabaseSync(path.join(snapshotDirectory, TARGET_STORE_FILENAME),
+            { readOnly: true });
+          try {
+            db.exec("PRAGMA query_only = ON");
+            const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
+              stagingDirectory: snapshotDirectory,
+              expectedRestoreGeneration: store.expectedRestoreGeneration,
+              mode: "r2-model",
+            }, { db: readDb, fd: snapshotFd }).ok;
+            return query(db, preflight);
+          } finally {
+            db.close();
+          }
+        });
       } finally {
         closeSync(databaseFd);
       }
