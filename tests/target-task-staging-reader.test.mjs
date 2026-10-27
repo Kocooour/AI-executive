@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, constants, copyFileSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdtempSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statfsSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,7 +22,9 @@ const {
 const { TARGET_STAGING_TASK_READ_AUDIENCE: audience, listAuthenticatedIsolatedTargetTasks } =
   await import("../lib/target-task-authenticated-read.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
-const { withPinnedTargetSnapshot } = await import("../lib/target-store-read-snapshot.ts");
+const {
+  withPinnedTargetSnapshot, cleanupOrphanedTargetReadSnapshots, targetReadSnapshotRoot,
+} = await import("../lib/target-store-read-snapshot.ts");
 
 const stage = bootstrapIsolatedTargetStore({
   stagingDirectory: path.join(root, "stage"),
@@ -282,4 +285,49 @@ test("temporary snapshots are cleaned after a denied read", () => {
     closeSync(descriptor);
   }
   assert.equal(existsSync(temporaryDirectory), false);
+});
+
+test("private snapshot root is memory-backed on Linux and never world-readable", {
+  skip: !["linux", "darwin"].includes(process.platform),
+}, () => {
+  cleanupOrphanedTargetReadSnapshots();
+  const root = targetReadSnapshotRoot();
+  assert.equal((statSync(root).mode & 0o077), 0);
+  if (process.platform === "linux") {
+    assert.equal(statfsSync(root).type, 0x01021994);
+  }
+});
+
+test("next staging read reclaims a crashed process's snapshot, never a live one", {
+  skip: !["linux", "darwin"].includes(process.platform),
+}, () => {
+  const root = targetReadSnapshotRoot();
+  cleanupOrphanedTargetReadSnapshots();
+  // SIGKILL bypasses JS finally, exactly as a process crash would.
+  const crashed = spawnSync(process.execPath, ["-e", "process.kill(process.pid, 'SIGKILL')"], {
+    timeout: 10_000,
+  });
+  assert.equal(crashed.signal, "SIGKILL");
+  assert.ok(crashed.pid > 0);
+
+  const orphan = path.join(root, `snapshot-${crashed.pid}-${randomUUID()}`);
+  const live = path.join(root, `snapshot-${process.pid}-${randomUUID()}`);
+  const untrusted = path.join(root, `snapshot-${crashed.pid}-${randomUUID()}`);
+  mkdirSync(orphan, { mode: 0o700 });
+  mkdirSync(live, { mode: 0o700 });
+  writeFileSync(path.join(orphan, "lumi-target.sqlite"), "leftover confidential data");
+  symlinkSync(legacy, untrusted);
+  try {
+    // The next normal staging read invokes orphan cleanup automatically.
+    assert.equal(list("alice", "personal").ok, true);
+    assert.equal(existsSync(orphan), false);
+    assert.equal(existsSync(live), true);
+    assert.equal(lstatSync(untrusted).isSymbolicLink(), true);
+    assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"),
+      "legacy data unchanged");
+  } finally {
+    rmSync(orphan, { recursive: true, force: true });
+    rmSync(live, { recursive: true, force: true });
+    rmSync(untrusted, { force: true });
+  }
 });
