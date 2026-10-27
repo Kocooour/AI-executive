@@ -16,8 +16,10 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
-  listAuthenticatedIsolatedTargetTasks, readAuthenticatedIsolatedTargetTask,
+  listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
+  readAuthenticatedIsolatedTargetTask,
 } from "./target-task-authenticated-read";
+import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingReadCredential, TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -109,7 +111,7 @@ function withPinnedSourceReadLock<T>(
 function withPreflightedStore<T>(
   store: TargetStagingReadStore,
   denied: () => T,
-  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean) => T,
+  query: (db: DatabaseSync, preflight: (db: DatabaseSync) => boolean, revision: string) => T,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
@@ -143,7 +145,7 @@ function withPreflightedStore<T>(
           // Keep the source SQLite SHARED lock across the raw descriptor copy.
           // A writer transaction (and any hot rollback journal) must deny reads.
           if (!noSidecars(databasePath)) return denied();
-          return withPinnedTargetSnapshot(databaseFd, (snapshotDirectory, snapshotFd) => {
+          return withPinnedTargetSnapshot(databaseFd, (snapshotDirectory, snapshotFd, revision) => {
             if (!noSidecars(databasePath)) return denied();
             const db = new DatabaseSync(path.join(snapshotDirectory, TARGET_STORE_FILENAME),
               { readOnly: true });
@@ -154,7 +156,7 @@ function withPreflightedStore<T>(
                 expectedRestoreGeneration: store.expectedRestoreGeneration,
                 mode: "r2-model",
               }, { db: readDb, fd: snapshotFd }).ok;
-              return query(db, preflight);
+              return query(db, preflight, revision);
             } finally {
               db.close();
             }
@@ -190,3 +192,51 @@ export function readPreflightedIsolatedTargetTask(
   return withPreflightedStore(store, deniedDetail, (db, preflight) =>
     readAuthenticatedIsolatedTargetTask(db, access, request, preflight));
 }
+
+/**
+ * Revision-bound page reads for the staging-only session authority.
+ *
+ * The digest describes the exact, preflighted SQLite bytes from which this
+ * page was selected, not a client-supplied revision. No digest is returned
+ * for unauthorized or otherwise denied reads. The authority compares it
+ * against the signed previous-page cursor and discards any stale page.
+ */
+export interface RevisionedTargetTaskList {
+  readonly result: AuthenticatedTargetTaskListResult;
+  readonly revision: string | null;
+}
+
+export function listRevisionedPreflightedIsolatedTargetTasks(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetStagingTaskListRequest,
+): RevisionedTargetTaskList {
+  return withPreflightedStore(store,
+    () => ({ result: deniedList(), revision: null }),
+    (db, preflight, revision) => {
+      const result = listAuthenticatedIsolatedTargetTasks(db, access, request, preflight);
+      return { result, revision: result.ok ? revision : null };
+    });
+}
+
+/** Offset is supplied only by the in-process session authority after HMAC verification. */
+export interface RevisionedTargetTaskOffsetList {
+  readonly result: TargetTaskOffsetListResult |
+    { ok: false; reason: "unauthorized"; tasks: []; hasMore: false };
+  readonly revision: string | null;
+}
+
+export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: { scope: TargetTaskScope; limit?: number; offset: number },
+): RevisionedTargetTaskOffsetList {
+  return withPreflightedStore(store,
+    () => ({ result: { ok: false, reason: "unauthorized", tasks: [], hasMore: false },
+      revision: null } as RevisionedTargetTaskOffsetList),
+    (db, preflight, revision) => {
+      const result = listAuthenticatedIsolatedTargetTasksAtOffset(db, access, request, preflight);
+      return { result, revision: result.ok ? revision : null };
+    });
+}
+
