@@ -3,9 +3,11 @@
  * production writer; the only supported entry is a session-bound authority.
  *
  * Node SQLite cannot attach to a pinned fd. Hold a no-follow source fd and
- * verify SQLite opened that inode before hashing and writing. BEGIN IMMEDIATE
- * serializes writers across revision, authorization and UPDATE. Any failure
- * rolls back; a preview is never a write authorization capability.
+ * fail closed unless the SQLite open adds exactly one regular-file descriptor
+ * matching that inode. This is only a staging best-effort check, not a
+ * production-safe fd-backed VFS or protection against hostile FD/path races.
+ * BEGIN IMMEDIATE serializes writers across revision, ACL and UPDATE.
+ * Any failure rolls back; a preview is never a write authorization capability.
  */
 import { createHash } from "node:crypto";
 import {
@@ -37,7 +39,7 @@ export type TargetStagingTaskTitleWriteResult =
   | { ok: true }
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unavailable" |
-        "stale_revision" | "write_failed" };
+        "stale_revision" | "unchanged" | "write_failed" };
 
 const denied = (): TargetStagingTaskTitleWriteResult =>
   ({ ok: false, reason: "unauthorized" });
@@ -125,6 +127,11 @@ export function writePreflightedTargetTaskTitle(
     directoryFd = openSync(directory,
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     if (realpathSync(descriptorRoot + "/" + directoryFd) !== directory) return denied();
+    // Only the bootstrap-created private staging directory is writable. Never
+    // open a path shared with a different user or a legacy production store.
+    const stagingStat = fstatSync(directoryFd);
+    if (!process.getuid || stagingStat.uid !== process.getuid() ||
+        (stagingStat.mode & 0o077) !== 0) return denied();
     const databasePath = path.join(directory, TARGET_STORE_FILENAME);
     const info = lstatSync(databasePath);
     if (!info.isFile() || info.isSymbolicLink() || !noSidecars(databasePath)) return denied();
@@ -140,25 +147,40 @@ export function writePreflightedTargetTaskTitle(
         header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
         header[18] !== 1 || header[19] !== 1) return denied();
 
-    // SQLite uses a pathname, so prove its newly opened handle refers to
-    // the same pinned inode before allowing any write. This is also the
-    // fail-closed inode check used by the staging read facade.
-    const matchingCount = (): number => readdirSync(descriptorRoot).reduce((sum, name) => {
-      if (!/^[0-9]+$/.test(name)) return sum;
-      try {
-        const opened = fstatSync(Number(name));
-        return sum + Number(opened.isFile() &&
-          opened.dev === pinned.dev && opened.ino === pinned.ino);
-      } catch {
-        return sum;
+    // Observe newly opened *regular-file descriptors*, rather than accepting
+    // a rising count of ANY descriptors pointing to the pinned inode. An
+    // unexpected concurrent file open makes this staging mutation fail closed.
+    // This does not solve arbitrary cross-process directory/path swapping:
+    // fd-backed SQLite/VFS remains a prerequisite for production writes.
+    const regularFiles = (): Map<number, { dev: number; ino: number }> => {
+      const result = new Map<number, { dev: number; ino: number }>();
+      for (const name of readdirSync(descriptorRoot)) {
+        if (!/^[0-9]+$/.test(name)) continue;
+        try {
+          const fd = Number(name);
+          const stat = fstatSync(fd);
+          if (stat.isFile()) result.set(fd, { dev: stat.dev, ino: stat.ino });
+        } catch { /* directory enumeration FD may close before fstat */ }
       }
-    }, 0);
-    const countBefore = matchingCount();
+      return result;
+    };
+    const stillPinned = (): boolean => {
+      try {
+        const current = lstatSync(databasePath);
+        return current.isFile() && !current.isSymbolicLink() &&
+          current.nlink === 1 && current.dev === pinned.dev && current.ino === pinned.ino;
+      } catch { return false; }
+    };
+    const beforeOpen = regularFiles();
     db = new DatabaseSync(databasePath);
     db.exec("PRAGMA busy_timeout=0; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    if (matchingCount() <= countBefore || !noSidecars(databasePath)) return denied();
+    const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
+    if (newlyOpened.length !== 1 ||
+        newlyOpened[0][1].dev !== pinned.dev ||
+        newlyOpened[0][1].ino !== pinned.ino ||
+        !stillPinned() || !noSidecars(databasePath)) return denied();
 
     // All checks, including current roles and the source-byte fingerprint,
     // occur under the same SQLite RESERVED write lock.
@@ -168,7 +190,7 @@ export function writePreflightedTargetTaskTitle(
       mode: "r2-model",
     }, { db, fd: databaseFd });
     if (!preflight.ok) return denied();
-    const actor = verifiedActor(db, access);
+    const actor = verifiedActor(db, access, true);
     if (!actor) return denied();
     if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
       return { ok: false, reason: "unavailable" };
@@ -176,6 +198,14 @@ export function writePreflightedTargetTaskTitle(
     if (fingerprint(databaseFd) !== request.expectedRevision) {
       return { ok: false, reason: "stale_revision" };
     }
+    // SQLite can count an UPDATE of the existing value as one changed row
+    // without advancing the byte fingerprint. Never report such a no-op as
+    // a successful mutation (revisions are optimistic checks, not one-shot IDs).
+    const oldTitle = db.prepare("SELECT title FROM tasks WHERE id=?")
+      .get(request.taskId) as { title: string } | undefined;
+    if (!oldTitle) return failed();
+    if (oldTitle.title === request.title) return { ok: false, reason: "unchanged" };
+    if (!stillPinned() || !noSidecars(databasePath)) return denied();
     const updated = db.prepare("UPDATE tasks SET title=? WHERE id=?")
       .run(request.title, request.taskId);
     if (updated.changes !== 1) return failed();
