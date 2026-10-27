@@ -405,7 +405,7 @@ test("malformed receipt namespace fails canonical staging preflight", () => {
   writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
     .run("r2:task-title-receipt:malformed", "not-a-hash");
   assert.deepEqual(preview(authority, token.sessionToken, "team-task"),
-    rejected("unauthorized") && { ok: false, reason: "unauthorized", snapshotRevision: null });
+    { ok: false, reason: "unauthorized", snapshotRevision: null });
   const fakeRevision = "a".repeat(64);
   assert.deepEqual(writeTitle(authority, token.sessionToken, "team-task", "Denied", fakeRevision),
     rejected("unauthorized"));
