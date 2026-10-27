@@ -2,6 +2,12 @@
 
 Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený kontrakt [LUMI-FR-013](PRODUCT.md#lumi-fr-013) a aktuální [clean-start roadmapu](ROADMAP.md) s povinnými bezpečnostními branami v [ARCHITECTURE.md](ARCHITECTURE.md). Historický migrační plán platí pouze při schváleném převodu legacy dat.
 
+## Implementační checkpoint 2026-10-27
+
+Podle aktuální [roadmapy](ROADMAP.md) je **R1 staging základ hotový** (PR #127–130), **R2 rozpracované**: PR #131–134 doplnily staging autentizované čtení, kontrolu read-only SQLite snapshotu, process-local session/revokaci a session-bound stránkování. [PR #135](https://github.com/Kocooour/AI-executive/pull/135) je rozpracovaný **read-only preflight** budoucího zápisu; žádný skutečný task mutation endpoint neexistuje.
+
+**Nejde o aktivované D3 ani produkční serverová oprávnění.** Staging identita není totožná s přihlášením Lumi; stávající Home/Inbox/Today/Projects/search/attention stále nejsou napojené na nový autorizovaný read model. Další pořadí: dokončit #135 → transakční per-item příkaz a identity-bound server API → sync/revokační brána a plné autorizované výpisy → potom integrace D3 do UI. Celé Browser E2E zůstává výhradně předprodukční release gate.
+
 ## Co obsahuje první D3 změna
 
 - `lib/work-read-scope.ts`: deterministický, bezstavový čtecí selektor pro `my-plan / personal / shared`.
