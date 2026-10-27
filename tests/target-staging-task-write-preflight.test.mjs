@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,8 @@ process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
+const { authorizeAuthenticatedIsolatedTargetTaskTitleEdit, TARGET_STAGING_TASK_READ_AUDIENCE } =
+  await import("../lib/target-task-authenticated-read.ts");
 const fixtures = [];
 
 function fixture() {
@@ -159,4 +161,32 @@ test("role upgrades, unrelated snapshot edits and empty task IDs cannot bypass p
     expectedRevision: permitted.snapshotRevision,
   }), denied("stale_revision"));
   assert.deepEqual(preview(authority, bob.sessionToken, "private-alice"), denied("unavailable"));
+});
+
+test("low-level title-edit authorization fails closed without mandatory preflight", () => {
+  const { stage } = fixture();
+  const signingKey = randomBytes(32);
+  const now = Math.floor(Date.now() / 1000);
+  const claims = { v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: "alice",
+    gen: stage.restoreGeneration, iat: now, exp: now + 300 };
+  const encoded = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  const signature = createHmac("sha256", signingKey)
+    .update("lumi:r2:target-task-read:staging:v1\\0").update(encoded).digest("base64url");
+  const access = { sessionToken: encoded + "." + signature, signingKey };
+  const request = { taskId: "team-task" };
+  const db = new DatabaseSync(stage.databasePath, { readOnly: true });
+  try {
+    const authorize = (preflight) =>
+      authorizeAuthenticatedIsolatedTargetTaskTitleEdit(db, access, request, preflight);
+    assert.deepEqual(authorize(undefined), { ok: false, reason: "unauthorized" });
+    assert.deepEqual(authorize(null), { ok: false, reason: "unauthorized" });
+    assert.deepEqual(authorize(() => false), { ok: false, reason: "unauthorized" });
+    // Synthetic trusted preflight proves that even success cannot mint a
+    // revision token; only the pinned staging facade may return one.
+    const allowed = authorize(() => true);
+    assert.deepEqual(allowed, { ok: true });
+    assert.equal("snapshotRevision" in allowed, false);
+  } finally {
+    db.close();
+  }
 });
