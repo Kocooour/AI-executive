@@ -160,6 +160,16 @@ try {
   assert.equal((await fetch(`${origin}/api/target-staging/projects/alice%2Fproject`)).status, 401);
   assert.equal((await fetch(`${origin}/api/target-staging/projects/alice%2Fproject?scope=shared`,
     { headers: { cookie } })).status, 400);
+  insertProject.run(" padded ", stage.unassignedAreaId, "Padded project");
+  const paddedResponse = await fetch(
+    `${origin}/api/target-staging/projects/${encodeURIComponent(" padded ")}`,
+    { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+  );
+  assert.equal(paddedResponse.status, 200, "Next project detail routing failed for padded ID");
+  assert.deepEqual(await paddedResponse.json(), {
+    project: { id: " padded ", title: "Padded project",
+      areaId: stage.unassignedAreaId, areaKind: "private" },
+  });
   console.log("Next router staging task and project list/detail smoke passed");
 } finally {
   if (server && server.exitCode === null) {
