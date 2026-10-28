@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-28 po sloučení PR #143; #144 je ve vývoji.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-28 po sloučení PR #144; detail soukromého projektu je ve vývoji.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–143 sloučeny; #144 owner-only staging HTTP seznam projektů ve vývoji) | Izolované staging čtení, task/policy revize, audit title write a opt-in owner-cookie seznam soukromých úkolů jsou v `main`. #143 přidal soukromý detail; #144 připravuje pouze soukromý seznam projektů; HTTP zápisy, víceuživatelská identita, durable revokace, sync a user-scoped cache zůstávají otevřené. |
+| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–144 sloučeny; owner-only staging HTTP detail projektu ve vývoji) | Izolované staging čtení, task/policy revize, audit title write a opt-in owner-cookie seznam soukromých úkolů jsou v `main`. #143 přidal soukromý detail úkolu; #144 přidal stránkovaný soukromý seznam projektů; navazuje pouze soukromý detail projektu; HTTP zápisy, víceuživatelská identita, durable revokace, sync a user-scoped cache zůstávají otevřené. |
 | **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
@@ -33,7 +33,8 @@
 | [#141](https://github.com/Kocooour/AI-executive/pull/141) | **Sloučeno** | Staging schema v3: obsahově úsporný transakční audit title write a minimální retenční/kapacitní bariéra |
 | [#142](https://github.com/Kocooour/AI-executive/pull/142) | **Sloučeno** | Opt-in owner-cookie HTTP GET osobních úkolů s podepsaným cursor stránkováním; omezený izolovaný čtecí podproces |
 | [#143](https://github.com/Kocooour/AI-executive/pull/143) | **Sloučeno** | Opt-in owner-cookie GET detailu jediného soukromého úkolu; jedno preflightované snapshot čtení, aktuální ACL, žádný shared/cizí obsah ani zápis či produkční aktivace |
-| **#144** | **Ve vývoji** | Opt-in owner-cookie GET stránkovaného seznamu vlastních soukromých projektů, bez task counts, členů, shared/cizího obsahu a zápisu |
+| [#144](https://github.com/Kocooour/AI-executive/pull/144) | **Sloučeno** | Opt-in owner-cookie GET stránkovaného seznamu vlastních soukromých projektů; staging schema v4 chrání revize proti ABA a ID reuse |
+| **Navazující R2b** | **Ve vývoji** | Opt-in owner-cookie GET detailu jediného soukromého projektu, bez agregací, členů, shared/cizího obsahu nebo zápisu |
 
 **Poznámka k receiptům od #139:** idempotence změny názvu je nově vázaná na kombinaci aktéra, úkolu a UUID příkazu. Příkazy pro jiné úkoly jsou nezávislé, zatímco změna payloadu se stejným UUID u stejného úkolu je konflikt. Staré actor-only receipty z #138 nejsou bezpečně převoditelné bez dohledání původního úkolu; jejich přítomnost vede k odmítnutí staging preflightu. Pro izolovaný testovací store je nutný nový bootstrap, nikoli migrace nebo reset produkčních dat.
 
@@ -53,7 +54,7 @@ Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez v
 |---|---|---|
 | **1** | **PR #135 — hotovo** | Review i `PR Checks` dokončeny, sloučeno do `main` (`70558de6`). Předzápisový náhled zůstává staging-only a nezakládá právo provést mutaci. |
 | **2** | **R2a — #137–141 sloučeny, staging pokračuje** | Transakční title write, idempotence, task/policy CAS a obsahově úsporný audit schema v3 jsou v `main`. Audit odmítnutých a dalších bezpečnostně významných operací, produkční retenční/exportní lifecycle a nezávislé bezpečnostní review stále chybí. Produkční aktivace není povolena. |
-| **3** | **R2b — #142–143 sloučeny; #144 projekty ve vývoji** | Owner cookie je svázána pouze s read-only `personal` staging seznamem a soukromým detailem za explicitním serverovým flagem; actor/Area/scope nelze dodat klientem. Přenositelný podepsaný cursor smí zvolit jen pokračování již autorizovaného seznamu, nikoliv identitu nebo rozsah. Detail odmítá neznámé, cizí a shared úkoly nerozlišitelným 404. Čtecí podproces odlehčuje hlavnímu Next event loop, ale není náhradou za produkční zátěžový test. Další iterace musí řešit write ACL, skutečné per-user identity, durable revokaci a víceprocesové bezpečné chování zápisů/sync. Nejde o produkční multiuser připravenost. |
+| **3** | **R2b — #142–144 sloučeny; detail projektu ve vývoji** | Owner cookie je svázána pouze s read-only `personal` staging seznamem a soukromým detailem za explicitním serverovým flagem; actor/Area/scope nelze dodat klientem. Přenositelný podepsaný cursor smí zvolit jen pokračování již autorizovaného seznamu, nikoliv identitu nebo rozsah. Detail odmítá neznámé, cizí a shared úkoly nerozlišitelným 404. Čtecí podproces odlehčuje hlavnímu Next event loop, ale není náhradou za produkční zátěžový test. Další iterace musí řešit write ACL, skutečné per-user identity, durable revokaci a víceprocesové bezpečné chování zápisů/sync. Nejde o produkční multiuser připravenost. |
 | **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
 | **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
 | **6** | **R3 — Propojit D3 s UI** | Zapojit existující #103/#108 do desktopu a mobilu; Home zůstane úvodní obrazovkou a Můj plán výchozím **čtecím rozsahem**. Zápisy mají vždy jednu viditelnou cílovou Oblast; `Nezařazeno` je soukromé; sdílení vyžaduje souhlas. Ověřit 2–3 identity, mobil, klávesnici/VoiceOver a offline/revokační případy. |
@@ -76,7 +77,15 @@ Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
 - Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
 
-**Nejbližší práce: zrevidovat #144 soukromý seznam projektů, dokončit auditní lifecycle a pokračovat v bezpečném owner-only HTTP toku bez otevření shared dat. Per-user identity, zápis, sync a produkční cutover jsou samostatné brány.**
+**Nejbližší práce: zrevidovat staging-only soukromý detail projektu, dokončit auditní lifecycle a pokračovat v bezpečném owner-only HTTP toku bez otevření shared dat. Per-user identity, zápis, sync a produkční cutover jsou samostatné brány.**
 
 
 #144 rozšiřuje stejný staging-only owner-cookie read-only tok o GET /api/target-staging/projects. Výsledek obsahuje pouze ID, název a soukromou Oblast vlastních projektů; žádné počty úkolů, členy, shared ani cizí projekty. Stránkování je omezené na 100 položek a používá odděleně podepsaný, cookie-bound cursor. Jeho revize hashují pouze autorizované soukromé projektové řádky, jejich monotónní projektovou revizi, Area policy epochu a restore generation; jiné úkoly a projekty nesmí prozrazovat změny přes staleness. Nové izolované staging schema v4 detekuje i návrat názvu projektu na původní hodnotu (ABA) a brání opětovnému použití ID bez tombstonů; již vytvořené testovací v3 úložiště vyžaduje nový bootstrap, nikoli migraci nebo reset produkčních dat. Produkční aktivace stále vyžaduje další bezpečnostní práci.
+
+Navazující R2b detail projektu přidává pouze `GET /api/target-staging/projects/[projectId]`.
+Stejně jako detail úkolu vyžaduje skutečnou owner cookie a explicitní staging flag.
+Autorizované SQL ověřuje soukromou Oblast, osobní workspace a vlastníka na jediném
+kanonickém čtecím snapshotu. Neexistující, cizí a sdílený projekt se vrací
+nerozlišitelným 404. Odpověď obsahuje pouze `id`, `title`, `areaId` a
+`areaKind=private`; žádné počty úkolů, členy, metadata ani historii.
+Endpoint nezakládá produkční autorizaci, zápisy ani aktivaci UI.

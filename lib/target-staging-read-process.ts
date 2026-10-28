@@ -181,3 +181,38 @@ export async function readStagingPrivateProjectPageInChild(
   const payload = await runChild(config, "target-staging-projects-child.mjs", [String(limit), String(offset)]);
   return parseStagingPrivateProjectPage(payload);
 }
+
+export type StagingPrivateProjectDetailResult =
+  | { ok: true; project: TargetReadableProject }
+  | { ok: false; reason: "unavailable" };
+
+/** Strict child DTO and request-ID binding at the HTTP boundary. */
+export function parseStagingPrivateProjectDetail(
+  value: unknown, projectId: string,
+): StagingPrivateProjectDetailResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (result.ok === false && result.reason === "unavailable" &&
+      Object.keys(result).sort().join(",") === "ok,reason") {
+    return { ok: false, reason: "unavailable" };
+  }
+  if (result.ok !== true ||
+      Object.keys(result).sort().join(",") !== "ok,project" ||
+      !result.project || typeof result.project !== "object" ||
+      Array.isArray(result.project)) return null;
+  const project = result.project as Record<string, unknown>;
+  if (Object.keys(project).sort().join(",") !== "areaId,areaKind,id,title" ||
+      typeof project.id !== "string" || project.id !== projectId ||
+      typeof project.title !== "string" ||
+      typeof project.areaId !== "string" || project.areaKind !== "private") return null;
+  return { ok: true, project: {
+    id: project.id, title: project.title, areaId: project.areaId, areaKind: "private",
+  } };
+}
+
+export async function readStagingPrivateProjectDetailInChild(
+  config: StagingPersonalReadConfig, projectId: string,
+): Promise<StagingPrivateProjectDetailResult | null> {
+  const payload = await runChild(config, "target-staging-project-detail-child.mjs", [projectId]);
+  return parseStagingPrivateProjectDetail(payload, projectId);
+}

@@ -66,3 +66,21 @@ export function readPrivateProjectsAtOffset(
     return null;
   }
 }
+
+/** Owner-private direct lookup. The actor and project ID are both SQL parameters. */
+export function readPrivateProjectById(
+  db: DatabaseSync, actorUserId: string, projectId: string,
+): TargetReadableProject | null {
+  if (!actorPattern.test(actorUserId) || typeof projectId !== "string" ||
+      projectId.length === 0 || projectId.trim() !== projectId ||
+      Buffer.byteLength(projectId, "utf8") > 512 ||
+      /[\u0000-\u001f\u007f]/.test(projectId)) return null;
+  try {
+    const row = db.prepare(columns + " " + authorizedFrom + " AND p.id = ? LIMIT 1")
+      .get(actorUserId, projectId) as ProjectRow | undefined;
+    if (!row || row.id !== projectId) return null;
+    return { id: row.id, title: row.title, areaId: row.areaId, areaKind: "private" };
+  } catch {
+    return null;
+  }
+}

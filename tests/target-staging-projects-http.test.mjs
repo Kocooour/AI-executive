@@ -21,10 +21,12 @@ process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/projects/route.ts");
+const { GET: GETProjectDetail } =
+  await import("../app/api/target-staging/projects/[projectId]/route.ts");
 const { signStagingHttpCursor } = await import("../lib/target-staging-http-cursor.ts");
 const { signStagingProjectHttpCursor, verifyStagingProjectHttpCursor } =
   await import("../lib/target-staging-project-http-cursor.ts");
-const { parseStagingPrivateProjectPage } =
+const { parseStagingPrivateProjectPage, parseStagingPrivateProjectDetail } =
   await import("../lib/target-staging-read-process.ts");
 const stage = bootstrapIsolatedTargetStore({
   stagingDirectory: path.join(root, "stage"), ownerUserId: "alice",
@@ -63,6 +65,15 @@ function request(query = "", withCookie = true, cookieToken = token) {
 }
 async function body(query = "") {
   const response = await GET(request(query));
+  return { response, data: await response.json() };
+}
+async function detail(projectId, query = "", withCookie = true) {
+  const response = await GETProjectDetail(
+    new Request(`http://localhost/api/target-staging/projects/${encodeURIComponent(projectId)}${query}`, {
+      headers: withCookie ? { cookie: `${sessionCookieName}=${token}` } : {},
+    }),
+    { params: Promise.resolve({ projectId }) },
+  );
   return { response, data: await response.json() };
 }
 after(() => {
@@ -194,5 +205,81 @@ test("child DTO rejects extra metadata and oversized owner project fails closed"
     db.prepare("UPDATE projects SET title='Alice one' WHERE id='alice-1'").run();
   }
   assert.equal((await GET(request("?limit=1"))).status, 200);
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+});
+
+test("direct project detail has a strict owner-private DTO and indistinguishable 404s", async () => {
+  configure();
+  const own = await detail("alice-1");
+  assert.equal(own.response.status, 200);
+  assert.equal(own.response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(own.data, {
+    project: { id: "alice-1", title: "Alice one", areaId: stage.unassignedAreaId,
+      areaKind: "private" },
+  });
+  for (const id of ["missing", "bob-1", "shared-1", "not/present"]) {
+    const hidden = await detail(id);
+    assert.equal(hidden.response.status, 404, id);
+    assert.equal(hidden.response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(hidden.data, { error: "Not found" }, id);
+  }
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "bob";
+  const bob = await detail("bob-1");
+  assert.equal(bob.response.status, 200);
+  assert.deepEqual(bob.data.project, {
+    id: "bob-1", title: "Bob secret", areaId: "bob-private", areaKind: "private",
+  });
+  assert.equal((await detail("alice-1")).response.status, 404);
+});
+
+test("project detail gate, real cookie, ID validation and server scope fail closed", async () => {
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+  assert.equal((await detail("alice-1")).response.status, 404);
+  configure();
+  assert.equal((await detail("alice-1", "", false)).response.status, 401);
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  assert.equal((await detail("alice-1")).response.status, 401);
+  configure();
+  for (const id of ["", " padded", "trailing ", "x".repeat(513), "bad\ncontrol"]) {
+    assert.equal((await detail(id)).response.status, 400, JSON.stringify(id));
+  }
+  for (const query of ["?scope=shared", "?actorUserId=bob", "?taskCount=1"]) {
+    assert.equal((await detail("alice-1", query)).response.status, 400, query);
+  }
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "missing";
+  assert.equal((await detail("alice-1")).response.status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION =
+    "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal((await detail("alice-1")).response.status, 503);
+});
+
+test("project detail child DTO binds requested ID and rejects extra fields", async () => {
+  const valid = { ok: true, project: {
+    id: "alice-1", title: "Alice one", areaId: stage.unassignedAreaId, areaKind: "private",
+  } };
+  assert.deepEqual(parseStagingPrivateProjectDetail(valid, "alice-1"), valid);
+  assert.equal(parseStagingPrivateProjectDetail(valid, "bob-1"), null);
+  assert.equal(parseStagingPrivateProjectDetail({ ...valid, project: {
+    ...valid.project, taskCount: 3,
+  } }, "alice-1"), null);
+  assert.deepEqual(parseStagingPrivateProjectDetail({
+    ok: false, reason: "unavailable",
+  }, "alice-1"), { ok: false, reason: "unavailable" });
+  assert.equal(parseStagingPrivateProjectDetail({
+    ok: false, reason: "unavailable", leaked: "Bob",
+  }, "alice-1"), null);
+});
+
+test("oversized project detail output fails closed without changing legacy data", async () => {
+  configure();
+  db.prepare("UPDATE projects SET title=? WHERE id='alice-1'").run("x".repeat(1_200_000));
+  try {
+    assert.equal((await detail("alice-1")).response.status, 503);
+  } finally {
+    db.prepare("UPDATE projects SET title='Alice one' WHERE id='alice-1'").run();
+  }
+  assert.equal((await detail("alice-1")).response.status, 200);
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
 });

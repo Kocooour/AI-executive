@@ -24,9 +24,9 @@ import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedTargetTaskTitleCommandStatus,
-  listPreflightedPrivateProjectsAtOffset,
+  listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
 } from "./target-task-staging-reader";
-import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -213,6 +213,31 @@ export class TargetStagingSessionAuthority {
         limit, offset);
     } catch {
       return null;
+    }
+  }
+
+  /** One authenticated owner-private project detail on a canonical pinned snapshot. */
+  readPrivateProjectDetail(
+    actorUserId: string, projectId: string,
+  ): TargetPreflightedPrivateProjectDetail {
+    const denied = (): TargetPreflightedPrivateProjectDetail =>
+      ({ ok: false, reason: "unauthorized" });
+    if (this.#closed || typeof actorUserId !== "string" ||
+        !ACTOR_PATTERN.test(actorUserId)) return denied();
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    try {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
+      return readPreflightedPrivateProjectDetail(this.#store,
+        { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, projectId);
+    } catch {
+      return denied();
     }
   }
 
