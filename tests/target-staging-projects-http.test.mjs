@@ -243,7 +243,7 @@ test("project detail gate, real cookie, ID validation and server scope fail clos
   process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
   assert.equal((await detail("alice-1")).response.status, 401);
   configure();
-  for (const id of ["", "x".repeat(513), "bad\ncontrol"]) {
+  for (const id of ["", ".", "..", "x".repeat(513), "bad\ncontrol"]) {
     assert.equal((await detail(id)).response.status, 400, JSON.stringify(id));
   }
   for (const query of ["?scope=shared", "?actorUserId=bob", "?taskCount=1"]) {
@@ -307,7 +307,12 @@ test("project ID whitespace is opaque and round-trips from list to detail", asyn
 
 test("malformed stored project IDs cannot appear in HTTP pagination", async () => {
   configure();
-  const invalidIds = ["", "bad\ncontrol", "x".repeat(513)];
+  const invalidIds = ["", ".", "..", "bad\ncontrol", "x".repeat(513)];
+  // URL normalization makes these exact IDs unreachable as dynamic path segments.
+  assert.equal(new URL("http://localhost/api/target-staging/projects/.").pathname,
+    "/api/target-staging/projects/");
+  assert.equal(new URL("http://localhost/api/target-staging/projects/..").pathname,
+    "/api/target-staging/");
   for (const [index, id] of invalidIds.entries()) {
     insertProject.run(id, stage.unassignedAreaId, `Invalid project ${index}`);
   }
@@ -326,10 +331,17 @@ test("malformed stored project IDs cannot appear in HTTP pagination", async () =
     assert.equal((await detail(id)).response.status, 400, JSON.stringify(id));
   }
   // Hidden invalid rows must not alter the signed revision for visible projects.
-  db.prepare("UPDATE projects SET title=title || ' changed' WHERE id=?").run("bad\ncontrol");
-  assert.equal((await GET(request(`?limit=1&cursor=${encodeURIComponent(first.data.nextCursor)}`))).status, 200);
-  assert.equal(parseStagingPrivateProjectPage({
-    ok: true, projects: [{ id: "bad\ncontrol", title: "Invalid", areaId: stage.unassignedAreaId,
-      areaKind: "private" }], hasMore: false, revision: "a".repeat(64),
-  }), null);
+  for (const id of ["bad\ncontrol", ".", ".."]) {
+    db.prepare("UPDATE projects SET title=title || ' changed' WHERE id=?").run(id);
+    assert.equal((await GET(request(`?limit=1&cursor=${encodeURIComponent(first.data.nextCursor)}`))).status,
+      200, JSON.stringify(id));
+  }
+  for (const id of ["bad\ncontrol", ".", ".."]) {
+    const project = { id, title: "Invalid", areaId: stage.unassignedAreaId,
+      areaKind: "private" };
+    assert.equal(parseStagingPrivateProjectPage({
+      ok: true, projects: [project], hasMore: false, revision: "a".repeat(64),
+    }), null);
+    assert.equal(parseStagingPrivateProjectDetail({ ok: true, project }, id), null);
+  }
 });
