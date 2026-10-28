@@ -6,7 +6,9 @@ export class HttpInputError extends Error {
   }
 }
 
-export async function readJsonBody<T = unknown>(request: Request, maxBytes: number): Promise<T> {
+export async function readJsonBody<T = unknown>(
+  request: Request, maxBytes: number, options: { strictUtf8?: boolean } = {},
+): Promise<T> {
   const contentType = request.headers.get("content-type") || "";
   const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
   if (mediaType !== "application/json") {
@@ -17,7 +19,17 @@ export async function readJsonBody<T = unknown>(request: Request, maxBytes: numb
   if (!request.body) throw new HttpInputError("Request body is required");
 
   const reader = request.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: options.strictUtf8 === true });
+  const decode = (value?: Uint8Array, stream = false) => {
+    try {
+      return decoder.decode(value, { stream });
+    } catch (error) {
+      if (options.strictUtf8 && error instanceof TypeError) {
+        throw new HttpInputError("Request body is not valid UTF-8");
+      }
+      throw error;
+    }
+  };
   let received = 0;
   let text = "";
   while (true) {
@@ -28,9 +40,9 @@ export async function readJsonBody<T = unknown>(request: Request, maxBytes: numb
       await reader.cancel();
       throw new HttpInputError("Request body is too large", 413);
     }
-    text += decoder.decode(value, { stream: true });
+    text += decode(value, true);
   }
-  text += decoder.decode();
+  text += decode();
   try {
     return JSON.parse(text) as T;
   } catch {
