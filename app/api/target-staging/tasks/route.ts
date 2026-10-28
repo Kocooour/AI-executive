@@ -106,7 +106,7 @@ export function GET(request: Request): Response {
 
     const result = activeRead.authority.list(activeRead.token,
       { scope: "personal", limit, cursor });
-    if (!result.ok) {
+    if (result.ok === false) {
       if (result.reason === "invalid_request") return answer(400, "Invalid cursor");
       if (result.reason === "stale_cursor") return answer(409, "Cursor stale");
       return answer(503, "Staging unavailable");
