@@ -136,14 +136,15 @@ export function personalTaskListRevision(db: DatabaseSync, actorUserId: string):
  * An unknown actor, missing task and inaccessible task share one result.
  */
 export function readIsolatedTargetTask(
-  db: DatabaseSync, request: TargetTaskDetailRequest,
+  db: DatabaseSync, request: TargetTaskDetailRequest, personalOnly = false,
 ): TargetTaskDetailResult {
   if (!request || !validId(request.actorUserId) || !validId(request.taskId)) {
     return { ok: false, reason: "invalid_request", task: null };
   }
   try {
     const row = db.prepare(`${TASK_COLUMNS} ${AUTHORIZED_TASK_FROM}
-      AND t.id = ?`).get(request.actorUserId, request.taskId) as TaskRow | undefined;
+      AND t.id = ? ${personalOnly ? "AND a.kind = 'private'" : ""}`)
+      .get(request.actorUserId, request.taskId) as TaskRow | undefined;
     if (!row) return { ok: false, reason: "unavailable", task: null };
     return { ok: true, task: toTask(row) };
   } catch {

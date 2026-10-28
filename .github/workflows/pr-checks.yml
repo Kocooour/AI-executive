@@ -11,7 +11,6 @@ permissions:
   contents: read
 
 concurrency:
-  # Cancel obsolete PR attempts, never checks of distinct main commits.
   group: pr-checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -52,3 +51,6 @@ jobs:
 
       - name: Production build
         run: pnpm build
+
+      - name: Focused Next router HTTP smoke
+        run: node --experimental-loader ./tests/ts-loader.mjs scripts/target-staging-next-smoke.mjs

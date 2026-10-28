@@ -180,6 +180,7 @@ export function readAuthenticatedIsolatedTargetTask(
   access: TargetStagingReadCredential,
   request: TargetStagingTaskDetailRequest,
   preflight?: TargetReadSnapshotPreflight,
+  personalOnly = false,
 ): AuthenticatedTargetTaskDetailResult {
   if (!request || typeof request !== "object" || invalidActorOverride(request)) {
     return { ok: false, reason: "invalid_request", task: null };
@@ -188,7 +189,7 @@ export function readAuthenticatedIsolatedTargetTask(
     if (preflight && !preflight(db)) return unauthDetail();
     const actorUserId = verifiedActor(db, access);
     if (!actorUserId) return unauthDetail();
-    return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId });
+    return readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId }, personalOnly);
   }, unauthDetail);
 }
 
@@ -214,3 +215,4 @@ export function listAuthenticatedIsolatedTargetTasksAtOffset(
     });
   }, denied);
 }
+
