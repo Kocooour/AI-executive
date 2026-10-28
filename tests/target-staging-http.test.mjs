@@ -97,34 +97,77 @@ test("personal list returns only the configured owner's private tasks", async ()
   assert.equal(JSON.stringify(body).includes("sessionToken"), false);
 });
 
-test("valid limits expose a bounded first page and honest hasMore without a dead cursor", async () => {
+test("valid limits expose a signed, usable cursor and bounded personal pages", async () => {
   configure();
   const first = GET(request("?limit=1"));
   assert.equal(first.status, 200);
-  assert.deepEqual(await first.json(), {
-    tasks: [{
+  const firstBody = await first.json();
+  assert.deepEqual(firstBody.tasks, [{
       id: "alice-private", title: "Alice private", projectId: null,
       effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
-    }],
-    hasMore: true,
-  });
+    }]);
+  assert.equal(firstBody.hasMore, true);
+  assert.match(firstBody.nextCursor, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.equal(JSON.stringify(firstBody).includes("sessionToken"), false);
+  assert.equal(GET(request(`?cursor=${encodeURIComponent(firstBody.nextCursor)}`, false)).status, 401);
+
+  const second = GET(request(`?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`));
+  assert.equal(second.status, 200);
+  const secondBody = await second.json();
+  assert.deepEqual(secondBody.tasks.map(task => task.id), ["alice-private-2"]);
+  assert.equal(secondBody.hasMore, false);
+  assert.equal(secondBody.nextCursor, null);
+
   const all = GET(request("?limit=100"));
   assert.equal(all.status, 200);
   const body = await all.json();
   assert.deepEqual(body.tasks.map(task => task.id), ["alice-private", "alice-private-2"]);
   assert.equal(body.hasMore, false);
-  assert.equal(Object.hasOwn(body, "nextCursor"), false);
+  assert.equal(body.nextCursor, null);
 });
 
-test("client actor, scope, Area, workspace and cursor overrides are rejected", () => {
+test("client actor, scope, Area, workspace and malformed cursors are rejected", () => {
   configure();
   for (const query of ["?actorUserId=bob", "?scope=shared", "?areaId=family-area",
     "?workspaceId=family", "?cursor=forged", "?limit=0", "?limit=101",
-    "?limit=1.5", "?limit=1&limit=2"]) {
+    "?limit=1.5", "?limit=1&limit=2", "?cursor=a.b&cursor=c.d"]) {
     const response = GET(request(query));
     assert.equal(response.status, 400, query);
     assert.equal(response.headers.get("cache-control"), "no-store");
   }
+});
+
+test("signed cursors reject tampering, changed snapshots and changed staging config", async () => {
+  configure();
+  const first = await GET(request("?limit=1")).json();
+  const cursor = first.nextCursor;
+  assert.equal(typeof cursor, "string");
+
+  const forged = cursor.slice(0, -1) + (cursor.endsWith("A") ? "B" : "A");
+  const invalid = GET(request(`?cursor=${encodeURIComponent(forged)}`));
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: "Invalid cursor" });
+
+  db.prepare("UPDATE tasks SET title='Changed during pagination' WHERE id='alice-private'").run();
+  try {
+    const stale = GET(request(`?limit=1&cursor=${encodeURIComponent(cursor)}`));
+    assert.equal(stale.status, 409);
+    assert.deepEqual(await stale.json(), { error: "Cursor stale" });
+  } finally {
+    db.prepare("UPDATE tasks SET title='Alice private' WHERE id='alice-private'").run();
+  }
+
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION =
+    "123e4567-e89b-42d3-a456-426614174000";
+  const expired = GET(request(`?cursor=${encodeURIComponent(cursor)}`));
+  assert.equal(expired.status, 409);
+  assert.deepEqual(await expired.json(), { error: "Cursor expired" });
+  configure();
+
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+  assert.equal(GET(request()).status, 404);
+  configure();
+  assert.equal(GET(request(`?cursor=${encodeURIComponent(cursor)}`)).status, 409);
 });
 
 test("stale generation, wrong owner and absent store fail without leaking task content or mutating legacy", async () => {
@@ -143,3 +186,4 @@ test("stale generation, wrong owner and absent store fail without leaking task c
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit").get().n, 0);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id='alice-private'").get().title, "Alice private");
 });
+
