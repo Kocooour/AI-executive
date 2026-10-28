@@ -66,10 +66,11 @@ export async function readStagingPersonalDetailInChild(
       typeof task.id !== "string" || typeof task.title !== "string" ||
       typeof task.effectiveAreaId !== "string" || task.areaKind !== "private" ||
       task.assigneeUserId !== null ||
-      !(task.projectId === null || typeof task.projectId === "string") ||
       task.id !== taskId) return null;
+  const projectId = task.projectId;
+  if (projectId !== null && typeof projectId !== "string") return null;
   return { ok: true, task: {
-    id: task.id, title: task.title, projectId: task.projectId,
+    id: task.id, title: task.title, projectId,
     effectiveAreaId: task.effectiveAreaId, areaKind: "private", assigneeUserId: null,
   } };
 }
