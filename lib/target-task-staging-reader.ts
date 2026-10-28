@@ -20,6 +20,8 @@ import {
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
 import { personalTaskListRevision } from "./target-task-read-model";
+import { readPrivateProjectsAtOffset } from "./target-project-read-model";
+import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
@@ -366,3 +368,19 @@ export function readPreflightedTargetTaskTitleCommandStatus(
   );
 }
 
+
+/** Owner-cookie HTTP facade: server-owned actor, one canonical private snapshot. */
+export function listPreflightedPrivateProjectsAtOffset(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  limit: number, offset: number,
+): TargetPrivateProjectPage | null {
+  return withPreflightedStore(store, () => null, (db, preflight) =>
+    inReadSnapshot(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return null;
+      return readPrivateProjectsAtOffset(
+        db, actorUserId, store.expectedRestoreGeneration, limit, offset,
+      );
+    }, () => null));
+}

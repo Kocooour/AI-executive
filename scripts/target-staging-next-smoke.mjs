@@ -61,6 +61,11 @@ try {
   for (const id of ids) insert.run(id, stage.unassignedAreaId, `Visible ${id}`);
   insert.run("bob-secret", "bob-private", "Bob secret");
   insert.run("shared-secret", "family-area", "Family secret");
+  const insertProject = db.prepare("INSERT INTO projects(id,area_id,title) VALUES (?,?,?)");
+  insertProject.run("alice/project", stage.unassignedAreaId, "Alice project");
+  insertProject.run("alice second", stage.unassignedAreaId, "Alice second");
+  insertProject.run("bob-project", "bob-private", "Bob project secret");
+  insertProject.run("shared-project", "family-area", "Shared project secret");
 
   const secret = randomBytes(32).toString("base64url");
   const hash = `scrypt:${Buffer.alloc(16, 1).toString("base64url")}:${Buffer.alloc(64, 2).toString("base64url")}`;
@@ -113,7 +118,27 @@ try {
   }
   const unauthenticated = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`);
   assert.equal(unauthenticated.status, 401);
-  console.log("Next router staging detail smoke passed");
+  const projectFirst = await fetch(`${origin}/api/target-staging/projects?limit=1`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(projectFirst.status, 200);
+  assert.equal(projectFirst.headers.get("cache-control"), "no-store");
+  const projectPage = await projectFirst.json();
+  assert.deepEqual(projectPage.projects, [{
+    id: "alice second", title: "Alice second",
+    areaId: stage.unassignedAreaId, areaKind: "private",
+  }]);
+  assert.equal(projectPage.hasMore, true);
+  const projectSecond = await fetch(
+    `${origin}/api/target-staging/projects?limit=1&cursor=${encodeURIComponent(projectPage.nextCursor)}`,
+    { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+  );
+  assert.equal(projectSecond.status, 200);
+  assert.deepEqual((await projectSecond.json()).projects.map(project => project.id), ["alice/project"]);
+  assert.equal((await fetch(`${origin}/api/target-staging/projects`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/target-staging/projects?scope=shared`,
+    { headers: { cookie } })).status, 400);
+  console.log("Next router staging detail and project smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");

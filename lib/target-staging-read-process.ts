@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-authority";
 import type { TargetReadableTask } from "./target-task-read-model";
+import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 
 const MAX_CONCURRENT = 2;
 const TIMEOUT_MS = 20_000;
@@ -148,4 +149,35 @@ export async function readStagingPersonalDetailInChild(
     id: task.id, title: task.title, projectId,
     effectiveAreaId: task.effectiveAreaId, areaKind: "private", assigneeUserId: null,
   } };
+}
+
+/** Strict project DTO allowlist at the child-to-HTTP boundary. */
+export function parseStagingPrivateProjectPage(value: unknown): TargetPrivateProjectPage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const page = value as Record<string, unknown>;
+  if (Object.keys(page).sort().join(",") !== "hasMore,ok,projects,revision" ||
+      page.ok !== true || !Array.isArray(page.projects) || page.projects.length > 100 ||
+      typeof page.hasMore !== "boolean" || typeof page.revision !== "string" ||
+      !REVISION.test(page.revision)) return null;
+  const validProject = (value: unknown): value is TargetReadableProject => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const project = value as Record<string, unknown>;
+    return Object.keys(project).sort().join(",") === "areaId,areaKind,id,title" &&
+      typeof project.id === "string" && typeof project.title === "string" &&
+      typeof project.areaId === "string" && project.areaKind === "private";
+  };
+  if (!page.projects.every(validProject)) return null;
+  return {
+    hasMore: page.hasMore, revision: page.revision,
+    projects: page.projects.map((project: TargetReadableProject) => ({
+      id: project.id, title: project.title, areaId: project.areaId, areaKind: "private",
+    })),
+  };
+}
+
+export async function readStagingPrivateProjectPageInChild(
+  config: StagingPersonalReadConfig, limit: number, offset: number,
+): Promise<TargetPrivateProjectPage | null> {
+  const payload = await runChild(config, "target-staging-projects-child.mjs", [String(limit), String(offset)]);
+  return parseStagingPrivateProjectPage(payload);
 }
