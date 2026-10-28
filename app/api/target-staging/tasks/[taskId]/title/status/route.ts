@@ -74,7 +74,7 @@ export async function POST(request: Request,
     const result = await readPrivateTaskTitleCommandStatusInChild(bound, command);
     if (!authenticated(request)) return answer(401, "Authentication required");
     if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
-    if (!result.ok) return answer(result.reason === "idempotency_conflict" ? 409 : 404,
+    if (result.ok === false) return answer(result.reason === "idempotency_conflict" ? 409 : 404,
       result.reason === "idempotency_conflict" ? "Revision conflict" : "Not found");
     return Response.json({ status: result.status }, { headers });
   } catch (error) {
