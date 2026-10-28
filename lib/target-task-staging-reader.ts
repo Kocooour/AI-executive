@@ -200,6 +200,16 @@ export function readPreflightedIsolatedTargetTask(
     readAuthenticatedIsolatedTargetTask(db, access, request, preflight));
 }
 
+/** HTTP owner-only selector: private scope is enforced inside authenticated SQL. */
+export function readPreflightedIsolatedPersonalTargetTask(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetStagingTaskDetailRequest,
+): AuthenticatedTargetTaskDetailResult {
+  return withPreflightedStore(store, deniedDetail, (db, preflight) =>
+    readAuthenticatedIsolatedTargetTask(db, access, request, preflight, true));
+}
+
 /**
  * Revision-bound page reads for the staging-only session authority.
  *

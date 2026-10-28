@@ -23,7 +23,7 @@ import type {
 import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
-  readPreflightedTargetTaskTitleCommandStatus,
+  readPreflightedIsolatedPersonalTargetTask, readPreflightedTargetTaskTitleCommandStatus,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
@@ -162,6 +162,29 @@ export class TargetStagingSessionAuthority {
     if (!issued?.initialPage) return null;
     return { tasks: issued.initialPage.tasks, hasMore: issued.initialPage.hasMore,
       revision: issued.initialPage.revision };
+  }
+
+  /** One pinned snapshot for the entire owner-only detail decision. No token
+   * escapes this short-lived child and no preliminary list snapshot is made. */
+  readPersonalTaskDetail(actorUserId: string, taskId: string): AuthenticatedTargetTaskDetailResult {
+    if (this.#closed || typeof actorUserId !== "string" || !ACTOR_PATTERN.test(actorUserId)) {
+      return deniedDetail();
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    try {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
+      return readPreflightedIsolatedPersonalTargetTask(this.#store,
+        { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, { taskId });
+    } catch {
+      return deniedDetail();
+    }
   }
 
   /**

@@ -21,6 +21,7 @@ process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/tasks/route.ts");
+const { GET: GET_DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
 const { signStagingHttpCursor, verifyStagingHttpCursor } =
   await import("../lib/target-staging-http-cursor.ts");
 const stage = bootstrapIsolatedTargetStore({
@@ -58,6 +59,13 @@ function request(query = "", cookie = true, token = currentOwnerToken) {
   return new Request(`http://localhost/api/target-staging/tasks${query}`, {
     headers: cookie ? { cookie: `${sessionCookieName}=${token}` } : {},
   });
+}
+
+function detail(taskId, cookie = true, token = currentOwnerToken, query = "") {
+  const req = new Request(`http://localhost/api/target-staging/tasks/${encodeURIComponent(taskId)}${query}`, {
+    headers: cookie ? { cookie: `${sessionCookieName}=${token}` } : {},
+  });
+  return GET_DETAIL(req, { params: Promise.resolve({ taskId }) });
 }
 
 after(() => {
@@ -267,5 +275,80 @@ test("oversized child response fails closed and a following read recovers", asyn
   const recovered = await GET(request("?limit=1"));
   assert.equal(recovered.status, 200);
   assert.deepEqual((await recovered.json()).tasks.map(task => task.id), ["alice-private"]);
+});
+
+test("personal detail returns only the configured owner's private task", async () => {
+  configure();
+  const response = await detail("alice-private");
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { task: {
+    id: "alice-private", title: "Alice private", projectId: null,
+    effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
+  } });
+  for (const taskId of ["absent", "bob-private", "family-shared"]) {
+    const denied = await detail(taskId);
+    assert.equal(denied.status, 404, taskId);
+    assert.equal(denied.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await denied.json(), { error: "Not found" });
+  }
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "bob";
+  const bob = await detail("bob-private");
+  assert.equal(bob.status, 200);
+  assert.equal((await bob.json()).task.title, "Bob secret");
+  assert.equal((await detail("alice-private")).status, 404);
+  assert.equal((await detail("family-shared")).status, 404);
+  configure();
+});
+
+test("detail rejects bad IDs, query overrides, missing auth and wrong staging config", async () => {
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+  assert.equal((await detail("alice-private")).status, 404);
+  configure();
+  for (const taskId of ["", " bad", "a".repeat(513)]) {
+    assert.equal((await detail(taskId)).status, 400, taskId);
+  }
+  assert.equal((await detail("alice-private", true, currentOwnerToken, "?scope=shared")).status, 400);
+  assert.equal((await detail("alice-private", false)).status, 401);
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  assert.equal((await detail("alice-private")).status, 401);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION =
+    "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal((await detail("alice-private")).status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY = path.join(root, "missing");
+  assert.equal((await detail("alice-private")).status, 503);
+  configure();
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+});
+
+test("oversized detail is rejected and a subsequent detail recovers", async () => {
+  configure();
+  db.prepare("UPDATE tasks SET title=? WHERE id='alice-private'").run("x".repeat(1_200_000));
+  try {
+    const oversized = await detail("alice-private");
+    assert.equal(oversized.status, 503);
+    assert.deepEqual(await oversized.json(), { error: "Staging unavailable" });
+  } finally {
+    db.prepare("UPDATE tasks SET title='Alice private' WHERE id='alice-private'").run();
+  }
+  assert.equal((await detail("alice-private")).status, 200);
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+});
+
+test("detail accepts bounded list-compatible IDs with interior spaces and punctuation", async () => {
+  configure();
+  const taskId = "alice spec / 1";
+  insert.run(taskId, stage.unassignedAreaId, "Special ID");
+  const listed = await GET(request());
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json()).tasks.some(task => task.id === taskId), true);
+  const response = await detail(taskId);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).task.title, "Special ID");
+  assert.equal((await detail("alice-private\n")).status, 400);
+  assert.equal((await detail("x".repeat(513))).status, 400);
 });
 
