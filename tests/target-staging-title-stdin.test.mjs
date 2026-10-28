@@ -15,10 +15,10 @@ test("title command preserves UTF-8 split in the middle of multibyte characters"
   assert.deepEqual(await readTitleCommand(chunks), command);
 });
 
-test("title command enforces the 8192-byte limit before decoding", async () => {
-  assert.deepEqual(await readTitleCommand([Buffer.from(`{"x":"${"a".repeat(8184)}"}`)]),
-    { x: "a".repeat(8184) });
-  await assert.rejects(readTitleCommand([Buffer.alloc(8192, 0x20), Buffer.from("x")]), /Too large/);
+test("title command enforces the 32768-byte limit before decoding", async () => {
+  assert.deepEqual(await readTitleCommand([Buffer.from(`{"x":"${"a".repeat(32760)}"}`)]),
+    { x: "a".repeat(32760) });
+  await assert.rejects(readTitleCommand([Buffer.alloc(32768, 0x20), Buffer.from("x")]), /Too large/);
 });
 
 test("title command rejects malformed UTF-8 and malformed JSON", async () => {
