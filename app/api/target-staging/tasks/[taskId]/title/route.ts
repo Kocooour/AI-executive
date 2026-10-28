@@ -67,7 +67,7 @@ export async function GET(request: Request,
     expectedRevision === null ? undefined : expectedRevision);
   if (!authenticated(request)) return answer(401, "Authentication required");
   if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
-  if (!result.ok) return answer(result.reason === "stale_revision" ? 409 : 404,
+  if (result.ok === false) return answer(result.reason === "stale_revision" ? 409 : 404,
     result.reason === "stale_revision" ? "Revision conflict" : "Not found");
   return Response.json({ snapshotRevision: result.snapshotRevision }, { headers });
 }
@@ -105,7 +105,7 @@ export async function PATCH(request: Request,
     const result = await writePrivateTaskTitleInChild(bound, command);
     if (!authenticated(request)) return answer(401, "Authentication required");
     if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
-    if (!result.ok) {
+    if (result.ok === false) {
       if (result.reason === "unavailable") return answer(404, "Not found");
       if (result.reason === "stale_revision" || result.reason === "idempotency_conflict" ||
           result.reason === "unchanged") return answer(409, "Revision conflict");
