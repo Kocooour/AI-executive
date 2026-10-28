@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
+import { isReadableStagingProjectId } from "./target-project-id";
 
 export type TargetReadableProject = {
   id: string;
@@ -40,25 +41,27 @@ export function readPrivateProjectsAtOffset(
       !Number.isSafeInteger(offset) || offset < 0 ||
       offset > MAX_STAGING_PAGE_OFFSET) return null;
   try {
-    // Both queries run on the same private SQLite copy. The revision deliberately
-    // excludes other owners, shared projects, tasks, and unrelated metadata.
+    // One ordered scan gives a revision and page over the same HTTP-reachable
+    // private projects. Malformed staging IDs are never emitted or counted.
     const hash = createHash("sha256").update("lumi:r2b:private-project-list-revision:v2\0")
       .update(JSON.stringify(restoreGeneration)).update("\0");
     const revisionRows = db.prepare(`${columns} ${authorizedFrom}
       ORDER BY p.id COLLATE BINARY ASC`);
+    const pageRows: ProjectRow[] = [];
+    let visibleOffset = 0;
     for (const row of revisionRows.iterate(actorUserId) as Iterable<ProjectRow>) {
+      if (!isReadableStagingProjectId(row.id)) continue;
       hash.update(JSON.stringify([
         row.id, row.title, row.areaId, row.areaKind, row.policyRevision,
         row.projectRevision,
       ])).update("\0");
+      if (visibleOffset >= offset && pageRows.length <= limit) pageRows.push(row);
+      visibleOffset++;
     }
-    const rows = db.prepare(`${columns} ${authorizedFrom}
-      ORDER BY p.id COLLATE BINARY ASC LIMIT ? OFFSET ?`)
-      .all(actorUserId, limit + 1, offset) as ProjectRow[];
     return {
       revision: hash.digest("hex"),
-      hasMore: rows.length > limit,
-      projects: rows.slice(0, limit).map(row => ({
+      hasMore: pageRows.length > limit,
+      projects: pageRows.slice(0, limit).map(row => ({
         id: row.id, title: row.title, areaId: row.areaId, areaKind: "private",
       })),
     };
@@ -71,10 +74,7 @@ export function readPrivateProjectsAtOffset(
 export function readPrivateProjectById(
   db: DatabaseSync, actorUserId: string, projectId: string,
 ): TargetReadableProject | null {
-  if (!actorPattern.test(actorUserId) || typeof projectId !== "string" ||
-      projectId.length === 0 ||
-      Buffer.byteLength(projectId, "utf8") > 512 ||
-      /[\u0000-\u001f\u007f]/.test(projectId)) return null;
+  if (!actorPattern.test(actorUserId) || !isReadableStagingProjectId(projectId)) return null;
   try {
     const row = db.prepare(columns + " " + authorizedFrom + " AND p.id = ? LIMIT 1")
       .get(actorUserId, projectId) as ProjectRow | undefined;
