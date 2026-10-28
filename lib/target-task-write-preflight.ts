@@ -78,7 +78,7 @@ export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): s
  * current private owners and shared editors/admins can edit a title.
  */
 export function canEditIsolatedTargetTaskTitle(
-  db: DatabaseSync, actorUserId: string, taskId: string,
+  db: DatabaseSync, actorUserId: string, taskId: string, privateOnly = false,
 ): boolean {
   try {
     return db.prepare(`
@@ -93,12 +93,14 @@ export function canEditIsolatedTargetTaskTitle(
         AND ((t.project_id IS NULL AND t.area_id IS NOT NULL)
           OR (t.project_id IS NOT NULL AND t.area_id IS NULL AND p.id IS NOT NULL))
         AND a.owner_user_id = w.owner_user_id
+        AND (? = 0 OR (a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id))
         AND ((a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id)
           OR (a.kind = 'shared' AND w.kind = 'shared'
             AND m.role IN ('editor', 'admin')))
       LIMIT 1
-    `).get(actorUserId, taskId) !== undefined;
+    `).get(actorUserId, taskId, privateOnly ? 1 : 0) !== undefined;
   } catch {
     return false; // No task information escapes a failed query.
   }
 }
+

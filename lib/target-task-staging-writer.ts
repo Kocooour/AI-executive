@@ -132,6 +132,7 @@ export function writePreflightedTargetTaskTitle(
   store: TargetStagingReadStore,
   access: TargetStagingReadCredential,
   request: TargetStagingTaskTitleWriteRequest,
+  privateOnly = false,
 ): TargetStagingTaskTitleWriteResult {
   if (!validTargetStagingTaskTitleWriteRequest(request)) {
     return { ok: false, reason: "invalid_request" };
@@ -219,7 +220,7 @@ export function writePreflightedTargetTaskTitle(
     if (!preflight.ok) return denied();
     const actor = verifiedActor(db, access, true);
     if (!actor) return denied();
-    if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+    if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
       return { ok: false, reason: "unavailable" };
     }
     // Persist the receipt in the *same transaction* as the UPDATE. The actor
@@ -307,3 +308,4 @@ export function writePreflightedTargetTaskTitle(
     }
   }
 }
+

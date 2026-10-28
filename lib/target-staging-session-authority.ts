@@ -459,13 +459,14 @@ export class TargetStagingSessionAuthority {
   previewTaskTitleEdit(
     sessionToken: string,
     request: TargetTaskTitleEditPreviewRequest,
+    privateOnly = false,
   ): TargetTaskTitleEditPreviewResult {
     const credential = this.#credential(sessionToken);
     if (!credential) return { ok: false, reason: "unauthorized", snapshotRevision: null };
     if (!validTargetTaskTitleEditPreviewRequest(request)) {
       return { ok: false, reason: "invalid_request", snapshotRevision: null };
     }
-    return previewPreflightedTargetTaskTitleEdit(this.#store, credential, request);
+    return previewPreflightedTargetTaskTitleEdit(this.#store, credential, request, privateOnly);
   }
 
   /**
@@ -477,13 +478,14 @@ export class TargetStagingSessionAuthority {
   updateTaskTitle(
     sessionToken: string,
     request: TargetStagingTaskTitleWriteRequest,
+    privateOnly = false,
   ): TargetStagingTaskTitleWriteResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok: false, reason: "unauthorized" };
     if (!validTargetStagingTaskTitleWriteRequest(request)) {
       return { ok: false, reason: "invalid_request" };
     }
-    return writePreflightedTargetTaskTitle(this.#store, credential, request);
+    return writePreflightedTargetTaskTitle(this.#store, credential, request, privateOnly);
   }
 
   /**
@@ -545,5 +547,6 @@ export class TargetStagingSessionAuthority {
     this.#key.fill(0);
   }
 }
+
 
 
