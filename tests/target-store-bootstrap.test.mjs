@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 3);
+  assert.equal(result.schemaVersion, 4);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "3");
+    assert.equal(metadata.schema_version, "4");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
     assert.equal(metadata.restore_generation, result.restoreGeneration);
@@ -105,6 +105,40 @@ test("R2a revision counters increase monotonically and reject same-ID replacemen
     assert.throws(() => db.prepare("UPDATE areas SET policy_revision=0 WHERE id=?")
       .run(shared.area), /Area policy revision must increment by one/);
     assert.equal(version(), 3);
+  } finally {
+    db.close();
+  }
+});
+
+test("project revision survives title ABA and rejects counter reset or ID recycling", () => {
+  const store = fresh("project-monotonic-revisions");
+  const db = open(store);
+  try {
+    db.prepare("INSERT INTO projects(id, area_id, title) VALUES ('p', ?, 'A')")
+      .run(store.unassignedAreaId);
+    const row = () => db.prepare("SELECT title, revision FROM projects WHERE id='p'").get();
+    assert.deepEqual({ ...row() }, { title: "A", revision: 0 });
+    db.prepare("UPDATE projects SET title='B' WHERE id='p'").run();
+    db.prepare("UPDATE projects SET title='A' WHERE id='p'").run();
+    assert.deepEqual({ ...row() }, { title: "A", revision: 2 });
+    db.prepare("UPDATE projects SET title=title WHERE id='p'").run();
+    assert.equal(row().revision, 2);
+    assert.throws(() => db.prepare("UPDATE projects SET revision=0 WHERE id='p'").run(),
+      /project revision must increment by one/);
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO projects(id, area_id, title) VALUES ('p', ?, 'A')")
+      .run(store.unassignedAreaId), /project replacement is not allowed/);
+    assert.throws(() => db.prepare("UPDATE projects SET id='renamed' WHERE id='p'").run(),
+      /project ID is immutable/);
+    assert.throws(() => db.prepare("DELETE FROM projects WHERE id='p'").run(),
+      /project deletion requires tombstone protocol/);
+    // A rowid collision must not bypass the delete guard through SQLite REPLACE.
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO projects(rowid,id,area_id,title) VALUES (1,'other',?,'Reset')")
+      .run(store.unassignedAreaId), /rowid/i);
+    assert.throws(() => db.prepare("UPDATE OR REPLACE projects SET rowid=2 WHERE id='p'").run(),
+      /rowid/i);
+    assert.throws(() => db.prepare("UPDATE OR REPLACE projects SET id='renamed' WHERE id='p'").run(),
+      /project ID is immutable/);
+    assert.deepEqual({ ...row() }, { title: "A", revision: 2 });
   } finally {
     db.close();
   }

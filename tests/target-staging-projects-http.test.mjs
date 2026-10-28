@@ -165,10 +165,16 @@ test("foreign/shared changes do not stale a private cursor; own project and poli
   db.prepare("UPDATE projects SET title='Changed' WHERE id='alice-1'").run();
   assert.equal((await GET(request(`?cursor=${original}&limit=1`))).status, 409);
   db.prepare("UPDATE projects SET title='Alice one' WHERE id='alice-1'").run();
-  // The current schema has no project revision. Policy epochs are monotonic.
+  assert.equal((await GET(request(`?cursor=${original}&limit=1`))).status, 409,
+    "owner title A→B→A must still stale the original cursor");
+  const afterAba = (await body("?limit=1")).data.nextCursor;
+  assert.notEqual(JSON.parse(Buffer.from(afterAba.split(".")[0], "base64url")).rev,
+    originalRevision);
+  assert.equal((await GET(request(`?cursor=${afterAba}&limit=1`))).status, 200);
   db.prepare("UPDATE areas SET policy_revision=policy_revision+1 WHERE id=?")
     .run(stage.unassignedAreaId);
   assert.equal((await GET(request(`?cursor=${original}&limit=1`))).status, 409);
+  assert.equal((await GET(request(`?cursor=${afterAba}&limit=1`))).status, 409);
   process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "bob";
   const bob = await body();
   assert.deepEqual(bob.data.projects.map(project => project.id), ["bob-1"]);

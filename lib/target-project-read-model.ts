@@ -16,7 +16,7 @@ export type TargetPrivateProjectPage = {
   revision: string;
 };
 
-type ProjectRow = TargetReadableProject & { policyRevision: number };
+type ProjectRow = TargetReadableProject & { policyRevision: number; projectRevision: number };
 
 const actorPattern = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const authorizedFrom = `
@@ -27,7 +27,8 @@ const authorizedFrom = `
   WHERE a.kind = 'private' AND w.kind = 'personal'
     AND a.owner_user_id = actor.id AND w.owner_user_id = actor.id`;
 const columns = `SELECT p.id AS id, p.title AS title, a.id AS areaId,
-    a.kind AS areaKind, a.policy_revision AS policyRevision`;
+    a.kind AS areaKind, a.policy_revision AS policyRevision,
+    p.revision AS projectRevision`;
 
 /** Call only on the same pinned, preflighted, read-only SQLite snapshot. */
 export function readPrivateProjectsAtOffset(
@@ -41,17 +42,18 @@ export function readPrivateProjectsAtOffset(
   try {
     // Both queries run on the same private SQLite copy. The revision deliberately
     // excludes other owners, shared projects, tasks, and unrelated metadata.
-    const hash = createHash("sha256").update("lumi:r2b:private-project-list-revision:v1\0")
+    const hash = createHash("sha256").update("lumi:r2b:private-project-list-revision:v2\0")
       .update(JSON.stringify(restoreGeneration)).update("\0");
     const revisionRows = db.prepare(`${columns} ${authorizedFrom}
-      ORDER BY p.id COLLATE BINARY ASC, p.rowid ASC`);
+      ORDER BY p.id COLLATE BINARY ASC`);
     for (const row of revisionRows.iterate(actorUserId) as Iterable<ProjectRow>) {
       hash.update(JSON.stringify([
         row.id, row.title, row.areaId, row.areaKind, row.policyRevision,
+        row.projectRevision,
       ])).update("\0");
     }
     const rows = db.prepare(`${columns} ${authorizedFrom}
-      ORDER BY p.id COLLATE BINARY ASC, p.rowid ASC LIMIT ? OFFSET ?`)
+      ORDER BY p.id COLLATE BINARY ASC LIMIT ? OFFSET ?`)
       .all(actorUserId, limit + 1, offset) as ProjectRow[];
     return {
       revision: hash.digest("hex"),

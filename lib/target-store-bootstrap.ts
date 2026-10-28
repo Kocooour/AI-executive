@@ -11,7 +11,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-export const TARGET_STORE_SCHEMA_VERSION = 3;
+export const TARGET_STORE_SCHEMA_VERSION = 4;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -154,11 +154,14 @@ CREATE TABLE area_members (
   role TEXT NOT NULL CHECK(role IN ('viewer', 'editor', 'admin')),
   PRIMARY KEY(area_id, user_id)
 );
+-- A rowid-less PK prevents INSERT/UPDATE OR REPLACE from silently deleting a
+-- different project through a hidden rowid collision (DELETE triggers may not fire).
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
   area_id TEXT NOT NULL REFERENCES areas(id),
-  title TEXT NOT NULL CHECK(length(trim(title)) > 0)
-);
+  title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)
+) WITHOUT ROWID;
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),
@@ -219,6 +222,12 @@ WHEN NEW.title IS NOT OLD.title OR NEW.project_id IS NOT OLD.project_id
 BEGIN
   UPDATE tasks SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
+-- Project title ABA must advance a durable per-row epoch, even with direct staging SQL.
+CREATE TRIGGER project_revision_bump AFTER UPDATE OF title ON projects
+WHEN NEW.title IS NOT OLD.title
+BEGIN
+  UPDATE projects SET revision = OLD.revision + 1 WHERE id = NEW.id;
+END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
@@ -238,6 +247,9 @@ END;
 CREATE TRIGGER task_revision_guard BEFORE UPDATE OF revision ON tasks
 WHEN NEW.revision <> OLD.revision + 1
 BEGIN SELECT RAISE(ABORT, 'task revision must increment by one'); END;
+CREATE TRIGGER project_revision_guard BEFORE UPDATE OF revision ON projects
+WHEN NEW.revision <> OLD.revision + 1
+BEGIN SELECT RAISE(ABORT, 'project revision must increment by one'); END;
 CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
 WHEN NEW.policy_revision <> OLD.policy_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
@@ -254,6 +266,9 @@ BEGIN SELECT RAISE(ABORT, 'task ID is immutable until tombstones exist'); END;
 -- recycled: a delete + insert would reset revision 0 and allow ABA.
 CREATE TRIGGER task_deletion_guard BEFORE DELETE ON tasks
 BEGIN SELECT RAISE(ABORT, 'task deletion requires tombstone protocol'); END;
+-- Project ID recycling would reset the epoch and could revive an old cursor.
+CREATE TRIGGER project_deletion_guard BEFORE DELETE ON projects
+BEGIN SELECT RAISE(ABORT, 'project deletion requires tombstone protocol'); END;
 
 -- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
 -- recursive_triggers is OFF (SQLite's default). Reject boundary replacements in
@@ -284,6 +299,11 @@ WHEN EXISTS(
   SELECT 1 FROM projects p WHERE p.id = NEW.id AND p.area_id <> NEW.area_id
 )
 BEGIN SELECT RAISE(ABORT, 'project move requires R2 confirmation'); END;
+CREATE TRIGGER project_replacement_guard BEFORE INSERT ON projects
+WHEN EXISTS(
+  SELECT 1 FROM projects p WHERE p.id = NEW.id AND p.area_id = NEW.area_id
+)
+BEGIN SELECT RAISE(ABORT, 'project replacement is not allowed'); END;
 
 CREATE TRIGGER shared_members_only_insert BEFORE INSERT ON area_members
 WHEN NOT EXISTS(SELECT 1 FROM areas WHERE id = NEW.area_id AND kind = 'shared')
