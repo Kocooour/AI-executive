@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-28 po sloučení PR #144; detail soukromého projektu je ve vývoji.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-28 po sloučení PR #146; staging-only owner-private title HTTP write je v návrhu PR.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -102,3 +102,16 @@ Area/aktéra, počty cizích událostí ani transakční přístup pro klienta.
 Nejde o úplný uživatelský audit: export, mazání, maximální retence,
 zamítnuté operace, změny ACL a samostatná produkční identity stále chybí.
 Žádné produkční přepnutí, UI nebo nový write endpoint.
+
+
+Navazující R2b návrh přidává samostatný, výchozí vypnutý flag
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED=true` nad existující čtecí flag.
+Pouze skutečná owner cookie může na izolovaném neaktivovaném staging store požádat
+o read-only CAS preflight a PATCH názvu jediného vlastního soukromého úkolu.
+Shared, cizí a neexistující úkoly jsou nerozlišitelné 404. Write ACL se opakuje
+uvnitř `BEGIN IMMEDIATE`, s task/policy revizí, restore generation,
+idempotentním receiptem a atomickým obsahově úsporným auditem. Nezapíná se
+produkční store, UI, legacy sync ani víceuživatelské sdílení. Toto není
+schválení produkční aktivace a neřeší durable multi-process revokaci, plný
+audit lifecycle ani per-user sync.
+
