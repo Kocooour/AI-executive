@@ -24,8 +24,10 @@ import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedTargetTaskTitleCommandStatus,
+  listPreflightedPrivateProjectsAtOffset,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -184,6 +186,33 @@ export class TargetStagingSessionAuthority {
         { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, { taskId });
     } catch {
       return deniedDetail();
+    }
+  }
+
+  /** One-use authenticated owner-private project page on a pinned snapshot. */
+  readPrivateProjectOffsetPage(
+    actorUserId: string, limit: number, offset: number,
+  ): TargetPrivateProjectPage | null {
+    if (this.#closed || typeof actorUserId !== "string" ||
+        !ACTOR_PATTERN.test(actorUserId) ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger(offset) || offset < 0 ||
+        offset > MAX_STAGING_PAGE_OFFSET) return null;
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    try {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
+      return listPreflightedPrivateProjectsAtOffset(this.#store,
+        { signingKey: this.#key, sessionToken: `${payload}.${signature}` },
+        limit, offset);
+    } catch {
+      return null;
     }
   }
 

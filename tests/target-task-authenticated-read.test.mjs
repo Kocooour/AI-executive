@@ -12,7 +12,8 @@ mkdirSync(legacy);
 writeFileSync(path.join(legacy, "sentinel"), "untouched");
 const previous = process.env.AI_EXECUTIVE_DATA_DIR;
 process.env.AI_EXECUTIVE_DATA_DIR = legacy;
-const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
+const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION } =
+  await import("../lib/target-store-bootstrap.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
 const {
   listAuthenticatedIsolatedTargetTasks: listTasks,
@@ -156,7 +157,8 @@ test("invalid isolated database and activation markers fail closed", () => {
   writer.prepare("UPDATE metadata SET value='false' WHERE key='activated'").run();
   writer.prepare("UPDATE metadata SET value='unknown' WHERE key='schema_version'").run();
   assert.deepEqual(detail(access(), "alice-private"), noDetail);
-  writer.prepare("UPDATE metadata SET value='3' WHERE key='schema_version'").run();
+  writer.prepare("UPDATE metadata SET value=? WHERE key='schema_version'")
+    .run(String(TARGET_STORE_SCHEMA_VERSION));
   assert.deepEqual(ids(list(access(), "personal")), ["alice-private"]);
 });
 
