@@ -1,15 +1,7 @@
 /** Owner-private title mutation; title arrives over stdin, never argv. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
-
-async function readInput() {
-  let text = "";
-  for await (const chunk of process.stdin) {
-    text += chunk.toString("utf8");
-    if (Buffer.byteLength(text) > 8192) throw new Error("Too large");
-  }
-  return JSON.parse(text);
-}
+import { readTitleCommand } from "./target-staging-title-stdin.mjs";
 const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
 const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
 const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
@@ -21,7 +13,7 @@ const available = process.argv.length === 2 &&
 
 try {
   if (!available) throw new Error("Unavailable");
-  const input = await readInput();
+  const input = await readTitleCommand(process.stdin);
   if (!input || typeof input !== "object" || Array.isArray(input) ||
       Object.keys(input).sort().join(",") !== "commandId,expectedRevision,taskId,title") {
     throw new Error("Invalid input");
