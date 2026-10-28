@@ -63,6 +63,12 @@ const patch = (taskId, payload, options = {}) =>
     },
     body: JSON.stringify(payload),
   }), context(taskId));
+const patchRaw = (taskId, bytes) =>
+  PATCH(new Request(base + taskId + "/title", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
+    body: bytes,
+  }), context(taskId));
 const command = (title, expectedRevision, commandId = randomUUID()) =>
   ({ commandId, title, expectedRevision });
 
@@ -103,6 +109,25 @@ test("shared, foreign and unknown task probes and writes are indistinguishable",
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id='foreign-task'").get().title, "Foreign");
 });
 
+test("valid long UTF-8 and escaped titles pass the HTTP and child byte limits", async () => {
+  let rev = (await (await get("private-task")).json()).snapshotRevision;
+  for (const title of ["č".repeat(3000), "\u0001".repeat(4096)]) {
+    const saved = await patch("private-task", command(title, rev));
+    assert.equal(saved.status, 200);
+    assert.equal(db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title, title);
+    rev = (await (await get("private-task")).json()).snapshotRevision;
+  }
+});
+
+test("malformed UTF-8 JSON is rejected before mutation", async () => {
+  const before = db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title;
+  const payload = Buffer.from(JSON.stringify(command("A", "a".repeat(64))));
+  payload[payload.indexOf(Buffer.from("A"))] = 0xc3;
+  const response = await patchRaw("private-task", payload);
+  assert.equal(response.status, 400);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title, before);
+});
+
 test("disabled, auth, Origin and input gates refuse mutation", async () => {
   const current = (await get("private-task")).status;
   assert.equal(current, 200);
@@ -118,7 +143,9 @@ test("disabled, auth, Origin and input gates refuse mutation", async () => {
   assert.equal((await patch("private-task", { ...input, actorUserId: "alice" })).status, 400);
   assert.equal((await patch("private-task", { ...input, areaId: stage.unassignedAreaId })).status, 400);
   assert.equal((await patch("private-task", { ...input, scope: "personal" })).status, 400);
-  assert.equal((await patch("private-task", { ...input, title: "x".repeat(7000) })).status, 413);
-  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title, "Edited");
+  assert.equal((await patch("private-task", { ...input, title: "x".repeat(7000) })).status, 400);
+  assert.equal((await patchRaw("private-task", Buffer.alloc(32 * 1024 + 1, 0x20))).status, 413);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title,
+    "\u0001".repeat(4096));
 });
 
