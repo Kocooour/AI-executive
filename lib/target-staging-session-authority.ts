@@ -496,13 +496,14 @@ export class TargetStagingSessionAuthority {
   taskTitleCommandStatus(
     sessionToken: string,
     request: TargetStagingTaskTitleWriteRequest,
+    privateOnly = false,
   ): TargetStagingTaskTitleCommandStatusResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok: false, reason: "unauthorized" };
     if (!validTargetStagingTaskTitleWriteRequest(request)) {
       return { ok: false, reason: "invalid_request" };
     }
-    return readPreflightedTargetTaskTitleCommandStatus(this.#store, credential, request);
+    return readPreflightedTargetTaskTitleCommandStatus(this.#store, credential, request, privateOnly);
   }
 
   detail(
