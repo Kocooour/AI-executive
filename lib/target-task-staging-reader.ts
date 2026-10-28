@@ -233,7 +233,7 @@ export function readPreflightedPersonalTargetTaskWithRevision(
       const actorUserId = verifiedActor(db, access);
       if (!actorUserId) return denied();
       const detail = readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId }, true);
-      if (!detail.ok) return detail;
+      if (detail.ok === false) return { ok: false, reason: detail.reason, task: null };
       // A readable task alone is insufficient: the token is a CAS precondition,
       // not authorization, so require the current private write ACL as well.
       if (!canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId, true)) {
