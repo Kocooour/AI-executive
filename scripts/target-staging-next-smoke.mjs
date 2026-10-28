@@ -74,9 +74,9 @@ try {
   process.env.AI_EXECUTIVE_SESSION_SECRET = secret;
   const cookie = `${sessionCookieName}=${createSessionToken()}`;
   const port = await unusedPort();
-  const origin = `http://127.0.0.1:${port}`;
+  const origin = `http://localhost:${port}`;
   server = spawn(process.execPath,
-    ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
+    ["node_modules/next/dist/bin/next", "start", "--hostname", "localhost", "--port", String(port)],
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], env: {
       PATH: process.env.PATH || "", NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1",
       AI_EXECUTIVE_DATA_DIR: legacy,
