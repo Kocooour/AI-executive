@@ -1,0 +1,125 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { after, test } from "node:test";
+
+const envNames = [
+  "AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_AUTH_ENABLED", "AI_EXECUTIVE_PASSWORD_HASH",
+  "AI_EXECUTIVE_SESSION_SECRET", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY", "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
+  "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
+];
+const oldEnv = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
+const root = mkdtempSync(path.join(os.tmpdir(), "lumi-r2b-http-"));
+const legacy = path.join(root, "legacy");
+mkdirSync(legacy);
+writeFileSync(path.join(legacy, "sentinel"), "legacy unchanged");
+process.env.AI_EXECUTIVE_DATA_DIR = legacy;
+
+const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
+const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const { GET } = await import("../app/api/target-staging/tasks/route.ts");
+const stage = bootstrapIsolatedTargetStore({
+  stagingDirectory: path.join(root, "stage"), ownerUserId: "alice",
+});
+const db = new DatabaseSync(stage.databasePath);
+db.exec("PRAGMA foreign_keys = ON");
+db.prepare("INSERT INTO identities(id) VALUES ('bob')").run();
+db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bob-personal','personal','bob')").run();
+db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES ('bob-private','Bob private','private','bob-personal','bob','unassigned')").run();
+db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('family','shared','alice')").run();
+db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('family-area','Family','shared','family','alice')").run();
+db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','alice','admin')").run();
+db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','bob','editor')").run();
+const insert = db.prepare("INSERT INTO tasks(id,project_id,area_id,title,assignee_user_id) VALUES (?,NULL,?,?,NULL)");
+insert.run("alice-private", stage.unassignedAreaId, "Alice private");
+insert.run("bob-private", "bob-private", "Bob secret");
+insert.run("family-shared", "family-area", "Family secret");
+
+function configure() {
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "true";
+  process.env.AI_EXECUTIVE_PASSWORD_HASH = `scrypt:${Buffer.alloc(16, 1).toString("base64url")}:${Buffer.alloc(64, 2).toString("base64url")}`;
+  process.env.AI_EXECUTIVE_SESSION_SECRET = "r2b-synthetic-only-secret-long-enough-12345";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY = stage.directory;
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = stage.restoreGeneration;
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "alice";
+}
+
+function request(query = "", cookie = true) {
+  return new Request(`http://localhost/api/target-staging/tasks${query}`, {
+    headers: cookie ? { cookie: `${sessionCookieName}=${createSessionToken()}` } : {},
+  });
+}
+
+after(() => {
+  db.close();
+  for (const name of envNames) {
+    if (oldEnv[name] === undefined) delete process.env[name];
+    else process.env[name] = oldEnv[name];
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("feature flag, complete configuration, and real owner cookie are mandatory", async () => {
+  configure();
+  delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED;
+  assert.equal(GET(request()).status, 404);
+  configure();
+  delete process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
+  assert.equal(GET(request()).status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY = "relative/stage";
+  assert.equal(GET(request()).status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = "wrong";
+  assert.equal(GET(request()).status, 503);
+  configure();
+  assert.equal(GET(request("", false)).status, 401);
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  assert.equal(GET(request()).status, 401, "insecure development auth bypass is not an owner proof");
+  configure();
+});
+
+test("personal list returns only the configured owner's private tasks", async () => {
+  configure();
+  const response = GET(request());
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const body = await response.json();
+  assert.deepEqual(body.tasks.map(task => task.id), ["alice-private"]);
+  assert.equal(body.hasMore, false);
+  assert.equal(JSON.stringify(body).includes("Bob secret"), false);
+  assert.equal(JSON.stringify(body).includes("Family secret"), false);
+  assert.equal(JSON.stringify(body).includes("sessionToken"), false);
+});
+
+test("client actor, scope, Area, workspace and cursor overrides are rejected", () => {
+  configure();
+  for (const query of ["?actorUserId=bob", "?scope=shared", "?areaId=family-area",
+    "?workspaceId=family", "?cursor=forged", "?limit=0", "?limit=101",
+    "?limit=1.5", "?limit=1&limit=2"]) {
+    const response = GET(request(query));
+    assert.equal(response.status, 400, query);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+});
+
+test("stale generation, wrong owner and absent store fail without leaking task content or mutating legacy", async () => {
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "missing";
+  const wrongOwner = GET(request());
+  assert.equal(wrongOwner.status, 503);
+  assert.deepEqual(await wrongOwner.json(), { error: "Staging unavailable" });
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal(GET(request()).status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY = path.join(root, "missing");
+  assert.equal(GET(request()).status, 503);
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit").get().n, 0);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='alice-private'").get().title, "Alice private");
+});
