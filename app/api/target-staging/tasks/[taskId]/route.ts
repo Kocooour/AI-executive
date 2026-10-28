@@ -16,7 +16,7 @@ const answer = (status: number, error: string): Response =>
   Response.json({ error }, { status, headers });
 
 export async function GET(
-  request: Request, context: { params: Promise<{ taskId: string }> | { taskId: string } },
+  request: Request, context: { params: Promise<{ taskId: string }> },
 ): Promise<Response> {
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") {
     return answer(404, "Not found");
