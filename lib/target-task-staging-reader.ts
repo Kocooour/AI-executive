@@ -19,6 +19,7 @@ import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
+import { personalTaskListRevision } from "./target-task-read-model";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
@@ -225,7 +226,11 @@ export function listRevisionedPreflightedIsolatedTargetTasks(
     });
 }
 
-/** Offset is supplied only by the in-process session authority after HMAC verification. */
+/**
+ * Offset is supplied only by the in-process session authority after HMAC
+ * verification. Personal pages use an ACL-scoped revision (also exposed by
+ * the HTTP cursor); other internal scopes retain the pinned-file revision.
+ */
 export interface RevisionedTargetTaskOffsetList {
   readonly result: TargetTaskOffsetListResult |
     { ok: false; reason: "unauthorized"; tasks: []; hasMore: false };
@@ -242,7 +247,16 @@ export function listRevisionedPreflightedIsolatedTargetTasksAtOffset(
       revision: null } as RevisionedTargetTaskOffsetList),
     (db, preflight, revision) => {
       const result = listAuthenticatedIsolatedTargetTasksAtOffset(db, access, request, preflight);
-      return { result, revision: result.ok ? revision : null };
+      if (!result.ok) return { result, revision: null };
+      // HTTP exposes this revision in a signed (but decodable) cursor. Only
+      // hash this actor's ACL-visible private tasks; changes to a different
+      // owner's private or shared tasks must not leak through cursor staleness.
+      // The copied DB is private and read-only, so both queries see the same
+      // state even though the authenticated selector owns its transaction.
+      const scopedRevision = request.scope === "personal"
+        ? personalTaskListRevision(db, verifiedActor(db, access) ?? "")
+        : revision;
+      return { result, revision: scopedRevision };
     });
 }
 
@@ -341,3 +355,4 @@ export function readPreflightedTargetTaskTitleCommandStatus(
     }, denied),
   );
 }
+

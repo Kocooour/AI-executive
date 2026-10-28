@@ -7,6 +7,7 @@
  * read/sync barriers and per-user cache invalidation. Caller must independently
  * preflight the isolated target store.
  */
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 export type TargetTaskScope = "my-plan" | "personal" | "shared";
@@ -97,6 +98,38 @@ const AUTHORIZED_TASK_FROM = `
       OR (a.kind = 'shared' AND w.kind = 'shared'
         AND member.role IN ('viewer', 'editor', 'admin')))
 `;
+
+/**
+ * Opaque pagination revision for the *authenticated actor's* personal list.
+ *
+ * Hash only rows that the same list ACL permits the actor to read. Hashing
+ * the whole staging SQLite file would disclose another person's task changes
+ * via otherwise unchanged HTTP cursors. Task revisions also detect an ABA edit
+ * (a title changed and then restored). The caller owns a private, preflighted
+ * SQLite snapshot, so pagination and this digest observe identical contents.
+ */
+export function personalTaskListRevision(db: DatabaseSync, actorUserId: string): string | null {
+  if (!validId(actorUserId)) return null;
+  try {
+    const hash = createHash("sha256").update("lumi:r2b:personal-task-list-revision:v1\0");
+    const rows = db.prepare(`SELECT t.id AS id, t.title AS title,
+        t.project_id AS projectId, a.id AS effectiveAreaId,
+        a.kind AS areaKind, t.assignee_user_id AS assigneeUserId,
+        t.revision AS revision
+      ${AUTHORIZED_TASK_FROM}
+      AND a.kind = 'private'
+      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC`);
+    for (const row of rows.iterate(actorUserId)) {
+      hash.update(JSON.stringify([
+        row.id, row.title, row.projectId, row.effectiveAreaId,
+        row.areaKind, row.assigneeUserId, row.revision,
+      ])).update("\0");
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Read one task if and only if its effective Area is readable by the actor.
@@ -193,4 +226,5 @@ export function listIsolatedTargetTasksAtOffset(
     return { ok: false, reason: "query_failed", tasks: [], hasMore: false };
   }
 }
+
 

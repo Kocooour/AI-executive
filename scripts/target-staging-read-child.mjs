@@ -6,8 +6,6 @@
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
 
-console.error("child argv", process.argv.slice(2));
-
 try {
   const [rawLimit, rawOffset, extra] = process.argv.slice(2);
   if (extra !== undefined || !/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit || "") ||
@@ -30,7 +28,6 @@ try {
       });
       try {
         const page = authority.readPersonalOffsetPage(ownerUserId, limit, offset);
-        console.error("child page?", !!page);
         if (!page) process.exitCode = 1;
         else process.stdout.write(JSON.stringify({ ok: true, ...page }));
       } finally {
@@ -38,7 +35,6 @@ try {
       }
     }
   }
-} catch (error) {
-  console.error("child catch", String(error));
+} catch {
   process.exitCode = 1;
 }

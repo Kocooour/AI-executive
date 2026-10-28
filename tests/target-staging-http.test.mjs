@@ -173,6 +173,34 @@ test("client actor, scope, Area, workspace and malformed cursors are rejected", 
   }
 });
 
+test("changes to another owner's private and shared tasks do not reveal activity in personal cursors", async () => {
+  configure();
+  const original = await (await GET(request("?limit=1"))).json();
+  assert.equal(typeof original.nextCursor, "string");
+  const originalRevision = JSON.parse(Buffer.from(original.nextCursor.split(".")[0],
+    "base64url").toString("utf8")).rev;
+
+  for (const [taskId, previousTitle] of [
+    ["bob-private", "Bob secret"], ["family-shared", "Family secret"],
+  ]) {
+    db.prepare("UPDATE tasks SET title=? WHERE id=?").run("Other user changed task", taskId);
+    try {
+      const fresh = await GET(request("?limit=1"));
+      assert.equal(fresh.status, 200);
+      const freshBody = await fresh.json();
+      const freshRevision = JSON.parse(Buffer.from(freshBody.nextCursor.split(".")[0],
+        "base64url").toString("utf8")).rev;
+      assert.equal(freshRevision, originalRevision,
+        `${taskId} must not affect the owner's cursor revision`);
+      const continued = await GET(request(`?limit=1&cursor=${encodeURIComponent(original.nextCursor)}`));
+      assert.equal(continued.status, 200, `${taskId} must not stale a personal cursor`);
+      assert.deepEqual((await continued.json()).tasks.map(task => task.id), ["alice-private-2"]);
+    } finally {
+      db.prepare("UPDATE tasks SET title=? WHERE id=?").run(previousTitle, taskId);
+    }
+  }
+});
+
 test("signed cursors reject tampering, changed snapshots and changed staging config", async () => {
   configure();
   const first = await (await GET(request("?limit=1"))).json();
