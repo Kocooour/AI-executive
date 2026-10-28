@@ -304,3 +304,32 @@ test("project ID whitespace is opaque and round-trips from list to detail", asyn
   assert.equal((await detail("padded")).response.status, 404,
     "no trimming or aliasing of stored project IDs");
 });
+
+test("malformed stored project IDs cannot appear in HTTP pagination", async () => {
+  configure();
+  const invalidIds = ["", "bad\ncontrol", "x".repeat(513)];
+  for (const [index, id] of invalidIds.entries()) {
+    insertProject.run(id, stage.unassignedAreaId, `Invalid project ${index}`);
+  }
+  const first = await body("?limit=1");
+  assert.equal(first.response.status, 200);
+  assert.deepEqual(first.data.projects.map(project => project.id), [" padded "]);
+  assert.equal(first.data.hasMore, true);
+  const second = await body(`?limit=1&cursor=${encodeURIComponent(first.data.nextCursor)}`);
+  assert.equal(second.response.status, 200);
+  assert.deepEqual(second.data.projects.map(project => project.id), ["alice-1"]);
+  const all = await body("?limit=100");
+  assert.equal(all.response.status, 200);
+  assert.deepEqual(all.data.projects.map(project => project.id),
+    [" padded ", "alice-1", "alice-2"]);
+  for (const id of invalidIds) {
+    assert.equal((await detail(id)).response.status, 400, JSON.stringify(id));
+  }
+  // Hidden invalid rows must not alter the signed revision for visible projects.
+  db.prepare("UPDATE projects SET title=title || ' changed' WHERE id=?").run("bad\ncontrol");
+  assert.equal((await GET(request(`?limit=1&cursor=${encodeURIComponent(first.data.nextCursor)}`))).status, 200);
+  assert.equal(parseStagingPrivateProjectPage({
+    ok: true, projects: [{ id: "bad\ncontrol", title: "Invalid", areaId: stage.unassignedAreaId,
+      areaKind: "private" }], hasMore: false, revision: "a".repeat(64),
+  }), null);
+});
