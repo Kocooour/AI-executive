@@ -25,9 +25,11 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedTargetTaskTitleCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
+  readPreflightedPrivateTaskTitleAudit,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
+import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
@@ -186,6 +188,32 @@ export class TargetStagingSessionAuthority {
         { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, { taskId });
     } catch {
       return deniedDetail();
+    }
+  }
+
+  /** Content-free audit timeline for one currently authorized owner-private task.
+   * The credential remains within this short-lived worker. */
+  readPrivateTaskTitleAudit(
+    actorUserId: string, taskId: string,
+  ): TargetPrivateTaskTitleAuditResult {
+    const denied = (): TargetPrivateTaskTitleAuditResult =>
+      ({ ok: false, reason: "query_failed" });
+    if (this.#closed || typeof actorUserId !== "string" ||
+        !ACTOR_PATTERN.test(actorUserId)) return denied();
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    try {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
+      return readPreflightedPrivateTaskTitleAudit(this.#store,
+        { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, taskId);
+    } catch {
+      return denied();
     }
   }
 

@@ -229,3 +229,59 @@ export function listIsolatedTargetTasksAtOffset(
 }
 
 
+
+/** Content-free, bounded audit timeline for a currently authorized private task.
+ * The caller MUST hold a canonical preflighted, read-only staging snapshot. */
+export type TargetPrivateTaskTitleAuditEvent = {
+  revisionBefore: number;
+  revisionAfter: number;
+  committedAtMs: number;
+};
+
+export type TargetPrivateTaskTitleAuditResult =
+  | { ok: true; events: TargetPrivateTaskTitleAuditEvent[] }
+  | { ok: false; reason: "invalid_request" | "unavailable" | "query_failed" };
+
+export function readPrivateTaskTitleAudit(
+  db: DatabaseSync,
+  actorUserId: string,
+  taskId: string,
+  expectedRestoreGeneration: string,
+): TargetPrivateTaskTitleAuditResult {
+  if (!validId(actorUserId) || !validId(taskId) || !validId(expectedRestoreGeneration)) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  // Current authorization is checked before the audit table can be queried.
+  const detail = readIsolatedTargetTask(db, { actorUserId, taskId }, true);
+  if (!detail.ok) {
+    return { ok: false, reason: detail.reason === "query_failed" ? "query_failed" : "unavailable" };
+  }
+  try {
+    const rows = db.prepare(`
+      SELECT revision_before AS revisionBefore, revision_after AS revisionAfter,
+             committed_at_ms AS committedAtMs
+      FROM task_title_audit
+      WHERE task_id = ? AND actor_user_id = ? AND area_id = ? AND restore_generation = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).all(taskId, actorUserId, detail.task.effectiveAreaId, expectedRestoreGeneration) as
+      TargetPrivateTaskTitleAuditEvent[];
+    const events: TargetPrivateTaskTitleAuditEvent[] = [];
+    for (const event of rows) {
+      if (!Number.isSafeInteger(event.revisionBefore) || event.revisionBefore < 0 ||
+          !Number.isSafeInteger(event.revisionAfter) ||
+          event.revisionAfter !== event.revisionBefore + 1 ||
+          !Number.isSafeInteger(event.committedAtMs) || event.committedAtMs <= 0) {
+        return { ok: false, reason: "query_failed" };
+      }
+      events.push({
+        revisionBefore: event.revisionBefore,
+        revisionAfter: event.revisionAfter,
+        committedAtMs: event.committedAtMs,
+      });
+    }
+    return { ok: true, events };
+  } catch {
+    return { ok: false, reason: "query_failed" };
+  }
+}

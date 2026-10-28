@@ -19,7 +19,8 @@ import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
-import { personalTaskListRevision } from "./target-task-read-model";
+import { personalTaskListRevision, readPrivateTaskTitleAudit } from "./target-task-read-model";
+import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
@@ -404,5 +405,26 @@ export function readPreflightedPrivateProjectDetail(
       const project = readPrivateProjectById(db, actorUserId, projectId);
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
+  );
+}
+
+/** Owner-private task audit timeline: authenticate, preflight and enforce the
+ * task's *current* private Area ACL on the same pinned read-only snapshot. */
+export function readPreflightedPrivateTaskTitleAudit(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  taskId: string,
+): TargetPrivateTaskTitleAuditResult {
+  const denied = (): TargetPrivateTaskTitleAuditResult =>
+    ({ ok: false, reason: "query_failed" });
+  return withPreflightedStore<TargetPrivateTaskTitleAuditResult>(
+    store, denied, (db, preflight) =>
+      inReadSnapshot<TargetPrivateTaskTitleAuditResult>(db, () => {
+        if (!preflight(db)) return denied();
+        const actorUserId = verifiedActor(db, access);
+        if (!actorUserId) return denied();
+        return readPrivateTaskTitleAudit(db, actorUserId, taskId,
+          store.expectedRestoreGeneration);
+      }, denied),
   );
 }

@@ -118,6 +118,26 @@ try {
   }
   const unauthenticated = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`);
   assert.equal(unauthenticated.status, 401);
+  for (const id of ids) {
+    const response = await fetch(
+      `${origin}/api/target-staging/tasks/${encodeURIComponent(id)}/audit`,
+      { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+    );
+    assert.equal(response.status, 200, `Next audit routing failed for ${id}`);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { events: [] });
+  }
+  for (const id of ["missing", "bob-secret", "shared-secret"]) {
+    const response = await fetch(
+      `${origin}/api/target-staging/tasks/${encodeURIComponent(id)}/audit`,
+      { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+    );
+    assert.equal(response.status, 404, `Next audit leaked access for ${id}`);
+    assert.deepEqual(await response.json(), { error: "Not found" });
+  }
+  assert.equal((await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}/audit`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}/audit?scope=shared`,
+    { headers: { cookie } })).status, 400);
   const projectFirst = await fetch(`${origin}/api/target-staging/projects?limit=1`, {
     headers: { cookie }, signal: AbortSignal.timeout(10_000),
   });
@@ -170,7 +190,7 @@ try {
     project: { id: " padded ", title: "Padded project",
       areaId: stage.unassignedAreaId, areaKind: "private" },
   });
-  console.log("Next router staging task and project list/detail smoke passed");
+  console.log("Next router staging task/project list/detail and private audit smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");
