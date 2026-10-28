@@ -223,6 +223,8 @@ test("direct project detail has a strict owner-private DTO and indistinguishable
     assert.equal(hidden.response.headers.get("cache-control"), "no-store");
     assert.deepEqual(hidden.data, { error: "Not found" }, id);
   }
+  // Earlier pagination tests deliberately mutate foreign titles; reset this fixture locally.
+  db.prepare("UPDATE projects SET title='Bob secret' WHERE id='bob-1'").run();
   process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "bob";
   const bob = await detail("bob-1");
   assert.equal(bob.response.status, 200);
