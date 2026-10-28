@@ -4,6 +4,7 @@ import path from "node:path";
 import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-authority";
 import type { TargetReadableTask } from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
+import { isReadableStagingProjectId } from "./target-project-id";
 
 const MAX_CONCURRENT = 2;
 const TIMEOUT_MS = 20_000;
@@ -163,7 +164,7 @@ export function parseStagingPrivateProjectPage(value: unknown): TargetPrivatePro
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const project = value as Record<string, unknown>;
     return Object.keys(project).sort().join(",") === "areaId,areaKind,id,title" &&
-      typeof project.id === "string" && typeof project.title === "string" &&
+      isReadableStagingProjectId(project.id) && typeof project.title === "string" &&
       typeof project.areaId === "string" && project.areaKind === "private";
   };
   if (!page.projects.every(validProject)) return null;
@@ -202,7 +203,7 @@ export function parseStagingPrivateProjectDetail(
       Array.isArray(result.project)) return null;
   const project = result.project as Record<string, unknown>;
   if (Object.keys(project).sort().join(",") !== "areaId,areaKind,id,title" ||
-      typeof project.id !== "string" || project.id !== projectId ||
+      !isReadableStagingProjectId(project.id) || project.id !== projectId ||
       typeof project.title !== "string" ||
       typeof project.areaId !== "string" || project.areaKind !== "private") return null;
   return { ok: true, project: {
