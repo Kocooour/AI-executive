@@ -1,11 +1,14 @@
 import path from "node:path";
-import { getAuthState } from "../../../../lib/auth";
+import { authenticationBinding, getAuthState } from "../../../../lib/auth";
 import { enforceRateLimit } from "../../../../lib/http-security";
-import { TargetStagingSessionAuthority } from "../../../../lib/target-staging-session-authority";
+import { readStagingPersonalPageInChild } from "../../../../lib/target-staging-read-process";
+import {
+  signStagingHttpCursor, verifyStagingHttpCursor,
+} from "../../../../lib/target-staging-http-cursor";
 
 // Isolated, opt-in R2b probe. It never opens the legacy application store.
-// The owner cookie is the only HTTP identity proof; internal staging tokens
-// remain in this process and never leave the server route.
+// The owner cookie is the only HTTP identity proof. A bounded child process
+// performs the synchronous staging preflight/read away from the Next event loop.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -13,33 +16,13 @@ const headers = { "cache-control": "no-store" };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const actorId = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const cursorPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
-const sessionLifetimeSeconds = 15 * 60;
-
-type ActiveRead = {
-  stagingDirectory: string;
-  restoreGeneration: string;
-  ownerUserId: string;
-  authority: TargetStagingSessionAuthority;
-  token: string;
-  expiresAt: number;
-};
-
-// Staging-only, process-local. A cursor expires after 15 minutes, process
-// restart, or configuration change; no cross-process session sharing is implied.
-let activeRead: ActiveRead | null = null;
-
-function clearActiveRead(): void {
-  activeRead?.authority.close();
-  activeRead = null;
-}
 
 function answer(status: number, error: string): Response {
   return Response.json({ error }, { status, headers });
 }
 
-export function GET(request: Request): Response {
+export async function GET(request: Request): Promise<Response> {
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") {
-    clearActiveRead();
     return answer(404, "Not found");
   }
   // isAuthenticated alone accepts an insecure development bypass. This route
@@ -54,15 +37,14 @@ export function GET(request: Request): Response {
   if (!stagingDirectory || !path.isAbsolute(stagingDirectory) ||
       !expectedRestoreGeneration || !uuid.test(expectedRestoreGeneration) ||
       !ownerUserId || !actorId.test(ownerUserId)) {
-    clearActiveRead();
     return answer(503, "Staging unavailable");
   }
 
   let limit = 50;
   try {
     const params = new URL(request.url).searchParams;
-    // Cursor is opaque and signed for this process-local session and snapshot.
-    // Actor, Area, workspace, scope and session remain server-controlled.
+    // Only a signed, cookie-bound snapshot position may be supplied.
+    // Actor, Area, workspace and scope remain server-controlled.
     if ([...params.keys()].some(key => key !== "limit" && key !== "cursor") ||
         params.getAll("limit").length > 1 || params.getAll("cursor").length > 1) {
       return answer(400, "Invalid request");
@@ -81,38 +63,42 @@ export function GET(request: Request): Response {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
 
-    if (activeRead && (activeRead.stagingDirectory !== stagingDirectory ||
-        activeRead.restoreGeneration !== expectedRestoreGeneration ||
-        activeRead.ownerUserId !== ownerUserId ||
-        activeRead.expiresAt <= Math.floor(Date.now() / 1000))) {
-      clearActiveRead();
+    const context = {
+      actorUserId: ownerUserId, restoreGeneration: expectedRestoreGeneration,
+      stagingDirectory, authenticationBinding: authenticationBinding(request),
+      sessionSecret: process.env.AI_EXECUTIVE_SESSION_SECRET || "",
+    };
+    const previous = cursor === null ? null : verifyStagingHttpCursor(context, cursor);
+    if (previous?.ok === false) {
+      return answer(previous.reason === "expired" ? 409 : 400,
+        previous.reason === "expired" ? "Cursor expired" : "Invalid cursor");
     }
-    if (!activeRead) {
-      // Never reinterpret an old cursor under a newly issued session.
-      if (cursor !== null) return answer(409, "Cursor expired");
-      const authority = new TargetStagingSessionAuthority({
-        stagingDirectory, expectedRestoreGeneration,
-      });
-      const first = authority.issuePersonalFirstPage(ownerUserId, limit, sessionLifetimeSeconds);
-      if (!first) {
-        authority.close();
-        return answer(503, "Staging unavailable");
-      }
-      activeRead = { stagingDirectory, restoreGeneration: expectedRestoreGeneration,
-        ownerUserId, authority, token: first.sessionToken, expiresAt: first.expiresAt };
-      return Response.json({ tasks: first.tasks, hasMore: first.nextCursor !== null,
-        nextCursor: first.nextCursor }, { headers });
+    const offset = previous?.ok === true ? previous.offset : 0;
+    const page = await readStagingPersonalPageInChild({
+      stagingDirectory, expectedRestoreGeneration, ownerUserId,
+    }, limit, offset);
+    if (!page) return answer(503, "Staging unavailable");
+    // The child can run for up to 20 seconds. Do not release its result if
+    // the owner cookie, feature gate or trusted store binding changed meanwhile.
+    const currentAuth = getAuthState(request);
+    if (!currentAuth.enabled || !currentAuth.configured || !currentAuth.authenticated) {
+      return answer(401, "Authentication required");
     }
-
-    const result = activeRead.authority.list(activeRead.token,
-      { scope: "personal", limit, cursor });
-    if (result.ok === false) {
-      if (result.reason === "invalid_request") return answer(400, "Invalid cursor");
-      if (result.reason === "stale_cursor") return answer(409, "Cursor stale");
+    if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
+        process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
+        process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
+        process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
       return answer(503, "Staging unavailable");
     }
-    return Response.json({ tasks: result.tasks, hasMore: result.nextCursor !== null,
-      nextCursor: result.nextCursor }, { headers });
+    if (previous?.ok === true && previous.revision !== page.revision) {
+      return answer(409, "Cursor stale");
+    }
+    const nextCursor = page.hasMore ? signStagingHttpCursor(
+      context, page.revision, offset + page.tasks.length,
+      previous?.ok === true ? previous.expiresAt : undefined,
+    ) : null;
+    if (page.hasMore && !nextCursor) return answer(503, "Staging unavailable");
+    return Response.json({ tasks: page.tasks, hasMore: page.hasMore, nextCursor }, { headers });
   } catch {
     return answer(503, "Staging unavailable");
   }
