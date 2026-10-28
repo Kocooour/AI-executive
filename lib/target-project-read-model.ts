@@ -72,7 +72,7 @@ export function readPrivateProjectById(
   db: DatabaseSync, actorUserId: string, projectId: string,
 ): TargetReadableProject | null {
   if (!actorPattern.test(actorUserId) || typeof projectId !== "string" ||
-      projectId.length === 0 || projectId.trim() !== projectId ||
+      projectId.length === 0 ||
       Buffer.byteLength(projectId, "utf8") > 512 ||
       /[\u0000-\u001f\u007f]/.test(projectId)) return null;
   try {
