@@ -147,6 +147,80 @@ test("staging writes reject public directories and database hardlinks", () => {
     version.snapshotRevision), { ok: true });
 });
 
+test("committed title edits have one content-free, immutable staging audit row", () => {
+  const { stage, authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  const bob = authority.issueWritable("bob");
+  const readOnly = authority.issue("bob");
+  assert.ok(alice && bob && readOnly);
+  const version = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(version.ok, true);
+  const commandId = randomUUID();
+  const audit = () => writer.prepare("SELECT * FROM task_title_audit ORDER BY id").all();
+  assert.deepEqual(audit(), []);
+
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Secret new title",
+    version.snapshotRevision, commandId), { ok: true });
+  const rows = audit();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].actor_user_id, "alice");
+  assert.equal(rows[0].task_id, "team-task");
+  assert.equal(rows[0].area_id, "team-area");
+  assert.equal(rows[0].revision_before, 0);
+  assert.equal(rows[0].revision_after, 1);
+  assert.equal(rows[0].expected_revision, version.snapshotRevision);
+  assert.equal(rows[0].restore_generation, stage.restoreGeneration);
+  assert.ok(Number.isSafeInteger(rows[0].committed_at_ms));
+  assert.ok(!JSON.stringify(rows).includes("Secret new title"));
+  assert.ok(!JSON.stringify(rows).includes("Team original"));
+
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Secret new title",
+    version.snapshotRevision, commandId), { ok: true, replayed: true });
+  const fresh = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(fresh.ok, true);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Secret new title",
+    fresh.snapshotRevision), rejected("unchanged"));
+  assert.deepEqual(writeTitle(authority, readOnly.sessionToken, "team-task", "Denied",
+    fresh.snapshotRevision), rejected("unauthorized"));
+  const privateVersion = preview(authority, alice.sessionToken, "private-task");
+  assert.equal(privateVersion.ok, true);
+  assert.deepEqual(writeTitle(authority, bob.sessionToken, "private-task", "Denied",
+    privateVersion.snapshotRevision), rejected("unavailable"));
+  assert.equal(audit().length, 1);
+  assert.throws(() => writer.prepare("UPDATE task_title_audit SET actor_user_id='bob'").run(),
+    /audit events are immutable/);
+  assert.throws(() => writer.prepare("DELETE FROM task_title_audit").run(),
+    /audit retention window is active/);
+  assert.equal(audit().length, 1);
+});
+
+test("audit insertion failure rolls back title, revision and idempotency receipt", () => {
+  const { authority, writer } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const first = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(first.ok, true);
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "First change",
+    first.snapshotRevision), { ok: true });
+  const next = preview(authority, alice.sessionToken, "team-task");
+  assert.equal(next.ok, true);
+  const before = writer.prepare("SELECT title,revision FROM tasks WHERE id='team-task'").get();
+  const receipts = () => writer.prepare(
+    "SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'r2:task-title-receipt-v2:%'",
+  ).get().n;
+  const count = receipts();
+  // An exhausted AUTOINCREMENT sequence forces the final audit INSERT to fail,
+  // after the title UPDATE and receipt INSERT, inside the same transaction.
+  writer.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='task_title_audit'")
+    .run("9223372036854775807");
+  assert.deepEqual(writeTitle(authority, alice.sessionToken, "team-task", "Must rollback",
+    next.snapshotRevision), rejected("write_failed"));
+  assert.deepEqual(writer.prepare("SELECT title,revision FROM tasks WHERE id='team-task'").get(),
+    before);
+  assert.equal(receipts(), count);
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_title_audit").get().n, 1);
+});
+
 test("task/policy CAS allows unrelated changes but detects same-task edits", () => {
   const { authority, writer } = fixture();
   const alice = authority.issueWritable("alice");

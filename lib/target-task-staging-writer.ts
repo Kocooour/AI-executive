@@ -18,7 +18,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_STORE_FILENAME, TARGET_STAGING_MAX_RECEIPTS,
-  TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
+  TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_RECEIPT_PREFIX,
+  verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { verifiedActor } from "./target-task-authenticated-read";
@@ -243,20 +244,49 @@ export function writePreflightedTargetTaskTitle(
     // SQLite can count an UPDATE of the existing value as one changed row
     // without advancing the byte fingerprint. Never report such a no-op as
     // a successful mutation (revisions are optimistic checks, not one-shot IDs).
-    const oldTitle = db.prepare("SELECT title FROM tasks WHERE id=?")
-      .get(request.taskId) as { title: string } | undefined;
-    if (!oldTitle) return failed();
-    if (oldTitle.title === request.title) return { ok: false, reason: "unchanged" };
+    const before = db.prepare(`
+      SELECT t.title AS title, t.revision AS revision,
+             a.id AS area_id, a.policy_revision AS policy_revision
+        FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+        JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+       WHERE t.id=?
+    `).get(request.taskId) as
+      { title: string; revision: number; area_id: string; policy_revision: number } | undefined;
+    if (!before) return failed();
+    if (before.title === request.title) return { ok: false, reason: "unchanged" };
     if (!stillPinned() || !noSidecars(databasePath)) return denied();
     const receiptCount = db.prepare(
       "SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?",
     ).get(TARGET_STAGING_RECEIPT_PREFIX + "%") as { n: number };
     if (receiptCount.n >= TARGET_STAGING_MAX_RECEIPTS) return failed();
+    const auditCount = db.prepare("SELECT COUNT(*) AS n FROM task_title_audit")
+      .get() as { n: number };
+    // A full audit ledger fails closed. No row is silently discarded or written
+    // without a matching receipt; archival/purge is a separate staging action.
+    if (auditCount.n >= TARGET_STAGING_AUDIT_MAX_EVENTS) return failed();
+    const committedAt = Date.now();
+    if (!Number.isSafeInteger(committedAt) || committedAt <= 0) return failed();
     const updated = db.prepare("UPDATE tasks SET title=? WHERE id=?")
       .run(request.title, request.taskId);
     if (updated.changes !== 1) return failed();
+    const after = db.prepare("SELECT revision FROM tasks WHERE id=?")
+      .get(request.taskId) as { revision: number } | undefined;
+    if (!after || after.revision !== before.revision + 1) return failed();
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)")
       .run(receiptKey, receiptDigest);
+    // No task titles or credential material enter the durable audit trail.
+    // All three changes commit or roll back together.
+    db.prepare(`
+      INSERT INTO task_title_audit(
+        receipt_key, actor_user_id, task_id, area_id, policy_revision,
+        revision_before, revision_after, expected_revision,
+        restore_generation, committed_at_ms
+      ) VALUES (?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      receiptKey, actor, request.taskId, before.area_id, before.policy_revision,
+      before.revision, after.revision, request.expectedRevision,
+      store.expectedRestoreGeneration, committedAt,
+    );
     db.exec("COMMIT");
     transaction = false;
     return { ok: true };
