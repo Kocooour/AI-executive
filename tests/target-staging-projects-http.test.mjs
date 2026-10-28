@@ -243,7 +243,7 @@ test("project detail gate, real cookie, ID validation and server scope fail clos
   process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
   assert.equal((await detail("alice-1")).response.status, 401);
   configure();
-  for (const id of ["", " padded", "trailing ", "x".repeat(513), "bad\ncontrol"]) {
+  for (const id of ["", "x".repeat(513), "bad\ncontrol"]) {
     assert.equal((await detail(id)).response.status, 400, JSON.stringify(id));
   }
   for (const query of ["?scope=shared", "?actorUserId=bob", "?taskCount=1"]) {
@@ -284,4 +284,23 @@ test("oversized project detail output fails closed without changing legacy data"
   }
   assert.equal((await detail("alice-1")).response.status, 200);
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+});
+
+test("project ID whitespace is opaque and round-trips from list to detail", async () => {
+  configure();
+  insertProject.run(" padded ", stage.unassignedAreaId, "Padded project");
+  const listed = await body("?limit=100");
+  assert.equal(listed.response.status, 200);
+  assert.deepEqual(listed.data.projects.find(project => project.id === " padded "), {
+    id: " padded ", title: "Padded project",
+    areaId: stage.unassignedAreaId, areaKind: "private",
+  });
+  const found = await detail(" padded ");
+  assert.equal(found.response.status, 200);
+  assert.deepEqual(found.data.project, {
+    id: " padded ", title: "Padded project",
+    areaId: stage.unassignedAreaId, areaKind: "private",
+  });
+  assert.equal((await detail("padded")).response.status, 404,
+    "no trimming or aliasing of stored project IDs");
 });
