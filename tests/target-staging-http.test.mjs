@@ -35,6 +35,7 @@ db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area'
 db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','bob','editor')").run();
 const insert = db.prepare("INSERT INTO tasks(id,project_id,area_id,title,assignee_user_id) VALUES (?,NULL,?,?,NULL)");
 insert.run("alice-private", stage.unassignedAreaId, "Alice private");
+insert.run("alice-private-2", stage.unassignedAreaId, "Alice second private");
 insert.run("bob-private", "bob-private", "Bob secret");
 insert.run("family-shared", "family-area", "Family secret");
 
@@ -89,11 +90,30 @@ test("personal list returns only the configured owner's private tasks", async ()
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   const body = await response.json();
-  assert.deepEqual(body.tasks.map(task => task.id), ["alice-private"]);
+  assert.deepEqual(body.tasks.map(task => task.id), ["alice-private", "alice-private-2"]);
   assert.equal(body.hasMore, false);
   assert.equal(JSON.stringify(body).includes("Bob secret"), false);
   assert.equal(JSON.stringify(body).includes("Family secret"), false);
   assert.equal(JSON.stringify(body).includes("sessionToken"), false);
+});
+
+test("valid limits expose a bounded first page and honest hasMore without a dead cursor", async () => {
+  configure();
+  const first = GET(request("?limit=1"));
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), {
+    tasks: [{
+      id: "alice-private", title: "Alice private", projectId: null,
+      effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
+    }],
+    hasMore: true,
+  });
+  const all = GET(request("?limit=100"));
+  assert.equal(all.status, 200);
+  const body = await all.json();
+  assert.deepEqual(body.tasks.map(task => task.id), ["alice-private", "alice-private-2"]);
+  assert.equal(body.hasMore, false);
+  assert.equal(Object.hasOwn(body, "nextCursor"), false);
 });
 
 test("client actor, scope, Area, workspace and cursor overrides are rejected", () => {
