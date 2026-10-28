@@ -47,7 +47,7 @@ function parseWrite(value: unknown): Write | null {
 
 async function run(config: StagingPersonalReadConfig, scriptName: string,
   input: string): Promise<unknown | null> {
-  if (active >= 2 || Buffer.byteLength(input) > 8192) return null;
+  if (active >= 2 || Buffer.byteLength(input) > 32 * 1024) return null;
   active++;
   try {
     return await new Promise<unknown | null>(resolve => {
