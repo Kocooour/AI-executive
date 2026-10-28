@@ -284,6 +284,7 @@ export function previewPreflightedTargetTaskTitleEdit(
   store: TargetStagingReadStore,
   access: TargetStagingReadCredential,
   request: TargetTaskTitleEditPreviewRequest,
+  privateOnly = false,
 ): TargetTaskTitleEditPreviewResult {
   return withPreflightedStore<TargetTaskTitleEditPreviewResult>(
     store,
@@ -303,7 +304,7 @@ export function previewPreflightedTargetTaskTitleEdit(
         if (!actor) return denied();
         // Always check live ACL before comparing revisions, so inaccessible
         // tasks disclose neither existence nor staleness.
-        if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+        if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
           return { ok: false, reason: "unavailable", snapshotRevision: null };
         }
         const revision = targetTaskTitleEditRevision(db, request.taskId);
@@ -428,3 +429,4 @@ export function readPreflightedPrivateTaskTitleAudit(
       }, denied),
   );
 }
+

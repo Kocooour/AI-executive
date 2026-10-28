@@ -1,0 +1,115 @@
+/** Bounded, short-lived staging title workers. No title or credentials enter argv. */
+import { spawn } from "node:child_process";
+import path from "node:path";
+import type { StagingPersonalReadConfig } from "./target-staging-read-process";
+import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+
+const REVISION = /^[a-f0-9]{64}$/;
+const MAX_OUTPUT = 1024;
+const TIMEOUT_MS = 20_000;
+let active = 0;
+
+type Preview = { ok: true; snapshotRevision: string } |
+  { ok: false; reason: "unavailable" | "stale_revision" };
+type Write = { ok: true; replayed?: true } |
+  { ok: false; reason: "unavailable" | "stale_revision" |
+    "idempotency_conflict" | "unchanged" | "write_failed" };
+
+function parsePreview(value: unknown): Preview | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const keys = Object.keys(v).sort().join(",");
+  if (keys === "ok,snapshotRevision" && v.ok === true &&
+      typeof v.snapshotRevision === "string" && REVISION.test(v.snapshotRevision)) {
+    return { ok: true, snapshotRevision: v.snapshotRevision };
+  }
+  if (keys === "ok,reason" && v.ok === false &&
+      (v.reason === "unavailable" || v.reason === "stale_revision")) {
+    return { ok: false, reason: v.reason };
+  }
+  return null;
+}
+
+function parseWrite(value: unknown): Write | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const keys = Object.keys(v).sort().join(",");
+  if (v.ok === true && keys === "ok") return { ok: true };
+  if (v.ok === true && keys === "ok,replayed" && v.replayed === true) {
+    return { ok: true, replayed: true };
+  }
+  if (v.ok === false && keys === "ok,reason" &&
+      (v.reason === "unavailable" || v.reason === "stale_revision" ||
+       v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
+       v.reason === "write_failed")) return { ok: false, reason: v.reason };
+  return null;
+}
+
+async function run(config: StagingPersonalReadConfig, scriptName: string,
+  input: string): Promise<unknown | null> {
+  if (active >= 2 || Buffer.byteLength(input) > 32 * 1024) return null;
+  active++;
+  try {
+    return await new Promise<unknown | null>(resolve => {
+      const cwd = process.cwd();
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(process.execPath, [
+          "--experimental-loader", path.join(cwd, "scripts/target-staging-ts-loader.mjs"),
+          path.join(cwd, "scripts", scriptName),
+        ], {
+          cwd, windowsHide: true, stdio: ["pipe", "pipe", "ignore"],
+          env: {
+            NODE_ENV: process.env.NODE_ENV || "production",
+            AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
+            AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED || "",
+            AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
+            AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
+            AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
+            AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
+          },
+        });
+      } catch { resolve(null); return; }
+      let done = false;
+      let failed = false;
+      const finish = (result: unknown | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => { failed = true; child.kill("SIGKILL"); }, TIMEOUT_MS);
+      const chunks: Buffer[] = [];
+      let size = 0;
+      child.stdout.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_OUTPUT) { failed = true; child.kill("SIGKILL"); }
+        else chunks.push(chunk);
+      });
+      child.on("error", () => { failed = true; finish(null); });
+      child.on("close", code => {
+        if (failed || code !== 0 || size > MAX_OUTPUT) return finish(null);
+        try { finish(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+        catch { finish(null); }
+      });
+      child.stdin.on("error", () => { failed = true; child.kill("SIGKILL"); });
+      child.stdin.end(input);
+    });
+  } finally { active--; }
+}
+
+export async function previewPrivateTaskTitleInChild(
+  config: StagingPersonalReadConfig, taskId: string, expectedRevision?: string,
+): Promise<Preview | null> {
+  const value = await run(config, "target-staging-title-preview-child.mjs",
+    JSON.stringify({ taskId, ...(expectedRevision === undefined ? {} : { expectedRevision }) }));
+  return parsePreview(value);
+}
+
+export async function writePrivateTaskTitleInChild(
+  config: StagingPersonalReadConfig, request: TargetStagingTaskTitleWriteRequest,
+): Promise<Write | null> {
+  const value = await run(config, "target-staging-title-write-child.mjs", JSON.stringify(request));
+  return parseWrite(value);
+}
+
