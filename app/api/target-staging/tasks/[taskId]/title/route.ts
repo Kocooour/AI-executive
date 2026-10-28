@@ -90,7 +90,7 @@ export async function PATCH(request: Request,
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
-    const input = await readJsonBody<unknown>(request, 6144);
+    const input = await readJsonBody<unknown>(request, 32 * 1024, { strictUtf8: true });
     if (!input || typeof input !== "object" || Array.isArray(input) ||
         Object.keys(input).sort().join(",") !== "commandId,expectedRevision,title") {
       return answer(400, "Invalid request");
