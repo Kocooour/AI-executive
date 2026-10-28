@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getAuthState } from "../../../../../lib/auth";
 import { enforceRateLimit } from "../../../../../lib/http-security";
+import { isReadableStagingProjectId } from "../../../../../lib/target-project-id";
 import { readStagingPrivateProjectDetailInChild } from "../../../../../lib/target-staging-read-process";
 
 export const runtime = "nodejs";
@@ -9,9 +10,6 @@ export const dynamic = "force-dynamic";
 const headers = { "cache-control": "no-store" };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const safeId = /^[A-Za-z0-9_.:@-]{1,120}$/;
-const validProjectId = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 &&
-  Buffer.byteLength(value, "utf8") <= 512 && !/[\u0000-\u001f\u007f]/.test(value);
 const answer = (status: number, error: string): Response =>
   Response.json({ error }, { status, headers });
 
@@ -36,7 +34,7 @@ export async function GET(
   }
   try {
     const { projectId } = await context.params;
-    if (!validProjectId(projectId) ||
+    if (!isReadableStagingProjectId(projectId) ||
         new URL(request.url).search !== "") return answer(400, "Invalid request");
     const limited = enforceRateLimit(request, "target-staging-private-project-detail", 120, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
