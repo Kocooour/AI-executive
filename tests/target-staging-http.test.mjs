@@ -22,6 +22,10 @@ const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-boots
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/tasks/route.ts");
 const { GET: GET_DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
+const { GET: GET_AUDIT } = await import("../app/api/target-staging/tasks/[taskId]/audit/route.ts");
+const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
+const { TARGET_STAGING_RECEIPT_PREFIX } = await import("../lib/target-store-bootstrap.ts");
+const { parseStagingPrivateTaskAudit } = await import("../lib/target-staging-read-process.ts");
 const { signStagingHttpCursor, verifyStagingHttpCursor } =
   await import("../lib/target-staging-http-cursor.ts");
 const stage = bootstrapIsolatedTargetStore({
@@ -66,6 +70,14 @@ function detail(taskId, cookie = true, token = currentOwnerToken, query = "") {
     headers: cookie ? { cookie: `${sessionCookieName}=${token}` } : {},
   });
   return GET_DETAIL(req, { params: Promise.resolve({ taskId }) });
+}
+
+function audit(taskId, cookie = true, token = currentOwnerToken, query = "") {
+  const req = new Request(
+    `http://localhost/api/target-staging/tasks/${encodeURIComponent(taskId)}/audit${query}`,
+    { headers: cookie ? { cookie: `${sessionCookieName}=${token}` } : {} },
+  );
+  return GET_AUDIT(req, { params: Promise.resolve({ taskId }) });
 }
 
 after(() => {
@@ -352,3 +364,215 @@ test("detail accepts bounded list-compatible IDs with interior spaces and punctu
   assert.equal((await detail("x".repeat(513))).status, 400);
 });
 
+
+test("private task audit exposes only bounded timestamps and revisions, never titles", async () => {
+  configure();
+  const authority = new TargetStagingSessionAuthority({
+    stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration,
+  });
+  try {
+    const initial = await audit("alice-private-2");
+    assert.equal(initial.status, 200);
+    assert.deepEqual(await initial.json(), { events: [] });
+
+    const token = authority.issueWritable("alice");
+    assert.ok(token);
+    const previous = authority.previewTaskTitleEdit(token.sessionToken, { taskId: "alice-private-2" });
+    assert.equal(previous.ok, true);
+    assert.deepEqual(authority.updateTaskTitle(token.sessionToken, {
+      commandId: "123e4567-e89b-42d3-a456-426614174000",
+      taskId: "alice-private-2",
+      title: "AUDIT_TITLE_SENTINEL_PRIVATE",
+      expectedRevision: previous.snapshotRevision,
+    }), { ok: true });
+    const response = await audit("alice-private-2");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const body = await response.json();
+    assert.equal(body.events.length, 1);
+    assert.deepEqual(Object.keys(body.events[0]).sort(),
+      ["committedAtMs", "revisionAfter", "revisionBefore"]);
+    assert.equal(body.events[0].revisionAfter, body.events[0].revisionBefore + 1);
+    assert.ok(body.events[0].committedAtMs > 0);
+    const json = JSON.stringify(body);
+    for (const hidden of [
+      "AUDIT_TITLE_SENTINEL_PRIVATE", "Alice second private", "Bob secret",
+      "Family secret", "receipt_key", "actor_user_id", "area_id",
+      "expected_revision", "restore_generation", "sessionToken",
+    ]) assert.equal(json.includes(hidden), false, hidden);
+    for (const id of ["absent", "bob-private", "family-shared"]) {
+      const denied = await audit(id);
+      assert.equal(denied.status, 404, id);
+      assert.deepEqual(await denied.json(), { error: "Not found" });
+    }
+  } finally {
+    authority.close();
+  }
+  assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
+});
+
+test("audit denies missing auth, disabled staging, bad IDs and client scope overrides", async () => {
+  configure();
+  assert.equal((await audit("alice-private", false)).status, 401);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+  assert.equal((await audit("alice-private")).status, 404);
+  configure();
+  for (const id of ["", " bad", "a".repeat(513), "bad\n"]) {
+    assert.equal((await audit(id)).status, 400, id);
+  }
+  for (const query of ["?actorUserId=bob", "?scope=shared", "?areaId=family-area", "?limit=999"]) {
+    assert.equal((await audit("alice-private", true, currentOwnerToken, query)).status, 400, query);
+  }
+  process.env.AI_EXECUTIVE_AUTH_ENABLED = "false";
+  assert.equal((await audit("alice-private")).status, 401);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "missing";
+  assert.equal((await audit("alice-private")).status, 503);
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION =
+    "123e4567-e89b-42d3-a456-426614174000";
+  assert.equal((await audit("alice-private")).status, 503);
+  configure();
+});
+
+test("audit returns only last 50 own-area events, with newest first", async () => {
+  configure();
+  const id = "audit-synthetic";
+  insert.run(id, stage.unassignedAreaId, "Synthetic task");
+  const receipt = db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  const insertEvent = db.prepare(`
+    INSERT INTO task_title_audit(
+      receipt_key,actor_user_id,task_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,'alice',?,?,0,0,1,?,?,?)
+  `);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < 51; i++) {
+      const hash = i.toString(16).padStart(64, "0");
+      const key = TARGET_STAGING_RECEIPT_PREFIX + hash;
+      receipt.run(key, hash);
+      insertEvent.run(key, id, stage.unassignedAreaId, hash, stage.restoreGeneration, 1_000_000 + i);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  const response = await audit(id);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.events.length, 50);
+  assert.deepEqual(body.events[0], { revisionBefore: 0, revisionAfter: 1,
+    committedAtMs: 1_000_050 });
+  assert.deepEqual(body.events[49], { revisionBefore: 0, revisionAfter: 1,
+    committedAtMs: 1_000_001 });
+});
+
+
+test("audit loses access when a previously private task is moved to a shared Area", async () => {
+  configure();
+  const id = "audit-acl-transition";
+  insert.run(id, stage.unassignedAreaId, "ACL transition");
+  const authority = new TargetStagingSessionAuthority({
+    stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration,
+  });
+  try {
+    const token = authority.issueWritable("alice");
+    assert.ok(token);
+    const previous = authority.previewTaskTitleEdit(token.sessionToken, { taskId: id });
+    assert.equal(previous.ok, true);
+    assert.deepEqual(authority.updateTaskTitle(token.sessionToken, {
+      commandId: "123e4567-e89b-42d3-a456-426614174010",
+      taskId: id, title: "ACL transition audited title",
+      expectedRevision: previous.snapshotRevision,
+    }), { ok: true });
+  } finally {
+    authority.close();
+  }
+
+  const before = await audit(id);
+  assert.equal(before.status, 200);
+  assert.equal((await before.json()).events.length, 1);
+
+  db.prepare("UPDATE tasks SET area_id = ? WHERE id = ?").run("family-area", id);
+  const revoked = await audit(id);
+  assert.equal(revoked.status, 404);
+  assert.deepEqual(await revoked.json(), { error: "Not found" });
+
+  db.prepare("UPDATE tasks SET area_id = ? WHERE id = ?").run(stage.unassignedAreaId, id);
+  const restored = await audit(id);
+  assert.equal(restored.status, 200);
+  assert.equal((await restored.json()).events.length, 1);
+});
+
+test("audit filters historical actor and Area rows and rejects stale generation rows", async () => {
+  configure();
+  const id = "audit-isolation";
+  insert.run(id, stage.unassignedAreaId, "Filtered audit task");
+  const insertReceipt = db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  const insertEvent = db.prepare(
+    "INSERT INTO task_title_audit(" +
+      "receipt_key,actor_user_id,task_id,area_id,policy_revision," +
+      "revision_before,revision_after,expected_revision,restore_generation,committed_at_ms" +
+    ") VALUES (?,?,?,?,0,0,1,?,?,?)"
+  );
+  const rows = [
+    { actor: "alice", area: stage.unassignedAreaId, ms: 2_000_001 },
+    { actor: "bob", area: stage.unassignedAreaId, ms: 2_000_002 },
+    { actor: "alice", area: "family-area", ms: 2_000_003 },
+    { actor: "alice", area: stage.unassignedAreaId, ms: 2_000_004 },
+  ];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [index, row] of rows.entries()) {
+      const hash = (200 + index).toString(16).padStart(64, "0");
+      const key = TARGET_STAGING_RECEIPT_PREFIX + hash;
+      insertReceipt.run(key, hash);
+      insertEvent.run(key, row.actor, id, row.area, hash, stage.restoreGeneration, row.ms);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  const response = await audit(id);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).events, [
+    { revisionBefore: 0, revisionAfter: 1, committedAtMs: 2_000_004 },
+    { revisionBefore: 0, revisionAfter: 1, committedAtMs: 2_000_001 },
+  ]);
+
+  // A mismatched generation is rejected by canonical preflight before SQL is read.
+  const staleHash = (204).toString(16).padStart(64, "0");
+  const staleKey = TARGET_STAGING_RECEIPT_PREFIX + staleHash;
+  insertReceipt.run(staleKey, staleHash);
+  insertEvent.run(staleKey, "alice", id, stage.unassignedAreaId, staleHash,
+    "123e4567-e89b-42d3-a456-426614174001", 2_000_005);
+  try {
+    const rejected = await audit(id);
+    assert.equal(rejected.status, 503);
+    assert.deepEqual(await rejected.json(), { error: "Staging unavailable" });
+  } finally {
+    db.prepare("DELETE FROM task_title_audit WHERE receipt_key = ?").run(staleKey);
+    db.prepare("DELETE FROM metadata WHERE key = ?").run(staleKey);
+  }
+  const recovered = await audit(id);
+  assert.equal(recovered.status, 200);
+  assert.deepEqual((await recovered.json()).events.map(e => e.committedAtMs),
+    [2_000_004, 2_000_001]);
+});
+
+test("audit subprocess DTO parser rejects hidden fields, bad values and oversized collections", () => {
+  const event = { revisionBefore: 0, revisionAfter: 1, committedAtMs: 1 };
+  assert.deepEqual(parseStagingPrivateTaskAudit({ ok: true, events: [event] }),
+    { ok: true, events: [event] });
+  for (const input of [
+    { ok: true, events: [{ ...event, title: "secret" }] },
+    { ok: true, events: [event], title: "secret" },
+    { ok: true, events: [{ ...event, revisionAfter: 3 }] },
+    { ok: true, events: [{ ...event, committedAtMs: "1" }] },
+    { ok: true, events: Array.from({ length: 51 }, () => event) },
+    { ok: false, reason: "unavailable", taskId: "secret" },
+  ]) assert.equal(parseStagingPrivateTaskAudit(input), null);
+});

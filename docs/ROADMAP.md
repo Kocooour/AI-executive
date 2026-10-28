@@ -54,7 +54,7 @@ Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez v
 |---|---|---|
 | **1** | **PR #135 — hotovo** | Review i `PR Checks` dokončeny, sloučeno do `main` (`70558de6`). Předzápisový náhled zůstává staging-only a nezakládá právo provést mutaci. |
 | **2** | **R2a — #137–141 sloučeny, staging pokračuje** | Transakční title write, idempotence, task/policy CAS a obsahově úsporný audit schema v3 jsou v `main`. Audit odmítnutých a dalších bezpečnostně významných operací, produkční retenční/exportní lifecycle a nezávislé bezpečnostní review stále chybí. Produkční aktivace není povolena. |
-| **3** | **R2b — #142–144 sloučeny; detail projektu ve vývoji** | Owner cookie je svázána pouze s read-only `personal` staging seznamem a soukromým detailem za explicitním serverovým flagem; actor/Area/scope nelze dodat klientem. Přenositelný podepsaný cursor smí zvolit jen pokračování již autorizovaného seznamu, nikoliv identitu nebo rozsah. Detail odmítá neznámé, cizí a shared úkoly nerozlišitelným 404. Čtecí podproces odlehčuje hlavnímu Next event loop, ale není náhradou za produkční zátěžový test. Další iterace musí řešit write ACL, skutečné per-user identity, durable revokaci a víceprocesové bezpečné chování zápisů/sync. Nejde o produkční multiuser připravenost. |
+| **3** | **R2b — #142–145 sloučeny; owner-only auditní náhled jako další iterace** | Owner cookie je svázána pouze s read-only `personal` staging seznamem a soukromým detailem za explicitním serverovým flagem; actor/Area/scope nelze dodat klientem. Přenositelný podepsaný cursor smí zvolit jen pokračování již autorizovaného seznamu, nikoliv identitu nebo rozsah. Detail odmítá neznámé, cizí a shared úkoly nerozlišitelným 404. Čtecí podproces odlehčuje hlavnímu Next event loop, ale není náhradou za produkční zátěžový test. Další iterace musí řešit write ACL, skutečné per-user identity, durable revokaci a víceprocesové bezpečné chování zápisů/sync. Nejde o produkční multiuser připravenost. |
 | **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
 | **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
 | **6** | **R3 — Propojit D3 s UI** | Zapojit existující #103/#108 do desktopu a mobilu; Home zůstane úvodní obrazovkou a Můj plán výchozím **čtecím rozsahem**. Zápisy mají vždy jednu viditelnou cílovou Oblast; `Nezařazeno` je soukromé; sdílení vyžaduje souhlas. Ověřit 2–3 identity, mobil, klávesnici/VoiceOver a offline/revokační případy. |
@@ -89,3 +89,16 @@ kanonickém čtecím snapshotu. Neexistující, cizí a sdílený projekt se vra
 nerozlišitelným 404. Odpověď obsahuje pouze `id`, `title`, `areaId` a
 `areaKind=private`; žádné počty úkolů, členy, metadata ani historii.
 Endpoint nezakládá produkční autorizaci, zápisy ani aktivaci UI.
+
+Po sloučení **PR #145** je staging-only owner-cookie detail soukromého projektu v `main`.
+Navazující samostatná iterace auditního lifecycle zpřístupňuje
+`GET /api/target-staging/tasks/[taskId]/audit` pouze se skutečnou owner cookie
+a explicitním staging flagem. Na jediné kanonické, preflightované čtecí kopii
+ověří aktuální osobní/private Area ACL úkolu; cizí, sdílené a neexistující úkoly
+vracejí nerozlišitelné 404. Vrací jen nejnovějších 50 záznamů **vlastního aktéra,
+aktuální Oblasti a restore generace**, a pouze `revisionBefore`,
+`revisionAfter` a `committedAtMs`. Žádné názvy, receipt klíče, identifikátory
+Area/aktéra, počty cizích událostí ani transakční přístup pro klienta.
+Nejde o úplný uživatelský audit: export, mazání, maximální retence,
+zamítnuté operace, změny ACL a samostatná produkční identity stále chybí.
+Žádné produkční přepnutí, UI nebo nový write endpoint.

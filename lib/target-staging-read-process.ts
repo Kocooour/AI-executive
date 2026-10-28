@@ -152,6 +152,48 @@ export async function readStagingPersonalDetailInChild(
   } };
 }
 
+/** Strict content-free HTTP audit boundary. Never forward raw SQL rows,
+ * task identifiers, titles, actor IDs, receipt keys or aggregate counts. */
+export type StagingPrivateTaskAuditResult =
+  | { ok: true; events: Array<{
+    revisionBefore: number; revisionAfter: number; committedAtMs: number;
+  }> }
+  | { ok: false; reason: "unavailable" };
+
+export function parseStagingPrivateTaskAudit(value: unknown): StagingPrivateTaskAuditResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (result.ok === false && result.reason === "unavailable" &&
+      Object.keys(result).sort().join(",") === "ok,reason") {
+    return { ok: false, reason: "unavailable" };
+  }
+  if (result.ok !== true || Object.keys(result).sort().join(",") !== "events,ok" ||
+      !Array.isArray(result.events) || result.events.length > 50) return null;
+  const events: Array<{ revisionBefore: number; revisionAfter: number; committedAtMs: number }> = [];
+  for (const entry of result.events) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const e = entry as Record<string, unknown>;
+    if (Object.keys(e).sort().join(",") !== "committedAtMs,revisionAfter,revisionBefore" ||
+        typeof e.revisionBefore !== "number" || !Number.isSafeInteger(e.revisionBefore) ||
+        e.revisionBefore < 0 || typeof e.revisionAfter !== "number" ||
+        !Number.isSafeInteger(e.revisionAfter) || e.revisionAfter !== e.revisionBefore + 1 ||
+        typeof e.committedAtMs !== "number" ||
+        !Number.isSafeInteger(e.committedAtMs) || e.committedAtMs <= 0) return null;
+    events.push({
+      revisionBefore: e.revisionBefore, revisionAfter: e.revisionAfter,
+      committedAtMs: e.committedAtMs,
+    });
+  }
+  return { ok: true, events };
+}
+
+export async function readStagingPrivateTaskAuditInChild(
+  config: StagingPersonalReadConfig, taskId: string,
+): Promise<StagingPrivateTaskAuditResult | null> {
+  const value = await runChild(config, "target-staging-audit-child.mjs", [taskId]);
+  return parseStagingPrivateTaskAudit(value);
+}
+
 /** Strict project DTO allowlist at the child-to-HTTP boundary. */
 export function parseStagingPrivateProjectPage(value: unknown): TargetPrivateProjectPage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
