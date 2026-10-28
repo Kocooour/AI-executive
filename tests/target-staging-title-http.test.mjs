@@ -28,6 +28,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET, PATCH } = await import("../app/api/target-staging/tasks/[taskId]/title/route.ts");
+const { POST: STATUS } = await import("../app/api/target-staging/tasks/[taskId]/title/status/route.ts");
 
 const stage = bootstrapIsolatedTargetStore({
   stagingDirectory: path.join(root, "stage"), ownerUserId: "alice",
@@ -66,6 +67,22 @@ const patch = (taskId, payload, options = {}) =>
 const patchRaw = (taskId, bytes) =>
   PATCH(new Request(base + taskId + "/title", {
     method: "PATCH",
+    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
+    body: bytes,
+  }), context(taskId));
+const status = (taskId, payload, options = {}) =>
+  STATUS(new Request(base + taskId + "/title/status" + (options.query || ""), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
+      ...(options.auth === null ? {} : { cookie: options.auth || cookie }),
+    },
+    body: JSON.stringify(payload),
+  }), context(taskId));
+const statusRaw = (taskId, bytes) =>
+  STATUS(new Request(base + taskId + "/title/status", {
+    method: "POST",
     headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
     body: bytes,
   }), context(taskId));
@@ -147,5 +164,55 @@ test("disabled, auth, Origin and input gates refuse mutation", async () => {
   assert.equal((await patchRaw("private-task", Buffer.alloc(32 * 1024 + 1, 0x20))).status, 413);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id='private-task'").get().title,
     "\u0001".repeat(4096));
+});
+
+test("status reconciles exact command without task or audit writes", async () => {
+  const rev = (await (await get("private-task")).json()).snapshotRevision;
+  const input = command("Status title", rev);
+  const before = db.prepare("SELECT COUNT(*) AS n FROM task_title_audit WHERE task_id='private-task'").get().n;
+  assert.deepEqual(await (await status("private-task", input)).json(), { status: "not_recorded" });
+  assert.equal((await patch("private-task", input)).status, 200);
+  const task = db.prepare("SELECT title,revision FROM tasks WHERE id='private-task'").get();
+  assert.deepEqual(await (await status("private-task", input)).json(), { status: "committed" });
+  assert.equal((await status("private-task", { ...input, title: "Other" })).status, 409);
+  assert.deepEqual(db.prepare("SELECT title,revision FROM tasks WHERE id='private-task'").get(), task);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit WHERE task_id='private-task'").get().n, before + 1);
+});
+
+test("status hides shared, foreign and missing tasks, and enforces owner gates", async () => {
+  const input = command("Probe", "a".repeat(64));
+  for (const id of ["shared-task", "foreign-task", "missing-task"]) {
+    const response = await status(id, input);
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), { error: "Not found" });
+  }
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "false";
+  assert.equal((await status("private-task", input)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+  assert.equal((await status("private-task", input)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+  assert.equal((await status("private-task", input, { auth: null })).status, 401);
+  assert.equal((await status("private-task", input, { origin: null })).status, 403);
+  assert.equal((await status("private-task", input, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await status("private-task", input, { query: "?title=secret" })).status, 400);
+  assert.equal((await status("private-task", { ...input, actorUserId: "alice" })).status, 400);
+  assert.equal((await status("private-task", { ...input, areaId: stage.unassignedAreaId })).status, 400);
+  assert.equal((await status("private-task", { ...input, scope: "personal" })).status, 400);
+  assert.equal((await status("private-task", { ...input, expectedRevision: "wrong" })).status, 400);
+  assert.equal((await status("private-task", { ...input, title: "x".repeat(7000) })).status, 400);
+  assert.equal((await statusRaw("private-task", Buffer.alloc(32 * 1024 + 1, 0x20))).status, 413);
+  const malformed = Buffer.from(JSON.stringify(input));
+  malformed[malformed.indexOf(Buffer.from("Probe"))] = 0xc3;
+  assert.equal((await statusRaw("private-task", malformed)).status, 400);
+});
+
+test("status immediately loses receipt visibility after private task moves to shared Area", async () => {
+  const rev = (await (await get("private-task")).json()).snapshotRevision;
+  const input = command("Before move", rev);
+  assert.equal((await patch("private-task", input)).status, 200);
+  assert.equal((await status("private-task", input)).status, 200);
+  db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='private-task'").run();
+  assert.equal((await status("private-task", input)).status, 404);
 });
 
