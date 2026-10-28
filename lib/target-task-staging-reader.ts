@@ -325,7 +325,8 @@ export function previewPreflightedTargetTaskTitleEdit(
  * A "committed" result acknowledges the original command, NOT that its title
  * is still the task's current title. "not_recorded" never authorizes retry:
  * callers must still use the full write command with live ACL and revision CAS.
- * There is no HTTP route, production identity bridge or client-side cache.
+ * The owner-private HTTP facade is staging-only; there is no production
+ * identity bridge or client-side cache.
  */
 export type TargetStagingTaskTitleCommandStatusResult =
   | { ok: true; status: "committed" | "not_recorded" }
@@ -342,6 +343,7 @@ export function readPreflightedTargetTaskTitleCommandStatus(
   store: TargetStagingReadStore,
   access: TargetStagingReadCredential,
   request: TargetStagingTaskTitleWriteRequest,
+  privateOnly = false,
 ): TargetStagingTaskTitleCommandStatusResult {
   if (!validTargetStagingTaskTitleWriteRequest(request)) {
     return { ok: false, reason: "invalid_request" };
@@ -355,7 +357,7 @@ export function readPreflightedTargetTaskTitleCommandStatus(
       if (!actor) return denied();
       // Recheck current Area membership before even querying the receipt so a
       // former editor cannot infer whether an old command was committed.
-      if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId)) {
+      if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
         return { ok: false, reason: "unavailable" };
       }
       const row = db.prepare("SELECT value FROM metadata WHERE key=?")

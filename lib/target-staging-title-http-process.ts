@@ -14,6 +14,8 @@ type Preview = { ok: true; snapshotRevision: string } |
 type Write = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "unchanged" | "write_failed" };
+type Status = { ok: true; status: "committed" | "not_recorded" } |
+  { ok: false; reason: "unavailable" | "idempotency_conflict" };
 
 function parsePreview(value: unknown): Preview | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -42,6 +44,21 @@ function parseWrite(value: unknown): Write | null {
       (v.reason === "unavailable" || v.reason === "stale_revision" ||
        v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
        v.reason === "write_failed")) return { ok: false, reason: v.reason };
+  return null;
+}
+
+function parseStatus(value: unknown): Status | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const keys = Object.keys(v).sort().join(",");
+  if (v.ok === true && keys === "ok,status" &&
+      (v.status === "committed" || v.status === "not_recorded")) {
+    return { ok: true, status: v.status };
+  }
+  if (v.ok === false && keys === "ok,reason" &&
+      (v.reason === "unavailable" || v.reason === "idempotency_conflict")) {
+    return { ok: false, reason: v.reason };
+  }
   return null;
 }
 
@@ -111,5 +128,12 @@ export async function writePrivateTaskTitleInChild(
 ): Promise<Write | null> {
   const value = await run(config, "target-staging-title-write-child.mjs", JSON.stringify(request));
   return parseWrite(value);
+}
+
+export async function readPrivateTaskTitleCommandStatusInChild(
+  config: StagingPersonalReadConfig, request: TargetStagingTaskTitleWriteRequest,
+): Promise<Status | null> {
+  const value = await run(config, "target-staging-title-status-child.mjs", JSON.stringify(request));
+  return parseStatus(value);
 }
 

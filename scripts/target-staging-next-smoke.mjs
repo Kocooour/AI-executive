@@ -1,7 +1,7 @@
 /** Focused post-build Next router smoke; no browser and no production data. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -74,15 +74,16 @@ try {
   process.env.AI_EXECUTIVE_SESSION_SECRET = secret;
   const cookie = `${sessionCookieName}=${createSessionToken()}`;
   const port = await unusedPort();
-  const origin = `http://127.0.0.1:${port}`;
+  const origin = `http://localhost:${port}`;
   server = spawn(process.execPath,
-    ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
+    ["node_modules/next/dist/bin/next", "start", "--hostname", "localhost", "--port", String(port)],
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"], env: {
       PATH: process.env.PATH || "", NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1",
       AI_EXECUTIVE_DATA_DIR: legacy,
       AI_EXECUTIVE_AUTH_ENABLED: "true", AI_EXECUTIVE_PASSWORD_HASH: hash,
       AI_EXECUTIVE_SESSION_SECRET: secret,
       AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
       AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: stage.directory,
       AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: stage.restoreGeneration,
       AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: "alice",
@@ -190,7 +191,63 @@ try {
     project: { id: " padded ", title: "Padded project",
       areaId: stage.unassignedAreaId, areaKind: "private" },
   });
-  console.log("Next router staging task/project list/detail and private audit smoke passed");
+  // Exercise the real post-build route and child process, not just a direct handler import.
+  // An uncertain PATCH response is reconciled using exactly the original command.
+  const titleTaskId = ids[0]; // Encoded slash also checks nested Next route matching.
+  const titleUrl = `${origin}/api/target-staging/tasks/${encodeURIComponent(titleTaskId)}/title`;
+  const statusUrl = `${titleUrl}/status`;
+  const writeHeaders = { cookie, origin, "content-type": "application/json" };
+  const preview = await fetch(titleUrl, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(preview.status, 200, "Next title preflight failed");
+  const { snapshotRevision } = await preview.json();
+  assert.match(snapshotRevision, /^[a-f0-9]{64}$/);
+  const titleCommand = {
+    commandId: randomUUID(), title: "HTTP reconciled title",
+    expectedRevision: snapshotRevision,
+  };
+  const checkStatus = (id, payload) => fetch(
+    `${origin}/api/target-staging/tasks/${encodeURIComponent(id)}/title/status`,
+    { method: "POST", headers: writeHeaders, body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000) },
+  );
+  const notRecorded = await checkStatus(titleTaskId, titleCommand);
+  assert.equal(notRecorded.status, 200, "Next status route failed before PATCH");
+  assert.deepEqual(await notRecorded.json(), { status: "not_recorded" });
+
+  const written = await fetch(titleUrl, {
+    method: "PATCH", headers: writeHeaders,
+    body: JSON.stringify(titleCommand), signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(written.status, 200, "Next title PATCH failed");
+  assert.deepEqual(await written.json(), { ok: true });
+  const committed = await checkStatus(titleTaskId, titleCommand);
+  assert.equal(committed.status, 200, "Next status route failed after PATCH");
+  assert.deepEqual(await committed.json(), { status: "committed" });
+
+  const conflict = await checkStatus(titleTaskId, {
+    ...titleCommand, title: "Different title",
+  });
+  assert.equal(conflict.status, 409, "Changed payload must conflict");
+  assert.deepEqual(await conflict.json(), { error: "Revision conflict" });
+  for (const id of ["bob-secret", "shared-secret", "missing"]) {
+    const hidden = await checkStatus(id, titleCommand);
+    assert.equal(hidden.status, 404, `Status leaked task ${id}`);
+    assert.deepEqual(await hidden.json(), { error: "Not found" });
+  }
+  const unauthenticatedStatus = await fetch(statusUrl, {
+    method: "POST", headers: { origin, "content-type": "application/json" },
+    body: JSON.stringify(titleCommand), signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(unauthenticatedStatus.status, 401);
+  const finalTask = await fetch(
+    `${origin}/api/target-staging/tasks/${encodeURIComponent(titleTaskId)}`,
+    { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+  );
+  assert.equal(finalTask.status, 200);
+  assert.equal((await finalTask.json()).task.title, titleCommand.title);
+  console.log("Next router staging task/project reads, private audit and title status smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");
