@@ -1,14 +1,14 @@
 /** Bounded, no-listener owner-private project detail reader. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { isReadableStagingProjectId } from "../lib/target-project-id.ts";
 
 try {
   const [projectId, extra] = process.argv.slice(2);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
-  if (extra !== undefined || !projectId ||
-      Buffer.byteLength(projectId, "utf8") > 512 || /[\u0000-\u001f\u007f]/.test(projectId) ||
+  if (extra !== undefined || !isReadableStagingProjectId(projectId) ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
       !stagingDirectory || !path.isAbsolute(stagingDirectory) ||
       !expectedRestoreGeneration || !ownerUserId) {
