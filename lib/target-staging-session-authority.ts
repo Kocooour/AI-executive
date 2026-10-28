@@ -56,6 +56,19 @@ export interface IssuedTargetStagingSession {
   readonly expiresAt: number;
 }
 
+/** Initial personal page obtained during issuance, without a second DB snapshot. */
+export interface IssuedTargetStagingPersonalPage extends IssuedTargetStagingSession {
+  readonly tasks: Extract<StableStagingTaskListResult, { ok: true }>["tasks"];
+  readonly nextCursor: string | null;
+}
+
+/** Trusted server-side page for a separately authenticated HTTP principal. */
+export interface TargetStagingPersonalOffsetPage {
+  readonly tasks: IssuedTargetStagingPersonalPage["tasks"];
+  readonly hasMore: boolean;
+  readonly revision: string;
+}
+
 const deniedList = (): AuthenticatedTargetTaskListResult =>
   ({ ok: false, reason: "unauthorized", tasks: [], nextCursor: null });
 const deniedDetail = (): AuthenticatedTargetTaskDetailResult =>
@@ -124,6 +137,33 @@ export class TargetStagingSessionAuthority {
     return this.#issue(actorUserId, lifetimeSeconds, false);
   }
 
+  /** Trusted server-only shortcut: issue a read session and its first personal
+   * page from the same pinned/preflighted snapshot. The token stays server-side. */
+  issuePersonalFirstPage(
+    actorUserId: string, limit: number, lifetimeSeconds = DEFAULT_SESSION_SECONDS,
+  ): IssuedTargetStagingPersonalPage | null {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return null;
+    const issued = this.#issue(actorUserId, lifetimeSeconds, false, limit);
+    if (!issued?.initialPage) return null;
+    return { sessionToken: issued.sessionToken, expiresAt: issued.expiresAt,
+      tasks: issued.initialPage.tasks, nextCursor: issued.initialPage.nextCursor };
+  }
+
+  /** Read exactly one preflighted page in a trusted isolated worker. The
+   * caller MUST authenticate the principal and validate any external cursor
+   * before selecting the offset. No session token is returned to the caller. */
+  readPersonalOffsetPage(
+    actorUserId: string, limit: number, offset: number,
+  ): TargetStagingPersonalOffsetPage | null {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger(offset) || offset < 0 ||
+        offset > MAX_STAGING_PAGE_OFFSET) return null;
+    const issued = this.#issue(actorUserId, DEFAULT_SESSION_SECONDS, false, limit, offset);
+    if (!issued?.initialPage) return null;
+    return { tasks: issued.initialPage.tasks, hasMore: issued.initialPage.hasMore,
+      revision: issued.initialPage.revision };
+  }
+
   /**
    * Explicit trusted-server issuance for staging mutations. A regular read
    * session cannot be upgraded through a task request or a preview.
@@ -133,7 +173,17 @@ export class TargetStagingSessionAuthority {
     return this.#issue(actorUserId, lifetimeSeconds, true);
   }
 
-  #issue(actorUserId: string, lifetimeSeconds: number, writable: boolean): IssuedTargetStagingSession | null {
+  #issue(
+    actorUserId: string, lifetimeSeconds: number, writable: boolean,
+    firstPageLimit?: number, firstPageOffset = 0,
+  ): (IssuedTargetStagingSession & {
+    initialPage?: {
+      tasks: IssuedTargetStagingPersonalPage["tasks"];
+      nextCursor: string | null;
+      hasMore: boolean;
+      revision: string;
+    };
+  }) | null {
     if (this.#closed || typeof actorUserId !== "string" ||
         !ACTOR_PATTERN.test(actorUserId) ||
         !Number.isSafeInteger(lifetimeSeconds) || lifetimeSeconds < 1 ||
@@ -163,13 +213,34 @@ export class TargetStagingSessionAuthority {
       // The staging gateway performs canonical preflight, generation validation
       // and identity lookup. It returns ok even when personal tasks are empty.
       // Do not register or return sessions for missing/corrupt/activated stores.
-      const check = listPreflightedIsolatedTargetTasks(this.#store,
-        { signingKey: this.#key, sessionToken },
-        { scope: "personal", limit: 1 });
-      if (!check.ok) return null;
+      const credential = { signingKey: this.#key, sessionToken };
+      let initialPage: {
+        tasks: IssuedTargetStagingPersonalPage["tasks"];
+        nextCursor: string | null;
+        hasMore: boolean;
+        revision: string;
+      } | undefined;
+      if (firstPageLimit === undefined) {
+        const check = listPreflightedIsolatedTargetTasks(this.#store, credential,
+          { scope: "personal", limit: 1 });
+        if (!check.ok) return null;
+      } else {
+        const page = listRevisionedPreflightedIsolatedTargetTasksAtOffset(this.#store, credential,
+          { scope: "personal", limit: firstPageLimit, offset: firstPageOffset });
+        if (!page.result.ok || !page.revision) return null;
+        const nextOffset = firstPageOffset + page.result.tasks.length;
+        if (page.result.hasMore && nextOffset > MAX_STAGING_PAGE_OFFSET) return null;
+        initialPage = {
+          tasks: page.result.tasks,
+          hasMore: page.result.hasMore,
+          revision: page.revision,
+          nextCursor: page.result.hasMore ?
+            this.#signCursor(sessionToken, "personal", page.revision, nextOffset) : null,
+        };
+      }
 
       this.#active.set(digest(sessionToken), { actor: actorUserId, expiresAt, writable });
-      return { sessionToken, expiresAt };
+      return initialPage ? { sessionToken, expiresAt, initialPage } : { sessionToken, expiresAt };
     } catch {
       return null;
     }
@@ -369,4 +440,5 @@ export class TargetStagingSessionAuthority {
     this.#key.fill(0);
   }
 }
+
 
