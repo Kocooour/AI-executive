@@ -18,8 +18,8 @@ try {
       stagingDirectory, expectedRestoreGeneration,
     });
     try {
-      const result = authority.readPersonalTaskDetail(ownerUserId, taskId);
-      if (result.ok) process.stdout.write(JSON.stringify({ ok: true, task: result.task }));
+      const result = authority.readPersonalTaskDetailWithRevision(ownerUserId, taskId);
+      if (result.ok) process.stdout.write(JSON.stringify({ ok: true, task: result.task, snapshotRevision: result.snapshotRevision }));
       else if (result.reason === "unavailable") {
         process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));
       } else process.exitCode = 1;
@@ -30,3 +30,4 @@ try {
 } catch {
   process.exitCode = 1;
 }
+

@@ -19,11 +19,11 @@ import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
-import { personalTaskListRevision, readPrivateTaskTitleAudit } from "./target-task-read-model";
+import { personalTaskListRevision, readIsolatedTargetTask, readPrivateTaskTitleAudit } from "./target-task-read-model";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
-import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
+import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
   targetTaskTitleReceiptDigest, targetTaskTitleReceiptKey, validTargetStagingTaskTitleWriteRequest,
@@ -211,6 +211,39 @@ export function readPreflightedIsolatedPersonalTargetTask(
 ): AuthenticatedTargetTaskDetailResult {
   return withPreflightedStore(store, deniedDetail, (db, preflight) =>
     readAuthenticatedIsolatedTargetTask(db, access, request, preflight, true));
+}
+
+/** Owner-private detail and title CAS token from one preflighted read transaction. */
+export type TargetPreflightedPersonalTaskDetail =
+  | { ok: true; task: TargetReadableTask; snapshotRevision: string }
+  | { ok: false; reason: "unauthorized" | "invalid_request" | "unavailable" | "query_failed"; task: null };
+
+export function readPreflightedPersonalTargetTaskWithRevision(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetStagingTaskDetailRequest,
+): TargetPreflightedPersonalTaskDetail {
+  const denied = (): TargetPreflightedPersonalTaskDetail =>
+    ({ ok: false, reason: "unauthorized", task: null });
+  return withPreflightedStore<TargetPreflightedPersonalTaskDetail>(store, denied,
+    (db, preflight) => inReadSnapshot<TargetPreflightedPersonalTaskDetail>(db, () => {
+      if (!request || typeof request !== "object" ||
+          Object.keys(request).sort().join(",") !== "taskId" ||
+          !preflight(db)) return denied();
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return denied();
+      const detail = readIsolatedTargetTask(db, { actorUserId, taskId: request.taskId }, true);
+      if (!detail.ok) return detail;
+      // A readable task alone is insufficient: the token is a CAS precondition,
+      // not authorization, so require the current private write ACL as well.
+      if (!canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId, true)) {
+        return { ok: false, reason: "unavailable", task: null };
+      }
+      const snapshotRevision = targetTaskTitleEditRevision(db, request.taskId);
+      return snapshotRevision
+        ? { ok: true, task: detail.task, snapshotRevision }
+        : denied();
+    }, denied));
 }
 
 /**
@@ -431,4 +464,5 @@ export function readPreflightedPrivateTaskTitleAudit(
       }, denied),
   );
 }
+
 

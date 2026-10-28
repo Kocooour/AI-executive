@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-28 po sloučení PR #147; staging-only owner-private reconciliation HTTP je v návrhu PR.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-28 po sloučení PR #148; detail s task-title CAS revizí je v návrhu PR.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–147 sloučeny; zotavení nejistého HTTP zápisu v návrhu) | V `main` jsou soukromé staging detaily úkolů a projektů, read-only audit a výchozí vypnutý owner-private title GET/PATCH s transakční ACL, CAS a receiptem. Navazuje read-only ověření výsledku přesného příkazu; skutečná víceuživatelská identita, durable revokace, sync a user-scoped cache zůstávají otevřené. |
+| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–148 sloučeny; detail s task-title CAS revizí v návrhu) | V `main` jsou soukromé staging detaily úkolů a projektů, read-only audit a výchozí vypnutý owner-private title GET/PATCH s transakční ACL, CAS a receiptem. Read-only ověření výsledku přesného příkazu je dodáno; skutečná víceuživatelská identita, durable revokace, sync a user-scoped cache zůstávají otevřené. |
 | **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
@@ -34,7 +34,8 @@
 | [#142](https://github.com/Kocooour/AI-executive/pull/142) | **Sloučeno** | Opt-in owner-cookie HTTP GET osobních úkolů s podepsaným cursor stránkováním; omezený izolovaný čtecí podproces |
 | [#143](https://github.com/Kocooour/AI-executive/pull/143) | **Sloučeno** | Opt-in owner-cookie GET detailu jediného soukromého úkolu; jedno preflightované snapshot čtení, aktuální ACL, žádný shared/cizí obsah ani zápis či produkční aktivace |
 | [#144](https://github.com/Kocooour/AI-executive/pull/144) | **Sloučeno** | Opt-in owner-cookie GET stránkovaného seznamu vlastních soukromých projektů; staging schema v4 chrání revize proti ABA a ID reuse |
-| **Navazující R2b** | **V návrhu** | Výchozí vypnuté owner-cookie POST pro read-only ověření výsledku přesného příkazu změny názvu soukromého úkolu; bez cizích/shared výsledků a bez produkční aktivace |
+| [#148](https://github.com/Kocooour/AI-executive/pull/148) | **Sloučeno** | Výchozí vypnuté owner-cookie POST pro read-only ověření výsledku přesného příkazu změny názvu soukromého úkolu |
+| **Navazující R2b** | **V návrhu** | GET detailu owner-private úkolu vrací task-title CAS `snapshotRevision` ze stejného preflightovaného SQLite snapshotu jako úkol; PATCH nadále ověřuje živé ACL a revizi |
 
 **Poznámka k receiptům od #139:** idempotence změny názvu je nově vázaná na kombinaci aktéra, úkolu a UUID příkazu. Příkazy pro jiné úkoly jsou nezávislé, zatímco změna payloadu se stejným UUID u stejného úkolu je konflikt. Staré actor-only receipty z #138 nejsou bezpečně převoditelné bez dohledání původního úkolu; jejich přítomnost vede k odmítnutí staging preflightu. Pro izolovaný testovací store je nutný nový bootstrap, nikoli migrace nebo reset produkčních dat.
 
@@ -126,4 +127,7 @@ pod stejným `commandId` vrací 409. `not_recorded` samo o sobě neopravňuje
 k nebezpečnému opakování: případný retry znovu prochází aktuální ACL, generací
 a revizním CAS. Endpoint zůstává výchozí vypnutý, pouze pro izolovaný staging,
 bez produkční identity, D3, UI nebo aktivace produkčního úložiště.
+
+
+Navazující staging-only detail vrací kromě soukromého úkolu také `snapshotRevision` pro jeho title CAS. Detail, aktuální soukromá write ACL a revize se ověřují v jedné preflightované čtecí transakci nad stejnou pinned SQLite kopií. Klient může předat tuto revizi přímo do title PATCH bez samostatného GET title preflightu; PATCH stále znovu ověřuje aktuální ACL, restore generation a revizi před zápisem. Cizí, sdílené či nepřístupné úkoly token nedostanou. Tato iterace nemění schema, produkční aktivaci, UI ani legacy vrstvu.
 

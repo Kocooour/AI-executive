@@ -123,7 +123,7 @@ export async function readStagingPersonalPageInChild(
 }
 
 export type StagingPersonalDetailResult =
-  | { ok: true; task: TargetReadableTask }
+  | { ok: true; task: TargetReadableTask; snapshotRevision: string }
   | { ok: false; reason: "unavailable" };
 
 export async function readStagingPersonalDetailInChild(
@@ -134,7 +134,8 @@ export async function readStagingPersonalDetailInChild(
   const result = value as Record<string, unknown>;
   if (result.ok === false && result.reason === "unavailable" &&
       Object.keys(result).sort().join(",") === "ok,reason") return { ok: false, reason: "unavailable" };
-  if (result.ok !== true || Object.keys(result).sort().join(",") !== "ok,task" ||
+  if (result.ok !== true || Object.keys(result).sort().join(",") !== "ok,snapshotRevision,task" ||
+      typeof result.snapshotRevision !== "string" || !REVISION.test(result.snapshotRevision) ||
       !result.task || typeof result.task !== "object" || Array.isArray(result.task)) return null;
   const task = result.task as Record<string, unknown>;
   if (Object.keys(task).sort().join(",") !==
@@ -146,7 +147,7 @@ export async function readStagingPersonalDetailInChild(
   if (task.projectId === null) projectId = null;
   else if (typeof task.projectId === "string") projectId = task.projectId;
   else return null;
-  return { ok: true, task: {
+  return { ok: true, snapshotRevision: result.snapshotRevision as string, task: {
     id: task.id, title: task.title, projectId,
     effectiveAreaId: task.effectiveAreaId, areaKind: "private", assigneeUserId: null,
   } };
@@ -259,3 +260,4 @@ export async function readStagingPrivateProjectDetailInChild(
   const payload = await runChild(config, "target-staging-project-detail-child.mjs", [projectId]);
   return parseStagingPrivateProjectDetail(payload, projectId);
 }
+
