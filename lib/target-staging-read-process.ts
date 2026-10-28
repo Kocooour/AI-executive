@@ -47,6 +47,7 @@ export async function readStagingPersonalPageInChild(
     const loader = path.join(cwd, "scripts/target-staging-ts-loader.mjs");
     const script = path.join(cwd, "scripts/target-staging-read-child.mjs");
     const environment = {
+      NODE_ENV: process.env.NODE_ENV || "production",
       AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
       AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
       AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
