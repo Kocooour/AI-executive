@@ -20,8 +20,8 @@ import {
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
 import { personalTaskListRevision } from "./target-task-read-model";
-import { readPrivateProjectsAtOffset } from "./target-project-read-model";
-import type { TargetPrivateProjectPage } from "./target-project-read-model";
+import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
+import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
@@ -383,4 +383,26 @@ export function listPreflightedPrivateProjectsAtOffset(
         db, actorUserId, store.expectedRestoreGeneration, limit, offset,
       );
     }, () => null));
+}
+
+/** Authenticated owner-private project detail; no existence signal crosses a failed preflight. */
+export type TargetPreflightedPrivateProjectDetail =
+  | { ok: true; project: TargetReadableProject }
+  | { ok: false; reason: "unauthorized" | "unavailable" };
+
+export function readPreflightedPrivateProjectDetail(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, projectId: string,
+): TargetPreflightedPrivateProjectDetail {
+  const denied = (): TargetPreflightedPrivateProjectDetail =>
+    ({ ok: false, reason: "unauthorized" });
+  return withPreflightedStore<TargetPreflightedPrivateProjectDetail>(
+    store, denied, (db, preflight) =>
+      inReadSnapshot<TargetPreflightedPrivateProjectDetail>(db, (): TargetPreflightedPrivateProjectDetail => {
+      if (!preflight(db)) return denied();
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return denied();
+      const project = readPrivateProjectById(db, actorUserId, projectId);
+      return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
+    }, denied),
+  );
 }

@@ -138,7 +138,39 @@ try {
   assert.equal((await fetch(`${origin}/api/target-staging/projects`)).status, 401);
   assert.equal((await fetch(`${origin}/api/target-staging/projects?scope=shared`,
     { headers: { cookie } })).status, 400);
-  console.log("Next router staging detail and project smoke passed");
+  for (const [id, title] of [["alice/project", "Alice project"], ["alice second", "Alice second"]]) {
+    const response = await fetch(
+      `${origin}/api/target-staging/projects/${encodeURIComponent(id)}`,
+      { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+    );
+    assert.equal(response.status, 200, `Next project detail routing failed for ${id}`);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), {
+      project: { id, title, areaId: stage.unassignedAreaId, areaKind: "private" },
+    });
+  }
+  for (const id of ["missing-project", "bob-project", "shared-project"]) {
+    const response = await fetch(
+      `${origin}/api/target-staging/projects/${encodeURIComponent(id)}`,
+      { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+    );
+    assert.equal(response.status, 404, id);
+    assert.deepEqual(await response.json(), { error: "Not found" });
+  }
+  assert.equal((await fetch(`${origin}/api/target-staging/projects/alice%2Fproject`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/target-staging/projects/alice%2Fproject?scope=shared`,
+    { headers: { cookie } })).status, 400);
+  insertProject.run(" padded ", stage.unassignedAreaId, "Padded project");
+  const paddedResponse = await fetch(
+    `${origin}/api/target-staging/projects/${encodeURIComponent(" padded ")}`,
+    { headers: { cookie }, signal: AbortSignal.timeout(10_000) },
+  );
+  assert.equal(paddedResponse.status, 200, "Next project detail routing failed for padded ID");
+  assert.deepEqual(await paddedResponse.json(), {
+    project: { id: " padded ", title: "Padded project",
+      areaId: stage.unassignedAreaId, areaKind: "private" },
+  });
+  console.log("Next router staging task and project list/detail smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");
