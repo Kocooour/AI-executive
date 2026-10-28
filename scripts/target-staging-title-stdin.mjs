@@ -4,7 +4,7 @@ export async function readTitleCommand(input) {
   let byteLength = 0;
   for await (const chunk of input) {
     byteLength += chunk.length;
-    if (byteLength > 8192) throw new Error("Too large");
+    if (byteLength > 32 * 1024) throw new Error("Too large");
     chunks.push(chunk);
   }
   const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, byteLength));
