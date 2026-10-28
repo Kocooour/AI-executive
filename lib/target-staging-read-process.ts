@@ -67,8 +67,10 @@ export async function readStagingPersonalDetailInChild(
       typeof task.effectiveAreaId !== "string" || task.areaKind !== "private" ||
       task.assigneeUserId !== null ||
       task.id !== taskId) return null;
-  const projectId = task.projectId;
-  if (projectId !== null && typeof projectId !== "string") return null;
+  let projectId: string | null;
+  if (task.projectId === null) projectId = null;
+  else if (typeof task.projectId === "string") projectId = task.projectId;
+  else return null;
   return { ok: true, task: {
     id: task.id, title: task.title, projectId,
     effectiveAreaId: task.effectiveAreaId, areaKind: "private", assigneeUserId: null,
