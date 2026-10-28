@@ -25,7 +25,7 @@ export async function readJsonBody<T = unknown>(
       return decoder.decode(value, { stream });
     } catch (error) {
       if (options.strictUtf8 && error instanceof TypeError) {
-        throw new HttpInputError("Request body is not valid UTF-8");
+        throw new HttpInputError("Request body is not valid JSON");
       }
       throw error;
     }
