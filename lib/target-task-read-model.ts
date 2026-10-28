@@ -253,7 +253,7 @@ export function readPrivateTaskTitleAudit(
   }
   // Current authorization is checked before the audit table can be queried.
   const detail = readIsolatedTargetTask(db, { actorUserId, taskId }, true);
-  if (!detail.ok) {
+  if (detail.ok === false) {
     return { ok: false, reason: detail.reason === "query_failed" ? "query_failed" : "unavailable" };
   }
   try {
