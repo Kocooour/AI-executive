@@ -503,13 +503,18 @@ export class TargetStagingSessionAuthority {
     sessionToken: string,
     request: TargetStagingTaskTitleWriteRequest,
     privateOnly = false,
+    durableSessionTokenHash?: string,
   ): TargetStagingTaskTitleWriteResult {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok: false, reason: "unauthorized" };
     if (!validTargetStagingTaskTitleWriteRequest(request)) {
       return { ok: false, reason: "invalid_request" };
     }
-    return writePreflightedTargetTaskTitle(this.#store, credential, request, privateOnly);
+    // R2-ID.1: when the HTTP identity is a durable staging session, the writer
+    // re-verifies that session inside its BEGIN IMMEDIATE transaction.
+    return writePreflightedTargetTaskTitle(
+      this.#store, credential, request, privateOnly, durableSessionTokenHash,
+    );
   }
 
   /**

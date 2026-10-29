@@ -1,5 +1,9 @@
 import path from "node:path";
-import { authenticationBinding, getAuthState } from "../../../../lib/auth";
+import {
+  resolveStagingHttpIdentity, stagingChildSessionConfig, stagingCursorIdentity,
+  stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+} from "../../../../lib/target-staging-http-identity";
+import { authenticationBinding } from "../../../../lib/auth";
 import { enforceRateLimit } from "../../../../lib/http-security";
 import { readStagingPersonalPageInChild } from "../../../../lib/target-staging-read-process";
 import {
@@ -27,10 +31,8 @@ export async function GET(request: Request): Promise<Response> {
   }
   // isAuthenticated alone accepts an insecure development bypass. This route
   // deliberately requires real, configured owner-cookie authentication.
-  const auth = getAuthState(request);
-  if (!auth.enabled || !auth.configured || !auth.authenticated) {
-    return answer(401, "Authentication required");
-  }
+  const identity = resolveStagingHttpIdentity(request);
+  if (!identity) return answer(401, "Authentication required");
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
@@ -64,8 +66,8 @@ export async function GET(request: Request): Promise<Response> {
     });
 
     const context = {
-      actorUserId: ownerUserId, restoreGeneration: expectedRestoreGeneration,
-      stagingDirectory, authenticationBinding: authenticationBinding(request),
+      ...stagingCursorIdentity(identity, ownerUserId, authenticationBinding(request)),
+      restoreGeneration: expectedRestoreGeneration, stagingDirectory,
       sessionSecret: process.env.AI_EXECUTIVE_SESSION_SECRET || "",
     };
     const previous = cursor === null ? null : verifyStagingHttpCursor(context, cursor);
@@ -76,20 +78,22 @@ export async function GET(request: Request): Promise<Response> {
     const offset = previous?.ok === true ? previous.offset : 0;
     const page = await readStagingPersonalPageInChild({
       stagingDirectory, expectedRestoreGeneration, ownerUserId,
+      ...stagingChildSessionConfig(identity),
     }, limit, offset);
-    if (!page) return answer(503, "Staging unavailable");
     // The child can run for up to 20 seconds. Do not release its result if
     // the owner cookie, feature gate or trusted store binding changed meanwhile.
-    const currentAuth = getAuthState(request);
-    if (!currentAuth.enabled || !currentAuth.configured || !currentAuth.authenticated) {
-      return answer(401, "Authentication required");
-    }
+    // Linearization point (R2-ID.1): after the child read, immediately before the
+    // body is released, a durable session is re-verified against the LIVE store.
+    const released = verifyStagingIdentityBeforeRelease(
+      request, identity, { stagingDirectory, expectedRestoreGeneration });
+    if (released !== "ok") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
       return answer(503, "Staging unavailable");
     }
+    if (!page) return answer(503, "Staging unavailable");
     if (previous?.ok === true && previous.revision !== page.revision) {
       return answer(409, "Cursor stale");
     }

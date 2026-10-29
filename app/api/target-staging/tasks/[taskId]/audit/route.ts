@@ -1,5 +1,8 @@
 import path from "node:path";
-import { getAuthState } from "../../../../../../lib/auth";
+import {
+  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+} from "../../../../../../lib/target-staging-http-identity";
 import { enforceRateLimit } from "../../../../../../lib/http-security";
 import { readStagingPrivateTaskAuditInChild } from "../../../../../../lib/target-staging-read-process";
 
@@ -21,10 +24,8 @@ export async function GET(
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") {
     return answer(404, "Not found");
   }
-  const auth = getAuthState(request);
-  if (!auth.enabled || !auth.configured || !auth.authenticated) {
-    return answer(401, "Authentication required");
-  }
+  const identity = resolveStagingHttpIdentity(request);
+  if (!identity) return answer(401, "Authentication required");
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
@@ -43,11 +44,13 @@ export async function GET(
     });
     const result = await readStagingPrivateTaskAuditInChild({
       stagingDirectory, expectedRestoreGeneration, ownerUserId,
+      ...stagingChildSessionConfig(identity),
     }, taskId);
-    const currentAuth = getAuthState(request);
-    if (!currentAuth.enabled || !currentAuth.configured || !currentAuth.authenticated) {
-      return answer(401, "Authentication required");
-    }
+    // Linearization point (R2-ID.1): after the child read, immediately before the
+    // body is released, a durable session is re-verified against the LIVE store.
+    const released = verifyStagingIdentityBeforeRelease(
+      request, identity, { stagingDirectory, expectedRestoreGeneration });
+    if (released !== "ok") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||

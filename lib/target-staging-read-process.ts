@@ -15,6 +15,12 @@ export interface StagingPersonalReadConfig {
   stagingDirectory: string;
   expectedRestoreGeneration: string;
   ownerUserId: string;
+  /**
+   * SHA-256 hash of a durable staging session token (R2-ID.1). When present the
+   * child resolves the actor from the LIVE session store instead of using
+   * ownerUserId. The raw token never reaches a child process.
+   */
+  sessionTokenHash?: string;
 }
 
 /** Only the production-owned instance is used by HTTP handlers. Injection is for lifecycle tests. */
@@ -37,6 +43,7 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
+        AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
       };
       return await new Promise<unknown | null>(resolve => {
         let child: ReturnType<typeof spawn>;

@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
-  TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS,
+  TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
@@ -14,7 +14,7 @@ export type TargetPreflightCode =
   | "metadata_invalid" | "schema_invalid" | "expected_owner_mismatch" | "expected_generation_mismatch"
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
-  | "audit_invalid"
+  | "audit_invalid" | "session_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
 
 export interface TargetPreflightOptions {
@@ -171,6 +171,14 @@ export function inspectIsolatedTargetStore(
             row.restore_generation !== meta.get("restore_generation") ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
+    try {
+      // Durable sessions hold only hashes (enforced by DDL CHECKs). A row whose
+      // issue-time epoch exceeds its identity's epoch cannot have been issued
+      // by the supported library and is treated as tampering.
+      if (count("SELECT COUNT(*) AS n FROM staging_sessions") > TARGET_STAGING_SESSION_MAX_ROWS ||
+          count(`SELECT COUNT(*) AS n FROM staging_sessions s LEFT JOIN identities i ON i.id=s.user_id
+            WHERE i.id IS NULL OR s.revocation_epoch > i.revocation_epoch`) !== 0) fail("session_invalid");
+    } catch { fail("session_invalid"); }
     try {
       const owners = all("SELECT w.owner_user_id AS owner FROM workspaces w WHERE w.kind = 'personal'") as { owner: string }[];
       if (owners.length === 0 || owners.length !== new Set(owners.map(row => row.owner)).size ||

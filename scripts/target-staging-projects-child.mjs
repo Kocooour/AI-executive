@@ -1,6 +1,7 @@
 /** Bounded, no-listener owner-private project reader. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 
 try {
   const [rawLimit, rawOffset, extra] = process.argv.slice(2);
@@ -19,8 +20,9 @@ try {
       stagingDirectory, expectedRestoreGeneration,
     });
     try {
-      const page = authority.readPrivateProjectOffsetPage(
-        ownerUserId, Number(rawLimit), Number(rawOffset),
+      const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+      const page = resolved && authority.readPrivateProjectOffsetPage(
+        resolved.actor, Number(rawLimit), Number(rawOffset),
       );
       if (!page) process.exitCode = 1;
       else process.stdout.write(JSON.stringify({ ok: true, ...page }));

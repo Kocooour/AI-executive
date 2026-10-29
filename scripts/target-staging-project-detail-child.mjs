@@ -1,6 +1,7 @@
 /** Bounded, no-listener owner-private project detail reader. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 import { isReadableStagingProjectId } from "../lib/target-project-id.ts";
 
 try {
@@ -18,7 +19,9 @@ try {
       stagingDirectory, expectedRestoreGeneration,
     });
     try {
-      const result = authority.readPrivateProjectDetail(ownerUserId, projectId);
+      const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+      if (!resolved) throw new Error("Unavailable");
+      const result = authority.readPrivateProjectDetail(resolved.actor, projectId);
       if (result.ok) process.stdout.write(JSON.stringify({ ok: true, project: result.project }));
       else if (result.reason === "unavailable") {
         process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));

@@ -11,7 +11,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-export const TARGET_STORE_SCHEMA_VERSION = 4;
+// v5 (R2-ID.1) adds the durable staging session store and identity revocation
+// epoch. Older staging stores are never migrated: preflight rejects them, and a
+// new (test-only) staging directory must be bootstrapped instead.
+export const TARGET_STORE_SCHEMA_VERSION = 5;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -25,6 +28,14 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
 export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
 export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
+/**
+ * R2-ID.1 durable staging sessions. A session is a short-lived server-side
+ * credential for a synthetic test identity, stored only as a SHA-256 token hash.
+ * Provisional staging limits; production lifetime and retention are not approved.
+ */
+export const TARGET_STAGING_SESSION_MAX_LIFETIME_MS = 15 * 60 * 1000;
+export const TARGET_STAGING_SESSION_MAX_ROWS = 4096;
+export const TARGET_STAGING_SESSION_RETENTION_DAYS = 90;
 
 export interface TargetStoreBootstrapOptions {
   /** Absolute path for a directory which MUST NOT exist yet. Its parent must exist. */
@@ -116,8 +127,27 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
 export const TARGET_SCHEMA_SQL = `
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE identities (
-  id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0)
+  id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0),
+  -- Monotonic sign-out-everywhere counter. A durable session is live only while
+  -- its issue-time epoch still equals this value.
+  revocation_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revocation_epoch)='integer' AND revocation_epoch >= 0 AND revocation_epoch < 9007199254740991)
 );
+-- Durable staging sessions (R2-ID.1). Only the SHA-256 hash of a random
+-- 256-bit token is stored; the raw token is returned once at issuance and
+-- cannot be recovered. A rowid-less PK prevents REPLACE through a hidden rowid.
+CREATE TABLE staging_sessions (
+  id TEXT PRIMARY KEY CHECK(length(id) = 36),
+  user_id TEXT NOT NULL REFERENCES identities(id),
+  token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
+  created_at_ms INTEGER NOT NULL CHECK(typeof(created_at_ms)='integer' AND created_at_ms > 0),
+  expires_at_ms INTEGER NOT NULL CHECK(typeof(expires_at_ms)='integer'
+    AND expires_at_ms > created_at_ms
+    AND expires_at_ms - created_at_ms <= ${TARGET_STAGING_SESSION_MAX_LIFETIME_MS}),
+  revoked_at_ms INTEGER CHECK(revoked_at_ms IS NULL OR (typeof(revoked_at_ms)='integer' AND revoked_at_ms > 0)),
+  revocation_epoch INTEGER NOT NULL CHECK(typeof(revocation_epoch)='integer' AND revocation_epoch >= 0)
+) WITHOUT ROWID;
+CREATE INDEX staging_sessions_by_user ON staging_sessions(user_id);
+
 CREATE TABLE workspaces (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('personal', 'shared')),
@@ -360,6 +390,37 @@ BEGIN SELECT RAISE(ABORT, 'project ID is immutable in R1'); END;
 CREATE TRIGGER protected_private_fallback BEFORE DELETE ON areas
 WHEN OLD.system_key = 'unassigned'
 BEGIN SELECT RAISE(ABORT, 'cannot delete private Unassigned'); END;
+
+-- Identity epoch and durable session guards (R2-ID.1). Revocation is one-way:
+-- a revoked session cannot be revived, an epoch cannot decrease, and a session
+-- cannot be re-pointed at another user, token or lifetime.
+CREATE TRIGGER immutable_identity_id BEFORE UPDATE OF id ON identities
+WHEN NEW.id <> OLD.id
+BEGIN SELECT RAISE(ABORT, 'identity ID is immutable in R1'); END;
+CREATE TRIGGER identity_conflict_guard BEFORE INSERT ON identities
+WHEN EXISTS(SELECT 1 FROM identities WHERE id = NEW.id) OR NEW.revocation_epoch <> 0
+BEGIN SELECT RAISE(ABORT, 'identity replacement is not allowed'); END;
+CREATE TRIGGER identity_revocation_epoch_guard BEFORE UPDATE OF revocation_epoch ON identities
+WHEN NEW.revocation_epoch <> OLD.revocation_epoch + 1
+BEGIN SELECT RAISE(ABORT, 'revocation epoch must increment by one'); END;
+CREATE TRIGGER staging_session_conflict_guard BEFORE INSERT ON staging_sessions
+WHEN EXISTS(SELECT 1 FROM staging_sessions WHERE id = NEW.id OR token_hash = NEW.token_hash)
+  OR NEW.revoked_at_ms IS NOT NULL
+  OR NEW.revocation_epoch <> (SELECT revocation_epoch FROM identities WHERE id = NEW.user_id)
+BEGIN SELECT RAISE(ABORT, 'session replacement or stale issuance is not allowed'); END;
+CREATE TRIGGER staging_session_capacity BEFORE INSERT ON staging_sessions
+WHEN (SELECT COUNT(*) FROM staging_sessions) >= ${TARGET_STAGING_SESSION_MAX_ROWS}
+BEGIN SELECT RAISE(ABORT, 'session capacity reached'); END;
+CREATE TRIGGER staging_session_immutable BEFORE UPDATE OF id, user_id, token_hash, created_at_ms, expires_at_ms, revocation_epoch ON staging_sessions
+BEGIN SELECT RAISE(ABORT, 'session identity, token and lifetime are immutable'); END;
+CREATE TRIGGER staging_session_no_unrevoke BEFORE UPDATE OF revoked_at_ms ON staging_sessions
+WHEN OLD.revoked_at_ms IS NOT NULL OR NEW.revoked_at_ms IS NULL
+BEGIN SELECT RAISE(ABORT, 'session revocation is irreversible'); END;
+-- Deleting a revoked row would erase the revocation; only long-expired rows
+-- may be removed (provisional retention, not an automatic purge).
+CREATE TRIGGER staging_session_retention BEFORE DELETE ON staging_sessions
+WHEN strftime('%s','now') IS NULL OR OLD.expires_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_SESSION_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'session retention window is active'); END;
 `;
 
 /**

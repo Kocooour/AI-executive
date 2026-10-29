@@ -83,6 +83,12 @@ function cookies(request: Request) {
   );
 }
 
+/** Read one request cookie; undefined when absent. Callers validate the value. */
+export function requestCookie(request: Request, name: string): string | undefined {
+  const value = cookies(request)[name];
+  return typeof value === "string" ? value : undefined;
+}
+
 export function authenticationBinding(request: Request) {
   if (insecureDevelopmentMode()) return "insecure-development";
   const token = cookies(request)[sessionCookieName] || "";
