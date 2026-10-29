@@ -2,7 +2,9 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-authority";
-import type { TargetReadableTask } from "./target-task-read-model";
+import type {
+  TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
+} from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import { isReadableStagingProjectId } from "./target-project-id";
 
@@ -275,3 +277,122 @@ export async function readStagingPrivateProjectDetailInChild(
   return parseStagingPrivateProjectDetail(payload, projectId);
 }
 
+
+// ---------------------------------------------------------------------------
+// R2-ID.2b shared / my-plan scopes. The child output is an HTTP data boundary:
+// strict allowlists, no other user's ID, and the linearization record must
+// describe exactly the Areas of the returned rows.
+// ---------------------------------------------------------------------------
+
+export type StagingScopedReadScope = "shared" | "my-plan";
+const ACTOR_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
+const ACCESS = new Set(["private-owner", "viewer", "editor", "admin"]);
+
+export interface StagingScopedPage {
+  readonly tasks: TargetScopedReadableTask[];
+  readonly hasMore: boolean;
+  readonly revision: string;
+  readonly linearization: TargetReadLinearization;
+}
+
+function parseLinearization(value: unknown, areaIds: Set<string>): TargetReadLinearization | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== "actorUserId,areas" ||
+      typeof record.actorUserId !== "string" || !ACTOR_ID.test(record.actorUserId) ||
+      !Array.isArray(record.areas) || record.areas.length > 100) return null;
+  const areas: TargetReadLinearization["areas"] = [];
+  const seen = new Set<string>();
+  for (const entry of record.areas) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const area = entry as Record<string, unknown>;
+    if (Object.keys(area).sort().join(",") !== "access,areaId,policyRevision" ||
+        typeof area.areaId !== "string" || area.areaId.length === 0 || seen.has(area.areaId) ||
+        typeof area.policyRevision !== "number" || !Number.isSafeInteger(area.policyRevision) ||
+        area.policyRevision < 0 || typeof area.access !== "string" || !ACCESS.has(area.access)) return null;
+    seen.add(area.areaId);
+    areas.push({
+      areaId: area.areaId, policyRevision: area.policyRevision,
+      access: area.access as TargetReadLinearization["areas"][number]["access"],
+    });
+  }
+  // The record must cover exactly the Areas the released rows come from.
+  if (seen.size !== areaIds.size || ![...areaIds].every(id => seen.has(id))) return null;
+  return { actorUserId: record.actorUserId, areas };
+}
+
+/** Allowlisted row DTO: shared rows carry assignedToMe, private rows never do. */
+function parseScopedTask(value: unknown, scope: StagingScopedReadScope): TargetScopedReadableTask | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const task = value as Record<string, unknown>;
+  const shared = task.areaKind === "shared";
+  const keys = "areaId,areaKind,effectiveAreaId,id,projectId,title" + (shared ? ",assignedToMe" : "");
+  if (Object.keys(task).sort().join(",") !== keys.split(",").sort().join(",") ||
+      typeof task.id !== "string" || typeof task.title !== "string" ||
+      (task.projectId !== null && typeof task.projectId !== "string") ||
+      typeof task.areaId !== "string" || task.effectiveAreaId !== task.areaId ||
+      (task.areaKind !== "private" && task.areaKind !== "shared")) return null;
+  if (shared && typeof task.assignedToMe !== "boolean") return null;
+  if (scope === "shared" && !shared) return null;
+  // my-plan carries shared tasks only when they are assigned to the actor.
+  if (scope === "my-plan" && shared && task.assignedToMe !== true) return null;
+  return {
+    id: task.id, title: task.title, projectId: task.projectId as string | null,
+    effectiveAreaId: task.areaId, areaId: task.areaId, areaKind: task.areaKind,
+    ...(shared ? { assignedToMe: task.assignedToMe as boolean } : {}),
+  };
+}
+
+export function parseStagingScopedPage(value: unknown, scope: StagingScopedReadScope): StagingScopedPage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const page = value as Record<string, unknown>;
+  if (Object.keys(page).sort().join(",") !== "hasMore,linearization,ok,revision,tasks" ||
+      page.ok !== true || !Array.isArray(page.tasks) || page.tasks.length > 100 ||
+      typeof page.hasMore !== "boolean" ||
+      typeof page.revision !== "string" || !REVISION.test(page.revision)) return null;
+  const tasks: TargetScopedReadableTask[] = [];
+  for (const entry of page.tasks) {
+    const task = parseScopedTask(entry, scope);
+    if (!task) return null;
+    tasks.push(task);
+  }
+  const linearization = parseLinearization(page.linearization, new Set(tasks.map(task => task.areaId)));
+  if (!linearization) return null;
+  return { tasks, hasMore: page.hasMore, revision: page.revision, linearization };
+}
+
+export async function readStagingScopedPageInChild(
+  config: StagingPersonalReadConfig, scope: StagingScopedReadScope, limit: number, offset: number,
+): Promise<StagingScopedPage | null> {
+  const payload = await runChild(config, "target-staging-scoped-read-child.mjs",
+    [scope, String(limit), String(offset)]);
+  return parseStagingScopedPage(payload, scope);
+}
+
+export type StagingTaskDetailResult =
+  | StagingPersonalDetailResult
+  | { ok: true; scope: "shared"; task: TargetScopedReadableTask; linearization: TargetReadLinearization };
+
+/**
+ * Detail child boundary. A private task keeps the exact legacy shape (with its
+ * title CAS revision); a shared-Area task has none (writes are R2-ID.3).
+ */
+export function parseStagingTaskDetail(value: unknown, taskId: string): StagingTaskDetailResult | null {
+  if (value && typeof value === "object" && !Array.isArray(value) &&
+      (value as Record<string, unknown>).scope === "shared") {
+    const result = value as Record<string, unknown>;
+    if (Object.keys(result).sort().join(",") !== "linearization,ok,scope,task" || result.ok !== true) return null;
+    const task = parseScopedTask(result.task, "shared");
+    if (!task || task.id !== taskId) return null;
+    const linearization = parseLinearization(result.linearization, new Set([task.areaId]));
+    return linearization ? { ok: true, scope: "shared", task, linearization } : null;
+  }
+  return parseStagingPersonalDetail(value, taskId);
+}
+
+export async function readStagingTaskDetailInChild(
+  config: StagingPersonalReadConfig, taskId: string,
+): Promise<StagingTaskDetailResult | null> {
+  const payload = await runChild(config, "target-staging-detail-child.mjs", [taskId]);
+  return parseStagingTaskDetail(payload, taskId);
+}

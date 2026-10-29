@@ -16,6 +16,7 @@ import {
   TARGET_STAGING_TASK_READ_AUDIENCE, TARGET_STAGING_TASK_WRITE_AUDIENCE,
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
+import type { TargetScopedOffsetPage, TargetSharedTaskDetail } from "./target-task-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -27,6 +28,7 @@ import {
   readPreflightedTargetTaskTitleCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
+  readPreflightedScopedTaskPage, readPreflightedSharedTargetTask,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
@@ -290,6 +292,47 @@ export class TargetStagingSessionAuthority {
         { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, projectId);
     } catch {
       return denied();
+    }
+  }
+
+  #oneShotReadCredential(actorUserId: string): { signingKey: Uint8Array; sessionToken: string } | null {
+    if (this.#closed || typeof actorUserId !== "string" || !ACTOR_PATTERN.test(actorUserId)) return null;
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+    const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+      .update(payload).digest("base64url");
+    return { signingKey: this.#key, sessionToken: `${payload}.${signature}` };
+  }
+
+  /** R2-ID.2b: one shared / my-plan page plus its read-linearization record,
+   * from a single pinned snapshot. The caller (HTTP route) must re-verify the
+   * record on the live store before releasing the body. */
+  readScopedOffsetPage(
+    actorUserId: string, scope: "shared" | "my-plan", limit: number, offset: number,
+  ): TargetScopedOffsetPage | null {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_STAGING_PAGE_OFFSET ||
+        (scope !== "shared" && scope !== "my-plan")) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedScopedTaskPage(this.#store, credential, { scope, limit, offset }) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R2-ID.2b: shared-Area task detail for a current member of any role. */
+  readSharedTaskDetail(actorUserId: string, taskId: string): TargetSharedTaskDetail | null {
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedSharedTargetTask(this.#store, credential, taskId) : null;
+    } catch {
+      return null;
     }
   }
 
