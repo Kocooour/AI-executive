@@ -223,10 +223,18 @@ test("detail: any current member reads a shared task with the minimal shape; pri
     const response = await detail(fx, "f-3", who.cookie);
     assert.equal(response.status, 200, who.user);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), expected(false), "no snapshotRevision / CAS for shared tasks");
+    // R2-ID.3: the title CAS token is present only for a current editor/admin.
+    const body = await response.json();
+    if (who === c) assert.deepEqual(body, expected(false), "viewer: no snapshotRevision");
+    else {
+      assert.match(body.snapshotRevision, /^[a-f0-9]{64}$/, who.user);
+      delete body.snapshotRevision;
+      assert.deepEqual(body, expected(false));
+    }
   }
-  assert.deepEqual(await (await detail(fx, "f-1", a.cookie)).json(), expected(true, "f-1", "Family one"));
-  assert.deepEqual(await (await detail(fx, "f-1", b.cookie)).json(), expected(false, "f-1", "Family one"));
+  const withoutRevision = async response => { const body = await response.json(); delete body.snapshotRevision; return body; };
+  assert.deepEqual(await withoutRevision(await detail(fx, "f-1", a.cookie)), expected(true, "f-1", "Family one"));
+  assert.deepEqual(await withoutRevision(await detail(fx, "f-1", b.cookie)), expected(false, "f-1", "Family one"));
   // Another Area, someone else's private task and unknown ids are all the same 404.
   for (const [who, taskId] of [[a, "o-1"], [b, "p-alice-1"], [c, "p-bob-1"], [a, "absent"]]) {
     const response = await detail(fx, taskId, who.cookie);

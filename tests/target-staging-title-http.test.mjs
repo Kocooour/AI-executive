@@ -44,6 +44,12 @@ db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_ke
 db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice')").run();
 db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Team','shared','team','alice')").run();
 db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin')").run();
+// R2-ID.3: alice is only a VIEWER here, so it stays read-only for her (shared writes: target-staging-shared-title.test.mjs).
+db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('ro','shared','bob')").run();
+db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('ro-area','Read only','shared','ro','bob')").run();
+db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('ro-area','bob','admin')").run();
+db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('ro-area','alice','viewer')").run();
+db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('viewer-task','ro-area','Viewer')").run();
 db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('private-task',?,'Original')").run(stage.unassignedAreaId);
 db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('foreign-task','bob-private','Foreign')").run();
 db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('shared-task','team-area','Shared')").run();
@@ -117,12 +123,12 @@ test("owner-private HTTP preflight, write, receipt replay and audit exactly once
   assert.equal((await get("private-task", "?expectedRevision=" + snapshotRevision)).status, 409);
 });
 
-test("shared, foreign and unknown task probes and writes are indistinguishable", async () => {
-  for (const id of ["shared-task", "foreign-task", "missing-task"]) {
+test("read-only shared, foreign and unknown task probes and writes are indistinguishable", async () => {
+  for (const id of ["viewer-task", "foreign-task", "missing-task"]) {
     assert.equal((await get(id)).status, 404);
     assert.equal((await patch(id, command("No", "a".repeat(64)))).status, 404);
   }
-  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='shared-task'").get().title, "Shared");
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id='viewer-task'").get().title, "Viewer");
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id='foreign-task'").get().title, "Foreign");
 });
 
@@ -179,9 +185,9 @@ test("status reconciles exact command without task or audit writes", async () =>
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_title_audit WHERE task_id='private-task'").get().n, before + 1);
 });
 
-test("status hides shared, foreign and missing tasks, and enforces owner gates", async () => {
+test("status hides read-only shared, foreign and missing tasks, and enforces owner gates", async () => {
   const input = command("Probe", "a".repeat(64));
-  for (const id of ["shared-task", "foreign-task", "missing-task"]) {
+  for (const id of ["viewer-task", "foreign-task", "missing-task"]) {
     const response = await status(id, input);
     assert.equal(response.status, 404);
     assert.deepEqual(await response.json(), { error: "Not found" });
@@ -207,12 +213,12 @@ test("status hides shared, foreign and missing tasks, and enforces owner gates",
   assert.equal((await statusRaw("private-task", malformed)).status, 400);
 });
 
-test("status immediately loses receipt visibility after private task moves to shared Area", async () => {
+test("status immediately loses receipt visibility after private task moves to a read-only shared Area", async () => {
   const rev = (await (await get("private-task")).json()).snapshotRevision;
   const input = command("Before move", rev);
   assert.equal((await patch("private-task", input)).status, 200);
   assert.equal((await status("private-task", input)).status, 200);
-  db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='private-task'").run();
+  db.prepare("UPDATE tasks SET area_id='ro-area' WHERE id='private-task'").run();
   assert.equal((await status("private-task", input)).status, 404);
 });
 
