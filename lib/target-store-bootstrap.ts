@@ -508,12 +508,13 @@ END;
 -- exactly once: INSERT -> one 'upsert'; every revision advance (the nested
 -- UPDATE of task_revision_bump, or a direct increment) -> one 'upsert' in the
 -- NEW effective Area; a move between Areas additionally -> one 'leave' for the
--- OLD Area from task_area_content_move_old. That trigger fires on the outer
--- UPDATE, where NEW.revision is still the pre-bump value, but a changed
--- project_id/area_id always makes task_revision_bump advance the revision by
--- exactly one, so OLD.revision + 1 is the revision of the moved row. The nested
--- revision-only UPDATE does not match "UPDATE OF project_id, area_id", so no
--- trigger can log twice, whatever order SQLite fires them in. A task whose
+-- OLD Area from task_area_content_move_old. This move trigger runs BEFORE the
+-- outer UPDATE, so its 'leave' is always recorded BEFORE any AFTER trigger
+-- (including task_revision_bump's nested revision update) records the new Area's
+-- 'upsert'. The move increments the task revision exactly once, so
+-- OLD.revision + 1 is the revision of both events. The nested revision-only
+-- UPDATE does not match "UPDATE OF project_id, area_id", preventing duplicates.
+-- A task whose
 -- project does not exist (no effective Area) is not logged, so the statement
 -- still fails with its FOREIGN KEY error instead of a log constraint.
 CREATE TRIGGER task_area_content_insert AFTER INSERT ON tasks
@@ -535,7 +536,9 @@ BEGIN
       SELECT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id)) AS area_id
     ) e WHERE e.area_id IS NOT NULL;
 END;
-CREATE TRIGGER task_area_content_move_old AFTER UPDATE OF project_id, area_id ON tasks
+-- BEFORE ensures a moved task's 'leave' precedes the new Area's 'upsert'
+-- regardless of the firing order of independent AFTER UPDATE triggers.
+CREATE TRIGGER task_area_content_move_old BEFORE UPDATE OF project_id, area_id ON tasks
 WHEN COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id))
   IS NOT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
 BEGIN
