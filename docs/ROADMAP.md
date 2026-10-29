@@ -65,7 +65,7 @@ Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, 
 **Zápis názvu úkolu.** Samostatný, výchozí vypnutý flag `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED=true` nad čtecím flagem.
 - `GET`/`PATCH tasks/[taskId]/title`: pouze vlastní soukromý úkol; shared, cizí a neexistující úkoly jsou nerozlišitelné 404. Write ACL se opakuje uvnitř `BEGIN IMMEDIATE` s task/policy revizí a restore generation. Idempotentní receipt je vázaný na aktéra + úkol + UUID příkazu; změna payloadu pod stejným UUID je konflikt.
 - Každá úspěšná změna má ve stejné transakci obsahově úspornou auditní událost (bez textů názvů). Replay a no-op nevytváří další záznam, selhání auditu vrací celý zápis. Prozatímní minimální 90denní ochrana před smazáním a tvrdý limit 4096 událostí; při nasycení se zápis bezpečně odmítne.
-- `POST tasks/[taskId]/title/status`: tělo `commandId`, `title`, `expectedRevision`; vrací `committed` / `not_recorded`, konflikt 409. `not_recorded` neopravňuje k nebezpečnému opakování; retry znovu prochází ACL, generací a CAS.
+- `POST tasks/[taskId]/title/status`: tělo `commandId`, `title`, `expectedRevision`; vrací `committed` / `not_recorded`; konflikt obsahu pod stejným `commandId` 409, neplatný požadavek 400, chybějící autentizace 401, ostatní selhání nerozlišitelné 404. `not_recorded` neopravňuje k nebezpečnému opakování; retry znovu prochází ACL, generací a CAS.
 
 **Stále neimplementováno:** audit zamítnutých pokusů, přímých SQL úprav a Area/member operací, produkční retence/export/archivace auditu, trvalé multi-process revokace, sdílené Oblasti s rolemi, sync, user-scoped cache, UI ani produkční aktivace.
 
@@ -75,16 +75,18 @@ Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, 
 
 | Krok | Obsah | Brána |
 |---|---|---|
-| **R2-ID.1** | Staging schema v5: `users`, trvalé `sessions` a revokační epocha v SQLite. Session cookie vázaná na `userId`, nikoli na pevného `owner`. Čtecí i zapisovací proces ověřuje session a revokaci v transakci. | Revokace platí okamžitě i na jiném serverovém procesu a po restartu. Starší staging schéma vyžaduje nový bootstrap, žádná migrace produkčních dat. |
+| **R2-ID.1** | Staging schema v5: `users`, trvalé `sessions` a revokační epocha v SQLite. Session cookie vázaná na `userId`, nikoli na pevného `owner`. Čtecí i zapisovací proces ověřuje session a revokaci v transakci. | Revokace platí okamžitě i na jiném serverovém procesu a po restartu; ověřit testem se dvěma serverovými procesy nad stejným staging úložištěm a restartem mezi revokací a dalším požadavkem. Starší staging schéma vyžaduje nový bootstrap, žádná migrace produkčních dat. |
 | **R2-ID.2** | Členství ve sdílené Oblasti a matice rolí. Staging-only admin příkaz pro přidání/odebrání člena a změnu role jako samostatná auditovaná transakce se zvýšením `policy_revision` (dle [architektury](ARCHITECTURE.md)); posledního admina nelze odebrat bez předání správy; odebranému členu se ve stejné transakci zruší přiřazení nedokončených úkolů (zůstanou **Nepřiděleno**). Řešitelé sdílených úkolů se pro testy nastavují v syntetických fixtures, příkaz přidělování je mimo rozsah. Čtení seznamu a detailu úkolů ve sdílené Oblasti podle aktuálního členství; rozsahy `Sdílené` a `Můj plán` (soukromé + mně přidělené) nad stejným preflightovaným snapshotem. | Nečlen dostane nerozlišitelné 404; žádný únik přes cursor, revize, počty ani staleness. |
 | **R2-ID.3** | Title PATCH na sdíleném úkolu podle role: viewer zamítnut, editor/admin povoleno. Změna role nebo odebrání člena během zápisu vede k bezpečnému zamítnutí přes `policy_revision`. Audit zaznamená skutečného aktéra. | Receipty a ověření výsledku jsou oddělené podle identity; revokovaná session nemůže dokončit čekající příkaz. |
 
 **Akceptační scénáře (syntetické identity A, B, C):**
 1. A nevidí ani nezmění soukromé úkoly a projekty B, a to ani přes seznam, detail, audit, cursor, `snapshotRevision`, stav příkazu či rozdíl odpovědí.
 2. Sdílená Oblast s A = admin, B = editor, C = viewer: C čte, ale nezapisuje; B zapisuje; po odebrání B je jeho další požadavek odmítnut, i na jiném procesu a po restartu.
-3. Revokace session A zablokuje pokračování stránkování, čekající PATCH i ověření výsledku příkazu.
+3. Revokace session A zablokuje pokračování stránkování, čekající PATCH i ověření výsledku příkazu, a to i na druhém procesu a po restartu; revokovaná session dostane 401, nikoli 404.
 4. `Můj plán` u B obsahuje jen jeho soukromé úkoly a sdílené úkoly přidělené B; nepřidělené a cizí přidělené sdílené úkoly zůstávají jen v `Sdílené`. Pokud krok zahrne seznam projektů, `Můj plán` obsahuje soukromé projekty B a sdílené projekty s alespoň jedním aktivním úkolem přiděleným B.
-5. Souběžná změna členství a zápis: buď zápis proběhne s původním oprávněním před změnou, nebo je zamítnut; nikdy nevznikne zápis s odebraným oprávněním.
+5. Souběžná změna členství a zápis (deterministicky dvěma procesy se synchronizační bariérou): buď zápis proběhne s původním oprávněním před změnou, nebo je zamítnut; nikdy nevznikne zápis s odebraným oprávněním.
+6. Receipty a ověření výsledku příkazu jsou oddělené podle identity: B nezjistí ani nezopakuje příkaz A se stejným `commandId`.
+7. Viewer nemůže být řešitelem: bootstrap/fixture i čtecí model odmítnou přiřazení úkolu viewerovi.
 
 **Mimo rozsah R2-ID:** sync protokol a cache (R2c), agregace Home/Today/Search (R2d), passkeys, obnova účtu a skutečné pozvánky (R5), UI a jakákoli práce s produkčními daty. Flagy zůstávají výchozí vypnuté.
 
