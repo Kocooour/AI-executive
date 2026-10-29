@@ -164,7 +164,10 @@ const scopedAccess = (row: Pick<ScopedRow, "areaKind" | "role">): TargetReadArea
   row.areaKind === "private" ? "private-owner"
     : row.role === "viewer" || row.role === "editor" || row.role === "admin" ? row.role : null;
 
-function linearizationOf(actorUserId: string, rows: ScopedRow[]): TargetReadLinearization | null {
+function linearizationOf(
+  actorUserId: string,
+  rows: Array<Pick<AreaRevisionRow, "areaId" | "areaKind" | "policyRevision" | "role">>,
+): TargetReadLinearization | null {
   const areas = new Map<string, TargetReadContributingArea>();
   for (const row of rows) {
     const access = scopedAccess(row);
@@ -233,14 +236,14 @@ function hashContributingAreas(
   rows: AreaRevisionRow[], scope: TargetTaskScope, restoreGeneration = "",
 ): string | null {
   const hash = createHash("sha256")
-    .update("lumi:area-cursor-revision:v2\\0" + scope + "\\0" + restoreGeneration + "\\0");
+    .update("lumi:area-cursor-revision:v2\0" + scope + "\0" + restoreGeneration + "\0");
   for (const row of rows) {
     const access = scopedAccess(row);
     if (!access || !Number.isSafeInteger(row.contentRevision) || row.contentRevision < 0 ||
         !Number.isSafeInteger(row.policyRevision) || row.policyRevision < 0) return null;
     hash.update(JSON.stringify([
       row.areaId, row.areaKind, access, row.policyRevision, row.contentRevision,
-    ])).update("\\0");
+    ])).update("\0");
   }
   return hash.digest("hex");
 }
