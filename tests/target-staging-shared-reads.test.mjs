@@ -758,3 +758,77 @@ test("issue #155: inherited project tasks advance Area revisions, without affect
     db.close();
   }
 });
+
+
+test("issue #155 review: actor-indexed cursor scans and exactly-once Area epochs", async () => {
+  const fx = makeFixture();
+  const db = new DatabaseSync(fx.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    // Many Areas invisible to alice must not be visited on every page.
+    const addForeign = db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id)
+      VALUES (?,'Foreign','private','erin-personal','erin')`);
+    for (let i = 0; i < 500; i++) addForeign.run(`foreign-area-${i}`);
+
+    const { scopedTaskListRevision, personalTaskListRevision } =
+      // Node tests use this module's same TypeScript loader as the HTTP route.
+      await import("../lib/target-task-read-model.ts");
+    const captured = [];
+    // Instrument only the SQL preparation boundary, without changing the
+    // production query or guessing a separate query for the plan test.
+    const tracedDb = {
+      prepare(sql) {
+        if (sql.includes("ORDER BY areaId COLLATE BINARY ASC")) captured.push(sql);
+        return db.prepare(sql);
+      },
+    };
+    const values = [
+      personalTaskListRevision(tracedDb, "alice"),
+      scopedTaskListRevision(tracedDb, "alice", "shared", fx.stage.restoreGeneration),
+      scopedTaskListRevision(tracedDb, "alice", "my-plan", fx.stage.restoreGeneration),
+    ];
+    assert.equal(values.length, 3);
+    assert.ok(values.every(value => /^[0-9a-f]{64}$/.test(value)));
+    assert.equal(captured.length, 3);
+    for (let i = 0; i < captured.length; i++) {
+      const bind = i === 2 ? ["alice", "alice"] : ["alice"];
+      const details = db.prepare("EXPLAIN QUERY PLAN " + captured[i])
+        .all(...bind).map(row => row.detail);
+      assert.ok(details.every(row => !/\\bSCAN (?:a|member)\\b/i.test(row)),
+        `cursor must not scan foreign Areas/memberships: ${details.join("; ")}`);
+      if (i !== 1) assert.ok(details.some(row => /SEARCH a USING (?:COVERING )?INDEX areas_by_owner_kind/i.test(row)),
+        `private Area actor index absent: ${details.join("; ")}`);
+      if (i !== 0) assert.ok(details.some(row => /SEARCH member USING (?:COVERING )?INDEX area_members_by_user_area/i.test(row)),
+        `shared membership actor index absent: ${details.join("; ")}`);
+    }
+
+    const epoch = id => Number(db.prepare(
+      "SELECT content_revision AS n FROM areas WHERE id=?").get(id).n);
+    const familyStart = epoch("family-area");
+    db.prepare("UPDATE tasks SET title='Changed once' WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 1,
+      "a normal title UPDATE must bump content exactly once");
+    db.prepare("UPDATE tasks SET title=title WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 1,
+      "a no-op title UPDATE must not bump content");
+    db.prepare("UPDATE tasks SET title='Family three' WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 2, "title ABA must stay detectable");
+    db.prepare("UPDATE tasks SET revision=revision+1 WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 3,
+      "direct SQL revision-only edits must still invalidate cursors");
+
+    // A task's effective Area changes via a direct Area reassignment. Both
+    // old and new sets must be invalidated, and exactly once each.
+    db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id)
+      VALUES ('alice-second-private','Another private','private',?,'alice')`)
+      .run(fx.stage.personalWorkspaceId);
+    const oldArea = fx.stage.unassignedAreaId;
+    const beforeOld = epoch(oldArea);
+    const beforeNew = epoch("alice-second-private");
+    db.prepare("UPDATE tasks SET area_id='alice-second-private' WHERE id='p-alice-1'").run();
+    assert.equal(epoch(oldArea), beforeOld + 1, "source Area changed once");
+    assert.equal(epoch("alice-second-private"), beforeNew + 1, "target Area changed once");
+  } finally {
+    db.close();
+  }
+});
