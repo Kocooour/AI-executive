@@ -18,14 +18,14 @@
  * Checks on the read side open the staging file read-only per call.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { lstatSync, statSync } from "node:fs";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_STAGING_SESSION_MAX_LIFETIME_MS, TARGET_STORE_FILENAME,
-  TARGET_STORE_SCHEMA_VERSION, verifyExistingTargetStagingPath,
+  TARGET_STAGING_SESSION_MAX_LIFETIME_MS, TARGET_STORE_SCHEMA_VERSION,
 } from "./target-store-bootstrap";
-import { noTargetStagingSidecars, withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
+import {
+  noTargetStagingSidecars, pinTargetStagingFiles, withPinnedTargetStagingWrite,
+} from "./target-staging-pinned-write";
+import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
@@ -104,6 +104,13 @@ export function issueDurableTargetStagingSession(
     const identity = db.prepare("SELECT revocation_epoch FROM identities WHERE id = ?")
       .get(userId) as { revocation_epoch: number } | undefined;
     if (!identity) return { ok: false, reason: "unknown_user" };
+    // An identity without its personal workspace and private Unassigned Area
+    // would make the store fail preflight (personal_workspace_invalid) once a
+    // session row exists; refuse before writing anything.
+    const personal = db.prepare(`SELECT 1 AS ok FROM workspaces w WHERE w.kind='personal' AND w.owner_user_id=?
+      AND EXISTS (SELECT 1 FROM areas a WHERE a.workspace_id=w.id AND a.owner_user_id=w.owner_user_id
+        AND a.kind='private' AND a.system_key='unassigned')`).get(userId);
+    if (!personal) return { ok: false, reason: "unknown_user" };
     // Before the first write: afterwards SQLite's own -journal legitimately exists.
     if (!context.stillPinned() || !context.noSidecars()) return { ok: false, reason: "write_failed" };
     const createdAt = Date.now();
@@ -196,19 +203,24 @@ export function verifyDurableTargetStagingSessionLive(
   if (!isTargetStagingSessionTokenHash(tokenHash)) return { ok: false, reason: "invalid" };
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string") return unavailable;
+  let files: PinnedTargetStagingFiles | null = null;
   let db: DatabaseSync | null = null;
   let snapshot = false;
   try {
-    const directory = verifyExistingTargetStagingPath(store.stagingDirectory);
-    const databasePath = path.join(directory, TARGET_STORE_FILENAME);
-    // Never follow a database-file symlink; reject sidecars exactly like preflight.
-    const info = statSync(databasePath);
-    if (lstatSync(databasePath).isSymbolicLink() || !info.isFile() || info.nlink !== 1 ||
-        !noTargetStagingSidecars(databasePath)) return unavailable;
-    db = new DatabaseSync(databasePath, { readOnly: true });
+    // Same pinned access as the writers: directory fd, uid/mode, fd-relative
+    // open, dev/ino/nlink identity. A rollback journal of a concurrent writer is
+    // normal for a reader; WAL/shm sidecars are refused exactly like preflight.
+    files = pinTargetStagingFiles(store.stagingDirectory);
+    if (!files || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return unavailable;
+    const opened = files.openDatabase({ readOnly: true });
+    db = opened.db;
     db.exec(`PRAGMA busy_timeout=${LIVE_READ_BUSY_MS}`);
     db.exec("BEGIN");
     snapshot = true;
+    // SQLite opens the file lazily: after the first statement prove the handle
+    // is the pinned inode, and prove it again after the read.
+    db.prepare("SELECT 1 FROM metadata LIMIT 1").get();
+    if (!opened.verifyOpened()) return unavailable;
     // Metadata, identity and session rows come from one SQLite snapshot.
     const metadata = db.prepare(
       "SELECT key, value FROM metadata WHERE key IN ('schema_version','activated','restore_generation')",
@@ -221,6 +233,9 @@ export function verifyDurableTargetStagingSessionLive(
     const live = lookupLiveTargetStagingSession(db, tokenHash, nowMs);
     db.exec("ROLLBACK");
     snapshot = false;
+    if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) {
+      return unavailable;
+    }
     return live ? { ok: true, sessionId: live.sessionId, userId: live.userId }
       : { ok: false, reason: "invalid" };
   } catch {
@@ -232,5 +247,6 @@ export function verifyDurableTargetStagingSessionLive(
       }
       try { db.close(); } catch { /* fail closed */ }
     }
+    if (files) files.close();
   }
 }

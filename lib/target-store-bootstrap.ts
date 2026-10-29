@@ -400,6 +400,11 @@ BEGIN SELECT RAISE(ABORT, 'identity ID is immutable in R1'); END;
 CREATE TRIGGER identity_conflict_guard BEFORE INSERT ON identities
 WHEN EXISTS(SELECT 1 FROM identities WHERE id = NEW.id) OR NEW.revocation_epoch <> 0
 BEGIN SELECT RAISE(ABORT, 'identity replacement is not allowed'); END;
+-- Deleting then re-inserting an identity would reset its epoch to 0 and could
+-- resurrect sessions revoked by sign-out-everywhere; this holds even with
+-- foreign_keys OFF, where the session FK would not block the delete.
+CREATE TRIGGER identity_deletion_guard BEFORE DELETE ON identities
+BEGIN SELECT RAISE(ABORT, 'identity deletion requires tombstone protocol'); END;
 CREATE TRIGGER identity_revocation_epoch_guard BEFORE UPDATE OF revocation_epoch ON identities
 WHEN NEW.revocation_epoch <> OLD.revocation_epoch + 1
 BEGIN SELECT RAISE(ABORT, 'revocation epoch must increment by one'); END;

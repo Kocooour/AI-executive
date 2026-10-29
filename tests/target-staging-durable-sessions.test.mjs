@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, linkSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -191,13 +191,13 @@ test("database triggers: no un-revoke, monotonic epoch, immutable rows, capacity
     assert.throws(() => db.prepare("UPDATE staging_sessions SET revocation_epoch=99 WHERE id=?").run(sid), /immutable/);
     assert.throws(() => db.prepare("DELETE FROM staging_sessions WHERE id=?").run(sid), /retention/);
     assert.throws(() => db.prepare("INSERT OR REPLACE INTO staging_sessions VALUES (?,?,?,?,?,NULL,0)")
-      .run(sid, "alice", hash("replace"), 1, 2), /replacement|stale|CHECK|constraint/i);
+      .run(sid, "alice", hash("replace"), 1, 2), /session replacement or stale issuance/);
     // A pre-revoked or stale-epoch row cannot be inserted either.
     const insert = (id, tokenHashValue, revoked, epoch) => db.prepare(
       "INSERT INTO staging_sessions VALUES (?,?,?,?,?,?,?)",
     ).run(id, "alice", tokenHashValue, 1000, 2000, revoked, epoch);
-    assert.throws(() => insert(randomUUID(), hash("a"), 1500, 0), /replacement|stale/);
-    assert.throws(() => insert(randomUUID(), hash("b"), null, 7), /replacement|stale/);
+    assert.throws(() => insert(randomUUID(), hash("a"), 1500, 0), /session replacement or stale issuance/);
+    assert.throws(() => insert(randomUUID(), hash("b"), null, 7), /session replacement or stale issuance/);
     assert.throws(() => insert(randomUUID(), "A".repeat(64), null, 0), /CHECK/);
     assert.throws(() => db.prepare("INSERT INTO staging_sessions VALUES (?,?,?,?,?,NULL,0)")
       .run(randomUUID(), "alice", hash("long"), 1000, 1000 + 15 * 60 * 1000 + 1), /CHECK/);
@@ -224,6 +224,64 @@ test("database triggers: no un-revoke, monotonic epoch, immutable rows, capacity
     db.close();
   }
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: stage.directory, mode: "r2-model" }).ok, true);
+});
+
+test("identity deletion is blocked (even with foreign keys OFF) so epochs cannot be reset", () => {
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=OFF");
+    const issued = issueCli("alice");
+    cli("revoke-user", "--user", "alice");
+    assert.throws(() => db.prepare("DELETE FROM identities WHERE id='alice'").run(), /identity deletion requires tombstone/);
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO identities(id) VALUES ('alice')").run(), /identity replacement/);
+    assert.equal(durable.verifyDurableTargetStagingSessionLive(store, hash(issued.sessionToken)).ok, false);
+  } finally {
+    db.close();
+  }
+});
+
+test("issuance refuses an identity without a personal workspace and leaves the store valid", () => {
+  // Own store: an identity without a workspace already fails preflight by itself.
+  const lone = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(root, "no-workspace"), ownerUserId: "alice" });
+  const loneStore = { stagingDirectory: lone.directory, expectedRestoreGeneration: lone.restoreGeneration };
+  const db = new DatabaseSync(lone.databasePath);
+  db.prepare("INSERT INTO identities(id) VALUES ('carol')").run();
+  db.close();
+  assert.equal(inspectIsolatedTargetStore({ stagingDirectory: lone.directory, mode: "r2-model" }).ok, false);
+  // Carol cannot be issued a session; the failure is reported before any write.
+  assert.equal(durable.issueDurableTargetStagingSession(loneStore, "carol").ok, false);
+  const check = new DatabaseSync(lone.databasePath, { readOnly: true });
+  try { assert.equal(check.prepare("SELECT COUNT(*) AS c FROM staging_sessions").get().c, 0); } finally { check.close(); }
+});
+
+test("the live check refuses a symlinked, hard-linked or swapped database file", () => {
+  const make = name => {
+    const created = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(root, name), ownerUserId: "alice" });
+    const target = { stagingDirectory: created.directory, expectedRestoreGeneration: created.restoreGeneration };
+    const issued = durable.issueDurableTargetStagingSession(target, "alice");
+    assert.equal(issued.ok, true);
+    return { created, target, tokenHash: hash(issued.sessionToken) };
+  };
+  const healthy = make("pin-ok");
+  assert.equal(durable.verifyDurableTargetStagingSessionLive(healthy.target, healthy.tokenHash).ok, true);
+
+  // Symlink in place of the database file.
+  const linked = make("pin-symlink");
+  const moved = path.join(root, "pin-symlink-real.sqlite");
+  renameSync(linked.created.databasePath, moved);
+  symlinkSync(moved, linked.created.databasePath);
+  assert.deepEqual(durable.verifyDurableTargetStagingSessionLive(linked.target, linked.tokenHash), { ok: false, reason: "unavailable" });
+  assert.equal(durable.issueDurableTargetStagingSession(linked.target, "alice").ok, false);
+
+  // Hard link (nlink 2) is not a pinned private file either.
+  const hard = make("pin-hardlink");
+  linkSync(hard.created.databasePath, path.join(root, "pin-hardlink-copy.sqlite"));
+  assert.deepEqual(durable.verifyDurableTargetStagingSessionLive(hard.target, hard.tokenHash), { ok: false, reason: "unavailable" });
+
+  // A WAL sidecar is refused like in preflight.
+  const wal = make("pin-wal");
+  copyFileSync(wal.created.databasePath, wal.created.databasePath + "-wal");
+  assert.deepEqual(durable.verifyDurableTargetStagingSessionLive(wal.target, wal.tokenHash), { ok: false, reason: "unavailable" });
 });
 
 test("a tampered session row (epoch ahead of identity) fails preflight", () => {
@@ -420,6 +478,7 @@ test("HTTP writes: B edits only B's task; a revoked session cannot write or reco
   assert.deepEqual(await status.json(), { status: "committed" });
 
   // Revoke, then neither write nor reconciliation is possible and nothing changes.
+  const receiptsBeforeRevoke = rows("SELECT COUNT(*) AS c FROM metadata WHERE key LIKE ?", TARGET_STAGING_RECEIPT_PREFIX + "%")[0].c;
   assert.equal(cli("revoke", "--session-id", bob.sessionId).body.ok, true);
   const next = await (await get(PREVIEW, "tasks/bob-2/title", sessionCookie(issueCli("bob").sessionToken), taskCtx("bob-2"))).json();
   const refused = await write("bob-2", cookie, { commandId: randomUUID(), title: "Too late", expectedRevision: next.snapshotRevision });
@@ -427,6 +486,7 @@ test("HTTP writes: B edits only B's task; a revoked session cannot write or reco
   assert.equal(refused.headers.get("cache-control"), "no-store");
   assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two");
   assert.equal((await write("bob-3", cookie, command, STATUS, "/status")).status, 401);
+  assert.equal(rows("SELECT COUNT(*) AS c FROM metadata WHERE key LIKE ?", TARGET_STAGING_RECEIPT_PREFIX + "%")[0].c, receiptsBeforeRevoke);
   assert.equal(rows("SELECT COUNT(*) AS c FROM task_title_audit WHERE task_id='bob-2'")[0].c, 0);
 });
 

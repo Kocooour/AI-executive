@@ -20,6 +20,9 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
+/** Internal control-flow marker: every boundary failure collapses to null. */
+class PinDenied extends Error {}
+
 const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetStagingPinnedWriteContext {
@@ -35,8 +38,10 @@ export interface TargetStagingPinnedWriteContext {
   commit(): void;
 }
 
-export function noTargetStagingSidecars(databasePath: string): boolean {
-  for (const suffix of ["-journal", "-shm", "-wal"]) {
+export function noTargetStagingSidecars(
+  databasePath: string, suffixes: readonly string[] = ["-journal", "-shm", "-wal"],
+): boolean {
+  for (const suffix of suffixes) {
     try {
       lstatSync(databasePath + suffix);
       return false;
@@ -47,63 +52,64 @@ export function noTargetStagingSidecars(databasePath: string): boolean {
   return true;
 }
 
-/**
- * Establish the pinned connection, take the RESERVED write lock, run the
- * canonical r2-model preflight on that very connection, then call body. The
- * caller cannot supply a DatabaseSync, file descriptor or generation.
- * `denied` is returned for every boundary failure, `failed` for any exception.
- */
-export function withPinnedTargetStagingWrite<T>(
-  store: TargetStagingReadStore,
-  body: (context: TargetStagingPinnedWriteContext) => T,
-  denied: () => T,
-  failed: () => T,
-  /** Bounded lock wait for short control-plane writes; the title writer fails fast (0). */
-  busyTimeoutMs = 0,
-): T {
-  if (!store || typeof store.stagingDirectory !== "string" ||
-      typeof store.expectedRestoreGeneration !== "string" ||
-      !GENERATION.test(store.expectedRestoreGeneration)) return denied();
+export interface PinnedTargetStagingFiles {
+  readonly directory: string;
+  readonly databasePath: string;
+  readonly databaseFd: number;
+  /** Path still names the pinned inode (no swap, hard link or symlink). */
+  stillPinned(): boolean;
+  /**
+   * Open SQLite on the verified path, then (after the caller ran its first
+   * statement, which is when SQLite really opens the file) prove that exactly
+   * one new regular-file descriptor appeared and that it is the pinned inode.
+   */
+  openDatabase(options: { readOnly: boolean }): { db: DatabaseSync; verifyOpened(): boolean };
+  close(): void;
+}
 
+/**
+ * Shared by writers and the live read check: a no-follow directory fd owned by
+ * this uid with mode 0700, whose /proc|/dev/fd realpath equals the verified
+ * directory, and a database fd opened THROUGH that directory fd whose
+ * dev/ino/nlink match the lstat of the path. Returns null (fail closed) on any
+ * boundary failure. Same staging-only limits as the writer: this is not a
+ * production fd-backed VFS.
+ */
+export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetStagingFiles | null {
   const descriptorRoot = process.platform === "linux" ? "/proc/self/fd"
     : process.platform === "darwin" ? "/dev/fd" : null;
   if (!descriptorRoot || constants.O_DIRECTORY === undefined ||
-      constants.O_NOFOLLOW === undefined) return denied();
-
+      constants.O_NOFOLLOW === undefined) return null;
   let directoryFd: number | null = null;
   let databaseFd: number | null = null;
-  let db: DatabaseSync | null = null;
-  let transaction = false;
   try {
-    const directory = verifyExistingTargetStagingPath(store.stagingDirectory);
+    const directory = verifyExistingTargetStagingPath(stagingDirectory);
     directoryFd = openSync(directory,
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    if (realpathSync(descriptorRoot + "/" + directoryFd) !== directory) return denied();
-    // Only the bootstrap-created private staging directory is writable. Never
+    if (realpathSync(descriptorRoot + "/" + directoryFd) !== directory) throw new PinDenied();
+    // Only the bootstrap-created private staging directory is accepted. Never
     // open a path shared with a different user or a legacy production store.
     const stagingStat = fstatSync(directoryFd);
     if (!process.getuid || stagingStat.uid !== process.getuid() ||
-        (stagingStat.mode & 0o077) !== 0) return denied();
+        (stagingStat.mode & 0o077) !== 0) throw new PinDenied();
     const databasePath = path.join(directory, TARGET_STORE_FILENAME);
     const info = lstatSync(databasePath);
-    if (!info.isFile() || info.isSymbolicLink() || !noTargetStagingSidecars(databasePath)) return denied();
+    if (!info.isFile() || info.isSymbolicLink()) throw new PinDenied();
     databaseFd = openSync(descriptorRoot + "/" + directoryFd + "/" + TARGET_STORE_FILENAME,
       constants.O_RDONLY | constants.O_NOFOLLOW);
     const pinned = fstatSync(databaseFd);
     if (!pinned.isFile() || pinned.nlink !== 1 ||
-        pinned.dev !== info.dev || pinned.ino !== info.ino) return denied();
-    // A WAL-mode source may create -wal/-shm on a writable SQLite open even
-    // when no sidecars are present yet. Reject it from the pinned header first.
+        pinned.dev !== info.dev || pinned.ino !== info.ino) throw new PinDenied();
+    // A WAL-mode source may create -wal/-shm even on a read-only SQLite open.
+    // Reject it from the pinned header first.
     const header = Buffer.alloc(20);
     if (readSync(databaseFd, header, 0, header.length, 0) !== header.length ||
         header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
-        header[18] !== 1 || header[19] !== 1) return denied();
+        header[18] !== 1 || header[19] !== 1) throw new PinDenied();
 
     // Observe newly opened *regular-file descriptors*, rather than accepting
     // a rising count of ANY descriptors pointing to the pinned inode. An
-    // unexpected concurrent file open makes this staging mutation fail closed.
-    // This does not solve arbitrary cross-process directory/path swapping:
-    // fd-backed SQLite/VFS remains a prerequisite for production writes.
+    // unexpected concurrent file open makes the operation fail closed.
     const regularFiles = (): Map<number, { dev: number; ino: number }> => {
       const result = new Map<number, { dev: number; ino: number }>();
       for (const name of readdirSync(descriptorRoot)) {
@@ -123,30 +129,83 @@ export function withPinnedTargetStagingWrite<T>(
           current.nlink === 1 && current.dev === pinned.dev && current.ino === pinned.ino;
       } catch { return false; }
     };
-    const beforeOpen = regularFiles();
-    db = new DatabaseSync(databasePath);
-    if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 10_000) return denied();
+    const dirFd = directoryFd;
+    const dbFd = databaseFd;
+    directoryFd = null;
+    databaseFd = null;
+    return {
+      directory, databasePath, databaseFd: dbFd, stillPinned,
+      openDatabase: options => {
+        const beforeOpen = regularFiles();
+        const db = new DatabaseSync(databasePath, { readOnly: options.readOnly });
+        return {
+          db,
+          verifyOpened: () => {
+            const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
+            return newlyOpened.length === 1 &&
+              newlyOpened[0][1].dev === pinned.dev && newlyOpened[0][1].ino === pinned.ino &&
+              stillPinned();
+          },
+        };
+      },
+      close: () => {
+        try { closeSync(dbFd); } catch { /* fail closed */ }
+        try { closeSync(dirFd); } catch { /* fail closed */ }
+      },
+    };
+  } catch {
+    if (databaseFd !== null) { try { closeSync(databaseFd); } catch { /* fail closed */ } }
+    if (directoryFd !== null) { try { closeSync(directoryFd); } catch { /* fail closed */ } }
+    return null;
+  }
+}
+
+/**
+ * Establish the pinned connection, take the RESERVED write lock, run the
+ * canonical r2-model preflight on that very connection, then call body. The
+ * caller cannot supply a DatabaseSync, file descriptor or generation.
+ * `denied` is returned for every boundary failure, `failed` for any exception.
+ */
+export function withPinnedTargetStagingWrite<T>(
+  store: TargetStagingReadStore,
+  body: (context: TargetStagingPinnedWriteContext) => T,
+  denied: () => T,
+  failed: () => T,
+  /** Bounded lock wait for short control-plane writes; the title writer fails fast (0). */
+  busyTimeoutMs = 0,
+): T {
+  if (!store || typeof store.stagingDirectory !== "string" ||
+      typeof store.expectedRestoreGeneration !== "string" ||
+      !GENERATION.test(store.expectedRestoreGeneration) ||
+      !Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 10_000) return denied();
+
+  let files: PinnedTargetStagingFiles | null = null;
+  let db: DatabaseSync | null = null;
+  let transaction = false;
+  try {
+    files = pinTargetStagingFiles(store.stagingDirectory);
+    if (!files || !noTargetStagingSidecars(files.databasePath)) return denied();
+    const opened = files.openDatabase({ readOnly: false });
+    db = opened.db;
     db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
-    if (newlyOpened.length !== 1 ||
-        newlyOpened[0][1].dev !== pinned.dev ||
-        newlyOpened[0][1].ino !== pinned.ino ||
-        !stillPinned() || !noTargetStagingSidecars(databasePath)) return denied();
+    if (!opened.verifyOpened() || !noTargetStagingSidecars(files.databasePath)) return denied();
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
     const preflight = inspectIsolatedTargetStore({
-      stagingDirectory: directory,
+      stagingDirectory: files.directory,
       expectedRestoreGeneration: store.expectedRestoreGeneration,
       mode: "r2-model",
-    }, { db, fd: databaseFd });
+    }, { db, fd: files.databaseFd });
     if (!preflight.ok) return denied();
     const connection = db;
+    const pinnedFiles = files;
     return body({
-      db: connection, databaseFd, directory, databasePath, stillPinned,
-      noSidecars: () => noTargetStagingSidecars(databasePath),
+      db: connection, databaseFd: pinnedFiles.databaseFd, directory: pinnedFiles.directory,
+      databasePath: pinnedFiles.databasePath, stillPinned: pinnedFiles.stillPinned,
+      noSidecars: () => noTargetStagingSidecars(pinnedFiles.databasePath),
       commit: () => { connection.exec("COMMIT"); transaction = false; },
     });
   } catch {
@@ -158,11 +217,6 @@ export function withPinnedTargetStagingWrite<T>(
       }
       try { db.close(); } catch { /* fail closed */ }
     }
-    if (databaseFd !== null) {
-      try { closeSync(databaseFd); } catch { /* fail closed */ }
-    }
-    if (directoryFd !== null) {
-      try { closeSync(directoryFd); } catch { /* fail closed */ }
-    }
+    if (files) files.close();
   }
 }
