@@ -603,3 +603,36 @@ test("HTTP: store integrity loss maps to 503 (not 401)", async () => {
   assert.deepEqual(counts(), state);
   assert.equal(role(area, "dave"), null);
 });
+
+test("explicit-rowid REPLACE cannot delete a row behind the DELETE/immutability triggers", () => {
+  const area = makeArea({ bob: "editor" });
+  const rev = revision(area);
+  // Rowid-less tables expose no rowid at all, so the bypass cannot even be expressed.
+  for (const sql of [
+    "INSERT OR REPLACE INTO area_members(rowid,area_id,user_id,role) VALUES (1,?, 'bob', 'editor')",
+    "INSERT OR REPLACE INTO identities(rowid,id) VALUES (1, 'rowid-x')",
+    "INSERT OR REPLACE INTO workspaces(rowid,id,kind,owner_user_id) VALUES (1, 'rowid-w', 'shared', 'alice')",
+    "INSERT OR REPLACE INTO areas(rowid,id,title,kind,workspace_id,owner_user_id) VALUES (1,'rowid-a','T','shared','rowid-w','alice')",
+    "INSERT OR REPLACE INTO metadata(rowid,key,value) VALUES (1, 'rowid-k', 'v')",
+  ]) {
+    assert.throws(() => db.prepare(sql).run(...(sql.includes("?") ? [area] : [])), /rowid/i, sql);
+  }
+  assert.equal(role(area, "alice"), "admin");
+  assert.equal(role(area, "bob"), "editor");
+  assert.equal(revision(area), rev);
+  // tasks keeps a rowid for the read model's tie-break: an explicit colliding rowid is rejected.
+  const first = `${area}-rw1`;
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'one')").run(first, area);
+  const rowid = db.prepare("SELECT rowid AS r FROM tasks WHERE id=?").get(first).r;
+  assert.throws(() => db.prepare("INSERT OR REPLACE INTO tasks(rowid,id,area_id,title) VALUES (?,?,?,'two')")
+    .run(rowid, `${area}-rw2`, area), /task replacement is not allowed/);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(first).title, "one");
+  // The membership audit is INTEGER PRIMARY KEY (rowid alias) with an id/key replace guard.
+  assert.equal(apply("alice", command(area, "add", "dave", { role: "viewer" })).ok, true);
+  const audit = db.prepare("SELECT id, receipt_key FROM area_membership_audit ORDER BY id DESC LIMIT 1").get();
+  assert.throws(() => db.prepare(`INSERT OR REPLACE INTO area_membership_audit(id,receipt_key,actor_user_id,area_id,
+    target_user_id,action,role_before,role_after,policy_revision_before,policy_revision_after,restore_generation,committed_at_ms)
+    VALUES (?, ?, 'alice', ?, 'bob', 'add', NULL, 'viewer', 0, 1, ?, 1)`)
+    .run(audit.id, audit.receipt_key, area, stage.restoreGeneration), /replacement/);
+  assert.equal(role(area, "alice"), "admin");
+});

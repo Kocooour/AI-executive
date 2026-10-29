@@ -127,13 +127,16 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
 }
 
 export const TARGET_SCHEMA_SQL = `
-CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Every table whose invariants rely on triggers is WITHOUT ROWID (or has an
+-- INTEGER PRIMARY KEY alias guarded in BEFORE INSERT): INSERT OR REPLACE with an
+-- explicit rowid would otherwise delete a different row without DELETE triggers.
+CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE identities (
   id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0),
   -- Monotonic sign-out-everywhere counter. A durable session is live only while
   -- its issue-time epoch still equals this value.
   revocation_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revocation_epoch)='integer' AND revocation_epoch >= 0 AND revocation_epoch < 9007199254740991)
-);
+) WITHOUT ROWID;
 -- Durable staging sessions (R2-ID.1). Only the SHA-256 hash of a random
 -- 256-bit token is stored; the raw token is returned once at issuance and
 -- cannot be recovered. A rowid-less PK prevents REPLACE through a hidden rowid.
@@ -155,7 +158,7 @@ CREATE TABLE workspaces (
   kind TEXT NOT NULL CHECK(kind IN ('personal', 'shared')),
   owner_user_id TEXT NOT NULL REFERENCES identities(id),
   UNIQUE (id, kind, owner_user_id)
-);
+) WITHOUT ROWID;
 CREATE UNIQUE INDEX one_personal_workspace_per_user ON workspaces(owner_user_id) WHERE kind = 'personal';
 
 CREATE TABLE areas (
@@ -172,7 +175,7 @@ CREATE TABLE areas (
   FOREIGN KEY (workspace_id, workspace_kind, owner_user_id)
     REFERENCES workspaces(id, kind, owner_user_id),
   CHECK(kind = 'private' OR system_key IS NULL)
-);
+) WITHOUT ROWID;
 -- At most one Area per shared workspace. An orphan workspace is a staging-only
 -- intermediate state; R2 must validate a complete 1:1 mapping and active admin
 -- membership before activation or any actor-accessible write.
@@ -185,7 +188,7 @@ CREATE TABLE area_members (
   user_id TEXT NOT NULL REFERENCES identities(id),
   role TEXT NOT NULL CHECK(role IN ('viewer', 'editor', 'admin')),
   PRIMARY KEY(area_id, user_id)
-);
+) WITHOUT ROWID;
 -- A rowid-less PK prevents INSERT/UPDATE OR REPLACE from silently deleting a
 -- different project through a hidden rowid collision (DELETE triggers may not fire).
 CREATE TABLE projects (
@@ -358,8 +361,11 @@ BEGIN SELECT RAISE(ABORT, 'project revision must increment by one'); END;
 CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
 WHEN NEW.policy_revision <> OLD.policy_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
+-- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
+-- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
+  OR EXISTS(SELECT 1 FROM tasks WHERE rowid = NEW.rowid)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
 -- A same-ID replacement can also be staged by renaming the original task's
 -- primary key, then inserting a new row with revision 0 under its old ID.
