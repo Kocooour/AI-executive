@@ -24,7 +24,17 @@ try {
       const result = authority.readPersonalTaskDetailWithRevision(resolved.actor, taskId);
       if (result.ok) process.stdout.write(JSON.stringify({ ok: true, task: result.task, snapshotRevision: result.snapshotRevision }));
       else if (result.reason === "unavailable") {
-        process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));
+        // Not a private task of this actor: R2-ID.2b falls back to a shared-Area
+        // task of which the actor is a current member (any role). The private
+        // path above is unchanged; unknown / foreign / non-member stay "unavailable".
+        const shared = authority.readSharedTaskDetail(resolved.actor, taskId);
+        if (shared && shared.ok) {
+          process.stdout.write(JSON.stringify({
+            ok: true, scope: "shared", task: shared.task, linearization: shared.linearization,
+          }));
+        } else if (shared && shared.reason === "unavailable") {
+          process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));
+        } else process.exitCode = 1;
       } else process.exitCode = 1;
     } finally {
       authority.close();

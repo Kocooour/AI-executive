@@ -100,6 +100,165 @@ const AUTHORIZED_TASK_FROM = `
 `;
 
 /**
+ * R2-ID.2b scoped (shared / my-plan) read DTOs. Rows never carry another user's
+ * ID, a member list or a count: only the actor's own assignment as a boolean.
+ */
+export type TargetScopedReadableTask = {
+  id: string;
+  title: string;
+  projectId: string | null;
+  effectiveAreaId: string;
+  areaId: string;
+  areaKind: "private" | "shared";
+  /** Present on shared-Area rows only. */
+  assignedToMe?: boolean;
+};
+
+/** How the actor's read access to a contributing Area was established. */
+export type TargetReadAreaAccess = "private-owner" | "viewer" | "editor" | "admin";
+
+export type TargetReadContributingArea = {
+  areaId: string;
+  areaKind: "private" | "shared";
+  policyRevision: number;
+  access: TargetReadAreaAccess;
+};
+
+/** What a snapshot read observed; re-verified on the LIVE store before release. */
+export type TargetReadLinearization = {
+  actorUserId: string;
+  areas: TargetReadContributingArea[];
+};
+
+export type TargetScopedOffsetPage = {
+  tasks: TargetScopedReadableTask[];
+  hasMore: boolean;
+  revision: string;
+  linearization: TargetReadLinearization;
+};
+
+type ScopedRow = {
+  id: string; title: string; projectId: string | null; areaId: string;
+  areaKind: "private" | "shared"; assignedToMe: number; policyRevision: number;
+  role: string | null; taskRevision: number;
+};
+
+const SCOPED_COLUMNS = `SELECT t.id AS id, t.title AS title, t.project_id AS projectId,
+    a.id AS areaId, a.kind AS areaKind,
+    CASE WHEN t.assignee_user_id = actor.id THEN 1 ELSE 0 END AS assignedToMe,
+    a.policy_revision AS policyRevision, member.role AS role, t.revision AS taskRevision`;
+
+const SCOPE_PREDICATE = `
+  AND ((? = 'shared' AND a.kind = 'shared')
+    OR (? = 'my-plan' AND (a.kind = 'private'
+      OR (a.kind = 'shared' AND t.assignee_user_id = actor.id
+        AND member.role IN ('editor', 'admin')))))`;
+
+const toScopedTask = (row: ScopedRow): TargetScopedReadableTask => ({
+  id: row.id, title: row.title, projectId: row.projectId,
+  effectiveAreaId: row.areaId, areaId: row.areaId, areaKind: row.areaKind,
+  ...(row.areaKind === "shared" ? { assignedToMe: row.assignedToMe === 1 } : {}),
+});
+
+const scopedAccess = (row: Pick<ScopedRow, "areaKind" | "role">): TargetReadAreaAccess | null =>
+  row.areaKind === "private" ? "private-owner"
+    : row.role === "viewer" || row.role === "editor" || row.role === "admin" ? row.role : null;
+
+function linearizationOf(actorUserId: string, rows: ScopedRow[]): TargetReadLinearization | null {
+  const areas = new Map<string, TargetReadContributingArea>();
+  for (const row of rows) {
+    const access = scopedAccess(row);
+    if (!access) return null;
+    areas.set(row.areaId, { areaId: row.areaId, areaKind: row.areaKind, policyRevision: row.policyRevision, access });
+  }
+  return { actorUserId, areas: [...areas.values()] };
+}
+
+/**
+ * Opaque pagination revision for the actor's shared / my-plan list. It hashes
+ * only rows this actor is authorized to read, plus the policy_revision and the
+ * actor's role of each contributing Area and the restore generation, so a
+ * change in an Area the actor cannot see never makes the actor's cursor stale.
+ */
+export function scopedTaskListRevision(
+  db: DatabaseSync, actorUserId: string, scope: "shared" | "my-plan", restoreGeneration: string,
+): string | null {
+  if (!validId(actorUserId) || !validId(restoreGeneration) || !["shared", "my-plan"].includes(scope)) return null;
+  try {
+    const hash = createHash("sha256")
+      .update("lumi:r2id2b:scoped-task-list-revision:v1\0" + scope + "\0" + restoreGeneration + "\0");
+    const rows = db.prepare(`${SCOPED_COLUMNS} ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}
+      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC`);
+    for (const row of rows.iterate(actorUserId, scope, scope) as Iterable<ScopedRow>) {
+      hash.update(JSON.stringify([
+        row.id, row.title, row.projectId, row.areaId, row.areaKind,
+        row.assignedToMe, row.policyRevision, row.role, row.taskRevision,
+      ])).update("\0");
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/** Offset page for scope shared or my-plan, with its linearization record. */
+export function readScopedTaskOffsetPage(
+  db: DatabaseSync,
+  request: { actorUserId: string; scope: "shared" | "my-plan"; limit: number;
+    offset: number; restoreGeneration: string },
+): TargetScopedOffsetPage | null {
+  if (!request || !validId(request.actorUserId) || !["shared", "my-plan"].includes(request.scope) ||
+      !Number.isInteger(request.limit) || request.limit < 1 || request.limit > 100 ||
+      !Number.isSafeInteger(request.offset) || request.offset < 0 ||
+      request.offset > MAX_STAGING_PAGE_OFFSET) return null;
+  try {
+    const rows = db.prepare(`${SCOPED_COLUMNS} ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}
+      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC
+      LIMIT ? OFFSET ?`).all(
+      request.actorUserId, request.scope, request.scope, request.limit + 1, request.offset,
+    ) as ScopedRow[];
+    const page = rows.slice(0, request.limit);
+    // EVERY Area behind anything released (page rows, look-ahead row, cursor revision):
+    // all Areas of the actor's scope in this snapshot, not just the page's.
+    const scopeRows = db.prepare(`SELECT DISTINCT a.id AS areaId, a.kind AS areaKind,
+        a.policy_revision AS policyRevision, member.role AS role ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}`)
+      .all(request.actorUserId, request.scope, request.scope) as ScopedRow[];
+    const linearization = linearizationOf(request.actorUserId, scopeRows);
+    const revision = scopedTaskListRevision(db, request.actorUserId, request.scope, request.restoreGeneration);
+    if (!linearization || !revision) return null;
+    return { tasks: page.map(toScopedTask), hasMore: rows.length > request.limit, revision, linearization };
+  } catch {
+    return null;
+  }
+}
+
+export type TargetSharedTaskDetail =
+  | { ok: true; task: TargetScopedReadableTask; linearization: TargetReadLinearization }
+  | { ok: false; reason: "unavailable" | "query_failed" };
+
+/**
+ * Detail of a task in a shared Area for any CURRENT member (viewer, editor,
+ * admin). Unknown, foreign-private and non-member tasks share one result.
+ */
+export function readSharedTargetTask(
+  db: DatabaseSync, request: TargetTaskDetailRequest,
+): TargetSharedTaskDetail {
+  if (!request || !validId(request.actorUserId) || !validId(request.taskId)) {
+    return { ok: false, reason: "unavailable" };
+  }
+  try {
+    const row = db.prepare(`${SCOPED_COLUMNS} ${AUTHORIZED_TASK_FROM}
+      AND a.kind = 'shared' AND t.id = ?`).get(request.actorUserId, request.taskId) as ScopedRow | undefined;
+    if (!row) return { ok: false, reason: "unavailable" };
+    const linearization = linearizationOf(request.actorUserId, [row]);
+    if (!linearization) return { ok: false, reason: "query_failed" };
+    return { ok: true, task: toScopedTask(row), linearization };
+  } catch {
+    return { ok: false, reason: "query_failed" };
+  }
+}
+
+/**
  * Opaque pagination revision for the *authenticated actor's* personal list.
  *
  * Hash only rows that the same list ACL permits the actor to read. Hashing

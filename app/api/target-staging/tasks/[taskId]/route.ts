@@ -2,9 +2,10 @@ import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+  verifyStagingReadBeforeRelease,
 } from "../../../../../lib/target-staging-http-identity";
 import { enforceRateLimit } from "../../../../../lib/http-security";
-import { readStagingPersonalDetailInChild } from "../../../../../lib/target-staging-read-process";
+import { readStagingTaskDetailInChild } from "../../../../../lib/target-staging-read-process";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,23 +48,31 @@ export async function GET(
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
-    const result = await readStagingPersonalDetailInChild({
+    const result = await readStagingTaskDetailInChild({
       stagingDirectory, expectedRestoreGeneration, ownerUserId,
       ...stagingChildSessionConfig(identity),
     }, taskId);
     // Linearization point (R2-ID.1): after the child read, immediately before the
     // body is released, a durable session is re-verified against the LIVE store.
-    const released = verifyStagingIdentityBeforeRelease(
-      request, identity, { stagingDirectory, expectedRestoreGeneration });
-    if (released !== "ok") return stagingIdentityRefusal(released);
+    // R2-ID.2b: a shared-Area task additionally re-verifies, in the same live
+    // transaction, that its Area is still readable at the observed policy_revision;
+    // otherwise the answer is the indistinguishable 404.
+    const store = { stagingDirectory, expectedRestoreGeneration };
+    const released = result && result.ok && "scope" in result
+      ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId, result.linearization)
+      : verifyStagingIdentityBeforeRelease(request, identity, store);
+    if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
       return answer(503, "Staging unavailable");
     }
+    if (released === "stale") return answer(404, "Not found");
     if (!result) return answer(503, "Staging unavailable");
     if (!result.ok) return answer(404, "Not found");
+    // Shared-Area task: no title CAS revision (writes arrive with R2-ID.3).
+    if ("scope" in result) return Response.json({ task: result.task }, { headers });
     return Response.json({ task: result.task, snapshotRevision: result.snapshotRevision }, { headers });
   } catch {
     return answer(503, "Staging unavailable");

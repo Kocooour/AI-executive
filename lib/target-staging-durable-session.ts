@@ -28,6 +28,9 @@ import {
 } from "./target-staging-pinned-write";
 import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import { evaluateTargetAreaPolicy } from "./target-area-policy";
+import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
+import type { TargetReadLinearization } from "./target-task-read-model";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -206,6 +209,23 @@ export function verifyDurableTargetStagingSessionLive(
 ): TargetStagingLiveSession {
   const unavailable: TargetStagingLiveSession = { ok: false, reason: "unavailable" };
   if (!isTargetStagingSessionTokenHash(tokenHash)) return { ok: false, reason: "invalid" };
+  return withLiveStagingReadTransaction<TargetStagingLiveSession>(store, db => {
+    const live = lookupLiveTargetStagingSession(db, tokenHash, nowMs);
+    return live ? { ok: true, sessionId: live.sessionId, userId: live.userId }
+      : { ok: false, reason: "invalid" };
+  }, unavailable);
+}
+
+/**
+ * One short read transaction on the LIVE staging store, opened exclusively via
+ * the pinned read-only helper (never by path): directory fd, uid/mode, fd-relative
+ * open, dev/ino/nlink identity re-proven after the first statement and after the
+ * read, metadata (schema, not activated, restore generation) from the same
+ * snapshot. `body` runs inside that snapshot; any failure is `unavailable`.
+ */
+function withLiveStagingReadTransaction<T>(
+  store: TargetStagingReadStore, body: (db: DatabaseSync) => T, unavailable: T,
+): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string") return unavailable;
   let files: PinnedTargetStagingFiles | null = null;
@@ -235,14 +255,13 @@ export function verifyDurableTargetStagingSessionLive(
         values.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
         values.get("activated") !== "false" ||
         values.get("restore_generation") !== store.expectedRestoreGeneration) return unavailable;
-    const live = lookupLiveTargetStagingSession(db, tokenHash, nowMs);
+    const result = body(db);
     db.exec("ROLLBACK");
     snapshot = false;
     if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) {
       return unavailable;
     }
-    return live ? { ok: true, sessionId: live.sessionId, userId: live.userId }
-      : { ok: false, reason: "invalid" };
+    return result;
   } catch {
     return unavailable;
   } finally {
@@ -254,4 +273,71 @@ export function verifyDurableTargetStagingSessionLive(
     }
     if (files) files.close();
   }
+}
+
+export type TargetStagingReadLive =
+  | { ok: true }
+  /** Session not live (unknown, revoked, expired, stale epoch): HTTP 401. */
+  | { ok: false; reason: "invalid" }
+  /** Membership / role / private ownership / policy_revision moved since the snapshot. */
+  | { ok: false; reason: "stale" }
+  | { ok: false; reason: "unavailable" };
+
+/**
+ * R2-ID.2b read linearization point. Immediately before a body is released, in
+ * ONE short read transaction on the LIVE store: (1) the durable session is live
+ * (skipped for the owner-cookie subject), then (2) for every Area which
+ * contributed to the snapshot read, the actor's CURRENT membership/role (or
+ * private ownership) still grants read, equals the role observed in the snapshot
+ * and the Area's policy_revision equals the snapshot's. Order matters: a dead
+ * session is "invalid" (401) even if memberships also changed. Everything else
+ * which fails is "stale" (the caller reloads) or "unavailable" (fail closed).
+ *
+ * Task reassignment does NOT bump policy_revision, so a my-plan response may
+ * lag one request behind a reassignment away from the actor; that is accepted.
+ */
+export function verifyTargetStagingReadLive(
+  store: TargetStagingReadStore,
+  subject: { readonly tokenHash: string } | { readonly ownerUserId: string },
+  observed: TargetReadLinearization,
+  nowMs = Date.now(),
+): TargetStagingReadLive {
+  const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
+  if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
+      !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
+  if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
+    return { ok: false, reason: "invalid" };
+  }
+  return withLiveStagingReadTransaction<TargetStagingReadLive>(store, db => {
+    let actorUserId: string;
+    if ("tokenHash" in subject) {
+      const live = lookupLiveTargetStagingSession(db, subject.tokenHash, nowMs);
+      if (!live) return { ok: false, reason: "invalid" };
+      actorUserId = live.userId;
+    } else {
+      if (typeof subject.ownerUserId !== "string" || !USER_ID.test(subject.ownerUserId)) return unavailable;
+      actorUserId = subject.ownerUserId;
+    }
+    // The snapshot must have been read for this very actor.
+    if (actorUserId !== observed.actorUserId) return unavailable;
+    for (const area of observed.areas) {
+      if (!area || typeof area.areaId !== "string" || !Number.isSafeInteger(area.policyRevision)) {
+        return unavailable;
+      }
+      const decision = evaluateTargetAreaPolicy(db, { actorUserId, areaId: area.areaId, permission: "read" });
+      if (!decision.allowed) {
+        return decision.reason === "query_failed" ? unavailable : { ok: false, reason: "stale" };
+      }
+      const current = db.prepare(`SELECT a.kind AS kind, a.policy_revision AS policy_revision, m.role AS role
+        FROM areas a LEFT JOIN area_members m ON m.area_id = a.id AND m.user_id = ?
+        WHERE a.id = ?`).get(actorUserId, area.areaId) as
+        { kind: string; policy_revision: number; role: string | null } | undefined;
+      if (!current) return { ok: false, reason: "stale" };
+      const access = current.kind === "private" ? "private-owner" : current.role;
+      if (access !== area.access || current.policy_revision !== area.policyRevision) {
+        return { ok: false, reason: "stale" };
+      }
+    }
+    return { ok: true };
+  }, unavailable);
 }

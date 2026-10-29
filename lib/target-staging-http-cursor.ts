@@ -19,11 +19,17 @@ export interface StagingHttpCursorContext {
   readonly stagingDirectory: string;
   readonly authenticationBinding: string;
   readonly sessionSecret: string;
+  /**
+   * R2-ID.2b read scope. Absent means "personal" with the exact historical
+   * binding; "shared" / "my-plan" extend the binding, so a cursor never moves
+   * between scopes (a personal cursor is invalid for shared and vice versa).
+   */
+  readonly scope?: "personal" | "shared" | "my-plan";
 }
 
 type Claims = {
   v: 1;
-  scope: "personal";
+  scope: "personal" | "shared" | "my-plan";
   binding: string;
   rev: string;
   offset: number;
@@ -40,12 +46,16 @@ function safeContext(context: StagingHttpCursorContext): boolean {
     typeof context.restoreGeneration === "string" &&
     typeof context.stagingDirectory === "string" &&
     BINDING.test(context.authenticationBinding) &&
-    typeof context.sessionSecret === "string" && context.sessionSecret.length >= 32;
+    typeof context.sessionSecret === "string" && context.sessionSecret.length >= 32 &&
+    (context.scope === undefined || SCOPES.includes(context.scope));
 }
 
 function derivedKey(secret: string): Buffer {
   return createHmac("sha256", secret).update(DOMAIN + "key").digest();
 }
+
+const SCOPES = ["personal", "shared", "my-plan"];
+const scopeOf = (context: StagingHttpCursorContext): Claims["scope"] => context.scope ?? "personal";
 
 function bindingDigest(context: StagingHttpCursorContext): string {
   const binding = JSON.stringify({
@@ -53,6 +63,7 @@ function bindingDigest(context: StagingHttpCursorContext): string {
     generation: context.restoreGeneration,
     directory: context.stagingDirectory,
     authentication: context.authenticationBinding,
+    ...(scopeOf(context) === "personal" ? {} : { scope: scopeOf(context) }),
   });
   return createHmac("sha256", derivedKey(context.sessionSecret))
     .update(DOMAIN + "binding\0" + binding).digest("hex");
@@ -73,7 +84,7 @@ export function signStagingHttpCursor(
   const exp = expiresAt ?? now + MAX_AGE_SECONDS;
   if (!Number.isSafeInteger(exp) || exp <= now || exp > now + MAX_AGE_SECONDS) return null;
   const claims: Claims = {
-    v: 1, scope: "personal", binding: bindingDigest(context),
+    v: 1, scope: scopeOf(context), binding: bindingDigest(context),
     rev: revision, offset, iat: now, exp,
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
@@ -100,7 +111,7 @@ export function verifyStagingHttpCursor(
     const claims: Claims = JSON.parse(payload.toString("utf8"));
     if (!claims || typeof claims !== "object" || Array.isArray(claims) ||
         Object.keys(claims).sort().join(",") !== "binding,exp,iat,offset,rev,scope,v" ||
-        claims.v !== 1 || claims.scope !== "personal" ||
+        claims.v !== 1 || claims.scope !== scopeOf(context) ||
         claims.binding !== bindingDigest(context) ||
         typeof claims.rev !== "string" || !SHA256.test(claims.rev) ||
         !Number.isSafeInteger(claims.offset) || claims.offset < 1 ||

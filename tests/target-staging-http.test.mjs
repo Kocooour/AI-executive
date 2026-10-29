@@ -197,7 +197,7 @@ test("stateless cursor verifies across independent contexts and expires without 
 
 test("client actor, scope, Area, workspace and malformed cursors are rejected", async () => {
   configure();
-  for (const query of ["?actorUserId=bob", "?scope=shared", "?areaId=family-area",
+  for (const query of ["?actorUserId=bob", "?scope=family-area", "?scope=", "?scope=shared&scope=personal", "?scope=Shared", "?areaId=family-area",
     "?workspaceId=family", "?cursor=forged", "?limit=0", "?limit=101",
     "?limit=1.5", "?limit=1&limit=2", "?cursor=a.b&cursor=c.d"]) {
     const response = await GET(request(query));
@@ -313,18 +313,26 @@ test("personal detail returns only the configured owner's private task", async (
     id: "alice-private", title: "Alice private", projectId: null,
     effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
   });
-  for (const taskId of ["absent", "bob-private", "family-shared"]) {
+  for (const taskId of ["absent", "bob-private"]) {
     const denied = await detail(taskId);
     assert.equal(denied.status, 404, taskId);
     assert.equal(denied.headers.get("cache-control"), "no-store");
     assert.deepEqual(await denied.json(), { error: "Not found" });
   }
+  // R2-ID.2b: a shared-Area task is readable by its current member (alice is admin),
+  // with the minimal shared shape and no private-only title CAS revision.
+  const sharedDetail = await detail("family-shared");
+  assert.equal(sharedDetail.status, 200);
+  assert.deepEqual(await sharedDetail.json(), { task: {
+    id: "family-shared", title: "Family secret", projectId: null, effectiveAreaId: "family-area",
+    areaId: "family-area", areaKind: "shared", assignedToMe: false,
+  } });
   process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "bob";
   const bob = await detail("bob-private");
   assert.equal(bob.status, 200);
   assert.equal((await bob.json()).task.title, "Bob secret");
   assert.equal((await detail("alice-private")).status, 404);
-  assert.equal((await detail("family-shared")).status, 404);
+  assert.equal((await detail("family-shared")).status, 200, "bob is an editor member of the shared Area");
   configure();
 });
 
@@ -358,12 +366,16 @@ test("detail revision supports owner-private PATCH and rejects stale revisions",
     insert.run(moved, stage.unassignedAreaId, "Private before move");
     const movedRevision = (await (await detail(moved)).json()).snapshotRevision;
     db.prepare("UPDATE tasks SET area_id=? WHERE id=?").run("family-area", moved);
-    assert.equal((await detail(moved)).status, 404);
+    // R2-ID.2b: it is now a shared-Area task readable by alice (admin) but WITHOUT a
+    // title CAS revision, and the private-only title command still refuses it.
+    const movedShared = await detail(moved);
+    assert.equal(movedShared.status, 200);
+    assert.equal("snapshotRevision" in (await movedShared.json()), false);
     assert.equal((await patchTitle(moved, "Must not write", movedRevision,
       "123e4567-e89b-42d3-a456-426614174104")).status, 404);
     assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(moved).title,
       "Private before move");
-    for (const deniedId of ["bob-private", "family-shared", "absent"]) {
+    for (const deniedId of ["bob-private", "absent"]) {
       const denied = await detail(deniedId);
       assert.equal(denied.status, 404, deniedId);
       assert.deepEqual(await denied.json(), { error: "Not found" });

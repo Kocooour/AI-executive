@@ -19,8 +19,13 @@ import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
   inReadSnapshot, readAuthenticatedIsolatedTargetTask, verifiedActor,
 } from "./target-task-authenticated-read";
-import { personalTaskListRevision, readIsolatedTargetTask, readPrivateTaskTitleAudit } from "./target-task-read-model";
-import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
+import {
+  personalTaskListRevision, readIsolatedTargetTask, readPrivateTaskTitleAudit,
+  readScopedTaskOffsetPage, readSharedTargetTask,
+} from "./target-task-read-model";
+import type {
+  TargetPrivateTaskTitleAuditResult, TargetScopedOffsetPage, TargetSharedTaskDetail,
+} from "./target-task-read-model";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
@@ -442,6 +447,40 @@ export function readPreflightedPrivateProjectDetail(
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
   );
+}
+
+/**
+ * R2-ID.2b scoped (shared / my-plan) page: one canonical pinned snapshot for
+ * preflight, actor, rows, revision and the linearization record. The record is
+ * what the HTTP route re-verifies against the LIVE store before release.
+ */
+export function readPreflightedScopedTaskPage(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  request: { scope: "shared" | "my-plan"; limit: number; offset: number },
+): TargetScopedOffsetPage | null {
+  return withPreflightedStore<TargetScopedOffsetPage | null>(store, () => null, (db, preflight) =>
+    inReadSnapshot<TargetScopedOffsetPage | null>(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return null;
+      return readScopedTaskOffsetPage(db, {
+        actorUserId, scope: request.scope, limit: request.limit, offset: request.offset,
+        restoreGeneration: store.expectedRestoreGeneration,
+      });
+    }, () => null));
+}
+
+/** Shared-Area task detail for a current member; no title CAS token (writes are R2-ID.3). */
+export function readPreflightedSharedTargetTask(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, taskId: string,
+): TargetSharedTaskDetail | null {
+  return withPreflightedStore<TargetSharedTaskDetail | null>(store, () => null, (db, preflight) =>
+    inReadSnapshot<TargetSharedTaskDetail | null>(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return null;
+      return readSharedTargetTask(db, { actorUserId, taskId });
+    }, () => null));
 }
 
 /** Owner-private task audit timeline: authenticate, preflight and enforce the
