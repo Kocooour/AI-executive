@@ -1,4 +1,4 @@
-/** Owner-private title mutation; title arrives over stdin, never argv. */
+/** Title mutation (private or shared editor/admin; ACL re-checked in the write TX); title arrives over stdin, never argv. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
 import { resolveChildActor } from "./target-staging-child-actor.mjs";
@@ -29,7 +29,7 @@ try {
     if (!resolved) throw new Error("Unavailable");
     const issued = authority.issueWritable(resolved.actor);
     if (!issued) throw new Error("Unavailable");
-    const result = authority.updateTaskTitle(issued.sessionToken, input, true, resolved.sessionTokenHash);
+    const result = authority.updateTaskTitle(issued.sessionToken, input, false, resolved.sessionTokenHash);
     if (result.ok) process.stdout.write(JSON.stringify(result.replayed
       ? { ok: true, replayed: true } : { ok: true }));
     else if (result.reason === "unavailable" || result.reason === "stale_revision" ||

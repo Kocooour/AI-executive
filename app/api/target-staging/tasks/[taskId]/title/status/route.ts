@@ -38,7 +38,7 @@ const unchanged = (before: StagingPersonalReadConfig) => {
     current.ownerUserId === before.ownerUserId;
 };
 
-/** Read-only reconciliation for the exact original owner-private title command. */
+/** Read-only per-identity reconciliation for the exact original title command (private or shared, current write ACL required). */
 export async function POST(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");

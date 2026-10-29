@@ -44,7 +44,7 @@ async function taskIdFrom(context: { params: Promise<{ taskId: string }> }) {
     validTaskId(params.taskId) ? params.taskId : null;
 }
 
-/** Read-only CAS preflight for one currently owner-private task. */
+/** Read-only CAS preflight for a task the actor may CURRENTLY write: own private task or shared Area as editor/admin (R2-ID.3). */
 export async function GET(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
@@ -77,7 +77,7 @@ export async function GET(request: Request,
   return Response.json({ snapshotRevision: result.snapshotRevision }, { headers });
 }
 
-/** Single owner-private title command; no actor/scope/Area or task ID in JSON. */
+/** Single title command (private owner or shared editor/admin; ACL re-checked in the write TX); no actor/scope/Area or task ID in JSON. */
 export async function PATCH(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");

@@ -16,7 +16,7 @@ import {
   TARGET_STAGING_TASK_READ_AUDIENCE, TARGET_STAGING_TASK_WRITE_AUDIENCE,
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
-import type { TargetScopedOffsetPage, TargetSharedTaskDetail } from "./target-task-read-model";
+import type { TargetScopedOffsetPage } from "./target-task-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -30,7 +30,7 @@ import {
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask,
 } from "./target-task-staging-reader";
-import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail,
+import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
@@ -328,8 +328,9 @@ export class TargetStagingSessionAuthority {
     }
   }
 
-  /** R2-ID.2b: shared-Area task detail for a current member of any role. */
-  readSharedTaskDetail(actorUserId: string, taskId: string): TargetSharedTaskDetail | null {
+  /** R2-ID.2b: shared-Area task detail for a current member of any role; R2-ID.3 adds the
+   * title CAS token only for a current editor/admin (same snapshot). */
+  readSharedTaskDetail(actorUserId: string, taskId: string): TargetPreflightedSharedTaskDetail | null {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedSharedTargetTask(this.#store, credential, taskId) : null;

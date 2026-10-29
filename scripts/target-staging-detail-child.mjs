@@ -31,6 +31,7 @@ try {
         if (shared && shared.ok) {
           process.stdout.write(JSON.stringify({
             ok: true, scope: "shared", task: shared.task, linearization: shared.linearization,
+            ...(shared.snapshotRevision === undefined ? {} : { snapshotRevision: shared.snapshotRevision }),
           }));
         } else if (shared && shared.reason === "unavailable") {
           process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));
