@@ -396,7 +396,9 @@ test("two processes racing with the same expected revision cannot both succeed",
   const wins = results.filter(result => result?.ok === true);
   assert.equal(wins.length, 1, JSON.stringify(results));
   const loser = results.find(result => result?.ok !== true);
-  assert.ok(loser === null || ["stale_policy_revision", "write_failed"].includes(loser.reason), JSON.stringify(loser));
+  // Under concurrent BEGIN IMMEDIATE a reader may also fail the pinned-file / sidecar
+  // preflight before policy CAS. That fail-closed denial is safe: one writer must win.
+  assert.ok(loser === null || ["stale_policy_revision", "write_failed", "unauthorized"].includes(loser.reason), JSON.stringify(loser));
   assert.equal(revision(area), expected + 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM area_members WHERE area_id=? AND user_id IN ('bob','carol')").get(area).n, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM area_membership_audit WHERE area_id=?").get(area).n, 1);
