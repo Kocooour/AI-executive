@@ -181,6 +181,9 @@ CREATE TABLE areas (
 CREATE UNIQUE INDEX one_area_per_shared_workspace ON areas(workspace_id) WHERE kind = 'shared';
 CREATE UNIQUE INDEX one_private_unassigned_per_owner ON areas(owner_user_id)
   WHERE system_key = 'unassigned';
+-- Cursor revision candidates must be selected by the current private owner,
+-- without inspecting other users' Areas on every page.
+CREATE INDEX areas_by_owner_kind ON areas(owner_user_id, kind);
 
 CREATE TABLE area_members (
   area_id TEXT NOT NULL REFERENCES areas(id),
@@ -188,6 +191,9 @@ CREATE TABLE area_members (
   role TEXT NOT NULL CHECK(role IN ('viewer', 'editor', 'admin')),
   PRIMARY KEY(area_id, user_id)
 ) WITHOUT ROWID;
+-- The primary key is Area-first. Listing an actor's shared Areas needs a
+-- reverse lookup independent of all other users' memberships.
+CREATE INDEX area_members_by_user_area ON area_members(user_id, area_id);
 -- A rowid-less PK prevents INSERT/UPDATE OR REPLACE from silently deleting a
 -- different project through a hidden rowid collision (DELETE triggers may not fire).
 CREATE TABLE projects (
@@ -339,26 +345,29 @@ WHEN NEW.title IS NOT OLD.title
 BEGIN
   UPDATE projects SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
--- Task-set epochs are incremented inside the same transaction as each insert
--- or mutation (including raw staging SQL). They cannot be reset on title ABA.
--- Project Area moves/deletes are forbidden below; when that policy changes,
--- the affected old/new Area epochs must be bumped for inherited task moves.
+-- Cursor epochs are incremented in the same transaction as every task change.
+-- The existing task_revision_bump advances t.revision for changed list fields;
+-- update the NEW effective Area exactly once when that revision advances,
+-- including a direct SQL revision-only increment. A move between Areas also
+-- invalidates the OLD effective Area (whose tasks have lost this row).
+-- Separate triggers avoid the double bump caused by cascading revision UPDATEs.
 CREATE TRIGGER task_area_content_insert AFTER INSERT ON tasks
 BEGIN
   UPDATE areas SET content_revision = content_revision + 1
     WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
 END;
-CREATE TRIGGER task_area_content_update AFTER UPDATE OF title, project_id, area_id, assignee_user_id, revision ON tasks
-WHEN NEW.title IS NOT OLD.title OR NEW.project_id IS NOT OLD.project_id
-  OR NEW.area_id IS NOT OLD.area_id OR NEW.assignee_user_id IS NOT OLD.assignee_user_id
-  OR NEW.revision IS NOT OLD.revision
+CREATE TRIGGER task_area_content_revision AFTER UPDATE OF revision ON tasks
+WHEN NEW.revision IS NOT OLD.revision
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+END;
+CREATE TRIGGER task_area_content_move_old AFTER UPDATE OF project_id, area_id ON tasks
+WHEN COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id))
+  IS NOT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
 BEGIN
   UPDATE areas SET content_revision = content_revision + 1
     WHERE id = COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
-  UPDATE areas SET content_revision = content_revision + 1
-    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
-      AND COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
-        IS NOT COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
 END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
 BEGIN
