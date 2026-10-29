@@ -25,7 +25,7 @@ import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
-  readPreflightedTargetTaskTitleCommandStatus,
+  readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask,
@@ -38,6 +38,10 @@ import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-st
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
+import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
+import type {
+  TargetStagingTaskDeleteRequest, TargetStagingTaskDeleteResult, TargetStagingTaskDeleteStatusResult,
+} from "./target-task-delete-writer";
 import { applyTargetStagingMembershipCommand, validTargetStagingMembershipCommand } from "./target-staging-membership-command";
 import type { TargetStagingMembershipCommand, TargetStagingMembershipResult } from "./target-staging-membership-command";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
@@ -561,6 +565,40 @@ export class TargetStagingSessionAuthority {
     return writePreflightedTargetTaskTitle(
       this.#store, credential, request, privateOnly, durableSessionTokenHash,
     );
+  }
+
+  /**
+   * R2c.1 idempotent task delete (tombstone). Same write audience, live-ACL and
+   * in-transaction durable-session guarantees as updateTaskTitle.
+   */
+  deleteTask(
+    sessionToken: string,
+    request: TargetStagingTaskDeleteRequest,
+    privateOnly = false,
+    durableSessionTokenHash?: string,
+  ): TargetStagingTaskDeleteResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTaskDeleteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return deletePreflightedTargetTask(
+      this.#store, credential, request, privateOnly, durableSessionTokenHash,
+    );
+  }
+
+  /** Read-only reconciliation of a delete command (see taskTitleCommandStatus). */
+  taskDeleteCommandStatus(
+    sessionToken: string,
+    request: TargetStagingTaskDeleteRequest,
+    privateOnly = false,
+  ): TargetStagingTaskDeleteStatusResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTaskDeleteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return readPreflightedTargetTaskDeleteCommandStatus(this.#store, credential, request, privateOnly);
   }
 
   /**

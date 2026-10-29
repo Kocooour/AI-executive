@@ -5,7 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
-  TARGET_STAGING_RECEIPT_PREFIX, verifyExistingTargetStagingPath,
+  TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
+  TARGET_STAGING_MAX_TOMBSTONES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -14,7 +15,7 @@ export type TargetPreflightCode =
   | "metadata_invalid" | "schema_invalid" | "expected_owner_mismatch" | "expected_generation_mismatch"
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
-  | "audit_invalid" | "session_invalid"
+  | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
 
 export interface TargetPreflightOptions {
@@ -142,19 +143,26 @@ export function inspectIsolatedTargetStore(
       const meta = new Map(rows.map(row => [row.key, row.value]));
       const receipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX));
+      const deleteReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX));
       // The only extra metadata entries allowed are strictly validated,
-      // content-free, staging-only receipt hashes. Reject unknown metadata,
+      // content-free, staging-only receipt hashes (title and, since R2c.1,
+      // delete namespaces, each capped separately). Reject unknown metadata,
       // malformed hashes and oversized ledgers; never expose receipt contents.
-      const receiptValid = receipts.every(row =>
+      const receiptValid = (list: typeof rows, prefix: string) => list.every(row =>
         typeof row.key === "string" &&
-        sha256Hex.test(row.key.slice(TARGET_STAGING_RECEIPT_PREFIX.length)) &&
+        sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 4 + receipts.length ||
-          receipts.length > TARGET_STAGING_MAX_RECEIPTS || !receiptValid ||
+      if (rows.length !== 4 + receipts.length + deleteReceipts.length ||
+          receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
+          !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           meta.size !== rows.length ||
           !rows.every(row => typeof row.key === "string" &&
             (CONTROL_METADATA_KEYS.has(row.key) ||
-              row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX))) ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("restore_generation") !== "string" ||
@@ -170,7 +178,42 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             row.restore_generation !== meta.get("restore_generation") ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
+      // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
+      // by the tombstone (same Area, revision and change sequence) it describes.
+      const deleteAudit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_delete_audit") as
+        { receipt_key: unknown; expected_revision: unknown; restore_generation: unknown }[];
+      if (deleteAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          deleteAudit.some(row => typeof row.receipt_key !== "string" ||
+            !row.receipt_key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
+            !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_DELETE_RECEIPT_PREFIX.length)) ||
+            typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
+            row.restore_generation !== meta.get("restore_generation") ||
+            !meta.has(row.receipt_key)) ||
+          count(`SELECT COUNT(*) AS n FROM task_delete_audit a LEFT JOIN task_tombstones ts ON ts.id=a.task_id
+            WHERE ts.id IS NULL OR ts.area_id<>a.area_id OR ts.revision<>a.tombstone_revision
+              OR ts.change_seq<>a.change_seq`) !== 0) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
+    try {
+      // R2c.1 tombstones and change log. Every check is a primary-key or
+      // partial-index lookup bounded by the staging tombstone cap, never a
+      // scan of the whole log. A tombstone must be backed by exactly its own
+      // 'tombstone' log entry (same sequence, ID, Area and revision), no live
+      // task/project may carry a tombstoned ID, and the log may not hold
+      // 'tombstone' entries which no tombstone explains.
+      const tombstoneChecks = (kind: "task" | "project") => {
+        const table = kind === "task" ? "task_tombstones" : "project_tombstones";
+        const live = kind === "task" ? "tasks" : "projects";
+        return count(`SELECT COUNT(*) AS n FROM ${table}`) > TARGET_STAGING_MAX_TOMBSTONES ||
+          count(`SELECT COUNT(*) AS n FROM ${table} ts LEFT JOIN change_log c ON c.seq=ts.change_seq
+            WHERE c.seq IS NULL OR c.entity_kind<>'${kind}' OR c.op<>'tombstone'
+              OR c.entity_id<>ts.id OR c.area_id<>ts.area_id OR c.revision<>ts.revision`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM ${table} ts JOIN ${live} l ON l.id=ts.id`) !== 0;
+      };
+      if (tombstoneChecks("task") || tombstoneChecks("project") ||
+          count("SELECT COUNT(*) AS n FROM change_log WHERE op='tombstone'") !==
+            count("SELECT COUNT(*) AS n FROM task_tombstones") +
+            count("SELECT COUNT(*) AS n FROM project_tombstones")) fail("tombstone_invalid");
+    } catch { fail("tombstone_invalid"); }
     try {
       // R2-ID.2a membership ledger: bounded, same restore generation, and every
       // audited change must be backed by an 'applied' receipt.

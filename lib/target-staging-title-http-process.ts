@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { StagingPersonalReadConfig } from "./target-staging-read-process";
 import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import type { TargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 
 const REVISION = /^[a-f0-9]{64}$/;
 const MAX_OUTPUT = 1024;
@@ -14,6 +15,9 @@ type Preview = { ok: true; snapshotRevision: string } |
 type Write = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
     "idempotency_conflict" | "unchanged" | "write_failed" | "session_revoked" };
+type DeleteWrite = { ok: true; replayed?: true } |
+  { ok: false; reason: "unavailable" | "stale_revision" |
+    "idempotency_conflict" | "write_failed" | "session_revoked" };
 type Status = { ok: true; status: "committed" | "not_recorded" } |
   { ok: false; reason: "unavailable" | "idempotency_conflict" };
 
@@ -44,6 +48,23 @@ function parseWrite(value: unknown): Write | null {
       (v.reason === "unavailable" || v.reason === "stale_revision" ||
        v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
        v.reason === "write_failed" || v.reason === "session_revoked")) return { ok: false, reason: v.reason };
+  return null;
+}
+
+function parseDeleteWrite(value: unknown): DeleteWrite | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const keys = Object.keys(v).sort().join(",");
+  if (v.ok === true && keys === "ok") return { ok: true };
+  if (v.ok === true && keys === "ok,replayed" && v.replayed === true) {
+    return { ok: true, replayed: true };
+  }
+  if (v.ok === false && keys === "ok,reason" &&
+      (v.reason === "unavailable" || v.reason === "stale_revision" ||
+       v.reason === "idempotency_conflict" || v.reason === "write_failed" ||
+       v.reason === "session_revoked")) {
+    return { ok: false, reason: v.reason };
+  }
   return null;
 }
 
@@ -141,3 +162,18 @@ export async function readPrivateTaskTitleCommandStatusInChild(
   return parseStatus(value);
 }
 
+
+/** R2c.1 task delete command (private owner or shared editor/admin; ACL re-checked in the write TX). */
+export async function deleteTaskInChild(
+  config: StagingPersonalReadConfig, request: TargetStagingTaskDeleteRequest,
+): Promise<DeleteWrite | null> {
+  const value = await run(config, "target-staging-delete-write-child.mjs", JSON.stringify(request));
+  return parseDeleteWrite(value);
+}
+
+export async function readTaskDeleteCommandStatusInChild(
+  config: StagingPersonalReadConfig, request: TargetStagingTaskDeleteRequest,
+): Promise<Status | null> {
+  const value = await run(config, "target-staging-delete-status-child.mjs", JSON.stringify(request));
+  return parseStatus(value);
+}

@@ -87,6 +87,8 @@ const exempt = {
   "POST /api/mail/gmail/messages": "read-only same-origin search with no persisted mutation; POST avoids search strings in URL logs",
   "PATCH /api/target-staging/tasks/[taskId]/title": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation and live ACL/revision atomically",
   "POST /api/target-staging/areas/[areaId]/members": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation, live session, admin ACL and policy revision atomically",
+  "POST /api/target-staging/tasks/[taskId]/delete": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation, live session, ACL and revision atomically",
+  "POST /api/target-staging/tasks/[taskId]/delete/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
   "POST /api/target-staging/tasks/[taskId]/title/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
 
 };

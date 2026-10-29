@@ -35,6 +35,12 @@ import {
   targetTaskTitleReceiptDigest, targetTaskTitleReceiptKey, validTargetStagingTaskTitleWriteRequest,
 } from "./target-task-staging-writer";
 import type { TargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import {
+  validTargetStagingTaskDeleteRequest, verifyTargetTaskDeleteCommand,
+} from "./target-task-delete-writer";
+import type {
+  TargetStagingTaskDeleteRequest, TargetStagingTaskDeleteStatusResult,
+} from "./target-task-delete-writer";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
@@ -411,6 +417,33 @@ export function readPreflightedTargetTaskTitleCommandStatus(
   );
 }
 
+
+/**
+ * R2c.1 read-only reconciliation of an uncertain task-delete response. Same
+ * pinned, canonical, single-snapshot read as the title status; the verification
+ * itself (current write right in the task's or its tombstone's Area, plus the
+ * actor's own receipt) lives with the delete command.
+ */
+export function readPreflightedTargetTaskDeleteCommandStatus(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: TargetStagingTaskDeleteRequest,
+  privateOnly = false,
+): TargetStagingTaskDeleteStatusResult {
+  if (!validTargetStagingTaskDeleteRequest(request)) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  const denied = (): TargetStagingTaskDeleteStatusResult =>
+    ({ ok: false, reason: "unauthorized" });
+  return withPreflightedStore<TargetStagingTaskDeleteStatusResult>(
+    store, denied, (db, preflight) => inReadSnapshot(db, () => {
+      if (!preflight(db)) return denied();
+      const actor = verifiedActor(db, access, true);
+      if (!actor) return denied();
+      return verifyTargetTaskDeleteCommand(db, actor, request, privateOnly);
+    }, denied),
+  );
+}
 
 /** Owner-cookie HTTP facade: server-owned actor, one canonical private snapshot. */
 export function listPreflightedPrivateProjectsAtOffset(
