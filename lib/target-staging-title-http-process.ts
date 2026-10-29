@@ -116,6 +116,9 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
   } finally { active--; }
 }
 
+/** Shared bounded-child runner for sibling staging write commands (membership). */
+export const runStagingWriteChild = run;
+
 export async function previewPrivateTaskTitleInChild(
   config: StagingPersonalReadConfig, taskId: string, expectedRevision?: string,
 ): Promise<Preview | null> {
