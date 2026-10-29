@@ -14,8 +14,9 @@ import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
 import {
   TARGET_STAGING_SESSION_COOKIE, hashTargetStagingSessionToken,
-  isTargetStagingSessionToken, verifyDurableTargetStagingSessionLive,
+  isTargetStagingSessionToken, verifyDurableTargetStagingSessionLive, verifyTargetStagingReadLive,
 } from "./target-staging-durable-session";
+import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 export type StagingHttpIdentity =
@@ -85,6 +86,30 @@ export function verifyStagingIdentityBeforeRelease(
   const live = verifyDurableTargetStagingSessionLive(store, identity.tokenHash);
   if (live.ok === true) return "ok";
   return live.reason === "invalid" ? "unauthorized" : "unavailable";
+}
+
+export type StagingReadCheck = StagingIdentityCheck | "stale";
+
+/**
+ * R2-ID.2b read linearization point for shared / my-plan lists and shared
+ * detail. Same position as verifyStagingIdentityBeforeRelease, but additionally
+ * proves, in the same single live read transaction, that every Area which
+ * contributed to the child's snapshot is still readable by the actor with the
+ * observed role and policy_revision. "unauthorized" (dead session, 401) is
+ * evaluated before "stale" (membership moved, 409 list / 404 detail). The
+ * owner-cookie identity gets the same Area check for its configured owner user.
+ */
+export function verifyStagingReadBeforeRelease(
+  request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+  ownerUserId: string, observed: TargetReadLinearization,
+): StagingReadCheck {
+  const auth = getAuthState(request);
+  if (!auth.enabled || !auth.configured) return "unauthorized";
+  if (identity.kind === "owner" && !auth.authenticated) return "unauthorized";
+  const live = verifyTargetStagingReadLive(store,
+    identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash }, observed);
+  if (live.ok === true) return "ok";
+  return live.reason === "invalid" ? "unauthorized" : live.reason === "stale" ? "stale" : "unavailable";
 }
 
 const headers = { "cache-control": "no-store" };

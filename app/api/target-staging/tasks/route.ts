@@ -2,13 +2,17 @@ import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingChildSessionConfig, stagingCursorIdentity,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+  verifyStagingReadBeforeRelease,
 } from "../../../../lib/target-staging-http-identity";
 import { authenticationBinding } from "../../../../lib/auth";
 import { enforceRateLimit } from "../../../../lib/http-security";
-import { readStagingPersonalPageInChild } from "../../../../lib/target-staging-read-process";
+import {
+  readStagingPersonalPageInChild, readStagingScopedPageInChild,
+} from "../../../../lib/target-staging-read-process";
 import {
   signStagingHttpCursor, verifyStagingHttpCursor,
 } from "../../../../lib/target-staging-http-cursor";
+import type { StagingHttpCursorContext } from "../../../../lib/target-staging-http-cursor";
 
 // Isolated, opt-in R2b probe. It never opens the legacy application store.
 // The owner cookie is the only HTTP identity proof. A bounded child process
@@ -23,6 +27,53 @@ const cursorPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 function answer(status: number, error: string): Response {
   return Response.json({ error }, { status, headers });
+}
+
+/**
+ * R2-ID.2b shared / my-plan listing. Same admission, limiter, cursor and env
+ * re-check discipline as the personal path, plus the read linearization point:
+ * immediately before release the contributing Areas observed by the child are
+ * re-verified on the LIVE store in one transaction. A moved membership / role /
+ * policy_revision yields 409 `read_stale_reload` (distinct from "Cursor stale").
+ */
+async function scopedList(input: {
+  request: Request;
+  identity: NonNullable<ReturnType<typeof resolveStagingHttpIdentity>>;
+  requestedScope: "shared" | "my-plan";
+  context: StagingHttpCursorContext;
+  previous: ReturnType<typeof verifyStagingHttpCursor> | null;
+  limit: number; offset: number;
+  stagingDirectory: string; expectedRestoreGeneration: string; ownerUserId: string;
+}): Promise<Response> {
+  const { request, identity, requestedScope, context, previous, limit, offset,
+    stagingDirectory, expectedRestoreGeneration, ownerUserId } = input;
+  const page = await readStagingScopedPageInChild({
+    stagingDirectory, expectedRestoreGeneration, ownerUserId,
+    ...stagingChildSessionConfig(identity),
+  }, requestedScope, limit, offset);
+  const store = { stagingDirectory, expectedRestoreGeneration };
+  // No snapshot (child refused, e.g. a revoked session): identity check only.
+  const released = page
+    ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId, page.linearization)
+    : verifyStagingIdentityBeforeRelease(request, identity, store);
+  if (released === "stale") return answer(409, "read_stale_reload");
+  if (released !== "ok") return stagingIdentityRefusal(released);
+  if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
+    return answer(503, "Staging unavailable");
+  }
+  if (!page) return answer(503, "Staging unavailable");
+  if (previous?.ok === true && previous.revision !== page.revision) {
+    return answer(409, "Cursor stale");
+  }
+  const nextCursor = page.hasMore ? signStagingHttpCursor(
+    context, page.revision, offset + page.tasks.length,
+    previous?.ok === true ? previous.expiresAt : undefined,
+  ) : null;
+  if (page.hasMore && !nextCursor) return answer(503, "Staging unavailable");
+  return Response.json({ tasks: page.tasks, hasMore: page.hasMore, nextCursor }, { headers });
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -52,10 +103,18 @@ export async function GET(request: Request): Promise<Response> {
     const params = new URL(request.url).searchParams;
     // Only a signed, cookie-bound snapshot position may be supplied.
     // Actor, Area, workspace and scope remain server-controlled.
-    if ([...params.keys()].some(key => key !== "limit" && key !== "cursor") ||
-        params.getAll("limit").length > 1 || params.getAll("cursor").length > 1) {
+    // `scope` (R2-ID.2b) only selects WHICH of the authenticated actor's own
+    // read views is listed; it never selects an identity, Area or workspace.
+    if ([...params.keys()].some(key => key !== "limit" && key !== "cursor" && key !== "scope") ||
+        params.getAll("limit").length > 1 || params.getAll("cursor").length > 1 ||
+        params.getAll("scope").length > 1) {
       return answer(400, "Invalid request");
     }
+    const scopeParam = params.has("scope") ? params.get("scope") : "personal";
+    if (scopeParam !== "personal" && scopeParam !== "shared" && scopeParam !== "my-plan") {
+      return answer(400, "Invalid request");
+    }
+    const requestedScope: "personal" | "shared" | "my-plan" = scopeParam;
     if (params.has("limit")) {
       const raw = params.get("limit") || "";
       if (!/^(?:[1-9]|[1-9][0-9]|100)$/.test(raw)) return answer(400, "Invalid request");
@@ -74,6 +133,7 @@ export async function GET(request: Request): Promise<Response> {
       ...stagingCursorIdentity(identity, ownerUserId, authenticationBinding(request)),
       restoreGeneration: expectedRestoreGeneration, stagingDirectory,
       sessionSecret: process.env.AI_EXECUTIVE_SESSION_SECRET || "",
+      ...(requestedScope === "personal" ? {} : { scope: requestedScope }),
     };
     const previous = cursor === null ? null : verifyStagingHttpCursor(context, cursor);
     if (previous?.ok === false) {
@@ -81,6 +141,12 @@ export async function GET(request: Request): Promise<Response> {
         previous.reason === "expired" ? "Cursor expired" : "Invalid cursor");
     }
     const offset = previous?.ok === true ? previous.offset : 0;
+    if (requestedScope !== "personal") {
+      return await scopedList({
+        request, identity, requestedScope, context, previous, limit, offset,
+        stagingDirectory, expectedRestoreGeneration, ownerUserId,
+      });
+    }
     const page = await readStagingPersonalPageInChild({
       stagingDirectory, expectedRestoreGeneration, ownerUserId,
       ...stagingChildSessionConfig(identity),
