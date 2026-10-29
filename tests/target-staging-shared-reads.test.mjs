@@ -543,6 +543,26 @@ test("child DTO boundary rejects extra fields, foreign ids and inconsistent Area
     linearization: { actorUserId: "carol", areas: [{ areaId: "a", areaKind: "shared", policyRevision: 1, access: "viewer" }] } }, "f-1"), null);
 });
 
+test("child DTO boundary: shared detail snapshotRevision only for a single editor/admin Area (R2-ID.3)", () => {
+  const row = { id: "f-1", title: "t", projectId: null, effectiveAreaId: "a", areaId: "a",
+    areaKind: "shared", assignedToMe: false };
+  const area = (access, areaId = "a") => ({ areaId, areaKind: "shared", policyRevision: 1, access });
+  const dto = (areas, extra = {}) => ({ ok: true, scope: "shared", task: row,
+    linearization: { actorUserId: "bob", areas }, ...extra });
+  const rev = "b".repeat(64);
+  for (const access of ["editor", "admin"]) {
+    const parsed = readProcess.parseStagingTaskDetail(dto([area(access)], { snapshotRevision: rev }), "f-1");
+    assert.equal(parsed?.snapshotRevision, rev, access);
+  }
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("viewer")]), "f-1")?.snapshotRevision, undefined);
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("viewer")], { snapshotRevision: rev }), "f-1"), null, "viewer + revision");
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor"), area("admin", "b")], { snapshotRevision: rev }), "f-1"), null, "two Areas + revision");
+  for (const bad of ["short", "B".repeat(64), 7, null]) {
+    assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor")], { snapshotRevision: bad }), "f-1"), null, String(bad));
+  }
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor")], { snapshotRevision: rev, members: ["x"] }), "f-1"), null, "extra key");
+});
+
 test("child DTO boundary: Area kind and access must be consistent (private-owner only with private Areas)", () => {
   const row = { id: "f-1", title: "t", projectId: null, effectiveAreaId: "a", areaId: "a",
     areaKind: "shared", assignedToMe: false };

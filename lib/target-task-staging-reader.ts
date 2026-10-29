@@ -496,8 +496,11 @@ export function readPreflightedSharedTargetTask(
         (detail.linearization.areas[0].access === "editor" || detail.linearization.areas[0].access === "admin") &&
         canEditIsolatedTargetTaskTitle(db, actorUserId, taskId, false);
       if (!writable) return detail;
+      // A null token for a task just proven writable can only be a query failure:
+      // fail closed (null -> 503) rather than return a token-less DTO that would
+      // look like a read-only task.
       const snapshotRevision = targetTaskTitleEditRevision(db, taskId);
-      return snapshotRevision ? { ...detail, snapshotRevision } : null;
+      return snapshotRevision ?{ ...detail, snapshotRevision } : null;
     }, () => null));
 }
 

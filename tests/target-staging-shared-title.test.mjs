@@ -155,6 +155,15 @@ const notFound = async response => {
   return JSON.stringify(await response.json());
 };
 
+/** Status + every response header except transport/date noise + body, as one comparable string. */
+const NOISE_HEADERS = new Set(["date", "connection", "keep-alive", "transfer-encoding"]);
+const fingerprint = async response => JSON.stringify({
+  status: response.status,
+  headers: Object.fromEntries([...response.headers.entries()]
+    .filter(([name]) => !NOISE_HEADERS.has(name.toLowerCase())).sort(([a], [b]) => a < b ? -1 : 1)),
+  body: JSON.stringify(await response.json()),
+});
+
 // Gate that holds the title CHILD before it starts, so a change can commit between
 // "route accepted + dispatched the command" and "child opens the write transaction".
 let gateCounter = 0;
@@ -228,16 +237,22 @@ test("viewer C, non-member D, foreign Area and foreign private tasks: indistingu
   const bodies = new Set();
   for (const who of [carol, dave]) {
     for (const id of [taskId, "alice-private", "bob-private-task", "other-task", "no-such-task"]) {
-      bodies.add(await notFound(await preview(id, who.cookie)));
-      bodies.add(await notFound(await patch(id, who.cookie, command("Forbidden", id === taskId ? good : stale))));
-      bodies.add(await notFound(await status(id, who.cookie, command("Forbidden", id === taskId ? good : stale))));
+      bodies.add(await fingerprint(await preview(id, who.cookie)));
+      bodies.add(await fingerprint(await patch(id, who.cookie, command("Forbidden", id === taskId ? good : stale))));
+      bodies.add(await fingerprint(await status(id, who.cookie, command("Forbidden", id === taskId ? good : stale))));
     }
   }
   // An editor of team-area is just as blind to the other Area and to foreign private tasks.
   for (const id of ["other-task", "alice-private", "bob-private-task-x"]) {
-    bodies.add(await notFound(await patch(id, bob.cookie, command("Forbidden", stale))));
+    bodies.add(await fingerprint(await patch(id, bob.cookie, command("Forbidden", stale))));
   }
-  assert.deepEqual([...bodies], [JSON.stringify({ error: "Not found" })]);
+  // One single fingerprint: status, full header set (minus transport/date noise) and body.
+  assert.equal(bodies.size, 1, [...bodies].join("\n"));
+  const only = JSON.parse([...bodies][0]);
+  assert.equal(only.status, 404);
+  assert.equal(only.headers["cache-control"], "no-store");
+  assert.match(only.headers["content-type"], /^application\/json/);
+  assert.equal(only.body, JSON.stringify({ error: "Not found" }));
   assert.deepEqual(snapshot(taskId), before);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id='other-task'").get().title, "Other");
 
