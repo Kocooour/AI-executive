@@ -12,9 +12,11 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
 // v5 (R2-ID.1) adds the durable staging session store and identity revocation
-// epoch. Older staging stores are never migrated: preflight rejects them, and a
-// new (test-only) staging directory must be bootstrapped instead.
-export const TARGET_STORE_SCHEMA_VERSION = 5;
+// epoch. v6 (R2-ID.2a) adds the membership command receipt store, the
+// content-free membership audit and the last-admin guards. Older staging stores
+// are never migrated: preflight rejects them, and a new (test-only) staging
+// directory must be bootstrapped instead.
+export const TARGET_STORE_SCHEMA_VERSION = 6;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -236,6 +238,76 @@ BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
 CREATE TRIGGER task_title_audit_capacity BEFORE INSERT ON task_title_audit
 WHEN (SELECT COUNT(*) FROM task_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+
+-- R2-ID.2a membership command ledger (staging only). A receipt is keyed by the
+-- opaque SHA-256 of (actor, Area, command UUID); it stores only a payload digest
+-- and the committed result, never task content. An exact retry returns the
+-- stored result; a different payload under the same key is a conflict.
+CREATE TABLE area_membership_receipts (
+  receipt_key TEXT PRIMARY KEY CHECK(length(receipt_key) = 64 AND receipt_key NOT GLOB '*[^0-9a-f]*'),
+  payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64 AND payload_digest NOT GLOB '*[^0-9a-f]*'),
+  outcome TEXT NOT NULL CHECK(outcome IN ('applied', 'noop')),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0),
+  unassigned_tasks INTEGER NOT NULL CHECK(typeof(unassigned_tasks)='integer' AND unassigned_tasks >= 0),
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+) WITHOUT ROWID;
+CREATE TRIGGER area_membership_receipts_no_update BEFORE UPDATE ON area_membership_receipts
+BEGIN SELECT RAISE(ABORT, 'membership receipts are immutable'); END;
+CREATE TRIGGER area_membership_receipts_retention BEFORE DELETE ON area_membership_receipts
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'membership receipt retention window is active'); END;
+CREATE TRIGGER area_membership_receipts_replace_guard BEFORE INSERT ON area_membership_receipts
+WHEN EXISTS(SELECT 1 FROM area_membership_receipts WHERE receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'membership receipt replacement is forbidden'); END;
+CREATE TRIGGER area_membership_receipts_capacity BEFORE INSERT ON area_membership_receipts
+WHEN (SELECT COUNT(*) FROM area_membership_receipts) >= ${TARGET_STAGING_MAX_RECEIPTS}
+BEGIN SELECT RAISE(ABORT, 'membership receipt capacity reached'); END;
+
+-- Internal, content-free, append-only audit of committed membership changes
+-- (no-ops are receipted but not audited). No read API exposes it.
+CREATE TABLE area_membership_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE REFERENCES area_membership_receipts(receipt_key),
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  target_user_id TEXT NOT NULL REFERENCES identities(id),
+  action TEXT NOT NULL CHECK(action IN ('add', 'remove', 'set_role')),
+  role_before TEXT CHECK(role_before IS NULL OR role_before IN ('viewer', 'editor', 'admin')),
+  role_after TEXT CHECK(role_after IS NULL OR role_after IN ('viewer', 'editor', 'admin')),
+  policy_revision_before INTEGER NOT NULL CHECK(typeof(policy_revision_before)='integer' AND policy_revision_before >= 0),
+  policy_revision_after INTEGER NOT NULL CHECK(typeof(policy_revision_after)='integer' AND policy_revision_after = policy_revision_before + 1),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+);
+CREATE INDEX area_membership_audit_by_area ON area_membership_audit(area_id, id);
+CREATE TRIGGER area_membership_audit_no_update BEFORE UPDATE ON area_membership_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER area_membership_audit_retention BEFORE DELETE ON area_membership_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'audit retention window is active'); END;
+CREATE TRIGGER area_membership_audit_replace_guard BEFORE INSERT ON area_membership_audit
+WHEN EXISTS(SELECT 1 FROM area_membership_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
+CREATE TRIGGER area_membership_audit_capacity BEFORE INSERT ON area_membership_audit
+WHEN (SELECT COUNT(*) FROM area_membership_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+
+-- A shared Area must keep at least one admin, even against raw SQL. REPLACE
+-- bypasses DELETE triggers, so it is checked in BEFORE INSERT as well.
+CREATE TRIGGER last_admin_delete_guard BEFORE DELETE ON area_members
+WHEN OLD.role = 'admin' AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = OLD.area_id AND m.role = 'admin' AND m.user_id <> OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+CREATE TRIGGER last_admin_demotion_guard BEFORE UPDATE OF role ON area_members
+WHEN OLD.role = 'admin' AND NEW.role <> 'admin' AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = OLD.area_id AND m.role = 'admin' AND m.user_id <> OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+CREATE TRIGGER last_admin_replace_guard BEFORE INSERT ON area_members
+WHEN NEW.role <> 'admin' AND EXISTS(
+  SELECT 1 FROM area_members o WHERE o.area_id = NEW.area_id AND o.user_id = NEW.user_id AND o.role = 'admin')
+  AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = NEW.area_id AND m.role = 'admin' AND m.user_id <> NEW.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
 
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,

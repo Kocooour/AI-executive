@@ -172,6 +172,19 @@ export function inspectIsolatedTargetStore(
             !meta.has(row.receipt_key))) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
     try {
+      // R2-ID.2a membership ledger: bounded, same restore generation, and every
+      // audited change must be backed by an 'applied' receipt.
+      const generation = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+        .get() as { value: string } | undefined)?.value;
+      if (typeof generation !== "string" ||
+          count("SELECT COUNT(*) AS n FROM area_membership_receipts") > TARGET_STAGING_MAX_RECEIPTS ||
+          count("SELECT COUNT(*) AS n FROM area_membership_audit") > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          Number((db.prepare(`SELECT COUNT(*) AS n FROM area_membership_audit a
+            LEFT JOIN area_membership_receipts r ON r.receipt_key=a.receipt_key
+            WHERE r.receipt_key IS NULL OR r.outcome<>'applied' OR a.restore_generation<>?`)
+            .get(generation) as { n: number }).n) !== 0) fail("audit_invalid");
+    } catch { fail("audit_invalid"); }
+    try {
       // Durable sessions hold only hashes (enforced by DDL CHECKs). A row whose
       // issue-time epoch exceeds its identity's epoch cannot have been issued
       // by the supported library and is treated as tampering.
