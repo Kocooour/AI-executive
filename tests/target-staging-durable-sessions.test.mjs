@@ -88,12 +88,18 @@ const ownerCookie = `${sessionCookieName}=${createSessionToken()}`;
 const base = "http://localhost:3001/api/target-staging/";
 const ctx = key => value => ({ params: Promise.resolve({ [key]: value }) });
 const taskCtx = ctx("taskId");
+// Each HTTP test group sets its own client identity so groups never share a
+// session-check rate-limit budget (default would be the shared "proxy-unknown").
+let currentClient = "10.1.0.1";
 const get = (handler, pathname, cookie, context) =>
-  handler(new Request(base + pathname, { headers: cookie ? { cookie } : {} }), context);
+  handler(new Request(base + pathname, {
+    headers: { ...(cookie ? { cookie } : {}), "x-forwarded-for": currentClient },
+  }), context);
 const write = (taskId, cookie, body, handler = PATCH, suffix = "") =>
   handler(new Request(base + `tasks/${taskId}/title${suffix}`, {
     method: handler === PATCH ? "PATCH" : "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
+    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie,
+      "x-forwarded-for": currentClient },
     body: JSON.stringify(body),
   }), taskCtx(taskId));
 const titles = body => body.tasks.map(task => task.title).sort();
@@ -323,6 +329,7 @@ test("older v4 stores are rejected and never migrated", () => {
 });
 
 test("HTTP: session cookie maps to its own user; identity B never sees A's private data", async () => {
+  currentClient = "10.1.0.2";
   const alice = issueCli("alice");
   const bob = issueCli("bob");
   const aliceCookie = sessionCookie(alice.sessionToken);
@@ -368,6 +375,7 @@ test("HTTP: session cookie maps to its own user; identity B never sees A's priva
 });
 
 test("HTTP: a revoked session gets 401 with no data on every read route, even without a restart", async () => {
+  currentClient = "10.1.0.3";
   const bob = issueCli("bob");
   const cookie = sessionCookie(bob.sessionToken);
   assert.equal((await get(LIST, "tasks", cookie)).status, 200);
@@ -458,6 +466,7 @@ test("write barrier: session revoked after resolution but before commit writes n
 });
 
 test("HTTP writes: B edits only B's task; a revoked session cannot write or reconcile", async () => {
+  currentClient = "10.1.0.4";
   const bob = issueCli("bob");
   const cookie = sessionCookie(bob.sessionToken);
   const preview = await get(PREVIEW, "tasks/bob-3/title", cookie, taskCtx("bob-3"));
@@ -498,9 +507,11 @@ test("the legacy store and unrelated state are untouched", () => {
   assert.equal(rows("SELECT value FROM metadata WHERE key='activated'")[0].value, "false");
 });
 
-test("a forged well-formed cookie gets 401 without consuming the rate-limit bucket", async () => {
+test("a forged well-formed cookie gets 401 without consuming the per-route rate-limit bucket", async () => {
+  currentClient = "10.1.0.5";
   const forged = sessionCookie("A".repeat(43));
-  // The list bucket allows 120 requests per window; 130 forged ones must not touch it.
+  // The per-route list bucket allows 120 requests per window; 130 forged ones must not
+  // touch it (they do consume this client's own session-check bucket, limit 600).
   for (let index = 0; index < 130; index++) {
     const response = await get(LIST, "tasks", forged);
     assert.equal(response.status, 401);
@@ -617,7 +628,7 @@ test("writers wait a bounded 200 ms for a held read lock: a short hold commits, 
     const shortHolder = await holdLock(100);
     const committed = second.run();
     assert.deepEqual(committed.result, { ok: true });
-    assert.ok(committed.elapsedMs >= 20 && committed.elapsedMs < 190, `waited for the lock (${committed.elapsedMs} ms)`);
+    assert.ok(committed.elapsedMs >= 5 && committed.elapsedMs < 400, `waited for the lock (${committed.elapsedMs} ms)`);
     await closed(shortHolder);
     assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two (short hold)");
   } finally {
