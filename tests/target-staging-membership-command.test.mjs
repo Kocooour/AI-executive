@@ -627,6 +627,24 @@ test("explicit-rowid REPLACE cannot delete a row behind the DELETE/immutability 
   assert.throws(() => db.prepare("INSERT OR REPLACE INTO tasks(rowid,id,area_id,title) VALUES (?,?,?,'two')")
     .run(rowid, `${area}-rw2`, area), /task replacement is not allowed/);
   assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(first).title, "one");
+  // Same-ID REPLACE through the primary key is still rejected.
+  assert.throws(() => db.prepare("INSERT OR REPLACE INTO tasks(id,area_id,title) VALUES (?,?,'again')")
+    .run(first, area), /task replacement is not allowed/);
+  // The rowid cannot be rewritten to evict another task (UPDATE OR REPLACE / plain UPDATE).
+  const second = `${area}-rw3`;
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'three')").run(second, area);
+  for (const verb of ["UPDATE OR REPLACE", "UPDATE"]) {
+    assert.throws(() => db.prepare(`${verb} tasks SET rowid=? WHERE id=?`).run(rowid, second), /rowid is immutable/);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id IN (?,?)").get(first, second).n, 2);
+  // Explicit rowid <= 0 is rejected and does not poison later automatic inserts.
+  for (const bad of [-1, 0]) {
+    assert.throws(() => db.prepare("INSERT INTO tasks(rowid,id,area_id,title) VALUES (?,?,?,'neg')")
+      .run(bad, `${area}-neg${bad}`, area), /rowid must be positive/);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id LIKE ?").get(`${area}-neg%`).n, 0);
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'after')").run(`${area}-after1`, area);
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'after')").run(`${area}-after2`, area);
   // The membership audit is INTEGER PRIMARY KEY (rowid alias) with an id/key replace guard.
   assert.equal(apply("alice", command(area, "add", "dave", { role: "viewer" })).ok, true);
   const audit = db.prepare("SELECT id, receipt_key FROM area_membership_audit ORDER BY id DESC LIMIT 1").get();

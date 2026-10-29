@@ -367,6 +367,19 @@ CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
   OR EXISTS(SELECT 1 FROM tasks WHERE rowid = NEW.rowid)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
+-- In a BEFORE INSERT trigger NEW.rowid is -1 whenever no rowid was supplied, so
+-- the guard above cannot tell an automatic rowid from an explicit -1, and a stored
+-- row with rowid -1 would make every later automatic insert collide with it
+-- (self-DoS). Automatic rowids are always >= 1: reject any explicit rowid <= 0
+-- AFTER insertion (the statement rolls back as a whole).
+CREATE TRIGGER task_rowid_positive AFTER INSERT ON tasks
+WHEN NEW.rowid <= 0
+BEGIN SELECT RAISE(ABORT, 'task rowid must be positive'); END;
+-- UPDATE OR REPLACE tasks SET rowid=<other> would delete the other task without
+-- task_deletion_guard (REPLACE does not fire DELETE triggers). Rowids are fixed.
+CREATE TRIGGER task_rowid_immutable BEFORE UPDATE ON tasks
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN SELECT RAISE(ABORT, 'task rowid is immutable'); END;
 -- A same-ID replacement can also be staged by renaming the original task's
 -- primary key, then inserting a new row with revision 0 under its old ID.
 -- Keep task identity stable until durable ID tombstones exist.
