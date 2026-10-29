@@ -19,20 +19,32 @@ import {
   revokeDurableTargetStagingSession,
 } from "../lib/target-staging-durable-session.ts";
 
-const VALUE_FLAGS = new Set(["directory", "generation", "user", "session-id", "lifetime-seconds"]);
+const COMMON = ["directory", "generation"];
+const ALLOWED = new Map([
+  ["issue", new Set([...COMMON, "user", "lifetime-seconds", "synthetic-test-identity"])],
+  ["revoke", new Set([...COMMON, "session-id"])],
+  ["revoke-user", new Set([...COMMON, "user"])],
+]);
+const BOOLEAN_FLAGS = new Set(["synthetic-test-identity"]);
 
+/** Strict parser: known command, options valid for it, no duplicates, no option-like values. */
 function parse(argv) {
   const [command, ...rest] = argv;
+  const allowed = ALLOWED.get(command);
+  if (!allowed) return null;
   const options = new Map();
   for (let index = 0; index < rest.length; index++) {
     const flag = rest[index];
-    if (flag === "--synthetic-test-identity") {
-      options.set("synthetic-test-identity", "true");
+    const name = typeof flag === "string" && flag.startsWith("--") ? flag.slice(2) : "";
+    if (!allowed.has(name) || options.has(name)) return null;
+    if (BOOLEAN_FLAGS.has(name)) {
+      options.set(name, "true");
       continue;
     }
-    const name = flag.startsWith("--") ? flag.slice(2) : "";
-    if (!VALUE_FLAGS.has(name) || options.has(name) || rest[index + 1] === undefined) return null;
-    options.set(name, rest[++index]);
+    const value = rest[index + 1];
+    if (value === undefined || value.startsWith("--")) return null;
+    options.set(name, value);
+    index++;
   }
   return { command, options };
 }

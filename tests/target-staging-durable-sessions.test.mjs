@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, linkSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -284,18 +284,21 @@ test("the live check refuses a symlinked, hard-linked or swapped database file",
   assert.deepEqual(durable.verifyDurableTargetStagingSessionLive(wal.target, wal.tokenHash), { ok: false, reason: "unavailable" });
 });
 
-test("a tampered session row (epoch ahead of identity) fails preflight", () => {
+test("a tampered session row with the canonical schema fails preflight as session_invalid", () => {
   const copy = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "tampered"), ownerUserId: "alice",
   });
   const db = new DatabaseSync(copy.databasePath);
-  db.exec("PRAGMA foreign_keys=ON; DROP TRIGGER staging_session_conflict_guard");
-  db.prepare("INSERT INTO staging_sessions VALUES (?,?,?,?,?,NULL,?)")
-    .run(randomUUID(), "alice", hash("t"), 1000, 2000, 3);
+  // Foreign keys OFF lets a row for a user that does not exist through every trigger
+  // (the epoch guard compares against NULL) while the schema stays byte-for-byte canonical.
+  db.exec("PRAGMA foreign_keys=OFF");
+  db.prepare("INSERT INTO staging_sessions VALUES (?,?,?,?,?,NULL,0)")
+    .run(randomUUID(), "ghost", hash("t"), 1000, 2000);
   db.close();
   const result = inspectIsolatedTargetStore({ stagingDirectory: copy.directory, mode: "r2-model" });
   assert.equal(result.ok, false);
-  assert.ok(result.issues.includes("schema_invalid") || result.issues.includes("session_invalid"));
+  assert.ok(result.issues.includes("session_invalid"), JSON.stringify(result.issues));
+  assert.equal(result.issues.includes("schema_invalid"), false);
 });
 
 test("older v4 stores are rejected and never migrated", () => {
@@ -493,4 +496,122 @@ test("HTTP writes: B edits only B's task; a revoked session cannot write or reco
 test("the legacy store and unrelated state are untouched", () => {
   assert.deepEqual(rows("SELECT id FROM identities ORDER BY id"), [{ id: "alice" }, { id: "bob" }]);
   assert.equal(rows("SELECT value FROM metadata WHERE key='activated'")[0].value, "false");
+});
+
+test("a forged well-formed cookie gets 401 without consuming the rate-limit bucket", async () => {
+  const forged = sessionCookie("A".repeat(43));
+  // The list bucket allows 120 requests per window; 130 forged ones must not touch it.
+  for (let index = 0; index < 130; index++) {
+    const response = await get(LIST, "tasks", forged);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  const alice = issueCli("alice");
+  assert.equal((await get(LIST, "tasks", sessionCookie(alice.sessionToken))).status, 200);
+  for (const [handler, pathname, context] of [
+    [DETAIL, "tasks/alice-1", taskCtx("alice-1")], [AUDIT, "tasks/alice-1/audit", taskCtx("alice-1")],
+  ]) assert.equal((await get(handler, pathname, forged, context)).status, 401);
+  assert.equal((await get(PROJECTS, "projects", forged)).status, 401);
+});
+
+test("the CLI rejects unknown, duplicate, foreign and option-like arguments", () => {
+  const user = ["--user", "alice"];
+  assert.equal(cli("issue", ...user, "--synthetic-test-identity", "--synthetic-test-identity").status, 1);
+  assert.equal(cli("issue", ...user, ...user, "--synthetic-test-identity").status, 1);
+  assert.equal(cli("issue", "--user", "--synthetic-test-identity").status, 1);
+  assert.equal(cli("issue", ...user, "--session-id", randomUUID(), "--synthetic-test-identity").status, 1);
+  assert.equal(cli("revoke", ...user).status, 1);
+  assert.equal(cli("revoke", "--session-id", randomUUID(), "--synthetic-test-identity").status, 1);
+  assert.equal(cli("revoke-user", ...user, "--lifetime-seconds", "10").status, 1);
+  assert.equal(cli("revoke-user", "--bogus", "x").status, 1);
+  assert.equal(cli("nonsense", ...user).status, 1);
+  assert.equal(cli("issue", ...user, "--synthetic-test-identity").status, 0);
+});
+
+test("issuance at the 4096-row cap reports a distinct capacity reason", () => {
+  const full = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(root, "full"), ownerUserId: "alice" });
+  const db = new DatabaseSync(full.databasePath);
+  db.exec("BEGIN");
+  const insert = db.prepare("INSERT INTO staging_sessions VALUES (?,?,?,?,?,NULL,0)");
+  for (let index = 0; index < 4096; index++) insert.run(randomUUID(), "alice", hash("cap" + index), 1000, 2000);
+  db.exec("COMMIT");
+  db.close();
+  const fullStore = { stagingDirectory: full.directory, expectedRestoreGeneration: full.restoreGeneration };
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fullStore, "alice"), { ok: false, reason: "capacity" });
+  const run = spawnSync(process.execPath, [
+    "--experimental-loader", loader, path.resolve("scripts/target-staging-session.mjs"), "issue",
+    "--directory", full.directory, "--generation", full.restoreGeneration,
+    "--user", "alice", "--synthetic-test-identity",
+  ], { encoding: "utf8", cwd: path.resolve(".") });
+  assert.equal(run.status, 1);
+  assert.deepEqual(JSON.parse(run.stdout), { ok: false, reason: "capacity" });
+});
+
+test("a title write commits although a live-check style read transaction is briefly open", async () => {
+  const bob = issueCli("bob");
+  const authority = new TargetStagingSessionAuthority(store);
+  // A separate process holds a SHARED lock for ~150 ms, as a concurrent live check would.
+  const holder = spawn(process.execPath, ["-e", `
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(process.argv[1], { readOnly: true });
+    db.exec("BEGIN"); db.prepare("SELECT COUNT(*) FROM metadata").get();
+    process.stdout.write("held\\n");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    db.exec("ROLLBACK"); db.close();
+  `, stage.databasePath], { stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    await new Promise((resolve, reject) => {
+      holder.stdout.once("data", resolve);
+      holder.once("error", reject);
+      holder.once("exit", () => reject(new Error("holder exited early")));
+    });
+    const reader = authority.issue("bob");
+    const preview = authority.previewTaskTitleEdit(reader.sessionToken, { taskId: "bob-2" }, true);
+    const writer = authority.issueWritable("bob");
+    const result = authority.updateTaskTitle(writer.sessionToken, {
+      commandId: randomUUID(), taskId: "bob-2", title: "Bob two (busy)", expectedRevision: preview.snapshotRevision,
+    }, true, hash(bob.sessionToken));
+    assert.deepEqual(result, { ok: true });
+    assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two (busy)");
+  } finally {
+    authority.close();
+    holder.kill();
+  }
+});
+
+test("the in-transaction recheck immediately before COMMIT rolls back task, receipt and audit", () => {
+  const bob = issueCli("bob");
+  const authority = new TargetStagingSessionAuthority(store);
+  const realNow = Date.now;
+  const realPrepare = DatabaseSync.prototype.prepare;
+  let skew = 0;
+  try {
+    const reader = authority.issue("bob");
+    const preview = authority.previewTaskTitleEdit(reader.sessionToken, { taskId: "bob-1" }, true);
+    const writer = authority.issueWritable("bob");
+    const titleBefore = rows("SELECT title, revision FROM tasks WHERE id='bob-1'");
+    const auditBefore = rows("SELECT COUNT(*) AS c FROM task_title_audit")[0].c;
+    const receiptsBefore = rows("SELECT COUNT(*) AS c FROM metadata WHERE key LIKE ?", TARGET_STAGING_RECEIPT_PREFIX + "%")[0].c;
+    // Test-local clock skew (no production hook): the session is live at the first
+    // in-transaction check and expired by the second one, right after the audit INSERT.
+    Date.now = () => realNow() + skew;
+    DatabaseSync.prototype.prepare = function (sql) {
+      if (/^\s*INSERT INTO task_title_audit/.test(sql)) skew = 10 * 60 * 1000;
+      return realPrepare.call(this, sql);
+    };
+    const result = authority.updateTaskTitle(writer.sessionToken, {
+      commandId: randomUUID(), taskId: "bob-1", title: "Expires mid-write", expectedRevision: preview.snapshotRevision,
+    }, true, hash(bob.sessionToken));
+    assert.deepEqual(result, { ok: false, reason: "session_revoked" });
+    assert.ok(skew > 0, "the audit INSERT was reached before the second check");
+    Date.now = realNow;
+    DatabaseSync.prototype.prepare = realPrepare;
+    assert.deepEqual(rows("SELECT title, revision FROM tasks WHERE id='bob-1'"), titleBefore);
+    assert.equal(rows("SELECT COUNT(*) AS c FROM task_title_audit")[0].c, auditBefore);
+    assert.equal(rows("SELECT COUNT(*) AS c FROM metadata WHERE key LIKE ?", TARGET_STAGING_RECEIPT_PREFIX + "%")[0].c, receiptsBefore);
+  } finally {
+    Date.now = realNow;
+    DatabaseSync.prototype.prepare = realPrepare;
+    authority.close();
+  }
 });

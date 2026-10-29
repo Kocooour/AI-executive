@@ -142,9 +142,13 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
           db,
           verifyOpened: () => {
             const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
-            return newlyOpened.length === 1 &&
-              newlyOpened[0][1].dev === pinned.dev && newlyOpened[0][1].ino === pinned.ino &&
-              stillPinned();
+            // Writers keep the strict rule (exactly one new regular file, the pinned
+            // inode). A read-only open in a long-lived server may see unrelated
+            // concurrent opens, so it only requires that the pinned inode was opened.
+            const matches = (entry: [number, { dev: number; ino: number }]) =>
+              entry[1].dev === pinned.dev && entry[1].ino === pinned.ino;
+            return (options.readOnly ? newlyOpened.some(matches)
+              : newlyOpened.length === 1 && matches(newlyOpened[0])) && stillPinned();
           },
         };
       },
@@ -171,8 +175,12 @@ export function withPinnedTargetStagingWrite<T>(
   body: (context: TargetStagingPinnedWriteContext) => T,
   denied: () => T,
   failed: () => T,
-  /** Bounded lock wait for short control-plane writes; the title writer fails fast (0). */
-  busyTimeoutMs = 0,
+  /**
+   * Bounded lock wait. COMMIT needs an exclusive lock and can briefly race with
+   * SHARED locks of the live session checks, so writers wait a little instead of
+   * failing the command.
+   */
+  busyTimeoutMs = 200,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||

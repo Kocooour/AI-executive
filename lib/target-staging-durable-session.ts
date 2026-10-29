@@ -20,7 +20,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
-  TARGET_STAGING_SESSION_MAX_LIFETIME_MS, TARGET_STORE_SCHEMA_VERSION,
+  TARGET_STAGING_SESSION_MAX_LIFETIME_MS, TARGET_STAGING_SESSION_MAX_ROWS,
+  TARGET_STORE_SCHEMA_VERSION,
 } from "./target-store-bootstrap";
 import {
   noTargetStagingSidecars, pinTargetStagingFiles, withPinnedTargetStagingWrite,
@@ -39,7 +40,7 @@ const LIVE_READ_BUSY_MS = 2_000;
 
 export type TargetStagingDurableSessionIssue =
   | { ok: true; sessionId: string; sessionToken: string; expiresAtMs: number }
-  | { ok: false; reason: "invalid_request" | "unknown_user" | "unavailable" | "write_failed" };
+  | { ok: false; reason: "invalid_request" | "unknown_user" | "unavailable" | "write_failed" | "capacity" };
 export type TargetStagingDurableSessionRevoke =
   | { ok: true; changed: boolean }
   | { ok: false; reason: "invalid_request" | "not_found" | "unavailable" | "write_failed" };
@@ -116,6 +117,10 @@ export function issueDurableTargetStagingSession(
     const createdAt = Date.now();
     if (!Number.isSafeInteger(createdAt) || createdAt <= 0) return { ok: false, reason: "write_failed" };
     const expiresAt = createdAt + lifetimeSeconds * 1000;
+    // The 4096-row cap trigger is a distinct, operator-visible outcome (the
+    // staging remedy is a fresh bootstrap); the open transaction rolls back.
+    const full = db.prepare("SELECT COUNT(*) AS n FROM staging_sessions").get() as { n: number };
+    if (full.n >= TARGET_STAGING_SESSION_MAX_ROWS) return { ok: false, reason: "capacity" };
     const inserted = db.prepare(`
       INSERT INTO staging_sessions(
         id, user_id, token_hash, created_at_ms, expires_at_ms, revoked_at_ms, revocation_epoch
@@ -190,7 +195,7 @@ export function revokeAllDurableTargetStagingSessionsForUser(
 
 /**
  * Resolve a token hash against the LIVE store. This is the read-side linearization
- * primitive: HTTP routes call it before dispatching a child reader and again
+ * primitive: HTTP routes call it before rate limiting and dispatching a child reader and again
  * immediately before releasing a response body, so a revocation committed by any
  * other process in between is observed. Every failure is fail-closed; "invalid"
  * (unknown, revoked, expired, stale epoch) is distinct from "unavailable"

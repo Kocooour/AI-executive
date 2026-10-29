@@ -34,6 +34,11 @@ export async function GET(
       !ownerUserId || !safeId.test(ownerUserId)) {
     return answer(503, "Staging unavailable");
   }
+  // Live session check BEFORE rate limiting and any child dispatch: a forged or
+  // revoked cookie gets 401 without consuming a bucket or spawning a worker.
+  const admitted = verifyStagingIdentityBeforeRelease(
+    request, identity, { stagingDirectory, expectedRestoreGeneration });
+  if (admitted !== "ok") return stagingIdentityRefusal(admitted);
   try {
     const { taskId } = await context.params;
     if (!validTaskId(taskId) ||
