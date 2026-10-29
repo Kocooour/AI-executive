@@ -56,8 +56,9 @@ export async function GET(
     }
     if (!result) return answer(503, "Staging unavailable");
     if (!result.ok) return answer(404, "Not found");
-    return Response.json({ task: result.task }, { headers });
+    return Response.json({ task: result.task, snapshotRevision: result.snapshotRevision }, { headers });
   } catch {
     return answer(503, "Staging unavailable");
   }
 }
+

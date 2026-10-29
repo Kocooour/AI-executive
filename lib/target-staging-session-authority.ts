@@ -23,11 +23,13 @@ import type {
 import {
   listPreflightedIsolatedTargetTasks, listRevisionedPreflightedIsolatedTargetTasksAtOffset,
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
-  readPreflightedIsolatedPersonalTargetTask, readPreflightedTargetTaskTitleCommandStatus,
+  readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
+  readPreflightedTargetTaskTitleCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
 } from "./target-task-staging-reader";
-import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail } from "./target-task-staging-reader";
+import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail,
+  TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
@@ -188,6 +190,28 @@ export class TargetStagingSessionAuthority {
         { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, { taskId });
     } catch {
       return deniedDetail();
+    }
+  }
+
+  /** Owner-private detail and title CAS token from the same authenticated snapshot. */
+  readPersonalTaskDetailWithRevision(actorUserId: string, taskId: string): TargetPreflightedPersonalTaskDetail {
+    if (this.#closed || typeof actorUserId !== "string" || !ACTOR_PATTERN.test(actorUserId)) {
+      return { ok: false, reason: "unauthorized", task: null };
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const claims = {
+      v: 1, aud: TARGET_STAGING_TASK_READ_AUDIENCE, sub: actorUserId,
+      gen: this.#store.expectedRestoreGeneration, iat: now,
+      exp: now + DEFAULT_SESSION_SECONDS, jti: randomUUID(),
+    };
+    try {
+      const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+      const signature = createHmac("sha256", this.#key).update(TOKEN_DOMAIN)
+        .update(payload).digest("base64url");
+      return readPreflightedPersonalTargetTaskWithRevision(this.#store,
+        { signingKey: this.#key, sessionToken: `${payload}.${signature}` }, { taskId });
+    } catch {
+      return { ok: false, reason: "unauthorized", task: null };
     }
   }
 
@@ -548,6 +572,7 @@ export class TargetStagingSessionAuthority {
     this.#key.fill(0);
   }
 }
+
 
 
 

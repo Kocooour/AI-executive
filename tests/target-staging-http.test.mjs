@@ -10,6 +10,7 @@ const envNames = [
   "AI_EXECUTIVE_SESSION_SECRET", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY", "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
 ];
 const oldEnv = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
 const root = mkdtempSync(path.join(os.tmpdir(), "lumi-r2b-http-"));
@@ -22,10 +23,12 @@ const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-boots
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/tasks/route.ts");
 const { GET: GET_DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
+const { PATCH: PATCH_TITLE } = await import("../app/api/target-staging/tasks/[taskId]/title/route.ts");
 const { GET: GET_AUDIT } = await import("../app/api/target-staging/tasks/[taskId]/audit/route.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const { TARGET_STAGING_RECEIPT_PREFIX } = await import("../lib/target-store-bootstrap.ts");
-const { parseStagingPrivateTaskAudit } = await import("../lib/target-staging-read-process.ts");
+const { parseStagingPersonalDetail, parseStagingPrivateTaskAudit } =
+  await import("../lib/target-staging-read-process.ts");
 const { signStagingHttpCursor, verifyStagingHttpCursor } =
   await import("../lib/target-staging-http-cursor.ts");
 const stage = bootstrapIsolatedTargetStore({
@@ -70,6 +73,16 @@ function detail(taskId, cookie = true, token = currentOwnerToken, query = "") {
     headers: cookie ? { cookie: `${sessionCookieName}=${token}` } : {},
   });
   return GET_DETAIL(req, { params: Promise.resolve({ taskId }) });
+}
+
+function patchTitle(taskId, title, expectedRevision, commandId) {
+  const req = new Request(`http://localhost/api/target-staging/tasks/${encodeURIComponent(taskId)}/title`, {
+    method: "PATCH",
+    headers: { cookie: `${sessionCookieName}=${currentOwnerToken}`,
+      origin: "http://localhost", "content-type": "application/json" },
+    body: JSON.stringify({ commandId, title, expectedRevision }),
+  });
+  return PATCH_TITLE(req, { params: Promise.resolve({ taskId }) });
 }
 
 function audit(taskId, cookie = true, token = currentOwnerToken, query = "") {
@@ -294,10 +307,12 @@ test("personal detail returns only the configured owner's private task", async (
   const response = await detail("alice-private");
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await response.json(), { task: {
+  const body = await response.json();
+  assert.match(body.snapshotRevision, /^[a-f0-9]{64}$/);
+  assert.deepEqual(body.task, {
     id: "alice-private", title: "Alice private", projectId: null,
     effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
-  } });
+  });
   for (const taskId of ["absent", "bob-private", "family-shared"]) {
     const denied = await detail(taskId);
     assert.equal(denied.status, 404, taskId);
@@ -311,6 +326,51 @@ test("personal detail returns only the configured owner's private task", async (
   assert.equal((await detail("alice-private")).status, 404);
   assert.equal((await detail("family-shared")).status, 404);
   configure();
+});
+
+test("detail revision supports owner-private PATCH and rejects stale revisions", async () => {
+  configure();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
+  const id = "detail-cas-target";
+  const other = "detail-cas-independent";
+  insert.run(id, stage.unassignedAreaId, "Before CAS");
+  insert.run(other, stage.unassignedAreaId, "Independent");
+  try {
+    const initial = await detail(id);
+    const separate = await detail(other);
+    assert.equal(initial.status, 200);
+    assert.equal(separate.status, 200);
+    const { snapshotRevision } = await initial.json();
+    const otherRevision = (await separate.json()).snapshotRevision;
+    assert.match(snapshotRevision, /^[a-f0-9]{64}$/);
+    assert.equal((await patchTitle(id, "After CAS", snapshotRevision,
+      "123e4567-e89b-42d3-a456-426614174101")).status, 200);
+    assert.equal((await patchTitle(id, "Stale write", snapshotRevision,
+      "123e4567-e89b-42d3-a456-426614174102")).status, 409);
+    assert.equal((await patchTitle(other, "Independent updated", otherRevision,
+      "123e4567-e89b-42d3-a456-426614174103")).status, 200);
+    const current = await detail(id);
+    assert.equal(current.status, 200);
+    assert.equal((await current.json()).task.title, "After CAS");
+    assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(other).title,
+      "Independent updated");
+    const moved = "detail-cas-revoked";
+    insert.run(moved, stage.unassignedAreaId, "Private before move");
+    const movedRevision = (await (await detail(moved)).json()).snapshotRevision;
+    db.prepare("UPDATE tasks SET area_id=? WHERE id=?").run("family-area", moved);
+    assert.equal((await detail(moved)).status, 404);
+    assert.equal((await patchTitle(moved, "Must not write", movedRevision,
+      "123e4567-e89b-42d3-a456-426614174104")).status, 404);
+    assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(moved).title,
+      "Private before move");
+    for (const deniedId of ["bob-private", "family-shared", "absent"]) {
+      const denied = await detail(deniedId);
+      assert.equal(denied.status, 404, deniedId);
+      assert.deepEqual(await denied.json(), { error: "Not found" });
+    }
+  } finally {
+    delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED;
+  }
 });
 
 test("detail rejects bad IDs, query overrides, missing auth and wrong staging config", async () => {
@@ -563,6 +623,50 @@ test("audit filters historical actor and Area rows and rejects stale generation 
     [2_000_004, 2_000_001]);
 });
 
+test("detail subprocess DTO parser enforces revision, private scope and exact shape", () => {
+  const taskId = "alice-private";
+  const task = {
+    id: taskId, title: "Private task", projectId: null,
+    effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
+  };
+  const snapshotRevision = "a".repeat(64);
+  const valid = { ok: true, task, snapshotRevision };
+
+  const parsed = parseStagingPersonalDetail(valid, taskId);
+  assert.deepEqual(parsed, valid);
+  assert.notStrictEqual(parsed.task, task, "never forward child object identity");
+  assert.deepEqual(parseStagingPersonalDetail({ ok: false, reason: "unavailable" }, taskId),
+    { ok: false, reason: "unavailable" });
+
+  const malformed = [
+    null, [], {}, { ok: true, task },
+    { ...valid, snapshotRevision: null },
+    { ...valid, snapshotRevision: 123 },
+    { ...valid, snapshotRevision: "" },
+    { ...valid, snapshotRevision: "a".repeat(63) },
+    { ...valid, snapshotRevision: "a".repeat(65) },
+    { ...valid, snapshotRevision: "A".repeat(64) },
+    { ...valid, snapshotRevision: "g".repeat(64) },
+    { ...valid, snapshotRevision: ` ${snapshotRevision}` },
+    { ...valid, restoreGeneration: "secret" },
+    { ...valid, sessionToken: "secret" },
+    { ...valid, task: { ...task, id: "bob-private" } },
+    { ...valid, task: { ...task, areaKind: "shared" } },
+    { ...valid, task: { ...task, assigneeUserId: "bob" } },
+    { ...valid, task: { ...task, projectId: 42 } },
+    { ...valid, task: { ...task, effectiveAreaId: 42 } },
+    { ...valid, task: { ...task, ownerUserId: "alice" } },
+    { ...valid, task: { ...task, snapshotRevision } },
+    { ok: false, reason: "unavailable", taskId },
+    { ok: false, reason: "unauthorized" },
+    { ok: false, reason: "unavailable", snapshotRevision },
+  ];
+  for (const [index, input] of malformed.entries()) {
+    assert.equal(parseStagingPersonalDetail(input, taskId), null,
+      `malformed child response #${index} must fail closed`);
+  }
+});
+
 test("audit subprocess DTO parser rejects hidden fields, bad values and oversized collections", () => {
   const event = { revisionBefore: 0, revisionAfter: 1, committedAtMs: 1 };
   assert.deepEqual(parseStagingPrivateTaskAudit({ ok: true, events: [event] }),
@@ -576,3 +680,4 @@ test("audit subprocess DTO parser rejects hidden fields, bad values and oversize
     { ok: false, reason: "unavailable", taskId: "secret" },
   ]) assert.equal(parseStagingPrivateTaskAudit(input), null);
 });
+
