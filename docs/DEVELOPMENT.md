@@ -169,7 +169,7 @@ Run each variant with a separate port and state prefix, document the hypothesis 
 - [ ] Production build and relevant focused checks pass
 - [ ] UI and persistence behavior tested where affected
 - [ ] Independent cross-review completed
-- [ ] PR code review run on the current head and every finding fixed, answered, moved to a follow-up issue, or decided by the owner
+- [ ] PR code review run on the current head and every finding fixed, answered, moved to a follow-up issue, or decided by the owner; round records (head/base SHA, reviewer, report link) present and re-reviewed if `main` moved
 - [ ] Integration branch tested for interacting parallel changes, or not needed with a stated reason
 - [ ] Preview deployment checked when available
 - [ ] No credentials, local state, or generated mutable data committed
