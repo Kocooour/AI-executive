@@ -654,3 +654,33 @@ test("explicit-rowid REPLACE cannot delete a row behind the DELETE/immutability 
     .run(audit.id, audit.receipt_key, area, stage.restoreGeneration), /replacement/);
   assert.equal(role(area, "alice"), "admin");
 });
+
+test("task rowid guards: transactional, multi-row and upsert inserts, and ordinary updates", () => {
+  const area = makeArea({ bob: "editor" });
+  const ids = prefix => db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id LIKE ?").get(`${area}-${prefix}%`).n;
+  const insert = "INSERT INTO tasks(rowid,id,area_id,title) VALUES (?,?,?,'x')";
+  // (a) a valid task earlier in the transaction still commits; the -1 row never exists.
+  db.exec("BEGIN");
+  try {
+    db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'ok')").run(`${area}-a-ok`, area);
+    assert.throws(() => db.prepare(insert).run(-1, `${area}-a-neg`, area), /rowid must be positive/);
+    db.exec("COMMIT");
+  } catch (error) { db.exec("ROLLBACK"); throw error; }
+  assert.equal(ids("a-ok"), 1);
+  assert.equal(ids("a-neg"), 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE rowid <= 0").get().n, 0);
+  // (b) one bad row rejects the whole multi-row statement.
+  assert.throws(() => db.prepare(`INSERT INTO tasks(rowid,id,area_id,title) VALUES
+    (NULL,?,?, 'm1'), (0,?,?, 'm2')`).run(`${area}-b1`, area, `${area}-b2`, area), /rowid must be positive/);
+  assert.equal(ids("b"), 0);
+  // (c) upsert forms with a negative rowid are rejected too.
+  for (const tail of ["ON CONFLICT DO NOTHING", "ON CONFLICT(id) DO UPDATE SET title='u'"]) {
+    assert.throws(() => db.prepare(`${insert} ${tail}`).run(-5, `${area}-c`, area), /rowid must be positive/);
+  }
+  assert.equal(ids("c"), 0);
+  // (d) an ordinary update that does not touch the rowid succeeds and bumps the revision once.
+  const before = taskRevision(`${area}-a-ok`);
+  db.prepare("UPDATE tasks SET title='renamed' WHERE id=?").run(`${area}-a-ok`);
+  assert.equal(taskRevision(`${area}-a-ok`), before + 1);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(`${area}-a-ok`).title, "renamed");
+});
