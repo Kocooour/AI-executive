@@ -794,7 +794,7 @@ test("issue #155 review: actor-indexed cursor scans and exactly-once Area epochs
       const bind = i === 2 ? ["alice", "alice"] : ["alice"];
       const details = db.prepare("EXPLAIN QUERY PLAN " + captured[i])
         .all(...bind).map(row => row.detail);
-      assert.ok(details.every(row => !/\\bSCAN (?:a|member)\\b/i.test(row)),
+      assert.ok(details.every(row => !/\bSCAN (?:a|member)\b/i.test(row)),
         `cursor must not scan foreign Areas/memberships: ${details.join("; ")}`);
       if (i !== 1) assert.ok(details.some(row => /SEARCH a USING (?:COVERING )?INDEX areas_by_owner_kind/i.test(row)),
         `private Area actor index absent: ${details.join("; ")}`);
