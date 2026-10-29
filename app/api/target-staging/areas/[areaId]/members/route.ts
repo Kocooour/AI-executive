@@ -82,7 +82,8 @@ export async function POST(request: Request,
       const afterWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
       if (afterWrite !== "ok") return stagingIdentityRefusal(afterWrite);
     }
-    if (result && result.ok === false && result.reason === "session_revoked") {
+    if (result && result.ok === false &&
+        (result.reason === "session_revoked" || result.reason === "unauthenticated")) {
       return answer(401, "Authentication required");
     }
     if (!result && identity.kind === "session") {

@@ -422,7 +422,9 @@ test("a revoked durable session cannot apply a command and nothing is written", 
   assert.deepEqual(apply("bob", command(area, "add", "erin", { role: "viewer" }), otherHash),
     { ok: false, reason: "session_revoked" });
   assert.deepEqual(apply("bob", command(area, "add", "erin", { role: "viewer" }), "not-a-hash"),
-    { ok: false, reason: "unauthorized" });
+    { ok: false, reason: "unauthenticated" });
+  assert.deepEqual(authority.applyMembershipCommand("garbage", command(area, "add", "erin")),
+    { ok: false, reason: "unauthenticated" });
 });
 
 // ---------------------------------------------------------------- HTTP
@@ -550,4 +552,54 @@ test("HTTP: a forged-cookie flood gets 401, never 429, and does not drain the ro
   const legit = await post(area, input, { cookie: ownerCookie, client: flooder });
   assert.equal(legit.status, 200);
   assert.equal(role(area, "dave"), "viewer");
+});
+
+test("audit CHECK constraints tie action to role_before / role_after", () => {
+  const area = makeArea();
+  const insert = (action, before, after, n) => db.prepare(`INSERT INTO area_membership_receipts(
+    receipt_key,payload_digest,outcome,policy_revision,unassigned_tasks,committed_at_ms)
+    VALUES (?,?, 'applied', 1, 0, ?)`).run(String(n).padStart(64, "0"), "b".repeat(64), Date.now()) &&
+    db.prepare(`INSERT INTO area_membership_audit(receipt_key,actor_user_id,area_id,target_user_id,action,
+      role_before,role_after,policy_revision_before,policy_revision_after,restore_generation,committed_at_ms)
+      VALUES (?, 'alice', ?, 'bob', ?, ?, ?, 0, 1, ?, ?)`)
+      .run(String(n).padStart(64, "0"), area, action, before, after, stage.restoreGeneration, Date.now());
+  const bad = [["add", "viewer", "editor"], ["add", null, null], ["remove", null, null],
+    ["remove", "viewer", "editor"], ["set_role", null, "editor"], ["set_role", "editor", null],
+    ["set_role", "editor", "editor"]];
+  // Each rejected insert rolls back its receipt in a savepoint-free way: use a transaction.
+  bad.forEach(([action, before, after], index) => {
+    db.exec("BEGIN");
+    try { assert.throws(() => insert(action, before, after, 9000 + index), /CHECK/); }
+    finally { db.exec("ROLLBACK"); }
+  });
+  db.exec("BEGIN");
+  try { insert("set_role", "viewer", "editor", 9100); } finally { db.exec("ROLLBACK"); }
+});
+
+test("HTTP: an admin who lost admin gets the same denial on exact replay as the command level", async () => {
+  client++;
+  const area = makeArea({ erin: "admin" });
+  const erin = durable.issueDurableTargetStagingSession(store, "erin", 600);
+  const cookie = sessionCookie(erin.sessionToken);
+  const input = body(area, "add", "dave", { role: "viewer" });
+  assert.equal((await post(area, input, { cookie })).status, 200);
+  db.prepare("UPDATE area_members SET role='viewer' WHERE area_id=? AND user_id='erin'").run(area);
+  const state = counts();
+  const replay = await post(area, input, { cookie });
+  assert.equal(replay.status, 404);
+  assert.deepEqual(await replay.json(), { error: "Not found" });
+  assert.deepEqual(counts(), state);
+});
+
+test("HTTP: store integrity loss maps to 503 (not 401)", async () => {
+  client++;
+  const area = makeArea();
+  const state = counts();
+  db.exec("CREATE TRIGGER integrity_probe BEFORE DELETE ON identities BEGIN SELECT 1; END");
+  try {
+    const response = await post(area, body(area, "add", "dave", { role: "viewer" }));
+    assert.equal(response.status, 503);
+  } finally { db.exec("DROP TRIGGER integrity_probe"); }
+  assert.deepEqual(counts(), state);
+  assert.equal(role(area, "dave"), null);
 });

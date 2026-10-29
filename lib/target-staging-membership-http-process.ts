@@ -3,7 +3,7 @@ import { runStagingWriteChild } from "./target-staging-title-http-process";
 import type { StagingPersonalReadConfig } from "./target-staging-read-process";
 import type { TargetStagingMembershipCommand, TargetStagingMembershipResult } from "./target-staging-membership-command";
 
-const REASONS = ["unavailable", "stale_policy_revision", "idempotency_conflict", "already_member",
+const REASONS = ["unauthorized", "unauthenticated", "unavailable", "stale_policy_revision", "idempotency_conflict", "already_member",
   "last_admin", "write_failed", "session_revoked"];
 
 function parse(value: unknown): TargetStagingMembershipResult | null {

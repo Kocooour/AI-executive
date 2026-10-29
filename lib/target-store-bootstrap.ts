@@ -277,7 +277,10 @@ CREATE TABLE area_membership_audit (
   policy_revision_before INTEGER NOT NULL CHECK(typeof(policy_revision_before)='integer' AND policy_revision_before >= 0),
   policy_revision_after INTEGER NOT NULL CHECK(typeof(policy_revision_after)='integer' AND policy_revision_after = policy_revision_before + 1),
   restore_generation TEXT NOT NULL,
-  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0),
+  CHECK((action = 'add' AND role_before IS NULL AND role_after IS NOT NULL)
+    OR (action = 'remove' AND role_before IS NOT NULL AND role_after IS NULL)
+    OR (action = 'set_role' AND role_before IS NOT NULL AND role_after IS NOT NULL AND role_before <> role_after))
 );
 CREATE INDEX area_membership_audit_by_area ON area_membership_audit(area_id, id);
 CREATE TRIGGER area_membership_audit_no_update BEFORE UPDATE ON area_membership_audit

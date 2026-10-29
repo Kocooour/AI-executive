@@ -45,11 +45,14 @@ export type TargetStagingMembershipResult =
   | { ok: true; outcome: "applied" | "noop"; policyRevision: number;
       unassignedTasks: number; replayed?: true }
   | { ok: false;
-      reason: "invalid_request" | "unauthorized" | "unavailable" | "stale_policy_revision" |
+      reason: "invalid_request" | "unauthorized" | "unauthenticated" | "unavailable" | "stale_policy_revision" |
         "idempotency_conflict" | "already_member" | "last_admin" | "write_failed" |
         "session_revoked" };
 
+/** Pin / store integrity loss (HTTP 503). */
 const denied = (): TargetStagingMembershipResult => ({ ok: false, reason: "unauthorized" });
+/** Actor or session verification failure (HTTP 401). */
+const unauthenticated = (): TargetStagingMembershipResult => ({ ok: false, reason: "unauthenticated" });
 const failed = (): TargetStagingMembershipResult => ({ ok: false, reason: "write_failed" });
 const roles = ["viewer", "editor", "admin"];
 
@@ -92,11 +95,11 @@ export function applyTargetStagingMembershipCommand(
 ): TargetStagingMembershipResult {
   if (!validTargetStagingMembershipCommand(command)) return { ok: false, reason: "invalid_request" };
   if (durableSessionTokenHash !== undefined &&
-      !isTargetStagingSessionTokenHash(durableSessionTokenHash)) return denied();
+      !isTargetStagingSessionTokenHash(durableSessionTokenHash)) return unauthenticated();
   return withPinnedTargetStagingWrite<TargetStagingMembershipResult>(store, context => {
     const { db } = context;
     const actor = verifiedActor(db, access, true);
-    if (!actor) return denied();
+    if (!actor) return unauthenticated();
     const sessionLive = (): boolean => {
       if (durableSessionTokenHash === undefined) return true;
       const live = lookupLiveTargetStagingSession(db, durableSessionTokenHash, Date.now());

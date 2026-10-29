@@ -530,7 +530,7 @@ export class TargetStagingSessionAuthority {
     durableSessionTokenHash?: string,
   ): TargetStagingMembershipResult {
     const credential = this.#credential(sessionToken, true);
-    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!credential) return { ok: false, reason: "unauthenticated" };
     if (!validTargetStagingMembershipCommand(command)) return { ok: false, reason: "invalid_request" };
     return applyTargetStagingMembershipCommand(
       this.#store, credential, command, durableSessionTokenHash,
