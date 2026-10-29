@@ -176,9 +176,13 @@ export function withPinnedTargetStagingWrite<T>(
   denied: () => T,
   failed: () => T,
   /**
-   * Bounded lock wait. COMMIT needs an exclusive lock and can briefly race with
-   * SHARED locks of the live session checks, so writers wait a little instead of
-   * failing the command.
+   * Bounded lock wait (default 200 ms). Every pinned writer, INCLUDING the title
+   * writer which previously failed immediately, now blocks synchronously (the
+   * thread sleeps inside SQLite) for up to this long when another connection
+   * holds a lock. COMMIT needs an exclusive lock and can briefly race with the
+   * SHARED locks of live session checks; waiting a little avoids failing a
+   * correct command, while the bound keeps a stuck holder from hanging the
+   * process. A holder longer than the bound still fails the write (write_failed).
    */
   busyTimeoutMs = 200,
 ): T {

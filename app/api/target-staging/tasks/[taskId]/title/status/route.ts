@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingChildSessionConfig,
-  stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+  admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../../lib/http-security";
 import { readPrivateTaskTitleCommandStatusInChild } from "../../../../../../../lib/target-staging-title-http-process";
@@ -70,8 +70,8 @@ export async function POST(request: Request,
     const command = { taskId: params.taskId, commandId: fields.commandId,
       title: fields.title, expectedRevision: fields.expectedRevision };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
-    const beforeRead = verifyStagingIdentityBeforeRelease(request, identity, bound);
-    if (beforeRead !== "ok") return stagingIdentityRefusal(beforeRead);
+    const refusedRead = admitStagingIdentity(request, identity, bound);
+    if (refusedRead) return refusedRead;
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
     const result = await readPrivateTaskTitleCommandStatusInChild(bound, command);
     // Reconciliation requires a live session at the moment of release.

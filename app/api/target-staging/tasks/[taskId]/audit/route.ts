@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingChildSessionConfig,
-  stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+  admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
 import { enforceRateLimit } from "../../../../../../lib/http-security";
 import { readStagingPrivateTaskAuditInChild } from "../../../../../../lib/target-staging-read-process";
@@ -34,11 +34,11 @@ export async function GET(
       !ownerUserId || !safeId.test(ownerUserId)) {
     return answer(503, "Staging unavailable");
   }
-  // Live session check BEFORE rate limiting and any child dispatch: a forged or
-  // revoked cookie gets 401 without consuming a bucket or spawning a worker.
-  const admitted = verifyStagingIdentityBeforeRelease(
-    request, identity, { stagingDirectory, expectedRestoreGeneration });
-  if (admitted !== "ok") return stagingIdentityRefusal(admitted);
+  // Live session check BEFORE the per-route limiter and any child dispatch: a
+  // forged or revoked cookie gets 401 without spawning a worker. Sessions are
+  // throttled by their own bucket first (see admitStagingIdentity).
+  const refused = admitStagingIdentity(request, identity, { stagingDirectory, expectedRestoreGeneration });
+  if (refused) return refused;
   try {
     const { taskId } = await context.params;
     if (!validTaskId(taskId) ||

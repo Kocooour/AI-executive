@@ -514,6 +514,27 @@ test("a forged well-formed cookie gets 401 without consuming the rate-limit buck
   assert.equal((await get(PROJECTS, "projects", forged)).status, 401);
 });
 
+test("session checks are throttled per client: a forged-cookie flooder gets 429, others are unaffected", async () => {
+  const from = (client, cookie) => LIST(new Request(base + "tasks", {
+    headers: { cookie, "x-forwarded-for": client },
+  }));
+  const forged = sessionCookie("B".repeat(43));
+  let blocked = null;
+  for (let index = 0; index < 700 && !blocked; index++) {
+    const response = await from("10.9.9.9", forged);
+    if (response.status === 429) blocked = response;
+    else assert.equal(response.status, 401);
+  }
+  assert.ok(blocked, "the flooding client is eventually limited on the session-check bucket");
+  assert.equal(blocked.headers.get("cache-control"), "no-store");
+  assert.ok(Number(blocked.headers.get("retry-after")) >= 1);
+  // The blocked client cannot even use a valid session until the window resets...
+  const alice = issueCli("alice");
+  assert.equal((await from("10.9.9.9", sessionCookie(alice.sessionToken))).status, 429);
+  // ...while a different client identity with a valid session is unaffected.
+  assert.equal((await from("10.9.9.10", sessionCookie(alice.sessionToken))).status, 200);
+});
+
 test("the CLI rejects unknown, duplicate, foreign and option-like arguments", () => {
   const user = ["--user", "alice"];
   assert.equal(cli("issue", ...user, "--synthetic-test-identity", "--synthetic-test-identity").status, 1);
@@ -547,35 +568,60 @@ test("issuance at the 4096-row cap reports a distinct capacity reason", () => {
   assert.deepEqual(JSON.parse(run.stdout), { ok: false, reason: "capacity" });
 });
 
-test("a title write commits although a live-check style read transaction is briefly open", async () => {
-  const bob = issueCli("bob");
+test("writers wait a bounded 200 ms for a held read lock: a short hold commits, a long hold fails", async () => {
   const authority = new TargetStagingSessionAuthority(store);
-  // A separate process holds a SHARED lock for ~150 ms, as a concurrent live check would.
-  const holder = spawn(process.execPath, ["-e", `
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(process.argv[1], { readOnly: true });
-    db.exec("BEGIN"); db.prepare("SELECT COUNT(*) FROM metadata").get();
-    process.stdout.write("held\\n");
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
-    db.exec("ROLLBACK"); db.close();
-  `, stage.databasePath], { stdio: ["ignore", "pipe", "ignore"] });
-  try {
+  const holdLock = async milliseconds => {
+    // A separate process holds a SHARED lock, as a concurrent live check would.
+    const holder = spawn(process.execPath, ["-e", `
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(process.argv[1], { readOnly: true });
+      db.exec("BEGIN"); db.prepare("SELECT COUNT(*) FROM metadata").get();
+      process.stdout.write("held\\n");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.argv[2]));
+      db.exec("ROLLBACK"); db.close();
+    `, stage.databasePath, String(milliseconds)], { stdio: ["ignore", "pipe", "ignore"] });
     await new Promise((resolve, reject) => {
       holder.stdout.once("data", resolve);
       holder.once("error", reject);
       holder.once("exit", () => reject(new Error("holder exited early")));
     });
+    return holder;
+  };
+  const closed = holder => new Promise(resolve => holder.once("exit", resolve));
+  const attempt = (bob, title) => {
     const reader = authority.issue("bob");
     const preview = authority.previewTaskTitleEdit(reader.sessionToken, { taskId: "bob-2" }, true);
     const writer = authority.issueWritable("bob");
-    const result = authority.updateTaskTitle(writer.sessionToken, {
-      commandId: randomUUID(), taskId: "bob-2", title: "Bob two (busy)", expectedRevision: preview.snapshotRevision,
-    }, true, hash(bob.sessionToken));
-    assert.deepEqual(result, { ok: true });
-    assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two (busy)");
+    return { writer, run: () => {
+      const started = process.hrtime.bigint();
+      const result = authority.updateTaskTitle(writer.sessionToken, {
+        commandId: randomUUID(), taskId: "bob-2", title, expectedRevision: preview.snapshotRevision,
+      }, true, hash(bob.sessionToken));
+      return { result, elapsedMs: Number(process.hrtime.bigint() - started) / 1e6 };
+    } };
+  };
+  try {
+    const bob = issueCli("bob");
+    const titleBefore = rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title;
+    // Hold ~1 s, far beyond the 200 ms timeout: the commit waits, then fails and rolls back.
+    const prepared = attempt(bob, "Bob two (long hold)");
+    const longHolder = await holdLock(1000);
+    const failed = prepared.run();
+    assert.deepEqual(failed.result, { ok: false, reason: "write_failed" });
+    assert.ok(failed.elapsedMs >= 150 && failed.elapsedMs < 900, `waited a bounded time (${failed.elapsedMs} ms)`);
+    await closed(longHolder);
+    assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, titleBefore);
+
+    // Hold ~100 ms, started right before the write: the commit waits it out and succeeds.
+    const second = attempt(bob, "Bob two (short hold)");
+    const shortHolder = await holdLock(100);
+    const committed = second.run();
+    assert.deepEqual(committed.result, { ok: true });
+    assert.ok(committed.elapsedMs >= 20 && committed.elapsedMs < 190, `waited for the lock (${committed.elapsedMs} ms)`);
+    await closed(shortHolder);
+    assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two (short hold)");
   } finally {
     authority.close();
-    holder.kill();
   }
 });
 

@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingChildSessionConfig,
-  stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+  admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { previewPrivateTaskTitleInChild, writePrivateTaskTitleInChild } from "../../../../../../lib/target-staging-title-http-process";
@@ -55,6 +55,8 @@ export async function GET(request: Request,
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const taskId = await taskIdFrom(context);
   if (!taskId) return answer(400, "Invalid request");
+  const refusedPreview = admitStagingIdentity(request, identity, bound);
+  if (refusedPreview) return refusedPreview;
   const query = new URL(request.url).searchParams;
   if ([...query.keys()].some(key => key !== "expectedRevision") ||
       query.getAll("expectedRevision").length > 1) return answer(400, "Invalid request");
@@ -105,8 +107,8 @@ export async function PATCH(request: Request,
       title: fields.title, expectedRevision: fields.expectedRevision };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
     // Recheck after potentially slow body read, before dispatching a mutation.
-    const beforeWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
-    if (beforeWrite !== "ok") return stagingIdentityRefusal(beforeWrite);
+    const refusedWrite = admitStagingIdentity(request, identity, bound);
+    if (refusedWrite) return refusedWrite;
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
     const result = await writePrivateTaskTitleInChild(bound, command);
     // A durable session is verified INSIDE the write transaction, so no

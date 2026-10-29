@@ -11,6 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import { getAuthState, requestCookie } from "./auth";
+import { enforceRateLimit } from "./http-security";
 import {
   TARGET_STAGING_SESSION_COOKIE, hashTargetStagingSessionToken,
   isTargetStagingSessionToken, verifyDurableTargetStagingSessionLive,
@@ -96,4 +97,30 @@ export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok"
   return check === "unauthorized"
     ? answer(401, "Authentication required")
     : answer(503, "Staging unavailable");
+}
+
+/**
+ * Admission gate run before any rate-limited work or child dispatch. A durable
+ * session costs an fd enumeration plus a synchronous SQLite open per check, so
+ * it is throttled per client first (600 per 10 minutes, a bucket separate from
+ * the per-route ones; a blocked client stops charging the global budget, so a
+ * forged-cookie flooder only blocks itself). The owner path does no database
+ * work and is unchanged. Returns a refusal Response, or null to proceed. An
+ * unexpected throw maps to the existing 503 instead of a framework 500.
+ */
+export function admitStagingIdentity(
+  request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+): Response | null {
+  try {
+    if (identity.kind === "session") {
+      const limited = enforceRateLimit(request, "target-staging-session-check", 600, 10 * 60_000);
+      if (limited) return Response.json({ error: "Too many requests" }, {
+        status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
+      });
+    }
+    const check = verifyStagingIdentityBeforeRelease(request, identity, store);
+    return check === "ok" ? null : stagingIdentityRefusal(check);
+  } catch {
+    return stagingIdentityRefusal("unavailable");
+  }
 }
