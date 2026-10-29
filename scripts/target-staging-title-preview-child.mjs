@@ -1,6 +1,7 @@
 /** Owner-private title CAS preflight; no session token leaves this process. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 import { readTitleCommand } from "./target-staging-title-stdin.mjs";
 const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
 const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -22,7 +23,11 @@ try {
     stagingDirectory, expectedRestoreGeneration,
   });
   try {
-    const issued = authority.issue(ownerUserId);
+    const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+    // An unresolvable durable session produces no output; the HTTP parent
+    // re-verifies the live session and answers 401, never a task result.
+    if (!resolved) throw new Error("Unavailable");
+    const issued = authority.issue(resolved.actor);
     if (!issued) throw new Error("Unavailable");
     const result = authority.previewTaskTitleEdit(issued.sessionToken, input, true);
     if (result.ok) process.stdout.write(JSON.stringify({

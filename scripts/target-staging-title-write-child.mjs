@@ -1,6 +1,7 @@
 /** Owner-private title mutation; title arrives over stdin, never argv. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 import { readTitleCommand } from "./target-staging-title-stdin.mjs";
 const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
 const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -22,14 +23,18 @@ try {
     stagingDirectory, expectedRestoreGeneration,
   });
   try {
-    const issued = authority.issueWritable(ownerUserId);
+    const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+    // An unresolvable durable session produces no output; the HTTP parent
+    // re-verifies the live session and answers 401, never a task result.
+    if (!resolved) throw new Error("Unavailable");
+    const issued = authority.issueWritable(resolved.actor);
     if (!issued) throw new Error("Unavailable");
-    const result = authority.updateTaskTitle(issued.sessionToken, input, true);
+    const result = authority.updateTaskTitle(issued.sessionToken, input, true, resolved.sessionTokenHash);
     if (result.ok) process.stdout.write(JSON.stringify(result.replayed
       ? { ok: true, replayed: true } : { ok: true }));
     else if (result.reason === "unavailable" || result.reason === "stale_revision" ||
         result.reason === "idempotency_conflict" || result.reason === "unchanged" ||
-        result.reason === "write_failed") {
+        result.reason === "write_failed" || result.reason === "session_revoked") {
       process.stdout.write(JSON.stringify({ ok: false, reason: result.reason }));
     } else throw new Error("Unavailable");
   } finally { authority.close(); }

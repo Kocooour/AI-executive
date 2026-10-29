@@ -1,5 +1,8 @@
 import path from "node:path";
-import { getAuthState } from "../../../../../../lib/auth";
+import {
+  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+} from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { previewPrivateTaskTitleInChild, writePrivateTaskTitleInChild } from "../../../../../../lib/target-staging-title-http-process";
 import { validTargetStagingTaskTitleWriteRequest } from "../../../../../../lib/target-task-staging-writer";
@@ -20,10 +23,6 @@ const answer = (status: number, error: string): Response =>
 const enabled = () =>
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED === "true" &&
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED === "true";
-const authenticated = (request: Request) => {
-  const auth = getAuthState(request);
-  return auth.enabled && auth.configured && auth.authenticated;
-};
 function config(): StagingPersonalReadConfig | null {
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -49,11 +48,15 @@ async function taskIdFrom(context: { params: Promise<{ taskId: string }> }) {
 export async function GET(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
-  if (!authenticated(request)) return answer(401, "Authentication required");
-  const bound = config();
-  if (!bound) return answer(503, "Staging unavailable");
+  const identity = resolveStagingHttpIdentity(request);
+  if (!identity) return answer(401, "Authentication required");
+  const base = config();
+  if (!base) return answer(503, "Staging unavailable");
+  const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const taskId = await taskIdFrom(context);
   if (!taskId) return answer(400, "Invalid request");
+  const refusedPreview = admitStagingIdentity(request, identity, bound);
+  if (refusedPreview) return refusedPreview;
   const query = new URL(request.url).searchParams;
   if ([...query.keys()].some(key => key !== "expectedRevision") ||
       query.getAll("expectedRevision").length > 1) return answer(400, "Invalid request");
@@ -65,7 +68,9 @@ export async function GET(request: Request,
   });
   const result = await previewPrivateTaskTitleInChild(bound, taskId,
     expectedRevision === null ? undefined : expectedRevision);
-  if (!authenticated(request)) return answer(401, "Authentication required");
+  // Read-side linearization point: live session re-verified before release.
+  const released = verifyStagingIdentityBeforeRelease(request, identity, bound);
+  if (released !== "ok") return stagingIdentityRefusal(released);
   if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
   if (result.ok === false) return answer(result.reason === "stale_revision" ? 409 : 404,
     result.reason === "stale_revision" ? "Revision conflict" : "Not found");
@@ -76,9 +81,11 @@ export async function GET(request: Request,
 export async function PATCH(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
-  if (!authenticated(request)) return answer(401, "Authentication required");
-  const bound = config();
-  if (!bound) return answer(503, "Staging unavailable");
+  const identity = resolveStagingHttpIdentity(request);
+  if (!identity) return answer(401, "Authentication required");
+  const base = config();
+  if (!base) return answer(503, "Staging unavailable");
+  const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const taskId = await taskIdFrom(context);
   if (!taskId || new URL(request.url).search !== "") return answer(400, "Invalid request");
   try {
@@ -86,6 +93,11 @@ export async function PATCH(request: Request,
     if (request.headers.get("origin") !== new URL(request.url).origin) {
       return answer(403, "Cross-origin request rejected");
     }
+    // Admission (and its own session-check bucket) comes BEFORE the per-route
+    // limiter and the body read: a forged or revoked cookie must not drain
+    // bucket budget that legitimate writers or reconciliations need.
+    const admitted = admitStagingIdentity(request, identity, bound);
+    if (admitted) return admitted;
     const limited = enforceRateLimit(request, "target-staging-private-title-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
@@ -100,10 +112,25 @@ export async function PATCH(request: Request,
       title: fields.title, expectedRevision: fields.expectedRevision };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
     // Recheck after potentially slow body read, before dispatching a mutation.
-    if (!authenticated(request)) return answer(401, "Authentication required");
+    const liveBeforeWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
+    if (liveBeforeWrite !== "ok") return stagingIdentityRefusal(liveBeforeWrite);
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
     const result = await writePrivateTaskTitleInChild(bound, command);
-    if (!authenticated(request)) return answer(401, "Authentication required");
+    // A durable session is verified INSIDE the write transaction, so no
+    // post-commit check is made for it (a committed write must not be reported
+    // as refused). The owner cookie keeps its existing post-write re-check.
+    if (identity.kind === "owner") {
+      const afterWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
+      if (afterWrite !== "ok") return stagingIdentityRefusal(afterWrite);
+    }
+    if (result && result.ok === false && result.reason === "session_revoked") {
+      return answer(401, "Authentication required");
+    }
+    if (!result && identity.kind === "session") {
+      // Child produced nothing: distinguish a revoked session from an outage.
+      const live = verifyStagingIdentityBeforeRelease(request, identity, bound);
+      if (live !== "ok") return stagingIdentityRefusal(live);
+    }
     if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
     if (result.ok === false) {
       if (result.reason === "unavailable") return answer(404, "Not found");

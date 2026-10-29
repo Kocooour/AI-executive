@@ -13,7 +13,7 @@ type Preview = { ok: true; snapshotRevision: string } |
   { ok: false; reason: "unavailable" | "stale_revision" };
 type Write = { ok: true; replayed?: true } |
   { ok: false; reason: "unavailable" | "stale_revision" |
-    "idempotency_conflict" | "unchanged" | "write_failed" };
+    "idempotency_conflict" | "unchanged" | "write_failed" | "session_revoked" };
 type Status = { ok: true; status: "committed" | "not_recorded" } |
   { ok: false; reason: "unavailable" | "idempotency_conflict" };
 
@@ -43,7 +43,7 @@ function parseWrite(value: unknown): Write | null {
   if (v.ok === false && keys === "ok,reason" &&
       (v.reason === "unavailable" || v.reason === "stale_revision" ||
        v.reason === "idempotency_conflict" || v.reason === "unchanged" ||
-       v.reason === "write_failed")) return { ok: false, reason: v.reason };
+       v.reason === "write_failed" || v.reason === "session_revoked")) return { ok: false, reason: v.reason };
   return null;
 }
 
@@ -84,6 +84,7 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
             AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
             AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
             AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
+            AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
           },
         });
       } catch { resolve(null); return; }

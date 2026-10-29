@@ -1,6 +1,7 @@
 /** Isolated read-only child: one owner-private task's content-free audit events. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 
 try {
   const [taskId, extra] = process.argv.slice(2);
@@ -18,7 +19,9 @@ try {
       stagingDirectory, expectedRestoreGeneration,
     });
     try {
-      const result = authority.readPrivateTaskTitleAudit(ownerUserId, taskId);
+      const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+      if (!resolved) throw new Error("Unavailable");
+      const result = authority.readPrivateTaskTitleAudit(resolved.actor, taskId);
       if (result.ok) process.stdout.write(JSON.stringify({ ok: true, events: result.events }));
       else if (result.reason === "unavailable") {
         process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));

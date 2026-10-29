@@ -1,6 +1,7 @@
 /** Short-lived, no-listener owner-only detail reader. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
+import { resolveChildActor } from "./target-staging-child-actor.mjs";
 
 try {
   const [taskId, extra] = process.argv.slice(2);
@@ -18,7 +19,9 @@ try {
       stagingDirectory, expectedRestoreGeneration,
     });
     try {
-      const result = authority.readPersonalTaskDetailWithRevision(ownerUserId, taskId);
+      const resolved = resolveChildActor({ stagingDirectory, expectedRestoreGeneration, ownerUserId });
+      if (!resolved) throw new Error("Unavailable");
+      const result = authority.readPersonalTaskDetailWithRevision(resolved.actor, taskId);
       if (result.ok) process.stdout.write(JSON.stringify({ ok: true, task: result.task, snapshotRevision: result.snapshotRevision }));
       else if (result.reason === "unavailable") {
         process.stdout.write(JSON.stringify({ ok: false, reason: "unavailable" }));

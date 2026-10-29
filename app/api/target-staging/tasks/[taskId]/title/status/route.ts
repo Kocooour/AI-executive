@@ -1,5 +1,8 @@
 import path from "node:path";
-import { getAuthState } from "../../../../../../../lib/auth";
+import {
+  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
+} from "../../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../../lib/http-security";
 import { readPrivateTaskTitleCommandStatusInChild } from "../../../../../../../lib/target-staging-title-http-process";
 import { validTargetStagingTaskTitleWriteRequest } from "../../../../../../../lib/target-task-staging-writer";
@@ -19,10 +22,6 @@ const answer = (status: number, error: string): Response =>
 const enabled = () =>
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED === "true" &&
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED === "true";
-const authenticated = (request: Request) => {
-  const auth = getAuthState(request);
-  return auth.enabled && auth.configured && auth.authenticated;
-};
 function config(): StagingPersonalReadConfig | null {
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -43,9 +42,11 @@ const unchanged = (before: StagingPersonalReadConfig) => {
 export async function POST(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
-  if (!authenticated(request)) return answer(401, "Authentication required");
-  const bound = config();
-  if (!bound) return answer(503, "Staging unavailable");
+  const identity = resolveStagingHttpIdentity(request);
+  if (!identity) return answer(401, "Authentication required");
+  const base = config();
+  if (!base) return answer(503, "Staging unavailable");
+  const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const params = await context.params;
   if (!params || Object.keys(params).sort().join(",") !== "taskId" ||
       !validTaskId(params.taskId) || new URL(request.url).search !== "") {
@@ -56,6 +57,11 @@ export async function POST(request: Request,
     if (request.headers.get("origin") !== new URL(request.url).origin) {
       return answer(403, "Cross-origin request rejected");
     }
+    // Admission (and its own session-check bucket) comes BEFORE the per-route
+    // limiter and the body read: a forged or revoked cookie must not drain
+    // bucket budget that legitimate writers or reconciliations need.
+    const admitted = admitStagingIdentity(request, identity, bound);
+    if (admitted) return admitted;
     const limited = enforceRateLimit(request, "target-staging-private-title-status", 60, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
@@ -69,10 +75,13 @@ export async function POST(request: Request,
     const command = { taskId: params.taskId, commandId: fields.commandId,
       title: fields.title, expectedRevision: fields.expectedRevision };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
-    if (!authenticated(request)) return answer(401, "Authentication required");
+    const liveBeforeRead = verifyStagingIdentityBeforeRelease(request, identity, bound);
+    if (liveBeforeRead !== "ok") return stagingIdentityRefusal(liveBeforeRead);
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
     const result = await readPrivateTaskTitleCommandStatusInChild(bound, command);
-    if (!authenticated(request)) return answer(401, "Authentication required");
+    // Reconciliation requires a live session at the moment of release.
+    const released = verifyStagingIdentityBeforeRelease(request, identity, bound);
+    if (released !== "ok") return stagingIdentityRefusal(released);
     if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
     if (result.ok === false) return answer(result.reason === "idempotency_conflict" ? 409 : 404,
       result.reason === "idempotency_conflict" ? "Revision conflict" : "Not found");

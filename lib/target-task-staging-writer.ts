@@ -2,32 +2,28 @@
  * R2 staging-only single-task title mutation. Not a route, sync command or
  * production writer; the only supported entry is a session-bound authority.
  *
- * Node SQLite cannot attach to a pinned fd. Hold a no-follow source fd and
- * fail closed unless the SQLite open adds exactly one regular-file descriptor
- * matching that inode. This is only a staging best-effort check, not a
- * production-safe fd-backed VFS or protection against hostile FD/path races.
+ * The pinned-fd open (no-follow source fd, exactly one newly opened regular
+ * file descriptor matching that inode, BEGIN IMMEDIATE, in-transaction canonical
+ * preflight) lives in the shared lib/target-staging-pinned-write.ts together
+ * with its staging-only limits: it is not a production-safe fd-backed VFS.
  * BEGIN IMMEDIATE serializes writers across revision, ACL and UPDATE.
  * Any failure rolls back; a preview is never a write authorization capability.
  */
 import { createHash } from "node:crypto";
+import { fstatSync, readSync } from "node:fs";
 import {
-  closeSync, constants, fstatSync, lstatSync, openSync, readSync,
-  readdirSync, realpathSync,
-} from "node:fs";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import {
-  TARGET_STORE_FILENAME, TARGET_STAGING_MAX_RECEIPTS,
-  TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_RECEIPT_PREFIX,
-  verifyExistingTargetStagingPath,
+  TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_AUDIT_MAX_EVENTS,
+  TARGET_STAGING_RECEIPT_PREFIX,
 } from "./target-store-bootstrap";
-import { inspectIsolatedTargetStore } from "./target-store-preflight";
+import {
+  isTargetStagingSessionTokenHash, lookupLiveTargetStagingSession,
+} from "./target-staging-durable-session";
+import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { verifiedActor } from "./target-task-authenticated-read";
 import type { TargetStagingReadCredential } from "./target-task-authenticated-read";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 
-const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CHUNK_BYTES = 64 * 1024;
 const MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 4096;
@@ -46,7 +42,8 @@ export type TargetStagingTaskTitleWriteResult =
   | { ok: true; replayed?: true }
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unavailable" |
-        "stale_revision" | "unchanged" | "idempotency_conflict" | "write_failed" };
+        "stale_revision" | "unchanged" | "idempotency_conflict" | "write_failed" |
+        "session_revoked" };
 
 const denied = (): TargetStagingTaskTitleWriteResult =>
   ({ ok: false, reason: "unauthorized" });
@@ -89,17 +86,6 @@ export function targetTaskTitleReceiptDigest(request: TargetStagingTaskTitleWrit
     .digest("hex");
 }
 
-function noSidecars(databasePath: string): boolean {
-  for (const suffix of ["-journal", "-shm", "-wal"]) {
-    try {
-      lstatSync(databasePath + suffix);
-      return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-    }
-  }
-  return true;
-}
 
 function fingerprint(fd: number): string {
   const before = fstatSync(fd);
@@ -123,103 +109,42 @@ function fingerprint(fd: number): string {
   return hash.digest("hex");
 }
 
+
 /**
  * This is a deliberately isolated staging file writer, not a production VFS.
  * The caller cannot supply a DatabaseSync, file descriptor, actor or revision
- * fingerprint. Everything is established within this synchronous boundary.
+ * fingerprint. Everything is established within this synchronous boundary by
+ * the shared pinned-write helper (pinned fd, BEGIN IMMEDIATE, canonical preflight).
+ *
+ * `durableSessionTokenHash` (R2-ID.1) additionally binds the mutation to a
+ * durable staging session. Its row, expiry and identity epoch are verified
+ * INSIDE the write transaction, both before any change and again immediately
+ * before COMMIT, so a session revoked at any earlier point writes nothing.
  */
 export function writePreflightedTargetTaskTitle(
   store: TargetStagingReadStore,
   access: TargetStagingReadCredential,
   request: TargetStagingTaskTitleWriteRequest,
   privateOnly = false,
+  durableSessionTokenHash?: string,
 ): TargetStagingTaskTitleWriteResult {
   if (!validTargetStagingTaskTitleWriteRequest(request)) {
     return { ok: false, reason: "invalid_request" };
   }
-  if (!store || typeof store.stagingDirectory !== "string" ||
-      typeof store.expectedRestoreGeneration !== "string" ||
-      !GENERATION.test(store.expectedRestoreGeneration)) return denied();
-
-  const descriptorRoot = process.platform === "linux" ? "/proc/self/fd"
-    : process.platform === "darwin" ? "/dev/fd" : null;
-  if (!descriptorRoot || constants.O_DIRECTORY === undefined ||
-      constants.O_NOFOLLOW === undefined) return denied();
-
-  let directoryFd: number | null = null;
-  let databaseFd: number | null = null;
-  let db: DatabaseSync | null = null;
-  let transaction = false;
-  try {
-    const directory = verifyExistingTargetStagingPath(store.stagingDirectory);
-    directoryFd = openSync(directory,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    if (realpathSync(descriptorRoot + "/" + directoryFd) !== directory) return denied();
-    // Only the bootstrap-created private staging directory is writable. Never
-    // open a path shared with a different user or a legacy production store.
-    const stagingStat = fstatSync(directoryFd);
-    if (!process.getuid || stagingStat.uid !== process.getuid() ||
-        (stagingStat.mode & 0o077) !== 0) return denied();
-    const databasePath = path.join(directory, TARGET_STORE_FILENAME);
-    const info = lstatSync(databasePath);
-    if (!info.isFile() || info.isSymbolicLink() || !noSidecars(databasePath)) return denied();
-    databaseFd = openSync(descriptorRoot + "/" + directoryFd + "/" + TARGET_STORE_FILENAME,
-      constants.O_RDONLY | constants.O_NOFOLLOW);
-    const pinned = fstatSync(databaseFd);
-    if (!pinned.isFile() || pinned.nlink !== 1 ||
-        pinned.dev !== info.dev || pinned.ino !== info.ino) return denied();
-    // A WAL-mode source may create -wal/-shm on a writable SQLite open even
-    // when no sidecars are present yet. Reject it from the pinned header first.
-    const header = Buffer.alloc(20);
-    if (readSync(databaseFd, header, 0, header.length, 0) !== header.length ||
-        header.toString("ascii", 0, 16) !== "SQLite format 3\0" ||
-        header[18] !== 1 || header[19] !== 1) return denied();
-
-    // Observe newly opened *regular-file descriptors*, rather than accepting
-    // a rising count of ANY descriptors pointing to the pinned inode. An
-    // unexpected concurrent file open makes this staging mutation fail closed.
-    // This does not solve arbitrary cross-process directory/path swapping:
-    // fd-backed SQLite/VFS remains a prerequisite for production writes.
-    const regularFiles = (): Map<number, { dev: number; ino: number }> => {
-      const result = new Map<number, { dev: number; ino: number }>();
-      for (const name of readdirSync(descriptorRoot)) {
-        if (!/^[0-9]+$/.test(name)) continue;
-        try {
-          const fd = Number(name);
-          const stat = fstatSync(fd);
-          if (stat.isFile()) result.set(fd, { dev: stat.dev, ino: stat.ino });
-        } catch { /* directory enumeration FD may close before fstat */ }
-      }
-      return result;
-    };
-    const stillPinned = (): boolean => {
-      try {
-        const current = lstatSync(databasePath);
-        return current.isFile() && !current.isSymbolicLink() &&
-          current.nlink === 1 && current.dev === pinned.dev && current.ino === pinned.ino;
-      } catch { return false; }
-    };
-    const beforeOpen = regularFiles();
-    db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA busy_timeout=0; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
-    transaction = true;
-    db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
-    if (newlyOpened.length !== 1 ||
-        newlyOpened[0][1].dev !== pinned.dev ||
-        newlyOpened[0][1].ino !== pinned.ino ||
-        !stillPinned() || !noSidecars(databasePath)) return denied();
-
-    // All checks, including current roles and the pinned source integrity check,
-    // occur under the same SQLite RESERVED write lock.
-    const preflight = inspectIsolatedTargetStore({
-      stagingDirectory: directory,
-      expectedRestoreGeneration: store.expectedRestoreGeneration,
-      mode: "r2-model",
-    }, { db, fd: databaseFd });
-    if (!preflight.ok) return denied();
+  if (durableSessionTokenHash !== undefined &&
+      !isTargetStagingSessionTokenHash(durableSessionTokenHash)) return denied();
+  return withPinnedTargetStagingWrite<TargetStagingTaskTitleWriteResult>(store, context => {
+    const { db, databaseFd } = context;
     const actor = verifiedActor(db, access, true);
     if (!actor) return denied();
+    // The live session must still exist for this very actor. Anything else,
+    // including a session of a different user, voids the whole command.
+    const sessionLive = (): boolean => {
+      if (durableSessionTokenHash === undefined) return true;
+      const live = lookupLiveTargetStagingSession(db, durableSessionTokenHash, Date.now());
+      return live !== null && live.userId === actor;
+    };
+    if (!sessionLive()) return { ok: false, reason: "session_revoked" };
     if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
       return { ok: false, reason: "unavailable" };
     }
@@ -255,7 +180,7 @@ export function writePreflightedTargetTaskTitle(
       { title: string; revision: number; area_id: string; policy_revision: number } | undefined;
     if (!before) return failed();
     if (before.title === request.title) return { ok: false, reason: "unchanged" };
-    if (!stillPinned() || !noSidecars(databasePath)) return denied();
+    if (!context.stillPinned() || !context.noSidecars()) return denied();
     const receiptCount = db.prepare(
       "SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?",
     ).get(TARGET_STAGING_RECEIPT_PREFIX + "%") as { n: number };
@@ -288,24 +213,11 @@ export function writePreflightedTargetTaskTitle(
       before.revision, after.revision, request.expectedRevision,
       store.expectedRestoreGeneration, committedAt,
     );
-    db.exec("COMMIT");
-    transaction = false;
+    // Linearization point of the write: still inside BEGIN IMMEDIATE, so no
+    // revocation can interleave between this check and COMMIT. A session which
+    // expired while the command ran rolls back task, receipt and audit together.
+    if (!sessionLive()) return { ok: false, reason: "session_revoked" };
+    context.commit();
     return { ok: true };
-  } catch {
-    return failed();
-  } finally {
-    if (db) {
-      if (transaction) {
-        try { db.exec("ROLLBACK"); } catch { /* fail closed */ }
-      }
-      try { db.close(); } catch { /* fail closed */ }
-    }
-    if (databaseFd !== null) {
-      try { closeSync(databaseFd); } catch { /* fail closed */ }
-    }
-    if (directoryFd !== null) {
-      try { closeSync(directoryFd); } catch { /* fail closed */ }
-    }
-  }
+  }, denied, failed);
 }
-
