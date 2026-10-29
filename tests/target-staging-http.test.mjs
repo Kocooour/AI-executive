@@ -27,7 +27,8 @@ const { PATCH: PATCH_TITLE } = await import("../app/api/target-staging/tasks/[ta
 const { GET: GET_AUDIT } = await import("../app/api/target-staging/tasks/[taskId]/audit/route.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const { TARGET_STAGING_RECEIPT_PREFIX } = await import("../lib/target-store-bootstrap.ts");
-const { parseStagingPrivateTaskAudit } = await import("../lib/target-staging-read-process.ts");
+const { parseStagingPersonalDetail, parseStagingPrivateTaskAudit } =
+  await import("../lib/target-staging-read-process.ts");
 const { signStagingHttpCursor, verifyStagingHttpCursor } =
   await import("../lib/target-staging-http-cursor.ts");
 const stage = bootstrapIsolatedTargetStore({
@@ -620,6 +621,50 @@ test("audit filters historical actor and Area rows and rejects stale generation 
   assert.equal(recovered.status, 200);
   assert.deepEqual((await recovered.json()).events.map(e => e.committedAtMs),
     [2_000_004, 2_000_001]);
+});
+
+test("detail subprocess DTO parser enforces revision, private scope and exact shape", () => {
+  const taskId = "alice-private";
+  const task = {
+    id: taskId, title: "Private task", projectId: null,
+    effectiveAreaId: stage.unassignedAreaId, areaKind: "private", assigneeUserId: null,
+  };
+  const snapshotRevision = "a".repeat(64);
+  const valid = { ok: true, task, snapshotRevision };
+
+  const parsed = parseStagingPersonalDetail(valid, taskId);
+  assert.deepEqual(parsed, valid);
+  assert.notStrictEqual(parsed.task, task, "never forward child object identity");
+  assert.deepEqual(parseStagingPersonalDetail({ ok: false, reason: "unavailable" }, taskId),
+    { ok: false, reason: "unavailable" });
+
+  const malformed = [
+    null, [], {}, { ok: true, task },
+    { ...valid, snapshotRevision: null },
+    { ...valid, snapshotRevision: 123 },
+    { ...valid, snapshotRevision: "" },
+    { ...valid, snapshotRevision: "a".repeat(63) },
+    { ...valid, snapshotRevision: "a".repeat(65) },
+    { ...valid, snapshotRevision: "A".repeat(64) },
+    { ...valid, snapshotRevision: "g".repeat(64) },
+    { ...valid, snapshotRevision: ` ${snapshotRevision}` },
+    { ...valid, restoreGeneration: "secret" },
+    { ...valid, sessionToken: "secret" },
+    { ...valid, task: { ...task, id: "bob-private" } },
+    { ...valid, task: { ...task, areaKind: "shared" } },
+    { ...valid, task: { ...task, assigneeUserId: "bob" } },
+    { ...valid, task: { ...task, projectId: 42 } },
+    { ...valid, task: { ...task, effectiveAreaId: 42 } },
+    { ...valid, task: { ...task, ownerUserId: "alice" } },
+    { ...valid, task: { ...task, snapshotRevision } },
+    { ok: false, reason: "unavailable", taskId },
+    { ok: false, reason: "unauthorized" },
+    { ok: false, reason: "unavailable", snapshotRevision },
+  ];
+  for (const [index, input] of malformed.entries()) {
+    assert.equal(parseStagingPersonalDetail(input, taskId), null,
+      `malformed child response #${index} must fail closed`);
+  }
 });
 
 test("audit subprocess DTO parser rejects hidden fields, bad values and oversized collections", () => {
