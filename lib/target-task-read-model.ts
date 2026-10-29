@@ -217,7 +217,12 @@ export function readScopedTaskOffsetPage(
       request.actorUserId, request.scope, request.scope, request.limit + 1, request.offset,
     ) as ScopedRow[];
     const page = rows.slice(0, request.limit);
-    const linearization = linearizationOf(request.actorUserId, page);
+    // EVERY Area behind anything released (page rows, look-ahead row, cursor revision):
+    // all Areas of the actor's scope in this snapshot, not just the page's.
+    const scopeRows = db.prepare(`SELECT DISTINCT a.id AS areaId, a.kind AS areaKind,
+        a.policy_revision AS policyRevision, member.role AS role ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}`)
+      .all(request.actorUserId, request.scope, request.scope) as ScopedRow[];
+    const linearization = linearizationOf(request.actorUserId, scopeRows);
     const revision = scopedTaskListRevision(db, request.actorUserId, request.scope, request.restoreGeneration);
     if (!linearization || !revision) return null;
     return { tasks: page.map(toScopedTask), hasMore: rows.length > request.limit, revision, linearization };

@@ -282,7 +282,7 @@ export type TargetStagingReadLive =
   | { ok: false; reason: "stale" }
   | { ok: false; reason: "unavailable" };
 
-const MAX_LINEARIZED_AREAS = 100;
+const MAX_LINEARIZED_AREAS = 1000;
 
 /**
  * R2-ID.2b read linearization point. Immediately before a body is released, in

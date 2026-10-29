@@ -403,10 +403,15 @@ test("barrier: membership removed after the child read -> shared detail 404 (ses
     async () => mutate(fx2, removeMemberSql("alice")));
   assert.equal(stale.status, 409);
   assert.deepEqual(await stale.json(), { error: "read_stale_reload" });
+  // Owner-cookie DETAIL: a real membership removal committed while the child output is held.
+  const fx3 = makeFixture();
+  mutate(fx3, "UPDATE area_members SET role='admin' WHERE area_id='family-area' AND user_id='bob'");
+  assert.equal((await detail(fx3, "f-3", owner)).status, 200);
   const staleDetail = await withGatedChild(
-    () => detail(fx2, "f-3", owner),
-    async () => mutate(fx2, "SELECT 1"));
+    () => detail(fx3, "f-3", owner),
+    async () => mutate(fx3, removeMemberSql("alice")));
   assert.equal(staleDetail.status, 404, "alice is no longer a member");
+  assert.deepEqual(await staleDetail.json(), { error: "Not found" });
 });
 
 test("barrier: a change committed after the check applies to the next request only", async () => {
@@ -521,4 +526,84 @@ test("child DTO boundary rejects extra fields, foreign ids and inconsistent Area
   assert.equal(readProcess.parseStagingScopedPage(page([{ ...row, areaKind: "private", assignedToMe: undefined }]), "shared"), null);
   assert.equal(readProcess.parseStagingTaskDetail({ ok: true, scope: "shared", task: { ...row, id: "other" },
     linearization: { actorUserId: "carol", areas: [{ areaId: "a", policyRevision: 1, access: "viewer" }] } }, "f-1"), null);
+});
+
+// Areas which contribute only to hasMore (look-ahead row) or to the cursor revision must be
+// re-verified too: the linearization record holds every Area of the actor's scope.
+const twoAreaSetup = fx => mutate(fx, `
+  INSERT INTO area_members(area_id,user_id,role) VALUES ('other-area','carol','viewer');
+  INSERT INTO area_members(area_id,user_id,role) VALUES ('other-area','bob','editor');
+  INSERT INTO tasks(id,area_id,title,assignee_user_id) VALUES ('a-1','other-area','Other a1','bob');
+  INSERT INTO tasks(id,area_id,title,assignee_user_id) VALUES ('a-2','other-area','Other a2','bob');`);
+
+test("barrier: an Area supplying only the look-ahead row or only the revision is re-verified (shared and my-plan)", async () => {
+  const cases = [
+    // [label, user, scope, limit, expected page ids, hasMore] ; Area family-area is revoked
+    ["shared look-ahead only", "carol", "shared", 2, ["a-1", "a-2"]],
+    ["shared revision only", "carol", "shared", 1, ["a-1"]],
+    ["my-plan look-ahead only", "bob", "my-plan", 2, ["a-1", "a-2"]],
+    ["my-plan revision only", "bob", "my-plan", 1, ["a-1"]],
+  ];
+  for (const [label, user, scope, limit, pageIds] of cases) {
+    const fx = makeFixture();
+    twoAreaSetup(fx);
+    const who = login(fx, user);
+    // Sanity: the unrevoked page really excludes family-area rows.
+    const before = await (await list(fx, `?scope=${scope}&limit=${limit}`, who.cookie)).json();
+    assert.deepEqual(ids(before), pageIds, label);
+    assert.equal(before.hasMore, true, label);
+    assert.ok(before.tasks.every(task => task.areaId === "other-area"), label);
+    const response = await withGatedChild(
+      () => list(fx, `?scope=${scope}&limit=${limit}`, who.cookie),
+      async () => mutate(fx, removeMemberSql(user)));
+    assert.equal(response.status, 409, label);
+    assert.deepEqual(await response.json(), { error: "read_stale_reload" }, label);
+  }
+  // A policy change in any Area of the actor's scope (other-area supplies rows beyond the page) stales the read.
+  const fx = makeFixture();
+  twoAreaSetup(fx);
+  const carol = login(fx, "carol");
+  const ok = await withGatedChild(
+    () => list(fx, "?scope=shared&limit=1", carol.cookie),
+    async () => mutate(fx, "INSERT INTO area_members(area_id,user_id,role) VALUES ('other-area','dave','viewer')"));
+  assert.equal(ok.status, 409, "other-area contributes to carol's scope, so its policy change is stale");
+});
+
+test("revision: reassignment between two non-actor users changes the shared revision (no silently skipped change)", async () => {
+  const fx = makeFixture();
+  const carol = login(fx, "carol");
+  const first = await (await list(fx, "?scope=shared&limit=2", carol.cookie)).json();
+  assert.ok(first.tasks.every(task => task.assignedToMe === false));
+  mutate(fx, "UPDATE tasks SET assignee_user_id='alice' WHERE id='f-5'");
+  const stale = await list(fx, `?scope=shared&limit=2&cursor=${first.nextCursor}`, carol.cookie);
+  assert.equal(stale.status, 409);
+  assert.deepEqual(await stale.json(), { error: "Cursor stale" });
+});
+
+test("my-plan cursor walk (limit 1..4): no duplicates, no gaps; shared and my-plan agree on a task", async () => {
+  const fx = makeFixture();
+  const b = login(fx, "bob");
+  twoAreaSetup(fx);
+  const expected = ids(await (await list(fx, "?scope=my-plan&limit=100", b.cookie)).json());
+  assert.deepEqual(expected, ["a-1", "a-2", "f-2", "f-5", "p-bob-1"]);
+  for (const limit of [1, 2, 3, 4]) {
+    const seen = [];
+    let cursor = null;
+    for (let page = 0; page < 10; page++) {
+      const response = await list(fx, `?scope=my-plan&limit=${limit}${cursor ? "&cursor=" + cursor : ""}`, b.cookie);
+      assert.equal(response.status, 200, `limit ${limit}`);
+      const body = await response.json();
+      seen.push(...ids(body));
+      cursor = body.nextCursor;
+      if (!cursor) break;
+    }
+    assert.deepEqual(seen, expected, `limit ${limit}`);
+  }
+  const plan = (await (await list(fx, "?scope=my-plan&limit=100", b.cookie)).json()).tasks;
+  const shared = (await (await list(fx, "?scope=shared&limit=100", b.cookie)).json()).tasks;
+  const common = plan.filter(task => task.areaKind === "shared");
+  assert.ok(common.length >= 2);
+  for (const task of common) {
+    assert.deepEqual(shared.find(other => other.id === task.id), task);
+  }
 });

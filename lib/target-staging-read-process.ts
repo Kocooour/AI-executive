@@ -300,7 +300,7 @@ function parseLinearization(value: unknown, areaIds: Set<string>): TargetReadLin
   const record = value as Record<string, unknown>;
   if (Object.keys(record).sort().join(",") !== "actorUserId,areas" ||
       typeof record.actorUserId !== "string" || !ACTOR_ID.test(record.actorUserId) ||
-      !Array.isArray(record.areas) || record.areas.length > 100) return null;
+      !Array.isArray(record.areas) || record.areas.length > 1000) return null;
   const areas: TargetReadLinearization["areas"] = [];
   const seen = new Set<string>();
   for (const entry of record.areas) {
@@ -317,7 +317,8 @@ function parseLinearization(value: unknown, areaIds: Set<string>): TargetReadLin
     });
   }
   // The record must cover exactly the Areas the released rows come from.
-  if (seen.size !== areaIds.size || ![...areaIds].every(id => seen.has(id))) return null;
+  // The record must cover at least the Areas of the released rows (it also holds look-ahead / revision Areas).
+  if (![...areaIds].every(id => seen.has(id))) return null;
   return { actorUserId: record.actorUserId, areas };
 }
 
