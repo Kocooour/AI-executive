@@ -500,7 +500,7 @@ export function readPreflightedSharedTargetTask(
       // fail closed (null -> 503) rather than return a token-less DTO that would
       // look like a read-only task.
       const snapshotRevision = targetTaskTitleEditRevision(db, taskId);
-      return snapshotRevision ?{ ...detail, snapshotRevision } : null;
+      return snapshotRevision ? { ...detail, snapshotRevision } : null;
     }, () => null));
 }
 
