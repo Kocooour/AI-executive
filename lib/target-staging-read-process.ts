@@ -7,6 +7,7 @@ import type {
 } from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import { isReadableStagingProjectId } from "./target-project-id";
+import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 
 const MAX_CONCURRENT = 2;
 const TIMEOUT_MS = 20_000;
@@ -296,7 +297,7 @@ export interface StagingScopedPage {
 }
 
 /** Hard staging limit: contributing Areas per scoped read (see docs/ARCHITECTURE.md, R2-ID.2b). */
-export const MAX_SCOPED_READ_AREAS = 1000;
+export { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 
 function parseLinearization(
   value: unknown, rowAreas: Map<string, "private" | "shared">,
