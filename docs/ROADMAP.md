@@ -1,67 +1,108 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-28 po sloučení PR #148; detail s task-title CAS revizí je v návrhu PR.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-29 po sloučení PR #149 a revizi stavu R2.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
 **Pracujeme na R2 — identita, serverová autorizace, zápisy a bezpečná synchronizace.** Izolovaný model R1 je připravený pro staging; zatím **není zapojen do běžících API, UI ani produkční databáze**. Připravená D3 logika a navigace nejsou aktivované.
 
-| Milník | Stav k 2026-10-28 | Výsledek / zbývající brána |
+| Milník | Stav k 2026-10-29 | Výsledek / zbývající brána |
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–148 sloučeny; detail s task-title CAS revizí v návrhu) | V `main` jsou soukromé staging detaily úkolů a projektů, read-only audit a výchozí vypnutý owner-private title GET/PATCH s transakční ACL, CAS a receiptem. Read-only ověření výsledku přesného příkazu je dodáno; skutečná víceuživatelská identita, durable revokace, sync a user-scoped cache zůstávají otevřené. |
+| **R2 — Identity, ACL, zápisy a sync** | **Probíhá** (#131–149 sloučeny) | V `main` je výchozí vypnutý staging-only owner-private tok: seznam a detail úkolů i projektů, náhled auditu, title PATCH s transakční ACL, CAS, receiptem a auditem, ověření výsledku nejistého příkazu a detail s title CAS revizí. **Vše jen pro jedinou identitu `owner` a soukromé Oblasti.** Skutečná víceuživatelská identita, durable revokace, sdílené Oblasti s rolemi, sync a user-scoped cache zůstávají otevřené. |
 | **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
 
 ### Ověřený postup na PR
 
-| PR | Sloučeno / otevřeno | Co přineslo |
+| PR | Stav | Co přineslo |
 |---|---|---|
 | [#126](https://github.com/Kocooour/AI-executive/pull/126) | Sloučeno | Rozhodnutí o čistém startu a první roadmapa |
 | [#127](https://github.com/Kocooour/AI-executive/pull/127) – [#130](https://github.com/Kocooour/AI-executive/pull/130) | Sloučeno | Izolované SQLite schéma, bezpečnostní preflight, Area role a filtrování úkolů |
 | [#131](https://github.com/Kocooour/AI-executive/pull/131) | Sloučeno | Ověřování aktéra při staging čtení |
 | [#132](https://github.com/Kocooour/AI-executive/pull/132) | Sloučeno | Autorizované čtení nad validovaným privátním read-only SQLite snapshotem |
-| [#133](https://github.com/Kocooour/AI-executive/pull/133) | Sloučeno | Dočasné staging sessions a okamžité lokální odvolání |
+| [#133](https://github.com/Kocooour/AI-executive/pull/133) | Sloučeno | Dočasné staging sessions a okamžité lokální (process-local) odvolání |
 | [#134](https://github.com/Kocooour/AI-executive/pull/134) | Sloučeno | Session-bound stránkovací kurzory a detekce změn mezi stránkami |
-| [#135](https://github.com/Kocooour/AI-executive/pull/135) | **Sloučeno** | Staging-only **read-only preflight** oprávnění a revize; nepovoluje ani neprovádí zápis |
-| [#137](https://github.com/Kocooour/AI-executive/pull/137) | **Sloučeno** | První staging-only transakční změna názvu úkolu s aktuální ACL a revizí celého SQLite snapshotu |
-| [#138](https://github.com/Kocooour/AI-executive/pull/138) | **Sloučeno** | Atomická, trvalá a podle aktéra oddělená potvrzení úspěšných příkazů, bezpečné replay/konflikty; limit 4096 na staging store |
-| [#139](https://github.com/Kocooour/AI-executive/pull/139) | **Sloučeno** | Autorizované ověření výsledku nejistého příkazu |
-| [#140](https://github.com/Kocooour/AI-executive/pull/140) | **Sloučeno** | Monotónní task/policy CAS ve staging schema v2, ochrana proti ABA a opětovnému použití ID |
-| [#141](https://github.com/Kocooour/AI-executive/pull/141) | **Sloučeno** | Staging schema v3: obsahově úsporný transakční audit title write a minimální retenční/kapacitní bariéra |
-| [#142](https://github.com/Kocooour/AI-executive/pull/142) | **Sloučeno** | Opt-in owner-cookie HTTP GET osobních úkolů s podepsaným cursor stránkováním; omezený izolovaný čtecí podproces |
-| [#143](https://github.com/Kocooour/AI-executive/pull/143) | **Sloučeno** | Opt-in owner-cookie GET detailu jediného soukromého úkolu; jedno preflightované snapshot čtení, aktuální ACL, žádný shared/cizí obsah ani zápis či produkční aktivace |
-| [#144](https://github.com/Kocooour/AI-executive/pull/144) | **Sloučeno** | Opt-in owner-cookie GET stránkovaného seznamu vlastních soukromých projektů; staging schema v4 chrání revize proti ABA a ID reuse |
-| [#148](https://github.com/Kocooour/AI-executive/pull/148) | **Sloučeno** | Výchozí vypnuté owner-cookie POST pro read-only ověření výsledku přesného příkazu změny názvu soukromého úkolu |
-| **Navazující R2b** | **V návrhu** | GET detailu owner-private úkolu vrací task-title CAS `snapshotRevision` ze stejného preflightovaného SQLite snapshotu jako úkol; PATCH nadále ověřuje živé ACL a revizi |
+| [#135](https://github.com/Kocooour/AI-executive/pull/135) | Sloučeno | Staging-only **read-only preflight** oprávnění a revize; nepovoluje ani neprovádí zápis |
+| [#137](https://github.com/Kocooour/AI-executive/pull/137) | Sloučeno | První staging-only transakční změna názvu úkolu s aktuální ACL a revizí |
+| [#138](https://github.com/Kocooour/AI-executive/pull/138) | Sloučeno | Atomická, trvalá a podle aktéra oddělená potvrzení úspěšných příkazů, bezpečné replay/konflikty; limit 4096 na staging store |
+| [#139](https://github.com/Kocooour/AI-executive/pull/139) | Sloučeno | Autorizované ověření výsledku nejistého příkazu; receipt vázaný na aktéra + úkol + UUID příkazu |
+| [#140](https://github.com/Kocooour/AI-executive/pull/140) | Sloučeno | Monotónní task/policy CAS ve staging schema v2, ochrana proti ABA a opětovnému použití ID |
+| [#141](https://github.com/Kocooour/AI-executive/pull/141) | Sloučeno | Staging schema v3: obsahově úsporný transakční audit title write a minimální retenční/kapacitní bariéra |
+| [#142](https://github.com/Kocooour/AI-executive/pull/142) | Sloučeno | Opt-in owner-cookie HTTP GET osobních úkolů s podepsaným cursor stránkováním; omezený izolovaný čtecí podproces |
+| [#143](https://github.com/Kocooour/AI-executive/pull/143) | Sloučeno | Opt-in owner-cookie GET detailu jediného soukromého úkolu |
+| [#144](https://github.com/Kocooour/AI-executive/pull/144) | Sloučeno | Opt-in owner-cookie GET seznamu vlastních soukromých projektů; staging schema v4 chrání projektové revize proti ABA a ID reuse |
+| [#145](https://github.com/Kocooour/AI-executive/pull/145) | Sloučeno | Opt-in owner-cookie GET detailu soukromého projektu |
+| [#146](https://github.com/Kocooour/AI-executive/pull/146) | Sloučeno | Owner-only náhled auditní časové osy změn názvu úkolu |
+| [#147](https://github.com/Kocooour/AI-executive/pull/147) | Sloučeno | Výchozí vypnutý owner-private title GET preflight / PATCH přes HTTP |
+| [#148](https://github.com/Kocooour/AI-executive/pull/148) | Sloučeno | Výchozí vypnuté POST ověření výsledku přesného příkazu změny názvu |
+| [#149](https://github.com/Kocooour/AI-executive/pull/149) | Sloučeno | Detail soukromého úkolu vrací title CAS `snapshotRevision` ze stejného preflightovaného snapshotu |
 
-**Poznámka k receiptům od #139:** idempotence změny názvu je nově vázaná na kombinaci aktéra, úkolu a UUID příkazu. Příkazy pro jiné úkoly jsou nezávislé, zatímco změna payloadu se stejným UUID u stejného úkolu je konflikt. Staré actor-only receipty z #138 nejsou bezpečně převoditelné bez dohledání původního úkolu; jejich přítomnost vede k odmítnutí staging preflightu. Pro izolovaný testovací store je nutný nový bootstrap, nikoli migrace nebo reset produkčních dat.
+## Revize stavu R2 (2026-10-29)
 
-Uvedená R2 implementace je **staging-only**; interní session authority a revokace jiných staging operací zůstávají process-local. #142 používá skutečnou owner cookie pouze pro svůj explicitně povolený read-only HTTP seznam. HTTP cursor není autentizační token: je podepsán oddělenou HMAC doménou ze serverového session secretu, vázán na konkrétní owner cookie, actor, staging directory, restore generation a SHA-256 pouze autorizovaných osobních úkolů vlastníka (nikoliv celého SQLite souboru). Platí nejvýše 15 minut, lze ho ověřit po restartu či na jiném serverovém procesu se stejnou konfigurací; změna cookie, konfigurace, autorizovaných osobních úkolů nebo expirace vyžaduje nové načtení od první stránky. Změny cizích soukromých nebo sdílených úkolů osobní cursor nezneplatní. Každý požadavek znovu ověřuje cookie a ACL v izolovaném čtecím podprocesu s limity souběhu, času a velikosti odpovědi. Nejde o produkční víceuživatelskou session službu ani o durable multiuser revokaci. Zelené CI samo o sobě neznamená aktivaci ani splnění produkčních ACL.
+- **Tok jedné identity je uzavřený.** Owner-private čtení, jediná mutace (název úkolu), idempotence, CAS, audit a zotavení z nejisté odpovědi jsou staging-only implementované a otestované.
+- **Kritéria R2 zatím nejsou ověřitelná.** Testy cizích a sdílených dat dosud pracují se syntetickými řádky, nikoli s druhou autentizovanou identitou. Chybí trvalé identity uživatelů, durable a víceprocesová revokace, čtení sdílených Oblastí a role viewer/editor/admin při zápisu.
+- **Riziko rozšiřování do šířky:** PR #146–#149 zpřesňovaly tentýž jednouživatelský tok. Další iterace musí přinést **novou ověřitelnou schopnost** podle kritérií R2, nikoli další helper téhož toku.
+- **Rozhodnutí vlastníka 2026-10-29:** další iterací je **R2-ID** (identita a první sdílená Oblast) **před R2c** (sync bariéra a cache), protože oddělení cache, offline front a revokace v synchronizaci na identitě závisí.
 
-#143 přidává na stejné explicitně povolené staging hranici read-only detail. ID úkolu je jediný parametr cesty; neprázdné ID bez krajních mezer a řídicích znaků je omezeno na 512 UTF-8 bytů. Mezery a interpunkce uvnitř ID jsou podporovány stejně jako v seznamu. Neznámé, cizí a sdílené úkoly vracejí stejnou odpověď 404 bez cache; poškozené úložiště a chybné serverové svázání selhávají uzavřeně. Každý detail provádí jedno izolované, kanonicky ověřené snapshot čtení s osobním rozsahem přímo v autentizovaném SQL selektoru.
+## Aktuální staging kontrakt
 
-**Nový staging kontrakt (rozpracovaná iterace):** schema v2 přidává `tasks.revision` a `areas.policy_revision`. SQLite triggery zvyšují revize při změnách úkolu, přidání/odebrání člena a změně role, a to i při návratu hodnoty do původního stavu. `snapshotRevision` v interním preview nyní představuje SHA-256 konkrétního úkolu, jeho efektivní Oblasti, policy epochy a `restoreGeneration`; název vlastnosti zůstává pouze kvůli staging kompatibilitě. Nový kontrakt dovoluje nezávislé změny jiných úkolů, ale stále ověřuje aktuální ACL a revizi uvnitř `BEGIN IMMEDIATE`. Stará schema v1 se **automaticky nemigruje**: izolované staging databáze se znovu vytvoří; produkční data nejsou dotčena. Smazání úkolu je v tomto staging schématu dočasně zakázáno, aby se ID nemohlo znovu použít s revizí 0; odstranění tohoto omezení vyžaduje nejprve trvalé tombstony. Stále nejsou implementované trvalé multi-process revokace, dokončený auditní lifecycle ani sync.
- 
-**Navazující staging audit (schema v3, návrh):** Každá úspěšná změna názvu má ve stejné transakci obsahově úspornou auditní událost (aktér, úkol, efektivní Oblast a policy epoch, původní/nová revize, restore generace, čas a neprůhledný klíč příkazu; žádné texty názvů). Replay a no-op nevytváří další záznam; selhání auditního INSERTu vrací celý zápis. Izolovaný testovací store uplatňuje **prozatímní minimální 90denní ochranu před smazáním** a tvrdý limit 4096 událostí, při nasycení zápis bezpečně odmítne. Neprobíhá automatické mazání starých událostí, není schválena maximální produkční doba retence, archivace, export ani uživatelské čtení auditu. Staré staging schema v2 se nemigruje a vyžaduje nové testovací úložiště. Tato iterace neaudituje zamítnuté pokusy, přímé SQL úpravy ani budoucí Area/member operace.
+Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, výchozí vypnutá a nad izolovaným úložištěm. Zelené CI samo o sobě neznamená aktivaci ani splnění produkčních ACL.
 
-## Nejbližší vývoj — skutečná kritická cesta
+**Schéma a revize.** Staging schema v2–v4 přidává `tasks.revision`, `areas.policy_revision` a monotónní projektové revize; SQLite triggery je zvyšují i při návratu hodnoty do původního stavu (ABA). Starší staging schémata se **automaticky nemigrují**; izolované testovací úložiště se znovu vytvoří bootstrapem, produkční data nejsou dotčena. Smazání úkolu je dočasně zakázáno, aby se ID nemohlo znovu použít s revizí 0; odstranění omezení vyžaduje trvalé tombstony. Staré actor-only receipty z #138 vedou k odmítnutí staging preflightu.
+
+**Identita a sessions.** Interní session authority a revokace jsou **process-local**. HTTP endpointy používají skutečnou owner cookie pouze pro explicitně povolené staging cesty. Nejde o produkční víceuživatelskou session službu ani o durable multiuser revokaci.
+
+**Čtení (`/api/target-staging/...`).**
+- `GET tasks` a `GET projects`: stránkování (nejvýše 100 položek) s cursorem podepsaným oddělenou HMAC doménou ze serverového session secretu, vázaným na owner cookie, aktéra, staging directory, restore generation a hash **pouze autorizovaných** vlastních řádků. Platí nejvýše 15 minut; změny cizích nebo sdílených položek osobní cursor nezneplatní. Cursor není autentizační token a nevolí identitu ani rozsah.
+- `GET tasks/[taskId]` a `GET projects/[projectId]`: jediné preflightované snapshot čtení s osobním rozsahem v autentizovaném SQL. ID je jediný parametr cesty, omezený na 512 UTF-8 bytů bez krajních mezer a řídicích znaků. Neznámé, cizí a sdílené položky vracejí nerozlišitelné 404 bez cache. Projekt vrací jen `id`, `title`, `areaId`, `areaKind=private`. Detail úkolu vrací navíc title CAS `snapshotRevision` ze stejného snapshotu.
+- `GET tasks/[taskId]/audit`: nejnovějších 50 záznamů vlastního aktéra, aktuální Oblasti a restore generace; pouze `revisionBefore`, `revisionAfter`, `committedAtMs`.
+- Každý požadavek znovu ověřuje cookie a ACL v izolovaném čtecím podprocesu s limity souběhu, času a velikosti odpovědi. Nejde o náhradu produkčního zátěžového testu.
+
+**Zápis názvu úkolu.** Samostatný flag `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED=true` nad čtecím flagem.
+- `GET`/`PATCH tasks/[taskId]/title`: write ACL se opakuje uvnitř `BEGIN IMMEDIATE` s task/policy revizí a restore generation. Idempotentní receipt je vázaný na aktéra + úkol + UUID příkazu; změna payloadu pod stejným UUID je konflikt.
+- Každá úspěšná změna má ve stejné transakci obsahově úspornou auditní událost (bez textů názvů). Replay a no-op nevytváří další záznam, selhání auditu vrací celý zápis. Prozatímní minimální 90denní ochrana před smazáním a tvrdý limit 4096 událostí; při nasycení se zápis bezpečně odmítne.
+- `POST tasks/[taskId]/title/status`: tělo `commandId`, `title`, `expectedRevision`; vrací `committed` / `not_recorded`, konflikt 409. `not_recorded` neopravňuje k nebezpečnému opakování; retry znovu prochází ACL, generací a CAS.
+
+**Stále neimplementováno:** audit zamítnutých pokusů a Area/member operací, produkční retence/export/archivace auditu, trvalé multi-process revokace, sdílené Oblasti s rolemi, sync, user-scoped cache, UI ani produkční aktivace.
+
+## Další iterace: R2-ID — trvalá víceuživatelská identita a první sdílená Oblast (staging)
+
+**Cíl:** první funkční řez se **2–3 skutečnými syntetickými identitami** na izolovaném stagingu. Nerozšiřovat dále tok jediného vlastníka.
+
+| Krok | Obsah | Brána |
+|---|---|---|
+| **R2-ID.1** | Staging schema v5: `users`, trvalé `sessions` a revokační epocha v SQLite. Session cookie vázaná na `userId`, nikoli na pevného `owner`. Čtecí i zapisovací proces ověřuje session a revokaci v transakci. | Revokace platí okamžitě i na jiném serverovém procesu a po restartu. Starší staging schéma vyžaduje nový bootstrap, žádná migrace produkčních dat. |
+| **R2-ID.2** | Členství ve sdílené Oblasti a matice rolí. Čtení seznamu a detailu úkolů ve sdílené Oblasti podle aktuálního členství; rozsahy `Sdílené` a `Můj plán` (soukromé + mně přidělené) nad stejným preflightovaným snapshotem. | Nečlen dostane nerozlišitelné 404; žádný únik přes cursor, revize, počty ani staleness. |
+| **R2-ID.3** | Title PATCH na sdíleném úkolu podle role: viewer zamítnut, editor/admin povoleno. Změna role nebo odebrání člena během zápisu vede k bezpečnému zamítnutí přes `policy_revision`. Audit zaznamená skutečného aktéra. | Receipty a ověření výsledku jsou oddělené podle identity; revokovaná session nemůže dokončit čekající příkaz. |
+
+**Akceptační scénáře (syntetické identity A, B, C):**
+1. A nevidí ani nezmění soukromé úkoly a projekty B, a to ani přes seznam, detail, audit, cursor, `snapshotRevision`, stav příkazu či rozdíl odpovědí.
+2. Sdílená Oblast s A = admin, B = editor, C = viewer: C čte, ale nezapisuje; B zapisuje; po odebrání B je jeho další požadavek odmítnut, i na jiném procesu a po restartu.
+3. Revokace session A zablokuje pokračování stránkování, čekající PATCH i ověření výsledku příkazu.
+4. `Můj plán` u B obsahuje jen jeho soukromé úkoly a sdílené úkoly přidělené B; nepřidělené a cizí přidělené sdílené úkoly zůstávají jen v `Sdílené`.
+5. Souběžná změna členství a zápis: buď zápis proběhne s původním oprávněním před změnou, nebo je zamítnut; nikdy nevznikne zápis s odebraným oprávněním.
+
+**Mimo rozsah R2-ID:** sync protokol a cache (R2c), agregace Home/Today/Search (R2d), passkeys, obnova účtu a skutečné pozvánky (R5), UI a jakákoli práce s produkčními daty. Flagy zůstávají výchozí vypnuté.
+
+**Postup:** podle [AGENTS.md](../AGENTS.md) — implementace v samostatné větvi/worktree s odděleným portem a staging adresářem, dva nezávislí testeři (funkce/akceptace; regrese/bezpečnost/integrita), během vývoje jen `PR Checks` a cílené testy.
+
+## Kritická cesta
 
 Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez vazby na fungující bezpečný vertikální tok. Další implementace mají přidávat **ověřitelnou funkční schopnost** a negativní testy, nejdřív na izolovaném stagingu, teprve potom ve skutečném runtime.
 
 | Pořadí | Iterace | Požadovaný výsledek a brána |
 |---|---|---|
-| **1** | **PR #135 — hotovo** | Review i `PR Checks` dokončeny, sloučeno do `main` (`70558de6`). Předzápisový náhled zůstává staging-only a nezakládá právo provést mutaci. |
-| **2** | **R2a — #137–141 sloučeny, staging pokračuje** | Transakční title write, idempotence, task/policy CAS a obsahově úsporný audit schema v3 jsou v `main`. Audit odmítnutých a dalších bezpečnostně významných operací, produkční retenční/exportní lifecycle a nezávislé bezpečnostní review stále chybí. Produkční aktivace není povolena. |
-| **3** | **R2b — #142–145 sloučeny; owner-only auditní náhled jako další iterace** | Owner cookie je svázána pouze s read-only `personal` staging seznamem a soukromým detailem za explicitním serverovým flagem; actor/Area/scope nelze dodat klientem. Přenositelný podepsaný cursor smí zvolit jen pokračování již autorizovaného seznamu, nikoliv identitu nebo rozsah. Detail odmítá neznámé, cizí a shared úkoly nerozlišitelným 404. Čtecí podproces odlehčuje hlavnímu Next event loop, ale není náhradou za produkční zátěžový test. Další iterace musí řešit write ACL, skutečné per-user identity, durable revokaci a víceprocesové bezpečné chování zápisů/sync. Nejde o produkční multiuser připravenost. |
-| **4** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
-| **5** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
-| **6** | **R3 — Propojit D3 s UI** | Zapojit existující #103/#108 do desktopu a mobilu; Home zůstane úvodní obrazovkou a Můj plán výchozím **čtecím rozsahem**. Zápisy mají vždy jednu viditelnou cílovou Oblast; `Nezařazeno` je soukromé; sdílení vyžaduje souhlas. Ověřit 2–3 identity, mobil, klávesnici/VoiceOver a offline/revokační případy. |
-| **7** | **R4 — Produkční připravenost a cutover** | Nejdřív inventura, recoverable archivní záloha a **otestovaný restore**, plán pro stávající klienty/integrační tajemství; teprve po **samostatném souhlasu vlastníka** přepnutí do nového úložiště. Produkční nasazení až po povinné plné Browser E2E release gate na **přesném SHA**. |
+| **1** | **R2a/R2b — #135–149 sloučeny** | Jednouživatelský owner-private staging tok čtení, title write, idempotence, CAS, audit a zotavení. Audit odmítnutých a dalších bezpečnostně významných operací, produkční retenční/exportní lifecycle a nezávislé bezpečnostní review stále chybí. Produkční aktivace není povolena. |
+| **2** | **R2-ID — další iterace** | Trvalé identity a sessions, durable víceprocesová revokace, sdílená Oblast s rolemi viewer/editor/admin pro čtení a title write; akceptační scénáře výše. |
+| **3** | **R2c — Sync bariéra a cache** | Verzované per-item zápisy/tombstony místo legacy global `PUT`; staré full-snapshot klienty zablokovat **před mutací**. Oddělit IndexedDB/cache a osobní stav podle identity; řešit offline fronty, konflikty, revokaci, `restoreGeneration`, obnovu, index, attention a push. Starý obsah nesmí být znovu nahrán ani potichu zahozen. |
+| **4** | **R2d — Kompletní autorizované čtení** | Rozšířit autorizaci na projekty, poznámky a vztahy i agregace **Home/Inbox/Today/Upcoming/Projects/Search/counts/attention/AI**; zakázat únik přes metadata, počty, notifikace, export a cache. Přesné aktivní projektové membership/assignee pravidlo pro Můj plán. |
+| **5** | **R3 — Propojit D3 s UI** | Zapojit existující #103/#108 do desktopu a mobilu; Home zůstane úvodní obrazovkou a Můj plán výchozím **čtecím rozsahem**. Zápisy mají vždy jednu viditelnou cílovou Oblast; `Nezařazeno` je soukromé; sdílení vyžaduje souhlas. Ověřit 2–3 identity, mobil, klávesnici/VoiceOver a offline/revokační případy. |
+| **6** | **R4 — Produkční připravenost a cutover** | Zafixovat cílové schéma s migracemi místo staging bootstrapů; inventura, recoverable archivní záloha a **otestovaný restore**, plán pro stávající klienty/integrační tajemství; teprve po **samostatném souhlasu vlastníka** přepnutí do nového úložiště. Produkční nasazení až po povinné plné Browser E2E release gate na **přesném SHA**. |
 
-Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsledek se má posuzovat podle konkrétních akceptačních scénářů, **ne podle počtu PR**. Staging helper není prod-ready endpoint; přepnutí `enabled` v UI není serverové oprávnění.
+Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsledek se má posuzovat podle konkrétních akceptačních scénářů, **ne podle počtu PR**. Staging helper není prod-ready endpoint; přepnutí `enabled` v UI není serverové oprávnění.
 
 ## Kritéria dokončení R2 před D3
 
@@ -78,56 +119,4 @@ Iterace 2–5 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
 - Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
 
-**Nejbližší práce: zrevidovat staging-only soukromý detail projektu, dokončit auditní lifecycle a pokračovat v bezpečném owner-only HTTP toku bez otevření shared dat. Per-user identity, zápis, sync a produkční cutover jsou samostatné brány.**
-
-
-#144 rozšiřuje stejný staging-only owner-cookie read-only tok o GET /api/target-staging/projects. Výsledek obsahuje pouze ID, název a soukromou Oblast vlastních projektů; žádné počty úkolů, členy, shared ani cizí projekty. Stránkování je omezené na 100 položek a používá odděleně podepsaný, cookie-bound cursor. Jeho revize hashují pouze autorizované soukromé projektové řádky, jejich monotónní projektovou revizi, Area policy epochu a restore generation; jiné úkoly a projekty nesmí prozrazovat změny přes staleness. Nové izolované staging schema v4 detekuje i návrat názvu projektu na původní hodnotu (ABA) a brání opětovnému použití ID bez tombstonů; již vytvořené testovací v3 úložiště vyžaduje nový bootstrap, nikoli migraci nebo reset produkčních dat. Produkční aktivace stále vyžaduje další bezpečnostní práci.
-
-PR #145 přidal pouze `GET /api/target-staging/projects/[projectId]` pro soukromý detail projektu.
-Stejně jako detail úkolu vyžaduje skutečnou owner cookie a explicitní staging flag.
-Autorizované SQL ověřuje soukromou Oblast, osobní workspace a vlastníka na jediném
-kanonickém čtecím snapshotu. Neexistující, cizí a sdílený projekt se vrací
-nerozlišitelným 404. Odpověď obsahuje pouze `id`, `title`, `areaId` a
-`areaKind=private`; žádné počty úkolů, členy, metadata ani historii.
-Endpoint nezakládá produkční autorizaci, zápisy ani aktivaci UI.
-
-Po sloučení **PR #145** je staging-only owner-cookie detail soukromého projektu v `main`.
-Navazující samostatná iterace auditního lifecycle zpřístupňuje
-`GET /api/target-staging/tasks/[taskId]/audit` pouze se skutečnou owner cookie
-a explicitním staging flagem. Na jediné kanonické, preflightované čtecí kopii
-ověří aktuální osobní/private Area ACL úkolu; cizí, sdílené a neexistující úkoly
-vracejí nerozlišitelné 404. Vrací jen nejnovějších 50 záznamů **vlastního aktéra,
-aktuální Oblasti a restore generace**, a pouze `revisionBefore`,
-`revisionAfter` a `committedAtMs`. Žádné názvy, receipt klíče, identifikátory
-Area/aktéra, počty cizích událostí ani transakční přístup pro klienta.
-Nejde o úplný uživatelský audit: export, mazání, maximální retence,
-zamítnuté operace, změny ACL a samostatná produkční identity stále chybí.
-Žádné produkční přepnutí, UI nebo nový write endpoint.
-
-
-Po sloučení **PR #146** (auditní čtení) a **PR #147** (owner-private title HTTP)
-do `main` zůstává další R2b prací bezpečné zotavení z nejisté odpovědi zápisu.
-PR #147 přidal samostatný, výchozí vypnutý flag
-`AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED=true` nad existující čtecí flag.
-Pouze skutečná owner cookie může na izolovaném neaktivovaném staging store požádat
-o read-only CAS preflight a PATCH názvu jediného vlastního soukromého úkolu.
-Shared, cizí a neexistující úkoly jsou nerozlišitelné 404. Write ACL se opakuje
-uvnitř `BEGIN IMMEDIATE`, s task/policy revizí, restore generation,
-idempotentním receiptem a atomickým obsahově úsporným auditem. Nezapíná se
-produkční store, UI, legacy sync ani víceuživatelské sdílení. Toto není
-schválení produkční aktivace a neřeší durable multi-process revokaci, plný
-audit lifecycle ani per-user sync.
-
-Navazující staging-only `POST /api/target-staging/tasks/[taskId]/title/status`
-umožňuje vlastníkovi se stejnou cookie a aktuálním soukromým oprávněním zjistit,
-zda se **přesný původní příkaz** zapsal (`committed`), nebo pro něj dosud není
-receipt (`not_recorded`). Tělo obsahuje `commandId`, `title` a `expectedRevision`;
-název nejde do URL a odpověď nevrací název ani digest receiptu. Konfliktní obsah
-pod stejným `commandId` vrací 409. `not_recorded` samo o sobě neopravňuje
-k nebezpečnému opakování: případný retry znovu prochází aktuální ACL, generací
-a revizním CAS. Endpoint zůstává výchozí vypnutý, pouze pro izolovaný staging,
-bez produkční identity, D3, UI nebo aktivace produkčního úložiště.
-
-
-Navazující staging-only detail vrací kromě soukromého úkolu také `snapshotRevision` pro jeho title CAS. Detail, aktuální soukromá write ACL a revize se ověřují v jedné preflightované čtecí transakci nad stejnou pinned SQLite kopií. Klient může předat tuto revizi přímo do title PATCH bez samostatného GET title preflightu; PATCH stále znovu ověřuje aktuální ACL, restore generation a revizi před zápisem. Cizí, sdílené či nepřístupné úkoly token nedostanou. Tato iterace nemění schema, produkční aktivaci, UI ani legacy vrstvu.
-
+**Nejbližší práce: R2-ID — trvalé identity a sessions, durable revokace a první sdílená Oblast s rolemi na izolovaném stagingu. Sync, UI a produkční cutover jsou samostatné následné brány.**
