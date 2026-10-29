@@ -11,12 +11,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-// v5 (R2-ID.1) adds the durable staging session store and identity revocation
-// epoch. v6 (R2-ID.2a) adds the membership command receipt store, the
-// content-free membership audit and the last-admin guards. Older staging stores
-// are never migrated: preflight rejects them, and a new (test-only) staging
-// directory must be bootstrapped instead.
-export const TARGET_STORE_SCHEMA_VERSION = 6;
+// v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
+// ACL-scoped cursor revisions. Older isolated staging stores are never migrated:
+// preflight rejects them; use a NEW test-only staging directory instead.
+export const TARGET_STORE_SCHEMA_VERSION = 7;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -169,6 +167,7 @@ CREATE TABLE areas (
   owner_user_id TEXT NOT NULL,
   system_key TEXT CHECK(system_key IS NULL OR system_key = 'unassigned'),
   policy_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0 AND policy_revision < 9007199254740991),
+  content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(content_revision)='integer' AND content_revision >= 0 AND content_revision < 9007199254740991),
   workspace_kind TEXT GENERATED ALWAYS AS (
     CASE kind WHEN 'private' THEN 'personal' ELSE 'shared' END
   ) STORED,
@@ -208,6 +207,10 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_by_project ON tasks(project_id);
 CREATE INDEX tasks_by_area ON tasks(area_id);
+-- Contributing-Area EXISTS checks must seek by Area/project, not rehash tasks.
+CREATE INDEX projects_by_area ON projects(area_id);
+CREATE INDEX tasks_by_project_assignee ON tasks(project_id, assignee_user_id);
+CREATE INDEX tasks_by_area_assignee ON tasks(area_id, assignee_user_id);
 
 -- Internal, content-free audit of committed title mutations only. The same
 -- transaction writes the task, idempotency receipt and this row. No API is
@@ -336,6 +339,27 @@ WHEN NEW.title IS NOT OLD.title
 BEGIN
   UPDATE projects SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
+-- Task-set epochs are incremented inside the same transaction as each insert
+-- or mutation (including raw staging SQL). They cannot be reset on title ABA.
+-- Project Area moves/deletes are forbidden below; when that policy changes,
+-- the affected old/new Area epochs must be bumped for inherited task moves.
+CREATE TRIGGER task_area_content_insert AFTER INSERT ON tasks
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+END;
+CREATE TRIGGER task_area_content_update AFTER UPDATE OF title, project_id, area_id, assignee_user_id, revision ON tasks
+WHEN NEW.title IS NOT OLD.title OR NEW.project_id IS NOT OLD.project_id
+  OR NEW.area_id IS NOT OLD.area_id OR NEW.assignee_user_id IS NOT OLD.assignee_user_id
+  OR NEW.revision IS NOT OLD.revision
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
+      AND COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
+        IS NOT COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
+END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
@@ -361,6 +385,9 @@ BEGIN SELECT RAISE(ABORT, 'project revision must increment by one'); END;
 CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
 WHEN NEW.policy_revision <> OLD.policy_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
+CREATE TRIGGER area_content_revision_guard BEFORE UPDATE OF content_revision ON areas
+WHEN NEW.content_revision <> OLD.content_revision + 1
+BEGIN SELECT RAISE(ABORT, 'Area content revision must increment by one'); END;
 -- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
 -- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
@@ -481,6 +508,10 @@ BEGIN SELECT RAISE(ABORT, 'workspace ID is immutable in R1'); END;
 CREATE TRIGGER immutable_project_id BEFORE UPDATE OF id ON projects
 WHEN NEW.id <> OLD.id
 BEGIN SELECT RAISE(ABORT, 'project ID is immutable in R1'); END;
+-- Never recycle an Area ID/epoch while cursors can still reference it.
+-- Area deletion requires a future tombstone protocol and revision redesign.
+CREATE TRIGGER area_deletion_guard BEFORE DELETE ON areas
+BEGIN SELECT RAISE(ABORT, 'Area deletion requires tombstone protocol'); END;
 CREATE TRIGGER protected_private_fallback BEFORE DELETE ON areas
 WHEN OLD.system_key = 'unassigned'
 BEGIN SELECT RAISE(ABORT, 'cannot delete private Unassigned'); END;
