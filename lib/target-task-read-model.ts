@@ -193,16 +193,6 @@ type AreaRevisionRow = {
   contentRevision: number; role: string | null;
 };
 
-const AUTHORIZED_AREA_FROM = `
-  FROM areas a
-  JOIN workspaces w ON w.id = a.workspace_id
-  JOIN identities actor ON actor.id = ?
-  LEFT JOIN area_members member ON member.area_id = a.id AND member.user_id = actor.id
-  WHERE a.owner_user_id = w.owner_user_id
-    AND ((a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id)
-      OR (a.kind = 'shared' AND w.kind = 'shared'
-        AND member.role IN ('viewer', 'editor', 'admin')))
-`;
 // Existing task/project indexes provide O(1)-style existence probes per Area.
 // CROSS JOIN pins the project-first loop; otherwise SQLite may scan *all*
 // project tasks (t.area_id IS NULL) before filtering p.area_id, restoring the
@@ -218,21 +208,46 @@ const areaHasTasks = (assigned: boolean): string => `(
       ${assigned ? "AND t.assignee_user_id = actor.id" : ""})
 )`;
 
+/**
+ * Two disjoint, indexed access paths: private Areas are found by owner, and
+ * shared Areas by an actor-first membership index. Do not scan every Area
+ * in the database for each cursor page (issue #155, review P2).
+ * Both branches retain the exact workspace / owner and membership ACL.
+ */
 function contributingAreaRows(
   db: DatabaseSync, actorUserId: string, scope: TargetTaskScope,
 ): AreaRevisionRow[] {
-  const selector = scope === "personal"
-    ? `a.kind = 'private' AND ${areaHasTasks(false)}`
-    : scope === "shared"
-      ? `a.kind = 'shared' AND ${areaHasTasks(false)}`
-      : `((a.kind = 'private' AND ${areaHasTasks(false)})
-        OR (a.kind = 'shared' AND member.role IN ('editor', 'admin')
-          AND ${areaHasTasks(true)}))`;
-  return db.prepare(`SELECT a.id AS areaId, a.kind AS areaKind,
-      a.policy_revision AS policyRevision, a.content_revision AS contentRevision,
-      member.role AS role
-      ${AUTHORIZED_AREA_FROM} AND (${selector})
-      ORDER BY a.id COLLATE BINARY ASC`).all(actorUserId) as AreaRevisionRow[];
+  const columns = `a.id AS areaId, a.kind AS areaKind,
+    a.policy_revision AS policyRevision, a.content_revision AS contentRevision`;
+  const queries: string[] = [];
+  const args: string[] = [];
+  if (scope !== "shared") {
+    queries.push(`SELECT ${columns}, NULL AS role
+      FROM areas a INDEXED BY areas_by_owner_kind
+      JOIN workspaces w ON w.id = a.workspace_id
+      JOIN identities actor ON actor.id = a.owner_user_id
+      WHERE a.owner_user_id = ? AND a.kind = 'private'
+        AND w.kind = 'personal' AND w.owner_user_id = a.owner_user_id
+        AND ${areaHasTasks(false)}`);
+    args.push(actorUserId);
+  }
+  if (scope !== "personal") {
+    queries.push(`SELECT ${columns}, member.role AS role
+      FROM area_members member INDEXED BY area_members_by_user_area
+      JOIN identities actor ON actor.id = member.user_id
+      JOIN areas a ON a.id = member.area_id
+      JOIN workspaces w ON w.id = a.workspace_id
+      WHERE member.user_id = ? AND a.kind = 'shared'
+        AND w.kind = 'shared' AND w.owner_user_id = a.owner_user_id
+        AND member.role IN ('viewer', 'editor', 'admin')
+        ${scope === "my-plan" ? "AND member.role IN ('editor', 'admin')" : ""}
+        AND ${areaHasTasks(scope === "my-plan")}`);
+    args.push(actorUserId);
+  }
+  // SQLite BINARY ordering matches the original cursor hash's row order.
+  // The branches are disjoint by Area kind, so UNION ALL cannot duplicate Areas.
+  return db.prepare(`SELECT * FROM (${queries.join(" UNION ALL ")})
+    ORDER BY areaId COLLATE BINARY ASC`).all(...args) as AreaRevisionRow[];
 }
 
 function hashContributingAreas(
