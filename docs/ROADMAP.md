@@ -114,7 +114,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Transakční konzistence:** souběžná změna oprávnění/revize/generace během zápisu vede k bezpečnému zamítnutí; opakování příkazu nezpůsobí dvojí změnu, audit a Undo neobejdou ACL.
 - **Synchronizace a revokace:** starý snapshot/pozdní offline fronta nemění novou generaci, po revokaci nevytéká obsah ani přes cache či odvozené kanály; uživatelské profily oddělené. Offline ztracená práva nelze zpětně odebrat již zkopírovanému obsahu, ale server musí po připojení přístup odmítnout.
 - **Funkční úplnost:** autorizované task/project/detail a Home/Today/Inbox/Upcoming/search výsledky jsou vzájemně konzistentní. `Můj plán` obsahuje soukromé a mně přidělené sdílené úkoly, `Sdílené` také nepřidělené oprávněné položky.
-- **Testování:** syntetické 2–3 identity, pozitivní i negativní scénáře pro čtení/zápis/souběh/offline/revokaci, pravidelné `PR Checks`, nezávislé review. Celá Browser E2E sada **jen před nasazením** dle [AGENTS.md](../AGENTS.md).
+- **Testování:** syntetické 2–3 identity, pozitivní i negativní scénáře pro čtení/zápis/souběh/offline/revokaci, pravidelné `PR Checks`, [povinné nezávislé code review](../AGENTS.md#mandatory-code-review-on-every-pr). Celá Browser E2E sada **jen před nasazením** dle [AGENTS.md](../AGENTS.md).
 
 ## Co se nemění
 
