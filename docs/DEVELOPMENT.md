@@ -113,7 +113,7 @@ Add and run focused automated checks when a feature introduces them. For UI-sens
 
 The [PR Checks workflow](../.github/workflows/pr-checks.yml) runs for every pull request and on pushes to `main`. It installs locked dependencies, validates the deployment script syntax, runs `pnpm typecheck` and `pnpm test`, and builds with `pnpm build`. These checks and the required code reviews are the **PR merge gate**. The full Playwright/Chromium browser suite is **not required** for opening, reviewing, or merging each PR; it does not run automatically on PRs or pushes. For higher-risk UI/integration work, run **focused** browser scenarios on an isolated branch instance. Do not run the unfiltered `pnpm test:e2e` suite or the complete `Browser E2E` workflow before a release merely because a change is risky or a reviewer requests extra coverage; the **project owner must explicitly approve that exception before the run**. Agents, reviewers, and test subagents must not self-authorize it.
 
-If GitHub's branch protection is unavailable or not enforced, manually verify (1) the current PR head and `main` SHAs; (2) successful complete `PR Checks` on the PR head; (3) required reviews and relevant integration/acceptance tests; and (4) a compare-and-swap head guard and successful merge. If the PR code or its integrated base changes, rerun the relevant PR validation. Never obtain a green result by skipping broken checks, weakening assertions or ignoring failures. Configure branch protection, where possible, to require **PR Checks**, not `Browser E2E`. Confirm that any ruleset is actually enforced; an unenforced one does not replace manual checks.
+If GitHub's branch protection is unavailable or not enforced, manually verify (1) the current PR head and `main` SHAs; (2) successful complete `PR Checks` on the PR head; (3) required reviews and relevant integration/acceptance tests; (4) the last completed PR code review on that head SHA (re-reviewed for interactions if `main` moved since), with a traceable reviewer report and no open blocking finding; and (5) a compare-and-swap head guard and successful merge. If the PR code or its integrated base changes, rerun the relevant PR validation. Never obtain a green result by skipping broken checks, weakening assertions or ignoring failures. Configure branch protection, where possible, to require **PR Checks**, not `Browser E2E`. Confirm that any ruleset is actually enforced; an unenforced one does not replace manual checks.
 
 ## Full browser E2E: mandatory production-release gate
 
@@ -132,7 +132,8 @@ Targeted `pnpm test:e2e -g "part of its name"` scenarios remain available locall
 1. An implementation author develops and validates the change in its own branch/worktree.
 2. Open a pull request with the local reproduction details and, if supported, a dedicated preview deployment.
 3. Request cross-review: Codex reviews Claude-authored work, and Claude reviews Codex-authored work. The reviewer independently checks acceptance criteria, regressions, edge cases, security/data boundaries, and the actual running instance or preview.
-4. When two or more changes interact, create an integration branch from the current target branch:
+4. Immediately after opening the PR, and after every push that changes the PR diff, run an independent code review of the whole PR diff on the current head (for example Claude Code `/code-review` or an equivalent review subagent that is not the implementation agent). Fix and push every confirmed finding and plainly correct nit in the same PR, answer findings that do not apply with a concrete reason, escalate product decisions and dismissals of security findings to the project owner, and re-review the new head until no blocking finding remains. Out-of-scope findings get a PR reply and a follow-up issue. A third round with blocking findings, or a severity dispute, goes to the project owner. The last completed review must be on the exact head SHA being merged; if `main` moved since then, re-review the integrated interactions. Record each round's head/base SHA, reviewer identity, a link or identifier of the reviewer's report, and the resolutions in the PR. The binding rules are in [AGENTS.md](../AGENTS.md#mandatory-code-review-on-every-pr).
+5. When two or more changes interact, create an integration branch from the current target branch:
 
    ```bash
    git fetch origin
@@ -146,7 +147,7 @@ Targeted `pnpm test:e2e -g "part of its name"` scenarios remain available locall
 
    Resolve integration conflicts and test the combined behavior, including the boundary between the features. Push the integration branch only when it is useful for shared review or CI; it is normally temporary.
 
-5. Merge individual PRs only after their reviews, required **PR Checks**, and relevant combined validation have passed. The full Browser E2E suite is required later, before a server deployment, on the exact intended release commit. Delete temporary integration branches and worktrees only after the work is safely merged.
+6. Merge individual PRs only after their reviews, the resolved PR code review, required **PR Checks**, and relevant combined validation have passed. The full Browser E2E suite is required later, before a server deployment, on the exact intended release commit. Delete temporary integration branches and worktrees only after the work is safely merged.
 
 If infrastructure provides preview deployments, configure one isolated preview per PR. Use preview-specific environment values and test data, and put its URL plus any setup steps in the PR. A preview must not share a writable production database, storage bucket/prefix, scheduled-job identity, or notification credentials.
 
@@ -168,6 +169,7 @@ Run each variant with a separate port and state prefix, document the hypothesis 
 - [ ] Production build and relevant focused checks pass
 - [ ] UI and persistence behavior tested where affected
 - [ ] Independent cross-review completed
+- [ ] PR code review run on the current head and every finding fixed, answered, moved to a follow-up issue, or decided by the owner; round records (head/base SHA, reviewer, report link) present and re-reviewed if `main` moved
 - [ ] Integration branch tested for interacting parallel changes, or not needed with a stated reason
 - [ ] Preview deployment checked when available
 - [ ] No credentials, local state, or generated mutable data committed
