@@ -204,14 +204,17 @@ const AUTHORIZED_AREA_FROM = `
         AND member.role IN ('viewer', 'editor', 'admin')))
 `;
 // Existing task/project indexes provide O(1)-style existence probes per Area.
-// The more selective assigned-task indexes handle my-plan without iterating
-// unrelated tasks inside a shared Area.
+// CROSS JOIN pins the project-first loop; otherwise SQLite may scan *all*
+// project tasks (t.area_id IS NULL) before filtering p.area_id, restoring the
+// very O(N) per-page walk that this revision eliminates. The composite indexes
+// seek assigned tasks for my-plan without scanning unrelated project members.
 const areaHasTasks = (assigned: boolean): string => `(
   EXISTS (SELECT 1 FROM tasks t
     WHERE t.area_id = a.id AND t.project_id IS NULL
       ${assigned ? "AND t.assignee_user_id = actor.id" : ""})
-  OR EXISTS (SELECT 1 FROM projects p JOIN tasks t ON t.project_id = p.id
-    WHERE p.area_id = a.id AND t.area_id IS NULL
+  OR EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area
+    CROSS JOIN tasks t INDEXED BY tasks_by_project_assignee
+    WHERE p.area_id = a.id AND t.project_id = p.id AND t.area_id IS NULL
       ${assigned ? "AND t.assignee_user_id = actor.id" : ""})
 )`;
 
