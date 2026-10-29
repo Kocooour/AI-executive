@@ -53,7 +53,7 @@ const plain = rows => rows.map(row => ({ ...row }));
 const logRows = (db, afterSeq = 0) => plain(db.prepare(
   `SELECT seq, entity_kind AS kind, entity_id AS id, area_id AS area, op, revision,
           member_user_id AS who, member_role AS role FROM change_log WHERE seq > ? ORDER BY seq`).all(afterSeq));
-/** Order-insensitive compare of one operation's entries (trigger firing order is not a contract). */
+/** Compare event sets when order is not part of the contract; moves assert sequence separately. */
 const brief = rows => rows.map(r => `${r.kind}:${r.id}:${r.area}:${r.op}:${r.revision ?? ""}`).sort();
 const maxSeq = db => db.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log").get().n;
 const contentRevision = (db, area) => db.prepare("SELECT content_revision AS n FROM areas WHERE id=?").get(area).n;
@@ -132,6 +132,8 @@ test("moving a task between Areas logs one 'leave' (old Area) and one 'upsert' (
   db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='m1'").run();
   assert.deepEqual(brief(logRows(db, mark)), [
     `task:m1:${stage.unassignedAreaId}:leave:1`, "task:m1:team-area:upsert:1"].sort());
+  assert.deepEqual(logRows(db, mark).map(r => r.op), ["leave", "upsert"],
+    "the old Area must see leave before the new Area sees upsert");
   assert.equal(contentRevision(db, stage.unassignedAreaId), privateEpoch + 1);
   assert.equal(contentRevision(db, "team-area"), teamEpoch + 1);
 
@@ -139,11 +141,34 @@ test("moving a task between Areas logs one 'leave' (old Area) and one 'upsert' (
   mark = maxSeq(db);
   db.prepare("UPDATE tasks SET area_id=NULL, project_id='pm' WHERE id='m1'").run();
   assert.deepEqual(brief(logRows(db, mark)), ["task:m1:other-area:upsert:2", "task:m1:team-area:leave:2"]);
+  assert.deepEqual(logRows(db, mark).map(r => r.op), ["leave", "upsert"],
+    "moving into a project must also record leave first");
   // Re-parenting inside the SAME effective Area is an upsert only: no 'leave'.
   db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('pm2','other-area','P2')").run();
   mark = maxSeq(db);
   db.prepare("UPDATE tasks SET project_id='pm2' WHERE id='m1'").run();
   assert.deepEqual(brief(logRows(db, mark)), ["task:m1:other-area:upsert:3"]);
+});
+
+test("bulk Area moves always pair leave before upsert, including a simultaneous title edit", () => {
+  const { db, stage } = fixture();
+  for (const id of ["bulk-1", "bulk-2", "bulk-3"]) {
+    db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?, 'team-area', 'old')").run(id);
+  }
+  const mark = maxSeq(db);
+  db.prepare("UPDATE tasks SET area_id='other-area', title='new' WHERE area_id='team-area'").run();
+  const rows = logRows(db, mark);
+  assert.equal(rows.length, 6, "each moved task generates exactly two entries");
+  for (const id of ["bulk-1", "bulk-2", "bulk-3"]) {
+    const events = rows.filter(row => row.kind === "task" && row.id === id);
+    assert.deepEqual(events.map(row => [row.area, row.op, row.revision]), [
+      ["team-area", "leave", 1], ["other-area", "upsert", 1],
+    ], `${id}: leave must precede upsert in global sequence order`);
+    assert.ok(events[0].seq < events[1].seq);
+  }
+  assert.deepEqual(inspectIsolatedTargetStore({
+    stagingDirectory: stage.directory, mode: "r2-model",
+  }).issues, []);
 });
 
 test("area_members insert, delete and role change log 'membership' entries with the role after the change", () => {
