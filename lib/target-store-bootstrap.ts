@@ -12,9 +12,11 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
 // v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
-// ACL-scoped cursor revisions. Older isolated staging stores are never migrated:
-// preflight rejects them; use a NEW test-only staging directory instead.
-export const TARGET_STORE_SCHEMA_VERSION = 7;
+// ACL-scoped cursor revisions. v8 (R2c.1) adds durable content-free task/project
+// tombstones, the append-only trigger-written change log and the task delete
+// audit. Older isolated staging stores are never migrated: preflight rejects
+// them; use a NEW test-only staging directory instead.
+export const TARGET_STORE_SCHEMA_VERSION = 8;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -25,6 +27,15 @@ export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 // databases intentionally fail preflight; recreate test-only staging stores.
 export const TARGET_STAGING_RECEIPT_PREFIX = "r2:task-title-receipt-v2:";
 export const TARGET_STAGING_MAX_RECEIPTS = 4096;
+/**
+ * R2c.1 task-delete receipts live in a SEPARATE metadata namespace with their
+ * own cap (same value, counted independently): title and delete commands do not
+ * starve each other, and total receipt metadata stays bounded (2 x 4096). The
+ * cap is also bounded by the tombstone and delete-audit caps below.
+ */
+export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
+/** Per-table cap for task_tombstones and project_tombstones; fails closed. */
+export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
 export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
 export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
@@ -218,6 +229,115 @@ CREATE INDEX projects_by_area ON projects(area_id);
 CREATE INDEX tasks_by_project_assignee ON tasks(project_id, assignee_user_id);
 CREATE INDEX tasks_by_area_assignee ON tasks(area_id, assignee_user_id);
 
+-- R2c.1 durable tombstones. A tombstone is the content-free proof that an opaque
+-- task/project ID existed and was deleted: ID, Area at deletion, the revision
+-- the deletion advanced the row to, the change_log sequence of its 'tombstone'
+-- entry and a timestamp, never a title or other content. They are immutable
+-- (no UPDATE), never deletable (no DELETE, not even after a retention window)
+-- and replace-guarded in BEFORE INSERT (INSERT OR REPLACE skips DELETE triggers).
+-- Rowid-less, so a hidden rowid cannot be used to replace a different row.
+-- A tombstone may only be created for a LIVE row, at exactly revision + 1 and in
+-- its current effective Area, and carries the change_log sequence which the
+-- row's DELETE will receive next (see task_tombstones_consistency): the DELETE
+-- is then the only thing that can complete it. Staging capacity fails closed.
+CREATE TABLE task_tombstones (
+  id TEXT PRIMARY KEY,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision > 0 AND revision < 9007199254740991),
+  change_seq INTEGER NOT NULL UNIQUE CHECK(typeof(change_seq)='integer' AND change_seq > 0),
+  deleted_at_ms INTEGER NOT NULL CHECK(typeof(deleted_at_ms)='integer' AND deleted_at_ms > 0)
+) WITHOUT ROWID;
+CREATE TABLE project_tombstones (
+  id TEXT PRIMARY KEY,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision > 0 AND revision < 9007199254740991),
+  change_seq INTEGER NOT NULL UNIQUE CHECK(typeof(change_seq)='integer' AND change_seq > 0),
+  deleted_at_ms INTEGER NOT NULL CHECK(typeof(deleted_at_ms)='integer' AND deleted_at_ms > 0)
+) WITHOUT ROWID;
+
+-- R2c.1 append-only, content-free change log, the monotonic per-store sequence
+-- for the R2c.2 feed. Rows are written ONLY by the triggers below, in the same
+-- transaction as the change itself, so direct staging SQL is logged too. There
+-- is no content column: tasks/projects carry only the opaque ID, Area and
+-- revision, memberships only the Area, user ID and role after the change.
+CREATE TABLE change_log (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT CHECK(typeof(seq)='integer' AND seq > 0),
+  entity_kind TEXT NOT NULL CHECK(entity_kind IN ('task', 'project', 'membership')),
+  entity_id TEXT NOT NULL,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  op TEXT NOT NULL CHECK(op IN ('upsert', 'leave', 'tombstone', 'member_add', 'member_remove', 'member_role')),
+  revision INTEGER CHECK(revision IS NULL OR (typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)),
+  member_user_id TEXT REFERENCES identities(id),
+  member_role TEXT CHECK(member_role IS NULL OR member_role IN ('viewer', 'editor', 'admin')),
+  CHECK((entity_kind IN ('task', 'project') AND op IN ('upsert', 'leave', 'tombstone')
+      AND revision IS NOT NULL AND member_user_id IS NULL AND member_role IS NULL)
+    OR (entity_kind = 'membership' AND entity_id = area_id
+      AND op IN ('member_add', 'member_remove', 'member_role')
+      AND revision IS NULL AND member_user_id IS NOT NULL
+      AND ((op = 'member_remove' AND member_role IS NULL) OR (op <> 'member_remove' AND member_role IS NOT NULL))))
+);
+-- The R2c.2 feed reads per Area in sequence order; tombstone entries are
+-- countable cheaply by preflight.
+CREATE INDEX change_log_by_area ON change_log(area_id, seq);
+CREATE INDEX change_log_tombstones ON change_log(seq) WHERE op = 'tombstone';
+-- Preflight reconciles the latest entry per entity with the live state; these
+-- checks must be index-driven (latest upsert/tombstone of one task/project/membership).
+CREATE INDEX change_log_by_entity ON change_log(entity_kind, entity_id, seq);
+CREATE TRIGGER change_log_no_update BEFORE UPDATE ON change_log
+BEGIN SELECT RAISE(ABORT, 'change log is append-only'); END;
+CREATE TRIGGER change_log_no_delete BEFORE DELETE ON change_log
+BEGIN SELECT RAISE(ABORT, 'change log is append-only'); END;
+-- INSERT OR REPLACE deletes a row without DELETE triggers. In BEFORE INSERT NEW.seq
+-- is the explicit value, or not a stored value (-1) when the ID is automatic.
+CREATE TRIGGER change_log_replace_guard BEFORE INSERT ON change_log
+WHEN EXISTS(SELECT 1 FROM change_log WHERE seq = NEW.seq)
+BEGIN SELECT RAISE(ABORT, 'change log replacement is forbidden'); END;
+-- Sequences strictly increase: an explicit seq must exceed every stored one
+-- (automatic ones always do). Checked AFTER insert, once the final seq is known;
+-- the statement rolls back as a whole.
+CREATE TRIGGER change_log_monotonic AFTER INSERT ON change_log
+WHEN EXISTS(SELECT 1 FROM change_log WHERE seq > NEW.seq)
+BEGIN SELECT RAISE(ABORT, 'change log sequence must increase'); END;
+
+CREATE TRIGGER task_tombstones_no_update BEFORE UPDATE ON task_tombstones
+BEGIN SELECT RAISE(ABORT, 'tombstones are immutable'); END;
+CREATE TRIGGER task_tombstones_no_delete BEFORE DELETE ON task_tombstones
+BEGIN SELECT RAISE(ABORT, 'tombstones are permanent'); END;
+CREATE TRIGGER task_tombstones_replace_guard BEFORE INSERT ON task_tombstones
+WHEN EXISTS(SELECT 1 FROM task_tombstones WHERE id = NEW.id OR change_seq = NEW.change_seq)
+BEGIN SELECT RAISE(ABORT, 'tombstone replacement is forbidden'); END;
+-- change_seq is NOT a placeholder: it must be exactly the next change_log
+-- sequence, which task_delete_log (AFTER DELETE ON tasks) then inserts
+-- explicitly as this tombstone's change_seq. The monotonic check rejects the
+-- DELETE if anything else was logged in between, so tombstone and log entry
+-- cannot disagree; preflight re-verifies the pair for every tombstone.
+CREATE TRIGGER task_tombstones_consistency BEFORE INSERT ON task_tombstones
+WHEN NOT EXISTS(
+    SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id = t.project_id
+     WHERE t.id = NEW.id AND t.revision + 1 = NEW.revision
+       AND COALESCE(t.area_id, p.area_id) = NEW.area_id)
+  OR NEW.change_seq <> COALESCE((SELECT MAX(seq) FROM change_log), 0) + 1
+BEGIN SELECT RAISE(ABORT, 'tombstone must match the deleted task and next change sequence'); END;
+CREATE TRIGGER task_tombstones_capacity BEFORE INSERT ON task_tombstones
+WHEN (SELECT COUNT(*) FROM task_tombstones) >= ${TARGET_STAGING_MAX_TOMBSTONES}
+BEGIN SELECT RAISE(ABORT, 'tombstone capacity reached'); END;
+CREATE TRIGGER project_tombstones_no_update BEFORE UPDATE ON project_tombstones
+BEGIN SELECT RAISE(ABORT, 'tombstones are immutable'); END;
+CREATE TRIGGER project_tombstones_no_delete BEFORE DELETE ON project_tombstones
+BEGIN SELECT RAISE(ABORT, 'tombstones are permanent'); END;
+CREATE TRIGGER project_tombstones_replace_guard BEFORE INSERT ON project_tombstones
+WHEN EXISTS(SELECT 1 FROM project_tombstones WHERE id = NEW.id OR change_seq = NEW.change_seq)
+BEGIN SELECT RAISE(ABORT, 'tombstone replacement is forbidden'); END;
+CREATE TRIGGER project_tombstones_consistency BEFORE INSERT ON project_tombstones
+WHEN NOT EXISTS(
+    SELECT 1 FROM projects p
+     WHERE p.id = NEW.id AND p.revision + 1 = NEW.revision AND p.area_id = NEW.area_id)
+  OR NEW.change_seq <> COALESCE((SELECT MAX(seq) FROM change_log), 0) + 1
+BEGIN SELECT RAISE(ABORT, 'tombstone must match the deleted project and next change sequence'); END;
+CREATE TRIGGER project_tombstones_capacity BEFORE INSERT ON project_tombstones
+WHEN (SELECT COUNT(*) FROM project_tombstones) >= ${TARGET_STAGING_MAX_TOMBSTONES}
+BEGIN SELECT RAISE(ABORT, 'tombstone capacity reached'); END;
+
 -- Internal, content-free audit of committed title mutations only. The same
 -- transaction writes the task, idempotency receipt and this row. No API is
 -- exposed for reading historical data under a member's current Area ACL.
@@ -225,7 +345,8 @@ CREATE TABLE task_title_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   receipt_key TEXT NOT NULL UNIQUE,
   actor_user_id TEXT NOT NULL REFERENCES identities(id),
-  task_id TEXT NOT NULL REFERENCES tasks(id),
+  -- No FK to tasks: a deleted task (tombstone) keeps its content-free audit rows.
+  task_id TEXT NOT NULL,
   area_id TEXT NOT NULL REFERENCES areas(id),
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0),
   revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before >= 0),
@@ -249,6 +370,36 @@ WHEN EXISTS(SELECT 1 FROM task_title_audit WHERE id=NEW.id OR receipt_key=NEW.re
 BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
 CREATE TRIGGER task_title_audit_capacity BEFORE INSERT ON task_title_audit
 WHEN (SELECT COUNT(*) FROM task_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+
+-- R2c.1 internal, content-free, append-only audit of committed task deletions.
+-- Written in the same transaction as the tombstone, the DELETE, its change_log
+-- entry and the idempotency receipt. task_id has no FK: the task row is gone.
+CREATE TABLE task_delete_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE,
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  task_id TEXT NOT NULL,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0),
+  revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before >= 0),
+  tombstone_revision INTEGER NOT NULL CHECK(typeof(tombstone_revision)='integer' AND tombstone_revision = revision_before + 1),
+  change_seq INTEGER NOT NULL CHECK(typeof(change_seq)='integer' AND change_seq > 0),
+  expected_revision TEXT NOT NULL CHECK(length(expected_revision)=64),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+);
+CREATE INDEX task_delete_audit_task_sequence ON task_delete_audit(task_id, id);
+CREATE TRIGGER task_delete_audit_no_update BEFORE UPDATE ON task_delete_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER task_delete_audit_retention BEFORE DELETE ON task_delete_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'audit retention window is active'); END;
+CREATE TRIGGER task_delete_audit_replace_guard BEFORE INSERT ON task_delete_audit
+WHEN EXISTS(SELECT 1 FROM task_delete_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
+CREATE TRIGGER task_delete_audit_capacity BEFORE INSERT ON task_delete_audit
+WHEN (SELECT COUNT(*) FROM task_delete_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
 
 -- R2-ID.2a membership command ledger (staging only). A receipt is keyed by the
@@ -349,38 +500,127 @@ END;
 -- The existing task_revision_bump advances t.revision for changed list fields;
 -- update the NEW effective Area exactly once when that revision advances,
 -- including a direct SQL revision-only increment. A move between Areas also
--- invalidates the OLD effective Area (whose tasks have lost this row).
+-- invalidates the OLD effective Area (whose tasks have lost this row), and a
+-- DELETE (task_delete_log) invalidates the Area the task left.
 -- Separate triggers avoid the double bump caused by cascading revision UPDATEs.
+--
+-- The same triggers append the change_log entries (R2c.1), so each change logs
+-- exactly once: INSERT -> one 'upsert'; every revision advance (the nested
+-- UPDATE of task_revision_bump, or a direct increment) -> one 'upsert' in the
+-- NEW effective Area; a move between Areas additionally -> one 'leave' for the
+-- OLD Area from task_area_content_move_old. This move trigger runs BEFORE the
+-- outer UPDATE, so its 'leave' is always recorded BEFORE any AFTER trigger
+-- (including task_revision_bump's nested revision update) records the new Area's
+-- 'upsert'. The move increments the task revision exactly once, so
+-- OLD.revision + 1 is the revision of both events. The nested revision-only
+-- UPDATE does not match "UPDATE OF project_id, area_id", preventing duplicates.
+-- A task whose
+-- project does not exist (no effective Area) is not logged, so the statement
+-- still fails with its FOREIGN KEY error instead of a log constraint.
 CREATE TRIGGER task_area_content_insert AFTER INSERT ON tasks
 BEGIN
   UPDATE areas SET content_revision = content_revision + 1
     WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    SELECT 'task', NEW.id, e.area_id, 'upsert', NEW.revision FROM (
+      SELECT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id)) AS area_id
+    ) e WHERE e.area_id IS NOT NULL;
 END;
 CREATE TRIGGER task_area_content_revision AFTER UPDATE OF revision ON tasks
 WHEN NEW.revision IS NOT OLD.revision
 BEGIN
   UPDATE areas SET content_revision = content_revision + 1
     WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    SELECT 'task', NEW.id, e.area_id, 'upsert', NEW.revision FROM (
+      SELECT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id)) AS area_id
+    ) e WHERE e.area_id IS NOT NULL;
 END;
-CREATE TRIGGER task_area_content_move_old AFTER UPDATE OF project_id, area_id ON tasks
+-- BEFORE ensures a moved task's 'leave' precedes the new Area's 'upsert'
+-- regardless of the firing order of independent AFTER UPDATE triggers.
+CREATE TRIGGER task_area_content_move_old BEFORE UPDATE OF project_id, area_id ON tasks
 WHEN COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id))
   IS NOT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
 BEGIN
   UPDATE areas SET content_revision = content_revision + 1
     WHERE id = COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    VALUES ('task', OLD.id,
+      COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id)),
+      'leave', OLD.revision + 1);
+END;
+-- A deletion is only possible after its tombstone exists (task_deletion_guard).
+-- The log row takes the tombstone's pre-verified change_seq explicitly, so the
+-- tombstone, the log entry and the DELETE can never disagree. The OLD Area's
+-- cursor epoch advances in the same transaction: every page that contained the
+-- task is invalidated.
+CREATE TRIGGER task_delete_log AFTER DELETE ON tasks
+BEGIN
+  INSERT INTO change_log(seq, entity_kind, entity_id, area_id, op, revision)
+    SELECT ts.change_seq, 'task', ts.id, ts.area_id, 'tombstone', ts.revision
+      FROM task_tombstones ts WHERE ts.id = OLD.id;
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = (SELECT area_id FROM task_tombstones WHERE id = OLD.id);
+END;
+-- Projects: every insert/revision advance is an 'upsert'. A project Area move is
+-- forbidden today (project_area_assignment_guard); this trigger exists so that,
+-- IF the guard is ever lifted by a confirmed move command, the move is logged
+-- for the project AND each child task (their effective Area changes although
+-- their revision does not: current revisions are recorded) and both Areas'
+-- cursor epochs advance exactly once.
+CREATE TRIGGER project_change_log_insert AFTER INSERT ON projects
+BEGIN
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    VALUES ('project', NEW.id, NEW.area_id, 'upsert', NEW.revision);
+END;
+CREATE TRIGGER project_change_log_revision AFTER UPDATE OF revision ON projects
+WHEN NEW.revision IS NOT OLD.revision
+BEGIN
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    VALUES ('project', NEW.id, NEW.area_id, 'upsert', NEW.revision);
+END;
+CREATE TRIGGER project_change_log_move AFTER UPDATE OF area_id ON projects
+WHEN NEW.area_id <> OLD.area_id
+BEGIN
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    VALUES ('project', OLD.id, OLD.area_id, 'leave', NEW.revision);
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    VALUES ('project', NEW.id, NEW.area_id, 'upsert', NEW.revision);
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    SELECT 'task', t.id, OLD.area_id, 'leave', t.revision FROM tasks t
+     WHERE t.project_id = NEW.id ORDER BY t.rowid;
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
+    SELECT 'task', t.id, NEW.area_id, 'upsert', t.revision FROM tasks t
+     WHERE t.project_id = NEW.id ORDER BY t.rowid;
+  UPDATE areas SET content_revision = content_revision + 1 WHERE id = OLD.area_id;
+  UPDATE areas SET content_revision = content_revision + 1 WHERE id = NEW.area_id;
+END;
+CREATE TRIGGER project_delete_log AFTER DELETE ON projects
+BEGIN
+  INSERT INTO change_log(seq, entity_kind, entity_id, area_id, op, revision)
+    SELECT ts.change_seq, 'project', ts.id, ts.area_id, 'tombstone', ts.revision
+      FROM project_tombstones ts WHERE ts.id = OLD.id;
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = (SELECT area_id FROM project_tombstones WHERE id = OLD.id);
 END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, member_user_id, member_role)
+    VALUES ('membership', NEW.area_id, NEW.area_id, 'member_add', NEW.user_id, NEW.role);
 END;
 CREATE TRIGGER area_policy_member_delete AFTER DELETE ON area_members
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = OLD.area_id;
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, member_user_id, member_role)
+    VALUES ('membership', OLD.area_id, OLD.area_id, 'member_remove', OLD.user_id, NULL);
 END;
 CREATE TRIGGER area_policy_member_role AFTER UPDATE OF role ON area_members
 WHEN NEW.role IS NOT OLD.role
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
+  INSERT INTO change_log(entity_kind, entity_id, area_id, op, member_user_id, member_role)
+    VALUES ('membership', NEW.area_id, NEW.area_id, 'member_role', NEW.user_id, NEW.role);
 END;
 
 -- Guard monotonicity against manual counter resets and the SQLite REPLACE
@@ -399,9 +639,12 @@ WHEN NEW.content_revision <> OLD.content_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area content revision must increment by one'); END;
 -- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
 -- explicit rowid which collides with a DIFFERENT task must be rejected as well.
+-- A tombstoned ID is never reusable: re-creating it would reset the revision
+-- (ABA) and resurrect a deleted task for clients holding the tombstone.
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
   OR EXISTS(SELECT 1 FROM tasks WHERE rowid = NEW.rowid)
+  OR EXISTS(SELECT 1 FROM task_tombstones WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
 -- In a BEFORE INSERT trigger NEW.rowid is -1 whenever no rowid was supplied, so
 -- the guard above cannot tell an automatic rowid from an explicit -1, and a stored
@@ -418,16 +661,28 @@ WHEN NEW.rowid IS NOT OLD.rowid
 BEGIN SELECT RAISE(ABORT, 'task rowid is immutable'); END;
 -- A same-ID replacement can also be staged by renaming the original task's
 -- primary key, then inserting a new row with revision 0 under its old ID.
--- Keep task identity stable until durable ID tombstones exist.
+-- Tombstones now exist, but a rename would still bypass them: the old ID would
+-- be freed without a tombstone and the new one never was tombstoned. IDs stay fixed.
 CREATE TRIGGER immutable_task_id BEFORE UPDATE OF id ON tasks
 WHEN NEW.id IS NOT OLD.id
-BEGIN SELECT RAISE(ABORT, 'task ID is immutable until tombstones exist'); END;
--- Until deletion tombstones are available, do not allow task IDs to be
--- recycled: a delete + insert would reset revision 0 and allow ABA.
+BEGIN SELECT RAISE(ABORT, 'task ID is immutable (renaming would bypass tombstones)'); END;
+-- A task may be deleted only after its tombstone exists at exactly the next
+-- revision, in the task's current effective Area. A plain delete + insert would
+-- otherwise reset revision 0 and allow ABA; the tombstone also forbids ID reuse.
 CREATE TRIGGER task_deletion_guard BEFORE DELETE ON tasks
+WHEN NOT EXISTS(
+  SELECT 1 FROM task_tombstones ts
+   WHERE ts.id = OLD.id AND ts.revision = OLD.revision + 1
+     AND ts.area_id = COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id)))
 BEGIN SELECT RAISE(ABORT, 'task deletion requires tombstone protocol'); END;
 -- Project ID recycling would reset the epoch and could revive an old cursor.
+-- Same rule as tasks; additionally a project with tasks is never deleted. There
+-- is no project delete command yet: this is the raw-SQL boundary only.
 CREATE TRIGGER project_deletion_guard BEFORE DELETE ON projects
+WHEN NOT EXISTS(
+  SELECT 1 FROM project_tombstones ts
+   WHERE ts.id = OLD.id AND ts.revision = OLD.revision + 1 AND ts.area_id = OLD.area_id)
+  OR EXISTS(SELECT 1 FROM tasks WHERE project_id = OLD.id)
 BEGIN SELECT RAISE(ABORT, 'project deletion requires tombstone protocol'); END;
 
 -- INSERT OR REPLACE deletes conflicting rows without invoking DELETE triggers when
@@ -462,7 +717,7 @@ BEGIN SELECT RAISE(ABORT, 'project move requires R2 confirmation'); END;
 CREATE TRIGGER project_replacement_guard BEFORE INSERT ON projects
 WHEN EXISTS(
   SELECT 1 FROM projects p WHERE p.id = NEW.id AND p.area_id = NEW.area_id
-)
+) OR EXISTS(SELECT 1 FROM project_tombstones WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'project replacement is not allowed'); END;
 
 CREATE TRIGGER shared_members_only_insert BEFORE INSERT ON area_members
@@ -514,6 +769,7 @@ BEGIN SELECT RAISE(ABORT, 'workspace security boundary is immutable in R1'); END
 CREATE TRIGGER immutable_workspace_id BEFORE UPDATE OF id ON workspaces
 WHEN NEW.id <> OLD.id
 BEGIN SELECT RAISE(ABORT, 'workspace ID is immutable in R1'); END;
+-- Tombstones exist, but a rename would still bypass their ID-reuse protection.
 CREATE TRIGGER immutable_project_id BEFORE UPDATE OF id ON projects
 WHEN NEW.id <> OLD.id
 BEGIN SELECT RAISE(ABORT, 'project ID is immutable in R1'); END;

@@ -60,7 +60,7 @@
 
 Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, výchozí vypnutá a nad izolovaným úložištěm. Zelené CI samo o sobě neznamená aktivaci ani splnění produkčních ACL.
 
-**Schéma a revize.** Staging schema v2–v4 přidává `tasks.revision`, `areas.policy_revision` a monotónní projektové revize; SQLite triggery je zvyšují i při návratu hodnoty do původního stavu (ABA). Starší staging schémata se **automaticky nemigrují**; izolované testovací úložiště se znovu vytvoří bootstrapem, produkční data nejsou dotčena. Smazání úkolu je dočasně zakázáno, aby se ID nemohlo znovu použít s revizí 0; omezení zruší až trvalé tombstony v R2c.1. Aktuální staging schema je **v7**: v5 trvalé sessions (#152), v6 členství (#153), v7 cursor epochy Oblastí (#157). Staré actor-only receipty z #138 vedou k odmítnutí staging preflightu.
+**Schéma a revize.** Staging schema v2–v4 přidává `tasks.revision`, `areas.policy_revision` a monotónní projektové revize; SQLite triggery je zvyšují i při návratu hodnoty do původního stavu (ABA). Starší staging schémata se **automaticky nemigrují**; izolované testovací úložiště se znovu vytvoří bootstrapem, produkční data nejsou dotčena. Smazání úkolu je ve schématu v7 dočasně zakázáno, aby se ID nemohlo znovu použít s revizí 0; trvalé tombstony a smazání úkolu přináší schema v8 (R2c.1, viz [architektura](ARCHITECTURE.md)). Aktuální staging schema je **v8**: v5 trvalé sessions (#152), v6 členství (#153), v7 cursor epochy Oblastí (#157), v8 tombstony, změnový záznam a audit smazání (R2c.1). Staré actor-only receipty z #138 vedou k odmítnutí staging preflightu.
 
 **Identita a sessions.** Trvalé identity (`identities`) a sessions (`staging_sessions`, jen hash tokenu, životnost nejvýše 15 minut) s revokační epochou v SQLite (#152). Revokace platí okamžitě i na jiném serverovém procesu a po restartu. Sessions vydává jen operátorský CLI pro syntetické identity, HTTP endpoint pro vydání neexistuje. Stávající owner cookie zůstává pro zpětnou kompatibilitu stagingu. Nejde o produkční přihlašovací službu (passkeys, obnova účtu a pozvánky patří do R5).
 
@@ -78,7 +78,7 @@ Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, 
 
 **Příkaz členství.** `POST areas/[areaId]/members` (#153): idempotentní admin příkaz přidání, odebrání a změny role s receiptem, CAS na `policy_revision`, ochranou posledního admina a zrušením přiřazení odebranému nebo na viewer sníženému členu.
 
-**Stále neimplementováno:** smazání úkolu a tombstony, změnový feed, sync a identity-scoped cache (R2c), anti-rollback obnova ze zálohy (R2c), audit zamítnutých pokusů a přímých SQL úprav, auditní časová osa (`tasks/[taskId]/audit`) sdílených úkolů, produkční retence/export/archivace auditu, UI ani produkční aktivace.
+**Stále neimplementováno:** změnový feed (změnový záznam a smazání úkolu s tombstony přináší R2c.1), sync a identity-scoped cache (R2c), anti-rollback obnova ze zálohy (R2c), audit zamítnutých pokusů a přímých SQL úprav, auditní časová osa (`tasks/[taskId]/audit`) sdílených úkolů, produkční retence/export/archivace auditu, UI ani produkční aktivace.
 
 ## Dokončená iterace: R2-ID — trvalá víceuživatelská identita a první sdílená Oblast (staging)
 

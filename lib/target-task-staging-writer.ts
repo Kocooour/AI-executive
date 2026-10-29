@@ -87,7 +87,7 @@ export function targetTaskTitleReceiptDigest(request: TargetStagingTaskTitleWrit
 }
 
 
-function fingerprint(fd: number): string {
+export function fingerprint(fd: number): string {
   const before = fstatSync(fd);
   if (!before.isFile() || !Number.isSafeInteger(before.size) ||
       before.size < 100 || before.size > MAX_DATABASE_BYTES) {

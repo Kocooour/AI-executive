@@ -324,7 +324,26 @@ try {
     ["bob", "alice"], "audit records the real writer");
   // The owner-only audit read stays private-only even after shared writes.
   assert.equal((await fetch(`${sharedUrl}/audit`, { headers: { cookie } })).status, 404);
-  console.log("Next router staging task/project reads, private audit, title status and shared title write smoke passed");
+  // R2c.1: tombstoning task delete + status through the real build. Viewer -> 404; editor deletes;
+  // the exact retry replays (the task is gone, the tombstone Area decides); a non-deleter learns nothing.
+  const deleteToken = (await (await sharedAs(bobCookie, "GET", "")).json()).snapshotRevision;
+  const deleteCommand = { commandId: randomUUID(), expectedRevision: deleteToken };
+  for (const suffix of ["/delete", "/delete/status"]) {
+    const refused = await sharedAs(carolCookie, "POST", suffix, deleteCommand);
+    assert.equal(refused.status, 404, `viewer POST ${suffix}`);
+    assert.deepEqual(await refused.json(), { error: "Not found" });
+  }
+  assert.deepEqual(await (await sharedAs(bobCookie, "POST", "/delete/status", deleteCommand)).json(), { status: "not_recorded" });
+  const deleted = await sharedAs(bobCookie, "POST", "/delete", deleteCommand);
+  assert.equal(deleted.status, 200, "Next shared task delete failed");
+  assert.deepEqual(await deleted.json(), { ok: true });
+  assert.deepEqual(await (await sharedAs(bobCookie, "POST", "/delete", deleteCommand)).json(), { ok: true, replayed: true });
+  assert.deepEqual(await (await sharedAs(bobCookie, "POST", "/delete/status", deleteCommand)).json(), { status: "committed" });
+  assert.equal((await sharedAs(cookie, "POST", "/delete/status", deleteCommand)).status, 404, "another identity learns nothing");
+  assert.equal((await sharedAs(bobCookie, "GET", "")).status, 404, "deleted task is gone");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM task_tombstones WHERE id='shared-secret'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM change_log WHERE entity_id='shared-secret' AND op='tombstone'").get().n, 1);
+  console.log("Next router staging task/project reads, private audit, title status, shared title write and task delete smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");

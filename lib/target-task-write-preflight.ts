@@ -75,6 +75,9 @@ export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): s
   }
 }
 
+/** R2c.1 delete commands use the very same CAS token as title edits. */
+export const targetTaskWriteRevision = targetTaskTitleEditRevision;
+
 /**
  * Conflate missing, unreadable and read-only tasks. Viewer membership grants
  * reading but not writing. Project tasks inherit the project's Area. Only
@@ -107,3 +110,44 @@ export function canEditIsolatedTargetTaskTitle(
   }
 }
 
+
+/**
+ * R2c.1: the same write right (private owner of the Area, or shared
+ * editor/admin) evaluated against the Area a TOMBSTONE records, with the
+ * actor's CURRENT role there. This only answers "may this actor write that
+ * Area"; a caller must additionally require an actor-owned receipt before it
+ * reveals anything, so an editor of the Area learns nothing about tombstones of
+ * commands issued by others. A viewer, non-member, foreign private owner and a
+ * never-existing ID are all `false`.
+ */
+export function canWriteIsolatedTargetTaskTombstone(
+  db: DatabaseSync, actorUserId: string, taskId: string, privateOnly = false,
+): boolean {
+  try {
+    return db.prepare(`
+      SELECT 1
+      FROM task_tombstones ts
+      JOIN areas a ON a.id = ts.area_id
+      JOIN workspaces w ON w.id = a.workspace_id
+      JOIN identities actor ON actor.id = ?
+      LEFT JOIN area_members m ON m.area_id = a.id AND m.user_id = actor.id
+      WHERE ts.id = ?
+        AND a.owner_user_id = w.owner_user_id
+        AND (? = 0 OR (a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id))
+        AND ((a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id)
+          OR (a.kind = 'shared' AND w.kind = 'shared'
+            AND m.role IN ('editor', 'admin')))
+      LIMIT 1
+    `).get(actorUserId, taskId, privateOnly ? 1 : 0) !== undefined;
+  } catch {
+    return false; // No task information escapes a failed query.
+  }
+}
+
+/** Live task with write right, or a tombstoned ID in an Area the actor can write; else null. */
+export function targetTaskWriteTarget(
+  db: DatabaseSync, actorUserId: string, taskId: string, privateOnly = false,
+): "live" | "tombstone" | null {
+  if (canEditIsolatedTargetTaskTitle(db, actorUserId, taskId, privateOnly)) return "live";
+  return canWriteIsolatedTargetTaskTombstone(db, actorUserId, taskId, privateOnly) ? "tombstone" : null;
+}
