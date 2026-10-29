@@ -38,13 +38,16 @@ export function validTargetTaskTitleEditPreviewRequest(
 }
 
 /**
- * R2a staging task + policy CAS token. Caller MUST first run canonical
- * preflight, verify the write-audience session and check current task ACL.
- * Task revisions and shared-Area membership epochs are monotonically bumped
- * by canonical SQLite triggers, including when values change and then revert.
+ * Staging task + policy CAS token. It covers the task revision (which also
+ * moves on reassignment), the effective Area's policy_revision, the restore
+ * generation and the task/Area identity columns. Task revisions and
+ * policy_revision are monotonically bumped by canonical SQLite triggers (also
+ * when values change and then revert); any membership or role change in the
+ * Area invalidates the token conservatively for all of its tasks.
  *
- * The restore generation binds tokens to one bootstrap. The token does not
- * expose title, actor or task content. This does NOT implement sync or audit.
+ * The token is a CAS precondition, never authorization: the caller must run
+ * canonical preflight and the writer re-checks the write ACL inside
+ * BEGIN IMMEDIATE. It does not expose title, actor or task content.
  */
 export function targetTaskTitleEditRevision(db: DatabaseSync, taskId: string): string | null {
   try {

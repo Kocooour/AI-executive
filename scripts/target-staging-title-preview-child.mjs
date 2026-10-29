@@ -1,4 +1,4 @@
-/** Owner-private title CAS preflight; no session token leaves this process. */
+/** Title CAS preflight (private or shared task per CURRENT role); no session token leaves this process. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
 import { resolveChildActor } from "./target-staging-child-actor.mjs";
@@ -29,7 +29,7 @@ try {
     if (!resolved) throw new Error("Unavailable");
     const issued = authority.issue(resolved.actor);
     if (!issued) throw new Error("Unavailable");
-    const result = authority.previewTaskTitleEdit(issued.sessionToken, input, true);
+    const result = authority.previewTaskTitleEdit(issued.sessionToken, input, false);
     if (result.ok) process.stdout.write(JSON.stringify({
       ok: true, snapshotRevision: result.snapshotRevision,
     }));

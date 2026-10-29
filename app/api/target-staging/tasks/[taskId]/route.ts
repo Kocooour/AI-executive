@@ -71,8 +71,10 @@ export async function GET(
     if (released === "stale") return answer(404, "Not found");
     if (!result) return answer(503, "Staging unavailable");
     if (!result.ok) return answer(404, "Not found");
-    // Shared-Area task: no title CAS revision (writes arrive with R2-ID.3).
-    if ("scope" in result) return Response.json({ task: result.task }, { headers });
+    // Shared-Area task: the title CAS revision (R2-ID.3) is included only when the
+    // actor is a current editor/admin; a viewer receives the plain shared DTO.
+    if ("scope" in result) return Response.json(result.snapshotRevision === undefined
+      ? { task: result.task } : { task: result.task, snapshotRevision: result.snapshotRevision }, { headers });
     return Response.json({ task: result.task, snapshotRevision: result.snapshotRevision }, { headers });
   } catch {
     return answer(503, "Staging unavailable");

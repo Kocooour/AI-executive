@@ -1,4 +1,4 @@
-/** Read-only owner-private receipt reconciliation; command arrives over stdin. */
+/** Read-only per-identity receipt reconciliation (private or shared task); command arrives over stdin. */
 import path from "node:path";
 import { TargetStagingSessionAuthority } from "../lib/target-staging-session-authority.ts";
 import { resolveChildActor } from "./target-staging-child-actor.mjs";
@@ -30,7 +30,7 @@ try {
     if (!resolved) throw new Error("Unavailable");
     const issued = authority.issueWritable(resolved.actor);
     if (!issued) throw new Error("Unavailable");
-    const result = authority.taskTitleCommandStatus(issued.sessionToken, input, true);
+    const result = authority.taskTitleCommandStatus(issued.sessionToken, input, false);
     if (result.ok) process.stdout.write(JSON.stringify(result));
     else if (result.reason === "unavailable" || result.reason === "idempotency_conflict") {
       process.stdout.write(JSON.stringify(result));

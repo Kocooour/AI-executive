@@ -24,7 +24,8 @@ import {
   readScopedTaskOffsetPage, readSharedTargetTask,
 } from "./target-task-read-model";
 import type {
-  TargetPrivateTaskTitleAuditResult, TargetScopedOffsetPage, TargetSharedTaskDetail,
+  TargetPrivateTaskTitleAuditResult, TargetReadLinearization, TargetScopedOffsetPage,
+  TargetScopedReadableTask,
 } from "./target-task-read-model";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -470,16 +471,36 @@ export function readPreflightedScopedTaskPage(
     }, () => null));
 }
 
-/** Shared-Area task detail for a current member; no title CAS token (writes are R2-ID.3). */
+/**
+ * Shared-Area task detail for a current member of any role (R2-ID.2b). R2-ID.3:
+ * `snapshotRevision` (the title CAS token) is present ONLY when the actor may
+ * currently write the task (editor/admin), computed in the same pinned
+ * snapshot as the task row and linearization record. Viewers never get it.
+ */
+export type TargetPreflightedSharedTaskDetail =
+  | { ok: true; task: TargetScopedReadableTask; linearization: TargetReadLinearization;
+      snapshotRevision?: string }
+  | { ok: false; reason: "unavailable" | "query_failed" };
+
 export function readPreflightedSharedTargetTask(
   store: TargetStagingReadStore, access: TargetStagingReadCredential, taskId: string,
-): TargetSharedTaskDetail | null {
-  return withPreflightedStore<TargetSharedTaskDetail | null>(store, () => null, (db, preflight) =>
-    inReadSnapshot<TargetSharedTaskDetail | null>(db, () => {
+): TargetPreflightedSharedTaskDetail | null {
+  return withPreflightedStore<TargetPreflightedSharedTaskDetail | null>(store, () => null, (db, preflight) =>
+    inReadSnapshot<TargetPreflightedSharedTaskDetail | null>(db, () => {
       if (!preflight(db)) return null;
       const actorUserId = verifiedActor(db, access);
       if (!actorUserId) return null;
-      return readSharedTargetTask(db, { actorUserId, taskId });
+      const detail = readSharedTargetTask(db, { actorUserId, taskId });
+      if (!detail.ok) return detail;
+      const writable = detail.linearization.areas.length === 1 &&
+        (detail.linearization.areas[0].access === "editor" || detail.linearization.areas[0].access === "admin") &&
+        canEditIsolatedTargetTaskTitle(db, actorUserId, taskId, false);
+      if (!writable) return detail;
+      // A null token for a task just proven writable can only be a query failure:
+      // fail closed (null -> 503) rather than return a token-less DTO that would
+      // look like a read-only task.
+      const snapshotRevision = targetTaskTitleEditRevision(db, taskId);
+      return snapshotRevision ? { ...detail, snapshotRevision } : null;
     }, () => null));
 }
 

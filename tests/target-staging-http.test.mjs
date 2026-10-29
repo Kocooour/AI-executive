@@ -320,10 +320,13 @@ test("personal detail returns only the configured owner's private task", async (
     assert.deepEqual(await denied.json(), { error: "Not found" });
   }
   // R2-ID.2b: a shared-Area task is readable by its current member (alice is admin),
-  // with the minimal shared shape and no private-only title CAS revision.
+  // with the minimal shared shape; R2-ID.3 adds the title CAS revision for an admin/editor.
   const sharedDetail = await detail("family-shared");
   assert.equal(sharedDetail.status, 200);
-  assert.deepEqual(await sharedDetail.json(), { task: {
+  const sharedBody = await sharedDetail.json();
+  assert.match(sharedBody.snapshotRevision, /^[a-f0-9]{64}$/);
+  delete sharedBody.snapshotRevision;
+  assert.deepEqual(sharedBody, { task: {
     id: "family-shared", title: "Family secret", projectId: null, effectiveAreaId: "family-area",
     areaId: "family-area", areaKind: "shared", assignedToMe: false,
   } });
@@ -366,13 +369,13 @@ test("detail revision supports owner-private PATCH and rejects stale revisions",
     insert.run(moved, stage.unassignedAreaId, "Private before move");
     const movedRevision = (await (await detail(moved)).json()).snapshotRevision;
     db.prepare("UPDATE tasks SET area_id=? WHERE id=?").run("family-area", moved);
-    // R2-ID.2b: it is now a shared-Area task readable by alice (admin) but WITHOUT a
-    // title CAS revision, and the private-only title command still refuses it.
+    // R2-ID.3: it is now a shared-Area task writable by alice (admin) with a NEW title CAS
+    // revision; the token issued while it was private is stale and writes nothing.
     const movedShared = await detail(moved);
     assert.equal(movedShared.status, 200);
-    assert.equal("snapshotRevision" in (await movedShared.json()), false);
+    assert.notEqual((await movedShared.json()).snapshotRevision, movedRevision);
     assert.equal((await patchTitle(moved, "Must not write", movedRevision,
-      "123e4567-e89b-42d3-a456-426614174104")).status, 404);
+      "123e4567-e89b-42d3-a456-426614174104")).status, 409);
     assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(moved).title,
       "Private before move");
     for (const deniedId of ["bob-private", "absent"]) {

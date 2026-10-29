@@ -223,10 +223,18 @@ test("detail: any current member reads a shared task with the minimal shape; pri
     const response = await detail(fx, "f-3", who.cookie);
     assert.equal(response.status, 200, who.user);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), expected(false), "no snapshotRevision / CAS for shared tasks");
+    // R2-ID.3: the title CAS token is present only for a current editor/admin.
+    const body = await response.json();
+    if (who === c) assert.deepEqual(body, expected(false), "viewer: no snapshotRevision");
+    else {
+      assert.match(body.snapshotRevision, /^[a-f0-9]{64}$/, who.user);
+      delete body.snapshotRevision;
+      assert.deepEqual(body, expected(false));
+    }
   }
-  assert.deepEqual(await (await detail(fx, "f-1", a.cookie)).json(), expected(true, "f-1", "Family one"));
-  assert.deepEqual(await (await detail(fx, "f-1", b.cookie)).json(), expected(false, "f-1", "Family one"));
+  const withoutRevision = async response => { const body = await response.json(); delete body.snapshotRevision; return body; };
+  assert.deepEqual(await withoutRevision(await detail(fx, "f-1", a.cookie)), expected(true, "f-1", "Family one"));
+  assert.deepEqual(await withoutRevision(await detail(fx, "f-1", b.cookie)), expected(false, "f-1", "Family one"));
   // Another Area, someone else's private task and unknown ids are all the same 404.
   for (const [who, taskId] of [[a, "o-1"], [b, "p-alice-1"], [c, "p-bob-1"], [a, "absent"]]) {
     const response = await detail(fx, taskId, who.cookie);
@@ -533,6 +541,26 @@ test("child DTO boundary rejects extra fields, foreign ids and inconsistent Area
   assert.equal(readProcess.parseStagingScopedPage(page([{ ...row, areaKind: "private", assignedToMe: undefined }]), "shared"), null);
   assert.equal(readProcess.parseStagingTaskDetail({ ok: true, scope: "shared", task: { ...row, id: "other" },
     linearization: { actorUserId: "carol", areas: [{ areaId: "a", areaKind: "shared", policyRevision: 1, access: "viewer" }] } }, "f-1"), null);
+});
+
+test("child DTO boundary: shared detail snapshotRevision only for a single editor/admin Area (R2-ID.3)", () => {
+  const row = { id: "f-1", title: "t", projectId: null, effectiveAreaId: "a", areaId: "a",
+    areaKind: "shared", assignedToMe: false };
+  const area = (access, areaId = "a") => ({ areaId, areaKind: "shared", policyRevision: 1, access });
+  const dto = (areas, extra = {}) => ({ ok: true, scope: "shared", task: row,
+    linearization: { actorUserId: "bob", areas }, ...extra });
+  const rev = "b".repeat(64);
+  for (const access of ["editor", "admin"]) {
+    const parsed = readProcess.parseStagingTaskDetail(dto([area(access)], { snapshotRevision: rev }), "f-1");
+    assert.equal(parsed?.snapshotRevision, rev, access);
+  }
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("viewer")]), "f-1")?.snapshotRevision, undefined);
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("viewer")], { snapshotRevision: rev }), "f-1"), null, "viewer + revision");
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor"), area("admin", "b")], { snapshotRevision: rev }), "f-1"), null, "two Areas + revision");
+  for (const bad of ["short", "B".repeat(64), 7, null]) {
+    assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor")], { snapshotRevision: bad }), "f-1"), null, String(bad));
+  }
+  assert.equal(readProcess.parseStagingTaskDetail(dto([area("editor")], { snapshotRevision: rev, members: ["x"] }), "f-1"), null, "extra key");
 });
 
 test("child DTO boundary: Area kind and access must be consistent (private-owner only with private Areas)", () => {

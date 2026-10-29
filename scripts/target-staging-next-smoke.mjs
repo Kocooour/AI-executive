@@ -56,6 +56,11 @@ try {
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('family-area','Family','shared','family','alice')").run();
   db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','alice','admin')").run();
   db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','bob','editor')").run();
+  // R2-ID.3: a viewer (read-only) for the shared title write smoke.
+  db.prepare("INSERT INTO identities(id) VALUES ('carol')").run();
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('carol-personal','personal','carol')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES ('carol-private','Carol private','private','carol-personal','carol','unassigned')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','carol','viewer')").run();
   const insert = db.prepare("INSERT INTO tasks(id,project_id,area_id,title,assignee_user_id) VALUES (?,NULL,?,?,NULL)");
   const ids = ["alice/slash", "alice space", "alice:punct@-._"];
   for (const id of ids) insert.run(id, stage.unassignedAreaId, `Visible ${id}`);
@@ -124,7 +129,9 @@ try {
   assert.equal(sharedDetail.status, 200);
   assert.equal(sharedDetail.headers.get("cache-control"), "no-store");
   const sharedBody = await sharedDetail.json();
-  assert.deepEqual(Object.keys(sharedBody), ["task"], "no snapshotRevision for shared tasks");
+  // R2-ID.3: alice is a shared admin, so the title CAS token accompanies the shared DTO.
+  assert.deepEqual(Object.keys(sharedBody).sort(), ["snapshotRevision", "task"]);
+  assert.match(sharedBody.snapshotRevision, /^[a-f0-9]{64}$/);
   assert.equal(sharedBody.task.id, "shared-secret");
   assert.equal(sharedBody.task.areaId, "family-area");
   assert.equal(sharedBody.task.areaKind, "shared");
@@ -254,7 +261,8 @@ try {
   });
   assert.equal(conflict.status, 409, "Changed payload must conflict");
   assert.deepEqual(await conflict.json(), { error: "Revision conflict" });
-  for (const id of ["bob-secret", "shared-secret", "missing"]) {
+  // (shared-secret is no longer hidden from alice: she is a shared admin, see the shared write below.)
+  for (const id of ["bob-secret", "missing"]) {
     const hidden = await checkStatus(id, titleCommand);
     assert.equal(hidden.status, 404, `Status leaked task ${id}`);
     assert.deepEqual(await hidden.json(), { error: "Not found" });
@@ -270,7 +278,53 @@ try {
   );
   assert.equal(finalTask.status, 200);
   assert.equal((await finalTask.json()).task.title, titleCommand.title);
-  console.log("Next router staging task/project reads, private audit and title status smoke passed");
+
+  // R2-ID.3: shared-Area title write through the real build. Owner cookie (alice, admin),
+  // a durable editor session (bob) and a durable viewer session (carol, read-only -> 404).
+  const durable = await import("../lib/target-staging-durable-session.ts");
+  const storeRef = { stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration };
+  const sessionCookieFor = user => {
+    const issued = durable.issueDurableTargetStagingSession(storeRef, user, 600);
+    assert.equal(issued.ok, true, `session for ${user}`);
+    return `${durable.TARGET_STAGING_SESSION_COOKIE}=${issued.sessionToken}`;
+  };
+  const bobCookie = sessionCookieFor("bob");
+  const carolCookie = sessionCookieFor("carol");
+  const sharedUrl = `${origin}/api/target-staging/tasks/shared-secret`;
+  const sharedAs = async (who, method, suffix, payload) => fetch(sharedUrl + suffix, {
+    method, headers: { cookie: who, origin, "content-type": "application/json" },
+    ...(payload ? { body: JSON.stringify(payload) } : {}), signal: AbortSignal.timeout(10_000),
+  });
+  const bobDetail = await (await sharedAs(bobCookie, "GET", "")).json();
+  assert.match(bobDetail.snapshotRevision, /^[a-f0-9]{64}$/, "editor gets the title CAS token");
+  const carolDetail = await sharedAs(carolCookie, "GET", "");
+  assert.equal(carolDetail.status, 200);
+  assert.deepEqual(Object.keys(await carolDetail.json()), ["task"], "viewer gets no title CAS token");
+  const viewerCommand = { commandId: randomUUID(), title: "Viewer must not write", expectedRevision: bobDetail.snapshotRevision };
+  for (const [method, suffix, payload] of [["GET", "/title"], ["PATCH", "/title", viewerCommand], ["POST", "/title/status", viewerCommand]]) {
+    const refused = await sharedAs(carolCookie, method, suffix, payload);
+    assert.equal(refused.status, 404, `viewer ${method} ${suffix}`);
+    assert.deepEqual(await refused.json(), { error: "Not found" });
+  }
+  const sharedCommand = { commandId: randomUUID(), title: "Shared title by bob", expectedRevision: bobDetail.snapshotRevision };
+  const sharedWritten = await sharedAs(bobCookie, "PATCH", "/title", sharedCommand);
+  assert.equal(sharedWritten.status, 200, "Next shared title PATCH failed");
+  assert.deepEqual(await sharedWritten.json(), { ok: true });
+  assert.deepEqual(await (await sharedAs(bobCookie, "POST", "/title/status", sharedCommand)).json(), { status: "committed" });
+  assert.deepEqual(await (await sharedAs(cookie, "POST", "/title/status", sharedCommand)).json(), { status: "not_recorded" },
+    "another identity cannot see bob's receipt");
+  assert.equal((await sharedAs(bobCookie, "PATCH", "/title", { ...sharedCommand, commandId: randomUUID() })).status, 409,
+    "a stale token is a conflict");
+  const ownerShared = await (await sharedAs(cookie, "GET", "")).json();
+  assert.equal(ownerShared.task.title, "Shared title by bob");
+  const ownerCommand = { commandId: randomUUID(), title: "Shared title by alice", expectedRevision: ownerShared.snapshotRevision };
+  assert.equal((await sharedAs(cookie, "PATCH", "/title", ownerCommand)).status, 200);
+  assert.deepEqual(
+    db.prepare("SELECT actor_user_id AS a FROM task_title_audit WHERE task_id='shared-secret' ORDER BY id").all().map(row => row.a),
+    ["bob", "alice"], "audit records the real writer");
+  // The owner-only audit read stays private-only even after shared writes.
+  assert.equal((await fetch(`${sharedUrl}/audit`, { headers: { cookie } })).status, 404);
+  console.log("Next router staging task/project reads, private audit, title status and shared title write smoke passed");
 } finally {
   if (server && server.exitCode === null) {
     const exited = once(server, "exit");

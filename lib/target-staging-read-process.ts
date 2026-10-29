@@ -383,21 +383,31 @@ export async function readStagingScopedPageInChild(
 
 export type StagingTaskDetailResult =
   | StagingPersonalDetailResult
-  | { ok: true; scope: "shared"; task: TargetScopedReadableTask; linearization: TargetReadLinearization };
+  | { ok: true; scope: "shared"; task: TargetScopedReadableTask; linearization: TargetReadLinearization;
+      /** Present only for a current shared editor/admin (R2-ID.3). */
+      snapshotRevision?: string };
 
 /**
  * Detail child boundary. A private task keeps the exact legacy shape (with its
- * title CAS revision); a shared-Area task has none (writes are R2-ID.3).
+ * title CAS revision); a shared-Area task has one only for a current editor/admin (R2-ID.3).
  */
 export function parseStagingTaskDetail(value: unknown, taskId: string): StagingTaskDetailResult | null {
   if (value && typeof value === "object" && !Array.isArray(value) &&
       (value as Record<string, unknown>).scope === "shared") {
     const result = value as Record<string, unknown>;
-    if (Object.keys(result).sort().join(",") !== "linearization,ok,scope,task" || result.ok !== true) return null;
+    const keys = Object.keys(result).sort().join(",");
+    const withRevision = keys === "linearization,ok,scope,snapshotRevision,task";
+    if ((keys !== "linearization,ok,scope,task" && !withRevision) || result.ok !== true) return null;
     const task = parseScopedTask(result.task, "shared");
     if (!task || task.id !== taskId) return null;
     const linearization = parseLinearization(result.linearization, new Map([[task.areaId, task.areaKind] as const]));
-    return linearization ? { ok: true, scope: "shared", task, linearization } : null;
+    if (!linearization) return null;
+    if (!withRevision) return { ok: true, scope: "shared", task, linearization };
+    // The CAS token is only ever issued to a current editor/admin of the Area.
+    const access = linearization.areas[0]?.access;
+    if (typeof result.snapshotRevision !== "string" || !REVISION.test(result.snapshotRevision) ||
+        linearization.areas.length !== 1 || (access !== "editor" && access !== "admin")) return null;
+    return { ok: true, scope: "shared", task, linearization, snapshotRevision: result.snapshotRevision };
   }
   return parseStagingPersonalDetail(value, taskId);
 }
