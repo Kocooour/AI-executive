@@ -130,6 +130,13 @@ const get = (fixture, handler, pathname, cookie, context) =>
     headers: { cookie, "x-forwarded-for": fixture.client },
   }), context);
 const list = (fixture, query, cookie) => get(fixture, LIST, "tasks" + query, cookie);
+// Diagnosable 200 + JSON: on failure the message names the status and body.
+const okJson = async (responsePromise, label = "") => {
+  const response = await responsePromise;
+  const text = await response.text();
+  assert.equal(response.status, 200, `${label} status ${response.status}: ${text.slice(0, 300)}`);
+  return JSON.parse(text);
+};
 const detail = (fixture, taskId, cookie) =>
   get(fixture, DETAIL, "tasks/" + taskId, cookie, { params: Promise.resolve({ taskId }) });
 const ids = body => body.tasks.map(task => task.id);
@@ -164,26 +171,26 @@ test("scope contents follow LUMI-FR-013 for admin A, editor B and viewer C", asy
   }
 
   // Muj plan: all my private tasks + shared tasks assigned to me; a viewer cannot be assigned.
-  const planA = await (await list(fx, "?scope=my-plan", a.cookie)).json();
+  const planA = await okJson(list(fx, "?scope=my-plan", a.cookie), "alice my-plan");
   assert.deepEqual(ids(planA), ["f-1", "f-4", "p-alice-1", "p-alice-2"]);
   assert.deepEqual(planA.tasks.filter(t => t.areaKind === "private").map(t => "assignedToMe" in t),
     [false, false], "private rows carry no assignedToMe");
   assert.ok(planA.tasks.filter(t => t.areaKind === "shared").every(t => t.assignedToMe === true));
-  assert.deepEqual(ids(await (await list(fx, "?scope=my-plan", b.cookie)).json()), ["f-2", "f-5", "p-bob-1"]);
-  assert.deepEqual(ids(await (await list(fx, "?scope=my-plan", c.cookie)).json()), ["p-carol-1"]);
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", b.cookie), "bob my-plan")), ["f-2", "f-5", "p-bob-1"]);
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", c.cookie), "carol my-plan")), ["p-carol-1"]);
 
   // The default and explicit personal scope keep the historical shape and content.
-  const implicit = await (await list(fx, "", a.cookie)).json();
-  const explicit = await (await list(fx, "?scope=personal", a.cookie)).json();
+  const implicit = await okJson(list(fx, "", a.cookie), "alice implicit personal");
+  const explicit = await okJson(list(fx, "?scope=personal", a.cookie), "alice explicit personal");
   assert.deepEqual(implicit, explicit);
   assert.deepEqual(ids(implicit), ["p-alice-1", "p-alice-2"]);
   assert.deepEqual(Object.keys(implicit.tasks[0]).sort(),
     ["areaKind", "assigneeUserId", "effectiveAreaId", "id", "projectId", "title"]);
 
   // The owner cookie maps to the configured owner (alice) and gets the same views.
-  assert.deepEqual(await (await list(fx, "?scope=shared", ownerCookie())).json(),
-    await (await list(fx, "?scope=shared", a.cookie)).json());
-  assert.deepEqual(ids(await (await list(fx, "?scope=my-plan", ownerCookie())).json()),
+  assert.deepEqual(await okJson(list(fx, "?scope=shared", ownerCookie()), "owner shared"),
+    await okJson(list(fx, "?scope=shared", a.cookie), "alice shared"));
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", ownerCookie()), "owner my-plan")),
     ["f-1", "f-4", "p-alice-1", "p-alice-2"]);
 });
 
@@ -680,7 +687,6 @@ test("my-plan cursor walk (limit 1..4): no duplicates, no gaps; shared and my-pl
     assert.deepEqual(shared.find(other => other.id === task.id), task);
   }
 });
-
 
 test("issue #155: area content markers invalidate shared and my-plan cursors on title ABA", async () => {
   const fx = makeFixture();
