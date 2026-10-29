@@ -687,3 +687,154 @@ test("my-plan cursor walk (limit 1..4): no duplicates, no gaps; shared and my-pl
     assert.deepEqual(shared.find(other => other.id === task.id), task);
   }
 });
+
+test("issue #155: area content markers invalidate shared and my-plan cursors on title ABA", async () => {
+  const fx = makeFixture();
+  const alice = login(fx, "alice");
+  const carol = login(fx, "carol");
+  // Give the viewer two private tasks so a my-plan cursor exists.
+  mutate(fx, "INSERT INTO tasks(id,area_id,title) VALUES ('p-carol-2','carol-private','Carol second')");
+  const shared = await (await list(fx, "?scope=shared&limit=2", alice.cookie)).json();
+  const plan = await (await list(fx, "?scope=my-plan&limit=1", alice.cookie)).json();
+  const viewerPlan = await (await list(fx, "?scope=my-plan&limit=1", carol.cookie)).json();
+  assert.ok(shared.nextCursor && plan.nextCursor && viewerPlan.nextCursor);
+  const continuation = (scope, cursor, cookie) =>
+    list(fx, `?scope=${scope}&limit=${scope === "shared" ? 2 : 1}&cursor=${cursor}`, cookie);
+
+  // A different Area is outside the authenticated actor's revision domain.
+  mutate(fx, "UPDATE tasks SET title='Changed elsewhere' WHERE id='o-1'");
+  assert.equal((await continuation("shared", shared.nextCursor, alice.cookie)).status, 200);
+  assert.equal((await continuation("my-plan", plan.nextCursor, alice.cookie)).status, 200);
+
+  const db = new DatabaseSync(fx.databasePath);
+  try {
+    const areaEpoch = id => Number(db.prepare("SELECT content_revision AS n FROM areas WHERE id=?").get(id).n);
+    const before = areaEpoch("family-area");
+    // An idempotent update must not change a cursor; a real update must.
+    mutate(fx, "UPDATE tasks SET title=title WHERE id='f-3'");
+    assert.equal(areaEpoch("family-area"), before);
+    // f-3 is not assigned to Alice, but she can read its shared Area.
+    // The Area-level my-plan revision intentionally errs toward invalidation.
+    mutate(fx, "UPDATE tasks SET title='Temporary' WHERE id='f-3'; UPDATE tasks SET title='Family three' WHERE id='f-3'");
+    assert.ok(areaEpoch("family-area") > before, "content epoch survives title ABA");
+    for (const [scope, cursor] of [["shared", shared.nextCursor], ["my-plan", plan.nextCursor]]) {
+      const res = await continuation(scope, cursor, alice.cookie);
+      assert.equal(res.status, 409, scope);
+      assert.deepEqual(await res.json(), { error: "Cursor stale" }, scope);
+    }
+    // A viewer has no shared assignments: their private-only my-plan must not
+    // change when an unrelated (albeit visible via shared) Area is edited.
+    assert.equal((await continuation("my-plan", viewerPlan.nextCursor, carol.cookie)).status, 200);
+    // Direct SQL cannot reset the epoch or recycle an Area identity.
+    assert.throws(() => db.prepare("UPDATE areas SET content_revision=0 WHERE id='family-area'").run(),
+      /Area content revision must increment by one/);
+  } finally {
+    db.close();
+  }
+});
+
+test("issue #155: inherited project tasks advance Area revisions, without affecting foreign cursors", async () => {
+  const fx = makeFixture();
+  const alice = login(fx, "alice");
+  const bob = login(fx, "bob");
+  const ownerPersonal = await (await list(fx, "?limit=1", alice.cookie)).json();
+  const bobPersonal = await (await list(fx, "?limit=1", bob.cookie)).json();
+  // Bob has only one private row in this fixture, so insert a second.
+  mutate(fx, "INSERT INTO tasks(id,area_id,title) VALUES ('p-bob-2','bob-private','Another private')");
+  const bobCursor = (await (await list(fx, "?limit=1", bob.cookie)).json()).nextCursor;
+  assert.ok(ownerPersonal.nextCursor && bobCursor);
+  const db = new DatabaseSync(fx.databasePath);
+  try {
+    const epoch = id => Number(db.prepare("SELECT content_revision AS n FROM areas WHERE id=?").get(id).n);
+    const before = epoch("family-area");
+    mutate(fx, `INSERT INTO projects(id,area_id,title) VALUES ('px-155','family-area','Inherited');
+      INSERT INTO tasks(id,project_id,title) VALUES ('px-155-task','px-155','Original');`);
+    assert.ok(epoch("family-area") > before, "project child insert advances Area revision");
+    const afterInsert = epoch("family-area");
+    mutate(fx, "UPDATE tasks SET title='Renamed' WHERE id='px-155-task'");
+    assert.ok(epoch("family-area") > afterInsert, "inherited title update advances Area revision");
+    // Changes in the shared Area do not invalidate either owner's personal view.
+    assert.equal((await list(fx, `?limit=1&cursor=${ownerPersonal.nextCursor}`, alice.cookie)).status, 200);
+    assert.equal((await list(fx, `?limit=1&cursor=${bobCursor}`, bob.cookie)).status, 200);
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('spare-155','Spare','private',?, 'alice')")
+      .run(fx.stage.personalWorkspaceId);
+    assert.throws(() => db.prepare("DELETE FROM areas WHERE id='spare-155'").run(),
+      /Area deletion requires tombstone protocol/, "Area IDs cannot be recycled to reset epochs");
+  } finally {
+    db.close();
+  }
+});
+
+
+test("issue #155 review: actor-indexed cursor scans and exactly-once Area epochs", async () => {
+  const fx = makeFixture();
+  const db = new DatabaseSync(fx.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    // Many Areas invisible to alice must not be visited on every page.
+    const addForeign = db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id)
+      VALUES (?,'Foreign','private','erin-personal','erin')`);
+    for (let i = 0; i < 500; i++) addForeign.run(`foreign-area-${i}`);
+
+    const { scopedTaskListRevision, personalTaskListRevision } =
+      // Node tests use this module's same TypeScript loader as the HTTP route.
+      await import("../lib/target-task-read-model.ts");
+    const captured = [];
+    // Instrument only the SQL preparation boundary, without changing the
+    // production query or guessing a separate query for the plan test.
+    const tracedDb = {
+      prepare(sql) {
+        if (sql.includes("ORDER BY areaId COLLATE BINARY ASC")) captured.push(sql);
+        return db.prepare(sql);
+      },
+    };
+    const values = [
+      personalTaskListRevision(tracedDb, "alice"),
+      scopedTaskListRevision(tracedDb, "alice", "shared", fx.stage.restoreGeneration),
+      scopedTaskListRevision(tracedDb, "alice", "my-plan", fx.stage.restoreGeneration),
+    ];
+    assert.equal(values.length, 3);
+    assert.ok(values.every(value => /^[0-9a-f]{64}$/.test(value)));
+    assert.equal(captured.length, 3);
+    for (let i = 0; i < captured.length; i++) {
+      const bind = i === 2 ? ["alice", "alice"] : ["alice"];
+      const details = db.prepare("EXPLAIN QUERY PLAN " + captured[i])
+        .all(...bind).map(row => row.detail);
+      assert.ok(details.every(row => !/\bSCAN (?:a|member)\b/i.test(row)),
+        `cursor must not scan foreign Areas/memberships: ${details.join("; ")}`);
+      if (i !== 1) assert.ok(details.some(row => /SEARCH a USING (?:COVERING )?INDEX areas_by_owner_kind/i.test(row)),
+        `private Area actor index absent: ${details.join("; ")}`);
+      if (i !== 0) assert.ok(details.some(row => /SEARCH member USING (?:COVERING )?INDEX area_members_by_user_area/i.test(row)),
+        `shared membership actor index absent: ${details.join("; ")}`);
+    }
+
+    const epoch = id => Number(db.prepare(
+      "SELECT content_revision AS n FROM areas WHERE id=?").get(id).n);
+    const familyStart = epoch("family-area");
+    db.prepare("UPDATE tasks SET title='Changed once' WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 1,
+      "a normal title UPDATE must bump content exactly once");
+    db.prepare("UPDATE tasks SET title=title WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 1,
+      "a no-op title UPDATE must not bump content");
+    db.prepare("UPDATE tasks SET title='Family three' WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 2, "title ABA must stay detectable");
+    db.prepare("UPDATE tasks SET revision=revision+1 WHERE id='f-3'").run();
+    assert.equal(epoch("family-area"), familyStart + 3,
+      "direct SQL revision-only edits must still invalidate cursors");
+
+    // A task's effective Area changes via a direct Area reassignment. Both
+    // old and new sets must be invalidated, and exactly once each.
+    db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id)
+      VALUES ('alice-second-private','Another private','private',?,'alice')`)
+      .run(fx.stage.personalWorkspaceId);
+    const oldArea = fx.stage.unassignedAreaId;
+    const beforeOld = epoch(oldArea);
+    const beforeNew = epoch("alice-second-private");
+    db.prepare("UPDATE tasks SET area_id='alice-second-private' WHERE id='p-alice-1'").run();
+    assert.equal(epoch(oldArea), beforeOld + 1, "source Area changed once");
+    assert.equal(epoch("alice-second-private"), beforeNew + 1, "target Area changed once");
+  } finally {
+    db.close();
+  }
+});

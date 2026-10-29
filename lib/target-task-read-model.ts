@@ -164,7 +164,10 @@ const scopedAccess = (row: Pick<ScopedRow, "areaKind" | "role">): TargetReadArea
   row.areaKind === "private" ? "private-owner"
     : row.role === "viewer" || row.role === "editor" || row.role === "admin" ? row.role : null;
 
-function linearizationOf(actorUserId: string, rows: ScopedRow[]): TargetReadLinearization | null {
+function linearizationOf(
+  actorUserId: string,
+  rows: Array<Pick<AreaRevisionRow, "areaId" | "areaKind" | "policyRevision" | "role">>,
+): TargetReadLinearization | null {
   const areas = new Map<string, TargetReadContributingArea>();
   for (const row of rows) {
     const access = scopedAccess(row);
@@ -175,27 +178,102 @@ function linearizationOf(actorUserId: string, rows: ScopedRow[]): TargetReadLine
 }
 
 /**
- * Opaque pagination revision for the actor's shared / my-plan list. It hashes
- * only rows this actor is authorized to read, plus the policy_revision and the
- * actor's role of each contributing Area and the restore generation, so a
- * change in an Area the actor cannot see never makes the actor's cursor stale.
+ * Per-Area cursor marker. Indexed EXISTS probes locate only Areas actually
+ * contributing tasks to the requested authenticated view. No task titles or
+ * complete task rows are read to calculate a page's revision; a single task
+ * mutation increments the relevant Area epoch in the SAME SQLite transaction.
+ *
+ * A shared Area is included in my-plan only while at least one of its tasks
+ * is assigned to the actor. This avoids stale cursors for invisible Areas.
+ * Changes to other tasks in a visible shared Area may conservatively stale
+ * my-plan, but cannot reveal activity in an Area the actor cannot read.
  */
+type AreaRevisionRow = {
+  areaId: string; areaKind: "private" | "shared"; policyRevision: number;
+  contentRevision: number; role: string | null;
+};
+
+// Existing task/project indexes provide O(1)-style existence probes per Area.
+// CROSS JOIN pins the project-first loop; otherwise SQLite may scan *all*
+// project tasks (t.area_id IS NULL) before filtering p.area_id, restoring the
+// very O(N) per-page walk that this revision eliminates. The composite indexes
+// seek assigned tasks for my-plan without scanning unrelated project members.
+const areaHasTasks = (assigned: boolean): string => `(
+  EXISTS (SELECT 1 FROM tasks t
+    WHERE t.area_id = a.id AND t.project_id IS NULL
+      ${assigned ? "AND t.assignee_user_id = actor.id" : ""})
+  OR EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area
+    CROSS JOIN tasks t INDEXED BY tasks_by_project_assignee
+    WHERE p.area_id = a.id AND t.project_id = p.id AND t.area_id IS NULL
+      ${assigned ? "AND t.assignee_user_id = actor.id" : ""})
+)`;
+
+/**
+ * Two disjoint, indexed access paths: private Areas are found by owner, and
+ * shared Areas by an actor-first membership index. Do not scan every Area
+ * in the database for each cursor page (issue #155, review P2).
+ * Both branches retain the exact workspace / owner and membership ACL.
+ */
+function contributingAreaRows(
+  db: DatabaseSync, actorUserId: string, scope: TargetTaskScope,
+): AreaRevisionRow[] {
+  const columns = `a.id AS areaId, a.kind AS areaKind,
+    a.policy_revision AS policyRevision, a.content_revision AS contentRevision`;
+  const queries: string[] = [];
+  const args: string[] = [];
+  if (scope !== "shared") {
+    queries.push(`SELECT ${columns}, NULL AS role
+      FROM areas a INDEXED BY areas_by_owner_kind
+      JOIN workspaces w ON w.id = a.workspace_id
+      JOIN identities actor ON actor.id = a.owner_user_id
+      WHERE a.owner_user_id = ? AND a.kind = 'private'
+        AND w.kind = 'personal' AND w.owner_user_id = a.owner_user_id
+        AND ${areaHasTasks(false)}`);
+    args.push(actorUserId);
+  }
+  if (scope !== "personal") {
+    queries.push(`SELECT ${columns}, member.role AS role
+      FROM area_members member INDEXED BY area_members_by_user_area
+      JOIN identities actor ON actor.id = member.user_id
+      JOIN areas a ON a.id = member.area_id
+      JOIN workspaces w ON w.id = a.workspace_id
+      WHERE member.user_id = ? AND a.kind = 'shared'
+        AND w.kind = 'shared' AND w.owner_user_id = a.owner_user_id
+        AND member.role IN ('viewer', 'editor', 'admin')
+        ${scope === "my-plan" ? "AND member.role IN ('editor', 'admin')" : ""}
+        AND ${areaHasTasks(scope === "my-plan")}`);
+    args.push(actorUserId);
+  }
+  // SQLite BINARY ordering matches the original cursor hash's row order.
+  // The branches are disjoint by Area kind, so UNION ALL cannot duplicate Areas.
+  return db.prepare(`SELECT * FROM (${queries.join(" UNION ALL ")})
+    ORDER BY areaId COLLATE BINARY ASC`).all(...args) as AreaRevisionRow[];
+}
+
+function hashContributingAreas(
+  rows: AreaRevisionRow[], scope: TargetTaskScope, restoreGeneration = "",
+): string | null {
+  const hash = createHash("sha256")
+    .update("lumi:area-cursor-revision:v2\0" + scope + "\0" + restoreGeneration + "\0");
+  for (const row of rows) {
+    const access = scopedAccess(row);
+    if (!access || !Number.isSafeInteger(row.contentRevision) || row.contentRevision < 0 ||
+        !Number.isSafeInteger(row.policyRevision) || row.policyRevision < 0) return null;
+    hash.update(JSON.stringify([
+      row.areaId, row.areaKind, access, row.policyRevision, row.contentRevision,
+    ])).update("\0");
+  }
+  return hash.digest("hex");
+}
+
+/** Used by direct selectors; page reads share the same Area query below. */
 export function scopedTaskListRevision(
   db: DatabaseSync, actorUserId: string, scope: "shared" | "my-plan", restoreGeneration: string,
 ): string | null {
-  if (!validId(actorUserId) || !validId(restoreGeneration) || !["shared", "my-plan"].includes(scope)) return null;
+  if (!validId(actorUserId) || !validId(restoreGeneration) ||
+      !["shared", "my-plan"].includes(scope)) return null;
   try {
-    const hash = createHash("sha256")
-      .update("lumi:r2id2b:scoped-task-list-revision:v1\0" + scope + "\0" + restoreGeneration + "\0");
-    const rows = db.prepare(`${SCOPED_COLUMNS} ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}
-      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC`);
-    for (const row of rows.iterate(actorUserId, scope, scope) as Iterable<ScopedRow>) {
-      hash.update(JSON.stringify([
-        row.id, row.title, row.projectId, row.areaId, row.areaKind,
-        row.assignedToMe, row.policyRevision, row.role, row.taskRevision,
-      ])).update("\0");
-    }
-    return hash.digest("hex");
+    return hashContributingAreas(contributingAreaRows(db, actorUserId, scope), scope, restoreGeneration);
   } catch {
     return null;
   }
@@ -220,11 +298,10 @@ export function readScopedTaskOffsetPage(
     const page = rows.slice(0, request.limit);
     // EVERY Area behind anything released (page rows, look-ahead row, cursor revision):
     // all Areas of the actor's scope in this snapshot, not just the page's.
-    const scopeRows = db.prepare(`SELECT DISTINCT a.id AS areaId, a.kind AS areaKind,
-        a.policy_revision AS policyRevision, member.role AS role ${AUTHORIZED_TASK_FROM} ${SCOPE_PREDICATE}`)
-      .all(request.actorUserId, request.scope, request.scope) as ScopedRow[];
+    const scopeRows = contributingAreaRows(db, request.actorUserId, request.scope);
     const linearization = linearizationOf(request.actorUserId, scopeRows);
-    const revision = scopedTaskListRevision(db, request.actorUserId, request.scope, request.restoreGeneration);
+    const revision = validId(request.restoreGeneration)
+      ? hashContributingAreas(scopeRows, request.scope, request.restoreGeneration) : null;
     if (!linearization || !revision) return null;
     return { tasks: page.map(toScopedTask), hasMore: rows.length > request.limit, revision, linearization };
   } catch {
@@ -259,32 +336,14 @@ export function readSharedTargetTask(
 }
 
 /**
- * Opaque pagination revision for the *authenticated actor's* personal list.
- *
- * Hash only rows that the same list ACL permits the actor to read. Hashing
- * the whole staging SQLite file would disclose another person's task changes
- * via otherwise unchanged HTTP cursors. Task revisions also detect an ABA edit
- * (a title changed and then restored). The caller owns a private, preflighted
- * SQLite snapshot, so pagination and this digest observe identical contents.
+ * Personal cursor revision uses only this actor's contributing private Area
+ * epochs. The HTTP cursor itself remains identity- and generation-bound.
+ * No private task of a different owner (or any shared task) contributes.
  */
 export function personalTaskListRevision(db: DatabaseSync, actorUserId: string): string | null {
   if (!validId(actorUserId)) return null;
   try {
-    const hash = createHash("sha256").update("lumi:r2b:personal-task-list-revision:v1\0");
-    const rows = db.prepare(`SELECT t.id AS id, t.title AS title,
-        t.project_id AS projectId, a.id AS effectiveAreaId,
-        a.kind AS areaKind, t.assignee_user_id AS assigneeUserId,
-        t.revision AS revision
-      ${AUTHORIZED_TASK_FROM}
-      AND a.kind = 'private'
-      ORDER BY t.id COLLATE BINARY ASC, t.rowid ASC`);
-    for (const row of rows.iterate(actorUserId)) {
-      hash.update(JSON.stringify([
-        row.id, row.title, row.projectId, row.effectiveAreaId,
-        row.areaKind, row.assigneeUserId, row.revision,
-      ])).update("\0");
-    }
-    return hash.digest("hex");
+    return hashContributingAreas(contributingAreaRows(db, actorUserId, "personal"), "personal");
   } catch {
     return null;
   }

@@ -11,12 +11,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
-// v5 (R2-ID.1) adds the durable staging session store and identity revocation
-// epoch. v6 (R2-ID.2a) adds the membership command receipt store, the
-// content-free membership audit and the last-admin guards. Older staging stores
-// are never migrated: preflight rejects them, and a new (test-only) staging
-// directory must be bootstrapped instead.
-export const TARGET_STORE_SCHEMA_VERSION = 6;
+// v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
+// ACL-scoped cursor revisions. Older isolated staging stores are never migrated:
+// preflight rejects them; use a NEW test-only staging directory instead.
+export const TARGET_STORE_SCHEMA_VERSION = 7;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -169,6 +167,7 @@ CREATE TABLE areas (
   owner_user_id TEXT NOT NULL,
   system_key TEXT CHECK(system_key IS NULL OR system_key = 'unassigned'),
   policy_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0 AND policy_revision < 9007199254740991),
+  content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(content_revision)='integer' AND content_revision >= 0 AND content_revision < 9007199254740991),
   workspace_kind TEXT GENERATED ALWAYS AS (
     CASE kind WHEN 'private' THEN 'personal' ELSE 'shared' END
   ) STORED,
@@ -182,6 +181,9 @@ CREATE TABLE areas (
 CREATE UNIQUE INDEX one_area_per_shared_workspace ON areas(workspace_id) WHERE kind = 'shared';
 CREATE UNIQUE INDEX one_private_unassigned_per_owner ON areas(owner_user_id)
   WHERE system_key = 'unassigned';
+-- Cursor revision candidates must be selected by the current private owner,
+-- without inspecting other users' Areas on every page.
+CREATE INDEX areas_by_owner_kind ON areas(owner_user_id, kind);
 
 CREATE TABLE area_members (
   area_id TEXT NOT NULL REFERENCES areas(id),
@@ -189,6 +191,9 @@ CREATE TABLE area_members (
   role TEXT NOT NULL CHECK(role IN ('viewer', 'editor', 'admin')),
   PRIMARY KEY(area_id, user_id)
 ) WITHOUT ROWID;
+-- The primary key is Area-first. Listing an actor's shared Areas needs a
+-- reverse lookup independent of all other users' memberships.
+CREATE INDEX area_members_by_user_area ON area_members(user_id, area_id);
 -- A rowid-less PK prevents INSERT/UPDATE OR REPLACE from silently deleting a
 -- different project through a hidden rowid collision (DELETE triggers may not fire).
 CREATE TABLE projects (
@@ -208,6 +213,10 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_by_project ON tasks(project_id);
 CREATE INDEX tasks_by_area ON tasks(area_id);
+-- Contributing-Area EXISTS checks must seek by Area/project, not rehash tasks.
+CREATE INDEX projects_by_area ON projects(area_id);
+CREATE INDEX tasks_by_project_assignee ON tasks(project_id, assignee_user_id);
+CREATE INDEX tasks_by_area_assignee ON tasks(area_id, assignee_user_id);
 
 -- Internal, content-free audit of committed title mutations only. The same
 -- transaction writes the task, idempotency receipt and this row. No API is
@@ -336,6 +345,30 @@ WHEN NEW.title IS NOT OLD.title
 BEGIN
   UPDATE projects SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
+-- Cursor epochs are incremented in the same transaction as every task change.
+-- The existing task_revision_bump advances t.revision for changed list fields;
+-- update the NEW effective Area exactly once when that revision advances,
+-- including a direct SQL revision-only increment. A move between Areas also
+-- invalidates the OLD effective Area (whose tasks have lost this row).
+-- Separate triggers avoid the double bump caused by cascading revision UPDATEs.
+CREATE TRIGGER task_area_content_insert AFTER INSERT ON tasks
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+END;
+CREATE TRIGGER task_area_content_revision AFTER UPDATE OF revision ON tasks
+WHEN NEW.revision IS NOT OLD.revision
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id));
+END;
+CREATE TRIGGER task_area_content_move_old AFTER UPDATE OF project_id, area_id ON tasks
+WHEN COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id))
+  IS NOT COALESCE(NEW.area_id, (SELECT area_id FROM projects WHERE id = NEW.project_id))
+BEGIN
+  UPDATE areas SET content_revision = content_revision + 1
+    WHERE id = COALESCE(OLD.area_id, (SELECT area_id FROM projects WHERE id = OLD.project_id));
+END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
 BEGIN
   UPDATE areas SET policy_revision = policy_revision + 1 WHERE id = NEW.area_id;
@@ -361,6 +394,9 @@ BEGIN SELECT RAISE(ABORT, 'project revision must increment by one'); END;
 CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
 WHEN NEW.policy_revision <> OLD.policy_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
+CREATE TRIGGER area_content_revision_guard BEFORE UPDATE OF content_revision ON areas
+WHEN NEW.content_revision <> OLD.content_revision + 1
+BEGIN SELECT RAISE(ABORT, 'Area content revision must increment by one'); END;
 -- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
 -- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
@@ -481,6 +517,10 @@ BEGIN SELECT RAISE(ABORT, 'workspace ID is immutable in R1'); END;
 CREATE TRIGGER immutable_project_id BEFORE UPDATE OF id ON projects
 WHEN NEW.id <> OLD.id
 BEGIN SELECT RAISE(ABORT, 'project ID is immutable in R1'); END;
+-- Never recycle an Area ID/epoch while cursors can still reference it.
+-- Area deletion requires a future tombstone protocol and revision redesign.
+CREATE TRIGGER area_deletion_guard BEFORE DELETE ON areas
+BEGIN SELECT RAISE(ABORT, 'Area deletion requires tombstone protocol'); END;
 CREATE TRIGGER protected_private_fallback BEFORE DELETE ON areas
 WHEN OLD.system_key = 'unassigned'
 BEGIN SELECT RAISE(ABORT, 'cannot delete private Unassigned'); END;
