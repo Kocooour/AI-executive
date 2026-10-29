@@ -382,3 +382,21 @@ test("the owner-only audit read route stays private-only: shared writes are not 
   }
   assert.deepEqual([...new Set(bodies)], [JSON.stringify({ error: "Not found" })]);
 });
+
+test("an admin who moves her own private task into a shared Area keeps her receipt visible and writes with a fresh token only", async () => {
+  const alice = login("alice");
+  const id = "alice-moving";
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'Moving')").run(id, stage.unassignedAreaId);
+  const first = command("Before move", (await (await detail(id, alice.cookie)).json()).snapshotRevision);
+  assert.equal((await patch(id, alice.cookie, first)).status, 200);
+  const privateToken = (await (await detail(id, alice.cookie)).json()).snapshotRevision;
+  db.prepare("UPDATE tasks SET area_id='team-area' WHERE id=?").run(id);
+  assert.deepEqual(await (await status(id, alice.cookie, first)).json(), { status: "committed" });
+  const before = snapshot(id);
+  assert.equal((await patch(id, alice.cookie, command("Stale private token", privateToken))).status, 409);
+  assert.deepEqual(snapshot(id), before);
+  const fresh = await revisionOf(id, alice.cookie);
+  assert.notEqual(fresh, privateToken);
+  assert.equal((await patch(id, alice.cookie, command("After move", fresh))).status, 200);
+  assert.equal(db.prepare("SELECT title FROM tasks WHERE id=?").get(id).title, "After move");
+});
