@@ -29,6 +29,7 @@ import {
 import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
+import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import type { TargetReadLinearization } from "./target-task-read-model";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
@@ -282,9 +283,6 @@ export type TargetStagingReadLive =
   | { ok: false; reason: "stale" }
   | { ok: false; reason: "unavailable" };
 
-/** Hard staging limit, equal to MAX_SCOPED_READ_AREAS in target-staging-read-process.ts. */
-const MAX_LINEARIZED_AREAS = 1000;
-
 /**
  * R2-ID.2b read linearization point. Immediately before a body is released, in
  * ONE short read transaction on the LIVE store: (1) the durable session is live
@@ -306,7 +304,7 @@ export function verifyTargetStagingReadLive(
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
-      !Array.isArray(observed.areas) || observed.areas.length > MAX_LINEARIZED_AREAS) return unavailable;
+      !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
     return { ok: false, reason: "invalid" };
   }
