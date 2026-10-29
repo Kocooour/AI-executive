@@ -56,14 +56,15 @@ async function scopedList(input: {
   const released = page
     ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId, page.linearization)
     : verifyStagingIdentityBeforeRelease(request, identity, store);
-  if (released === "stale") return answer(409, "read_stale_reload");
-  if (released !== "ok") return stagingIdentityRefusal(released);
+  if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
+  // Config / feature gate first: a disabled gate or rebound store is always 503, never 409.
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
     return answer(503, "Staging unavailable");
   }
+  if (released === "stale") return answer(409, "read_stale_reload");
   if (!page) return answer(503, "Staging unavailable");
   if (previous?.ok === true && previous.revision !== page.revision) {
     return answer(409, "Cursor stale");

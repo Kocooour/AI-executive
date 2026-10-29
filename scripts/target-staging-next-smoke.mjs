@@ -109,7 +109,7 @@ try {
     assert.equal(body.task.id, id);
     assert.equal(body.task.title, `Visible ${id}`);
   }
-  for (const id of ["missing", "bob-secret", "shared-secret"]) {
+  for (const id of ["missing", "bob-secret"]) {
     const response = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(id)}`, {
       headers: { cookie }, signal: AbortSignal.timeout(10_000),
     });
@@ -117,6 +117,29 @@ try {
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.deepEqual(await response.json(), { error: "Not found" });
   }
+  // R2-ID.2b: alice is a member of the shared Area, so its task is readable with the minimal shared shape.
+  const sharedDetail = await fetch(`${origin}/api/target-staging/tasks/shared-secret`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(sharedDetail.status, 200);
+  assert.equal(sharedDetail.headers.get("cache-control"), "no-store");
+  const sharedBody = await sharedDetail.json();
+  assert.deepEqual(Object.keys(sharedBody), ["task"], "no snapshotRevision for shared tasks");
+  assert.equal(sharedBody.task.id, "shared-secret");
+  assert.equal(sharedBody.task.areaId, "family-area");
+  assert.equal(sharedBody.task.areaKind, "shared");
+  assert.equal(typeof sharedBody.task.assignedToMe, "boolean");
+  assert.equal(JSON.stringify(sharedBody).includes("assigneeUserId"), false);
+  assert.equal(JSON.stringify(sharedBody).includes("bob"), false);
+  const sharedList = await fetch(`${origin}/api/target-staging/tasks?scope=shared`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(sharedList.status, 200);
+  assert.equal(sharedList.headers.get("cache-control"), "no-store");
+  assert.ok((await sharedList.json()).tasks.some(task => task.id === "shared-secret"));
+  assert.equal((await fetch(`${origin}/api/target-staging/tasks?scope=bogus`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  })).status, 400);
   const unauthenticated = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`);
   assert.equal(unauthenticated.status, 401);
   for (const id of ids) {

@@ -61,14 +61,14 @@ export async function GET(
     const released = result && result.ok && "scope" in result
       ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId, result.linearization)
       : verifyStagingIdentityBeforeRelease(request, identity, store);
-    if (released === "stale") return answer(404, "Not found");
-    if (released !== "ok") return stagingIdentityRefusal(released);
+    if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
       return answer(503, "Staging unavailable");
     }
+    if (released === "stale") return answer(404, "Not found");
     if (!result) return answer(503, "Staging unavailable");
     if (!result.ok) return answer(404, "Not found");
     // Shared-Area task: no title CAS revision (writes arrive with R2-ID.3).

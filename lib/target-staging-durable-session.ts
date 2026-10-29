@@ -282,6 +282,7 @@ export type TargetStagingReadLive =
   | { ok: false; reason: "stale" }
   | { ok: false; reason: "unavailable" };
 
+/** Hard staging limit, equal to MAX_SCOPED_READ_AREAS in target-staging-read-process.ts. */
 const MAX_LINEARIZED_AREAS = 1000;
 
 /**

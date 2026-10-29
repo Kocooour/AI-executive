@@ -295,30 +295,40 @@ export interface StagingScopedPage {
   readonly linearization: TargetReadLinearization;
 }
 
-function parseLinearization(value: unknown, areaIds: Set<string>): TargetReadLinearization | null {
+/** Hard staging limit: contributing Areas per scoped read (see docs/ARCHITECTURE.md, R2-ID.2b). */
+export const MAX_SCOPED_READ_AREAS = 1000;
+
+function parseLinearization(
+  value: unknown, rowAreas: Map<string, "private" | "shared">,
+): TargetReadLinearization | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).sort().join(",") !== "actorUserId,areas" ||
       typeof record.actorUserId !== "string" || !ACTOR_ID.test(record.actorUserId) ||
-      !Array.isArray(record.areas) || record.areas.length > 1000) return null;
+      !Array.isArray(record.areas) || record.areas.length > MAX_SCOPED_READ_AREAS) return null;
   const areas: TargetReadLinearization["areas"] = [];
   const seen = new Set<string>();
   for (const entry of record.areas) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
     const area = entry as Record<string, unknown>;
-    if (Object.keys(area).sort().join(",") !== "access,areaId,policyRevision" ||
+    if (Object.keys(area).sort().join(",") !== "access,areaId,areaKind,policyRevision" ||
         typeof area.areaId !== "string" || area.areaId.length === 0 || seen.has(area.areaId) ||
         typeof area.policyRevision !== "number" || !Number.isSafeInteger(area.policyRevision) ||
-        area.policyRevision < 0 || typeof area.access !== "string" || !ACCESS.has(area.access)) return null;
+        area.policyRevision < 0 || typeof area.access !== "string" || !ACCESS.has(area.access) ||
+        (area.areaKind !== "private" && area.areaKind !== "shared") ||
+        // private-owner only with private Areas; viewer/editor/admin only with shared Areas.
+        (area.areaKind === "private") !== (area.access === "private-owner") ||
+        // A row's Area must be recorded with the very same kind.
+        (rowAreas.has(area.areaId) && rowAreas.get(area.areaId) !== area.areaKind)) return null;
     seen.add(area.areaId);
     areas.push({
-      areaId: area.areaId, policyRevision: area.policyRevision,
+      areaId: area.areaId, areaKind: area.areaKind, policyRevision: area.policyRevision,
       access: area.access as TargetReadLinearization["areas"][number]["access"],
     });
   }
-  // The record must cover exactly the Areas the released rows come from.
-  // The record must cover at least the Areas of the released rows (it also holds look-ahead / revision Areas).
-  if (![...areaIds].every(id => seen.has(id))) return null;
+  // The record holds ALL Areas of the scope (look-ahead and revision Areas too); it must at
+  // least contain every Area a released row comes from.
+  if (![...rowAreas.keys()].every(id => seen.has(id))) return null;
   return { actorUserId: record.actorUserId, areas };
 }
 
@@ -357,7 +367,7 @@ export function parseStagingScopedPage(value: unknown, scope: StagingScopedReadS
     if (!task) return null;
     tasks.push(task);
   }
-  const linearization = parseLinearization(page.linearization, new Set(tasks.map(task => task.areaId)));
+  const linearization = parseLinearization(page.linearization, new Map(tasks.map(task => [task.areaId, task.areaKind] as const)));
   if (!linearization) return null;
   return { tasks, hasMore: page.hasMore, revision: page.revision, linearization };
 }
@@ -385,7 +395,7 @@ export function parseStagingTaskDetail(value: unknown, taskId: string): StagingT
     if (Object.keys(result).sort().join(",") !== "linearization,ok,scope,task" || result.ok !== true) return null;
     const task = parseScopedTask(result.task, "shared");
     if (!task || task.id !== taskId) return null;
-    const linearization = parseLinearization(result.linearization, new Set([task.areaId]));
+    const linearization = parseLinearization(result.linearization, new Map([[task.areaId, task.areaKind] as const]));
     return linearization ? { ok: true, scope: "shared", task, linearization } : null;
   }
   return parseStagingPersonalDetail(value, taskId);

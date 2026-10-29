@@ -119,6 +119,7 @@ export type TargetReadAreaAccess = "private-owner" | "viewer" | "editor" | "admi
 
 export type TargetReadContributingArea = {
   areaId: string;
+  areaKind: "private" | "shared";
   policyRevision: number;
   access: TargetReadAreaAccess;
 };
@@ -168,7 +169,7 @@ function linearizationOf(actorUserId: string, rows: ScopedRow[]): TargetReadLine
   for (const row of rows) {
     const access = scopedAccess(row);
     if (!access) return null;
-    areas.set(row.areaId, { areaId: row.areaId, policyRevision: row.policyRevision, access });
+    areas.set(row.areaId, { areaId: row.areaId, areaKind: row.areaKind, policyRevision: row.policyRevision, access });
   }
   return { actorUserId, areas: [...areas.values()] };
 }

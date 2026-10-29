@@ -512,20 +512,93 @@ test("child DTO boundary rejects extra fields, foreign ids and inconsistent Area
     id: "f-1", title: "t", projectId: null, effectiveAreaId: "a", areaId: "a",
     areaKind: "shared", assignedToMe: false,
   };
-  const page = (tasks, areas = [{ areaId: "a", policyRevision: 1, access: "viewer" }], extra = {}) => ({
+  const page = (tasks, areas = [{ areaId: "a", areaKind: "shared", policyRevision: 1, access: "viewer" }], extra = {}) => ({
     ok: true, tasks, hasMore: false, revision: "a".repeat(64),
     linearization: { actorUserId: "carol", areas }, ...extra,
   });
   assert.ok(readProcess.parseStagingScopedPage(page([row]), "shared"));
   assert.equal(readProcess.parseStagingScopedPage(page([{ ...row, assigneeUserId: "bob" }]), "shared"), null);
   assert.equal(readProcess.parseStagingScopedPage(page([row], [], {}), "shared"), null, "areas must cover the rows");
-  assert.equal(readProcess.parseStagingScopedPage(page([row], [{ areaId: "a", policyRevision: 1, access: "owner" }]), "shared"), null);
+  assert.equal(readProcess.parseStagingScopedPage(page([row], [{ areaId: "a", areaKind: "shared", policyRevision: 1, access: "owner" }]), "shared"), null);
   assert.equal(readProcess.parseStagingScopedPage(page([row], undefined, { members: ["bob"] }), "shared"), null);
   assert.equal(readProcess.parseStagingScopedPage(page([{ ...row, assignedToMe: false }]), "my-plan"), null,
     "my-plan carries a shared task only when assigned to the actor");
   assert.equal(readProcess.parseStagingScopedPage(page([{ ...row, areaKind: "private", assignedToMe: undefined }]), "shared"), null);
   assert.equal(readProcess.parseStagingTaskDetail({ ok: true, scope: "shared", task: { ...row, id: "other" },
-    linearization: { actorUserId: "carol", areas: [{ areaId: "a", policyRevision: 1, access: "viewer" }] } }, "f-1"), null);
+    linearization: { actorUserId: "carol", areas: [{ areaId: "a", areaKind: "shared", policyRevision: 1, access: "viewer" }] } }, "f-1"), null);
+});
+
+test("child DTO boundary: Area kind and access must be consistent (private-owner only with private Areas)", () => {
+  const row = { id: "f-1", title: "t", projectId: null, effectiveAreaId: "a", areaId: "a",
+    areaKind: "shared", assignedToMe: false };
+  const page = areas => ({ ok: true, tasks: [row], hasMore: false, revision: "a".repeat(64),
+    linearization: { actorUserId: "carol", areas } });
+  const area = (areaKind, access, areaId = "a") => ({ areaId, areaKind, policyRevision: 1, access });
+  assert.ok(readProcess.parseStagingScopedPage(page([area("shared", "editor")]), "shared"));
+  assert.ok(readProcess.parseStagingScopedPage(page([area("shared", "viewer"), area("private", "private-owner", "p")]), "shared"));
+  for (const bad of [
+    [area("shared", "private-owner")],            // private-owner on a shared Area
+    [area("private", "admin")],                   // role on a private Area
+    [area("private", "private-owner")],           // row's Area recorded with a different kind
+    [area("shared", "viewer"), area("shared", "editor")],   // duplicate Area
+    [{ areaId: "a", policyRevision: 1, access: "viewer" }],  // kind missing
+  ]) {
+    assert.equal(readProcess.parseStagingScopedPage(page(bad), "shared"), null, JSON.stringify(bad));
+  }
+});
+
+test("a disabled feature gate or rebound store is 503, never a stale 409 / 404", async () => {
+  for (const [label, run, expectedStale] of [
+    ["list", (fx, who) => list(fx, "?scope=shared", who.cookie), 409],
+    ["detail", (fx, who) => detail(fx, "f-3", who.cookie), 404],
+  ]) {
+    const fx = makeFixture();
+    const b = login(fx, "bob");
+    try {
+      const response = await withGatedChild(() => run(fx, b), async () => {
+        mutate(fx, removeMemberSql("bob"));
+        process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
+      });
+      assert.equal(response.status, 503, label);
+      assert.deepEqual(await response.json(), { error: "Staging unavailable" });
+    } finally {
+      process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+    }
+    // Same race with the gate intact is the stale answer.
+    const fx2 = makeFixture();
+    const b2 = login(fx2, "bob");
+    const stale = await withGatedChild(() => run(fx2, b2), async () => mutate(fx2, removeMemberSql("bob")));
+    assert.equal(stale.status, expectedStale, label);
+  }
+});
+
+test("hard staging limit: 1000 contributing Areas per scoped read pass, 1001 fail closed with 503 and no data", async () => {
+  const fx = makeFixture();
+  const db = new DatabaseSync(fx.databasePath);
+  db.exec("PRAGMA foreign_keys=ON; BEGIN");
+  for (let n = 0; n < 999; n++) {
+    db.exec(`INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bw${n}','shared','erin');
+      INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('bulk${n}','Bulk ${n}','shared','bw${n}','erin');
+      INSERT INTO area_members(area_id,user_id,role) VALUES ('bulk${n}','erin','admin');
+      INSERT INTO area_members(area_id,user_id,role) VALUES ('bulk${n}','carol','viewer');
+      INSERT INTO tasks(id,area_id,title) VALUES ('z-${n}','bulk${n}','Bulk task ${n}');`);
+  }
+  db.exec("COMMIT");
+  db.close();
+  const carol = login(fx, "carol");
+  const ok = await list(fx, "?scope=shared&limit=1", carol.cookie);
+  assert.equal(ok.status, 200, "family-area + 999 bulk Areas = 1000");
+  assert.equal((await ok.json()).tasks.length, 1);
+  mutate(fx, `INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bw-over','shared','erin');
+    INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('bulk-over','Over','shared','bw-over','erin');
+    INSERT INTO area_members(area_id,user_id,role) VALUES ('bulk-over','erin','admin');
+    INSERT INTO area_members(area_id,user_id,role) VALUES ('bulk-over','carol','viewer');
+    INSERT INTO tasks(id,area_id,title) VALUES ('z-over','bulk-over','Over task');`);
+  const over = await list(fx, "?scope=shared&limit=1", carol.cookie);
+  assert.equal(over.status, 503);
+  const text = await over.text();
+  assert.deepEqual(JSON.parse(text), { error: "Staging unavailable" });
+  assert.equal(text.includes("Family"), false);
 });
 
 // Areas which contribute only to hasMore (look-ahead row) or to the cursor revision must be
