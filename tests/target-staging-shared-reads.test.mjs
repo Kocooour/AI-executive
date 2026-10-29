@@ -171,26 +171,26 @@ test("scope contents follow LUMI-FR-013 for admin A, editor B and viewer C", asy
   }
 
   // Muj plan: all my private tasks + shared tasks assigned to me; a viewer cannot be assigned.
-  const planA = await okJson(list(fx, "?scope=my-plan", a.cookie));
+  const planA = await okJson(list(fx, "?scope=my-plan", a.cookie), "alice my-plan");
   assert.deepEqual(ids(planA), ["f-1", "f-4", "p-alice-1", "p-alice-2"]);
   assert.deepEqual(planA.tasks.filter(t => t.areaKind === "private").map(t => "assignedToMe" in t),
     [false, false], "private rows carry no assignedToMe");
   assert.ok(planA.tasks.filter(t => t.areaKind === "shared").every(t => t.assignedToMe === true));
-  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", b.cookie))), ["f-2", "f-5", "p-bob-1"]);
-  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", c.cookie))), ["p-carol-1"]);
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", b.cookie), "bob my-plan")), ["f-2", "f-5", "p-bob-1"]);
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", c.cookie), "carol my-plan")), ["p-carol-1"]);
 
   // The default and explicit personal scope keep the historical shape and content.
-  const implicit = await okJson(list(fx, "", a.cookie));
-  const explicit = await okJson(list(fx, "?scope=personal", a.cookie));
+  const implicit = await okJson(list(fx, "", a.cookie), "alice implicit personal");
+  const explicit = await okJson(list(fx, "?scope=personal", a.cookie), "alice explicit personal");
   assert.deepEqual(implicit, explicit);
   assert.deepEqual(ids(implicit), ["p-alice-1", "p-alice-2"]);
   assert.deepEqual(Object.keys(implicit.tasks[0]).sort(),
     ["areaKind", "assigneeUserId", "effectiveAreaId", "id", "projectId", "title"]);
 
   // The owner cookie maps to the configured owner (alice) and gets the same views.
-  assert.deepEqual(await okJson(list(fx, "?scope=shared", ownerCookie())),
-    await okJson(list(fx, "?scope=shared", a.cookie)));
-  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", ownerCookie()))),
+  assert.deepEqual(await okJson(list(fx, "?scope=shared", ownerCookie()), "owner shared"),
+    await okJson(list(fx, "?scope=shared", a.cookie), "alice shared"));
+  assert.deepEqual(ids(await okJson(list(fx, "?scope=my-plan", ownerCookie()), "owner my-plan")),
     ["f-1", "f-4", "p-alice-1", "p-alice-2"]);
 });
 
