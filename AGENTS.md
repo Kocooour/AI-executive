@@ -27,6 +27,13 @@ Do not treat an implementation as complete before both independent testers have 
 - For competing product or UX ideas, it is acceptable to implement two variants of the same feature on separate branches/worktrees. Label them as an A/B comparison, run them separately, and select one deliberately; do not merge both variants by default.
 - Follow the concrete naming, worktree, port, environment, and test conventions in `docs/DEVELOPMENT.md`.
 
+## Mandatory code review on every PR
+
+- After opening every pull request, and again after every push that changes its code or docs, the author (the primary model) must start a code review of the complete PR diff on the current head without waiting to be asked. Use an independent reviewer: a review agent or tool (for example Claude Code `/code-review` or an equivalent review subagent) that is not the implementation agent. The four-role testers and the Codex/Claude cross-review remain required in addition; this review replaces neither.
+- Resolve every finding in the same PR before requesting merge, without waiting for a separate instruction: fix and push confirmed defects (correctness, security, data integrity, regressions, missing tests, violations of AGENTS.md or the canonical docs), and also apply plainly correct minor findings. A finding that does not reproduce or is not worth its cost is answered in the PR with the concrete reason. A finding that requires a product decision or diverges from docs/PRODUCT.md goes to the project owner, and a security finding may be dismissed only with the owner's explicit decision.
+- After fixes, review the new head again and repeat until no blocking finding remains. Record in the PR the review rounds, the findings and how each was resolved (commit, reply, or owner decision).
+- An unfinished review, or an open blocking finding, blocks merge in the same way as a failed `PR Checks`. Code review never authorizes the full Browser E2E suite; it uses unit tests, typecheck, build and focused tests per the CI gates below.
+
 ## Scope control
 
 - Validate every iteration against the canonical Lumi product specification in docs/PRODUCT.md, relevant UX in docs/UX-UI.md and technical requirements in docs/ARCHITECTURE.md and the user's latest requirements.
@@ -49,6 +56,6 @@ Do not treat an implementation as complete before both independent testers have 
 
 - Work in a dedicated branch and open a pull request for every change. Do not commit directly to `main`.
 - A pull request must identify its branch, validation performed, and any required local/preview setup. For related concurrent work, it must also identify the integration branch or explain why integration testing is unnecessary.
-- Merge only after the required reviews, final verification, and any integration testing have passed.
+- Merge only after the required reviews, the mandatory PR code review with all findings resolved, final verification, and any integration testing have passed.
 - After the merged change is ready for deployment, first require a passing full Browser E2E run on the exact deployment SHA as specified above; then preserve unrelated server changes, create and verify a recoverable database backup, use a fast-forward-only update, build the production application, restart it through the configured service manager, and verify the service, database integrity, authentication boundary, and configured HTTPS route.
 - If credentials, server state, a failed check, or a destructive/conflicting condition prevents safe delivery, stop at that boundary and report the concrete blocker instead of weakening safeguards.

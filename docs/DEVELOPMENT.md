@@ -132,7 +132,8 @@ Targeted `pnpm test:e2e -g "part of its name"` scenarios remain available locall
 1. An implementation author develops and validates the change in its own branch/worktree.
 2. Open a pull request with the local reproduction details and, if supported, a dedicated preview deployment.
 3. Request cross-review: Codex reviews Claude-authored work, and Claude reviews Codex-authored work. The reviewer independently checks acceptance criteria, regressions, edge cases, security/data boundaries, and the actual running instance or preview.
-4. When two or more changes interact, create an integration branch from the current target branch:
+4. Immediately after opening the PR, and after every later push, run an independent code review of the whole PR diff on the current head (for example Claude Code `/code-review` or an equivalent review subagent that is not the implementation agent). Fix and push every confirmed finding and plainly correct nit in the same PR, answer findings that do not apply with a concrete reason, escalate product decisions and dismissals of security findings to the project owner, and re-review the new head until no blocking finding remains. Record the rounds and resolutions in the PR. See [AGENTS.md](../AGENTS.md#mandatory-code-review-on-every-pr).
+5. When two or more changes interact, create an integration branch from the current target branch:
 
    ```bash
    git fetch origin
@@ -146,7 +147,7 @@ Targeted `pnpm test:e2e -g "part of its name"` scenarios remain available locall
 
    Resolve integration conflicts and test the combined behavior, including the boundary between the features. Push the integration branch only when it is useful for shared review or CI; it is normally temporary.
 
-5. Merge individual PRs only after their reviews, required **PR Checks**, and relevant combined validation have passed. The full Browser E2E suite is required later, before a server deployment, on the exact intended release commit. Delete temporary integration branches and worktrees only after the work is safely merged.
+6. Merge individual PRs only after their reviews, the resolved PR code review, required **PR Checks**, and relevant combined validation have passed. The full Browser E2E suite is required later, before a server deployment, on the exact intended release commit. Delete temporary integration branches and worktrees only after the work is safely merged.
 
 If infrastructure provides preview deployments, configure one isolated preview per PR. Use preview-specific environment values and test data, and put its URL plus any setup steps in the PR. A preview must not share a writable production database, storage bucket/prefix, scheduled-job identity, or notification credentials.
 
@@ -168,6 +169,7 @@ Run each variant with a separate port and state prefix, document the hypothesis 
 - [ ] Production build and relevant focused checks pass
 - [ ] UI and persistence behavior tested where affected
 - [ ] Independent cross-review completed
+- [ ] PR code review run on the current head and every finding fixed, answered, or decided by the owner
 - [ ] Integration branch tested for interacting parallel changes, or not needed with a stated reason
 - [ ] Preview deployment checked when available
 - [ ] No credentials, local state, or generated mutable data committed
