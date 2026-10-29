@@ -36,6 +36,8 @@ import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-st
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
+import { applyTargetStagingMembershipCommand, validTargetStagingMembershipCommand } from "./target-staging-membership-command";
+import type { TargetStagingMembershipCommand, TargetStagingMembershipResult } from "./target-staging-membership-command";
 import type { TargetTaskTitleEditPreviewRequest, TargetTaskTitleEditPreviewResult } from "./target-task-write-preflight";
 
 const TOKEN_DOMAIN = "lumi:r2:target-task-read:staging:v1\0";
@@ -514,6 +516,24 @@ export class TargetStagingSessionAuthority {
     // re-verifies that session inside its BEGIN IMMEDIATE transaction.
     return writePreflightedTargetTaskTitle(
       this.#store, credential, request, privateOnly, durableSessionTokenHash,
+    );
+  }
+
+  /**
+   * R2-ID.2a shared-Area membership command. Needs a write-audience token; the
+   * actor comes from the token, never from the command. A durable session hash
+   * is re-verified inside the write transaction.
+   */
+  applyMembershipCommand(
+    sessionToken: string,
+    command: TargetStagingMembershipCommand,
+    durableSessionTokenHash?: string,
+  ): TargetStagingMembershipResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthenticated" };
+    if (!validTargetStagingMembershipCommand(command)) return { ok: false, reason: "invalid_request" };
+    return applyTargetStagingMembershipCommand(
+      this.#store, credential, command, durableSessionTokenHash,
     );
   }
 

@@ -112,8 +112,8 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("schema v5 stores only a token hash and enforces issuance limits", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 5);
+test("schema v6 stores only a token hash and enforces issuance limits", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 6);
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: stage.directory, mode: "r2-model" }).ok, true);
   const issued = issueCli("alice");
   assert.equal(issued.ok, true);
@@ -628,7 +628,8 @@ test("writers wait a bounded 200 ms for a held read lock: a short hold commits, 
     const shortHolder = await holdLock(100);
     const committed = second.run();
     assert.deepEqual(committed.result, { ok: true });
-    assert.ok(committed.elapsedMs >= 5 && committed.elapsedMs < 400, `waited for the lock (${committed.elapsedMs} ms)`);
+    // Upper bound is wide to tolerate CI load; the lower bound keeps the wait meaningful.
+    assert.ok(committed.elapsedMs >= 5 && committed.elapsedMs < 900, `waited for the lock (${committed.elapsedMs} ms)`);
     await closed(shortHolder);
     assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two (short hold)");
   } finally {

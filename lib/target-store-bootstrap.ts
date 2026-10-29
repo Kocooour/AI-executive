@@ -12,9 +12,11 @@ import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 
 // v5 (R2-ID.1) adds the durable staging session store and identity revocation
-// epoch. Older staging stores are never migrated: preflight rejects them, and a
-// new (test-only) staging directory must be bootstrapped instead.
-export const TARGET_STORE_SCHEMA_VERSION = 5;
+// epoch. v6 (R2-ID.2a) adds the membership command receipt store, the
+// content-free membership audit and the last-admin guards. Older staging stores
+// are never migrated: preflight rejects them, and a new (test-only) staging
+// directory must be bootstrapped instead.
+export const TARGET_STORE_SCHEMA_VERSION = 6;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -125,13 +127,16 @@ export function verifyTargetStagingPath(stagingDirectory: string): string {
 }
 
 export const TARGET_SCHEMA_SQL = `
-CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Every table whose invariants rely on triggers is WITHOUT ROWID (or has an
+-- INTEGER PRIMARY KEY alias guarded in BEFORE INSERT): INSERT OR REPLACE with an
+-- explicit rowid would otherwise delete a different row without DELETE triggers.
+CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE identities (
   id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0),
   -- Monotonic sign-out-everywhere counter. A durable session is live only while
   -- its issue-time epoch still equals this value.
   revocation_epoch INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revocation_epoch)='integer' AND revocation_epoch >= 0 AND revocation_epoch < 9007199254740991)
-);
+) WITHOUT ROWID;
 -- Durable staging sessions (R2-ID.1). Only the SHA-256 hash of a random
 -- 256-bit token is stored; the raw token is returned once at issuance and
 -- cannot be recovered. A rowid-less PK prevents REPLACE through a hidden rowid.
@@ -153,7 +158,7 @@ CREATE TABLE workspaces (
   kind TEXT NOT NULL CHECK(kind IN ('personal', 'shared')),
   owner_user_id TEXT NOT NULL REFERENCES identities(id),
   UNIQUE (id, kind, owner_user_id)
-);
+) WITHOUT ROWID;
 CREATE UNIQUE INDEX one_personal_workspace_per_user ON workspaces(owner_user_id) WHERE kind = 'personal';
 
 CREATE TABLE areas (
@@ -170,7 +175,7 @@ CREATE TABLE areas (
   FOREIGN KEY (workspace_id, workspace_kind, owner_user_id)
     REFERENCES workspaces(id, kind, owner_user_id),
   CHECK(kind = 'private' OR system_key IS NULL)
-);
+) WITHOUT ROWID;
 -- At most one Area per shared workspace. An orphan workspace is a staging-only
 -- intermediate state; R2 must validate a complete 1:1 mapping and active admin
 -- membership before activation or any actor-accessible write.
@@ -183,7 +188,7 @@ CREATE TABLE area_members (
   user_id TEXT NOT NULL REFERENCES identities(id),
   role TEXT NOT NULL CHECK(role IN ('viewer', 'editor', 'admin')),
   PRIMARY KEY(area_id, user_id)
-);
+) WITHOUT ROWID;
 -- A rowid-less PK prevents INSERT/UPDATE OR REPLACE from silently deleting a
 -- different project through a hidden rowid collision (DELETE triggers may not fire).
 CREATE TABLE projects (
@@ -237,6 +242,79 @@ CREATE TRIGGER task_title_audit_capacity BEFORE INSERT ON task_title_audit
 WHEN (SELECT COUNT(*) FROM task_title_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
 
+-- R2-ID.2a membership command ledger (staging only). A receipt is keyed by the
+-- opaque SHA-256 of (actor, Area, command UUID); it stores only a payload digest
+-- and the committed result, never task content. An exact retry returns the
+-- stored result; a different payload under the same key is a conflict.
+CREATE TABLE area_membership_receipts (
+  receipt_key TEXT PRIMARY KEY CHECK(length(receipt_key) = 64 AND receipt_key NOT GLOB '*[^0-9a-f]*'),
+  payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64 AND payload_digest NOT GLOB '*[^0-9a-f]*'),
+  outcome TEXT NOT NULL CHECK(outcome IN ('applied', 'noop')),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0),
+  unassigned_tasks INTEGER NOT NULL CHECK(typeof(unassigned_tasks)='integer' AND unassigned_tasks >= 0),
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0)
+) WITHOUT ROWID;
+CREATE TRIGGER area_membership_receipts_no_update BEFORE UPDATE ON area_membership_receipts
+BEGIN SELECT RAISE(ABORT, 'membership receipts are immutable'); END;
+CREATE TRIGGER area_membership_receipts_retention BEFORE DELETE ON area_membership_receipts
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'membership receipt retention window is active'); END;
+CREATE TRIGGER area_membership_receipts_replace_guard BEFORE INSERT ON area_membership_receipts
+WHEN EXISTS(SELECT 1 FROM area_membership_receipts WHERE receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'membership receipt replacement is forbidden'); END;
+CREATE TRIGGER area_membership_receipts_capacity BEFORE INSERT ON area_membership_receipts
+WHEN (SELECT COUNT(*) FROM area_membership_receipts) >= ${TARGET_STAGING_MAX_RECEIPTS}
+BEGIN SELECT RAISE(ABORT, 'membership receipt capacity reached'); END;
+
+-- Internal, content-free, append-only audit of committed membership changes
+-- (no-ops are receipted but not audited). No read API exposes it.
+CREATE TABLE area_membership_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE REFERENCES area_membership_receipts(receipt_key),
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  target_user_id TEXT NOT NULL REFERENCES identities(id),
+  action TEXT NOT NULL CHECK(action IN ('add', 'remove', 'set_role')),
+  role_before TEXT CHECK(role_before IS NULL OR role_before IN ('viewer', 'editor', 'admin')),
+  role_after TEXT CHECK(role_after IS NULL OR role_after IN ('viewer', 'editor', 'admin')),
+  policy_revision_before INTEGER NOT NULL CHECK(typeof(policy_revision_before)='integer' AND policy_revision_before >= 0),
+  policy_revision_after INTEGER NOT NULL CHECK(typeof(policy_revision_after)='integer' AND policy_revision_after = policy_revision_before + 1),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0),
+  CHECK((action = 'add' AND role_before IS NULL AND role_after IS NOT NULL)
+    OR (action = 'remove' AND role_before IS NOT NULL AND role_after IS NULL)
+    OR (action = 'set_role' AND role_before IS NOT NULL AND role_after IS NOT NULL AND role_before <> role_after))
+);
+CREATE INDEX area_membership_audit_by_area ON area_membership_audit(area_id, id);
+CREATE TRIGGER area_membership_audit_no_update BEFORE UPDATE ON area_membership_audit
+BEGIN SELECT RAISE(ABORT, 'audit events are immutable'); END;
+CREATE TRIGGER area_membership_audit_retention BEFORE DELETE ON area_membership_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_AUDIT_RETENTION_DAYS} * 86400000)
+BEGIN SELECT RAISE(ABORT, 'audit retention window is active'); END;
+CREATE TRIGGER area_membership_audit_replace_guard BEFORE INSERT ON area_membership_audit
+WHEN EXISTS(SELECT 1 FROM area_membership_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'audit replacement is forbidden'); END;
+CREATE TRIGGER area_membership_audit_capacity BEFORE INSERT ON area_membership_audit
+WHEN (SELECT COUNT(*) FROM area_membership_audit) >= ${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'audit capacity reached'); END;
+
+-- A shared Area must keep at least one admin, even against raw SQL. REPLACE
+-- bypasses DELETE triggers, so it is checked in BEFORE INSERT as well.
+CREATE TRIGGER last_admin_delete_guard BEFORE DELETE ON area_members
+WHEN OLD.role = 'admin' AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = OLD.area_id AND m.role = 'admin' AND m.user_id <> OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+CREATE TRIGGER last_admin_demotion_guard BEFORE UPDATE OF role ON area_members
+WHEN OLD.role = 'admin' AND NEW.role <> 'admin' AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = OLD.area_id AND m.role = 'admin' AND m.user_id <> OLD.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+CREATE TRIGGER last_admin_replace_guard BEFORE INSERT ON area_members
+WHEN NEW.role <> 'admin' AND EXISTS(
+  SELECT 1 FROM area_members o WHERE o.area_id = NEW.area_id AND o.user_id = NEW.user_id AND o.role = 'admin')
+  AND NOT EXISTS(
+  SELECT 1 FROM area_members m WHERE m.area_id = NEW.area_id AND m.role = 'admin' AND m.user_id <> NEW.user_id)
+BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
          t.assignee_user_id AS assignee_user_id
@@ -283,9 +361,25 @@ BEGIN SELECT RAISE(ABORT, 'project revision must increment by one'); END;
 CREATE TRIGGER area_policy_revision_guard BEFORE UPDATE OF policy_revision ON areas
 WHEN NEW.policy_revision <> OLD.policy_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
+-- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
+-- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 CREATE TRIGGER task_conflict_guard BEFORE INSERT ON tasks
 WHEN EXISTS(SELECT 1 FROM tasks WHERE id = NEW.id)
+  OR EXISTS(SELECT 1 FROM tasks WHERE rowid = NEW.rowid)
 BEGIN SELECT RAISE(ABORT, 'task replacement is not allowed'); END;
+-- In a BEFORE INSERT trigger NEW.rowid is -1 whenever no rowid was supplied, so
+-- the guard above cannot tell an automatic rowid from an explicit -1, and a stored
+-- row with rowid -1 would make every later automatic insert collide with it
+-- (self-DoS). Automatic rowids are always >= 1: reject any explicit rowid <= 0
+-- AFTER insertion (the statement rolls back as a whole).
+CREATE TRIGGER task_rowid_positive AFTER INSERT ON tasks
+WHEN NEW.rowid <= 0
+BEGIN SELECT RAISE(ABORT, 'task rowid must be positive'); END;
+-- UPDATE OR REPLACE tasks SET rowid=<other> would delete the other task without
+-- task_deletion_guard (REPLACE does not fire DELETE triggers). Rowids are fixed.
+CREATE TRIGGER task_rowid_immutable BEFORE UPDATE ON tasks
+WHEN NEW.rowid IS NOT OLD.rowid
+BEGIN SELECT RAISE(ABORT, 'task rowid is immutable'); END;
 -- A same-ID replacement can also be staged by renaming the original task's
 -- primary key, then inserting a new row with revision 0 under its old ID.
 -- Keep task identity stable until durable ID tombstones exist.
