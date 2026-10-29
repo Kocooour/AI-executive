@@ -126,10 +126,10 @@ export type StagingPersonalDetailResult =
   | { ok: true; task: TargetReadableTask; snapshotRevision: string }
   | { ok: false; reason: "unavailable" };
 
-export async function readStagingPersonalDetailInChild(
-  config: StagingPersonalReadConfig, taskId: string,
-): Promise<StagingPersonalDetailResult | null> {
-  const value = await runChild(config, "target-staging-detail-child.mjs", [taskId]);
+/** Strict child-to-HTTP DTO boundary, bound to the requested task ID. */
+export function parseStagingPersonalDetail(
+  value: unknown, taskId: string,
+): StagingPersonalDetailResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const result = value as Record<string, unknown>;
   if (result.ok === false && result.reason === "unavailable" &&
@@ -151,6 +151,13 @@ export async function readStagingPersonalDetailInChild(
     id: task.id, title: task.title, projectId,
     effectiveAreaId: task.effectiveAreaId, areaKind: "private", assigneeUserId: null,
   } };
+}
+
+export async function readStagingPersonalDetailInChild(
+  config: StagingPersonalReadConfig, taskId: string,
+): Promise<StagingPersonalDetailResult | null> {
+  const payload = await runChild(config, "target-staging-detail-child.mjs", [taskId]);
+  return parseStagingPersonalDetail(payload, taskId);
 }
 
 /** Strict content-free HTTP audit boundary. Never forward raw SQL rows,
