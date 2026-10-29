@@ -672,3 +672,29 @@ test("the in-transaction recheck immediately before COMMIT rolls back task, rece
     authority.close();
   }
 });
+
+test("forged-cookie floods of PATCH title and POST status get 401 and never drain the per-route buckets", async () => {
+  currentClient = "10.2.0.1";
+  const forged = sessionCookie("C".repeat(43));
+  const body = { commandId: randomUUID(), title: "Forged", expectedRevision: "0".repeat(64) };
+  // Well past the per-route limits (30 write / 60 status), valid Origin and JSON.
+  for (let index = 0; index < 40; index++) {
+    const response = await write("bob-1", forged, body);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  for (let index = 0; index < 70; index++) {
+    assert.equal((await write("bob-1", forged, body, STATUS, "/status")).status, 401);
+  }
+  // The same client identity can still use both endpoints with a legitimate session.
+  const bob = issueCli("bob");
+  const cookie = sessionCookie(bob.sessionToken);
+  const preview = await (await get(PREVIEW, "tasks/bob-1/title", cookie, taskCtx("bob-1"))).json();
+  const command = { commandId: randomUUID(), title: "Bob one (after flood)", expectedRevision: preview.snapshotRevision };
+  const saved = await write("bob-1", cookie, command);
+  assert.equal(saved.status, 200);
+  const status = await write("bob-1", cookie, command, STATUS, "/status");
+  assert.equal(status.status, 200);
+  assert.deepEqual(await status.json(), { status: "committed" });
+  assert.equal(rows("SELECT title FROM tasks WHERE id='bob-1'")[0].title, "Bob one (after flood)");
+});

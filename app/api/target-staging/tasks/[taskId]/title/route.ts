@@ -93,6 +93,11 @@ export async function PATCH(request: Request,
     if (request.headers.get("origin") !== new URL(request.url).origin) {
       return answer(403, "Cross-origin request rejected");
     }
+    // Admission (and its own session-check bucket) comes BEFORE the per-route
+    // limiter and the body read: a forged or revoked cookie must not drain
+    // bucket budget that legitimate writers or reconciliations need.
+    const admitted = admitStagingIdentity(request, identity, bound);
+    if (admitted) return admitted;
     const limited = enforceRateLimit(request, "target-staging-private-title-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
@@ -107,8 +112,8 @@ export async function PATCH(request: Request,
       title: fields.title, expectedRevision: fields.expectedRevision };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
     // Recheck after potentially slow body read, before dispatching a mutation.
-    const refusedWrite = admitStagingIdentity(request, identity, bound);
-    if (refusedWrite) return refusedWrite;
+    const liveBeforeWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
+    if (liveBeforeWrite !== "ok") return stagingIdentityRefusal(liveBeforeWrite);
     if (!unchanged(bound)) return answer(503, "Staging unavailable");
     const result = await writePrivateTaskTitleInChild(bound, command);
     // A durable session is verified INSIDE the write transaction, so no
