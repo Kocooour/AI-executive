@@ -91,7 +91,7 @@ Celá R2 implementace je **staging-only**, za explicitními serverovými flagy, 
 
 **Mimo rozsah R2-ID:** sync protokol a cache (R2c), agregace Home/Today/Search (R2d), passkeys, obnova účtu a skutečné pozvánky (R5), UI a jakákoli práce s produkčními daty. Flagy zůstávají výchozí vypnuté.
 
-**Postup:** podle [AGENTS.md](../AGENTS.md) — implementace v samostatné větvi/worktree s odděleným portem a staging adresářem, dva nezávislí testeři (funkce/akceptace; regrese/bezpečnost/integrita), během vývoje jen `PR Checks` a cílené testy.
+**Postup:** podle [AGENTS.md](../AGENTS.md) — implementace v samostatné větvi/worktree s odděleným portem a staging adresářem, dva nezávislí testeři (funkce/akceptace; regrese/bezpečnost/integrita), [povinné code review](../AGENTS.md#mandatory-code-review-on-every-pr) po každém pushi s vyřešením nálezů, během vývoje jen `PR Checks` a cílené testy.
 
 ## Kritická cesta
 
