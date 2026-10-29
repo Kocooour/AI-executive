@@ -280,6 +280,9 @@ CREATE TABLE change_log (
 -- countable cheaply by preflight.
 CREATE INDEX change_log_by_area ON change_log(area_id, seq);
 CREATE INDEX change_log_tombstones ON change_log(seq) WHERE op = 'tombstone';
+-- Preflight reconciles the latest entry per entity with the live state; these
+-- checks must be index-driven (latest upsert/tombstone of one task/project/membership).
+CREATE INDEX change_log_by_entity ON change_log(entity_kind, entity_id, seq);
 CREATE TRIGGER change_log_no_update BEFORE UPDATE ON change_log
 BEGIN SELECT RAISE(ABORT, 'change log is append-only'); END;
 CREATE TRIGGER change_log_no_delete BEFORE DELETE ON change_log

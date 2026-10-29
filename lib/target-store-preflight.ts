@@ -16,6 +16,7 @@ export type TargetPreflightCode =
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
+  | "change_log_invalid" | "membership_log_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
 
 export interface TargetPreflightOptions {
@@ -192,6 +193,11 @@ export function inspectIsolatedTargetStore(
           count(`SELECT COUNT(*) AS n FROM task_delete_audit a LEFT JOIN task_tombstones ts ON ts.id=a.task_id
             WHERE ts.id IS NULL OR ts.area_id<>a.area_id OR ts.revision<>a.tombstone_revision
               OR ts.change_seq<>a.change_seq`) !== 0) fail("audit_invalid");
+      // Delete receipts are 1:1 with delete audit rows: a raw receipt for a task
+      // that was never deleted would otherwise replay as "committed".
+      if (count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,${TARGET_STAGING_DELETE_RECEIPT_PREFIX.length})=?
+        AND NOT EXISTS (SELECT 1 FROM task_delete_audit a WHERE a.receipt_key=m.key)`
+        .replace("=?", `='${TARGET_STAGING_DELETE_RECEIPT_PREFIX}'`)) !== 0) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
     try {
       // R2c.1 tombstones and change log. Every check is a primary-key or
@@ -214,6 +220,45 @@ export function inspectIsolatedTargetStore(
             count("SELECT COUNT(*) AS n FROM task_tombstones") +
             count("SELECT COUNT(*) AS n FROM project_tombstones")) fail("tombstone_invalid");
     } catch { fail("tombstone_invalid"); }
+    try {
+      // R2c.1 change_log reconciliation with live state (set-based, index-driven).
+      // 'leave' rows are ignored: only the latest upsert/tombstone of an entity
+      // is authoritative, whatever order SQLite fired the move triggers in. A live
+      // task/project must end in an 'upsert' matching its revision and effective
+      // Area; a gone one must end in the 'tombstone' its tombstone row names.
+      const reconcile = (kind: "task" | "project") => {
+        const live = kind === "task" ? "tasks" : "projects";
+        const tomb = kind === "task" ? "task_tombstones" : "project_tombstones";
+        const area = kind === "task" ? "COALESCE(l.area_id, p.area_id)" : "l.area_id";
+        const join = kind === "task" ? "LEFT JOIN projects p ON p.id=l.project_id" : "";
+        const latest = `(SELECT MAX(x.seq) FROM change_log x WHERE x.entity_kind='${kind}'
+          AND x.entity_id=%ID% AND x.op IN ('upsert','tombstone'))`;
+        return count(`SELECT COUNT(*) AS n FROM ${live} l ${join} WHERE NOT EXISTS (
+          SELECT 1 FROM change_log c WHERE c.entity_kind='${kind}' AND c.entity_id=l.id
+            AND c.op='upsert' AND c.revision=l.revision AND c.area_id=${area}
+            AND c.seq=${latest.replace("%ID%", "l.id")})`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM (SELECT entity_id AS id, MAX(seq) AS last FROM change_log
+            WHERE entity_kind='${kind}' AND op IN ('upsert','tombstone') GROUP BY entity_id) g
+            WHERE NOT EXISTS (SELECT 1 FROM ${live} l WHERE l.id=g.id)
+              AND NOT EXISTS (SELECT 1 FROM ${tomb} ts WHERE ts.id=g.id AND ts.change_seq=g.last)`) !== 0;
+      };
+      if (reconcile("task") || reconcile("project")) fail("change_log_invalid");
+    } catch { fail("change_log_invalid"); }
+    try {
+      // Membership: the latest entry per (Area, user) is the live row's state, or a removal.
+      if (count(`SELECT COUNT(*) AS n FROM area_members m WHERE NOT EXISTS (
+            SELECT 1 FROM change_log c WHERE c.entity_kind='membership' AND c.entity_id=m.area_id
+              AND c.member_user_id=m.user_id AND c.op IN ('member_add','member_role') AND c.member_role=m.role
+              AND c.seq=(SELECT MAX(x.seq) FROM change_log x WHERE x.entity_kind='membership'
+                AND x.entity_id=m.area_id AND x.member_user_id=m.user_id))`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM (SELECT entity_id AS area, member_user_id AS who, MAX(seq) AS last
+              FROM change_log WHERE entity_kind='membership' GROUP BY entity_id, member_user_id) g
+            JOIN change_log c ON c.seq=g.last
+            WHERE c.op<>'member_remove' AND NOT EXISTS (
+              SELECT 1 FROM area_members a WHERE a.area_id=g.area AND a.user_id=g.who)`) !== 0) {
+        fail("membership_log_invalid");
+      }
+    } catch { fail("membership_log_invalid"); }
     try {
       // R2-ID.2a membership ledger: bounded, same restore generation, and every
       // audited change must be backed by an 'applied' receipt.

@@ -630,44 +630,50 @@ test("library: a store that fails canonical preflight (guard dropped, or old sch
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: s.directory, mode: "r2-model" }).ok, false);
 });
 
-test("library: delete-receipt, tombstone and audit capacity fail closed without writing", () => {
-  // Receipt cap (own namespace, counted separately from title receipts).
-  const full = libFixture();
-  full.writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('t','team-area','x')").run();
-  const insertReceipt = full.writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
-  full.writer.exec("BEGIN");
-  for (let i = 0; i < TARGET_STAGING_MAX_RECEIPTS; i++) {
-    const hash = createHash("sha256").update(String(i)).digest("hex");
-    insertReceipt.run(TARGET_STAGING_DELETE_RECEIPT_PREFIX + hash, hash);
-  }
-  full.writer.exec("COMMIT");
-  const a = full.authority.issueWritable("alice");
-  const expectedRevision = token(full.authority, a.sessionToken, "t");
-  assert.deepEqual(full.authority.deleteTask(a.sessionToken, { commandId: randomUUID(), taskId: "t", expectedRevision }),
-    { ok: false, reason: "write_failed" });
-  assert.equal(full.writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
-  assert.equal(full.writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n, 0);
-  // Title commands keep their own budget.
-  assert.deepEqual(full.authority.updateTaskTitle(a.sessionToken,
-    { commandId: randomUUID(), taskId: "t", title: "still works", expectedRevision }), { ok: true });
-
-  // Tombstone cap.
+test("library: a full delete ledger (tombstones, receipts, audit at the cap) fails closed without writing; title commands keep their own budget", () => {
   const crowded = libFixture();
-  const insertTask = crowded.writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?, 'team-area', 'x')");
-  const tomb = crowded.writer.prepare("INSERT INTO task_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES (?, 'team-area', 1, ?, 1)");
-  crowded.writer.exec("BEGIN");
+  const { writer } = crowded;
+  const insertTask = writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?, 'team-area', 'x')");
+  const tomb = writer.prepare("INSERT INTO task_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES (?, 'team-area', 1, ?, 1)");
+  const receipt = writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)");
+  const auditRow = writer.prepare(`INSERT INTO task_delete_audit(receipt_key,actor_user_id,task_id,area_id,policy_revision,
+    revision_before,tombstone_revision,change_seq,expected_revision,restore_generation,committed_at_ms)
+    VALUES (?, 'alice', ?, 'team-area', 0, 0, 1, ?, ?, ?, 1)`);
+  writer.exec("BEGIN");
   for (let i = 0; i < TARGET_STAGING_MAX_TOMBSTONES; i++) {
     insertTask.run(`c-${i}`);
-    tomb.run(`c-${i}`, crowded.writer.prepare("SELECT MAX(seq)+1 AS n FROM change_log").get().n);
-    crowded.writer.prepare("DELETE FROM tasks WHERE id=?").run(`c-${i}`);
+    const seq = writer.prepare("SELECT MAX(seq)+1 AS n FROM change_log").get().n;
+    tomb.run(`c-${i}`, seq);
+    writer.prepare("DELETE FROM tasks WHERE id=?").run(`c-${i}`);
+    const hash = createHash("sha256").update(String(i)).digest("hex");
+    receipt.run(TARGET_STAGING_DELETE_RECEIPT_PREFIX + hash, hash);
+    auditRow.run(TARGET_STAGING_DELETE_RECEIPT_PREFIX + hash, `c-${i}`, seq, hash, crowded.s.restoreGeneration);
   }
-  crowded.writer.exec("COMMIT");
-  crowded.writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('last','team-area','x')").run();
+  writer.exec("COMMIT");
+  assert.equal(TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_MAX_TOMBSTONES);
+  assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: crowded.s.directory, mode: "r2-model" }).issues, []);
+  writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('last','team-area','x')").run();
   const b = crowded.authority.issueWritable("alice");
   const lastRevision = token(crowded.authority, b.sessionToken, "last");
   assert.deepEqual(crowded.authority.deleteTask(b.sessionToken, { commandId: randomUUID(), taskId: "last", expectedRevision: lastRevision }),
     { ok: false, reason: "write_failed" });
-  assert.equal(crowded.writer.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id='last'").get().n, 1);
-  assert.equal(crowded.writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n, TARGET_STAGING_MAX_TOMBSTONES);
-  assert.equal(crowded.writer.prepare("SELECT COUNT(*) AS n FROM task_delete_audit").get().n, 0);
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id='last'").get().n, 1);
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n, TARGET_STAGING_MAX_TOMBSTONES);
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_delete_audit").get().n, TARGET_STAGING_MAX_TOMBSTONES);
+  assert.deepEqual(crowded.authority.updateTaskTitle(b.sessionToken,
+    { commandId: randomUUID(), taskId: "last", title: "still works", expectedRevision: lastRevision }), { ok: true });
+});
+
+test("preflight: a raw delete receipt without an audit row (live task) is rejected and never replays", () => {
+  const { s, writer, authority } = libFixture();
+  writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('live','team-area','x')").run();
+  const write = authority.issueWritable("alice");
+  const request = { commandId: randomUUID(), taskId: "live", expectedRevision: token(authority, write.sessionToken, "live") };
+  const key = TARGET_STAGING_DELETE_RECEIPT_PREFIX + createHash("sha256")
+    .update(JSON.stringify(["alice", "live", request.commandId])).digest("hex");
+  const digest = createHash("sha256").update(JSON.stringify(["task-delete-v1", "live", request.expectedRevision])).digest("hex");
+  writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, digest);
+  assert.ok(inspectIsolatedTargetStore({ stagingDirectory: s.directory, mode: "r2-model" }).issues.includes("audit_invalid"));
+  assert.deepEqual(authority.deleteTask(write.sessionToken, request), { ok: false, reason: "unauthorized" });
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
 });

@@ -422,7 +422,7 @@ test("preflight rejects a tombstone without its log entry, a stray log tombstone
   const stray = fixture();
   stray.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision)
     VALUES ('task','forged','team-area','tombstone',3)`).run();
-  assert.deepEqual(issues(stray.stage), ["tombstone_invalid"]);
+  assert.deepEqual(issues(stray.stage).sort(), ["change_log_invalid", "tombstone_invalid"]);
 
   // 4. A live task whose ID is tombstoned (resurrection through raw SQL with the guard disabled).
   const live = fixture();
@@ -436,7 +436,7 @@ test("preflight rejects a tombstone without its log entry, a stray log tombstone
   tamper(liveProject.db, ["project_tombstones_consistency"],
     `INSERT INTO change_log(seq,entity_kind,entity_id,area_id,op,revision) VALUES (500,'project','rp','team-area','tombstone',1);
      INSERT INTO project_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES ('rp','team-area',1,500,1)`);
-  assert.deepEqual(issues(liveProject.stage), ["tombstone_invalid"]);
+  assert.deepEqual(issues(liveProject.stage).sort(), ["change_log_invalid", "tombstone_invalid"]);
 
   // Simply dropping a guard is caught by the schema comparison.
   const dropped = fixture();
@@ -461,4 +461,54 @@ test("replace guards hold on their own: tombstones and the log refuse REPLACE ev
       VALUES (?,'task','forged','team-area','tombstone',9)`).run(seq), /change log replacement is forbidden/);
   }
   assert.deepEqual(logRows(db), logBefore);
+});
+
+test("preflight reconciles the change log with live state: fake, stale, silently deleted and membership entries fail closed", () => {
+  const clean = fixture();
+  clean.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('ok','team-area','x')").run();
+  clean.db.prepare("UPDATE tasks SET area_id='other-area' WHERE id='ok'").run(); // leave+upsert in either firing order
+  clean.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('okp','team-area','P')").run();
+  clean.db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('okc','okp','c')").run();
+  clean.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  clean.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  clean.db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(issues(clean.stage), []);
+
+  // Fake upsert for a task that does not exist (and no tombstone explains it).
+  const fake = fixture();
+  fake.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision) VALUES ('task','ghost','team-area','upsert',0)`).run();
+  assert.deepEqual(issues(fake.stage), ["change_log_invalid"]);
+
+  // Latest upsert no longer matches the task's revision / Area.
+  const stale = fixture();
+  stale.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('s','team-area','x')").run();
+  tamper(stale.db, ["task_revision_bump", "task_area_content_revision"], "UPDATE tasks SET title='silent' WHERE id='s'; UPDATE tasks SET revision=1 WHERE id='s'");
+  assert.deepEqual(issues(stale.stage), ["change_log_invalid"]);
+  const moved = fixture();
+  moved.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('mv','team-area','x')").run();
+  tamper(moved.db, ["task_revision_bump", "task_area_content_move_old", "task_area_content_revision"], "UPDATE tasks SET area_id='other-area' WHERE id='mv'");
+  assert.deepEqual(issues(moved.stage), ["change_log_invalid"]);
+
+  // Task deleted with the deletion guard dropped: no tombstone, no log tombstone.
+  const silent = fixture();
+  silent.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('sd','team-area','x')").run();
+  tamper(silent.db, ["task_deletion_guard", "task_delete_log"], "DELETE FROM tasks WHERE id='sd'");
+  assert.deepEqual(issues(silent.stage), ["change_log_invalid"]);
+  const silentProject = fixture();
+  silentProject.db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('sp','team-area','P')").run();
+  tamper(silentProject.db, ["project_deletion_guard", "project_delete_log"], "DELETE FROM projects WHERE id='sp'");
+  assert.deepEqual(issues(silentProject.stage), ["change_log_invalid"]);
+
+  // Membership: row without a matching latest entry, wrong role, and a log entry for a missing member.
+  const noLog = fixture();
+  tamper(noLog.db, ["area_policy_member_insert"], "INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')");
+  assert.deepEqual(issues(noLog.stage), ["membership_log_invalid"]);
+  const wrongRole = fixture();
+  wrongRole.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  tamper(wrongRole.db, ["area_policy_member_role"], "UPDATE area_members SET role='viewer' WHERE user_id='bob'");
+  assert.deepEqual(issues(wrongRole.stage), ["membership_log_invalid"]);
+  const removed = fixture();
+  removed.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  tamper(removed.db, ["area_policy_member_delete"], "DELETE FROM area_members WHERE user_id='bob'");
+  assert.deepEqual(issues(removed.stage), ["membership_log_invalid"]);
 });
