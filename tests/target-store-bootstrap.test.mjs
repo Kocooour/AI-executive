@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 5);
+  assert.equal(result.schemaVersion, 6);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "5");
+    assert.equal(metadata.schema_version, "6");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
     assert.equal(metadata.restore_generation, result.restoreGeneration);
@@ -96,15 +96,20 @@ test("R2a revision counters increase monotonically and reject same-ID replacemen
     db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?, 'owner', 'admin')")
       .run(shared.area);
     assert.equal(version(), 1);
-    db.prepare("UPDATE area_members SET role='editor' WHERE area_id=? AND user_id='owner'")
+    // R2-ID.2a: the last admin cannot be demoted, so a second admin is needed first.
+    db.prepare("INSERT INTO identities(id) VALUES ('second-admin')").run();
+    db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?, 'second-admin', 'admin')")
       .run(shared.area);
     assert.equal(version(), 2);
-    db.prepare("UPDATE area_members SET role='admin' WHERE area_id=? AND user_id='owner'")
+    db.prepare("UPDATE area_members SET role='editor' WHERE area_id=? AND user_id='owner'")
       .run(shared.area);
     assert.equal(version(), 3);
+    db.prepare("UPDATE area_members SET role='admin' WHERE area_id=? AND user_id='owner'")
+      .run(shared.area);
+    assert.equal(version(), 4);
     assert.throws(() => db.prepare("UPDATE areas SET policy_revision=0 WHERE id=?")
       .run(shared.area), /Area policy revision must increment by one/);
-    assert.equal(version(), 3);
+    assert.equal(version(), 4);
   } finally {
     db.close();
   }
