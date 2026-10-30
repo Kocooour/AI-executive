@@ -20,11 +20,15 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import {
   appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
   openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd, warmTargetStagingJournal,
-  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, truncateTargetStagingJournal,
+  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, targetStagingJournalGenesis,
+  truncateTargetStagingJournal,
 } from "./target-staging-anchor-journal";
 import type {
   TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
 } from "./target-staging-anchor-journal";
+import {
+  attachTargetStagingWitness, readAttachedTargetStagingWitness, recordTargetStagingWitnessCommit,
+} from "./target-staging-anchor-witness";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
@@ -224,10 +228,20 @@ export function withPinnedTargetStagingWrite<T>(
     warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
     db = opened.db;
+    // Prove that SQLite opened the pinned main inode BEFORE ATTACH adds the
+    // second (witness) database descriptor.
+    db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
+    if (!opened.verifyOpened()) return denied();
+    const genesisHash = targetStagingJournalGenesis(store.expectedRestoreGeneration).hash;
+    // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
+    // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
+    // ambiguous after a restore of just the main DB.
+    if (!attachTargetStagingWitness(db, files.directoryFdPath,
+        store.expectedRestoreGeneration, genesisHash)) return denied();
     db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    if (!opened.verifyOpened() || !noTargetStagingSidecars(files.databasePath)) return denied();
+    if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath)) return denied();
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
@@ -250,8 +264,13 @@ export function withPinnedTargetStagingWrite<T>(
     const anchor = parseTargetStagingAnchor(anchorRaw);
     const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
     let state = scan ? scan.state : null;
+    const witnessed = readAttachedTargetStagingWitness(connection,
+      store.expectedRestoreGeneration, genesisHash);
     // Verdict first, on the complete lines: an untrusted store is never modified.
-    if (!state || anchor === null || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
+    // A restored main DB may have the same number as the last JSONL confirm but
+    // be behind a COMMITTED unconfirmed intent. The atomic witness detects it.
+    if (!state || anchor === null || witnessed === null || anchor !== witnessed ||
+        evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
     if (scan && scan.torn) {
       // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
       // killed append) back to the last complete line before resolving the tail.
@@ -294,6 +313,9 @@ export function withPinnedTargetStagingWrite<T>(
         const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
           .run(String(n));
         if (advanced.changes !== 1) throw new Error();
+        // This insert and the main anchor update are one SQLite ATTACH commit.
+        // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
+        recordTargetStagingWitnessCommit(connection, n, intent.hash, generation);
         connection.exec("COMMIT");
         transaction = false;
         // After the commit, under a FRESH write lock (the chain is linear: an append must be
