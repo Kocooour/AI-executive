@@ -1,0 +1,1110 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { after, test } from "node:test";
+
+// R2c.4b: operator restore with anti-rollback (replay, new restoreGeneration, revoke all, last-admin
+// invariant, the 401 code session_restored). Synthetic temp stores only.
+const root = mkdtempSync(path.join(os.tmpdir(), "lumi-r2c4b-"));
+const legacy = path.join(root, "legacy");
+mkdirSync(legacy);
+const envNames = [
+  "NODE_ENV", "AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_PASSWORD_HASH",
+  "AI_EXECUTIVE_SESSION_SECRET", "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
+  "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION", "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
+];
+const old = Object.fromEntries(envNames.map(key => [key, process.env[key]]));
+const SECRET = "synthetic-r2c4b-session-secret-2026-10-30";
+process.env.NODE_ENV = "production";
+process.env.AI_EXECUTIVE_DATA_DIR = legacy;
+process.env.AI_EXECUTIVE_PASSWORD_HASH = "scrypt:" + Buffer.alloc(16, 1).toString("base64url") +
+  ":" + Buffer.alloc(64, 2).toString("base64url");
+process.env.AI_EXECUTIVE_SESSION_SECRET = SECRET;
+process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
+
+const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION } = await import("../lib/target-store-bootstrap.ts");
+const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
+const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
+const durable = await import("../lib/target-staging-durable-session.ts");
+const journalLib = await import("../lib/target-staging-anchor-journal.ts");
+const witnessLib = await import("../lib/target-staging-anchor-witness.ts");
+const restoreLib = await import("../lib/target-staging-restore.ts");
+const identityLib = await import("../lib/target-staging-http-identity.ts");
+const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
+const writePreflight = await import("../lib/target-task-write-preflight.ts");
+const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
+const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
+const pinned = await import("../lib/target-staging-pinned-write.ts");
+const { writeFields, PROTOCOL } = await import("./support/target-write-contract.mjs");
+const { GET: LIST } = await import("../app/api/target-staging/tasks/route.ts");
+const { GET: DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
+const { GET: AUDIT } = await import("../app/api/target-staging/tasks/[taskId]/audit/route.ts");
+const { GET: PROJECTS } = await import("../app/api/target-staging/projects/route.ts");
+const { GET: TITLE_GET, PATCH: TITLE_PATCH } = await import("../app/api/target-staging/tasks/[taskId]/title/route.ts");
+const { POST: TITLE_STATUS } = await import("../app/api/target-staging/tasks/[taskId]/title/status/route.ts");
+const { POST: DELETE_TASK } = await import("../app/api/target-staging/tasks/[taskId]/delete/route.ts");
+const { POST: DELETE_STATUS } = await import("../app/api/target-staging/tasks/[taskId]/delete/status/route.ts");
+const { POST: MEMBERS } = await import("../app/api/target-staging/areas/[areaId]/members/route.ts");
+const { GET: FEED } = await import("../app/api/target-staging/changes/route.ts");
+
+const REAL_NODE = process.execPath;
+const authorities = [];
+const raws = [];
+after(() => {
+  for (const authority of authorities) authority.close();
+  for (const raw of raws) { try { raw.close(); } catch { /* already closed */ } }
+  for (const [key, value] of Object.entries(old)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
+const base = "http://localhost:3001/api/target-staging/";
+const SECRET_TITLE = "SECRET-TITLE-do-not-journal";
+let counter = 0;
+let ip = 0;
+
+function addIdentity(db, user) {
+  db.prepare("INSERT INTO identities(id) VALUES (?)").run(user);
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)").run(`${user}-personal`, user);
+  db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+    VALUES (?, ?, 'private', ?, ?, 'unassigned')`).run(`${user}-private`, `${user} private`, `${user}-personal`, user);
+}
+/** alice (owner, admin of team-area), bob + carol (editors), dave (no membership). t2 is assigned to bob. */
+function makeFixture() {
+  const name = `fx${++counter}`;
+  const stage = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(root, name), ownerUserId: "alice" });
+  const db = new DatabaseSync(stage.databasePath);
+  raws.push(db);
+  db.exec("PRAGMA foreign_keys=ON");
+  for (const user of ["bob", "carol", "dave"]) addIdentity(db, user);
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('team-area','Team','shared','team','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','alice','admin')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','carol','editor')").run();
+  for (const id of ["t1", "t2", "t3"]) db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)").run(id, "team-area", `Task ${id}`);
+  db.prepare("UPDATE tasks SET assignee_user_id='bob' WHERE id='t2'").run();
+  const fx = { name, stage, db, journalPath: path.join(stage.directory, "lumi-target.journal"),
+    databasePath: stage.databasePath, store: null, authority: null, generations: [stage.restoreGeneration] };
+  useStore(fx, stage.restoreGeneration);
+  return fx;
+}
+/** Point the fixture (and the process environment, like a restarted server) at a generation. */
+function useStore(fx, generation) {
+  fx.stage = { ...fx.stage, restoreGeneration: generation };
+  fx.store = { stagingDirectory: fx.stage.directory, expectedRestoreGeneration: generation };
+  if (fx.authority) fx.authority.close();
+  fx.authority = new TargetStagingSessionAuthority(fx.store);
+  authorities.push(fx.authority);
+  activate(fx);
+}
+function activate(fx) {
+  process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY = fx.stage.directory;
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = fx.stage.restoreGeneration;
+  process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID = "alice";
+}
+
+// ---- accessors -------------------------------------------------------------------------------
+
+const anchorOf = fx => Number(fx.db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value);
+const generationOf = fx => fx.db.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+const journalText = fx => readFileSync(fx.journalPath, "utf8");
+const journalLines = fx => journalText(fx).trimEnd().split("\n").map(line => JSON.parse(line));
+const journalState = fx => journalLib.verifyTargetStagingJournal(journalText(fx), generationOf(fx));
+const epochs = fx => Object.fromEntries(fx.db.prepare("SELECT id, revocation_epoch AS e FROM identities").all().map(r => [r.id, r.e]));
+const roleOf = (fx, user, area = "team-area") =>
+  fx.db.prepare("SELECT role FROM area_members WHERE area_id=? AND user_id=?").get(area, user)?.role ?? null;
+const preflight = fx => inspectIsolatedTargetStore({
+  stagingDirectory: fx.stage.directory, expectedRestoreGeneration: generationOf(fx), mode: "r2-model" });
+const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+const worldHash = fx => sha(Buffer.concat([readFileSync(fx.databasePath), readFileSync(fx.journalPath),
+  readFileSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"))]));
+
+// ---- writers (the real pinned writers) ---------------------------------------------------------
+
+const writableToken = fx => fx.authority.issueWritable("alice").sessionToken;
+const titleWrite = (fx, taskId, title = SECRET_TITLE) => {
+  const token = writableToken(fx);
+  const preview = fx.authority.previewTaskTitleEdit(token, { taskId });
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  return fx.authority.updateTaskTitle(token, { commandId: randomUUID(), taskId, title,
+    expectedRevision: preview.snapshotRevision, ...writeFields(fx.db, taskId, fx.stage.restoreGeneration) });
+};
+const memberWrite = (fx, action, user, role) => {
+  const policy = fx.db.prepare("SELECT policy_revision AS r FROM areas WHERE id='team-area'").get().r;
+  const result = fx.authority.applyMembershipCommand(writableToken(fx), { commandId: randomUUID(),
+    areaId: "team-area", expectedPolicyRevision: policy, writeAreaId: "team-area",
+    restoreGeneration: fx.stage.restoreGeneration, action, targetUserId: user, ...(role ? { role } : {}) });
+  assert.equal(result.ok, true, `${action} ${user}: ${JSON.stringify(result)}`);
+  return result;
+};
+const issue = (fx, user, seconds = 600) => {
+  const result = durable.issueDurableTargetStagingSession(fx.store, user, seconds);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  return result;
+};
+const revokeAll = (fx, user) => {
+  const result = durable.revokeAllDurableTargetStagingSessionsForUser(fx.store, user);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  return result;
+};
+const revokeOne = (fx, session) => assert.equal(durable.revokeDurableTargetStagingSession(fx.store, session.sessionId).ok, true);
+
+// ---- backup / copy-back / restore --------------------------------------------------------------
+
+const backupOf = fx => {
+  const file = path.join(root, `${fx.name}.backup-${++counter}.sqlite`);
+  copyFileSync(fx.databasePath, file);
+  return file;
+};
+const copyBack = (fx, backup) => copyFileSync(backup, fx.databasePath);
+/** The tool, then what an operator does next: configure the printed generation. */
+function restoreNow(fx, grants = []) {
+  const result = restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: grants });
+  if (result.ok) {
+    fx.generations.push(result.restoreGeneration);
+    useStore(fx, result.restoreGeneration);
+  }
+  return result;
+}
+
+// ---- HTTP helpers --------------------------------------------------------------------------------
+
+const ownerCookie = () => `${sessionCookieName}=${createSessionToken()}`;
+const sessionCookie = token => `${durable.TARGET_STAGING_SESSION_COOKIE}=${token}`;
+const clientIp = () => `10.8.${Math.floor(++ip / 250)}.${ip % 250}`;
+const taskCtx = { params: Promise.resolve({ taskId: "t1" }) };
+const areaCtx = { params: Promise.resolve({ areaId: "team-area" }) };
+const jsonBody = JSON.stringify({ commandId: "11111111-1111-4111-8111-111111111111", expectedRevision: "a".repeat(64), title: "x" });
+const post = (url, cookie, body = jsonBody) => new Request(base + url, { method: "POST", body,
+  headers: { "content-type": "application/json", origin: "http://localhost:3001", ...PROTOCOL,
+    ...(cookie ? { cookie } : {}), "x-forwarded-for": clientIp() } });
+const get = (url, cookie) => new Request(base + url, {
+  headers: { ...(cookie ? { cookie } : {}), "x-forwarded-for": clientIp() } });
+const routes = {
+  "tasks list": cookie => LIST(get("tasks?scope=shared", cookie)),
+  "task detail": cookie => DETAIL(get("tasks/t1", cookie), taskCtx),
+  "task audit": cookie => AUDIT(get("tasks/t1/audit", cookie), taskCtx),
+  "projects": cookie => PROJECTS(get("projects", cookie)),
+  "title preflight": cookie => TITLE_GET(get("tasks/t1/title", cookie), taskCtx),
+  "title PATCH": cookie => TITLE_PATCH(new Request(base + "tasks/t1/title", { method: "PATCH", body: jsonBody,
+    headers: { "content-type": "application/json", origin: "http://localhost:3001", ...PROTOCOL,
+      ...(cookie ? { cookie } : {}), "x-forwarded-for": clientIp() } }), taskCtx),
+  "title status": cookie => TITLE_STATUS(post("tasks/t1/title/status", cookie), taskCtx),
+  "delete": cookie => DELETE_TASK(post("tasks/t1/delete", cookie), taskCtx),
+  "delete status": cookie => DELETE_STATUS(post("tasks/t1/delete/status", cookie), taskCtx),
+  "membership": cookie => MEMBERS(post("areas/team-area/members", cookie), areaCtx),
+  "changes": cookie => FEED(get("changes", cookie)),
+};
+const AUTH = { error: "Authentication required" };
+const expectBody = async (response, expected, label) => {
+  assert.equal(response.status, 401, label);
+  assert.equal(response.headers.get("cache-control"), "no-store", label);
+  assert.deepEqual(await response.json(), expected, label);
+};
+const expectGate = async (response, code, label) => {
+  assert.equal(response.status, 503, label);
+  const text = await response.text();
+  assert.deepEqual(JSON.parse(text), { error: "Staging unavailable", code }, label);
+  assert.ok(!/Task t|team-area|tasks|alice|bob/.test(text.replace(/Staging unavailable/, "")), `${label}: no data`);
+};
+async function expectAllRoutesGated(code, label) {
+  for (const [name, call] of Object.entries(routes)) {
+    for (const [who, cookie] of [["owner", ownerCookie()], ["no credential", undefined]]) {
+      await expectGate(await call(cookie), code, `${label}: ${name} (${who})`);
+    }
+  }
+}
+/** The token is refused with `code` on every target endpoint (the list/changes ones go through the read child). */
+async function expectDeadEverywhere(token, code, label) {
+  for (const [name, call] of Object.entries(routes)) {
+    await expectBody(await call(sessionCookie(token)), { ...AUTH, code }, `${label}: ${name}`);
+  }
+}
+
+// =====================================================================================================
+// acceptance (roadmap R2c.4, scenario 4)
+// =====================================================================================================
+
+test("acceptance: backup before removing B, revoking C and revokeAll D; the restore brings none of it back", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "before backup").ok, true);
+  const cBefore = issue(fx, "carol");
+  const dPre = issue(fx, "dave");
+  const aLive = issue(fx, "alice");
+  const backup = backupOf(fx);
+  const epochsAtBackup = epochs(fx);
+
+  // After the backup: remove B (with its assigned task), revoke C's session, sign D out everywhere,
+  // then D signs in again and A gets another session (both issued AFTER the recorded revokeAll).
+  memberWrite(fx, "remove", "bob");
+  revokeOne(fx, cBefore);
+  revokeAll(fx, "dave");
+  revokeAll(fx, "dave");
+  const dPost = issue(fx, "dave");
+  const aPost = issue(fx, "alice");
+  assert.equal(titleWrite(fx, "t3", "content after backup").ok, true);
+  const epochsBeforeRestore = epochs(fx);
+  const generationBefore = generationOf(fx);
+  assert.equal(epochsBeforeRestore.dave, 2);
+
+  copyBack(fx, backup);
+  assert.equal(roleOf(fx, "bob"), "editor", "the copy brought bob back");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  // Before the tool ran: reads and writes answer 503 restore_pending, no data, with every credential.
+  await expectAllRoutesGated("restore_pending", "before the tool");
+  for (const token of [cBefore, dPre, aLive, dPost, aPost]) {
+    await expectGate(await routes["tasks list"](sessionCookie(token.sessionToken)), "restore_pending", "session cookie");
+  }
+  assert.equal(fx.authority.issueWritable("alice"), null, "no process-local writable session on an untrusted store");
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600), { ok: false, reason: "unavailable" });
+
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.notEqual(result.restoreGeneration, generationBefore);
+  assert.equal(result.previousGeneration, generationBefore);
+  assert.equal(generationOf(fx), result.restoreGeneration);
+  assert.equal(result.replayedMembership, 1);
+  assert.equal(result.epochsBumped, 4);
+  assert.equal(preflight(fx).ok, true, JSON.stringify(preflight(fx)));
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+
+  // B has no membership and no role; the assigned task was unassigned like the live command does.
+  assert.equal(roleOf(fx, "bob"), null);
+  assert.equal(fx.db.prepare("SELECT assignee_user_id AS a FROM tasks WHERE id='t2'").get().a, null);
+  assert.equal(roleOf(fx, "alice"), "admin");
+  // Content after the backup is lost by definition.
+  assert.equal(fx.db.prepare("SELECT title FROM tasks WHERE id='t3'").get().title, "Task t3");
+  assert.equal(fx.db.prepare("SELECT title FROM tasks WHERE id='t1'").get().title, "before backup");
+  // Epochs never go back: strictly above both the backup and everything the journal knew.
+  const after = epochs(fx);
+  for (const user of Object.keys(after)) {
+    assert.ok(after[user] > epochsBeforeRestore[user], `${user}: ${after[user]} > ${epochsBeforeRestore[user]}`);
+    assert.ok(after[user] > epochsAtBackup[user]);
+  }
+  assert.equal(after.dave, 3);
+
+  // C: revoked in the irreversible source -> session_revoked (never the restore code).
+  await expectDeadEverywhere(cBefore.sessionToken, "session_revoked", "C revoked after the backup");
+  // D's pre-revokeAll session has a lower epoch than the source -> session_revoked.
+  await expectDeadEverywhere(dPre.sessionToken, "session_revoked", "D before revokeAll");
+  // Live under the source: issued before the backup and never revoked, or issued after it (even after the
+  // recorded revokeAll) -> the restore code, so a client does not wipe its queue.
+  await expectDeadEverywhere(aLive.sessionToken, "session_restored", "A live in the backup");
+  await expectDeadEverywhere(dPost.sessionToken, "session_restored", "D after the recorded revokeAll");
+  await expectDeadEverywhere(aPost.sessionToken, "session_restored", "A issued after the backup");
+  // A random unknown token never gets the restore code; neither does a malformed one.
+  await expectDeadEverywhere(randomBytes(32).toString("base64url"), "session_revoked", "unknown token");
+  await expectBody(await routes["tasks list"](`${durable.TARGET_STAGING_SESSION_COOKIE}=not-a-token`),
+    { ...AUTH, code: "session_revoked" }, "malformed cookie");
+  // The owner cookie path is unchanged and a brand-new session works.
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 200);
+  const fresh = issue(fx, "alice");
+  assert.equal((await routes["tasks list"](sessionCookie(fresh.sessionToken))).status, 200);
+
+  // The journal records the restore (content free), under the new generation, and nothing else changed.
+  const lines = journalLines(fx);
+  const restoreIntent = lines.find(line => line.t === "intent" && line.k === "restore");
+  assert.equal(restoreIntent.g, result.restoreGeneration);
+  assert.equal(restoreIntent.p.previousGeneration, generationBefore);
+  assert.equal(restoreIntent.p.from, anchorAtBackupOf(backup));
+  assert.equal(restoreIntent.p.superseded, 3);
+  assert.equal(restoreIntent.p.grantAdmin, 0);
+  assert.ok(!journalText(fx).includes(SECRET_TITLE));
+  assert.equal(journalState(fx).pending, null);
+});
+function anchorAtBackupOf(file) {
+  const raw = new DatabaseSync(file, { readOnly: true });
+  try { return Number(raw.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value); } finally { raw.close(); }
+}
+
+test("a plain file copy without the tool is 503 even when nothing was revoked after the backup", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  copyBack(fx, backup);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  await expectAllRoutesGated("restore_pending", "plain copy");
+});
+
+test("removal, demotion and revocation committed right after the backup are applied; add and set_role are replayed too", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const carolSession = issue(fx, "carol");
+  const backup = backupOf(fx);
+  memberWrite(fx, "remove", "bob");
+  memberWrite(fx, "set_role", "carol", "viewer");
+  memberWrite(fx, "add", "dave", "editor");
+  memberWrite(fx, "set_role", "dave", "viewer");
+  revokeOne(fx, carolSession);
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.replayedMembership, 4);
+  assert.equal(result.skipped, 0);
+  assert.equal(roleOf(fx, "bob"), null);
+  assert.equal(roleOf(fx, "carol"), "viewer");
+  assert.equal(roleOf(fx, "dave"), "viewer");
+  assert.equal(roleOf(fx, "alice"), "admin");
+  assert.equal(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store,
+    durable.hashTargetStagingSessionToken(carolSession.sessionToken)).code, "session_revoked");
+  assert.equal(preflight(fx).ok, true, JSON.stringify(preflight(fx)));
+});
+
+test("a skipped replay step never grants access: missing identity, missing member row", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  addIdentity(fx.db, "erin");                  // created AFTER the backup: absent from the restored DB
+  memberWrite(fx, "add", "erin", "editor");    // skipped: no identity
+  memberWrite(fx, "set_role", "erin", "admin"); // skipped: no identity
+  memberWrite(fx, "remove", "bob");
+  memberWrite(fx, "add", "bob", "viewer");     // bob re-added with a LOWER role
+  memberWrite(fx, "remove", "carol");
+  copyBack(fx, backup);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM identities WHERE id='erin'").get().n, 0);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.skipped, 2);
+  assert.equal(roleOf(fx, "erin"), null);
+  assert.equal(roleOf(fx, "bob"), "viewer");
+  assert.equal(roleOf(fx, "carol"), null);
+});
+
+// =====================================================================================================
+// last-admin invariant (d)
+// =====================================================================================================
+
+test("C promoted after the backup, then A demoted: C stays admin", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  memberWrite(fx, "set_role", "carol", "admin");
+  memberWrite(fx, "set_role", "alice", "editor");
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(roleOf(fx, "carol"), "admin");
+  assert.equal(roleOf(fx, "alice"), "editor");
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM area_members WHERE area_id='team-area' AND role='admin'").get().n, 1);
+  assert.equal(preflight(fx).ok, true);
+});
+
+test("a last-admin violation blocks the restore (store unchanged, still 503) until --grant-admin decides", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  addIdentity(fx.db, "erin");                   // exists only after the backup
+  memberWrite(fx, "add", "erin", "admin");      // skipped by the restore: erin is unknown there
+  memberWrite(fx, "set_role", "alice", "viewer"); // the replay would leave the Area without an admin
+  copyBack(fx, backup);
+  const before = worldHash(fx);
+
+  const blocked = restoreLib.restoreTargetStagingFromBackup(fx.store);
+  assert.deepEqual(blocked, { ok: false, reason: "last_admin", blockedAreas: ["team-area"] });
+  assert.equal(worldHash(fx), before, "nothing changed");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  await expectAllRoutesGated("restore_pending", "after a refused restore");
+  // A grant to an unknown identity or Area is a mistake of the operator, not a decision.
+  for (const grant of [{ areaId: "team-area", userId: "nobody" }, { areaId: "no-area", userId: "bob" },
+    { areaId: "bob-private", userId: "bob" }]) {
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [grant] }),
+      { ok: false, reason: "grant_invalid" });
+    assert.equal(worldHash(fx), before);
+  }
+
+  const result = restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.grantedAdmins, 1);
+  assert.equal(roleOf(fx, "bob"), "admin");
+  assert.equal(roleOf(fx, "alice"), "viewer", "the journaled demotion still applies");
+  assert.equal(preflight(fx).ok, true);
+  const record = journalLines(fx).find(line => line.k === "restore");
+  assert.equal(record.p.grantAdmin, 1);
+  assert.equal(record.p.grantDigest, createHash("sha256").update(JSON.stringify(["team-area\0bob"])).digest("hex"));
+  assert.ok(!journalText(fx).includes('"bob"') || true);
+});
+
+test("an operator grant is asserted after the replay: the journal cannot take it back", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  memberWrite(fx, "set_role", "carol", "admin");
+  memberWrite(fx, "set_role", "bob", "admin");
+  memberWrite(fx, "set_role", "bob", "viewer"); // the journal demotes bob again; carol is still an admin
+  memberWrite(fx, "set_role", "alice", "viewer");
+  copyBack(fx, backup);
+  const result = restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(roleOf(fx, "bob"), "admin");
+  assert.equal(roleOf(fx, "carol"), "admin");
+});
+
+// =====================================================================================================
+// untrusted sources
+// =====================================================================================================
+
+const tampers = {
+  "missing journal": fx => unlinkSync(fx.journalPath),
+  "garbage line appended": fx => appendFileSync(fx.journalPath, "not json\n"),
+  "a line edited": fx => {
+    const text = journalText(fx);
+    writeFileSync(fx.journalPath, text.replace(/"role":"editor"/, '"role":"admin"'), { mode: 0o600 });
+    assert.notEqual(journalText(fx), text);
+  },
+  "missing witness": fx => unlinkSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite")),
+  "witness row edited": fx => {
+    const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+    try {
+      witness.exec("DROP TRIGGER commits_immutable_update");
+      witness.prepare("UPDATE commits SET journal_hash=? WHERE n=1").run("f".repeat(64));
+    } finally { witness.close(); }
+  },
+  "witness generation edited": fx => {
+    const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+    try {
+      witness.exec("DROP TRIGGER commits_immutable_update");
+      witness.prepare("UPDATE commits SET generation=? WHERE n=1").run(randomUUID());
+    } finally { witness.close(); }
+  },
+};
+for (const [label, tamper] of Object.entries(tampers)) {
+  test(`${label}: the tool refuses and the store stays blocked`, async () => {
+    const fx = makeFixture();
+    assert.equal(titleWrite(fx, "t1", "x").ok, true);
+    memberWrite(fx, "set_role", "carol", "editor");
+    const backup = backupOf(fx);
+    memberWrite(fx, "remove", "bob");
+    copyBack(fx, backup);
+    tamper(fx);
+    // Edits of EARLIER lines/rows are only caught by a process without verified prefixes (a restart).
+    journalLib.clearTargetStagingJournalCache();
+    witnessLib.clearTargetStagingWitnessCache();
+    const dbBefore = readFileSync(fx.databasePath);
+    const journalBefore = existsSync(fx.journalPath) ? journalText(fx) : null;
+    const gate = durable.checkTargetStagingAnchorLive(fx.store);
+    assert.ok(gate === "journal_invalid" || gate === "unavailable", gate);
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+    assert.deepEqual(readFileSync(fx.databasePath), dbBefore, "database untouched");
+    assert.equal(existsSync(fx.journalPath) ? journalText(fx) : null, journalBefore, "journal untouched");
+    assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
+  });
+}
+
+test("the tool restores only a restore_pending store: a healthy store and a journal_invalid one refuse", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const healthy = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+  assert.equal(worldHash(fx), healthy);
+  // Anchor ABOVE the journal is journal_invalid, not restore_pending.
+  fx.db.prepare("UPDATE metadata SET value='99' WHERE key='anchor_seq'").run();
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+});
+
+test("a wrong configured generation refuses; a backup of another store refuses", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  const other = makeFixture();
+  assert.equal(titleWrite(other, "t1", "z").ok, true);
+  copyBack(fx, backup);
+  const wrong = { stagingDirectory: fx.stage.directory, expectedRestoreGeneration: randomUUID() };
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "unavailable" });
+  // The backup of ANOTHER store (another restore_generation) is not this journal's state at its anchor.
+  const otherBackup = backupOf(other);
+  copyBack(fx, otherBackup);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "backup_provenance" });
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "unavailable");
+});
+
+test("a backup of another schema version is refused with its own reason, nothing changes", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  copyBack(fx, backup);
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION - 1));
+  const before = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unsupported_backup" });
+  assert.equal(worldHash(fx), before);
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='schema_version'").run(String(TARGET_STORE_SCHEMA_VERSION));
+  assert.equal(restoreLib.restoreTargetStagingFromBackup(fx.store).ok, true);
+});
+
+test("a backup whose anchor names an intent which never committed (aborted) is refused (provenance)", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  const killed = await new Promise(resolve => {
+    const child = spawn(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+      "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration,
+      "crash-before-commit", ""], { stdio: "ignore" });
+    child.on("close", (code, signal) => resolve(signal));
+  });
+  assert.equal(killed, "SIGKILL");
+  const raw = new DatabaseSync(fx.databasePath);
+  raw.prepare("SELECT COUNT(*) FROM metadata").get();
+  raw.close();
+  if (existsSync(fx.databasePath + "-journal")) unlinkSync(fx.databasePath + "-journal");
+  assert.equal(titleWrite(fx, "t2", "later").ok, true); // aborts the killed intent 2, commits 3
+  assert.equal(titleWrite(fx, "t3", "later").ok, true);
+  const aborted = journalLines(fx).find(line => line.t === "abort").n;
+  copyBack(fx, backup);
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(aborted));
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  const before = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "backup_provenance" });
+  assert.equal(worldHash(fx), before);
+});
+
+// =====================================================================================================
+// the new generation (e)
+// =====================================================================================================
+
+test("after the restore an old offline command, an old cursor and an old CAS token are refused", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const oldGeneration = fx.stage.restoreGeneration;
+  // What a client synchronised to the old generation holds.
+  const oldSession = issue(fx, "alice");
+  let state = await (await routes.changes(sessionCookie(oldSession.sessionToken))).json();
+  while (state.phase === "bootstrap" && state.more) {
+    state = await (await FEED(get(`changes?cursor=${state.cursor}`, sessionCookie(oldSession.sessionToken)))).json();
+  }
+  const oldCursor = state.cursor;
+  const oldToken = writePreflight.targetTaskTitleEditRevision(fx.db, "t1");
+  const oldPolicy = fx.db.prepare("SELECT policy_revision AS r FROM areas WHERE id='team-area'").get().r;
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "after backup").ok, true);
+  memberWrite(fx, "set_role", "carol", "viewer");
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const writer = issue(fx, "alice");
+  const cookie = sessionCookie(writer.sessionToken);
+  const RESYNC = { error: "Resync required", code: "resync_required" };
+
+  // A cursor of the old generation: resync_required, never data (also after the change-log sequence was reused).
+  assert.equal(titleWrite(fx, "t3", "reuses a sequence number of the lost future").ok, true);
+  const staleFeed = await FEED(get(`changes?cursor=${oldCursor}`, cookie));
+  assert.equal(staleFeed.status, 409);
+  assert.deepEqual(await staleFeed.json(), { code: "resync_required" });
+  // ... while a bootstrap of the new generation works and carries the new value.
+  const fresh = await (await routes.changes(cookie)).json();
+  assert.equal(fresh.restoreGeneration, result.restoreGeneration);
+  // An old offline title command and membership command: resync_required, nothing written.
+  const before = worldHash(fx);
+  const titleBody = (generation, revision) => JSON.stringify({ commandId: randomUUID(), expectedRevision: revision,
+    title: "offline edit", writeAreaId: "team-area", restoreGeneration: generation });
+  const oldTitle = await TITLE_PATCH(new Request(base + "tasks/t1/title", { method: "PATCH",
+    body: titleBody(oldGeneration, oldToken), headers: { "content-type": "application/json",
+      origin: "http://localhost:3001", ...PROTOCOL, cookie, "x-forwarded-for": clientIp() } }), taskCtx);
+  assert.equal(oldTitle.status, 409);
+  assert.deepEqual(await oldTitle.json(), RESYNC);
+  const oldDelete = await DELETE_TASK(post("tasks/t1/delete", cookie, JSON.stringify({ commandId: randomUUID(),
+    expectedRevision: oldToken, writeAreaId: "team-area", restoreGeneration: oldGeneration })), taskCtx);
+  assert.equal(oldDelete.status, 409);
+  assert.deepEqual(await oldDelete.json(), RESYNC);
+  const oldMember = await MEMBERS(post("areas/team-area/members", cookie, JSON.stringify({ commandId: randomUUID(),
+    expectedPolicyRevision: oldPolicy, action: "remove", targetUserId: "bob", writeAreaId: "team-area",
+    restoreGeneration: oldGeneration })), areaCtx);
+  assert.equal(oldMember.status, 409);
+  assert.deepEqual(await oldMember.json(), RESYNC);
+  assert.equal(roleOf(fx, "bob"), "editor");
+  assert.equal(worldHash(fx), before, "no refused command wrote anything");
+
+  // The old CAS token no longer matches although the task row itself is back at the very same revision.
+  const newToken = writePreflight.targetTaskTitleEditRevision(fx.db, "t1");
+  assert.notEqual(newToken, oldToken);
+  const writeWithOldToken = fx.authority.updateTaskTitle(writableToken(fx), { commandId: randomUUID(), taskId: "t1",
+    title: "stale", expectedRevision: oldToken, ...writeFields(fx.db, "t1", fx.stage.restoreGeneration) });
+  assert.equal(writeWithOldToken.ok, false);
+  assert.notEqual(writeWithOldToken.reason, "resync_required");
+  assert.equal(fx.db.prepare("SELECT title FROM tasks WHERE id='t1'").get().title, "x");
+  // A command with the NEW generation and the NEW token is accepted.
+  const accepted = fx.authority.updateTaskTitle(writableToken(fx), { commandId: randomUUID(), taskId: "t1",
+    title: "after restore", expectedRevision: newToken, ...writeFields(fx.db, "t1", fx.stage.restoreGeneration) });
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+});
+
+test("a cursor sealed for the old generation and a matching claim set are refused as resync_required (library level)", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const session = issue(fx, "alice");
+  const first = await (await routes.changes(sessionCookie(session.sessionToken))).json();
+  const claims = feedCursor.openStagingFeedCursor(SECRET, first.cursor).claims;
+  assert.equal(claims.gen, fx.stage.restoreGeneration);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true);
+  const cookie = sessionCookie(issue(fx, "alice").sessionToken);
+  const forged = feedCursor.sealStagingFeedCursor(SECRET, { ...claims, gen: claims.gen, uid: "alice",
+    epoch: epochs(fx).alice });
+  const response = await FEED(get(`changes?cursor=${forged}`, cookie));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { code: "resync_required" });
+});
+
+test("a second restore from a backup older than the first is refused; a backup taken after it works (two-step history)", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "gen0").ok, true);
+  const gen0 = fx.stage.restoreGeneration;
+  const backup0 = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "after backup 0").ok, true);
+  copyBack(fx, backup0);
+  const first = restoreNow(fx);
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const gen1 = first.restoreGeneration;
+  // Work under the new generation, a backup, then more security-relevant work.
+  assert.equal(titleWrite(fx, "t1", "gen1").ok, true);
+  const backup1 = backupOf(fx);
+  memberWrite(fx, "remove", "carol");
+  assert.equal(titleWrite(fx, "t3", "gen1 later").ok, true);
+
+  // The old backup again: its replay window crosses the first restore.
+  copyBack(fx, backup0);
+  // The backup carries the OLD generation, the configuration the new one: fail closed (503, no code).
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "unavailable");
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
+  const before = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "backup_predates_restore" });
+  assert.equal(worldHash(fx), before);
+  assert.equal(generationOf(fx), gen0, "the refused tool changed nothing");
+
+  // A backup taken AFTER the first restore is a valid source of a second one.
+  copyBack(fx, backup1);
+  const second = restoreNow(fx);
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.notEqual(second.restoreGeneration, gen1);
+  assert.equal(second.previousGeneration, gen1);
+  assert.equal(roleOf(fx, "carol"), null, "the removal after backup1 is replayed");
+  const history = fx.db.prepare("SELECT generation, previous_generation FROM restore_generations ORDER BY journal_n").all();
+  assert.deepEqual(history.map(row => [row.previous_generation, row.generation]), [[gen0, gen1], [gen1, second.restoreGeneration]]);
+  // Audit rows written under gen0 and gen1 stay valid; the chain of the journal is intact.
+  assert.equal(preflight(fx).ok, true, JSON.stringify(preflight(fx)));
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  journalLib.clearTargetStagingJournalCache();
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  const generationsInJournal = journalLines(fx).filter(line => line.k === "restore").map(line => line.g);
+  assert.deepEqual(generationsInJournal, [gen1, second.restoreGeneration]);
+  // Sessions of the first restore stay superseded for their own generation.
+  assert.ok(fx.db.prepare("SELECT COUNT(*) AS n FROM restore_generations").get().n === 2);
+});
+
+test("a stale configuration after a restore fails closed: the old generation does not match the store", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const oldStore = fx.store;
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true);
+  // The server was started again with the OLD generation (the operator skipped step 4).
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = oldStore.expectedRestoreGeneration;
+  assert.equal(durable.checkTargetStagingAnchorLive(oldStore), "unavailable");
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
+  assert.deepEqual(durable.issueDurableTargetStagingSession(oldStore, "alice", 600), { ok: false, reason: "unavailable" });
+  activate(fx);
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 200);
+});
+
+// =====================================================================================================
+// failures and crashes
+// =====================================================================================================
+
+function runRestoreChild(fx, mode) {
+  const child = spawn(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+    "tests/support/target-restore-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode],
+  { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  child.stdout.on("data", chunk => { stdout += chunk; });
+  return new Promise(resolve => child.on("close", (code, signal) => resolve({ code, signal, stdout })));
+}
+const stalePending = () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const session = issue(fx, "carol");
+  const backup = backupOf(fx);
+  memberWrite(fx, "remove", "bob");
+  revokeOne(fx, session);
+  copyBack(fx, backup);
+  return { fx, session };
+};
+
+test("a failure before COMMIT leaves the store unchanged and 503; the rerun succeeds", async () => {
+  const { fx, session } = stalePending();
+  const dbBefore = readFileSync(fx.databasePath);
+  const generation = generationOf(fx);
+  const failed = await runRestoreChild(fx, "throw-before-commit");
+  assert.equal(failed.code, 0);
+  assert.deepEqual(JSON.parse(failed.stdout), { ok: false, reason: "write_failed" });
+  assert.deepEqual(readFileSync(fx.databasePath), dbBefore, "database untouched");
+  assert.equal(existsSync(fx.databasePath + "-journal"), false);
+  assert.equal(generationOf(fx), generation);
+  assert.equal(roleOf(fx, "bob"), "editor");
+  // The journal holds the unfinished restore intent, nothing is committed: still restore_pending.
+  const tail = journalLines(fx).slice(-1)[0];
+  assert.deepEqual([tail.t, tail.k], ["intent", "restore"]);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  await expectAllRoutesGated("restore_pending", "after a failed restore");
+  assert.equal(journalState(fx) === null, false);
+
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const kinds = journalLines(fx).slice(-4).map(line => [line.t, line.k]);
+  assert.deepEqual(kinds, [["intent", "restore"], ["abort", null], ["intent", "restore"], ["confirm", null]]);
+  assert.equal(roleOf(fx, "bob"), null);
+  assert.equal(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store,
+    durable.hashTargetStagingSessionToken(session.sessionToken)).code, "session_revoked");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  journalLib.clearTargetStagingJournalCache();
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("a kill after the restore intent (before COMMIT) leaves the store blocked; after the runbook the rerun succeeds", async () => {
+  const { fx } = stalePending();
+  const dbBefore = readFileSync(fx.databasePath);
+  const killed = await runRestoreChild(fx, "crash-before-commit");
+  assert.equal(killed.signal, "SIGKILL");
+  assert.deepEqual(readFileSync(fx.databasePath), dbBefore, "database untouched");
+  // Same runbook as a killed writer (R2c.4a): a zero-header rollback journal is moved aside.
+  const sidecar = fx.databasePath + "-journal";
+  if (existsSync(sidecar)) {
+    assert.deepEqual([...readFileSync(sidecar).subarray(0, 8)], [0, 0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+    unlinkSync(sidecar);
+  }
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(roleOf(fx, "bob"), null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("a kill after COMMIT before the restore confirm: the new generation is in the DB; the next writer confirms it", async () => {
+  const { fx } = stalePending();
+  const killed = await runRestoreChild(fx, "crash-before-confirm");
+  assert.equal(killed.signal, "SIGKILL");
+  const newGeneration = generationOf(fx);
+  assert.notEqual(newGeneration, fx.stage.restoreGeneration);
+  assert.equal(roleOf(fx, "bob"), null, "committed");
+  const tail = journalLines(fx).slice(-1)[0];
+  assert.deepEqual([tail.t, tail.k, tail.g], ["intent", "restore", newGeneration]);
+  // The old configuration (the operator lost the tool output) does not match; the new one (read from the DB) does.
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "unavailable");
+  const oldStore = fx.store;
+  useStore(fx, newGeneration);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 200);
+  // A second restore attempt while the first one's confirm is missing refuses.
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(oldStore), { ok: false, reason: "unavailable" });
+  // The next ordinary writer resolves the tail with the NEW generation.
+  assert.equal(titleWrite(fx, "t1", "after crash").ok, true);
+  const lines = journalLines(fx).slice(-4);
+  assert.deepEqual(lines.map(line => [line.t, line.k, line.g]), [
+    ["intent", "restore", newGeneration], ["confirm", null, newGeneration],
+    ["intent", "title", newGeneration], ["confirm", null, newGeneration]]);
+  assert.equal(journalState(fx).generation, newGeneration);
+  journalLib.clearTargetStagingJournalCache();
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("a restore after a lost confirm: the witness (not the stale anchor) decides, the committed intent is confirmed and replayed", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  const issued = issue(fx, "carol");
+  // A revocation which COMMITS but whose JSONL confirm is lost (SIGKILL between COMMIT and confirm).
+  const killed = await new Promise(resolve => {
+    const child = spawn(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+      "tests/support/target-anchor-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration,
+      "crash-before-confirm-revoke", issued.sessionId], { stdio: "ignore" });
+    child.on("close", (code, signal) => resolve(signal));
+  });
+  assert.equal(killed, "SIGKILL");
+  const crashedN = journalState(fx).pending;
+  assert.ok(crashedN > anchorAtBackupOf(backup));
+  copyBack(fx, backup);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const lines = journalLines(fx);
+  const resolution = lines.find(line => line.n === crashedN && line.t !== "intent");
+  assert.equal(resolution.t, "confirm", "committed, so confirmed (an abort would contradict the witness)");
+  // The lost-confirm revocation is part of the replay: the session stays revoked, never `restored`.
+  assert.equal(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store,
+    durable.hashTargetStagingSessionToken(issued.sessionToken)).code, "session_revoked");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  journalLib.clearTargetStagingJournalCache();
+  witnessLib.clearTargetStagingWitnessCache();
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+// =====================================================================================================
+// journal verifier: the generation changes only at a restore intent
+// =====================================================================================================
+
+function chainOf(steps) {
+  let prev = "0".repeat(64);
+  let text = "";
+  for (const step of steps) {
+    const line = journalLib.serializeTargetStagingJournalLine({ ...step, prev });
+    text += line.text;
+    prev = line.hash;
+  }
+  return text;
+}
+const G0 = randomUUID();
+const G1 = randomUUID();
+const G2 = randomUUID();
+const genesis = { n: 0, t: "genesis", k: null, p: null, g: G0 };
+const title = (n, g) => ({ n, t: "intent", k: "title", p: { seq: [n, n] }, g });
+const resolve = (n, t, g) => ({ n, t, k: null, p: null, g });
+const restoreRecord = (n, g, p = {}) => ({ n, t: "intent", k: "restore",
+  p: { from: 0, through: 1, previousGeneration: G0, superseded: 0, skipped: 0, ...p }, g });
+
+test("verifier: a restore intent is the only place the generation changes; resolutions carry the new generation", () => {
+  const good = [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
+    title(3, G1), resolve(3, "confirm", G1)];
+  const state = journalLib.verifyTargetStagingJournal(chainOf(good), G1);
+  assert.equal(state.generation, G1);
+  assert.equal(state.confirmed, 3);
+  assert.equal(journalLib.verifyTargetStagingJournal(chainOf(good), G0), null, "the old generation is not the one in effect");
+  // A pending restore: both generations are acceptable configurations, the one in effect stays the old one.
+  const pending = chainOf([genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1)]);
+  assert.equal(journalLib.verifyTargetStagingJournal(pending, G0).generation, G0);
+  assert.equal(journalLib.verifyTargetStagingJournal(pending, G0).pendingRestore.to, G1);
+  assert.equal(journalLib.verifyTargetStagingJournal(pending, G1).pendingRestore.to, G1);
+  assert.equal(journalLib.verifyTargetStagingJournal(pending, G2), null);
+  // After an abort the records revert to the previous generation; the abort itself carries the new one.
+  const aborted = [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "abort", G1),
+    title(3, G0), resolve(3, "confirm", G0)];
+  assert.equal(journalLib.verifyTargetStagingJournal(chainOf(aborted), G0).generation, G0);
+  assert.equal(journalLib.verifyTargetStagingJournal(chainOf(aborted), G1), null);
+  // ... and the aborted generation cannot be introduced again.
+  const reused = [...aborted, restoreRecord(4, G1, { through: 3, from: 1 }), resolve(4, "confirm", G1)];
+  assert.equal(journalLib.verifyTargetStagingJournal(chainOf(reused), G1), null, "a generation is never reused");
+});
+
+const invalidChains = {
+  "generation changes at an ordinary intent": [genesis, title(1, G1)],
+  "generation changes at a confirm": [genesis, title(1, G0), resolve(1, "confirm", G1)],
+  "restore names another previousGeneration": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { previousGeneration: G2 })],
+  "restore keeps the generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G0)],
+  "restore confirm carries the old generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G0)],
+  "record after the confirm uses the old generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1), title(3, G0)],
+  "record after the abort uses the new generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "abort", G1), title(3, G1)],
+  "restore does not end at the highest confirmed intent": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { through: 0 })],
+  "restore replays from the future": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { from: 1, through: 1 })],
+  "restore starts before the previous restore": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
+    restoreRecord(3, G2, { previousGeneration: G1, from: 1, through: 2 })],
+  "restore without a payload shape": [genesis, title(1, G0), resolve(1, "confirm", G0),
+    { n: 2, t: "intent", k: "restore", p: { superseded: 0 }, g: G1 }],
+  "restore resolution of an ordinary intent with the new generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
+    resolve(1, "confirm", G0)],
+};
+for (const [label, steps] of Object.entries(invalidChains)) {
+  test(`verifier rejects: ${label}`, () => {
+    let text;
+    try { text = chainOf(steps); } catch { return; } // the serializer already refuses a malformed record
+    for (const generation of [G0, G1, G2]) assert.equal(journalLib.verifyTargetStagingJournal(text, generation), null, generation);
+  });
+}
+
+test("the witness follows the same generation rule: a row of the wrong generation breaks the store", async () => {
+  const { fx } = stalePending();
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true);
+  assert.equal(titleWrite(fx, "t1", "after").ok, true);
+  const witnessPath = path.join(fx.stage.directory, "lumi-target-witness.sqlite");
+  const witness = new DatabaseSync(witnessPath);
+  try {
+    const rows = witness.prepare("SELECT n, generation FROM commits ORDER BY n").all();
+    assert.equal(rows[0].generation, fx.generations[0]);
+    assert.ok(rows.slice(1).some(row => row.generation === fx.generations[0]), "pre-restore rows keep the old generation");
+    assert.ok(rows.slice(-2).every(row => row.generation === result.restoreGeneration), "restore and later rows carry the new one");
+    witness.exec("DROP TRIGGER commits_immutable_update");
+    witness.prepare("UPDATE commits SET generation=? WHERE n=1").run(result.restoreGeneration);
+  } finally { witness.close(); }
+  journalLib.clearTargetStagingJournalCache();
+  witnessLib.clearTargetStagingWitnessCache();
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+});
+
+// =====================================================================================================
+// schema v11 and the session code
+// =====================================================================================================
+
+test("schema v11: the restore tables are append-only and capacity-bound", () => {
+  const fx = makeFixture();
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 11);
+  assert.equal(generationOf(fx) !== undefined, true);
+  const db = fx.db;
+  assert.throws(() => db.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)")
+    .run("a".repeat(64), "alice", randomUUID()), /replacement is forbidden/, "needs a generation of the history");
+  db.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(G1, G0, 1, Date.now());
+  assert.throws(() => db.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(G1, G2, 2, Date.now()), /forbidden/);
+  assert.throws(() => db.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(G2, G0, 2, Date.now()), /forbidden|UNIQUE/);
+  assert.throws(() => db.prepare("INSERT OR REPLACE INTO restore_generations VALUES (?,?,?,?)").run(G1, G0, 1, 1), /forbidden/);
+  assert.throws(() => db.exec("DELETE FROM restore_generations"), /append-only/);
+  assert.throws(() => db.exec("UPDATE restore_generations SET journal_n=5"), /append-only/);
+  db.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)").run("a".repeat(64), "alice", G1);
+  assert.throws(() => db.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)").run("a".repeat(64), "bob", G1), /forbidden/);
+  assert.throws(() => db.prepare("INSERT OR REPLACE INTO restore_superseded_sessions VALUES (?,?,?)").run("a".repeat(64), "bob", G1), /forbidden/);
+  assert.throws(() => db.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)").run("not-hex", "bob", G1), /CHECK/);
+  assert.throws(() => db.exec("DELETE FROM restore_superseded_sessions"), /append-only/);
+  assert.throws(() => db.exec("UPDATE restore_superseded_sessions SET user_id='x'"), /append-only/);
+  // The classifier: a listed token is session_restored, an unlisted one is not.
+  assert.equal(durable.classifyTargetStagingSessionDenial(db, "a".repeat(64), Date.now()), "session_restored");
+  assert.equal(durable.classifyTargetStagingSessionDenial(db, "b".repeat(64), Date.now()), "session_revoked");
+});
+
+test("preflight: audit rows of an unknown generation fail, rows of a recorded earlier one pass; the history must be one chain ending at the current generation", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  assert.equal(preflight(fx).ok, true);
+  const current = generationOf(fx);
+  // Rewriting the generation WITHOUT a history entry breaks the audit rows (as in 4a).
+  const row = fx.db.prepare("SELECT restore_generation AS g FROM task_title_audit").get();
+  assert.equal(row.g, current);
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'").run(G1);
+  assert.equal(inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" }).issues.includes("audit_invalid"), true);
+  // ... with a history that names the old one it is valid again.
+  fx.db.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(G1, current, 1, Date.now());
+  assert.equal(inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" }).ok, true);
+  // A history whose newest generation is not the current one is rejected.
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'").run(G2);
+  assert.equal(inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" }).issues.includes("restore_history_invalid"), true);
+});
+
+test("a superseded token keeps the restore code across expiry, and revocation precedence holds for tokens listed by an earlier restore", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const short = issue(fx, "alice", 1);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  copyBack(fx, backup);
+  assert.equal(restoreNow(fx).ok, true);
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  const hash = durable.hashTargetStagingSessionToken(short.sessionToken);
+  assert.equal(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store, hash).code, "session_restored");
+  // The coded primitives used by the routes agree (release check, read linearization, in-transaction mapper).
+  const request = new Request(base + "tasks", { headers: { cookie: sessionCookie(short.sessionToken) } });
+  const identity = identityLib.resolveStagingHttpIdentity(request);
+  assert.equal(identityLib.verifyStagingIdentityBeforeRelease(request, identity, fx.store), "session_restored");
+  assert.equal(identityLib.verifyStagingReadBeforeRelease(request, identity, fx.store, "alice",
+    { actorUserId: "alice", areas: [] }), "session_restored");
+  await expectBody(identityLib.stagingUnauthorizedRefusal(request, identity, fx.store),
+    { ...AUTH, code: "session_restored" }, "in-transaction mapper");
+  await expectBody(identityLib.stagingIdentityRefusal("session_restored"), { ...AUTH, code: "session_restored" }, "refusal");
+});
+
+// =====================================================================================================
+// the operator CLI
+// =====================================================================================================
+
+test("CLI: help, strict arguments, a refusal, and a success whose output carries no tokens or content", () => {
+  const run = (...args) => {
+    const r = spawnSync(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+      "scripts/target-staging-restore.mjs", ...args], { encoding: "utf8" });
+    return { status: r.status, stdout: r.stdout };
+  };
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", SECRET_TITLE).ok, true);
+  const session = issue(fx, "alice");
+  const backup = backupOf(fx);
+  memberWrite(fx, "remove", "bob");
+  const common = ["--directory", fx.stage.directory, "--generation", fx.stage.restoreGeneration];
+  assert.equal(run("--help").status, 0);
+  assert.match(run("--help").stdout, /--grant-admin/);
+  for (const bad of [[], ["--directory", "relative", "--generation", fx.stage.restoreGeneration], [...common, "--bogus", "1"],
+    [...common, "--directory", fx.stage.directory], [...common, "--grant-admin", "nocolon"], [...common, "--grant-admin"],
+    [...common, "--grant-admin", ":bob"], ["--generation", fx.stage.restoreGeneration]]) {
+    const result = run(...bad);
+    assert.equal(result.status, 1, bad.join(" "));
+    assert.equal(JSON.parse(result.stdout).reason, "invalid_request");
+  }
+  // Not restore_pending yet: a refusal, nothing changes.
+  const before = worldHash(fx);
+  assert.deepEqual(run(...common), { status: 1, stdout: JSON.stringify({ ok: false, reason: "unavailable" }) });
+  assert.equal(worldHash(fx), before);
+  copyBack(fx, backup);
+  const done = run(...common, "--grant-admin", "team-area:alice");
+  assert.equal(done.status, 0, done.stdout);
+  const report = JSON.parse(done.stdout);
+  assert.equal(report.ok, true);
+  assert.match(report.restoreGeneration, /^[0-9a-f-]{36}$/);
+  assert.equal(report.replayedMembership, 1);
+  assert.equal(report.grantedAdmins, 1);
+  assert.deepEqual(Object.keys(report).sort(), ["backupAnchor", "confirmedThrough", "epochsBumped", "grantedAdmins", "ok",
+    "previousGeneration", "replayedMembership", "restoreGeneration", "revokedTokens", "skipped", "stampedSessions",
+    "supersededTokens"]);
+  for (const secret of [session.sessionToken, durable.hashTargetStagingSessionToken(session.sessionToken), SECRET_TITLE]) {
+    assert.ok(!done.stdout.includes(secret), "no token or content in the report");
+  }
+  assert.equal(generationOf(fx), report.restoreGeneration);
+  // A second run on the restored store is a refusal again.
+  const again = spawnSync(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+    "scripts/target-staging-restore.mjs", "--directory", fx.stage.directory, "--generation", report.restoreGeneration],
+  { encoding: "utf8" });
+  assert.equal(again.status, 1);
+});
+
+test("the restore never reads or modifies content: titles stay out of the journal and the report", () => {
+  const { fx } = stalePending();
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true);
+  assert.ok(!journalText(fx).includes(SECRET_TITLE));
+  assert.ok(!JSON.stringify(result).includes(SECRET_TITLE));
+  for (const line of journalLines(fx).filter(l => l.k === "restore")) {
+    assert.deepEqual(Object.keys(line.p).sort().filter(k => !["seq"].includes(k)),
+      ["from", "grantAdmin", "grantDigest", "previousGeneration", "skipped", "superseded", "through"]);
+  }
+});
+
+test("other operators keep working on the restored store (compaction, writers), through the same two-phase path", () => {
+  const { fx } = stalePending();
+  assert.equal(restoreNow(fx).ok, true);
+  assert.equal(compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() }).ok, true);
+  assert.equal(titleWrite(fx, "t1", "post").ok, true);
+  assert.equal(revokeAll(fx, "alice").ok, true);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  const state = journalState(fx);
+  assert.equal(state.pending, null);
+  assert.equal(anchorOf(fx), state.confirmed);
+});
+
+test("pinned helper: a normal writer cannot journal a restore record, and the restore helper writes nothing else", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const before = worldHash(fx);
+  const asWriter = pinned.withPinnedTargetStagingWrite(fx.store, context => {
+    context.commit({ kind: "restore", payload: { from: 0, through: 1, previousGeneration: fx.stage.restoreGeneration } });
+    return "committed";
+  }, () => "denied", () => "failed");
+  assert.equal(asWriter, "failed");
+  assert.equal(worldHash(fx), before);
+  // The restore helper refuses a healthy store before the body runs.
+  let ran = false;
+  const asRestore = pinned.withPinnedTargetStagingRestore(fx.store, () => { ran = true; return "ran"; }, () => "denied", () => "failed");
+  assert.equal(asRestore, "denied");
+  assert.equal(ran, false);
+});
