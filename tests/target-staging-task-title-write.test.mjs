@@ -43,6 +43,7 @@ function fixture() {
   });
   const item = { stage, writer, authority };
   fixtures.push(item);
+  owners.set(authority, item);
   return item;
 }
 
@@ -60,8 +61,17 @@ after(() => {
 const preview = (authority, token, taskId) =>
   authority.previewTaskTitleEdit(token, { taskId });
 
+// R2c.3: a client names the Area it writes into and the restore generation it synced to.
+const owners = new WeakMap();
+const contractOf = (authority, taskId) => {
+  const { stage, writer } = owners.get(authority);
+  return { writeAreaId: writer.prepare(`SELECT COALESCE(t.area_id,p.area_id) AS id FROM tasks t
+    LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?`).get(taskId).id,
+  restoreGeneration: stage.restoreGeneration };
+};
 const writeTitle = (authority, token, taskId, title, expectedRevision, commandId = randomUUID()) =>
-  authority.updateTaskTitle(token, { commandId, taskId, title, expectedRevision });
+  authority.updateTaskTitle(token, { commandId, taskId, title, expectedRevision,
+    ...contractOf(authority, taskId) });
 
 const rejected = reason => ({ ok: false, reason });
 
@@ -347,7 +357,7 @@ test("invalid title, actor overrides, missing revision and forged token fail clo
   assert.equal(version.ok, true);
   const original = readFileSync(writer.prepare("PRAGMA database_list").all()[0].file);
   const good = { commandId: randomUUID(), taskId: "team-task", title: "Valid",
-    expectedRevision: version.snapshotRevision };
+    expectedRevision: version.snapshotRevision, ...contractOf(authority, "team-task") };
   for (const bad of [
     { ...good, actorUserId: "alice" }, { ...good, workspaceId: "team" },
     { ...good, commandId: undefined }, { ...good, commandId: "not-a-uuid" },
@@ -356,6 +366,8 @@ test("invalid title, actor overrides, missing revision and forged token fail clo
     { ...good, title: " " }, { ...good, title: " leading" },
     { ...good, title: "trailing " }, { ...good, title: "bad\0title" },
     { ...good, title: "X".repeat(4097) }, null, {},
+    { ...good, writeAreaId: undefined }, { ...good, writeAreaId: "" }, { ...good, writeAreaId: "bad id" },
+    { ...good, restoreGeneration: undefined }, { ...good, restoreGeneration: "not-a-uuid" },
   ]) {
     assert.deepEqual(authority.updateTaskTitle(alice.sessionToken, bad),
       rejected("invalid_request"));
@@ -507,6 +519,7 @@ test("successful task mutation has a durable actor-scoped receipt across authori
   const freshAuthority = new TargetStagingSessionAuthority({
     stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration,
   });
+  owners.set(freshAuthority, owners.get(authority));
   try {
     const next = freshAuthority.issueWritable("alice");
     assert.ok(next);
@@ -655,7 +668,7 @@ test("old actor-only receipts fail closed instead of losing their idempotency hi
   assert.equal(rev.ok, true);
   const request = {
     commandId: randomUUID(), taskId: "team-task", title: "Must not apply",
-    expectedRevision: rev.snapshotRevision,
+    expectedRevision: rev.snapshotRevision, writeAreaId: "team-area", restoreGeneration: stage.restoreGeneration,
   };
   // The actor-only namespace belongs to #138 and cannot prove the original
   // task for ACL checks. An old staging DB must be re-bootstrapped, not reused.
@@ -680,6 +693,7 @@ test("read-only command reconciliation is durable, actor/task-scoped and not a m
   assert.equal(rev.ok, true);
   const request = {
     commandId: randomUUID(), taskId: "team-task", title: "Committed", expectedRevision: rev.snapshotRevision,
+    writeAreaId: "team-area", restoreGeneration: stage.restoreGeneration,
   };
   const status = (session, input = request) => authority.taskTitleCommandStatus(session, input);
   const untouched = readFileSync(stage.databasePath);
@@ -718,7 +732,7 @@ test("command status rechecks current ACL and session across restart", () => {
   assert.equal(rev.ok, true);
   const request = {
     commandId: randomUUID(), taskId: "team-task", title: "Bob committed",
-    expectedRevision: rev.snapshotRevision,
+    expectedRevision: rev.snapshotRevision, writeAreaId: "team-area", restoreGeneration: stage.restoreGeneration,
   };
   assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, request), { ok: true });
   authority.close();
@@ -758,7 +772,7 @@ test("rolled-back and stale writes remain unrecorded during reconciliation", () 
   assert.equal(rev.ok, true);
   const request = {
     commandId: randomUUID(), taskId: "team-task", title: "Blocked",
-    expectedRevision: rev.snapshotRevision,
+    expectedRevision: rev.snapshotRevision, writeAreaId: "team-area", restoreGeneration: stage.restoreGeneration,
   };
   const competing = new DatabaseSync(stage.databasePath);
   try {
@@ -793,7 +807,7 @@ test("revoked command cannot be probed via another editable task", () => {
   assert.equal(teamRev.ok, true);
   const teamCommand = {
     commandId: randomUUID(), taskId: "team-task", title: "Committed team",
-    expectedRevision: teamRev.snapshotRevision,
+    expectedRevision: teamRev.snapshotRevision, writeAreaId: "team-area", restoreGeneration: stage.restoreGeneration,
   };
   const status = input => authority.taskTitleCommandStatus(bob.sessionToken, input);
   assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, teamCommand), { ok: true });
@@ -804,7 +818,7 @@ test("revoked command cannot be probed via another editable task", () => {
   const beforeProbe = readFileSync(stage.databasePath);
   // Bob still owns bob-task. Swapping the request's taskId must not
   // disclose the committed command for the now-inaccessible team-task.
-  assert.deepEqual(status({ ...teamCommand, taskId: "bob-task" }),
+  assert.deepEqual(status({ ...teamCommand, taskId: "bob-task", writeAreaId: "bob-private" }),
     { ok: true, status: "not_recorded" });
   assert.deepEqual(readFileSync(stage.databasePath), beforeProbe);
 
@@ -814,7 +828,7 @@ test("revoked command cannot be probed via another editable task", () => {
   assert.equal(personalRev.ok, true);
   const privateCommand = {
     ...teamCommand, taskId: "bob-task", title: "Committed private",
-    expectedRevision: personalRev.snapshotRevision,
+    expectedRevision: personalRev.snapshotRevision, writeAreaId: "bob-private",
   };
   assert.deepEqual(status(privateCommand), { ok: true, status: "not_recorded" });
   assert.deepEqual(authority.updateTaskTitle(bob.sessionToken, privateCommand), { ok: true });

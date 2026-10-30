@@ -426,7 +426,8 @@ test("new member D: access_granted and an Area bootstrap with every existing tas
   // An Area cursor of a lost Area serves nothing and reveals nothing.
   mutate(fx, removeMemberSql("dave"));
   const lost = await page(fx, d, body.items[0].areaCursor);
-  assert.deepEqual(lost, { phase: "area_bootstrap", items: [], done: true, cursor: null });
+  assert.deepEqual(lost, { phase: "area_bootstrap", items: [], done: true, cursor: null,
+    restoreGeneration: fx.store.expectedRestoreGeneration });
 });
 
 test("moving a task out of B's Area: left_scope for the old Area and nothing about the target", async () => {

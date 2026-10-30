@@ -31,7 +31,7 @@ try {
       issued.sessionToken, input, resolved.sessionTokenHash);
     if (result.ok) process.stdout.write(JSON.stringify(result));
     else if (["unauthorized", "unauthenticated", "unavailable", "stale_policy_revision", "idempotency_conflict", "already_member",
-        "last_admin", "write_failed", "session_revoked"].includes(result.reason)) {
+        "last_admin", "write_failed", "session_revoked", "resync_required"].includes(result.reason)) {
       process.stdout.write(JSON.stringify({ ok: false, reason: result.reason }));
     } else throw new Error("Unavailable");
   } finally { authority.close(); }

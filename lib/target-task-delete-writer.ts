@@ -25,9 +25,10 @@ import type { TargetStagingReadCredential } from "./target-task-authenticated-re
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { fingerprint } from "./target-task-staging-writer";
 import {
-  targetTaskWriteRevision, targetTaskWriteTarget, validTargetTaskTitleEditPreviewRequest,
+  checkTargetTaskWriteContract, targetStoreRestoreGeneration, targetTaskWriteRevision, targetTaskWriteTarget, validTargetTaskTitleEditPreviewRequest,
 } from "./target-task-write-preflight";
 
+const WRITE_AREA_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetStagingTaskDeleteRequest {
@@ -36,18 +37,24 @@ export interface TargetStagingTaskDeleteRequest {
   readonly taskId: string;
   /** Mandatory task + policy SHA-256 (the task detail's snapshotRevision). */
   readonly expectedRevision: string;
+  /** R2c.3: the Area the client believes it writes into (never trusted, always verified). */
+  readonly writeAreaId: string;
+  /** R2c.3: the restore generation the client synchronized to. */
+  readonly restoreGeneration: string;
 }
 
 export type TargetStagingTaskDeleteResult =
   | { ok: true; replayed?: true }
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unavailable" |
-        "stale_revision" | "idempotency_conflict" | "write_failed" | "session_revoked" };
+        "stale_revision" | "idempotency_conflict" | "write_failed" | "session_revoked" |
+        "resync_required" | "write_area_mismatch" };
 
 /** Verification of an uncertain delete response; never authorizes a retry. */
 export type TargetStagingTaskDeleteStatusResult =
   | { ok: true; status: "committed" | "not_recorded" }
-  | { ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "idempotency_conflict" };
+  | { ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "idempotency_conflict" |
+      "resync_required" | "write_area_mismatch" };
 
 const denied = (): TargetStagingTaskDeleteResult => ({ ok: false, reason: "unauthorized" });
 const failed = (): TargetStagingTaskDeleteResult => ({ ok: false, reason: "write_failed" });
@@ -57,8 +64,11 @@ export function validTargetStagingTaskDeleteRequest(
 ): value is TargetStagingTaskDeleteRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).sort().join(",") !== "commandId,expectedRevision,taskId" ||
+  if (Object.keys(input).sort().join(",") !== "commandId,expectedRevision,restoreGeneration,taskId,writeAreaId" ||
       typeof input.commandId !== "string" || !COMMAND_ID.test(input.commandId)) return false;
+  if (typeof input.writeAreaId !== "string" || !WRITE_AREA_ID.test(input.writeAreaId) ||
+      typeof input.restoreGeneration !== "string" ||
+      !COMMAND_ID.test(input.restoreGeneration)) return false;
   return typeof input.expectedRevision === "string" &&
     validTargetTaskTitleEditPreviewRequest({
       taskId: input.taskId, expectedRevision: input.expectedRevision,
@@ -97,6 +107,26 @@ export function targetTaskDeleteReceiptOutcome(
 }
 
 /**
+ * R2c.3 contract for delete and its status. A tombstone is never revealed to an
+ * actor who did not issue the delete (R2c.1): for a tombstoned ID the actor's OWN
+ * receipt is required BEFORE the Area match, so `write_area_mismatch` cannot tell a
+ * deleted ID from a never-existing one. Live tasks keep the generic order.
+ */
+function checkDeleteContract(
+  db: DatabaseSync, actor: string, request: TargetStagingTaskDeleteRequest, privateOnly: boolean,
+) {
+  const generation = targetStoreRestoreGeneration(db);
+  if (generation === null || generation !== request.restoreGeneration.toLowerCase()) {
+    return { ok: false as const, reason: "resync_required" as const };
+  }
+  if (targetTaskWriteTarget(db, actor, request.taskId, privateOnly) === "tombstone" &&
+      targetTaskDeleteReceiptOutcome(db, actor, request) === "none") {
+    return { ok: false as const, reason: "unavailable" as const };
+  }
+  return checkTargetTaskWriteContract(db, actor, request, privateOnly, true);
+}
+
+/**
  * Read-only reconciliation inside an authenticated snapshot. Access needs the
  * CURRENT write right in the task's Area, or (task gone) in the Area its
  * tombstone records, plus the actor's own receipt: everything else, including
@@ -106,8 +136,10 @@ export function targetTaskDeleteReceiptOutcome(
 export function verifyTargetTaskDeleteCommand(
   db: DatabaseSync, actor: string, request: TargetStagingTaskDeleteRequest, privateOnly = false,
 ): TargetStagingTaskDeleteStatusResult {
-  const target = targetTaskWriteTarget(db, actor, request.taskId, privateOnly);
-  if (!target) return { ok: false, reason: "unavailable" };
+  // R2c.3 contract first (generation, write access, writeAreaId right, Area match).
+  const contract = checkDeleteContract(db, actor, request, privateOnly);
+  if (contract.ok === false) return { ok: false, reason: contract.reason };
+  const target = contract.target;
   const outcome = targetTaskDeleteReceiptOutcome(db, actor, request);
   if (outcome === "conflict") return { ok: false, reason: "idempotency_conflict" };
   if (outcome === "match") return { ok: true, status: "committed" };
@@ -144,8 +176,10 @@ export function deletePreflightedTargetTask(
     // Write right on the live task, or (retry after success) on the Area a
     // tombstone records, with the actor's CURRENT role. Missing, viewer,
     // non-member and foreign-private are one "unavailable".
-    const target = targetTaskWriteTarget(db, actor, request.taskId, privateOnly);
-    if (!target) return { ok: false, reason: "unavailable" };
+    // R2c.3: generation, write access, writeAreaId right and Area match first.
+    const contract = checkDeleteContract(db, actor, request, privateOnly);
+    if (contract.ok === false) return { ok: false, reason: contract.reason };
+    const target = contract.target;
     const receiptKey = targetTaskDeleteReceiptKey(actor, request.taskId, request.commandId);
     const receiptDigest = targetTaskDeleteReceiptDigest(request);
     const outcome = targetTaskDeleteReceiptOutcome(db, actor, request);

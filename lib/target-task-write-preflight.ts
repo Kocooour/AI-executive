@@ -151,3 +151,93 @@ export function targetTaskWriteTarget(
   if (canEditIsolatedTargetTaskTitle(db, actorUserId, taskId, privateOnly)) return "live";
   return canWriteIsolatedTargetTaskTombstone(db, actorUserId, taskId, privateOnly) ? "tombstone" : null;
 }
+
+/**
+ * R2c.3: the same write right evaluated against an Area named by the client
+ * (`writeAreaId`). A non-existent Area, a viewer, a non-member and a foreign
+ * private Area are all `false`, so a caller can map them to one indistinguishable
+ * denial.
+ */
+export function canWriteIsolatedTargetArea(
+  db: DatabaseSync, actorUserId: string, areaId: string, privateOnly = false,
+): boolean {
+  try {
+    return db.prepare(`
+      SELECT 1
+      FROM areas a
+      JOIN workspaces w ON w.id = a.workspace_id
+      JOIN identities actor ON actor.id = ?
+      LEFT JOIN area_members m ON m.area_id = a.id AND m.user_id = actor.id
+      WHERE a.id = ?
+        AND a.owner_user_id = w.owner_user_id
+        AND (? = 0 OR (a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id))
+        AND ((a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id)
+          OR (a.kind = 'shared' AND w.kind = 'shared'
+            AND m.role IN ('editor', 'admin')))
+      LIMIT 1
+    `).get(actorUserId, areaId, privateOnly ? 1 : 0) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/** The store's current restore generation (lower-cased), or null if unreadable. */
+export function targetStoreRestoreGeneration(db: DatabaseSync): string | null {
+  try {
+    const row = db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+      .get() as { value: string } | undefined;
+    return row && typeof row.value === "string" ? row.value.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+export type TargetTaskWriteContractCheck =
+  | { ok: true; target: "live" | "tombstone" }
+  | { ok: false; reason: "resync_required" | "unavailable" | "write_area_mismatch" };
+
+/**
+ * R2c.3 fixed check order for every task write command and its status
+ * verification (inside the write transaction / pinned snapshot, before any
+ * mutation or receipt lookup):
+ *   1. `restoreGeneration` differs from the store's        -> resync_required
+ *      (store-level, reveals nothing about tasks);
+ *   2. actor write access to the task (live task; for delete also the
+ *      tombstone's Area)                                    -> unavailable
+ *   3. actor write right in `writeAreaId` (the Area need not exist)
+ *                                                            -> the SAME unavailable
+ *   4. `writeAreaId` is the task's effective Area (or the tombstone's Area)
+ *                                                            -> write_area_mismatch
+ * Only an actor who may write the task AND the named Area can ever see (4).
+ */
+export function checkTargetTaskWriteContract(
+  db: DatabaseSync, actorUserId: string,
+  request: { readonly taskId: string; readonly writeAreaId: string; readonly restoreGeneration: string },
+  privateOnly = false, allowTombstone = false,
+): TargetTaskWriteContractCheck {
+  const generation = targetStoreRestoreGeneration(db);
+  if (generation === null || generation !== request.restoreGeneration.toLowerCase()) {
+    return { ok: false, reason: "resync_required" };
+  }
+  const target = allowTombstone
+    ? targetTaskWriteTarget(db, actorUserId, request.taskId, privateOnly)
+    : (canEditIsolatedTargetTaskTitle(db, actorUserId, request.taskId, privateOnly) ? "live" : null);
+  if (!target) return { ok: false, reason: "unavailable" };
+  if (!canWriteIsolatedTargetArea(db, actorUserId, request.writeAreaId, privateOnly)) {
+    return { ok: false, reason: "unavailable" };
+  }
+  let taskArea: string | undefined;
+  try {
+    const row = (target === "live"
+      ? db.prepare(`SELECT COALESCE(t.area_id,p.area_id) AS area_id
+          FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.id=?`)
+      : db.prepare("SELECT area_id FROM task_tombstones WHERE id=?")
+    ).get(request.taskId) as { area_id: string } | undefined;
+    taskArea = row?.area_id;
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+  if (taskArea === undefined) return { ok: false, reason: "unavailable" };
+  return taskArea === request.writeAreaId
+    ? { ok: true, target } : { ok: false, reason: "write_area_mismatch" };
+}
