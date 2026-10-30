@@ -34,6 +34,7 @@ const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflig
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const journalLib = await import("../lib/target-staging-anchor-journal.ts");
+const witnessLib = await import("../lib/target-staging-anchor-witness.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const pinned = await import("../lib/target-staging-pinned-write.ts");
@@ -471,6 +472,15 @@ test("crash after the intent but before COMMIT: reads stay ok, the next writer a
   assert.equal(anchorOf(fx), anchorBefore + 2, "numbers are never reused after an abort");
   const state = journalState(fx);
   assert.deepEqual([state.pending, state.confirmed, state.lastIntent], [null, anchorBefore + 2, anchorBefore + 2]);
+  // An aborted intent has NO witness row. The gap is legitimate and must not
+  // prevent subsequent reads or a cold process from validating the sequence.
+  const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+  try {
+    assert.deepEqual(witness.prepare("SELECT n FROM commits ORDER BY n").all().map(row => row.n),
+      [0, anchorBefore, anchorBefore + 2]);
+  } finally { witness.close(); }
+  witnessLib.clearTargetStagingWitnessCache();
+  journalLib.clearTargetStagingJournalCache();
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
