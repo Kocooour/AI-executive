@@ -213,6 +213,8 @@ export interface TargetStagingJournalScan {
   readonly torn: boolean;
   /** Hashes from verified intent records (the witness must match each committed one). */
   readonly intentHashes: ReadonlyMap<number, string>;
+  /** The final verified state of each journal intent (abort does not commit). */
+  readonly intentStatuses: ReadonlyMap<number, "pending" | "confirmed" | "aborted">;
 }
 
 /**
@@ -320,7 +322,7 @@ export function warmTargetStagingJournal(directoryRoot: string, generation: stri
       // Under the actual read/write lock the witness can then verify the
       // unchanged prefix plus any newly committed suffix incrementally.
       readTargetStagingWitness(directoryRoot, generation,
-        targetStagingJournalGenesis(generation).hash, scanned.intentHashes);
+        targetStagingJournalGenesis(generation).hash, scanned.intentHashes, scanned.intentStatuses);
     }
   } finally {
     try { closeSync(fd); } catch { /* fail closed */ }
@@ -363,7 +365,7 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
               prefixCache.set(key, { generation, end, ctx,
                 lastLineStart: cached.end + scanned.lastLineStart });
             }
-            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn, intentHashes: ctx.intents };
+            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn, intentHashes: ctx.intents, intentStatuses: ctx.status };
           }
         }
       }
@@ -376,7 +378,7 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
     if (!scanned || ctx.records === 0) return null;
     if (prefixCache.size >= PREFIX_CACHE_MAX) prefixCache.clear();
     prefixCache.set(key, { generation, end: scanned.completeBytes, ctx, lastLineStart: scanned.lastLineStart });
-    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn, intentHashes: ctx.intents };
+    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn, intentHashes: ctx.intents, intentStatuses: ctx.status };
   } catch { return null; }
 }
 
@@ -503,7 +505,7 @@ export function checkTargetStagingJournal(
     // In particular it distinguishes a genuine pre-COMMIT crash (witness stays
     // at the old n) from an older DB restored after COMMIT without JSONL confirm.
     const witnessed = readTargetStagingWitness(directoryRoot, generation,
-      targetStagingJournalGenesis(generation).hash, scan.intentHashes);
+      targetStagingJournalGenesis(generation).hash, scan.intentHashes, scan.intentStatuses);
     if (witnessed === null) return "journal_invalid";
     if (anchor < witnessed) return "restore_pending";
     if (anchor > witnessed) return "journal_invalid";
