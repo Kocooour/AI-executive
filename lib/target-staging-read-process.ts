@@ -69,25 +69,25 @@ export function createStagingReadRunner(
         }
         let bytes = 0;
         const chunks: Buffer[] = [];
-        let exceeded = false;
+        let failureReason: "timeout" | "output_limit" | "child_error" | null = null;
         const timer = setTimeout(() => {
-          exceeded = true;
+          failureReason ??= "timeout";
           child.kill("SIGKILL");
         }, timeoutMs);
         child.stdout.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_OUTPUT_BYTES) {
-            exceeded = true;
+            failureReason ??= "output_limit";
             child.kill("SIGKILL");
           } else {
             chunks.push(chunk);
           }
         });
-        child.on("error", () => { exceeded = true; });
+        child.on("error", () => { failureReason ??= "child_error"; });
         child.on("close", code => {
           clearTimeout(timer);
-          if (exceeded || code !== 0) {
-            logStagingFailure("read_child", exceeded ? "timeout_or_output_limit" : "nonzero_exit");
+          if (failureReason !== null || code !== 0) {
+            logStagingFailure("read_child", failureReason ?? "nonzero_exit");
             return resolve(null);
           }
           try {

@@ -162,7 +162,7 @@ export function stagingUnauthorizedRefusal(
 ): Response {
   if (identity.kind === "session") {
     try {
-      const check = verifyStagingIdentityBeforeRelease(request, identity, store, "admission");
+      const check = verifyStagingIdentityBeforeRelease(request, identity, store, "release");
       if (check === "session_expired" || check === "session_revoked") return coded(check);
     } catch { /* fall through to the code-less body */ }
   }
@@ -188,7 +188,7 @@ export function admitStagingIdentity(
         status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
       });
     }
-    const check = verifyStagingIdentityBeforeRelease(request, identity, store);
+    const check = verifyStagingIdentityBeforeRelease(request, identity, store, "admission");
     return check === "ok" ? null : stagingIdentityRefusal(check);
   } catch (error) {
     logStagingFailure("identity_admission", "exception", error);
