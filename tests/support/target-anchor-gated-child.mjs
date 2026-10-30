@@ -32,6 +32,20 @@ fs.fsyncSync = fd => {
 };
 syncBuiltinESMExports();
 
+if (mode === "exclusive-lock") {
+  // Synthetic competing connection holds an EXCLUSIVE SQLite lock long enough
+  // to exercise the early first-SELECT busy timeout of a pinned writer.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(directory + "/lumi-target.sqlite");
+  try {
+    db.exec("BEGIN EXCLUSIVE");
+    writeFileSync(gate + "/ready", "");
+    wait(110);
+    db.exec("ROLLBACK");
+  } finally { db.close(); }
+  process.stdout.write("released");
+  process.exit(0);
+}
 if (mode === "raw") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
   const outcome = withPinnedTargetStagingWrite(
