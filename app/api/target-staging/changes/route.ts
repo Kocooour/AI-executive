@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig, admitStagingIdentity,
+  resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingChildSessionConfig, admitStagingIdentity,
   stagingIdentityRefusal, verifyStagingIdentityBeforeRelease, verifyStagingReadBeforeRelease,
 } from "../../../../lib/target-staging-http-identity";
 import { enforceRateLimit } from "../../../../lib/http-security";
@@ -30,6 +30,8 @@ const code = (status: number, value: "cursor_invalid" | "resync_required" | "rea
 
 export async function GET(request: Request): Promise<Response> {
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") return answer(404, "Not found");
+  const anchorRefused = stagingAnchorRefusal(request);
+  if (anchorRefused) return anchorRefused;
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;

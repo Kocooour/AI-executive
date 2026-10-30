@@ -14,6 +14,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
+import { checkTargetStagingJournal } from "./target-staging-anchor-journal";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
@@ -176,6 +177,13 @@ function withPreflightedStore<T>(
               { readOnly: true });
             try {
               db.exec("PRAGMA query_only = ON");
+              // R2c.4a: the copy was taken under the SHARED lock held by this callback, which
+              // excludes any commit, so the snapshot anchor and the journal read here are
+              // exact. A rolled-back or unverifiable store serves no data.
+              const anchorRaw = (db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+                .get() as { value: unknown } | undefined)?.value;
+              if (checkTargetStagingJournal(`${descriptorRoot}/${directoryFd}`, anchorRaw,
+                  store.expectedRestoreGeneration) !== "ok") return denied();
               const preflight = (readDb: DatabaseSync) => inspectIsolatedTargetStore({
                 stagingDirectory: snapshotDirectory,
                 expectedRestoreGeneration: store.expectedRestoreGeneration,

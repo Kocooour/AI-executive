@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig, stagingCursorIdentity,
+  resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingChildSessionConfig, stagingCursorIdentity,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../lib/target-staging-http-identity";
 import { authenticationBinding } from "../../../../lib/auth";
@@ -31,6 +31,8 @@ export async function GET(request: Request): Promise<Response> {
   }
   // isAuthenticated alone accepts an insecure development bypass. This route
   // deliberately requires real, configured owner-cookie authentication.
+  const anchorRefused = stagingAnchorRefusal(request);
+  if (anchorRefused) return anchorRefused;
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;

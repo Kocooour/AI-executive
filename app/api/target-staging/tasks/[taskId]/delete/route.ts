@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
+  resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
@@ -56,6 +56,8 @@ async function taskIdFrom(context: { params: Promise<{ taskId: string }> }) {
 export async function POST(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
+  const anchorRefused = stagingAnchorRefusal(request);
+  if (anchorRefused) return anchorRefused;
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
   const base = config();

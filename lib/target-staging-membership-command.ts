@@ -176,7 +176,9 @@ export function applyTargetStagingMembershipCommand(
       if (!context.stillPinned() || !context.noSidecars()) return denied();
       if (!record("noop", area.policy_revision, 0)) return failed();
       if (!sessionLive()) return { ok: false, reason: "session_revoked" };
-      context.commit();
+      context.commit({ kind: "membership", payload: {
+        area: command.areaId, user: command.targetUserId, op: "noop", role: roleAfter,
+      } });
       return { ok: true, outcome: "noop", policyRevision: area.policy_revision, unassignedTasks: 0 };
     }
 
@@ -228,7 +230,9 @@ export function applyTargetStagingMembershipCommand(
     // Linearization point, still inside BEGIN IMMEDIATE: a session revoked
     // earlier rolls back membership, tasks, receipt and audit together.
     if (!sessionLive()) return { ok: false, reason: "session_revoked" };
-    context.commit();
+    context.commit({ kind: "membership", payload: {
+      area: command.areaId, user: command.targetUserId, op: command.action, role: roleAfter,
+    } });
     return { ok: true, outcome: "applied", policyRevision: after.policy_revision,
       unassignedTasks: unassigned };
   }, denied, failed);

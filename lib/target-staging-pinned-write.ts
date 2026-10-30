@@ -17,6 +17,14 @@ import {
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import {
+  appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
+  openTargetStagingJournal, parseTargetStagingAnchor, readTargetStagingJournalText,
+  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, verifyTargetStagingJournal,
+} from "./target-staging-anchor-journal";
+import type {
+  TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
+} from "./target-staging-anchor-journal";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
@@ -34,8 +42,19 @@ export interface TargetStagingPinnedWriteContext {
   stillPinned(): boolean;
   /** No -journal/-shm/-wal sidecar exists next to the pinned database. */
   noSidecars(): boolean;
-  /** Commit. A body that returns without calling this is rolled back. */
-  commit(): void;
+  /**
+   * Commit. A body that returns without calling this is rolled back. R2c.4a: `entry`
+   * is the content-free journal record of this write; the intent is appended and
+   * fsynced just before COMMIT (a failure rolls the transaction back), `anchor_seq` is
+   * advanced in the same transaction and the confirm follows the COMMIT.
+   */
+  commit(entry: TargetStagingJournalEntry): void;
+}
+
+export interface TargetStagingJournalEntry {
+  readonly kind: TargetStagingJournalKind;
+  /** Content-free fields only (IDs, hashes, roles, numbers). Never titles or credentials. */
+  readonly payload: TargetStagingJournalPayload;
 }
 
 export function noTargetStagingSidecars(
@@ -56,6 +75,8 @@ export interface PinnedTargetStagingFiles {
   readonly directory: string;
   readonly databasePath: string;
   readonly databaseFd: number;
+  /** `/proc|/dev/fd/<directory fd>`: open siblings below the pinned directory without a path walk. */
+  readonly directoryFdPath: string;
   /** Path still names the pinned inode (no swap, hard link or symlink). */
   stillPinned(): boolean;
   /**
@@ -135,6 +156,7 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
     databaseFd = null;
     return {
       directory, databasePath, databaseFd: dbFd, stillPinned,
+      directoryFdPath: descriptorRoot + "/" + dirFd,
       openDatabase: options => {
         const beforeOpen = regularFiles();
         const db = new DatabaseSync(databasePath, { readOnly: options.readOnly });
@@ -194,6 +216,7 @@ export function withPinnedTargetStagingWrite<T>(
   let files: PinnedTargetStagingFiles | null = null;
   let db: DatabaseSync | null = null;
   let transaction = false;
+  let journalFd: number | null = null;
   try {
     files = pinTargetStagingFiles(store.stagingDirectory);
     if (!files || !noTargetStagingSidecars(files.databasePath)) return denied();
@@ -214,11 +237,75 @@ export function withPinnedTargetStagingWrite<T>(
     if (!preflight.ok) return denied();
     const connection = db;
     const pinnedFiles = files;
+
+    // R2c.4a: verify the journal against the DB anchor under the write lock (no commit
+    // can interleave) and resolve a trailing unconfirmed intent of a crashed writer.
+    journalFd = openTargetStagingJournal(pinnedFiles.directoryFdPath, true);
+    if (journalFd === null) return denied();
+    const journal = journalFd;
+    const anchorRaw = (connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+      .get() as { value: unknown } | undefined)?.value;
+    const anchor = parseTargetStagingAnchor(anchorRaw);
+    const text = readTargetStagingJournalText(journal);
+    let state = text === null ? null : verifyTargetStagingJournal(text, store.expectedRestoreGeneration);
+    if (!state || anchor === null || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
+    const generation = state.generation;
+    if (state.pending !== null) {
+      const tail = resolveTargetStagingJournalTail(state, anchor);
+      if (tail.action !== "none") {
+        const line = serializeTargetStagingJournalLine({
+          n: tail.n, t: tail.action, k: null, p: null, g: generation, prev: state.lastHash,
+        });
+        appendTargetStagingJournalLine(journal, line.text);
+        state = { ...state, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
+          pending: null, lastHash: line.hash, records: state.records + 1 };
+      }
+    }
+    let tailState = state;
+    const seqBefore = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+      .get() as { n: number }).n);
+    let committed = false;
     return body({
       db: connection, databaseFd: pinnedFiles.databaseFd, directory: pinnedFiles.directory,
       databasePath: pinnedFiles.databasePath, stillPinned: pinnedFiles.stillPinned,
       noSidecars: () => noTargetStagingSidecars(pinnedFiles.databasePath),
-      commit: () => { connection.exec("COMMIT"); transaction = false; },
+      commit: entry => {
+        if (committed || !entry || typeof entry.kind !== "string") throw new Error();
+        committed = true;
+        const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+          .get() as { n: number }).n);
+        const n = tailState.lastIntent + 1;
+        const intent = serializeTargetStagingJournalLine({
+          n, t: "intent", k: entry.kind,
+          p: { ...entry.payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
+          g: generation, prev: tailState.lastHash,
+        });
+        // Durable BEFORE the commit: a thrown error here rolls the transaction back.
+        appendTargetStagingJournalLine(journal, intent.text);
+        tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
+        const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
+          .run(String(n));
+        if (advanced.changes !== 1) throw new Error();
+        connection.exec("COMMIT");
+        transaction = false;
+        // After the commit, under a FRESH write lock (the chain is linear: an append must be
+        // computed from the tail read while holding the lock, because another writer may have
+        // resolved this very intent already): append the confirm unless it is there. A failure
+        // here only leaves a trailing intent which the next writer resolves (anchor == intent).
+        try {
+          connection.exec("BEGIN IMMEDIATE");
+          transaction = true;
+          const fresh = readTargetStagingJournalText(journal);
+          const current = fresh === null ? null : verifyTargetStagingJournal(fresh, generation);
+          if (current && current.pending === n) {
+            appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
+              n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
+            }).text);
+          }
+          connection.exec("ROLLBACK");
+          transaction = false;
+        } catch { /* resolved by the next writer */ }
+      },
     });
   } catch {
     return failed();
@@ -229,6 +316,22 @@ export function withPinnedTargetStagingWrite<T>(
       }
       try { db.close(); } catch { /* fail closed */ }
     }
+    if (journalFd !== null) { try { closeSync(journalFd); } catch { /* fail closed */ } }
     if (files) files.close();
   }
+}
+
+/**
+ * Journal verdict for the connection the caller already holds a SQLite lock on (a SHARED
+ * read snapshot of the live store). The anchor is read from `db`, the journal is opened
+ * below the pinned directory fd; see evaluateTargetStagingAnchor for the rules.
+ */
+export function checkPinnedTargetStagingAnchor(
+  files: PinnedTargetStagingFiles, db: DatabaseSync, generation: string,
+): TargetStagingAnchorVerdict {
+  try {
+    const raw = (db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+      .get() as { value: unknown } | undefined)?.value;
+    return checkTargetStagingJournal(files.directoryFdPath, raw, generation);
+  } catch { return "journal_invalid"; }
 }

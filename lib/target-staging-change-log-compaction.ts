@@ -86,7 +86,7 @@ export function compactTargetStagingChangeLog(
       after = batch[batch.length - 1].seq;
     }
     if (!context.stillPinned()) return { ok: false, reason: "write_failed" };
-    context.commit();
+    context.commit({ kind: "compaction", payload: { floor } });
     return { ok: true, floor, deleted };
   }, () => ({ ok: false, reason: "unavailable" }), () => ({ ok: false, reason: "write_failed" }), BUSY_MS);
 }

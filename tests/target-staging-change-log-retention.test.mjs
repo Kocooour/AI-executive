@@ -525,6 +525,9 @@ function cloneStore(fx) {
   const dir = path.join(root, `${fx.name}-copy`);
   mkdirSync(dir, { mode: 0o700 });
   copyFileSync(fx.databasePath, path.join(dir, "lumi-target.sqlite"));
+  // R2c.4a: a usable copy of a store carries its journal (mode 0600) taken at the same moment.
+  copyFileSync(path.join(fx.stage.directory, "lumi-target.journal"), path.join(dir, "lumi-target.journal"));
+  chmodSync(path.join(dir, "lumi-target.journal"), 0o600);
   return { ...fx, stage: { ...fx.stage, directory: dir }, store: { ...fx.store, stagingDirectory: dir },
     databasePath: path.join(dir, "lumi-target.sqlite"), client: fx.client + "9" };
 }
