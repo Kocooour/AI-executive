@@ -46,7 +46,7 @@ test("closed WAL database with no sidecars is rejected without creating files", 
   const filesBefore = readdirSync(store.directory);
   assert.equal(before[18], 2);
   assert.equal(before[19], 2);
-  assert.deepEqual(filesBefore, ["lumi-target.sqlite"]);
+  assert.deepEqual(filesBefore, ["lumi-target-witness.sqlite", "lumi-target.journal", "lumi-target.sqlite"].sort());
   has(check(store), "database_open_failed");
   assert.deepEqual(readFileSync(store.databasePath), before);
   assert.deepEqual(readdirSync(store.directory), filesBefore);

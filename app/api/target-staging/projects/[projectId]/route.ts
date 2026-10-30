@@ -1,7 +1,7 @@
 import { logStagingFailure } from "../../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig,
+  resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../lib/target-staging-http-identity";
 import { enforceRateLimit } from "../../../../../lib/http-security";
@@ -24,6 +24,8 @@ export async function GET(
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") {
     return answer(404, "Not found");
   }
+  const anchorRefused = stagingAnchorRefusal(request);
+  if (anchorRefused) return anchorRefused;
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;

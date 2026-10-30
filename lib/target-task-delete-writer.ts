@@ -248,7 +248,8 @@ export function deletePreflightedTargetTask(
     // expired while the command ran rolls back tombstone, delete, log entry,
     // receipt and audit together.
     if (!sessionLive()) return { ok: false, reason: "session_revoked" };
-    context.commit();
+    // R2c.4a journal entry: content-free (the change_log sequence range is added by the helper).
+    context.commit({ kind: "delete", payload: {} });
     return { ok: true };
   }, denied, failed);
 }

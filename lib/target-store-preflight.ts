@@ -38,6 +38,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const sha256Hex = /^[a-f0-9]{64}$/;
 const CONTROL_METADATA_KEYS = new Set([
   "schema_version", "activated", "write_protocol", "restore_generation", "change_log_floor",
+  "anchor_seq",
 ]);
 /** Compare the complete stored DDL, not just names: a same-name no-op trigger is unsafe. */
 function matchesCanonicalSchema(actual: DatabaseSync): boolean {
@@ -154,7 +155,7 @@ export function inspectIsolatedTargetStore(
         typeof row.key === "string" &&
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 5 + receipts.length + deleteReceipts.length ||
+      if (rows.length !== 6 + receipts.length + deleteReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
@@ -166,6 +167,8 @@ export function inspectIsolatedTargetStore(
               row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX))) ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
+          typeof meta.get("anchor_seq") !== "string" ||
+          !/^(0|[1-9][0-9]{0,14})$/.test(meta.get("anchor_seq") as string) ||
           typeof meta.get("restore_generation") !== "string" ||
           !uuid.test(meta.get("restore_generation") as string)) fail("metadata_invalid");
       if (options.expectedRestoreGeneration !== undefined &&

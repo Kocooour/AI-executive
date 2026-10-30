@@ -26,7 +26,10 @@ import {
 import {
   noTargetStagingSidecars, pinTargetStagingFiles, withPinnedTargetStagingWrite,
 } from "./target-staging-pinned-write";
+import { checkPinnedTargetStagingAnchor } from "./target-staging-pinned-write";
 import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
+import { warmTargetStagingJournal } from "./target-staging-anchor-journal";
+import type { TargetStagingAnchorVerdict } from "./target-staging-anchor-journal";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
@@ -166,7 +169,9 @@ export function issueDurableTargetStagingSession(
     `).run(sessionId, userId, hashTargetStagingSessionToken(token), createdAt, expiresAt,
       identity.revocation_epoch);
     if (inserted.changes !== 1 || !context.stillPinned()) return { ok: false, reason: "write_failed" };
-    context.commit();
+    context.commit({ kind: "session_issue", payload: {
+      userId, tokenHash: hashTargetStagingSessionToken(token), epoch: identity.revocation_epoch,
+    } });
     return { ok: true, sessionId, sessionToken: token, expiresAtMs: expiresAt };
   }, () => ({ ok: false, reason: "unavailable" }), () => ({ ok: false, reason: "write_failed" }),
   CONTROL_WRITE_BUSY_MS);
@@ -181,8 +186,10 @@ export function revokeDurableTargetStagingSession(
   }
   return withPinnedTargetStagingWrite<TargetStagingDurableSessionRevoke>(store, context => {
     const { db } = context;
-    const row = db.prepare("SELECT revoked_at_ms FROM staging_sessions WHERE id = ?")
-      .get(sessionId) as { revoked_at_ms: number | null } | undefined;
+    const row = db.prepare(
+      "SELECT revoked_at_ms, user_id, token_hash, revocation_epoch FROM staging_sessions WHERE id = ?",
+    ).get(sessionId) as { revoked_at_ms: number | null; user_id: string; token_hash: string;
+      revocation_epoch: number } | undefined;
     if (!row) return { ok: false, reason: "not_found" };
     if (row.revoked_at_ms !== null) return { ok: true, changed: false };
     if (!context.stillPinned() || !context.noSidecars()) return { ok: false, reason: "write_failed" };
@@ -192,7 +199,9 @@ export function revokeDurableTargetStagingSession(
       "UPDATE staging_sessions SET revoked_at_ms = ? WHERE id = ? AND revoked_at_ms IS NULL",
     ).run(revokedAt, sessionId);
     if (updated.changes !== 1 || !context.stillPinned()) return { ok: false, reason: "write_failed" };
-    context.commit();
+    context.commit({ kind: "session_revoke", payload: {
+      userId: row.user_id, tokenHash: row.token_hash, epoch: row.revocation_epoch,
+    } });
     return { ok: true, changed: true };
   }, () => ({ ok: false, reason: "unavailable" }), () => ({ ok: false, reason: "write_failed" }),
   CONTROL_WRITE_BUSY_MS);
@@ -225,7 +234,7 @@ export function revokeAllDurableTargetStagingSessionsForUser(
       .get(userId) as { revocation_epoch: number } | undefined;
     if (bumped.changes !== 1 || !after || after.revocation_epoch !== identity.revocation_epoch + 1 ||
         !context.stillPinned()) return { ok: false, reason: "write_failed" };
-    context.commit();
+    context.commit({ kind: "session_revoke_all", payload: { userId, epochAfter: after.revocation_epoch } });
     return { ok: true, revocationEpoch: after.revocation_epoch, revokedSessions: Number(stamped.changes) };
   }, () => ({ ok: false, reason: "unavailable" }), () => ({ ok: false, reason: "write_failed" }),
   CONTROL_WRITE_BUSY_MS);
@@ -270,6 +279,7 @@ export function verifyDurableTargetStagingSessionLiveCoded(
  */
 function withLiveStagingReadTransaction<T>(
   store: TargetStagingReadStore, body: (db: DatabaseSync) => T, unavailable: T,
+  onAnchorFailure?: (verdict: Exclude<TargetStagingAnchorVerdict, "ok">) => T,
 ): T {
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string") return unavailable;
@@ -289,6 +299,7 @@ function withLiveStagingReadTransaction<T>(
       logStagingFailure("live_read", "sidecar_present");
       return unavailable;
     }
+    warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: true });
     db = opened.db;
     db.exec(`PRAGMA busy_timeout=${LIVE_READ_BUSY_MS}`);
@@ -313,6 +324,10 @@ function withLiveStagingReadTransaction<T>(
       logStagingFailure("live_read", "metadata_mismatch");
       return unavailable;
     }
+    // R2c.4a: the SHARED lock taken above excludes any commit, so the anchor and the journal
+    // read here are exact; a rolled-back or invalid store never serves a live check.
+    const anchor = checkPinnedTargetStagingAnchor(files, db, store.expectedRestoreGeneration);
+    if (anchor !== "ok") return onAnchorFailure ? onAnchorFailure(anchor) : unavailable;
     const result = body(db);
     db.exec("ROLLBACK");
     snapshot = false;
@@ -333,6 +348,18 @@ function withLiveStagingReadTransaction<T>(
     }
     if (files) files.close();
   }
+}
+
+/**
+ * R2c.4a gate run by every target-staging route BEFORE identity resolution (so no
+ * session check runs against an untrusted store): the DB anchor against the irreversible
+ * journal. "unavailable" means the store could not be checked at all (fail closed).
+ */
+export function checkTargetStagingAnchorLive(
+  store: TargetStagingReadStore,
+): "ok" | "restore_pending" | "journal_invalid" | "unavailable" {
+  return withLiveStagingReadTransaction<"ok" | "restore_pending" | "journal_invalid" | "unavailable">(
+    store, () => "ok", "unavailable", verdict => verdict);
 }
 
 export type TargetStagingReadLive =

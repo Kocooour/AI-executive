@@ -17,6 +17,18 @@ import {
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
+import {
+  appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
+  openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd, warmTargetStagingJournal,
+  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, targetStagingJournalGenesis,
+  truncateTargetStagingJournal,
+} from "./target-staging-anchor-journal";
+import type {
+  TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
+} from "./target-staging-anchor-journal";
+import {
+  attachTargetStagingWitness, readAttachedTargetStagingWitness, recordTargetStagingWitnessCommit,
+} from "./target-staging-anchor-witness";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
 import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
@@ -35,8 +47,19 @@ export interface TargetStagingPinnedWriteContext {
   stillPinned(): boolean;
   /** No -journal/-shm/-wal sidecar exists next to the pinned database. */
   noSidecars(): boolean;
-  /** Commit. A body that returns without calling this is rolled back. */
-  commit(): void;
+  /**
+   * Commit. A body that returns without calling this is rolled back. R2c.4a: `entry`
+   * is the content-free journal record of this write; the intent is appended and
+   * fsynced just before COMMIT (a failure rolls the transaction back), `anchor_seq` is
+   * advanced in the same transaction and the confirm follows the COMMIT.
+   */
+  commit(entry: TargetStagingJournalEntry): void;
+}
+
+export interface TargetStagingJournalEntry {
+  readonly kind: TargetStagingJournalKind;
+  /** Content-free fields only (IDs, hashes, roles, numbers). Never titles or credentials. */
+  readonly payload: TargetStagingJournalPayload;
 }
 
 export function noTargetStagingSidecars(
@@ -71,6 +94,8 @@ export interface PinnedTargetStagingFiles {
   readonly directory: string;
   readonly databasePath: string;
   readonly databaseFd: number;
+  /** `/proc|/dev/fd/<directory fd>`: open siblings below the pinned directory without a path walk. */
+  readonly directoryFdPath: string;
   /** Path still names the pinned inode (no swap, hard link or symlink). */
   stillPinned(): boolean;
   /**
@@ -154,6 +179,7 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
     databaseFd = null;
     return {
       directory, databasePath, databaseFd: dbFd, stillPinned,
+      directoryFdPath: descriptorRoot + "/" + dirFd,
       openDatabase: options => {
         const beforeOpen = regularFiles();
         // Deterministically reproduce concurrent descriptor recycling in tests.
@@ -221,15 +247,34 @@ export function withPinnedTargetStagingWrite<T>(
   let files: PinnedTargetStagingFiles | null = null;
   let db: DatabaseSync | null = null;
   let transaction = false;
+  let journalFd: number | null = null;
   try {
     files = pinTargetStagingFiles(store.stagingDirectory);
     if (!files || !noTargetStagingSidecars(files.databasePath)) return denied();
+    // R2c.4a: the (possibly long) cold chain verification happens BEFORE the write lock.
+    warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
     db = opened.db;
-    db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
+    // Set the bounded wait BEFORE the first SQLite read and ATTACH: a short
+    // EXCLUSIVE lock held by another connection must not fail immediately.
+    db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
+    // Prove that SQLite opened the pinned main inode BEFORE ATTACH adds the
+    // second (witness) database descriptor.
+    db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
+    if (!opened.verifyOpened()) return denied();
+    const genesisHash = targetStagingJournalGenesis(store.expectedRestoreGeneration).hash;
+    // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
+    // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
+    // ambiguous after a restore of just the main DB.
+    // ATTACH MUST use the durable canonical filesystem pathname, not the
+    // /proc/self/fd/N alias: SQLite records attached journal paths in its
+    // crash-recovery super-journal, which must remain valid after process exit.
+    if (!attachTargetStagingWitness(db, files.directory,
+        store.expectedRestoreGeneration, genesisHash)) return denied();
+    db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    if (!opened.verifyOpened() || !noTargetStagingSidecars(files.databasePath)) return denied();
+    if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath)) return denied();
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
@@ -241,11 +286,91 @@ export function withPinnedTargetStagingWrite<T>(
     if (!preflight.ok) return denied();
     const connection = db;
     const pinnedFiles = files;
+
+    // R2c.4a: verify the journal against the DB anchor under the write lock (no commit
+    // can interleave) and resolve a trailing unconfirmed intent of a crashed writer.
+    journalFd = openTargetStagingJournal(pinnedFiles.directoryFdPath, true);
+    if (journalFd === null) return denied();
+    const journal = journalFd;
+    const anchorRaw = (connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+      .get() as { value: unknown } | undefined)?.value;
+    const anchor = parseTargetStagingAnchor(anchorRaw);
+    const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
+    let state = scan ? scan.state : null;
+    const witnessed = scan ? readAttachedTargetStagingWitness(connection,
+      store.expectedRestoreGeneration, genesisHash, pinnedFiles.directoryFdPath,
+      scan.intentHashes, scan.intentStatuses) : null;
+    // Verdict first, on the complete lines: an untrusted store is never modified.
+    // A restored main DB may have the same number as the last JSONL confirm but
+    // be behind a COMMITTED unconfirmed intent. The atomic witness detects it.
+    if (!state || anchor === null || witnessed === null || anchor !== witnessed ||
+        evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
+    if (scan && scan.torn) {
+      // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
+      // killed append) back to the last complete line before resolving the tail.
+      truncateTargetStagingJournal(journal, scan.completeBytes);
+    }
+    const generation = state.generation;
+    if (state.pending !== null) {
+      const tail = resolveTargetStagingJournalTail(state, anchor);
+      if (tail.action !== "none") {
+        const line = serializeTargetStagingJournalLine({
+          n: tail.n, t: tail.action, k: null, p: null, g: generation, prev: state.lastHash,
+        });
+        appendTargetStagingJournalLine(journal, line.text);
+        state = { ...state, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
+          pending: null, lastHash: line.hash, records: state.records + 1 };
+      }
+    }
+    let tailState = state;
+    const seqBefore = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+      .get() as { n: number }).n);
+    let committed = false;
     return body({
       db: connection, databaseFd: pinnedFiles.databaseFd, directory: pinnedFiles.directory,
       databasePath: pinnedFiles.databasePath, stillPinned: pinnedFiles.stillPinned,
       noSidecars: () => noTargetStagingSidecars(pinnedFiles.databasePath),
-      commit: () => { connection.exec("COMMIT"); transaction = false; },
+      commit: entry => {
+        if (committed || !entry || typeof entry.kind !== "string") throw new Error();
+        committed = true;
+        const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+          .get() as { n: number }).n);
+        const n = tailState.lastIntent + 1;
+        const intent = serializeTargetStagingJournalLine({
+          n, t: "intent", k: entry.kind,
+          p: { ...entry.payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
+          g: generation, prev: tailState.lastHash,
+        });
+        // Durable BEFORE the commit: a thrown error here rolls the transaction back.
+        appendTargetStagingJournalLine(journal, intent.text);
+        tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
+        const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
+          .run(String(n));
+        if (advanced.changes !== 1) throw new Error();
+        // This insert and the main anchor update are one SQLite ATTACH commit.
+        // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
+        recordTargetStagingWitnessCommit(connection, n, intent.hash, generation);
+        connection.exec("COMMIT");
+        transaction = false;
+        // After the commit, under a FRESH write lock (the chain is linear: an append must be
+        // computed from the tail read while holding the lock, because another writer may have
+        // resolved this very intent already): append the confirm unless it is there. A failure
+        // here only leaves a trailing intent which the next writer resolves (anchor == intent).
+        try {
+          connection.exec("BEGIN IMMEDIATE");
+          transaction = true;
+          const fresh = scanTargetStagingJournalFd(journal, generation);
+          if (fresh && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
+          const current = fresh ? fresh.state : null;
+          if (current && current.pending === n) {
+            appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
+              n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
+            }).text);
+          }
+          connection.exec("ROLLBACK");
+          transaction = false;
+        } catch { /* resolved by the next writer */ }
+      },
     });
   } catch {
     return failed();
@@ -256,6 +381,22 @@ export function withPinnedTargetStagingWrite<T>(
       }
       try { db.close(); } catch { /* fail closed */ }
     }
+    if (journalFd !== null) { try { closeSync(journalFd); } catch { /* fail closed */ } }
     if (files) files.close();
   }
+}
+
+/**
+ * Journal verdict for the connection the caller already holds a SQLite lock on (a SHARED
+ * read snapshot of the live store). The anchor is read from `db`, the journal is opened
+ * below the pinned directory fd; see evaluateTargetStagingAnchor for the rules.
+ */
+export function checkPinnedTargetStagingAnchor(
+  files: PinnedTargetStagingFiles, db: DatabaseSync, generation: string,
+): TargetStagingAnchorVerdict {
+  try {
+    const raw = (db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+      .get() as { value: unknown } | undefined)?.value;
+    return checkTargetStagingJournal(files.directoryFdPath, raw, generation);
+  } catch { return "journal_invalid"; }
 }

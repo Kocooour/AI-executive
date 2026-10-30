@@ -10,12 +10,14 @@
  * There is no endpoint which issues this cookie; issuance is operator-only.
  */
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
 import { logStagingFailure } from "./target-staging-failure-log";
 import {
   TARGET_STAGING_SESSION_COOKIE, hashTargetStagingSessionToken,
   isTargetStagingSessionToken, verifyDurableTargetStagingSessionLiveCoded, verifyTargetStagingReadLive,
+  checkTargetStagingAnchorLive,
 } from "./target-staging-durable-session";
 import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
@@ -123,6 +125,7 @@ export function verifyStagingReadBeforeRelease(
 }
 
 const headers = { "cache-control": "no-store" };
+const unavailableMessage = "Staging unavailable";
 
 const answer = (status: number, message: string): Response =>
   Response.json({ error: message }, { status, headers });
@@ -135,6 +138,34 @@ export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok"
   return check === "unauthorized"
     ? answer(401, "Authentication required")
     : answer(503, "Staging unavailable");
+}
+
+/**
+ * R2c.4a anti-rollback gate: call right after the feature-flag 404 and BEFORE identity
+ * resolution. A store whose anchor is behind the irreversible journal (`restore_pending`) or whose
+ * journal cannot be verified (`journal_invalid`) answers 503 with a stable code and no
+ * data on every target-staging route. Missing or invalid configuration returns null here
+ * and keeps the route's own 503 handling, as does a store which cannot be read at all. Content-free and independent of any credential.
+ */
+export function stagingAnchorRefusal(request: Request): Response | null {
+  try {
+    const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
+    const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
+    if (!stagingDirectory || !path.isAbsolute(stagingDirectory) || !expectedRestoreGeneration) return null;
+    // The check costs a SQLite open plus the journal verification: a client floods only
+    // its own bucket (separate from every per-route bucket).
+    const limited = enforceRateLimit(request, "target-staging-anchor-gate", 1200, 10 * 60_000);
+    if (limited) return Response.json({ error: "Too many requests" }, {
+      status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
+    });
+    const verdict = checkTargetStagingAnchorLive({ stagingDirectory, expectedRestoreGeneration });
+    // "unavailable" (unreadable store, busy, schema mismatch) is left to the route's own
+    // fail-closed handling (child preflight and live checks), which already answer 503/401.
+    if (verdict === "ok" || verdict === "unavailable") return null;
+    return Response.json({ error: unavailableMessage, code: verdict }, { status: 503, headers });
+  } catch {
+    return answer(503, "Staging unavailable");
+  }
 }
 
 /**

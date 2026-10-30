@@ -131,7 +131,9 @@ const count = sql => db.prepare(sql).get().n;
 const world = () => JSON.stringify({
   tasks: db.prepare("SELECT id,title,revision,area_id FROM tasks ORDER BY id").all(),
   tombstones: db.prepare("SELECT id,area_id,revision FROM task_tombstones ORDER BY id").all(),
-  metadata: db.prepare("SELECT key,value FROM metadata ORDER BY key").all(),
+  // anchor_seq (R2c.4a) advances with every committed write incl. test-side login() session
+  // issuance; it is asserted in target-staging-anchor-journal.test.mjs.
+  metadata: db.prepare("SELECT key,value FROM metadata WHERE key<>'anchor_seq' ORDER BY key").all(),
   titleAudit: count("SELECT COUNT(*) AS n FROM task_title_audit"),
   deleteAudit: count("SELECT COUNT(*) AS n FROM task_delete_audit"),
   membershipAudit: count("SELECT COUNT(*) AS n FROM area_membership_audit"),

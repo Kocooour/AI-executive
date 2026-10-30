@@ -6,10 +6,14 @@
  * R2 must provide authenticated, per-item server commands before this store is used.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync, constants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync, statSync, writeSync,
+} from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
+import { TARGET_STAGING_JOURNAL_FILENAME, targetStagingJournalGenesis } from "./target-staging-anchor-journal";
+import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 
 // v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
 // ACL-scoped cursor revisions. v8 (R2c.1) adds durable content-free task/project
@@ -17,8 +21,10 @@ import { resolveDataDirectory } from "./data-dir";
 // audit. Older isolated staging stores are never migrated: preflight rejects
 // them; use a NEW test-only staging directory instead. v9 (R2c.2b) adds the
 // change_log commit timestamp, the own-membership index and the monotonic
-// compaction floor with its guarded delete (no v8 migration, same rule).
-export const TARGET_STORE_SCHEMA_VERSION = 9;
+// compaction floor with its guarded delete (no v8 migration, same rule). v10
+// (R2c.4a) adds the monotonic anti-rollback anchor `anchor_seq` (mirrored by the
+// append-only lumi-target.journal next to the database; no v9 migration, same rule).
+export const TARGET_STORE_SCHEMA_VERSION = 10;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -328,6 +334,24 @@ BEGIN SELECT RAISE(ABORT, 'change log floor cannot be deleted'); END;
 CREATE TRIGGER change_log_floor_no_replace BEFORE INSERT ON metadata
 WHEN NEW.key = 'change_log_floor' AND EXISTS(SELECT 1 FROM metadata WHERE key = 'change_log_floor')
 BEGIN SELECT RAISE(ABORT, 'change log floor cannot be replaced'); END;
+-- R2c.4a anti-rollback anchor: the number of the last journal intent committed with the
+-- store. Canonical decimal text, only ever increases, exists exactly once: no delete,
+-- rename or replace (the same guard set as the floor).
+CREATE TRIGGER anchor_seq_update BEFORE UPDATE ON metadata
+WHEN OLD.key = 'anchor_seq' AND (NEW.key <> 'anchor_seq'
+  OR typeof(NEW.value) <> 'text' OR NEW.value = '' OR length(NEW.value) > 15
+  OR length(CAST(NEW.value AS BLOB)) <> length(NEW.value) OR NEW.value GLOB '*[^0-9]*' OR (length(NEW.value) > 1 AND substr(NEW.value, 1, 1) = '0')
+  OR CAST(NEW.value AS INTEGER) < CAST(OLD.value AS INTEGER))
+BEGIN SELECT RAISE(ABORT, 'anchor sequence may only increase'); END;
+CREATE TRIGGER anchor_seq_no_rename_onto BEFORE UPDATE ON metadata
+WHEN NEW.key = 'anchor_seq' AND OLD.key <> 'anchor_seq'
+BEGIN SELECT RAISE(ABORT, 'anchor sequence cannot be replaced'); END;
+CREATE TRIGGER anchor_seq_no_delete BEFORE DELETE ON metadata
+WHEN OLD.key = 'anchor_seq'
+BEGIN SELECT RAISE(ABORT, 'anchor sequence cannot be deleted'); END;
+CREATE TRIGGER anchor_seq_no_replace BEFORE INSERT ON metadata
+WHEN NEW.key = 'anchor_seq' AND EXISTS(SELECT 1 FROM metadata WHERE key = 'anchor_seq')
+BEGIN SELECT RAISE(ABORT, 'anchor sequence cannot be replaced'); END;
 -- INSERT OR REPLACE deletes a row without DELETE triggers. In BEFORE INSERT NEW.seq
 -- is the explicit value, or not a stored value (-1) when the ID is automatic.
 CREATE TRIGGER change_log_replace_guard BEFORE INSERT ON change_log
@@ -889,6 +913,7 @@ export function bootstrapIsolatedTargetStore(
       meta.run("activated", "false");
       meta.run("restore_generation", restoreGeneration);
       meta.run("change_log_floor", "0");
+      meta.run("anchor_seq", "0");
       db.prepare("INSERT INTO identities(id) VALUES (?)").run(owner);
       db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)")
         .run(personalWorkspaceId, owner);
@@ -902,6 +927,21 @@ export function bootstrapIsolatedTargetStore(
     }
   } finally {
     db.close();
+  }
+  // The independent witness is committed atomically with main via SQLite ATTACH on every write.
+  // Initialize it before exposing the genesis journal; an incomplete bootstrap is unusable.
+  const genesis = targetStagingJournalGenesis(restoreGeneration);
+  bootstrapTargetStagingWitness(directory, restoreGeneration, genesis.hash);
+  // R2c.4a: the journal starts with its genesis record (confirmed 0). Created exclusively,
+  // never through a symlink, private to this user, fsynced.
+  const journalFd = openSync(path.join(directory, TARGET_STAGING_JOURNAL_FILENAME),
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_APPEND, 0o600);
+  try {
+    fchmodSync(journalFd, 0o600);
+    writeSync(journalFd, genesis.text);
+    fsyncSync(journalFd);
+  } finally {
+    closeSync(journalFd);
   }
   return {
     directory, databasePath, ownerUserId: owner, personalWorkspaceId,

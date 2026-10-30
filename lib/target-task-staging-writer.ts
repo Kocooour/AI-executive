@@ -228,7 +228,8 @@ export function writePreflightedTargetTaskTitle(
     // revocation can interleave between this check and COMMIT. A session which
     // expired while the command ran rolls back task, receipt and audit together.
     if (!sessionLive()) return { ok: false, reason: "session_revoked" };
-    context.commit();
+    // R2c.4a journal entry: content-free (the change_log sequence range is added by the helper).
+    context.commit({ kind: "title", payload: {} });
     return { ok: true };
   }, denied, failed);
 }

@@ -174,6 +174,8 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "R1 staging directory overlaps the current legacy data directory",
   "R1 bootstrap requires a nonempty, stable owner user ID",
   "R1 foreign-key validation failed",
+  // R2c.4a bootstrap rejects malformed internal generation/hash parameters; no route exposes this error.
+  "Invalid witness genesis",
   // D3 pre-activation read-selector guards: internal programmer/snapshot errors,
   // not surfaced by any live UI or route until the access-control gates ship.
   "Conflicting canonical entity ID in work scope snapshot",
