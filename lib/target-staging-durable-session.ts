@@ -59,9 +59,11 @@ export type TargetStagingLiveSession =
   | { ok: false; reason: "invalid" | "unavailable" };
 /**
  * R2c.2b distinct 401 reasons, derived ONLY from the presented token (its holder
- * alone learns them). Revocation takes precedence over expiry.
+ * alone learns them). Revocation takes precedence over expiry. R2c.4b adds
+ * `session_restored`: the token was live under the irreversible source when an operator restore
+ * replaced the store (only such tokens are listed by the restore, see classify below).
  */
-export type TargetStagingSessionDenial = "session_expired" | "session_revoked";
+export type TargetStagingSessionDenial = "session_expired" | "session_revoked" | "session_restored";
 export type TargetStagingCodedLiveSession =
   | { ok: true; sessionId: string; userId: string }
   | { ok: false; reason: "invalid"; code: TargetStagingSessionDenial }
@@ -112,6 +114,9 @@ export function classifyTargetStagingSessionDenial(
   db: DatabaseSync, tokenHash: string, nowMs: number,
 ): TargetStagingSessionDenial {
   if (!TOKEN_HASH.test(tokenHash) || !Number.isSafeInteger(nowMs) || nowMs <= 0) return "session_revoked";
+  if (db.prepare("SELECT 1 AS ok FROM restore_superseded_sessions WHERE token_hash = ?").get(tokenHash)) {
+    return "session_restored";
+  }
   const row = db.prepare(`
     SELECT s.revoked_at_ms AS revoked, s.expires_at_ms AS expires,
            s.revocation_epoch AS epoch, i.revocation_epoch AS current

@@ -32,7 +32,7 @@ export type StagingHttpIdentity =
  * token which the caller itself presented.
  */
 export type StagingIdentityCheck =
-  | "ok" | "unauthorized" | "unavailable" | "session_expired" | "session_revoked";
+  | "ok" | "unauthorized" | "unavailable" | "session_expired" | "session_revoked" | "session_restored";
 
 /** Null means: no valid proof of any kind was presented (HTTP 401). */
 export function resolveStagingHttpIdentity(request: Request): StagingHttpIdentity | null {
@@ -129,12 +129,14 @@ const unavailableMessage = "Staging unavailable";
 
 const answer = (status: number, message: string): Response =>
   Response.json({ error: message }, { status, headers });
-const coded = (code: "session_expired" | "session_revoked"): Response =>
+const coded = (code: "session_expired" | "session_revoked" | "session_restored"): Response =>
   Response.json({ error: "Authentication required", code }, { status: 401, headers });
 
 /** Content-free refusal for a failed identity check; always no-store. */
 export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok">): Response {
-  if (check === "session_expired" || check === "session_revoked") return coded(check);
+  if (check === "session_expired" || check === "session_revoked" || check === "session_restored") {
+    return coded(check);
+  }
   return check === "unauthorized"
     ? answer(401, "Authentication required")
     : answer(503, "Staging unavailable");
@@ -194,7 +196,9 @@ export function stagingUnauthorizedRefusal(
   if (identity.kind === "session") {
     try {
       const check = verifyStagingIdentityBeforeRelease(request, identity, store, "release");
-      if (check === "session_expired" || check === "session_revoked") return coded(check);
+      if (check === "session_expired" || check === "session_revoked" || check === "session_restored") {
+        return coded(check);
+      }
     } catch { /* fall through to the code-less body */ }
   }
   return answer(401, "Authentication required");
