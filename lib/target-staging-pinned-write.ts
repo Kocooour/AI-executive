@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import {
   appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
-  openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd,
+  openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd, warmTargetStagingJournal,
   resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, truncateTargetStagingJournal,
 } from "./target-staging-anchor-journal";
 import type {
@@ -220,6 +220,8 @@ export function withPinnedTargetStagingWrite<T>(
   try {
     files = pinTargetStagingFiles(store.stagingDirectory);
     if (!files || !noTargetStagingSidecars(files.databasePath)) return denied();
+    // R2c.4a: the (possibly long) cold chain verification happens BEFORE the write lock.
+    warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
     db = opened.db;
     db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
@@ -248,12 +250,13 @@ export function withPinnedTargetStagingWrite<T>(
     const anchor = parseTargetStagingAnchor(anchorRaw);
     const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
     let state = scan ? scan.state : null;
+    // Verdict first, on the complete lines: an untrusted store is never modified.
+    if (!state || anchor === null || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
     if (scan && scan.torn) {
       // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
       // killed append) back to the last complete line before resolving the tail.
       truncateTargetStagingJournal(journal, scan.completeBytes);
     }
-    if (!state || anchor === null || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
     const generation = state.generation;
     if (state.pending !== null) {
       const tail = resolveTargetStagingJournalTail(state, anchor);

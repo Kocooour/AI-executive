@@ -36,6 +36,8 @@ const durable = await import("../lib/target-staging-durable-session.ts");
 const journalLib = await import("../lib/target-staging-anchor-journal.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
+const pinned = await import("../lib/target-staging-pinned-write.ts");
+const identityLib = await import("../lib/target-staging-http-identity.ts");
 const { writeFields } = await import("./support/target-write-contract.mjs");
 const { PROTOCOL } = await import("./support/target-write-contract.mjs");
 const { GET: LIST } = await import("../app/api/target-staging/tasks/route.ts");
@@ -49,9 +51,11 @@ const { POST: DELETE_STATUS } = await import("../app/api/target-staging/tasks/[t
 const { POST: MEMBERS } = await import("../app/api/target-staging/areas/[areaId]/members/route.ts");
 const { GET: FEED } = await import("../app/api/target-staging/changes/route.ts");
 
+const REAL_NODE = process.execPath;
 const authorities = [];
 const raws = [];
 after(() => {
+  process.execPath = REAL_NODE;
   for (const authority of authorities) authority.close();
   for (const raw of raws) { try { raw.close(); } catch { /* already closed */ } }
   for (const [key, value] of Object.entries(old)) {
@@ -388,6 +392,14 @@ test("concurrent writers in several processes keep one linear, valid chain (ever
   assert.equal(state.pending, null);
   assert.equal(state.confirmed, anchorOf(fx));
   assert.equal(anchorOf(fx), issued, "one anchor step per successful write, none lost or duplicated");
+  // Exactly one confirm per intent and no abort: the post-commit guard never double-confirms.
+  const counts = new Map();
+  for (const line of journalLines(fx)) if (line.t !== "genesis") counts.set(line.t + line.n, (counts.get(line.t + line.n) ?? 0) + 1);
+  for (let n = 1; n <= issued; n++) {
+    assert.equal(counts.get("intent" + n), 1, "intent " + n);
+    assert.equal(counts.get("confirm" + n), 1, "confirm " + n);
+    assert.equal(counts.get("abort" + n), undefined, "abort " + n);
+  }
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
@@ -799,3 +811,166 @@ for (const writes of [5000, 20000]) {
     assert.ok(warm < Math.max(40, cold), `warm gate ${warm} ms`);
   });
 }
+
+// ---- review round 1 -------------------------------------------------------------------------
+
+/** Append `writes` genuine intent+confirm pairs and move the anchor (same serializer as the writers). */
+function inflate(fx, writes) {
+  const gen = fx.stage.restoreGeneration;
+  let state = journalState(fx);
+  let prev = state.lastHash;
+  let n0 = state.lastIntent;
+  const chunks = [];
+  for (let i = 1; i <= writes; i++) {
+    const n = n0 + i;
+    const intent = journalLib.serializeTargetStagingJournalLine({ n, t: "intent", k: "title", p: { seq: [n, n] }, g: gen, prev });
+    const confirm = journalLib.serializeTargetStagingJournalLine({ n, t: "confirm", k: null, p: null, g: gen, prev: intent.hash });
+    chunks.push(intent.text, confirm.text);
+    prev = confirm.hash;
+  }
+  appendFileSync(fx.journalPath, chunks.join(""));
+  fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(n0 + writes));
+}
+
+test("cold processes verify the long chain BEFORE taking the write lock: two cold 200 ms-timeout writers both succeed", async () => {
+  const fx = makeFixture();
+  inflate(fx, 20000);
+  const base0 = anchorOf(fx);
+  const first = runChild(fx, "raw");
+  await sleep(100);
+  const second = runChild(fx, "raw");
+  const results = await Promise.all([first.done, second.done]);
+  assert.deepEqual(results.map(r => JSON.parse(r.stdout).outcome), ["ok", "ok"], results.map(r => r.stdout + r.signal).join(" "));
+  assert.equal(anchorOf(fx), base0 + 2);
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+for (const scenario of ["restore_pending", "journal_invalid"]) {
+  const degrade = (fx, backup) => {
+    if (scenario === "restore_pending") copyFileSync(backup, fx.databasePath);
+    else unlinkSync(fx.journalPath);
+    journalLib.clearTargetStagingJournalCache();
+  };
+  const setup = () => {
+    const fx = makeFixture();
+    assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+    const backup = path.join(root, `${fx.name}.backup.sqlite`);
+    copyFileSync(fx.databasePath, backup);
+    assert.equal(titleWrite(fx, "t1", "later").ok, true);
+    return { fx, backup };
+  };
+  const observed = { actorUserId: "alice", areas: [] };
+  const ownerRequest = () => new Request(base + "tasks", { headers: { cookie: ownerCookie() } });
+
+  test(`${scenario}: the read child, the live checks and the release-time checks refuse (no data)`, () => {
+    const { fx, backup } = setup();
+    const token = fx.authority.issue("alice").sessionToken;
+    const issued = durable.issueDurableTargetStagingSession(fx.store, "bob", 600);
+    assert.equal(issued.ok, true);
+    const hash = durable.hashTargetStagingSessionToken(issued.sessionToken);
+    const sessionIdentity = { kind: "session", tokenHash: hash };
+    // Healthy store: everything answers (so the refusals below are caused by the store state).
+    const healthy = fx.authority.list(token, { scope: "shared" });
+    assert.equal(healthy.ok, true);
+    assert.ok(healthy.tasks.length > 0);
+    assert.equal(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store, hash).ok, true);
+    assert.equal(durable.verifyTargetStagingReadLive(fx.store, { ownerUserId: "alice" }, observed).ok, true);
+    assert.equal(identityLib.verifyStagingReadBeforeRelease(ownerRequest(), { kind: "owner" }, fx.store, "alice", observed), "ok");
+
+    degrade(fx, backup);
+    // withPreflightedStore (the child-process read path): denied, no tasks.
+    assert.deepEqual(fx.authority.list(token, { scope: "shared" }), { ok: false, reason: "unauthorized", tasks: [], nextCursor: null });
+    assert.deepEqual(fx.authority.readSharedTaskDetail(token, "t1"), null);
+    // Live checks (withLiveStagingReadTransaction without an onAnchorFailure handler).
+    assert.deepEqual(durable.verifyDurableTargetStagingSessionLiveCoded(fx.store, hash), { ok: false, reason: "unavailable" });
+    assert.deepEqual(durable.verifyDurableTargetStagingSessionLive(fx.store, hash), { ok: false, reason: "unavailable" });
+    assert.deepEqual(durable.verifyTargetStagingReadLive(fx.store, { ownerUserId: "alice" }, observed), { ok: false, reason: "unavailable" });
+    assert.deepEqual(durable.verifyTargetStagingReadLive(fx.store, { tokenHash: hash }, observed), { ok: false, reason: "unavailable" });
+    assert.equal(identityLib.verifyStagingReadBeforeRelease(ownerRequest(), { kind: "owner" }, fx.store, "alice", observed), "unavailable");
+    assert.equal(identityLib.verifyStagingReadBeforeRelease(ownerRequest(), sessionIdentity, fx.store, "alice", observed), "unavailable");
+    assert.equal(identityLib.verifyStagingIdentityBeforeRelease(ownerRequest(), sessionIdentity, fx.store), "unavailable");
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), scenario);
+  });
+}
+
+test("a store restored AFTER the gate passed (between gate and read child) answers 503 with no data", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+  const backup = path.join(root, `${fx.name}.backup.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  assert.equal(titleWrite(fx, "t1", "later").ok, true);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  // The read child is spawned through process.execPath: this wrapper copies the old DB back first.
+  const wrapper = path.join(root, `${fx.name}-restore-wrapper.sh`);
+  writeFileSync(wrapper, `#!/bin/sh\ncp "${backup}" "${fx.databasePath}"\nexec "${REAL_NODE}" "$@"\n`, { mode: 0o700 });
+  process.execPath = wrapper;
+  let response;
+  try {
+    response = await routes["tasks list"](ownerCookie()); // the gate runs in this process, before the swap
+  } finally {
+    process.execPath = REAL_NODE;
+  }
+  assert.equal(response.status, 503);
+  const text = await response.text();
+  assert.ok(!/Task t|later|warm|team-area/.test(text), text);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+});
+
+test("a restore_pending store with a torn fragment: writers refuse and the journal bytes stay unchanged", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+  const backup = path.join(root, `${fx.name}.backup.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  assert.equal(titleWrite(fx, "t1", "later").ok, true);
+  appendFileSync(fx.journalPath, '{"g":"');
+  copyFileSync(backup, fx.databasePath);
+  const before = readFileSync(fx.journalPath);
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600), { ok: false, reason: "unavailable" });
+  assert.deepEqual(readFileSync(fx.journalPath), before, "fragment not cut on an untrusted store");
+});
+
+test("a reader racing a writer's fragment truncation reads the bytes that exist (short read is not corruption)", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+  appendFileSync(fx.journalPath, '{"g":"torn');
+  const size = statSync(fx.journalPath).size;
+  const fd = journalLib.openTargetStagingJournal(fx.stage.directory, false);
+  try {
+    // fstat said `size`; the writer then truncated the fragment: the read returns fewer bytes.
+    truncateSync(fx.journalPath, size - 10);
+    const buffer = journalLib.readTargetStagingJournalRange(fd, 0, size);
+    assert.equal(buffer.length, size - 10);
+    const scan = journalLib.scanTargetStagingJournalFd(fd, fx.stage.restoreGeneration);
+    assert.ok(scan && scan.state.confirmed === anchorOf(fx));
+  } finally { closeSync(fd); }
+});
+
+test("the serializer enforces the verifier's rules: an invalid record can never be appended", () => {
+  const gen = randomUUID();
+  const prev = "a".repeat(64);
+  const make = overrides => journalLib.serializeTargetStagingJournalLine({
+    n: 1, t: "intent", k: "title", p: { seq: [1, 1] }, g: gen, prev, ...overrides });
+  assert.doesNotThrow(() => make({}));
+  for (const [label, overrides] of Object.entries({
+    "unknown kind": { k: "bogus" }, "intent without payload": { p: null }, "intent without kind": { k: null },
+    "9 payload keys": { p: Object.fromEntries(Array.from({ length: 9 }, (_, i) => ["k" + i, i])) },
+    "long string": { p: { a: "x".repeat(300) } }, "float": { p: { a: 1.5 } }, "nested object": { p: { a: { b: 1 } } },
+    "long key": { p: { ["k".repeat(40)]: 1 } }, "bad generation": { g: "nope" }, "bad prev": { prev: "zz" },
+    "n zero intent": { n: 0 }, "confirm with payload": { t: "confirm", k: null, p: { a: 1 } },
+    "abort with kind": { t: "abort", k: "title", p: null }, "genesis with n": { t: "genesis", k: null, p: null, n: 3 },
+  })) assert.throws(() => make(overrides), label);
+  // And through the writer: an oversized payload rolls the transaction back.
+  const fx = makeFixture();
+  const before = { journal: journalText(fx), anchor: anchorOf(fx) };
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: "x".repeat(300) } }); return "done"; },
+    () => "denied", () => "failed");
+  assert.equal(outcome, "failed");
+  assert.deepEqual({ journal: journalText(fx), anchor: anchorOf(fx) }, before);
+});
+
+// The lstat-vs-fstat dev/ino comparison in openTargetStagingJournal is defense in depth against a
+// swap between lstat and open. It cannot be driven deterministically without a hook between two
+// syscalls inside the function (no such hook is added to production code), so it has no test; the
+// symlink, FIFO, hard-link, mode and owner checks around it are covered above.

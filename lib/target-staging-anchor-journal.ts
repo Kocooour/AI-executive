@@ -91,10 +91,26 @@ export function canonicalJournalJson(value: unknown): string {
 const chainHash = (record: TargetStagingJournalRecord): string =>
   createHash("sha256").update(record.prev + canonicalJournalJson(record)).digest("hex");
 
+/**
+ * The same field rules the verifier applies, so a record the verifier would reject can never be
+ * appended (an invalid line would turn the store journal_invalid for good).
+ */
+function validRecordShape(record: TargetStagingJournalRecord): boolean {
+  const { n, t, k, p, g, prev } = record;
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 ||
+      (t !== "genesis" && t !== "intent" && t !== "confirm" && t !== "abort") ||
+      typeof g !== "string" || !UUID.test(g) || typeof prev !== "string" || !HEX64.test(prev) ||
+      !validPayload(p)) return false;
+  if (t === "intent") return n >= 1 && typeof k === "string" && KINDS.has(k) && p !== null;
+  if (t === "genesis") return n === 0 && k === null && p === null && prev === TARGET_STAGING_JOURNAL_GENESIS_PREV;
+  return n >= 1 && k === null && p === null;
+}
+
 /** The complete line (with trailing newline) and its hash. */
 export function serializeTargetStagingJournalLine(
   record: TargetStagingJournalRecord,
 ): { text: string; hash: string } {
+  if (!validRecordShape(record)) throw new Error();
   const hash = chainHash(record);
   const text = canonicalJournalJson({ ...record, h: hash }) + "\n";
   if (Buffer.byteLength(text, "utf8") > MAX_LINE_BYTES) throw new Error();
@@ -263,15 +279,36 @@ interface CachedPrefix { generation: string; end: number; lastLineStart: number;
 const prefixCache = new Map<string, CachedPrefix>();
 const PREFIX_CACHE_MAX = 16;
 
-function readRange(fd: number, start: number, size: number): Buffer | null {
-  const buffer = Buffer.alloc(size - start);
+/**
+ * Read up to `size` bytes from `start`; stops at EOF and returns the bytes actually read. A
+ * writer may truncate a torn fragment (only the unterminated tail can shrink) between our fstat
+ * and this read, which must not look like corruption: the complete lines stay intact.
+ */
+export function readTargetStagingJournalRange(fd: number, start: number, size: number): Buffer | null {
+  const buffer = Buffer.alloc(Math.max(0, size - start));
   let offset = 0;
   while (offset < buffer.length) {
     const read = readSync(fd, buffer, offset, buffer.length - offset, start + offset);
-    if (read <= 0) return null;
+    if (read < 0) return null;
+    if (read === 0) break;
     offset += read;
   }
-  return buffer;
+  return offset === buffer.length ? buffer : buffer.subarray(0, offset);
+}
+const readRange = readTargetStagingJournalRange;
+
+/**
+ * Verify (and cache) the journal prefix WITHOUT holding any SQLite lock. Every request runs in a
+ * fresh child process with an empty cache; doing the full verification inside RESERVED/SHARED would
+ * hold the lock for the whole chain (hundreds of ms at 20 000 writes). The in-lock check then only
+ * re-verifies the boundary line and the appended bytes, with the same verdict rules. Best effort.
+ */
+export function warmTargetStagingJournal(directoryRoot: string, generation: string): void {
+  const fd = openTargetStagingJournal(directoryRoot, false);
+  if (fd === null) return;
+  try { scanTargetStagingJournalFd(fd, generation); } finally {
+    try { closeSync(fd); } catch { /* fail closed */ }
+  }
 }
 
 /** A fresh process starts empty; tests call this to simulate a restart. */

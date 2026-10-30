@@ -28,6 +28,7 @@ import {
 } from "./target-staging-pinned-write";
 import { checkPinnedTargetStagingAnchor } from "./target-staging-pinned-write";
 import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
+import { warmTargetStagingJournal } from "./target-staging-anchor-journal";
 import type { TargetStagingAnchorVerdict } from "./target-staging-anchor-journal";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
@@ -290,6 +291,7 @@ function withLiveStagingReadTransaction<T>(
     // normal for a reader; WAL/shm sidecars are refused exactly like preflight.
     files = pinTargetStagingFiles(store.stagingDirectory);
     if (!files || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return unavailable;
+    warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: true });
     db = opened.db;
     db.exec(`PRAGMA busy_timeout=${LIVE_READ_BUSY_MS}`);

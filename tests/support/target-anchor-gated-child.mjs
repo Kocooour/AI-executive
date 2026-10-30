@@ -3,6 +3,7 @@
 //   pause                 - after the intent is fsynced, signal `ready`, wait for `go`, then finish
 //   crash-before-commit   - SIGKILL right after the intent is fsynced (hot SQLite journal remains)
 //   crash-before-confirm  - SIGKILL after COMMIT, just before the confirm line is written
+//   raw                   - one pinned write with the DEFAULT 200 ms busy timeout (no hook); prints ok|denied|failed
 //   plain                 - no hook; `rounds` (argv[5]) sessions are issued back to back
 import fs, { existsSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -31,6 +32,15 @@ fs.fsyncSync = fd => {
 };
 syncBuiltinESMExports();
 
+if (mode === "raw") {
+  const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
+  const outcome = withPinnedTargetStagingWrite(
+    { stagingDirectory: directory, expectedRestoreGeneration: generation },
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed");
+  process.stdout.write(JSON.stringify({ outcome }));
+  process.exit(0);
+}
 const durable = await import("../../lib/target-staging-durable-session.ts");
 let result = { ok: true };
 let done = 0;

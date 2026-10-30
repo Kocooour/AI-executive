@@ -14,7 +14,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
-import { checkTargetStagingJournal } from "./target-staging-anchor-journal";
+import { checkTargetStagingJournal, warmTargetStagingJournal } from "./target-staging-anchor-journal";
 import { withPinnedTargetSnapshot } from "./target-store-read-snapshot";
 import {
   listAuthenticatedIsolatedTargetTasks, listAuthenticatedIsolatedTargetTasksAtOffset,
@@ -167,6 +167,8 @@ function withPreflightedStore<T>(
         if (!opened.isFile() || opened.nlink !== 1 ||
             opened.dev !== file.dev || opened.ino !== file.ino) return denied();
 
+        // Cold chain verification before the SHARED lock (see warmTargetStagingJournal).
+        warmTargetStagingJournal(`${descriptorRoot}/${directoryFd}`, store.expectedRestoreGeneration);
         return withPinnedSourceReadLock(databasePath, descriptorRoot, databaseFd, () => {
           // Keep the source SQLite SHARED lock across the raw descriptor copy.
           // A writer transaction (and any hot rollback journal) must deny reads.
