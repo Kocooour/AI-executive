@@ -228,6 +228,9 @@ export function withPinnedTargetStagingWrite<T>(
     warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
     db = opened.db;
+    // Set the bounded wait BEFORE the first SQLite read and ATTACH: a short
+    // EXCLUSIVE lock held by another connection must not fail immediately.
+    db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
     // Prove that SQLite opened the pinned main inode BEFORE ATTACH adds the
     // second (witness) database descriptor.
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
@@ -241,7 +244,7 @@ export function withPinnedTargetStagingWrite<T>(
     // crash-recovery super-journal, which must remain valid after process exit.
     if (!attachTargetStagingWitness(db, files.directory,
         store.expectedRestoreGeneration, genesisHash)) return denied();
-    db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
+    db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
     if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath)) return denied();
