@@ -250,7 +250,7 @@ export function inspectIsolatedTargetStore(
         const area = kind === "task" ? "COALESCE(l.area_id, p.area_id)" : "l.area_id";
         const join = kind === "task" ? "LEFT JOIN projects p ON p.id=l.project_id" : "";
         const latest = `(SELECT MAX(x.seq) FROM change_log x WHERE x.entity_kind='${kind}'
-          AND x.entity_id=%ID% AND x.op IN ('upsert','tombstone'))`;
+          AND x.entity_id=%ID% AND x.member_user_id IS NULL AND x.op IN ('upsert','tombstone'))`;
         return count(`SELECT COUNT(*) AS n FROM ${live} l ${join} WHERE NOT EXISTS (
           SELECT 1 FROM change_log c WHERE c.entity_kind='${kind}' AND c.entity_id=l.id
             AND c.op='upsert' AND c.revision=l.revision AND c.area_id=${area}
