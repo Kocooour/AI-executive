@@ -18,6 +18,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
+import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 /** Internal control-flow marker: every boundary failure collapses to null. */
@@ -52,6 +53,20 @@ export function noTargetStagingSidecars(
   return true;
 }
 
+/** A numeric fd can be reused after another file closes: prove a net-new
+ * pinned-inode handle, rather than a numeric fd absent from the first scan. */
+export function hasNewPinnedReadDescriptor(
+  before: ReadonlyMap<number, { dev: number; ino: number }>,
+  after: ReadonlyMap<number, { dev: number; ino: number }>,
+  pinned: { dev: number; ino: number },
+): boolean {
+  const matches = (v: { dev: number; ino: number }) => v.dev === pinned.dev && v.ino === pinned.ino;
+  let count = 0;
+  for (const v of after.values()) if (matches(v)) count++;
+  for (const v of before.values()) if (matches(v)) count--;
+  return count > 0;
+}
+
 export interface PinnedTargetStagingFiles {
   readonly directory: string;
   readonly databasePath: string;
@@ -59,11 +74,15 @@ export interface PinnedTargetStagingFiles {
   /** Path still names the pinned inode (no swap, hard link or symlink). */
   stillPinned(): boolean;
   /**
-   * Open SQLite on the verified path, then (after the caller ran its first
-   * statement, which is when SQLite really opens the file) prove that exactly
-   * one new regular-file descriptor appeared and that it is the pinned inode.
+   * Open SQLite on the verified path. The read-only proof permits recycled
+   * descriptor numbers; the writer retains its strict fd-set check.
+   * afterSnapshotBeforeSQLiteOpen is a synchronous, internal TEST-ONLY seam,
+   * never populated by staging routes or writer code.
    */
-  openDatabase(options: { readOnly: boolean }): { db: DatabaseSync; verifyOpened(): boolean };
+  openDatabase(options: {
+    readOnly: boolean;
+    afterSnapshotBeforeSQLiteOpen?: () => void;
+  }): { db: DatabaseSync; verifyOpened(): boolean };
   close(): void;
 }
 
@@ -137,17 +156,24 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
       directory, databasePath, databaseFd: dbFd, stillPinned,
       openDatabase: options => {
         const beforeOpen = regularFiles();
+        // Deterministically reproduce concurrent descriptor recycling in tests.
+        // No production call passes this hook; writer opens cannot supply it.
+        if (options.afterSnapshotBeforeSQLiteOpen) {
+          if (!options.readOnly) throw new PinDenied();
+          options.afterSnapshotBeforeSQLiteOpen();
+        }
         const db = new DatabaseSync(databasePath, { readOnly: options.readOnly });
         return {
           db,
           verifyOpened: () => {
-            const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
+            const afterOpen = regularFiles();
+            const newlyOpened = [...afterOpen].filter(([fd]) => !beforeOpen.has(fd));
             // Writers keep the strict rule (exactly one new regular file, the pinned
             // inode). A read-only open in a long-lived server may see unrelated
             // concurrent opens, so it only requires that the pinned inode was opened.
             const matches = (entry: [number, { dev: number; ino: number }]) =>
               entry[1].dev === pinned.dev && entry[1].ino === pinned.ino;
-            return (options.readOnly ? newlyOpened.some(matches)
+            return (options.readOnly ? hasNewPinnedReadDescriptor(beforeOpen, afterOpen, pinned)
               : newlyOpened.length === 1 && matches(newlyOpened[0])) && stillPinned();
           },
         };
@@ -157,7 +183,8 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
         try { closeSync(dirFd); } catch { /* fail closed */ }
       },
     };
-  } catch {
+  } catch (error) {
+    logStagingFailure("pin_files", error instanceof PinDenied ? "boundary_denied" : "exception", error);
     if (databaseFd !== null) { try { closeSync(databaseFd); } catch { /* fail closed */ } }
     if (directoryFd !== null) { try { closeSync(directoryFd); } catch { /* fail closed */ } }
     return null;

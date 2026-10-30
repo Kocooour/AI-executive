@@ -30,6 +30,7 @@ import type { PinnedTargetStagingFiles } from "./target-staging-pinned-write";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
+import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetReadLinearization } from "./target-task-read-model";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
@@ -280,7 +281,14 @@ function withLiveStagingReadTransaction<T>(
     // open, dev/ino/nlink identity. A rollback journal of a concurrent writer is
     // normal for a reader; WAL/shm sidecars are refused exactly like preflight.
     files = pinTargetStagingFiles(store.stagingDirectory);
-    if (!files || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return unavailable;
+    if (!files) {
+      logStagingFailure("live_read", "pin_failed");
+      return unavailable;
+    }
+    if (!noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) {
+      logStagingFailure("live_read", "sidecar_present");
+      return unavailable;
+    }
     const opened = files.openDatabase({ readOnly: true });
     db = opened.db;
     db.exec(`PRAGMA busy_timeout=${LIVE_READ_BUSY_MS}`);
@@ -289,7 +297,10 @@ function withLiveStagingReadTransaction<T>(
     // SQLite opens the file lazily: after the first statement prove the handle
     // is the pinned inode, and prove it again after the read.
     db.prepare("SELECT 1 FROM metadata LIMIT 1").get();
-    if (!opened.verifyOpened()) return unavailable;
+    if (!opened.verifyOpened()) {
+      logStagingFailure("live_read", "sqlite_inode_proof_failed");
+      return unavailable;
+    }
     // Metadata, identity and session rows come from one SQLite snapshot.
     const metadata = db.prepare(
       "SELECT key, value FROM metadata WHERE key IN ('schema_version','activated','restore_generation')",
@@ -298,15 +309,20 @@ function withLiveStagingReadTransaction<T>(
     if (metadata.length !== 3 || values.size !== 3 ||
         values.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
         values.get("activated") !== "false" ||
-        values.get("restore_generation") !== store.expectedRestoreGeneration) return unavailable;
+        values.get("restore_generation") !== store.expectedRestoreGeneration) {
+      logStagingFailure("live_read", "metadata_mismatch");
+      return unavailable;
+    }
     const result = body(db);
     db.exec("ROLLBACK");
     snapshot = false;
     if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) {
+      logStagingFailure("live_read", "post_read_binding_changed");
       return unavailable;
     }
     return result;
-  } catch {
+  } catch (error) {
+    logStagingFailure("live_read", "exception", error);
     return unavailable;
   } finally {
     if (db) {

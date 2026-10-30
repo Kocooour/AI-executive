@@ -116,3 +116,41 @@ test("personal page output rejects unexpected fields instead of forwarding priva
     tasks: [{ ...task, privateNote: "do not expose" }],
   }), null);
 });
+
+test("child error, timeout, output limit and nonzero exit log distinct sanitized reasons", async () => {
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(" "));
+  try {
+    const children = [];
+    const run = createStagingReadRunner(() => {
+      const child = fakeChild();
+      children.push(child);
+      return child;
+    }, 1000);
+    const childError = run(config, "target-staging-detail-child.mjs", ["one"]);
+    children[0].emit("error", new Error("private child details"));
+    children[0].finish({ ok: true });
+    assert.equal(await childError, null);
+    const tooLarge = run(config, "target-staging-detail-child.mjs", ["two"]);
+    children[1].stdout.write(Buffer.alloc(1024 * 1024 + 1));
+    assert.equal(await tooLarge, null);
+    const failed = run(config, "target-staging-detail-child.mjs", ["three"]);
+    children[2].finish(undefined, 2);
+    assert.equal(await failed, null);
+    const timeChildren = [];
+    const timeoutRun = createStagingReadRunner(() => {
+      const child = fakeChild();
+      timeChildren.push(child);
+      return child;
+    }, 5);
+    assert.equal(await timeoutRun(config, "target-staging-detail-child.mjs", ["four"]), null);
+    assert.deepEqual(timeChildren[0].kills, ["SIGKILL"]);
+  } finally { console.error = original; }
+  assert.deepEqual(logged, [
+    "[target-staging] stage=read_child reason=child_error error_code=none",
+    "[target-staging] stage=read_child reason=output_limit error_code=none",
+    "[target-staging] stage=read_child reason=nonzero_exit error_code=none",
+    "[target-staging] stage=read_child reason=timeout error_code=none",
+  ]);
+});
