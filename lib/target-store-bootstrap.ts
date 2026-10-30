@@ -13,6 +13,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveDataDirectory } from "./data-dir";
 import { TARGET_STAGING_JOURNAL_FILENAME, targetStagingJournalGenesis } from "./target-staging-anchor-journal";
+import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 
 // v7 (issue #155) tracks monotonic per-Area task-content epochs for efficient,
 // ACL-scoped cursor revisions. v8 (R2c.1) adds durable content-free task/project
@@ -927,13 +928,17 @@ export function bootstrapIsolatedTargetStore(
   } finally {
     db.close();
   }
+  // The independent witness is committed atomically with main via SQLite ATTACH on every write.
+  // Initialize it before exposing the genesis journal; an incomplete bootstrap is unusable.
+  const genesis = targetStagingJournalGenesis(restoreGeneration);
+  bootstrapTargetStagingWitness(directory, restoreGeneration, genesis.hash);
   // R2c.4a: the journal starts with its genesis record (confirmed 0). Created exclusively,
   // never through a symlink, private to this user, fsynced.
   const journalFd = openSync(path.join(directory, TARGET_STAGING_JOURNAL_FILENAME),
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_APPEND, 0o600);
   try {
     fchmodSync(journalFd, 0o600);
-    writeSync(journalFd, targetStagingJournalGenesis(restoreGeneration).text);
+    writeSync(journalFd, genesis.text);
     fsyncSync(journalFd);
   } finally {
     closeSync(journalFd);
