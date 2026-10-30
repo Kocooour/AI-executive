@@ -152,41 +152,67 @@ function itemFromRow(row: ItemRow, area: ReadableArea, actor: string): FeedItem 
   };
 }
 
-/** Current state of one Area, keyset-ordered by (kind, id); never an offset. */
+/**
+ * Current state of one Area, keyset-ordered by (kind, id); never an offset. The keyset
+ * predicate and LIMIT are pushed into every branch (project, task, task-in-project), so
+ * each branch reads only its slice; the (at most 3 x limit) rows are merged here.
+ */
 function areaRowsAfter(
   db: DatabaseSync, areaId: string, after: [string, string] | null, limit: number,
 ): ItemRow[] {
   const [kind, id] = after ?? ["", ""];
-  return db.prepare(`SELECT kind, id, title, projectId, revision, assignee FROM (
-      SELECT 'project' AS kind, p.id AS id, p.title AS title, NULL AS projectId,
-             p.revision AS revision, NULL AS assignee
-        FROM projects p INDEXED BY projects_by_area WHERE p.area_id = ?
-      UNION ALL
-      SELECT 'task', t.id, t.title, t.project_id, t.revision, t.assignee_user_id
-        FROM tasks t INDEXED BY tasks_by_area WHERE t.area_id = ?
-      UNION ALL
-      SELECT 'task', t.id, t.title, t.project_id, t.revision, t.assignee_user_id
-        FROM projects p INDEXED BY projects_by_area
-        CROSS JOIN tasks t INDEXED BY tasks_by_project
-       WHERE p.area_id = ? AND t.project_id = p.id AND t.area_id IS NULL
-    ) WHERE kind > ? OR (kind = ? AND id COLLATE BINARY > ?)
-    ORDER BY kind COLLATE BINARY ASC, id COLLATE BINARY ASC LIMIT ?`)
-    .all(areaId, areaId, areaId, kind, kind, id, limit) as ItemRow[];
+  // "project" < "task" (BINARY): a branch is fully open, restricted by id, or closed.
+  const bound = (own: "project" | "task"): "all" | "after" | "none" =>
+    own > kind ? "all" : own === kind ? "after" : "none";
+  const rows: ItemRow[] = [];
+  const run = (mode: "all" | "after" | "none", sql: string, ...args: (string | number)[]) => {
+    if (mode === "none") return;
+    rows.push(...db.prepare(sql.replace("/*KEY*/", mode === "after" ? "AND X.id COLLATE BINARY > ?" : ""))
+      .all(...args, ...(mode === "after" ? [id] : []), limit) as ItemRow[]);
+  };
+  run(bound("project"), `SELECT * FROM (SELECT 'project' AS kind, X.id AS id, X.title AS title,
+      NULL AS projectId, X.revision AS revision, NULL AS assignee
+      FROM projects X INDEXED BY projects_by_area WHERE X.area_id = ? /*KEY*/
+      ORDER BY X.id COLLATE BINARY ASC LIMIT ?)`, areaId);
+  run(bound("task"), `SELECT * FROM (SELECT 'task' AS kind, X.id AS id, X.title AS title,
+      X.project_id AS projectId, X.revision AS revision, X.assignee_user_id AS assignee
+      FROM tasks X INDEXED BY tasks_by_area WHERE X.area_id = ? /*KEY*/
+      ORDER BY X.id COLLATE BINARY ASC LIMIT ?)`, areaId);
+  run(bound("task"), `SELECT * FROM (SELECT 'task' AS kind, X.id AS id, X.title AS title,
+      X.project_id AS projectId, X.revision AS revision, X.assignee_user_id AS assignee
+      FROM projects p INDEXED BY projects_by_area
+      CROSS JOIN tasks X INDEXED BY tasks_by_project
+      WHERE p.area_id = ? AND X.project_id = p.id AND X.area_id IS NULL /*KEY*/
+      ORDER BY X.id COLLATE BINARY ASC LIMIT ?)`, areaId);
+  return rows.sort((x, y) => byBinary(x.kind, y.kind) || byBinary(x.id, y.id)).slice(0, limit);
 }
 
 type Collected = { items: FeedItem[]; contributing: Map<string, ReadableArea> };
 
 /**
  * Serve items of `areas` (ascending) after the keyset position until `FEED_PAGE_LIMIT`.
- * Returns the last consumed key and whether more may follow.
+ * `lost` Areas (readable at W, not any more) are slots of the same ordered keyset with
+ * the marker kind "lost", so their `access_lost` notices count toward the limit and are
+ * resumable. Returns the last consumed key and whether more may follow.
  */
 function collectItems(
   db: DatabaseSync, actor: string, areas: ReadableArea[], start: [string, string, string] | null,
-  into: Collected,
+  into: Collected, lost: string[] = [],
 ): { full: boolean; last: [string, string, string] | null } {
   let last: [string, string, string] | null = start;
-  for (const area of areas) {
-    if (start && area.areaId < start[0]) continue;
+  const slots = [
+    ...areas.map(area => ({ id: area.areaId, area })),
+    ...lost.map(id => ({ id, area: null as ReadableArea | null })),
+  ].sort((x, y) => byBinary(x.id, y.id));
+  for (const { id: slotId, area } of slots) {
+    if (start && slotId < start[0]) continue;
+    if (!area) {
+      if (start && slotId === start[0] && start[1] === "lost") continue;
+      if (into.items.length >= FEED_PAGE_LIMIT) return { full: true, last };
+      into.items.push({ type: "access_lost", areaId: slotId });
+      last = [slotId, "lost", slotId];
+      continue;
+    }
     let after: [string, string] | null = start && area.areaId === start[0] ? [start[1], start[2]] : null;
     for (;;) {
       const want = FEED_PAGE_LIMIT - into.items.length;
@@ -223,23 +249,17 @@ function bootstrapPage(
   const watermark = pos ? pos.w : (db.prepare("SELECT COALESCE(MAX(seq), 0) AS w FROM change_log")
     .get() as { w: number }).w;
   const into: Collected = { items: [], contributing: new Map() };
-  const { full, last } = collectItems(db, actor, readable, pos ? pos.k : null, into);
-
-  // Areas the actor could read at bootstrap start (seq <= W) but cannot now, within the
-  // part of the list this page passed: skipped, announced exactly once as access_lost.
+  // Areas the actor could read at bootstrap start (seq <= W) but cannot now are skipped and
+  // announced once as access_lost, as slots of the same keyset (counted in the page limit).
   const own = ownMembershipRows(db, actor);
-  const startArea = pos?.k ? pos.k[0] : null;
-  const endArea = full && last ? last[0] : null;
   const current = new Set(readable.map(area => area.areaId));
   const lost: string[] = [];
   for (const [areaId, rows] of own) {
-    if (current.has(areaId) || !isReadableStagingProjectId(areaId) || !memberAt(rows, watermark)) continue;
-    if ((startArea === null || areaId >= startArea) && (endArea === null || areaId <= endArea)) lost.push(areaId);
+    if (!current.has(areaId) && isReadableStagingProjectId(areaId) && memberAt(rows, watermark)) lost.push(areaId);
   }
-  lost.sort(byBinary);
-  const items: FeedItem[] = [...into.items, ...lost.map((areaId): FeedItem => ({ type: "access_lost", areaId }))];
+  const { full, last } = collectItems(db, actor, readable, pos ? pos.k : null, into, lost);
   return {
-    ok: true, phase: "bootstrap", items, more: full, done: false, actorUserId: actor, epoch,
+    ok: true, phase: "bootstrap", items: into.items, more: full, done: false, actorUserId: actor, epoch,
     next: full && last ? { ph: "b", w: watermark, k: last } : { ph: "f", p: watermark },
     linearization: linearizationOf(actor, into.contributing),
   };
@@ -315,8 +335,9 @@ function currentItem(db: DatabaseSync, kind: "task" | "project", id: string): Cu
 function feedPage(
   db: DatabaseSync, actor: string, epoch: number, position: number,
 ): TargetChangeFeedResult {
+  // Too many relevant Areas to serve a feed page: the client must re-bootstrap (409).
   const readable = readableAreas(db, actor);
-  if (!readable) return denied("unavailable");
+  if (!readable) return denied("resync_required");
   const readableById = new Map(readable.map(area => [area.areaId, area] as const));
   const own = ownMembershipRows(db, actor);
   // Relevant Areas: private owned + current membership (readable) + any Area with an own
@@ -324,7 +345,7 @@ function feedPage(
   const relevant: { areaId: string; spans: Array<[number, number]>; own: MemberRow[] }[] = [];
   const ids = new Set<string>(readable.map(area => area.areaId));
   for (const [areaId, rows] of own) if (rows.some(row => row.seq > position)) ids.add(areaId);
-  if (ids.size > MAX_SCOPED_READ_AREAS) return denied("unavailable");
+  if (ids.size > MAX_SCOPED_READ_AREAS) return denied("resync_required");
   for (const areaId of [...ids].sort(byBinary)) {
     if (!isReadableStagingProjectId(areaId)) continue;
     const rows = own.get(areaId) ?? [];

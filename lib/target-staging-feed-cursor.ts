@@ -33,7 +33,7 @@ const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 
 /** Position state inside the encrypted claims. */
 export type FeedPosition =
-  /** Whole-actor bootstrap: watermark W and the last served (areaId, kind, id). */
+  /** Whole-actor bootstrap: watermark W and the last served (areaId, kind, id); kind "lost" = an access_lost slot. */
   | { ph: "b"; w: number; k: [string, string, string] | null }
   /** Feed: P is the seq of the last entry examined for THIS actor, never the log head. */
   | { ph: "f"; p: number }
@@ -64,7 +64,8 @@ export function validFeedPosition(value: unknown): value is FeedPosition {
   if (pos.ph === "f") return keys === "p,ph" && safeInt(pos.p, 0);
   if (pos.ph === "b") {
     return keys === "k,ph,w" && safeInt(pos.w, 0) && (pos.k === null || (Array.isArray(pos.k) &&
-      pos.k.length === 3 && pos.k.every(idOk) && (pos.k[1] === "project" || pos.k[1] === "task")));
+      pos.k.length === 3 && pos.k.every(idOk) &&
+      (pos.k[1] === "project" || pos.k[1] === "task" || pos.k[1] === "lost")));
   }
   if (pos.ph === "a") {
     return keys === "a,k,ph,w" && idOk(pos.a) && safeInt(pos.w, 0) && (pos.k === null ||

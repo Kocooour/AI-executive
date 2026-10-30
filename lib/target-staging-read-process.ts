@@ -502,25 +502,22 @@ export function parseStagingFeedResult(value: unknown): StagingFeedResult | null
       page.ok !== true || !ACTOR_ID.test(String(page.actorUserId)) || !rev(page.epoch) ||
       (page.phase !== "bootstrap" && page.phase !== "feed" && page.phase !== "area_bootstrap") ||
       typeof page.more !== "boolean" || typeof page.done !== "boolean" ||
-      !Array.isArray(page.items) || page.items.length > FEED_PAGE_LIMIT + MAX_SCOPED_READ_AREAS ||
+      !Array.isArray(page.items) || page.items.length > FEED_PAGE_LIMIT ||
       (page.next !== null && !validFeedPosition(page.next)) ||
       // The next position must match the phase it continues from.
       (page.next === null) !== (page.phase === "area_bootstrap" && page.done === true)) return null;
   const items: FeedItem[] = [];
   const rowAreas = new Map<string, "private" | "shared">();
-  let upserts = 0;
   for (const raw of page.items) {
     const item = parseFeedItem(raw);
     if (!item) return null;
     if (item.type === "upsert") {
-      upserts++;
       const seen = rowAreas.get(item.areaId);
       if (seen !== undefined && seen !== item.areaKind) return null;
       rowAreas.set(item.areaId, item.areaKind);
     }
     items.push(item);
   }
-  if (upserts > FEED_PAGE_LIMIT) return null;
   const linearization = parseLinearization(page.linearization, rowAreas);
   if (!linearization || linearization.actorUserId !== page.actorUserId) return null;
   return {

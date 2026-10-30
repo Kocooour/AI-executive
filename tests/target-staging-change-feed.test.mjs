@@ -283,6 +283,62 @@ test("bootstrap: an Area lost since bootstrap start is skipped and announced onc
   assert.deepEqual((await drain(fx, d)).items.filter(i => i.type !== "upsert"), []);
 });
 
+/** n shared Areas z-area-NNN (alice admin, bob viewer), one task each; raw SQL in one transaction. */
+const seedAreas = (fx, count) => {
+  const db = new DatabaseSync(fx.databasePath);
+  db.exec("PRAGMA foreign_keys=ON; BEGIN");
+  for (let i = 0; i < count; i++) {
+    const n = String(i).padStart(4, "0");
+    db.exec(`INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('zw-${n}','shared','alice');
+      INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('z-area-${n}','Z ${n}','shared','zw-${n}','alice');
+      INSERT INTO area_members(area_id,user_id,role) VALUES ('z-area-${n}','alice','admin'),('z-area-${n}','bob','viewer');
+      INSERT INTO tasks(id,area_id,title) VALUES ('z-task-${n}','z-area-${n}','Z task ${n}');`);
+  }
+  db.exec("COMMIT");
+  db.close();
+};
+
+test("bootstrap: >100 Areas lost mid-bootstrap -> every page <=100 items, each notice once, no data", async () => {
+  const fx = makeFixture();
+  seedAreas(fx, 250);
+  const b = login(fx, "bob");
+  const pages = [];
+  const boot = await drain(fx, b, null, async (pageNumber, body) => {
+    pages.push(body);
+    if (pageNumber === 1) mutate(fx, "DELETE FROM area_members WHERE user_id='bob' AND area_id LIKE 'z-area-%';");
+  });
+  pages.push(boot.last);
+  assert.ok(pages.length >= 3);
+  for (const body of pages) assert.ok(body.items.length <= 100, `page of ${body.items.length}`);
+  const served = new Set(pages[0].items.filter(i => i.type === "upsert").map(i => i.areaId));
+  const lostAreas = boot.items.filter(i => i.type === "access_lost").map(i => i.areaId);
+  assert.equal(new Set(lostAreas).size, lostAreas.length, "each notice exactly once");
+  // Unserved Areas, plus the page-1 boundary Area (served, then lost) which is also announced.
+  const boundary = decrypt(pages[0].cursor).pos.k[0];
+  const unserved = lostAreas.filter(id => !served.has(id));
+  assert.equal(unserved.length, 250 - [...served].filter(a => a.startsWith("z-area-")).length);
+  assert.ok(lostAreas.filter(id => served.has(id)).every(id => id === boundary));
+  for (const body of pages.slice(1)) {
+    assert.equal(body.items.some(i => i.type === "upsert"), false, "no data from lost Areas");
+  }
+  // Every Area is either served on page 1 or announced as lost: nothing disappears silently.
+  for (let i = 0; i < 250; i++) {
+    const id = `z-area-${String(i).padStart(4, "0")}`;
+    assert.ok(served.has(id) || lostAreas.includes(id), id);
+  }
+  assert.equal(decrypt(boot.cursor).pos.ph, "f");
+});
+
+test("feed: more relevant Areas than the staging bound -> 409 resync_required, never 503", async () => {
+  const fx = makeFixture();
+  const a = login(fx, "alice");
+  const start = await drain(fx, a);
+  seedAreas(fx, 1001);
+  const response = await feedRequest(fx, a.cookie, start.cursor);
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { code: "resync_required" });
+});
+
 test("hidden activity: 50 changes in an Area the actor cannot see change neither response nor position", async () => {
   const fx = makeFixture();
   for (const user of ["dave", "bob"]) {
