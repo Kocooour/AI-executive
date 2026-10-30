@@ -1,3 +1,4 @@
+import { logStagingFailure } from "../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig, stagingCursorIdentity,
@@ -65,7 +66,10 @@ async function scopedList(input: {
     return answer(503, "Staging unavailable");
   }
   if (released === "stale") return answer(409, "read_stale_reload");
-  if (!page) return answer(503, "Staging unavailable");
+  if (!page) {
+      logStagingFailure("tasks_list", "child_page_unavailable");
+      return answer(503, "Staging unavailable");
+    }
   if (previous?.ok === true && previous.revision !== page.revision) {
     return answer(409, "Cursor stale");
   }
@@ -165,7 +169,10 @@ export async function GET(request: Request): Promise<Response> {
         process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId) {
       return answer(503, "Staging unavailable");
     }
-    if (!page) return answer(503, "Staging unavailable");
+    if (!page) {
+      logStagingFailure("tasks_list", "child_page_unavailable");
+      return answer(503, "Staging unavailable");
+    }
     if (previous?.ok === true && previous.revision !== page.revision) {
       return answer(409, "Cursor stale");
     }
@@ -175,7 +182,8 @@ export async function GET(request: Request): Promise<Response> {
     ) : null;
     if (page.hasMore && !nextCursor) return answer(503, "Staging unavailable");
     return Response.json({ tasks: page.tasks, hasMore: page.hasMore, nextCursor }, { headers });
-  } catch {
+  } catch (error) {
+    logStagingFailure("target-staging/tasks", "route_exception", error);
     return answer(503, "Staging unavailable");
   }
 }

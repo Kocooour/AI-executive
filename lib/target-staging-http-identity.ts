@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
+import { logStagingFailure } from "./target-staging-failure-log";
 import {
   TARGET_STAGING_SESSION_COOKIE, hashTargetStagingSessionToken,
   isTargetStagingSessionToken, verifyDurableTargetStagingSessionLiveCoded, verifyTargetStagingReadLive,
@@ -91,6 +92,7 @@ export function verifyStagingIdentityBeforeRelease(
   if (!auth.enabled || !auth.configured) return "unauthorized";
   const live = verifyDurableTargetStagingSessionLiveCoded(store, identity.tokenHash);
   if (live.ok === true) return "ok";
+  if (live.reason === "unavailable") logStagingFailure("identity_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : "unavailable";
 }
 
@@ -115,6 +117,7 @@ export function verifyStagingReadBeforeRelease(
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash }, observed);
   if (live.ok === true) return "ok";
+  if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
 }
 
@@ -186,7 +189,8 @@ export function admitStagingIdentity(
     }
     const check = verifyStagingIdentityBeforeRelease(request, identity, store);
     return check === "ok" ? null : stagingIdentityRefusal(check);
-  } catch {
+  } catch (error) {
+    logStagingFailure("identity_admission", "exception", error);
     return stagingIdentityRefusal("unavailable");
   }
 }

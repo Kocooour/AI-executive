@@ -1,3 +1,4 @@
+import { logStagingFailure } from "../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig, admitStagingIdentity,
@@ -111,7 +112,8 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json(result.phase === "area_bootstrap"
       ? { phase: result.phase, items, done: result.done, cursor: next }
       : { phase: result.phase, items, more: result.more, cursor: next }, { headers });
-  } catch {
+  } catch (error) {
+    logStagingFailure("target-staging/changes", "route_exception", error);
     return answer(503, "Staging unavailable");
   }
 }

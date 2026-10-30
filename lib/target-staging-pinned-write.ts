@@ -18,6 +18,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import { inspectIsolatedTargetStore } from "./target-store-preflight";
+import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 /** Internal control-flow marker: every boundary failure collapses to null. */
@@ -50,6 +51,20 @@ export function noTargetStagingSidecars(
     }
   }
   return true;
+}
+
+/** A numeric fd can be reused after another file closes: prove a net-new
+ * pinned-inode handle, rather than a numeric fd absent from the first scan. */
+export function hasNewPinnedReadDescriptor(
+  before: ReadonlyMap<number, { dev: number; ino: number }>,
+  after: ReadonlyMap<number, { dev: number; ino: number }>,
+  pinned: { dev: number; ino: number },
+): boolean {
+  const matches = (v: { dev: number; ino: number }) => v.dev === pinned.dev && v.ino === pinned.ino;
+  let count = 0;
+  for (const v of after.values()) if (matches(v)) count++;
+  for (const v of before.values()) if (matches(v)) count--;
+  return count > 0;
 }
 
 export interface PinnedTargetStagingFiles {
@@ -147,7 +162,7 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
             // concurrent opens, so it only requires that the pinned inode was opened.
             const matches = (entry: [number, { dev: number; ino: number }]) =>
               entry[1].dev === pinned.dev && entry[1].ino === pinned.ino;
-            return (options.readOnly ? newlyOpened.some(matches)
+            return (options.readOnly ? hasNewPinnedReadDescriptor(beforeOpen, regularFiles(), pinned)
               : newlyOpened.length === 1 && matches(newlyOpened[0])) && stillPinned();
           },
         };
@@ -157,7 +172,8 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
         try { closeSync(dirFd); } catch { /* fail closed */ }
       },
     };
-  } catch {
+  } catch (error) {
+    logStagingFailure("pin_files", error instanceof PinDenied ? "boundary_denied" : "exception", error);
     if (databaseFd !== null) { try { closeSync(databaseFd); } catch { /* fail closed */ } }
     if (directoryFd !== null) { try { closeSync(directoryFd); } catch { /* fail closed */ } }
     return null;
