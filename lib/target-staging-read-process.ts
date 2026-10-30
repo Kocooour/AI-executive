@@ -8,6 +8,10 @@ import type {
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import { isReadableStagingProjectId } from "./target-project-id";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
+import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
+import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
+import { validFeedClaims, validFeedPosition } from "./target-staging-feed-cursor";
+import type { FeedClaims, FeedPosition } from "./target-staging-feed-cursor";
 
 const MAX_CONCURRENT = 2;
 const TIMEOUT_MS = 20_000;
@@ -299,7 +303,7 @@ export interface StagingScopedPage {
 /** Hard staging limit: contributing Areas per scoped read (see docs/ARCHITECTURE.md, R2-ID.2b). */
 export { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 
-function parseLinearization(
+export function parseLinearization(
   value: unknown, rowAreas: Map<string, "private" | "shared">,
 ): TargetReadLinearization | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -417,4 +421,125 @@ export async function readStagingTaskDetailInChild(
 ): Promise<StagingTaskDetailResult | null> {
   const payload = await runChild(config, "target-staging-detail-child.mjs", [taskId]);
   return parseStagingTaskDetail(payload, taskId);
+}
+
+
+// ---------------------------------------------------------------------------
+// R2c.2a bootstrap / Area bootstrap / change feed. Strict allowlists per item
+// type at the child-to-HTTP boundary; the linearization record must contain
+// every Area of a released upsert, with the very same kind.
+// ---------------------------------------------------------------------------
+
+export type StagingFeedResult =
+  | TargetChangeFeedPage
+  | { ok: false; reason: "cursor_invalid" | "resync_required" | "unavailable" };
+
+const str = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const rev = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const ROLE = (value: unknown): value is string =>
+  value === "viewer" || value === "editor" || value === "admin";
+const KIND = (value: unknown): value is "task" | "project" => value === "task" || value === "project";
+const AREA_KIND = (value: unknown): value is "private" | "shared" => value === "private" || value === "shared";
+const keysOf = (value: object): string => Object.keys(value).sort().join(",");
+
+function parseFeedItem(value: unknown): FeedItem | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const keys = keysOf(item);
+  switch (item.type) {
+    case "upsert":
+      if (item.kind === "task" && str(item.id) && rev(item.revision) && str(item.areaId) &&
+          AREA_KIND(item.areaKind) && typeof item.title === "string" &&
+          (item.projectId === null || str(item.projectId)) && item.effectiveAreaId === item.areaId) {
+        const shared = item.areaKind === "shared";
+        if (keys !== (shared ? "areaId,areaKind,assignedToMe,effectiveAreaId,id,kind,projectId,revision,title,type"
+              : "areaId,areaKind,effectiveAreaId,id,kind,projectId,revision,title,type") ||
+            (shared && typeof item.assignedToMe !== "boolean")) return null;
+        return {
+          type: "upsert", kind: "task", id: item.id, revision: item.revision, areaId: item.areaId,
+          areaKind: item.areaKind, title: item.title, projectId: item.projectId as string | null,
+          effectiveAreaId: item.areaId, ...(shared ? { assignedToMe: item.assignedToMe as boolean } : {}),
+        };
+      }
+      if (item.kind === "project" && keys === "areaId,areaKind,id,kind,revision,title,type" &&
+          str(item.id) && rev(item.revision) && str(item.areaId) && AREA_KIND(item.areaKind) &&
+          typeof item.title === "string") {
+        return { type: "upsert", kind: "project", id: item.id, revision: item.revision,
+          areaId: item.areaId, areaKind: item.areaKind, title: item.title };
+      }
+      return null;
+    case "left_scope":
+      return keys === "areaId,id,kind,type" && KIND(item.kind) && str(item.id) && str(item.areaId)
+        ? { type: "left_scope", kind: item.kind, id: item.id, areaId: item.areaId } : null;
+    case "tombstone":
+      return keys === "areaId,id,kind,revision,type" && KIND(item.kind) && str(item.id) &&
+        str(item.areaId) && rev(item.revision)
+        ? { type: "tombstone", kind: item.kind, id: item.id, areaId: item.areaId, revision: item.revision } : null;
+    case "access_granted":
+      return keys === "areaId,grantSeq,role,type" && str(item.areaId) && ROLE(item.role) &&
+        typeof item.grantSeq === "number" && Number.isSafeInteger(item.grantSeq) && item.grantSeq > 0
+        ? { type: "access_granted", areaId: item.areaId, role: item.role, grantSeq: item.grantSeq } : null;
+    case "role_changed":
+      return keys === "areaId,role,type" && str(item.areaId) && ROLE(item.role)
+        ? { type: "role_changed", areaId: item.areaId, role: item.role } : null;
+    case "access_lost":
+      return keys === "areaId,type" && str(item.areaId) ? { type: "access_lost", areaId: item.areaId } : null;
+    default:
+      return null;
+  }
+}
+
+export function parseStagingFeedResult(value: unknown): StagingFeedResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const page = value as Record<string, unknown>;
+  if (page.ok === false) {
+    return keysOf(page) === "ok,reason" &&
+      (page.reason === "cursor_invalid" || page.reason === "resync_required" || page.reason === "unavailable")
+      ? { ok: false, reason: page.reason } : null;
+  }
+  if (keysOf(page) !== "actorUserId,done,epoch,items,linearization,more,next,ok,phase" ||
+      page.ok !== true || !ACTOR_ID.test(String(page.actorUserId)) || !rev(page.epoch) ||
+      (page.phase !== "bootstrap" && page.phase !== "feed" && page.phase !== "area_bootstrap") ||
+      typeof page.more !== "boolean" || typeof page.done !== "boolean" ||
+      !Array.isArray(page.items) || page.items.length > FEED_PAGE_LIMIT ||
+      (page.next !== null && !validFeedPosition(page.next)) ||
+      // The next position must match the phase it continues from.
+      (page.next === null) !== (page.phase === "area_bootstrap" && page.done === true)) return null;
+  const items: FeedItem[] = [];
+  const rowAreas = new Map<string, "private" | "shared">();
+  for (const raw of page.items) {
+    const item = parseFeedItem(raw);
+    if (!item) return null;
+    if (item.type === "upsert") {
+      const seen = rowAreas.get(item.areaId);
+      if (seen !== undefined && seen !== item.areaKind) return null;
+      rowAreas.set(item.areaId, item.areaKind);
+    }
+    items.push(item);
+  }
+  // Per-phase allowlists: item types and the position the next cursor may continue from.
+  const nextPh = page.next === null ? null : (page.next as FeedPosition).ph;
+  const allowed = page.phase === "bootstrap" ? ["upsert", "access_lost"]
+    : page.phase === "feed" ? null : ["upsert"];
+  if (allowed && !items.every(item => allowed.includes(item.type))) return null;
+  if (page.phase === "bootstrap" && nextPh !== "b" && nextPh !== "f") return null;
+  if (page.phase === "feed" && nextPh !== "f") return null;
+  if (page.phase === "area_bootstrap" && nextPh !== "a" && nextPh !== null) return null;
+  const linearization = parseLinearization(page.linearization, rowAreas);
+  if (!linearization || linearization.actorUserId !== page.actorUserId) return null;
+  return {
+    ok: true, phase: page.phase, items, more: page.more, done: page.done,
+    next: page.next as TargetChangeFeedPage["next"], actorUserId: page.actorUserId as string,
+    epoch: page.epoch, linearization,
+  };
+}
+
+export async function readStagingFeedPageInChild(
+  config: StagingPersonalReadConfig, claims: FeedClaims | null,
+): Promise<StagingFeedResult | null> {
+  if (claims !== null && !validFeedClaims(claims)) return null;
+  const encoded = claims === null ? "-" : Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  const payload = await runChild(config, "target-staging-feed-child.mjs", [encoded]);
+  return parseStagingFeedResult(payload);
 }

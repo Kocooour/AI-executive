@@ -28,11 +28,13 @@ import {
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
-  readPreflightedScopedTaskPage, readPreflightedSharedTargetTask,
+  readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
+import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
+import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -327,6 +329,16 @@ export class TargetStagingSessionAuthority {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedScopedTaskPage(this.#store, credential, { scope, limit, offset }) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R2c.2a: one bootstrap / Area bootstrap / feed page from a single pinned snapshot. */
+  readChangeFeedPage(actorUserId: string, claims: FeedClaims | null): TargetChangeFeedResult | null {
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedChangeFeedPage(this.#store, credential, claims) : null;
     } catch {
       return null;
     }
