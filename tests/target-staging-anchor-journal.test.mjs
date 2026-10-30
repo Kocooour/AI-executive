@@ -506,18 +506,35 @@ test("a restore after a lost confirm is detected once any later write resolved t
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
 });
 
-test("DOCUMENTED LIMITATION: restoring the copy taken just before a write whose confirm was lost, with no write in between, is not detected", async () => {
-  // anchor == highest confirmed with one trailing unconfirmed intent looks exactly like a crash
-  // before COMMIT. Only a restore of that precise copy in that precise window is affected; the
-  // journal still carries the lost intent with its payload for the restore procedure (R2c.4b).
+test("a copied older main DB is rejected even when the latest committed intent lost its confirm", async () => {
+  // SQLite's attached witness commits together with main, whereas a backup
+  // restoration replaces only main: the witness sees the lost COMMIT.
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "warm").ok, true);
   const backup = path.join(root, `${fx.name}.backup.sqlite`);
   copyFileSync(fx.databasePath, backup);
-  await runChild(fx, "crash-before-confirm").done;
+  const result = await runChild(fx, "crash-before-confirm").done;
+  assert.equal(result.signal, "SIGKILL");
   copyFileSync(backup, fx.databasePath);
-  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
   assert.equal(journalState(fx).pending, anchorOf(fx) + 1);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  await expectGate(await routes["tasks list"](ownerCookie()), "restore_pending", "lost confirm main restore");
+});
+
+test("committed session revocation remains fail-closed after lost confirm and main-only DB restore", async () => {
+  const fx = makeFixture();
+  const issued = durable.issueDurableTargetStagingSession(fx.store, "bob", 600);
+  assert.equal(issued.ok, true);
+  const backup = path.join(root, `${fx.name}.backup.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  const result = await runChild(fx, "crash-before-confirm-revoke", issued.sessionId).done;
+  assert.equal(result.signal, "SIGKILL");
+  copyFileSync(backup, fx.databasePath);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  await expectGate(await routes["tasks list"](sessionCookie(issued.sessionToken)),
+    "restore_pending", "revoked session must not resume");
+  assert.equal(durable.verifyDurableTargetStagingSessionLive(fx.store,
+    durable.hashTargetStagingSessionToken(issued.sessionToken)).ok, false);
 });
 
 // ---- journal tampering ----------------------------------------------------------------------
