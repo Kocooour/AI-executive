@@ -562,3 +562,28 @@ test("preflight rejects forged 'leave' entries and removals without a prior add;
   db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
   assert.deepEqual(issues(ok.stage), []);
 });
+
+test("preflight membership reconciliation stays linear in membership churn", () => {
+  const { stage, db } = fixture();
+  // 4000 users added and removed plus 2000 live viewers in one Area: the
+  // previous correlated check took ~1.4 s at 4000 pairs and grew quadratically.
+  db.exec("BEGIN");
+  const identity = db.prepare("INSERT INTO identities(id) VALUES (?)");
+  const workspace = db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)");
+  const privateArea = db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+    VALUES (?, ?, 'private', ?, ?, 'unassigned')`);
+  const add = db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area', ?, 'viewer')");
+  const remove = db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id=?");
+  for (let i = 0; i < 6000; i += 1) {
+    const user = `churn-${i}`;
+    identity.run(user);
+    workspace.run(`${user}-personal`, user);
+    privateArea.run(`${user}-private`, user, `${user}-personal`, user);
+    add.run(user);
+    if (i < 4000) remove.run(user);
+  }
+  db.exec("COMMIT");
+  const started = performance.now();
+  assert.deepEqual(issues(stage), []);
+  assert.ok(performance.now() - started < 1500, "membership reconciliation must not scale quadratically");
+});
