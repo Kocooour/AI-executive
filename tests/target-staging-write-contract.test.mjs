@@ -414,3 +414,28 @@ test("the receipt digest binds writeAreaId: a moved task turns a same-command re
   await refused(() => KINDS.titleStatus(taskId, { cookie: bob.cookie, body: { ...command, writeAreaId: "team2-area" } }), 409,
     { error: "Revision conflict" });
 });
+
+test("delete oracle: a writer of the tombstone Area who did not delete cannot tell a deleted ID from a ghost", async () => {
+  const bob = login("bob");
+  const taskId = newTask();
+  const command = goodBody("delete", await revisionOf(taskId, bob.cookie), "team-area");
+  assert.equal((await KINDS.delete(taskId, { cookie: bob.cookie, body: command })).status, 200);
+  const alice = login("alice"); // may write team-area AND team2-area, did not delete
+  for (const kind of ["delete", "deleteStatus"]) {
+    for (const areaId of ["team-area", "team2-area"]) {
+      const body = { ...command, writeAreaId: areaId };
+      const ghost = await fingerprint(await KINDS[kind]("ghost-task", { cookie: alice.cookie, body }));
+      assert.equal(JSON.parse(ghost).status, 404);
+      for (const cookie of [alice.cookie, ownerCookie]) {
+        const before = world();
+        assert.equal(await fingerprint(await KINDS[kind](taskId, { cookie, body })), ghost, `${kind} ${areaId}`);
+        assert.equal(world(), before);
+      }
+    }
+  }
+  // The deleter's own retry with another writable Area still learns write_area_mismatch.
+  for (const kind of ["delete", "deleteStatus"]) {
+    await refused(() => KINDS[kind](taskId, { cookie: bob.cookie,
+      body: { ...command, writeAreaId: "team2-area" } }), 409, MISMATCH_BODY);
+  }
+});

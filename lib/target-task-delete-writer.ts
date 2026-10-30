@@ -25,7 +25,7 @@ import type { TargetStagingReadCredential } from "./target-task-authenticated-re
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 import { fingerprint } from "./target-task-staging-writer";
 import {
-  checkTargetTaskWriteContract, targetTaskWriteRevision, validTargetTaskTitleEditPreviewRequest,
+  checkTargetTaskWriteContract, targetStoreRestoreGeneration, targetTaskWriteRevision, targetTaskWriteTarget, validTargetTaskTitleEditPreviewRequest,
 } from "./target-task-write-preflight";
 
 const WRITE_AREA_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -107,6 +107,26 @@ export function targetTaskDeleteReceiptOutcome(
 }
 
 /**
+ * R2c.3 contract for delete and its status. A tombstone is never revealed to an
+ * actor who did not issue the delete (R2c.1): for a tombstoned ID the actor's OWN
+ * receipt is required BEFORE the Area match, so `write_area_mismatch` cannot tell a
+ * deleted ID from a never-existing one. Live tasks keep the generic order.
+ */
+function checkDeleteContract(
+  db: DatabaseSync, actor: string, request: TargetStagingTaskDeleteRequest, privateOnly: boolean,
+) {
+  const generation = targetStoreRestoreGeneration(db);
+  if (generation === null || generation !== request.restoreGeneration.toLowerCase()) {
+    return { ok: false as const, reason: "resync_required" as const };
+  }
+  if (targetTaskWriteTarget(db, actor, request.taskId, privateOnly) === "tombstone" &&
+      targetTaskDeleteReceiptOutcome(db, actor, request) === "none") {
+    return { ok: false as const, reason: "unavailable" as const };
+  }
+  return checkTargetTaskWriteContract(db, actor, request, privateOnly, true);
+}
+
+/**
  * Read-only reconciliation inside an authenticated snapshot. Access needs the
  * CURRENT write right in the task's Area, or (task gone) in the Area its
  * tombstone records, plus the actor's own receipt: everything else, including
@@ -117,7 +137,7 @@ export function verifyTargetTaskDeleteCommand(
   db: DatabaseSync, actor: string, request: TargetStagingTaskDeleteRequest, privateOnly = false,
 ): TargetStagingTaskDeleteStatusResult {
   // R2c.3 contract first (generation, write access, writeAreaId right, Area match).
-  const contract = checkTargetTaskWriteContract(db, actor, request, privateOnly, true);
+  const contract = checkDeleteContract(db, actor, request, privateOnly);
   if (contract.ok === false) return { ok: false, reason: contract.reason };
   const target = contract.target;
   const outcome = targetTaskDeleteReceiptOutcome(db, actor, request);
@@ -157,7 +177,7 @@ export function deletePreflightedTargetTask(
     // tombstone records, with the actor's CURRENT role. Missing, viewer,
     // non-member and foreign-private are one "unavailable".
     // R2c.3: generation, write access, writeAreaId right and Area match first.
-    const contract = checkTargetTaskWriteContract(db, actor, request, privateOnly, true);
+    const contract = checkDeleteContract(db, actor, request, privateOnly);
     if (contract.ok === false) return { ok: false, reason: contract.reason };
     const target = contract.target;
     const receiptKey = targetTaskDeleteReceiptKey(actor, request.taskId, request.commandId);
