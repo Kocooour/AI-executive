@@ -12,8 +12,8 @@
  * authentication capability: every request still needs a live session.
  *
  * Token = base64url(version byte || nonce(12) || ciphertext || tag(16)). The
- * plaintext JSON is space-padded to a multiple of PAD bytes so the token length
- * does not reveal the number of digits of a sequence position.
+ * plaintext JSON is space-padded to one fixed size (see FEED_CURSOR_PLAINTEXT_BYTES), so every token has the
+ * same length.
  */
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
@@ -22,9 +22,16 @@ const SALT = Buffer.from("lumi:r2c:feed-cursor:salt");
 const VERSION = 1;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
-const PAD = 128;
-/** Query bound: longer values are rejected before any decryption. */
-export const MAX_FEED_CURSOR_LENGTH = 2048;
+/**
+ * Every plaintext is padded to ONE size, so all tokens have the same length and nothing
+ * (uid length, digits of a position, key length) shows in it. Worst case of valid claims:
+ * two ids of <= 512 UTF-8 bytes (JSON escaping at most doubles them) = 2048, plus the
+ * fixed keys, uid (<=120), gen (36), kind and 16-digit numbers (~330) = ~2380 <= 2560.
+ */
+export const FEED_CURSOR_PLAINTEXT_BYTES = 2560;
+/** Exact token length (base64url of version + nonce + plaintext + tag); also the query bound. */
+export const MAX_FEED_CURSOR_LENGTH =
+  Math.ceil((1 + 12 + FEED_CURSOR_PLAINTEXT_BYTES + 16) / 3) * 4;
 const TOKEN = /^[A-Za-z0-9_-]+$/;
 const USER_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -53,7 +60,7 @@ const key = (secret: string): Buffer =>
 const safeInt = (value: unknown, min: number): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= min && value < MAX_SAFE;
 const idOk = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= MAX_ID_BYTES &&
+  typeof value === "string" && value.length > 0 && value.isWellFormed() && Buffer.byteLength(value, "utf8") <= MAX_ID_BYTES &&
   !/[\u0000-\u001f\u007f]/.test(value);
 
 /** Strict position validation, shared by the cursor, the child request and its output. */
@@ -92,14 +99,16 @@ export function sealStagingFeedCursor(
     const plain = JSON.stringify({
       v: 1, uid: claims.uid, epoch: claims.epoch, gen: claims.gen, iat: now, pos: claims.pos,
     });
-    const padded = Buffer.from(plain.padEnd(Math.ceil(plain.length / PAD) * PAD, " "), "utf8");
+    const bytes = Buffer.from(plain, "utf8");
+    if (bytes.length > FEED_CURSOR_PLAINTEXT_BYTES) return null;
+    const padded = Buffer.concat([bytes, Buffer.alloc(FEED_CURSOR_PLAINTEXT_BYTES - bytes.length, 0x20)]);
     const nonce = randomBytes(NONCE_BYTES);
     const cipher = createCipheriv("aes-256-gcm", key(secret), nonce, { authTagLength: TAG_BYTES });
     cipher.setAAD(Buffer.from(INFO));
     const body = Buffer.concat([cipher.update(padded), cipher.final()]);
     const token = Buffer.concat([Buffer.from([VERSION]), nonce, body, cipher.getAuthTag()])
       .toString("base64url");
-    return token.length <= MAX_FEED_CURSOR_LENGTH ? token : null;
+    return token.length === MAX_FEED_CURSOR_LENGTH ? token : null;
   } catch {
     return null;
   }
@@ -113,7 +122,7 @@ export function openStagingFeedCursor(secret: string, token: unknown): OpenedFee
   try {
     const raw = Buffer.from(token, "base64url");
     if (raw.toString("base64url") !== token ||
-        raw.length < 1 + NONCE_BYTES + TAG_BYTES + 1 || raw[0] !== VERSION) return fail;
+        raw.length !== 1 + NONCE_BYTES + FEED_CURSOR_PLAINTEXT_BYTES + TAG_BYTES || raw[0] !== VERSION) return fail;
     const nonce = raw.subarray(1, 1 + NONCE_BYTES);
     const tag = raw.subarray(raw.length - TAG_BYTES);
     const body = raw.subarray(1 + NONCE_BYTES, raw.length - TAG_BYTES);

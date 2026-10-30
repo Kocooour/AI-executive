@@ -32,6 +32,7 @@ const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-boots
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
+const readProcess = await import("../lib/target-staging-read-process.ts");
 const { GET: FEED } = await import("../app/api/target-staging/changes/route.ts");
 
 after(() => {
@@ -151,7 +152,7 @@ async function drain(fx, who, cursor = null, onPage = async () => {}) {
     phases.push(body.phase);
     items.push(...body.items);
     cursor = body.cursor;
-    if (!body.more) return { items, cursor, pages, phases, last: body };
+    if (body.phase === "area_bootstrap" ? body.done : !body.more) return { items, cursor, pages, phases, last: body };
     await onPage(pages, body);
   }
 }
@@ -559,12 +560,11 @@ test("cursor crypto: fresh nonce, AEAD, claims, padding and bounds", () => {
   assert.equal(feedCursor.openStagingFeedCursor(SECRET, "").ok, false);
 });
 
-test("linearization barrier: membership removed after the snapshot -> 409 read_stale_reload and no data", async () => {
-  async function withGatedChild(run, between) {
-    const gate = path.join(root, `gate-${++counter}`);
-    mkdirSync(gate);
-    const script = path.join(gate, "node-wrapper.sh");
-    writeFileSync(script, `#!/bin/sh
+async function withGatedChild(run, between) {
+  const gate = path.join(root, `gate-${++counter}`);
+  mkdirSync(gate);
+  const script = path.join(gate, "node-wrapper.sh");
+  writeFileSync(script, `#!/bin/sh
 PATH=/usr/bin:/bin
 out=$("${REAL_NODE}" "$@")
 code=$?
@@ -573,21 +573,23 @@ while [ ! -e "${gate}/go" ]; do sleep 0.02; done
 printf '%s' "$out"
 exit $code
 `);
-    chmodSync(script, 0o755);
-    process.execPath = script;
-    try {
-      const pending = run();
-      for (let waited = 0; !existsSync(path.join(gate, "done")); waited += 20) {
-        assert.ok(waited < 30_000, "gated child never finished");
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-      await between();
-      writeFileSync(path.join(gate, "go"), "");
-      return await pending;
-    } finally {
-      process.execPath = REAL_NODE;
+  chmodSync(script, 0o755);
+  process.execPath = script;
+  try {
+    const pending = run();
+    for (let waited = 0; !existsSync(path.join(gate, "done")); waited += 20) {
+      assert.ok(waited < 30_000, "gated child never finished");
+      await new Promise(resolve => setTimeout(resolve, 20));
     }
+    await between();
+    writeFileSync(path.join(gate, "go"), "");
+    return await pending;
+  } finally {
+    process.execPath = REAL_NODE;
   }
+}
+
+test("linearization barrier: membership removed after the snapshot -> 409 read_stale_reload and no data", async () => {
 
   // Bootstrap page, owner-cookie identity (alice) and a session identity (bob).
   for (const kind of ["session", "owner"]) {
@@ -680,4 +682,156 @@ test("HTTP: flag off 404, 401 without a session, no-store, rate limit, bounded c
   assert.ok(blocked, "429 after the per-client budget");
   assert.ok(Number(blocked.headers.get("retry-after")) > 0);
   assert.equal(blocked.headers.get("cache-control"), "no-store");
+});
+
+const insertTasks = (fx, rows, area = "family-area") => {
+  const db = new DatabaseSync(fx.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  const insert = db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+  for (const id of rows) insert.run(id, area, `T ${id.length}`);
+  db.close();
+};
+const ordered = ids => [...ids].sort((x, y) => Buffer.compare(Buffer.from(x), Buffer.from(y)));
+
+test("keyset order is UTF-8 byte order like SQLite BINARY: BMP-high vs astral ids at a page boundary", async () => {
+  const fx = makeFixture();
+  const specials = ["\uff61x", "\u{1F600}x", ...Array.from({ length: 108 }, (_, i) => `\u{10000}${String(i).padStart(3, "0")}`), ""];
+  const plain = Array.from({ length: 92 }, (_, i) => `g-${String(i).padStart(3, "0")}`);
+  insertTasks(fx, [...plain, ...specials]);
+  const expected = ordered(["f-1", "f-2", "f-3", "f-4", "f-5", ...plain, ...specials.filter(Boolean)]);
+  assert.ok(expected.length > 100);
+  const a = login(fx, "alice");
+  const boot = await drain(fx, a);
+  const served = boot.items.filter(i => i.areaId === "family-area").map(i => i.id);
+  assert.deepEqual(served, expected, "every item exactly once, in byte order");
+
+  // Area bootstrap (after a grant) uses the same keyset.
+  const d = login(fx, "dave");
+  const start = await drain(fx, d);
+  mutate(fx, addMemberSql("dave", "viewer"));
+  const grant = (await page(fx, d, start.cursor)).items[0];
+  const area = await drain(fx, d, grant.areaCursor);
+  assert.deepEqual(area.items.map(i => i.id), expected);
+  assert.ok(area.pages > 1);
+});
+
+test("area bootstrap pages past 100 items including a project and its tasks", async () => {
+  const fx = makeFixture();
+  mutate(fx, `INSERT INTO projects(id,area_id,title) VALUES ('pr-a','family-area','Big project');`);
+  const db = new DatabaseSync(fx.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  const insert = db.prepare("INSERT INTO tasks(id,project_id,title) VALUES (?,?,?)");
+  for (let i = 0; i < 120; i++) insert.run(`pt-${String(i).padStart(3, "0")}`, "pr-a", `P ${i}`);
+  db.close();
+  insertTasks(fx, Array.from({ length: 60 }, (_, i) => `q-${String(i).padStart(3, "0")}`));
+  const d = login(fx, "dave");
+  const start = await drain(fx, d);
+  mutate(fx, addMemberSql("dave", "viewer"));
+  const grant = (await page(fx, d, start.cursor)).items[0];
+  const pages = [];
+  const area = await drain(fx, d, grant.areaCursor, async (n, body) => pages.push(body));
+  pages.push(area.last);
+  assert.equal(pages.length, 2);
+  for (const body of pages) assert.ok(body.items.length <= 100);
+  assert.equal(area.items.length, 1 + 120 + 60 + 5);
+  assert.equal(new Set(area.items.map(i => `${i.kind}:${i.id}`)).size, area.items.length);
+  assert.equal(area.items.filter(i => i.kind === "task" && i.projectId === "pr-a").length, 120);
+  assert.equal(area.last.done, true);
+});
+
+test("cursor size: one fixed token length, worst-case claims round-trip and reach the child", async () => {
+  const gen = "0b7e7c1e-6a1f-4a7e-8c52-3a9d1f0c9a11";
+  const lengths = new Set();
+  for (const uidLength of [1, 6, 17, 60, 120]) {
+    for (const pos of [0, 9, 99999, 9007199254740990]) {
+      const token = feedCursor.sealStagingFeedCursor(SECRET, {
+        uid: "u".repeat(uidLength), epoch: pos === 0 ? 0 : 9007199254740990, gen, pos: { ph: "f", p: pos } });
+      lengths.add(token.length);
+    }
+  }
+  assert.deepEqual([...lengths], [feedCursor.MAX_FEED_CURSOR_LENGTH]);
+
+  const fx = makeFixture();
+  const worstIds = ['\\'.repeat(512), '"'.repeat(512), "\u{1F600}".repeat(128)];
+  const max = 9007199254740990;
+  for (const id of worstIds) {
+    for (const pos of [
+      { ph: "b", w: max, k: [id, "project", id] },
+      { ph: "b", w: max, k: [id, "lost", id] },
+      { ph: "a", a: id, w: max, k: ["project", id] },
+    ]) {
+      const claims = { uid: "u".repeat(120), epoch: max, gen: fx.stage.restoreGeneration, pos };
+      const plain = Buffer.byteLength(JSON.stringify({ v: 1, ...claims, iat: max }));
+      assert.ok(plain <= feedCursor.FEED_CURSOR_PLAINTEXT_BYTES, `plaintext ${plain}`);
+      const token = feedCursor.sealStagingFeedCursor(SECRET, claims);
+      assert.equal(token.length, feedCursor.MAX_FEED_CURSOR_LENGTH);
+      assert.deepEqual(feedCursor.openStagingFeedCursor(SECRET, token).claims, claims);
+      // The decrypted claims travel to the read subprocess as an argument: no smaller limit there.
+      const result = await readProcess.readStagingFeedPageInChild({
+        stagingDirectory: fx.stage.directory, expectedRestoreGeneration: fx.stage.restoreGeneration,
+        ownerUserId: "alice" }, claims);
+      assert.deepEqual(result, { ok: false, reason: "cursor_invalid" });
+    }
+  }
+  // Not well-formed (lone surrogate) or oversized ids can never be sealed.
+  const bad = pos => feedCursor.sealStagingFeedCursor(SECRET, { uid: "alice", epoch: 0, gen, pos });
+  assert.equal(bad({ ph: "a", a: "x\ud800", w: 0, k: null }), null);
+  assert.equal(bad({ ph: "a", a: "x".repeat(513), w: 0, k: null }), null);
+});
+
+test("child result parser enforces per-phase item types and next positions", () => {
+  const base = { ok: true, more: false, actorUserId: "alice", epoch: 0,
+    linearization: { actorUserId: "alice", areas: [] } };
+  const parse = value => readProcess.parseStagingFeedResult({ ...base, ...value });
+  const lost = [{ type: "access_lost", areaId: "x" }];
+  const role = [{ type: "role_changed", areaId: "x", role: "viewer" }];
+  const f = { ph: "f", p: 1 };
+  const b = { ph: "b", w: 1, k: ["x", "task", "t"] };
+  const a = { ph: "a", a: "x", w: 1, k: null };
+  assert.ok(parse({ phase: "bootstrap", items: lost, done: false, next: b }));
+  assert.ok(parse({ phase: "bootstrap", items: [], done: false, next: f }));
+  assert.ok(parse({ phase: "feed", items: role, done: false, next: f }));
+  assert.ok(parse({ phase: "area_bootstrap", items: [], done: false, next: a }));
+  assert.ok(parse({ phase: "area_bootstrap", items: [], done: true, next: null }));
+  assert.equal(parse({ phase: "bootstrap", items: [], done: false, next: a }), null);
+  assert.equal(parse({ phase: "bootstrap", items: role, done: false, next: f }), null);
+  assert.equal(parse({ phase: "feed", items: [], done: false, next: b }), null);
+  assert.equal(parse({ phase: "feed", items: [], done: false, next: a }), null);
+  assert.equal(parse({ phase: "area_bootstrap", items: [], done: false, next: f }), null);
+  assert.equal(parse({ phase: "area_bootstrap", items: lost, done: true, next: null }), null);
+  assert.equal(parse({ phase: "area_bootstrap", items: [], done: false, next: null }), null);
+});
+
+test("barrier on an Area-bootstrap page: membership removed after the snapshot -> 409, no data", async () => {
+  const fx = makeFixture();
+  const d = login(fx, "dave");
+  const start = await drain(fx, d);
+  mutate(fx, addMemberSql("dave", "viewer"));
+  const grant = (await page(fx, d, start.cursor)).items[0];
+  const stale = await withGatedChild(() => feedRequest(fx, d.cookie, grant.areaCursor),
+    async () => mutate(fx, removeMemberSql("dave")));
+  assert.equal(stale.status, 409);
+  const text = await stale.text();
+  assert.deepEqual(JSON.parse(text), { code: "read_stale_reload" });
+  assert.equal(text.includes("Family"), false);
+});
+
+test("feed work budget: many visible-but-unreadable upserts -> more:true, advanced position, nothing leaked", async () => {
+  const fx = makeFixture();
+  const b = login(fx, "bob");
+  const start = await drain(fx, b);
+  const db = new DatabaseSync(fx.databasePath);
+  db.exec("PRAGMA foreign_keys=ON; BEGIN");
+  const update = db.prepare("UPDATE tasks SET title=? WHERE id='f-3'");
+  for (let i = 0; i < 2100; i++) update.run(`Budget secret ${i}`);
+  db.exec("UPDATE tasks SET assignee_user_id=NULL WHERE assignee_user_id='bob'; DELETE FROM area_members WHERE user_id='bob' AND area_id='family-area'; COMMIT");
+  db.close();
+  const first = await page(fx, b, start.cursor);
+  assert.deepEqual(first.items, []);
+  assert.equal(first.more, true);
+  assert.ok(decrypt(first.cursor).pos.p > decrypt(start.cursor).pos.p + 2000, "position advanced over skipped entries");
+  assert.equal(JSON.stringify(first).includes("Budget"), false);
+  const second = await page(fx, b, first.cursor);
+  assert.deepEqual(second.items, [{ type: "access_lost", areaId: "family-area" }]);
+  assert.equal(second.more, false);
 });

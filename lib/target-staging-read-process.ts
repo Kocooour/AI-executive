@@ -11,7 +11,7 @@ import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
 import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
 import { validFeedClaims, validFeedPosition } from "./target-staging-feed-cursor";
-import type { FeedClaims } from "./target-staging-feed-cursor";
+import type { FeedClaims, FeedPosition } from "./target-staging-feed-cursor";
 
 const MAX_CONCURRENT = 2;
 const TIMEOUT_MS = 20_000;
@@ -518,6 +518,14 @@ export function parseStagingFeedResult(value: unknown): StagingFeedResult | null
     }
     items.push(item);
   }
+  // Per-phase allowlists: item types and the position the next cursor may continue from.
+  const nextPh = page.next === null ? null : (page.next as FeedPosition).ph;
+  const allowed = page.phase === "bootstrap" ? ["upsert", "access_lost"]
+    : page.phase === "feed" ? null : ["upsert"];
+  if (allowed && !items.every(item => allowed.includes(item.type))) return null;
+  if (page.phase === "bootstrap" && nextPh !== "b" && nextPh !== "f") return null;
+  if (page.phase === "feed" && nextPh !== "f") return null;
+  if (page.phase === "area_bootstrap" && nextPh !== "a" && nextPh !== null) return null;
   const linearization = parseLinearization(page.linearization, rowAreas);
   if (!linearization || linearization.actorUserId !== page.actorUserId) return null;
   return {

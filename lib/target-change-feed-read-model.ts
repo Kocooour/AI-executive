@@ -73,7 +73,13 @@ const denied = (reason: "cursor_invalid" | "resync_required" | "unavailable"): T
   ({ ok: false, reason });
 const isMember = (row: Pick<MemberRow, "op"> | undefined): boolean =>
   row !== undefined && row.op !== "member_remove";
-const byBinary = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/**
+ * SQLite COLLATE BINARY compares UTF-8 bytes; JS `<` compares UTF-16 code units and
+ * disagrees for U+E000..U+FFFF versus astral characters. Every JS ordering or comparison
+ * that interacts with an SQL keyset MUST use this comparator.
+ */
+const byBinary = (a: string, b: string): number =>
+  Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
 
 /** The actor's current readable Areas: private owned + shared where member. Index-driven. */
 function readableAreas(db: DatabaseSync, actor: string): ReadableArea[] | null {
@@ -205,7 +211,7 @@ function collectItems(
     ...lost.map(id => ({ id, area: null as ReadableArea | null })),
   ].sort((x, y) => byBinary(x.id, y.id));
   for (const { id: slotId, area } of slots) {
-    if (start && slotId < start[0]) continue;
+    if (start && byBinary(slotId, start[0]) < 0) continue;
     if (!area) {
       if (start && slotId === start[0] && start[1] === "lost") continue;
       if (into.items.length >= FEED_PAGE_LIMIT) return { full: true, last };
