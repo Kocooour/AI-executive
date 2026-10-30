@@ -72,10 +72,10 @@ function readRows(
     const total = db.prepare(`SELECT COUNT(*) AS total FROM ${name}.commits`).get() as
       { total: number } | undefined;
     if (!total || total.total !== last.n + 1 || intents.size < last.n) return null;
-    const stat = statSync(path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME));
+    const stat = statSync(path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME), { bigint: true });
     if (!stat.isFile() || stat.nlink !== 1) return null;
     const key = `${stat.dev}:${stat.ino}:${generation}`;
-    const change = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+    const change = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
     const cached = witnessCache.get(key);
     if (cached && (cached.n > last.n || (cached.n === last.n &&
         (cached.hash !== last.journal_hash || cached.change !== change)))) {
