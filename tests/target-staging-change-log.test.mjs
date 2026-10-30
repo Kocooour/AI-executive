@@ -565,8 +565,8 @@ test("preflight rejects forged 'leave' entries and removals without a prior add;
 
 test("preflight membership reconciliation stays linear in membership churn", () => {
   const { stage, db } = fixture();
-  // 4000 users added and removed plus 2000 live viewers in one Area: the
-  // previous correlated check took ~1.4 s at 4000 pairs and grew quadratically.
+  // 4000 users added and removed plus 4000 live viewers in one Area: the
+  // previous correlated checks took several seconds here and grew quadratically.
   db.exec("BEGIN");
   const identity = db.prepare("INSERT INTO identities(id) VALUES (?)");
   const workspace = db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)");
@@ -574,7 +574,7 @@ test("preflight membership reconciliation stays linear in membership churn", () 
     VALUES (?, ?, 'private', ?, ?, 'unassigned')`);
   const add = db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area', ?, 'viewer')");
   const remove = db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id=?");
-  for (let i = 0; i < 6000; i += 1) {
+  for (let i = 0; i < 8000; i += 1) {
     const user = `churn-${i}`;
     identity.run(user);
     workspace.run(`${user}-personal`, user);
