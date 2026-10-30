@@ -53,10 +53,8 @@ export async function POST(request: Request,
   if (!base) return answer(503, "Staging unavailable");
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const params = await context.params;
-  if (!params || Object.keys(params).sort().join(",") !== "taskId" ||
-      !validTaskId(params.taskId) || new URL(request.url).search !== "") {
-    return answer(400, "Invalid request");
-  }
+  const invalidInput = !params || Object.keys(params).sort().join(",") !== "taskId" ||
+    !validTaskId(params.taskId) || new URL(request.url).search !== "";
   try {
     requireSameOrigin(request);
     if (request.headers.get("origin") !== new URL(request.url).origin) {
@@ -67,6 +65,8 @@ export async function POST(request: Request,
     // bucket budget that legitimate writers or reconciliations need.
     const admitted = admitStagingIdentity(request, identity, bound);
     if (admitted) return admitted;
+    // Input errors only after admission: a dead session always gets its coded 401.
+    if (invalidInput) return answer(400, "Invalid request");
     const limited = enforceRateLimit(request, "target-staging-task-delete-status", 60, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },

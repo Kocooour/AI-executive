@@ -198,6 +198,51 @@ test("401 codes: expired / revoked / epoch / unknown / malformed / precedence on
   assert.equal((await routes["tasks list"](sessionCookie(live.sessionToken))).status, 200);
 });
 
+test("401 codes take precedence over invalid path / query input on every route", async () => {
+  const fx = makeFixture();
+  const issue = (user, seconds) => {
+    const r = durable.issueDurableTargetStagingSession(fx.store, user, seconds);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    return r;
+  };
+  const expired = issue("alice", 1);
+  const revoked = issue("alice", 900);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, revoked.sessionId).ok, true);
+  const live = issue("alice", 900);
+  await sleep(1300);
+  const badTask = { params: Promise.resolve({ taskId: "" }) };
+  const badArea = { params: Promise.resolve({ areaId: "" }) };
+  const writeHeaders = cookie => ({ "content-type": "application/json", origin: "http://localhost:3001",
+    cookie, "x-forwarded-for": `10.7.${Math.floor(++ip / 250)}.${ip % 250}` });
+  const invalid = {
+    "tasks list (unknown query)": cookie => LIST(get("tasks?scope=shared&bogus=1", cookie)),
+    "task detail (query)": cookie => DETAIL(get("tasks/f-1?x=1", cookie), taskCtx),
+    "task audit (query)": cookie => AUDIT(get("tasks/f-1/audit?x=1", cookie), taskCtx),
+    "projects (unknown query)": cookie => PROJECTS(get("projects?bogus=1", cookie)),
+    "title preflight (empty id)": cookie => TITLE_GET(get("tasks/x/title", cookie), badTask),
+    "title preflight (query)": cookie => TITLE_GET(get("tasks/f-1/title?bogus=1", cookie), taskCtx),
+    "title PATCH (query)": cookie => TITLE_PATCH(new Request(base + "tasks/f-1/title?x=1", {
+      method: "PATCH", body, headers: writeHeaders(cookie) }), taskCtx),
+    "title PATCH (empty id)": cookie => TITLE_PATCH(new Request(base + "tasks/x/title", {
+      method: "PATCH", body, headers: writeHeaders(cookie) }), badTask),
+    "title status (query)": cookie => TITLE_STATUS(post("tasks/f-1/title/status?x=1", cookie), taskCtx),
+    "title status (empty id)": cookie => TITLE_STATUS(post("tasks/x/title/status", cookie), badTask),
+    "delete (query)": cookie => DELETE_TASK(post("tasks/f-1/delete?x=1", cookie), taskCtx),
+    "delete (empty id)": cookie => DELETE_TASK(post("tasks/x/delete", cookie), badTask),
+    "delete status (query)": cookie => DELETE_STATUS(post("tasks/f-1/delete/status?x=1", cookie), taskCtx),
+    "delete status (empty id)": cookie => DELETE_STATUS(post("tasks/x/delete/status", cookie), badTask),
+    "membership (query)": cookie => MEMBERS(post("areas/family-area/members?unexpected=1", cookie), areaCtx),
+    "membership (empty id)": cookie => MEMBERS(post("areas/x/members", cookie), badArea),
+    "changes (unknown query)": cookie => FEED(get("changes?since=1", cookie)),
+  };
+  for (const [label, call] of Object.entries(invalid)) {
+    await expectBody(await call(sessionCookie(expired.sessionToken)), { ...AUTH, code: "session_expired" }, `${label}: expired`);
+    await expectBody(await call(sessionCookie(revoked.sessionToken)), { ...AUTH, code: "session_revoked" }, `${label}: revoked`);
+    const response = await call(sessionCookie(live.sessionToken));
+    assert.equal(response.status, 400, `${label}: live session still gets 400`);
+  }
+});
+
 let gateCounter = 0;
 async function withGatedChild(run, between) {
   const gate = path.join(root, `gate-${++gateCounter}`);

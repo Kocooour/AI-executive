@@ -50,7 +50,7 @@ export async function POST(request: Request,
   const params = await context.params;
   const areaId = params && Object.keys(params).join(",") === "areaId" &&
     typeof params.areaId === "string" && safeId.test(params.areaId) ? params.areaId : null;
-  if (!areaId || new URL(request.url).search !== "") return answer(400, "Invalid request");
+  const invalidInput = !areaId || new URL(request.url).search !== "";
   try {
     requireSameOrigin(request);
     if (request.headers.get("origin") !== new URL(request.url).origin) {
@@ -59,6 +59,8 @@ export async function POST(request: Request,
     // Admission before limiter and body: forged cookies must not drain budgets.
     const admitted = admitStagingIdentity(request, identity, bound);
     if (admitted) return admitted;
+    // Input errors only after admission: a dead session always gets its coded 401.
+    if (invalidInput || !areaId) return answer(400, "Invalid request");
     const limited = enforceRateLimit(request, "target-staging-membership-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
