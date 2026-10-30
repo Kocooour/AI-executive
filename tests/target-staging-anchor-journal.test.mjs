@@ -649,6 +649,20 @@ test("preflight validates anchor_seq (a missing or malformed value fails the sto
   assert.ok(check.issues.includes("metadata_invalid") || check.issues.includes("schema_invalid"));
 });
 
+// Synthetic journal inflation bypasses the real writers solely for performance measurements.
+// Mirror every fabricated committed intent into the independent witness as well.
+function seedSyntheticWitness(fx, entries) {
+  const db = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const add = db.prepare("INSERT INTO commits(n,journal_hash,generation) VALUES (?,?,?)");
+      for (const [n, hash] of entries) add.run(n, hash, fx.stage.restoreGeneration);
+      db.exec("COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); throw e; }
+  } finally { db.close(); }
+}
+
 // ---- performance sanity ---------------------------------------------------------------------
 
 test("performance: full-chain verification of a 5000-write journal stays far below the request budget", async () => {
@@ -659,15 +673,18 @@ test("performance: full-chain verification of a 5000-write journal stays far bel
   // measure SQLite.
   let prev = journalLines(fx).at(-1).h;
   let text = "";
+  const syntheticCommits = [];
   for (let n = 1; n <= 5000; n++) {
     const intent = journalLib.serializeTargetStagingJournalLine({
       n, t: "intent", k: "title", p: { seq: [n, n] }, g: generation, prev });
     const confirm = journalLib.serializeTargetStagingJournalLine({
       n, t: "confirm", k: null, p: null, g: generation, prev: intent.hash });
     text += intent.text + confirm.text;
+    syntheticCommits.push([n, intent.hash]);
     prev = confirm.hash;
   }
   appendFileSync(fx.journalPath, text);
+  seedSyntheticWitness(fx, syntheticCommits);
   fx.db.prepare("UPDATE metadata SET value='5000' WHERE key='anchor_seq'").run();
   const size = statSync(fx.journalPath).size;
 
@@ -801,13 +818,16 @@ for (const writes of [5000, 20000]) {
     const gen = fx.stage.restoreGeneration;
     let prev = journalLines(fx).at(-1).h;
     const chunks = [];
+    const syntheticCommits = [];
     for (let n = 1; n <= writes; n++) {
       const intent = journalLib.serializeTargetStagingJournalLine({ n, t: "intent", k: "title", p: { seq: [n, n] }, g: gen, prev });
       const confirm = journalLib.serializeTargetStagingJournalLine({ n, t: "confirm", k: null, p: null, g: gen, prev: intent.hash });
       chunks.push(intent.text, confirm.text);
+      syntheticCommits.push([n, intent.hash]);
       prev = confirm.hash;
     }
     appendFileSync(fx.journalPath, chunks.join(""));
+    seedSyntheticWitness(fx, syntheticCommits);
     fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(writes));
     const ms = fn => { const t = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t) / 1e6; };
     const median = (fn, rounds = 15) => {
@@ -838,14 +858,17 @@ function inflate(fx, writes) {
   let prev = state.lastHash;
   let n0 = state.lastIntent;
   const chunks = [];
+  const syntheticCommits = [];
   for (let i = 1; i <= writes; i++) {
     const n = n0 + i;
     const intent = journalLib.serializeTargetStagingJournalLine({ n, t: "intent", k: "title", p: { seq: [n, n] }, g: gen, prev });
     const confirm = journalLib.serializeTargetStagingJournalLine({ n, t: "confirm", k: null, p: null, g: gen, prev: intent.hash });
     chunks.push(intent.text, confirm.text);
+    syntheticCommits.push([n, intent.hash]);
     prev = confirm.hash;
   }
   appendFileSync(fx.journalPath, chunks.join(""));
+  seedSyntheticWitness(fx, syntheticCommits);
   fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(n0 + writes));
 }
 
