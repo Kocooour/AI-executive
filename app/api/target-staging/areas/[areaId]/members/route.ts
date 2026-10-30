@@ -5,7 +5,7 @@ import {
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { applyMembershipCommandInChild } from "../../../../../../lib/target-staging-membership-http-process";
-import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse, writeAreaMismatchResponse } from "../../../../../../lib/target-staging-write-contract";
+import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse } from "../../../../../../lib/target-staging-write-contract";
 import { validTargetStagingMembershipCommand } from "../../../../../../lib/target-staging-membership-command";
 import type { StagingPersonalReadConfig } from "../../../../../../lib/target-staging-read-process";
 
@@ -80,7 +80,8 @@ export async function POST(request: Request,
       writeAreaId: fields.writeAreaId, restoreGeneration: fields.restoreGeneration,
       ...("role" in fields ? { role: fields.role } : {}) };
     // R2c.3: a writeAreaId that differs from the path Area is a plain 400, decided
-    // here BEFORE the admin check, so it can reveal nothing about the Area.
+    // here BEFORE the admin check, so it can reveal nothing about the Area. The binding
+    // check is the validator in lib/target-staging-membership-command.ts; this only orders it.
     if (typeof fields.writeAreaId === "string" && fields.writeAreaId !== areaId) {
       return answer(400, "Invalid request");
     }

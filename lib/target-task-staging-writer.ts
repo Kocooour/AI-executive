@@ -93,7 +93,7 @@ export function targetTaskTitleReceiptKey(actor: string, taskId: string, command
 /** Digest exact request semantics, including the preview revision. */
 export function targetTaskTitleReceiptDigest(request: TargetStagingTaskTitleWriteRequest): string {
   return createHash("sha256")
-    .update(JSON.stringify([request.taskId, request.title, request.expectedRevision, request.writeAreaId]))
+    .update(JSON.stringify([request.taskId, request.title, request.expectedRevision]))
     .digest("hex");
 }
 

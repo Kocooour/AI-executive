@@ -705,7 +705,7 @@ test("preflight: a raw delete receipt without an audit row (live task) is reject
     writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   const key = TARGET_STAGING_DELETE_RECEIPT_PREFIX + createHash("sha256")
     .update(JSON.stringify(["alice", "live", request.commandId])).digest("hex");
-  const digest = createHash("sha256").update(JSON.stringify(["task-delete-v2", "live", request.expectedRevision, "team-area"])).digest("hex");
+  const digest = createHash("sha256").update(JSON.stringify(["task-delete-v1", "live", request.expectedRevision])).digest("hex");
   writer.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, digest);
   assert.ok(inspectIsolatedTargetStore({ stagingDirectory: s.directory, mode: "r2-model" }).issues.includes("audit_invalid"));
   assert.deepEqual(authority.deleteTask(write.sessionToken, request), { ok: false, reason: "unauthorized" });

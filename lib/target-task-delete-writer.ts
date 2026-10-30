@@ -87,7 +87,7 @@ export function targetTaskDeleteReceiptKey(actor: string, taskId: string, comman
 /** Digest of the exact request semantics (task and expected revision). */
 export function targetTaskDeleteReceiptDigest(request: TargetStagingTaskDeleteRequest): string {
   return createHash("sha256")
-    .update(JSON.stringify(["task-delete-v2", request.taskId, request.expectedRevision, request.writeAreaId]))
+    .update(JSON.stringify(["task-delete-v1", request.taskId, request.expectedRevision]))
     .digest("hex");
 }
 

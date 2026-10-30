@@ -109,8 +109,8 @@ export async function GET(request: Request): Promise<Response> {
     const next = result.next ? seal(result.next) : null;
     if (result.next && !next) return answer(503, "Staging unavailable");
     return Response.json(result.phase === "area_bootstrap"
-      ? { phase: result.phase, items, done: result.done, cursor: next }
-      : { phase: result.phase, items, more: result.more, cursor: next }, { headers });
+      ? { phase: result.phase, items, done: result.done, cursor: next, restoreGeneration: expectedRestoreGeneration }
+      : { phase: result.phase, items, more: result.more, cursor: next, restoreGeneration: expectedRestoreGeneration }, { headers });
   } catch {
     return answer(503, "Staging unavailable");
   }

@@ -422,7 +422,7 @@ test("the owner-only audit read route stays private-only: shared writes are not 
   assert.deepEqual([...new Set(bodies)], [JSON.stringify({ error: "Not found" })]);
 });
 
-test("an admin who moves her own private task into a shared Area keeps her receipt visible and writes with a fresh token only", async () => {
+test("an admin who moves her own private task into a shared Area keeps her receipt visible (via the new Area) and writes with a fresh token only", async () => {
   const alice = login("alice");
   const id = "alice-moving";
   db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'Moving')").run(id, stage.unassignedAreaId);
@@ -430,14 +430,13 @@ test("an admin who moves her own private task into a shared Area keeps her recei
   assert.equal((await patch(id, alice.cookie, first)).status, 200);
   const privateToken = (await (await detail(id, alice.cookie)).json()).snapshotRevision;
   db.prepare("UPDATE tasks SET area_id='team-area' WHERE id=?").run(id);
-  // R2c.3: the receipt digest binds writeAreaId. After the move the original
-  // command (private Area) is a write_area_mismatch, and the same command re-sent
-  // with the new Area is an idempotency/revision conflict, never "committed".
+  // R2c.3: the digest excludes writeAreaId. After the move the old Area is a
+  // write_area_mismatch, while the task's CURRENT Area verifies the original command.
   const original = { ...first, writeAreaId: stage.unassignedAreaId };
   const moved = await status(id, alice.cookie, original);
   assert.equal(moved.status, 409);
   assert.deepEqual(await moved.json(), { error: "Revision conflict", code: "write_area_mismatch" });
-  assert.equal((await status(id, alice.cookie, first)).status, 409);
+  assert.deepEqual(await (await status(id, alice.cookie, first)).json(), { status: "committed" });
   const before = snapshot(id);
   assert.equal((await patch(id, alice.cookie, command("Stale private token", privateToken))).status, 409);
   assert.deepEqual(snapshot(id), before);

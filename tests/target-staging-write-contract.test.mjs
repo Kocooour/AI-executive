@@ -38,6 +38,8 @@ const { GET: PREVIEW, PATCH } = await import("../app/api/target-staging/tasks/[t
 const { POST: TITLE_STATUS } = await import("../app/api/target-staging/tasks/[taskId]/title/status/route.ts");
 const { POST: DELETE_TASK } = await import("../app/api/target-staging/tasks/[taskId]/delete/route.ts");
 const { POST: DELETE_STATUS } = await import("../app/api/target-staging/tasks/[taskId]/delete/status/route.ts");
+const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
+const { GET: FEED } = await import("../app/api/target-staging/changes/route.ts");
 const { GET: DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
 const { POST: MEMBERS } = await import("../app/api/target-staging/areas/[areaId]/members/route.ts");
 
@@ -147,6 +149,7 @@ const fingerprint = async response => JSON.stringify({
 });
 const PROTOCOL_BODY = { error: "Invalid request", code: "protocol_unsupported" };
 const LEGACY_BODY = { error: "Invalid request", code: "legacy_snapshot_rejected" };
+const RESYNC_BODY = { error: "Resync required", code: "resync_required" };
 const MISMATCH_BODY = { error: "Revision conflict", code: "write_area_mismatch" };
 /** Send and assert status + body, and that NOTHING was written (unless `moves` first changed the world). */
 async function refused(send, status, body) {
@@ -337,9 +340,9 @@ test("membership: protocol, snapshot, field and restoreGeneration refusals write
   await refused(() => send({ restoreGeneration: randomUUID() }), 409, { error: "Resync required", code: "resync_required" });
   // Store-level: a non-admin and an unknown Area get the same 409, before the admin check.
   await refused(() => members("team-area", { cookie: login("dave").cookie,
-    body: memberBody("team-area", { restoreGeneration: randomUUID() }) }), 409, undefined);
+    body: memberBody("team-area", { restoreGeneration: randomUUID() }) }), 409, RESYNC_BODY);
   await refused(() => members("no-such-area", { cookie: alice.cookie,
-    body: memberBody("no-such-area", { restoreGeneration: randomUUID() }) }), 409, undefined);
+    body: memberBody("no-such-area", { restoreGeneration: randomUUID() }) }), 409, RESYNC_BODY);
   const ok = await send({});
   assert.equal(ok.status, 200);
 });
@@ -400,18 +403,24 @@ test("delete with a lost response: retry and status return the stored result; ot
   assert.deepEqual(await again.json(), { status: "committed" });
 });
 
-test("the receipt digest binds writeAreaId: a moved task turns a same-command retry into a conflict", async () => {
+test("after a move the old Area is a mismatch and the current Area still verifies and replays the command", async () => {
   const bob = login("bob");
   const taskId = newTask("team-area");
   const command = goodBody("title", await revisionOf(taskId, bob.cookie), "team-area");
   assert.equal((await KINDS.title(taskId, { cookie: bob.cookie, body: command })).status, 200);
   db.prepare("UPDATE tasks SET area_id='team2-area' WHERE id=?").run(taskId);
-  // Old Area: the Area check fails first. New Area: the Area check passes and the digest (which includes
-  // writeAreaId) differs from the stored receipt, so it is an idempotency conflict, never a replay.
+  // The digest excludes writeAreaId. Old Area: the Area check fails first. Current Area: normal result.
   await refused(() => KINDS.title(taskId, { cookie: bob.cookie, body: command }), 409, MISMATCH_BODY);
-  await refused(() => KINDS.title(taskId, { cookie: bob.cookie, body: { ...command, writeAreaId: "team2-area" } }), 409,
-    { error: "Revision conflict" });
-  await refused(() => KINDS.titleStatus(taskId, { cookie: bob.cookie, body: { ...command, writeAreaId: "team2-area" } }), 409,
+  await refused(() => KINDS.titleStatus(taskId, { cookie: bob.cookie, body: command }), 409, MISMATCH_BODY);
+  const current = { ...command, writeAreaId: "team2-area" };
+  const status = await KINDS.titleStatus(taskId, { cookie: bob.cookie, body: current });
+  assert.deepEqual([status.status, await status.json()], [200, { status: "committed" }]);
+  const before = world();
+  const replay = await KINDS.title(taskId, { cookie: bob.cookie, body: current });
+  assert.deepEqual([replay.status, await replay.json()], [200, { ok: true, replayed: true }]);
+  assert.equal(world(), before);
+  // A changed payload is still an idempotency conflict.
+  await refused(() => KINDS.title(taskId, { cookie: bob.cookie, body: { ...current, title: "Other" } }), 409,
     { error: "Revision conflict" });
 });
 
@@ -438,4 +447,53 @@ test("delete oracle: a writer of the tombstone Area who did not delete cannot te
     await refused(() => KINDS[kind](taskId, { cookie: bob.cookie,
       body: { ...command, writeAreaId: "team2-area" } }), 409, MISMATCH_BODY);
   }
+});
+
+test("every successful /changes response carries the store's restoreGeneration, and a write built from it succeeds", async () => {
+  const bob = login("bob");
+  const feed = cursor => FEED(new Request(`${base}changes${cursor ? "?cursor=" + cursor : ""}`,
+    { headers: { cookie: bob.cookie, "x-forwarded-for": ip() } }));
+  const stored = db.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+  assert.equal(stored, GEN);
+  // bootstrap -> feed phase
+  const first = await feed(null);
+  assert.equal(first.status, 200);
+  const bootstrap = await first.json();
+  assert.equal(bootstrap.phase, "bootstrap");
+  assert.equal(bootstrap.restoreGeneration, stored);
+  assert.equal(bootstrap.more, false);
+  const polled = await (await feed(bootstrap.cursor)).json();
+  assert.equal(polled.phase, "feed");
+  assert.equal(polled.restoreGeneration, stored);
+  // area_bootstrap: a viewer is granted a new Area, the grant notice carries the Area cursor.
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team2-area','carol','viewer')").run();
+  const carol = login("carol");
+  const carolFeed = cursor => FEED(new Request(`${base}changes${cursor ? "?cursor=" + cursor : ""}`,
+    { headers: { cookie: carol.cookie, "x-forwarded-for": ip() } }));
+  let state = await (await carolFeed(null)).json();
+  while (state.phase === "bootstrap" && state.more) state = await (await carolFeed(state.cursor)).json();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('other-area','carol','viewer')").run();
+  const grant = (await (await carolFeed(state.cursor)).json()).items.find(item => item.type === "access_granted");
+  assert.ok(grant, "grant notice");
+  const area = await (await carolFeed(grant.areaCursor)).json();
+  assert.equal(area.phase, "area_bootstrap");
+  assert.equal(area.restoreGeneration, stored);
+  // A write built from the feed value succeeds ...
+  const taskId = newTask();
+  const revision = await revisionOf(taskId, bob.cookie);
+  const written = await KINDS.title(taskId, { cookie: bob.cookie,
+    body: goodBody("title", revision, "team-area", { restoreGeneration: polled.restoreGeneration }) });
+  assert.equal(written.status, 200);
+  // ... and a client holding another generation gets resync_required on the write ...
+  const wrong = await KINDS.delete(taskId, { cookie: bob.cookie,
+    body: goodBody("delete", revision, "team-area", { restoreGeneration: randomUUID() }) });
+  assert.equal(wrong.status, 409);
+  assert.deepEqual(await wrong.json(), RESYNC_BODY);
+  // ... and resync_required on a feed cursor sealed for another generation.
+  const claims = feedCursor.openStagingFeedCursor(process.env.AI_EXECUTIVE_SESSION_SECRET, polled.cursor).claims;
+  const foreignCursor = feedCursor.sealStagingFeedCursor(process.env.AI_EXECUTIVE_SESSION_SECRET,
+    { ...claims, gen: randomUUID() });
+  const resync = await feed(foreignCursor);
+  assert.equal(resync.status, 409);
+  assert.deepEqual(await resync.json(), { code: "resync_required" });
 });
