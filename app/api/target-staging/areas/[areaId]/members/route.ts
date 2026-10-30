@@ -5,6 +5,7 @@ import {
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { applyMembershipCommandInChild } from "../../../../../../lib/target-staging-membership-http-process";
+import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse } from "../../../../../../lib/target-staging-write-contract";
 import { validTargetStagingMembershipCommand } from "../../../../../../lib/target-staging-membership-command";
 import type { StagingPersonalReadConfig } from "../../../../../../lib/target-staging-read-process";
 
@@ -61,16 +62,29 @@ export async function POST(request: Request,
     if (admitted) return admitted;
     // Input errors only after admission: a dead session always gets its coded 401.
     if (invalidInput || !areaId) return answer(400, "Invalid request");
+    // R2c.3: protocol version before the limiter and the body read.
+    const unsupported = targetProtocolRefusal(request);
+    if (unsupported) return unsupported;
     const limited = enforceRateLimit(request, "target-staging-membership-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
     const input = await readJsonBody<unknown>(request, 8 * 1024, { strictUtf8: true });
+    const legacy = legacySnapshotRefusal(input);
+    if (legacy) return legacy;
     if (!input || typeof input !== "object" || Array.isArray(input)) return answer(400, "Invalid request");
     const fields = input as Record<string, unknown>;
     const command = { areaId, commandId: fields.commandId,
       expectedPolicyRevision: fields.expectedPolicyRevision, action: fields.action,
-      targetUserId: fields.targetUserId, ...("role" in fields ? { role: fields.role } : {}) };
+      targetUserId: fields.targetUserId,
+      writeAreaId: fields.writeAreaId, restoreGeneration: fields.restoreGeneration,
+      ...("role" in fields ? { role: fields.role } : {}) };
+    // R2c.3: a writeAreaId that differs from the path Area is a plain 400, decided
+    // here BEFORE the admin check, so it can reveal nothing about the Area. The binding
+    // check is the validator in lib/target-staging-membership-command.ts; this only orders it.
+    if (typeof fields.writeAreaId === "string" && fields.writeAreaId !== areaId) {
+      return answer(400, "Invalid request");
+    }
     // Unknown keys (e.g. actorUserId) are rejected: the key set is exact.
     if (Object.keys(fields).length !== Object.keys(command).length - 1 ||
         !validTargetStagingMembershipCommand(command)) return answer(400, "Invalid request");
@@ -96,6 +110,7 @@ export async function POST(request: Request,
     if (result.ok === false) {
       switch (result.reason) {
         case "unavailable": return answer(404, "Not found");
+        case "resync_required": return resyncRequiredResponse();
         case "stale_policy_revision": return answer(409, "Policy revision conflict", "stale_policy_revision");
         case "idempotency_conflict": return answer(409, "Idempotency conflict", "idempotency_conflict");
         case "already_member": return answer(409, "Already a member", "already_member");

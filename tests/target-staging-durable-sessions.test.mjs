@@ -99,9 +99,12 @@ const write = (taskId, cookie, body, handler = PATCH, suffix = "") =>
   handler(new Request(base + `tasks/${taskId}/title${suffix}`, {
     method: handler === PATCH ? "PATCH" : "POST",
     headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie,
-      "x-forwarded-for": currentClient },
-    body: JSON.stringify(body),
+      "x-lumi-target-protocol": "1", "x-forwarded-for": currentClient },
+    body: JSON.stringify({ writeAreaId: rows("SELECT COALESCE(area_id,'none') AS a FROM tasks WHERE id=?", taskId)[0]?.a ?? "none",
+      restoreGeneration: stage.restoreGeneration, ...body }),
   }), taskCtx(taskId));
+// R2c.3 library-level contract fields for bob's private tasks.
+const bobArea = { writeAreaId: "bob-private", restoreGeneration: stage.restoreGeneration };
 const titles = body => body.tasks.map(task => task.title).sort();
 
 after(() => {
@@ -433,7 +436,7 @@ test("write barrier: session revoked after resolution but before commit writes n
     assert.equal(preview.ok, true);
     const writer = authority.issueWritable("bob");
     const input = { commandId: randomUUID(), taskId: "bob-1", title: "Bob edited",
-      expectedRevision: preview.snapshotRevision };
+      expectedRevision: preview.snapshotRevision, ...bobArea };
     const auditBefore = rows("SELECT COUNT(*) AS c FROM task_title_audit")[0].c;
     const receiptsBefore = rows("SELECT COUNT(*) AS c FROM metadata WHERE key LIKE ?", TARGET_STAGING_RECEIPT_PREFIX + "%")[0].c;
     const revisionBefore = rows("SELECT revision FROM tasks WHERE id='bob-1'")[0].revision;
@@ -457,7 +460,7 @@ test("write barrier: session revoked after resolution but before commit writes n
     const alice = issueCli("alice");
     const second = authority.previewTaskTitleEdit(reader.sessionToken, { taskId: "bob-2" }, true);
     const mismatch = authority.updateTaskTitle(writer.sessionToken, {
-      commandId: randomUUID(), taskId: "bob-2", title: "Hijack", expectedRevision: second.snapshotRevision,
+      commandId: randomUUID(), taskId: "bob-2", title: "Hijack", expectedRevision: second.snapshotRevision, ...bobArea,
     }, true, hash(alice.sessionToken));
     assert.deepEqual(mismatch, { ok: false, reason: "session_revoked" });
     assert.equal(rows("SELECT title FROM tasks WHERE id='bob-2'")[0].title, "Bob two");
@@ -607,7 +610,7 @@ test("writers wait a bounded 200 ms for a held read lock: a short hold commits, 
     return { writer, run: () => {
       const started = process.hrtime.bigint();
       const result = authority.updateTaskTitle(writer.sessionToken, {
-        commandId: randomUUID(), taskId: "bob-2", title, expectedRevision: preview.snapshotRevision,
+        commandId: randomUUID(), taskId: "bob-2", title, expectedRevision: preview.snapshotRevision, ...bobArea,
       }, true, hash(bob.sessionToken));
       return { result, elapsedMs: Number(process.hrtime.bigint() - started) / 1e6 };
     } };
@@ -659,7 +662,7 @@ test("the in-transaction recheck immediately before COMMIT rolls back task, rece
       return realPrepare.call(this, sql);
     };
     const result = authority.updateTaskTitle(writer.sessionToken, {
-      commandId: randomUUID(), taskId: "bob-1", title: "Expires mid-write", expectedRevision: preview.snapshotRevision,
+      commandId: randomUUID(), taskId: "bob-1", title: "Expires mid-write", expectedRevision: preview.snapshotRevision, ...bobArea,
     }, true, hash(bob.sessionToken));
     assert.deepEqual(result, { ok: false, reason: "session_revoked" });
     assert.ok(skew > 0, "the audit INSERT was reached before the second check");

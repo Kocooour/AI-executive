@@ -86,6 +86,7 @@ const taskRevision = id => db.prepare("SELECT revision AS r FROM tasks WHERE id=
 const authority = new TargetStagingSessionAuthority(store);
 const command = (area, action, targetUserId, extra = {}) => ({
   commandId: randomUUID(), areaId: area, expectedPolicyRevision: revision(area),
+  writeAreaId: area, restoreGeneration: stage.restoreGeneration,
   action, targetUserId, ...(action === "remove" ? {} : { role: "editor" }), ...extra,
 });
 const apply = (actor, cmd, hash) => {
@@ -212,10 +213,10 @@ test("non-admins, unknown Areas and private Areas receive the same indistinguish
   assert.deepEqual(apply("bob", command(area, "add", "dave")), denial);
   assert.deepEqual(apply("carol", command(area, "add", "dave")), denial);
   assert.deepEqual(apply("dave", command(area, "add", "dave")), denial);
-  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: "no-such-area" }), denial);
-  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: stage.unassignedAreaId }), denial);
-  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: "private-bob" }), denial);
-  assert.deepEqual(apply("bob", { ...command(area, "add", "dave"), areaId: "private-bob" }), denial);
+  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: "no-such-area", writeAreaId: "no-such-area" }), denial);
+  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: stage.unassignedAreaId, writeAreaId: stage.unassignedAreaId }), denial);
+  assert.deepEqual(apply("alice", { ...command(area, "add", "dave"), areaId: "private-bob", writeAreaId: "private-bob" }), denial);
+  assert.deepEqual(apply("bob", { ...command(area, "add", "dave"), areaId: "private-bob", writeAreaId: "private-bob" }), denial);
   assert.equal(role(area, "dave"), null);
   assert.equal(revision(area), rev);
   assert.deepEqual(counts(), state);
@@ -249,7 +250,9 @@ test("invalid commands are rejected before any store access", () => {
     { ...good, role: undefined }, { ...command(area, "remove", "bob"), role: "viewer" },
     { ...good, expectedPolicyRevision: -1 }, { ...good, expectedPolicyRevision: 1.5 },
     { ...good, expectedPolicyRevision: "0" }, { ...good, targetUserId: "" },
-    { ...good, actorUserId: "alice" }, { ...good, areaId: "a b" },
+    { ...good, actorUserId: "alice" }, { ...good, areaId: "a b", writeAreaId: "a b" },
+    { ...good, writeAreaId: undefined }, { ...good, writeAreaId: stage.unassignedAreaId },
+    { ...good, restoreGeneration: undefined }, { ...good, restoreGeneration: "not-a-uuid" },
   ]) assert.deepEqual(apply("alice", bad), { ok: false, reason: "invalid_request" });
 });
 
@@ -390,7 +393,8 @@ test("two processes racing with the same expected revision cannot both succeed",
     child.stdout.on("data", chunk => { out += chunk; });
     child.on("close", () => { try { resolve(JSON.parse(out)); } catch { resolve(null); } });
     child.stdin.end(JSON.stringify({ commandId: randomUUID(), areaId: area,
-      expectedPolicyRevision: expected, action: "add", targetUserId: target, role: "editor" }));
+      expectedPolicyRevision: expected, action: "add", targetUserId: target, role: "editor",
+      writeAreaId: area, restoreGeneration: stage.restoreGeneration }));
   });
   const results = await Promise.all([run("bob"), run("carol")]);
   const wins = results.filter(result => result?.ok === true);
@@ -438,6 +442,7 @@ const post = (areaId, body, options = {}) => POST(new Request(
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...(options.protocol === null ? {} : { "x-lumi-target-protocol": options.protocol || "1" }),
       "x-forwarded-for": options.client || `10.7.${Math.floor(client / 250)}.${client % 250 + 1}`,
       ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
       ...(options.cookie === null ? {} : { cookie: options.cookie || ownerCookie }),
@@ -493,7 +498,7 @@ test("HTTP: last admin refusal is 422 last_admin; denials are indistinguishable 
     [area, bobCookie, "dave"], ["missing-area", ownerCookie, "dave"],
     [stage.unassignedAreaId, ownerCookie, "dave"], [area, ownerCookie, "nobody"],
   ]) {
-    const response = await post(id, body(area, "add", target), { cookie });
+    const response = await post(id, { ...body(area, "add", target), writeAreaId: id }, { cookie });
     denials.push([response.status, await response.json()]);
   }
   assert.deepEqual(denials, Array(4).fill([404, { error: "Not found" }]));

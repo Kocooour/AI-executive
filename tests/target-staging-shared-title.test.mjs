@@ -29,6 +29,7 @@ process.env.AI_EXECUTIVE_SESSION_SECRET = "synthetic-r2id3-session-secret-2026-1
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 
+const { PROTOCOL, writeFields } = await import("./support/target-write-contract.mjs");
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
@@ -105,11 +106,13 @@ const preview = (taskId, cookie, query = "") =>
   PREVIEW(new Request(`${base}tasks/${taskId}/title${query}`, { headers: headersOf(cookie) }), context(taskId));
 const patch = (taskId, cookie, payload) =>
   PATCH(new Request(`${base}tasks/${taskId}/title`, {
-    method: "PATCH", headers: headersOf(cookie), body: JSON.stringify(payload),
+    method: "PATCH", headers: { ...headersOf(cookie), ...PROTOCOL },
+    body: JSON.stringify({ ...writeFields(db, taskId, stage.restoreGeneration), ...payload }),
   }), context(taskId));
 const status = (taskId, cookie, payload) =>
   STATUS(new Request(`${base}tasks/${taskId}/title/status`, {
-    method: "POST", headers: headersOf(cookie), body: JSON.stringify(payload),
+    method: "POST", headers: { ...headersOf(cookie), ...PROTOCOL },
+    body: JSON.stringify({ ...writeFields(db, taskId, stage.restoreGeneration), ...payload }),
   }), context(taskId));
 const detail = (taskId, cookie) =>
   DETAIL(new Request(`${base}tasks/${taskId}`, { headers: headersOf(cookie) }), context(taskId));
@@ -117,7 +120,8 @@ const audit = (taskId, cookie) =>
   AUDIT(new Request(`${base}tasks/${taskId}/audit`, { headers: headersOf(cookie) }), context(taskId));
 const members = (areaId, cookie, payload) =>
   MEMBERS(new Request(`${base}areas/${areaId}/members`, {
-    method: "POST", headers: headersOf(cookie), body: JSON.stringify(payload),
+    method: "POST", headers: { ...headersOf(cookie), ...PROTOCOL },
+    body: JSON.stringify({ writeAreaId: areaId, restoreGeneration: stage.restoreGeneration, ...payload }),
   }), { params: Promise.resolve({ areaId }) });
 const command = (title, expectedRevision, commandId = randomUUID()) => ({ commandId, title, expectedRevision });
 const revisionOf = async (taskId, cookie) => {
@@ -418,7 +422,7 @@ test("the owner-only audit read route stays private-only: shared writes are not 
   assert.deepEqual([...new Set(bodies)], [JSON.stringify({ error: "Not found" })]);
 });
 
-test("an admin who moves her own private task into a shared Area keeps her receipt visible and writes with a fresh token only", async () => {
+test("an admin who moves her own private task into a shared Area keeps her receipt visible (via the new Area) and writes with a fresh token only", async () => {
   const alice = login("alice");
   const id = "alice-moving";
   db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,'Moving')").run(id, stage.unassignedAreaId);
@@ -426,6 +430,12 @@ test("an admin who moves her own private task into a shared Area keeps her recei
   assert.equal((await patch(id, alice.cookie, first)).status, 200);
   const privateToken = (await (await detail(id, alice.cookie)).json()).snapshotRevision;
   db.prepare("UPDATE tasks SET area_id='team-area' WHERE id=?").run(id);
+  // R2c.3: the digest excludes writeAreaId. After the move the old Area is a
+  // write_area_mismatch, while the task's CURRENT Area verifies the original command.
+  const original = { ...first, writeAreaId: stage.unassignedAreaId };
+  const moved = await status(id, alice.cookie, original);
+  assert.equal(moved.status, 409);
+  assert.deepEqual(await moved.json(), { error: "Revision conflict", code: "write_area_mismatch" });
   assert.deepEqual(await (await status(id, alice.cookie, first)).json(), { status: "committed" });
   const before = snapshot(id);
   assert.equal((await patch(id, alice.cookie, command("Stale private token", privateToken))).status, 409);

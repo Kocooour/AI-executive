@@ -25,6 +25,7 @@ process.env.AI_EXECUTIVE_PASSWORD_HASH = "scrypt:" +
 process.env.AI_EXECUTIVE_SESSION_SECRET = "synthetic-http-title-session-secret-20261028";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
+const { writeFields } = await import("./support/target-write-contract.mjs");
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET, PATCH } = await import("../app/api/target-staging/tasks/[taskId]/title/route.ts");
@@ -64,32 +65,32 @@ const patch = (taskId, payload, options = {}) =>
   PATCH(new Request(base + taskId + "/title" + (options.query || ""), {
     method: "PATCH",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/json", "x-lumi-target-protocol": "1",
       ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
       ...(options.auth === null ? {} : { cookie: options.auth || cookie }),
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...writeFields(db, taskId, stage.restoreGeneration), ...payload }),
   }), context(taskId));
 const patchRaw = (taskId, bytes) =>
   PATCH(new Request(base + taskId + "/title", {
     method: "PATCH",
-    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
+    headers: { "content-type": "application/json", "x-lumi-target-protocol": "1", origin: "http://localhost:3001", cookie },
     body: bytes,
   }), context(taskId));
 const status = (taskId, payload, options = {}) =>
   STATUS(new Request(base + taskId + "/title/status" + (options.query || ""), {
     method: "POST",
     headers: {
-      "content-type": "application/json",
+      "content-type": "application/json", "x-lumi-target-protocol": "1",
       ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
       ...(options.auth === null ? {} : { cookie: options.auth || cookie }),
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...writeFields(db, taskId, stage.restoreGeneration), ...payload }),
   }), context(taskId));
 const statusRaw = (taskId, bytes) =>
   STATUS(new Request(base + taskId + "/title/status", {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3001", cookie },
+    headers: { "content-type": "application/json", "x-lumi-target-protocol": "1", origin: "http://localhost:3001", cookie },
     body: bytes,
   }), context(taskId));
 const command = (title, expectedRevision, commandId = randomUUID()) =>

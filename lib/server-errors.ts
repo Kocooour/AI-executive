@@ -146,6 +146,9 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // R2c.3 staging write contract (lib/target-staging-write-contract.ts): staging-only, no UI yet.
+  "Resync required",
+  "Revision conflict",
   // R2 staging-only private snapshot guards: caught by the gateway, never surfaced.
   "Unsafe staging source file",
   "Unsupported staging SQLite journal mode",

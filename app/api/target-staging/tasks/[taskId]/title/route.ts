@@ -5,6 +5,7 @@ import {
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
 import { previewPrivateTaskTitleInChild, writePrivateTaskTitleInChild } from "../../../../../../lib/target-staging-title-http-process";
+import { targetProtocolRefusal, legacySnapshotRefusal, resyncRequiredResponse, writeAreaMismatchResponse } from "../../../../../../lib/target-staging-write-contract";
 import { validTargetStagingTaskTitleWriteRequest } from "../../../../../../lib/target-task-staging-writer";
 import type { StagingPersonalReadConfig } from "../../../../../../lib/target-staging-read-process";
 
@@ -101,18 +102,24 @@ export async function PATCH(request: Request,
     if (admitted) return admitted;
     // Input errors only after admission: a dead session always gets its coded 401.
     if (invalidInput || !taskId) return answer(400, "Invalid request");
+    // R2c.3: protocol version before the limiter and the body read.
+    const unsupported = targetProtocolRefusal(request);
+    if (unsupported) return unsupported;
     const limited = enforceRateLimit(request, "target-staging-private-title-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
     const input = await readJsonBody<unknown>(request, 32 * 1024, { strictUtf8: true });
+    const legacy = legacySnapshotRefusal(input);
+    if (legacy) return legacy;
     if (!input || typeof input !== "object" || Array.isArray(input) ||
-        Object.keys(input).sort().join(",") !== "commandId,expectedRevision,title") {
+        Object.keys(input).sort().join(",") !== "commandId,expectedRevision,restoreGeneration,title,writeAreaId") {
       return answer(400, "Invalid request");
     }
     const fields = input as Record<string, unknown>;
     const command = { taskId, commandId: fields.commandId,
-      title: fields.title, expectedRevision: fields.expectedRevision };
+      title: fields.title, expectedRevision: fields.expectedRevision,
+      writeAreaId: fields.writeAreaId, restoreGeneration: fields.restoreGeneration };
     if (!validTargetStagingTaskTitleWriteRequest(command)) return answer(400, "Invalid request");
     // Recheck after potentially slow body read, before dispatching a mutation.
     const liveBeforeWrite = verifyStagingIdentityBeforeRelease(request, identity, bound);
@@ -137,6 +144,8 @@ export async function PATCH(request: Request,
     if (!unchanged(bound) || !result) return answer(503, "Staging unavailable");
     if (result.ok === false) {
       if (result.reason === "unavailable") return answer(404, "Not found");
+      if (result.reason === "resync_required") return resyncRequiredResponse();
+      if (result.reason === "write_area_mismatch") return writeAreaMismatchResponse();
       if (result.reason === "stale_revision" || result.reason === "idempotency_conflict" ||
           result.reason === "unchanged") return answer(409, "Revision conflict");
       return answer(503, "Staging unavailable");

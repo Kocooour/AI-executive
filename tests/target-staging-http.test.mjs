@@ -19,6 +19,7 @@ mkdirSync(legacy);
 writeFileSync(path.join(legacy, "sentinel"), "legacy unchanged");
 process.env.AI_EXECUTIVE_DATA_DIR = legacy;
 
+const { writeFields } = await import("./support/target-write-contract.mjs");
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/tasks/route.ts");
@@ -79,8 +80,10 @@ function patchTitle(taskId, title, expectedRevision, commandId) {
   const req = new Request(`http://localhost/api/target-staging/tasks/${encodeURIComponent(taskId)}/title`, {
     method: "PATCH",
     headers: { cookie: `${sessionCookieName}=${currentOwnerToken}`,
-      origin: "http://localhost", "content-type": "application/json" },
-    body: JSON.stringify({ commandId, title, expectedRevision }),
+      origin: "http://localhost", "content-type": "application/json",
+      "x-lumi-target-protocol": "1" },
+    body: JSON.stringify({ commandId, title, expectedRevision,
+      ...writeFields(db, taskId, stage.restoreGeneration) }),
   });
   return PATCH_TITLE(req, { params: Promise.resolve({ taskId }) });
 }
@@ -459,6 +462,7 @@ test("private task audit exposes only bounded timestamps and revisions, never ti
       taskId: "alice-private-2",
       title: "AUDIT_TITLE_SENTINEL_PRIVATE",
       expectedRevision: previous.snapshotRevision,
+      writeAreaId: stage.unassignedAreaId, restoreGeneration: stage.restoreGeneration,
     }), { ok: true });
     const response = await audit("alice-private-2");
     assert.equal(response.status, 200);
@@ -561,6 +565,7 @@ test("audit loses access when a previously private task is moved to a shared Are
       commandId: "123e4567-e89b-42d3-a456-426614174010",
       taskId: id, title: "ACL transition audited title",
       expectedRevision: previous.snapshotRevision,
+      writeAreaId: stage.unassignedAreaId, restoreGeneration: stage.restoreGeneration,
     }), { ok: true });
   } finally {
     authority.close();

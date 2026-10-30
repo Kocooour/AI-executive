@@ -33,6 +33,7 @@ const {
   bootstrapIsolatedTargetStore, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_MAX_TOMBSTONES,
 } = await import("../lib/target-store-bootstrap.ts");
+const { PROTOCOL, writeFields } = await import("./support/target-write-contract.mjs");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
@@ -107,17 +108,21 @@ const headersOf = (cookie, extra = {}) => ({
   "content-type": "application/json", origin: "http://localhost:3001",
   "x-forwarded-for": ip(), ...(cookie ? { cookie } : {}), ...extra,
 });
+const withContract = (taskId, payload) =>
+  ({ ...writeFields(db, taskId, stage.restoreGeneration), ...payload });
 const del = (taskId, cookie, payload, extra = {}) =>
   DELETE_TASK(new Request(`${base}tasks/${taskId}/delete${extra.query ?? ""}`, {
-    method: "POST", headers: headersOf(cookie, extra.headers), body: extra.raw ?? JSON.stringify(payload),
+    method: "POST", headers: headersOf(cookie, { ...PROTOCOL, ...extra.headers }),
+    body: extra.raw ?? JSON.stringify(withContract(taskId, payload)),
   }), context(taskId));
 const delStatus = (taskId, cookie, payload, extra = {}) =>
   DELETE_STATUS(new Request(`${base}tasks/${taskId}/delete/status${extra.query ?? ""}`, {
-    method: "POST", headers: headersOf(cookie, extra.headers), body: extra.raw ?? JSON.stringify(payload),
+    method: "POST", headers: headersOf(cookie, { ...PROTOCOL, ...extra.headers }),
+    body: extra.raw ?? JSON.stringify(withContract(taskId, payload)),
   }), context(taskId));
 const title = (taskId, cookie, payload) =>
   TITLE(new Request(`${base}tasks/${taskId}/title`, {
-    method: "PATCH", headers: headersOf(cookie), body: JSON.stringify(payload),
+    method: "PATCH", headers: headersOf(cookie, PROTOCOL), body: JSON.stringify(withContract(taskId, payload)),
   }), context(taskId));
 const detail = (taskId, cookie) =>
   DETAIL(new Request(`${base}tasks/${taskId}`, { headers: headersOf(cookie) }), context(taskId));
@@ -126,7 +131,8 @@ const audit = (taskId, cookie) =>
 const list = (query, cookie) => LIST(new Request(`${base}tasks${query}`, { headers: headersOf(cookie) }));
 const members = (areaId, cookie, payload) =>
   MEMBERS(new Request(`${base}areas/${areaId}/members`, {
-    method: "POST", headers: headersOf(cookie), body: JSON.stringify(payload),
+    method: "POST", headers: headersOf(cookie, PROTOCOL),
+    body: JSON.stringify({ writeAreaId: areaId, restoreGeneration: stage.restoreGeneration, ...payload }),
   }), { params: Promise.resolve({ areaId }) });
 const command = (expectedRevision, commandId = randomUUID()) => ({ commandId, expectedRevision });
 const revisionOf = async (taskId, cookie) => {
@@ -564,7 +570,8 @@ test("preflight checks the delete ledger: a receipt-less or mismatching audit ro
   const { s, writer, authority } = libFixture();
   writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('t','team-area','x')").run();
   const write = authority.issueWritable("alice");
-  const request = { commandId: randomUUID(), taskId: "t", expectedRevision: token(authority, write.sessionToken, "t") };
+  const request = { commandId: randomUUID(), taskId: "t", expectedRevision: token(authority, write.sessionToken, "t"),
+    writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   assert.deepEqual(authority.deleteTask(write.sessionToken, request), { ok: true });
   const issues = () => inspectIsolatedTargetStore({ stagingDirectory: s.directory, mode: "r2-model" }).issues;
   assert.deepEqual(issues(), []);
@@ -606,16 +613,18 @@ const token = (authority, session, taskId) => {
 };
 
 test("library: replay, conflict, read-only audience and invalid shapes", () => {
-  const { writer, authority } = libFixture();
+  const { s, writer, authority } = libFixture();
   writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('t','team-area','x')").run();
   const write = authority.issueWritable("alice");
   const read = authority.issue("alice");
   const expectedRevision = token(authority, write.sessionToken, "t");
   const commandId = randomUUID();
-  const request = { commandId, taskId: "t", expectedRevision };
+  const request = { commandId, taskId: "t", expectedRevision, writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   assert.deepEqual(authority.deleteTask(read.sessionToken, request), { ok: false, reason: "unauthorized" });
   assert.deepEqual(authority.taskDeleteCommandStatus(read.sessionToken, request), { ok: false, reason: "unauthorized" });
   for (const bad of [{ ...request, title: "x" }, { ...request, commandId: "nope" }, { commandId, taskId: "t" },
+    { ...request, writeAreaId: undefined }, { ...request, writeAreaId: "bad id" },
+    { ...request, restoreGeneration: undefined }, { ...request, restoreGeneration: "nope" },
     { ...request, expectedRevision: "abc" }, { ...request, taskId: "" }, null, []]) {
     assert.deepEqual(authority.deleteTask(write.sessionToken, bad), { ok: false, reason: "invalid_request" });
     assert.deepEqual(authority.taskDeleteCommandStatus(write.sessionToken, bad), { ok: false, reason: "invalid_request" });
@@ -640,11 +649,12 @@ test("library: a store that fails canonical preflight (guard dropped, or old sch
   writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('t','team-area','x')").run();
   const write = authority.issueWritable("alice");
   const expectedRevision = token(authority, write.sessionToken, "t");
+  const area = { writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   writer.exec("DROP TRIGGER task_tombstones_no_delete");
-  assert.deepEqual(authority.deleteTask(write.sessionToken, { commandId: randomUUID(), taskId: "t", expectedRevision }),
+  assert.deepEqual(authority.deleteTask(write.sessionToken, { commandId: randomUUID(), taskId: "t", expectedRevision, ...area }),
     { ok: false, reason: "unauthorized" });
   writer.exec("UPDATE metadata SET value='7' WHERE key='schema_version'");
-  assert.deepEqual(authority.deleteTask(write.sessionToken, { commandId: randomUUID(), taskId: "t", expectedRevision }),
+  assert.deepEqual(authority.deleteTask(write.sessionToken, { commandId: randomUUID(), taskId: "t", expectedRevision, ...area }),
     { ok: false, reason: "unauthorized" });
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n, 0);
@@ -676,20 +686,23 @@ test("library: a full delete ledger (tombstones, receipts, audit at the cap) fai
   writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('last','team-area','x')").run();
   const b = crowded.authority.issueWritable("alice");
   const lastRevision = token(crowded.authority, b.sessionToken, "last");
-  assert.deepEqual(crowded.authority.deleteTask(b.sessionToken, { commandId: randomUUID(), taskId: "last", expectedRevision: lastRevision }),
+  assert.deepEqual(crowded.authority.deleteTask(b.sessionToken, { commandId: randomUUID(), taskId: "last", expectedRevision: lastRevision,
+      writeAreaId: "team-area", restoreGeneration: crowded.s.restoreGeneration }),
     { ok: false, reason: "write_failed" });
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id='last'").get().n, 1);
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n, TARGET_STAGING_MAX_TOMBSTONES);
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM task_delete_audit").get().n, TARGET_STAGING_MAX_TOMBSTONES);
   assert.deepEqual(crowded.authority.updateTaskTitle(b.sessionToken,
-    { commandId: randomUUID(), taskId: "last", title: "still works", expectedRevision: lastRevision }), { ok: true });
+    { commandId: randomUUID(), taskId: "last", title: "still works", expectedRevision: lastRevision,
+      writeAreaId: "team-area", restoreGeneration: crowded.s.restoreGeneration }), { ok: true });
 });
 
 test("preflight: a raw delete receipt without an audit row (live task) is rejected and never replays", () => {
   const { s, writer, authority } = libFixture();
   writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('live','team-area','x')").run();
   const write = authority.issueWritable("alice");
-  const request = { commandId: randomUUID(), taskId: "live", expectedRevision: token(authority, write.sessionToken, "live") };
+  const request = { commandId: randomUUID(), taskId: "live", expectedRevision: token(authority, write.sessionToken, "live"),
+    writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   const key = TARGET_STAGING_DELETE_RECEIPT_PREFIX + createHash("sha256")
     .update(JSON.stringify(["alice", "live", request.commandId])).digest("hex");
   const digest = createHash("sha256").update(JSON.stringify(["task-delete-v1", "live", request.expectedRevision])).digest("hex");
@@ -711,7 +724,8 @@ test("library: the session recheck immediately before COMMIT rolls back tombston
   assert.equal(issued.ok, true);
   const tokenHash = createHash("sha256").update(issued.sessionToken).digest("hex");
   const write = authority.issueWritable("bob");
-  const request = { commandId: randomUUID(), taskId: "t", expectedRevision: token(authority, write.sessionToken, "t") };
+  const request = { commandId: randomUUID(), taskId: "t", expectedRevision: token(authority, write.sessionToken, "t"),
+    writeAreaId: "team-area", restoreGeneration: s.restoreGeneration };
   const snap = () => JSON.stringify([
     writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n,
     writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n,

@@ -33,7 +33,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
-import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import { canEditIsolatedTargetTaskTitle, checkTargetTaskWriteContract, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import {
   targetTaskTitleReceiptDigest, targetTaskTitleReceiptKey, validTargetStagingTaskTitleWriteRequest,
 } from "./target-task-staging-writer";
@@ -378,7 +378,8 @@ export function previewPreflightedTargetTaskTitleEdit(
  */
 export type TargetStagingTaskTitleCommandStatusResult =
   | { ok: true; status: "committed" | "not_recorded" }
-  | { ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "idempotency_conflict" };
+  | { ok: false; reason: "invalid_request" | "unauthorized" | "unavailable" | "idempotency_conflict" |
+      "resync_required" | "write_area_mismatch" };
 
 /**
  * Access requires a *current writable session*, the current task's write ACL,
@@ -405,9 +406,8 @@ export function readPreflightedTargetTaskTitleCommandStatus(
       if (!actor) return denied();
       // Recheck current Area membership before even querying the receipt so a
       // former editor cannot infer whether an old command was committed.
-      if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
-        return { ok: false, reason: "unavailable" };
-      }
+      const contract = checkTargetTaskWriteContract(db, actor, request, privateOnly);
+      if (contract.ok === false) return { ok: false, reason: contract.reason };
       const row = db.prepare("SELECT value FROM metadata WHERE key=?")
         .get(targetTaskTitleReceiptKey(actor, request.taskId, request.commandId)) as
         { value: string } | undefined;
