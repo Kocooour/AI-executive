@@ -112,8 +112,8 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("schema v8 stores only a token hash and enforces issuance limits", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 8);
+test("schema v9 stores only a token hash and enforces issuance limits", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 9);
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: stage.directory, mode: "r2-model" }).ok, true);
   const issued = issueCli("alice");
   assert.equal(issued.ok, true);
@@ -389,7 +389,7 @@ test("HTTP: a revoked session gets 401 with no data on every read route, even wi
   ]) {
     assert.equal(response.status, 401);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), { error: "Authentication required" });
+    assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_revoked" });
   }
 });
 
@@ -408,11 +408,12 @@ test("read barrier: read finished -> revoke on another process -> release check 
   // 2. Another process revokes after the read finished but before release.
   assert.equal(cli("revoke", "--session-id", bob.sessionId).body.ok, true);
   // 3. The release check observes the revocation: the route must answer 401, no body.
-  assert.equal(identityLib.verifyStagingIdentityBeforeRelease(request, identity, store), "unauthorized");
-  const refusal = identityLib.stagingIdentityRefusal("unauthorized");
+  assert.equal(identityLib.verifyStagingIdentityBeforeRelease(request, identity, store), "session_revoked");
+  const refusal = identityLib.stagingIdentityRefusal("session_revoked");
   assert.equal(refusal.status, 401);
   assert.equal(refusal.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await refusal.json(), { error: "Authentication required" });
+  assert.deepEqual(await refusal.json(), { error: "Authentication required", code: "session_revoked" });
+  assert.deepEqual(await identityLib.stagingIdentityRefusal("unauthorized").json(), { error: "Authentication required" });
   // A child started for a revoked session reads nothing at all.
   assert.equal(await readStagingPersonalPageInChild(config, 50, 0), null);
   // Expiry is enforced at the same linearization point; owner path is unaffected.

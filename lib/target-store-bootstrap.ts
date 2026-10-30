@@ -15,8 +15,10 @@ import { resolveDataDirectory } from "./data-dir";
 // ACL-scoped cursor revisions. v8 (R2c.1) adds durable content-free task/project
 // tombstones, the append-only trigger-written change log and the task delete
 // audit. Older isolated staging stores are never migrated: preflight rejects
-// them; use a NEW test-only staging directory instead.
-export const TARGET_STORE_SCHEMA_VERSION = 8;
+// them; use a NEW test-only staging directory instead. v9 (R2c.2b) adds the
+// change_log commit timestamp, the own-membership index and the monotonic
+// compaction floor with its guarded delete (no v8 migration, same rule).
+export const TARGET_STORE_SCHEMA_VERSION = 9;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -269,6 +271,10 @@ CREATE TABLE change_log (
   revision INTEGER CHECK(revision IS NULL OR (typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)),
   member_user_id TEXT REFERENCES identities(id),
   member_role TEXT CHECK(member_role IS NULL OR member_role IN ('viewer', 'editor', 'admin')),
+  -- R2c.2b: commit time (ms, second resolution) stamped automatically for trigger
+  -- inserts; compaction retention is measured against it.
+  committed_at_ms INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000)
+    CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms > 0),
   CHECK((entity_kind IN ('task', 'project') AND op IN ('upsert', 'leave', 'tombstone')
       AND revision IS NOT NULL AND member_user_id IS NULL AND member_role IS NULL)
     OR (entity_kind = 'membership' AND entity_id = area_id
@@ -283,10 +289,38 @@ CREATE INDEX change_log_tombstones ON change_log(seq) WHERE op = 'tombstone';
 -- Preflight reconciles the latest entry per entity with the live state; these
 -- checks must be index-driven (latest upsert/tombstone of one task/project/membership).
 CREATE INDEX change_log_by_entity ON change_log(entity_kind, entity_id, seq);
+-- R2c.2b: the own-membership lookup of the feed seeks by (kind, user) instead of
+-- scanning every membership row of the log.
+CREATE INDEX change_log_by_member ON change_log(entity_kind, member_user_id, seq);
 CREATE TRIGGER change_log_no_update BEFORE UPDATE ON change_log
 BEGIN SELECT RAISE(ABORT, 'change log is append-only'); END;
-CREATE TRIGGER change_log_no_delete BEFORE DELETE ON change_log
-BEGIN SELECT RAISE(ABORT, 'change log is append-only'); END;
+-- R2c.2b compaction. Rows are never deleted freely: a row may go only when it lies
+-- at or below the compaction floor (metadata 'change_log_floor') AND a LATER row of
+-- the same key (task/project: kind+ID; membership: Area+user) also lies at or below
+-- the floor. So the last row <= floor of every key and every row above the floor
+-- stay; tombstone rows are the last row of their key and therefore never go.
+CREATE TRIGGER change_log_guarded_delete BEFORE DELETE ON change_log
+WHEN OLD.seq > COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0)
+  OR NOT EXISTS(SELECT 1 FROM change_log x
+    WHERE x.entity_kind = OLD.entity_kind AND x.entity_id = OLD.entity_id
+      AND x.member_user_id IS OLD.member_user_id AND x.seq > OLD.seq
+      AND x.seq <= COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0))
+BEGIN SELECT RAISE(ABORT, 'change log rows may only be compacted below the floor'); END;
+-- The floor is a canonical decimal integer which only ever increases, never above
+-- the newest sequence, and exists exactly once: no delete, rename or replace.
+CREATE TRIGGER change_log_floor_update BEFORE UPDATE ON metadata
+WHEN OLD.key = 'change_log_floor' AND (NEW.key <> 'change_log_floor'
+  OR typeof(NEW.value) <> 'text' OR NEW.value = '' OR length(NEW.value) > 15
+  OR NEW.value GLOB '*[^0-9]*' OR (length(NEW.value) > 1 AND substr(NEW.value, 1, 1) = '0')
+  OR CAST(NEW.value AS INTEGER) < CAST(OLD.value AS INTEGER)
+  OR CAST(NEW.value AS INTEGER) > COALESCE((SELECT MAX(seq) FROM change_log), 0))
+BEGIN SELECT RAISE(ABORT, 'change log floor may only increase up to the newest sequence'); END;
+CREATE TRIGGER change_log_floor_no_delete BEFORE DELETE ON metadata
+WHEN OLD.key = 'change_log_floor'
+BEGIN SELECT RAISE(ABORT, 'change log floor cannot be deleted'); END;
+CREATE TRIGGER change_log_floor_no_replace BEFORE INSERT ON metadata
+WHEN NEW.key = 'change_log_floor' AND EXISTS(SELECT 1 FROM metadata WHERE key = 'change_log_floor')
+BEGIN SELECT RAISE(ABORT, 'change log floor cannot be replaced'); END;
 -- INSERT OR REPLACE deletes a row without DELETE triggers. In BEFORE INSERT NEW.seq
 -- is the explicit value, or not a stored value (-1) when the ID is automatic.
 CREATE TRIGGER change_log_replace_guard BEFORE INSERT ON change_log
@@ -847,6 +881,7 @@ export function bootstrapIsolatedTargetStore(
       meta.run("write_protocol", "per-item-only");
       meta.run("activated", "false");
       meta.run("restore_generation", restoreGeneration);
+      meta.run("change_log_floor", "0");
       db.prepare("INSERT INTO identities(id) VALUES (?)").run(owner);
       db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)")
         .run(personalWorkspaceId, owner);

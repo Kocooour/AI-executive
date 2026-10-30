@@ -215,7 +215,7 @@ test("an editor deletes a shared task: tombstone, log entry, receipt, audit and 
   assert.equal(tombstone.change_seq, before.log + 1);
   assert.ok(tombstone.deleted_at_ms > 0);
   assert.deepEqual(Object.keys(tombstone).sort(), ["area_id", "change_seq", "deleted_at_ms", "id", "revision"]);
-  assert.deepEqual({ ...db.prepare("SELECT * FROM change_log WHERE seq=?").get(tombstone.change_seq) }, {
+  assert.deepEqual({ ...db.prepare("SELECT seq, entity_kind, entity_id, area_id, op, revision, member_user_id, member_role FROM change_log WHERE seq=?").get(tombstone.change_seq) }, {
     seq: tombstone.change_seq, entity_kind: "task", entity_id: taskId, area_id: "team-area",
     op: "tombstone", revision: revision + 1, member_user_id: null, member_role: null });
   assert.equal(count("SELECT COALESCE(MAX(seq),0) AS n FROM change_log"), before.log + 1, "exactly one log entry");

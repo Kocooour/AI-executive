@@ -70,15 +70,15 @@ function tombstoneAndDelete(db, taskId, now = Date.now()) {
   return { ...task, seq };
 }
 
-test("schema v8: tombstone and change-log tables exist, are content-free and v7 fails preflight", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 8);
+test("schema v9: tombstone and change-log tables exist, are content-free and v7 fails preflight", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 9);
   const { stage, db } = fixture();
   for (const table of ["task_tombstones", "project_tombstones"]) {
     assert.deepEqual(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name),
       ["id", "area_id", "revision", "change_seq", "deleted_at_ms"]);
   }
   assert.deepEqual(db.prepare("PRAGMA table_info(change_log)").all().map(c => c.name),
-    ["seq", "entity_kind", "entity_id", "area_id", "op", "revision", "member_user_id", "member_role"]);
+    ["seq", "entity_kind", "entity_id", "area_id", "op", "revision", "member_user_id", "member_role", "committed_at_ms"]);
   // No FK from the title audit to tasks any more (rows outlive a deleted task); no FK to projects/tasks at all.
   assert.deepEqual(db.prepare("PRAGMA foreign_key_list(task_title_audit)").all().map(f => f.table).sort(), ["areas", "identities"]);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_list(task_delete_audit)").all().map(f => f.table).sort(), ["areas", "identities"]);
@@ -86,7 +86,7 @@ test("schema v8: tombstone and change-log tables exist, are content-free and v7 
 
   // A v7 store (no migration) fails preflight and must be re-bootstrapped.
   const v7 = fixture();
-  v7.db.exec(`DROP TABLE task_delete_audit; DROP TABLE change_log; UPDATE metadata SET value='7' WHERE key='schema_version'`);
+  v7.db.exec(`UPDATE metadata SET value='7' WHERE key='schema_version'; DROP TABLE task_delete_audit; DROP TABLE change_log`);
   const old = inspectIsolatedTargetStore({ stagingDirectory: v7.stage.directory, mode: "r2-model" });
   assert.equal(old.ok, false);
   assert.ok(old.issues.includes("schema_invalid") || old.issues.includes("metadata_invalid"), JSON.stringify(old));
@@ -243,8 +243,8 @@ test("change_log: strictly monotonic, append-only, no replacement, positive seq 
     VALUES (?,'task','x','team-area','upsert',0)`).run(seq);
   const top = maxSeq(db);
   assert.throws(() => db.prepare("UPDATE change_log SET entity_id='x' WHERE seq=1").run(), /append-only/);
-  assert.throws(() => db.prepare("DELETE FROM change_log WHERE seq=?").run(top), /append-only/);
-  assert.throws(() => db.exec("DELETE FROM change_log"), /append-only/);
+  assert.throws(() => db.prepare("DELETE FROM change_log WHERE seq=?").run(top), /compacted below the floor/);
+  assert.throws(() => db.exec("DELETE FROM change_log"), /compacted below the floor/);
   assert.throws(() => insert(top), /replacement is forbidden/);
   assert.throws(() => insert(1), /replacement is forbidden/);
   assert.throws(() => db.prepare(`INSERT OR REPLACE INTO change_log(seq,entity_kind,entity_id,area_id,op,revision)

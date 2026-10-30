@@ -116,14 +116,15 @@ function readableAreas(db: DatabaseSync, actor: string): ReadableArea[] | null {
 }
 
 /**
- * All membership rows about THIS actor, per Area, in sequence order. The entity index
- * is Area-keyed and has no member column, so this scans the membership rows of the
- * log (task/project rows are never touched). A member_user_id index would make it a
- * seek; that is a possible schema follow-up, not needed for correctness.
+ * All membership rows about THIS actor, per Area, in sequence order. Since schema v9 the
+ * (entity_kind, member_user_id, seq) index makes this a seek on the actor's own rows;
+ * task/project rows and other users' membership rows are never touched. After compaction
+ * the last row at or below the floor of every (Area, actor) is still present, so
+ * membership state at any position >= floor is exact.
  */
 function ownMembershipRows(db: DatabaseSync, actor: string): Map<string, MemberRow[]> {
   const rows = db.prepare(`SELECT area_id AS areaId, seq, op, member_role AS role
-      FROM change_log INDEXED BY change_log_by_entity
+      FROM change_log INDEXED BY change_log_by_member
      WHERE entity_kind = 'membership' AND member_user_id = ?
      ORDER BY entity_id COLLATE BINARY ASC, seq ASC`).all(actor) as
     { areaId: string; seq: number; op: MemberRow["op"]; role: string | null }[];
@@ -341,6 +342,13 @@ function currentItem(db: DatabaseSync, kind: "task" | "project", id: string): Cu
 function feedPage(
   db: DatabaseSync, actor: string, epoch: number, position: number,
 ): TargetChangeFeedResult {
+  // R2c.2b: entries at or below the compaction floor may be gone, so a cursor behind it
+  // cannot be continued (409 resync_required; the client re-bootstraps keeping its queue).
+  const floorRow = db.prepare("SELECT value FROM metadata WHERE key = 'change_log_floor'")
+    .get() as { value: string } | undefined;
+  const floor = Number(floorRow?.value);
+  if (!floorRow || !Number.isSafeInteger(floor) || floor < 0) return denied("unavailable");
+  if (position < floor) return denied("resync_required");
   // Too many relevant Areas to serve a feed page: the client must re-bootstrap (409).
   const readable = readableAreas(db, actor);
   if (!readable) return denied("resync_required");

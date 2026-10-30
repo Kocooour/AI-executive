@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
@@ -49,7 +49,7 @@ export async function GET(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
   const identity = resolveStagingHttpIdentity(request);
-  if (!identity) return answer(401, "Authentication required");
+  if (!identity) return stagingUnauthenticatedRefusal(request);
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
@@ -82,7 +82,7 @@ export async function PATCH(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
   const identity = resolveStagingHttpIdentity(request);
-  if (!identity) return answer(401, "Authentication required");
+  if (!identity) return stagingUnauthenticatedRefusal(request);
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
@@ -124,7 +124,7 @@ export async function PATCH(request: Request,
       if (afterWrite !== "ok") return stagingIdentityRefusal(afterWrite);
     }
     if (result && result.ok === false && result.reason === "session_revoked") {
-      return answer(401, "Authentication required");
+      return stagingUnauthorizedRefusal(request, identity, bound);
     }
     if (!result && identity.kind === "session") {
       // Child produced nothing: distinguish a revoked session from an outage.

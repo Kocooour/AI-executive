@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
   verifyStagingReadBeforeRelease,
 } from "../../../../../lib/target-staging-http-identity";
@@ -26,7 +26,7 @@ export async function GET(
     return answer(404, "Not found");
   }
   const identity = resolveStagingHttpIdentity(request);
-  if (!identity) return answer(401, "Authentication required");
+  if (!identity) return stagingUnauthenticatedRefusal(request);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
