@@ -14,7 +14,7 @@ import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
 import {
   TARGET_STAGING_SESSION_COOKIE, hashTargetStagingSessionToken,
-  isTargetStagingSessionToken, verifyDurableTargetStagingSessionLive, verifyTargetStagingReadLive,
+  isTargetStagingSessionToken, verifyDurableTargetStagingSessionLiveCoded, verifyTargetStagingReadLive,
 } from "./target-staging-durable-session";
 import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
@@ -23,7 +23,13 @@ export type StagingHttpIdentity =
   | { readonly kind: "owner" }
   | { readonly kind: "session"; readonly tokenHash: string };
 
-export type StagingIdentityCheck = "ok" | "unauthorized" | "unavailable";
+/**
+ * "unauthorized" is an owner-cookie failure (or a misconfigured server): 401 with the
+ * unchanged, code-less body. The R2c.2b codes only ever describe the durable session
+ * token which the caller itself presented.
+ */
+export type StagingIdentityCheck =
+  | "ok" | "unauthorized" | "unavailable" | "session_expired" | "session_revoked";
 
 /** Null means: no valid proof of any kind was presented (HTTP 401). */
 export function resolveStagingHttpIdentity(request: Request): StagingHttpIdentity | null {
@@ -83,9 +89,9 @@ export function verifyStagingIdentityBeforeRelease(
   }
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
-  const live = verifyDurableTargetStagingSessionLive(store, identity.tokenHash);
+  const live = verifyDurableTargetStagingSessionLiveCoded(store, identity.tokenHash);
   if (live.ok === true) return "ok";
-  return live.reason === "invalid" ? "unauthorized" : "unavailable";
+  return live.reason === "invalid" ? live.code : "unavailable";
 }
 
 export type StagingReadCheck = StagingIdentityCheck | "stale";
@@ -109,19 +115,54 @@ export function verifyStagingReadBeforeRelease(
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash }, observed);
   if (live.ok === true) return "ok";
-  return live.reason === "invalid" ? "unauthorized" : live.reason === "stale" ? "stale" : "unavailable";
+  return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
 }
 
 const headers = { "cache-control": "no-store" };
 
 const answer = (status: number, message: string): Response =>
   Response.json({ error: message }, { status, headers });
+const coded = (code: "session_expired" | "session_revoked"): Response =>
+  Response.json({ error: "Authentication required", code }, { status: 401, headers });
 
 /** Content-free refusal for a failed identity check; always no-store. */
 export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok">): Response {
+  if (check === "session_expired" || check === "session_revoked") return coded(check);
   return check === "unauthorized"
     ? answer(401, "Authentication required")
     : answer(503, "Staging unavailable");
+}
+
+/**
+ * 401 for a request which resolved to NO identity. A staging session cookie which
+ * is present but malformed is a dead credential (`session_revoked`); no session
+ * cookie, or an owner-cookie failure, keeps the unchanged code-less body.
+ */
+export function stagingUnauthenticatedRefusal(request: Request): Response {
+  try {
+    if (requestCookie(request, TARGET_STAGING_SESSION_COOKIE) !== undefined) {
+      const auth = getAuthState(request);
+      if (auth.enabled && auth.configured) return coded("session_revoked");
+    }
+  } catch { /* fall through to the code-less body */ }
+  return answer(401, "Authentication required");
+}
+
+/**
+ * 401 after a write child reported the session as unauthorized inside its own
+ * transaction: the live store (not the child) classifies the presented token.
+ * Owner-cookie and unclassifiable cases keep the code-less body.
+ */
+export function stagingUnauthorizedRefusal(
+  request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+): Response {
+  if (identity.kind === "session") {
+    try {
+      const check = verifyStagingIdentityBeforeRelease(request, identity, store);
+      if (check === "session_expired" || check === "session_revoked") return coded(check);
+    } catch { /* fall through to the code-less body */ }
+  }
+  return answer(401, "Authentication required");
 }
 
 /**

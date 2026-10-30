@@ -472,7 +472,7 @@ test("barrier: concurrent session revocation and membership removal -> 401, no d
     });
     assert.equal(response.status, 401, label);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), { error: "Authentication required" });
+    assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_revoked" });
   }
   // Sign-out-everywhere (epoch bump) is observed by the same combined transaction.
   const fx = makeFixture();
@@ -517,7 +517,7 @@ test("the release primitive: session first, then every contributing Area, in one
   mutate(fx, removeMemberSql("bob"));
   assert.equal(check(), "stale");
   assert.equal(durable.revokeDurableTargetStagingSession(fx.store, b.sessionId).ok, true);
-  assert.equal(check(), "unauthorized", "a dead session wins over a stale membership");
+  assert.equal(check(), "session_revoked", "a dead session wins over a stale membership");
   // A child started for a revoked session reads nothing.
   assert.equal(await readProcess.readStagingScopedPageInChild(config, "shared", 50, 0), null);
 });

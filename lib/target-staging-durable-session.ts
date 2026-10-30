@@ -53,6 +53,15 @@ export type TargetStagingDurableUserRevoke =
 export type TargetStagingLiveSession =
   | { ok: true; sessionId: string; userId: string }
   | { ok: false; reason: "invalid" | "unavailable" };
+/**
+ * R2c.2b distinct 401 reasons, derived ONLY from the presented token (its holder
+ * alone learns them). Revocation takes precedence over expiry.
+ */
+export type TargetStagingSessionDenial = "session_expired" | "session_revoked";
+export type TargetStagingCodedLiveSession =
+  | { ok: true; sessionId: string; userId: string }
+  | { ok: false; reason: "invalid"; code: TargetStagingSessionDenial }
+  | { ok: false; reason: "unavailable" };
 
 /** The only stored form of a session credential. */
 export function hashTargetStagingSessionToken(token: string): string {
@@ -85,6 +94,31 @@ export function lookupLiveTargetStagingSession(
        AND s.revocation_epoch = i.revocation_epoch
   `).get(tokenHash, nowMs) as { id: string; user_id: string } | undefined;
   return row ? { sessionId: row.id, userId: row.user_id } : null;
+}
+
+/**
+ * R2c.2b pure classification of a session which is NOT live (call it on the same
+ * snapshot/transaction after lookupLiveTargetStagingSession returned null).
+ * `session_expired`: the row exists, is not revoked, carries the identity's current
+ * epoch and is merely past its expiry. Everything else is `session_revoked`: a
+ * revoked row, a stale epoch (sign-out everywhere), an unknown token (including a
+ * row deleted after the retention window) or a token whose identity is gone.
+ */
+export function classifyTargetStagingSessionDenial(
+  db: DatabaseSync, tokenHash: string, nowMs: number,
+): TargetStagingSessionDenial {
+  if (!TOKEN_HASH.test(tokenHash) || !Number.isSafeInteger(nowMs) || nowMs <= 0) return "session_revoked";
+  const row = db.prepare(`
+    SELECT s.revoked_at_ms AS revoked, s.expires_at_ms AS expires,
+           s.revocation_epoch AS epoch, i.revocation_epoch AS current
+      FROM staging_sessions s LEFT JOIN identities i ON i.id = s.user_id
+     WHERE s.token_hash = ?
+  `).get(tokenHash) as
+    { revoked: number | null; expires: number; epoch: number; current: number | null } | undefined;
+  if (!row || row.revoked !== null || row.current === null || row.epoch !== row.current) {
+    return "session_revoked";
+  }
+  return row.expires <= nowMs ? "session_expired" : "session_revoked";
 }
 
 /**
@@ -207,12 +241,22 @@ export function revokeAllDurableTargetStagingSessionsForUser(
 export function verifyDurableTargetStagingSessionLive(
   store: TargetStagingReadStore, tokenHash: string, nowMs = Date.now(),
 ): TargetStagingLiveSession {
-  const unavailable: TargetStagingLiveSession = { ok: false, reason: "unavailable" };
-  if (!isTargetStagingSessionTokenHash(tokenHash)) return { ok: false, reason: "invalid" };
-  return withLiveStagingReadTransaction<TargetStagingLiveSession>(store, db => {
+  const result = verifyDurableTargetStagingSessionLiveCoded(store, tokenHash, nowMs);
+  return result.ok === false && result.reason === "invalid" ? { ok: false, reason: "invalid" } : result;
+}
+
+/** Same check, additionally classifying a dead session (R2c.2b 401 code) in the same snapshot. */
+export function verifyDurableTargetStagingSessionLiveCoded(
+  store: TargetStagingReadStore, tokenHash: string, nowMs = Date.now(),
+): TargetStagingCodedLiveSession {
+  const unavailable: TargetStagingCodedLiveSession = { ok: false, reason: "unavailable" };
+  if (!isTargetStagingSessionTokenHash(tokenHash)) {
+    return { ok: false, reason: "invalid", code: "session_revoked" };
+  }
+  return withLiveStagingReadTransaction<TargetStagingCodedLiveSession>(store, db => {
     const live = lookupLiveTargetStagingSession(db, tokenHash, nowMs);
     return live ? { ok: true, sessionId: live.sessionId, userId: live.userId }
-      : { ok: false, reason: "invalid" };
+      : { ok: false, reason: "invalid", code: classifyTargetStagingSessionDenial(db, tokenHash, nowMs) };
   }, unavailable);
 }
 
@@ -277,8 +321,8 @@ function withLiveStagingReadTransaction<T>(
 
 export type TargetStagingReadLive =
   | { ok: true }
-  /** Session not live (unknown, revoked, expired, stale epoch): HTTP 401. */
-  | { ok: false; reason: "invalid" }
+  /** Session not live (unknown, revoked, expired, stale epoch): HTTP 401 with its R2c.2b code. */
+  | { ok: false; reason: "invalid"; code: TargetStagingSessionDenial }
   /** Membership / role / private ownership / policy_revision moved since the snapshot. */
   | { ok: false; reason: "stale" }
   | { ok: false; reason: "unavailable" };
@@ -306,13 +350,15 @@ export function verifyTargetStagingReadLive(
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
       !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
-    return { ok: false, reason: "invalid" };
+    return { ok: false, reason: "invalid", code: "session_revoked" };
   }
   return withLiveStagingReadTransaction<TargetStagingReadLive>(store, db => {
     let actorUserId: string;
     if ("tokenHash" in subject) {
       const live = lookupLiveTargetStagingSession(db, subject.tokenHash, nowMs);
-      if (!live) return { ok: false, reason: "invalid" };
+      if (!live) {
+        return { ok: false, reason: "invalid", code: classifyTargetStagingSessionDenial(db, subject.tokenHash, nowMs) };
+      }
       actorUserId = live.userId;
     } else {
       if (typeof subject.ownerUserId !== "string" || !USER_ID.test(subject.ownerUserId)) return unavailable;

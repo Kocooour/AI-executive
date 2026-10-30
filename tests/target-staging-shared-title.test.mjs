@@ -337,10 +337,30 @@ test("a revoked durable session cannot complete a pending shared PATCH (401, not
     () => patch(taskId, bob.cookie, command("Revoked", token)),
     async () => { assert.equal(durable.revokeDurableTargetStagingSession(store, bob.sessionId).ok, true); });
   assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_revoked" });
   assert.deepEqual(snapshot(taskId), before);
   // And afterwards every title route refuses the dead session.
   assert.equal((await preview(taskId, bob.cookie)).status, 401);
   assert.equal((await status(taskId, bob.cookie, command("Revoked", token))).status, 401);
+});
+
+
+const waitUntilExpired = async issued => {
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.expiresAtMs - Date.now()) + 400));
+};
+
+test("a durable session which EXPIRES before the pending shared PATCH child starts (no-result fallback) gets 401 session_expired, nothing written", async () => {
+  const taskId = sharedTask();
+  const issued = durable.issueDurableTargetStagingSession(store, "bob", 3);
+  assert.equal(issued.ok, true);
+  const cookie = `${durable.TARGET_STAGING_SESSION_COOKIE}=${issued.sessionToken}`;
+  const token = await revisionOf(taskId, cookie);
+  const before = snapshot(taskId);
+  const response = await withChildGatedBeforeStart(
+    () => patch(taskId, cookie, command("Expired", token)), () => waitUntilExpired(issued));
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_expired" });
+  assert.deepEqual(snapshot(taskId), before);
 });
 
 test("receipts and status are per identity: B cannot learn or replay A's command; same commandId from two editors is independent", async () => {

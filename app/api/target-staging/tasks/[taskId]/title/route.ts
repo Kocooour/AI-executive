@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  resolveStagingHttpIdentity, stagingChildSessionConfig,
+  resolveStagingHttpIdentity, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
   admitStagingIdentity, stagingIdentityRefusal, verifyStagingIdentityBeforeRelease,
 } from "../../../../../../lib/target-staging-http-identity";
 import { HttpInputError, enforceRateLimit, readJsonBody, requireSameOrigin } from "../../../../../../lib/http-security";
@@ -49,14 +49,15 @@ export async function GET(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
   const identity = resolveStagingHttpIdentity(request);
-  if (!identity) return answer(401, "Authentication required");
+  if (!identity) return stagingUnauthenticatedRefusal(request);
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const taskId = await taskIdFrom(context);
-  if (!taskId) return answer(400, "Invalid request");
   const refusedPreview = admitStagingIdentity(request, identity, bound);
   if (refusedPreview) return refusedPreview;
+  // Input errors only after admission: a dead session always gets its coded 401.
+  if (!taskId) return answer(400, "Invalid request");
   const query = new URL(request.url).searchParams;
   if ([...query.keys()].some(key => key !== "expectedRevision") ||
       query.getAll("expectedRevision").length > 1) return answer(400, "Invalid request");
@@ -82,12 +83,12 @@ export async function PATCH(request: Request,
   context: { params: Promise<{ taskId: string }> }): Promise<Response> {
   if (!enabled()) return answer(404, "Not found");
   const identity = resolveStagingHttpIdentity(request);
-  if (!identity) return answer(401, "Authentication required");
+  if (!identity) return stagingUnauthenticatedRefusal(request);
   const base = config();
   if (!base) return answer(503, "Staging unavailable");
   const bound = { ...base, ...stagingChildSessionConfig(identity) };
   const taskId = await taskIdFrom(context);
-  if (!taskId || new URL(request.url).search !== "") return answer(400, "Invalid request");
+  const invalidInput = !taskId || new URL(request.url).search !== "";
   try {
     requireSameOrigin(request);
     if (request.headers.get("origin") !== new URL(request.url).origin) {
@@ -98,6 +99,8 @@ export async function PATCH(request: Request,
     // bucket budget that legitimate writers or reconciliations need.
     const admitted = admitStagingIdentity(request, identity, bound);
     if (admitted) return admitted;
+    // Input errors only after admission: a dead session always gets its coded 401.
+    if (invalidInput || !taskId) return answer(400, "Invalid request");
     const limited = enforceRateLimit(request, "target-staging-private-title-write", 30, 10 * 60_000);
     if (limited) return Response.json({ error: "Too many requests" }, {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
@@ -124,7 +127,7 @@ export async function PATCH(request: Request,
       if (afterWrite !== "ok") return stagingIdentityRefusal(afterWrite);
     }
     if (result && result.ok === false && result.reason === "session_revoked") {
-      return answer(401, "Authentication required");
+      return stagingUnauthorizedRefusal(request, identity, bound);
     }
     if (!result && identity.kind === "session") {
       // Child produced nothing: distinguish a revoked session from an outage.

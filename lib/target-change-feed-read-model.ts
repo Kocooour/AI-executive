@@ -116,14 +116,15 @@ function readableAreas(db: DatabaseSync, actor: string): ReadableArea[] | null {
 }
 
 /**
- * All membership rows about THIS actor, per Area, in sequence order. The entity index
- * is Area-keyed and has no member column, so this scans the membership rows of the
- * log (task/project rows are never touched). A member_user_id index would make it a
- * seek; that is a possible schema follow-up, not needed for correctness.
+ * All membership rows about THIS actor, per Area, in sequence order. Since schema v9 the
+ * (entity_kind, member_user_id, seq) index makes this a seek on the actor's own rows;
+ * task/project rows and other users' membership rows are never touched. After compaction
+ * the last row at or below the floor of every (Area, actor) is still present, so
+ * membership state at any position >= floor is exact.
  */
 function ownMembershipRows(db: DatabaseSync, actor: string): Map<string, MemberRow[]> {
   const rows = db.prepare(`SELECT area_id AS areaId, seq, op, member_role AS role
-      FROM change_log INDEXED BY change_log_by_entity
+      FROM change_log INDEXED BY change_log_by_member
      WHERE entity_kind = 'membership' AND member_user_id = ?
      ORDER BY entity_id COLLATE BINARY ASC, seq ASC`).all(actor) as
     { areaId: string; seq: number; op: MemberRow["op"]; role: string | null }[];
@@ -297,7 +298,7 @@ function intervalEntries(
 ): Candidate[] {
   return (db.prepare(`SELECT seq, entity_kind AS kind, entity_id AS id, area_id AS areaId, op,
         revision, NULL AS role
-      FROM change_log INDEXED BY change_log_by_area
+      FROM change_log INDEXED BY change_log_content_by_area
      WHERE area_id = ? AND seq > ? AND seq < ? AND entity_kind <> 'membership'
      ORDER BY seq ASC LIMIT ?`).all(areaId, fromSeq, toSeq, limit) as Candidate[]);
 }
@@ -429,6 +430,16 @@ export function readChangeFeedPage(
       if (claims.epoch !== identity.epoch) return denied("cursor_invalid");
     }
     const pos = claims?.pos ?? null;
+    if (pos !== null) {
+      // R2c.2b: membership history at or below the compaction floor may be gone, so a cursor
+      // whose position (feed p, bootstrap watermark w, grant sequence w) lies behind it can
+      // no longer be served exactly: 409 resync_required, never partial data.
+      const floorRow = db.prepare("SELECT value FROM metadata WHERE key = 'change_log_floor'")
+        .get() as { value: string } | undefined;
+      const floor = Number(floorRow?.value);
+      if (!floorRow || !Number.isSafeInteger(floor) || floor < 0) return denied("unavailable");
+      if ((pos.ph === "f" ? pos.p : pos.w) < floor) return denied("resync_required");
+    }
     if (pos === null) return bootstrapPage(db, actor, identity.epoch, null);
     if (pos.ph === "b") return bootstrapPage(db, actor, identity.epoch, pos);
     if (pos.ph === "a") return areaBootstrapPage(db, actor, identity.epoch, pos);

@@ -16,7 +16,7 @@ export type TargetPreflightCode =
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
-  | "change_log_invalid" | "membership_log_invalid"
+  | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
 
 export interface TargetPreflightOptions {
@@ -37,7 +37,7 @@ export interface TargetPreflightResult {
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sha256Hex = /^[a-f0-9]{64}$/;
 const CONTROL_METADATA_KEYS = new Set([
-  "schema_version", "activated", "write_protocol", "restore_generation",
+  "schema_version", "activated", "write_protocol", "restore_generation", "change_log_floor",
 ]);
 /** Compare the complete stored DDL, not just names: a same-name no-op trigger is unsafe. */
 function matchesCanonicalSchema(actual: DatabaseSync): boolean {
@@ -154,7 +154,7 @@ export function inspectIsolatedTargetStore(
         typeof row.key === "string" &&
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 4 + receipts.length + deleteReceipts.length ||
+      if (rows.length !== 5 + receipts.length + deleteReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
@@ -220,6 +220,23 @@ export function inspectIsolatedTargetStore(
             count("SELECT COUNT(*) AS n FROM task_tombstones") +
             count("SELECT COUNT(*) AS n FROM project_tombstones")) fail("tombstone_invalid");
     } catch { fail("tombstone_invalid"); }
+    // R2c.2b compaction floor: a canonical integer within [0, MAX(seq)], and a
+    // consistent compaction: no row at or below it is superseded by a later row of
+    // its own key that is also at or below it (rows == distinct keys below the floor).
+    let floor = 0;
+    try {
+      const raw = (db.prepare("SELECT value FROM metadata WHERE key='change_log_floor'")
+        .get() as { value: unknown } | undefined)?.value;
+      const max = count("SELECT COALESCE(MAX(seq),0) AS n FROM change_log");
+      if (typeof raw !== "string" || !/^(0|[1-9][0-9]{0,14})$/.test(raw) || Number(raw) > max) {
+        fail("change_log_floor_invalid");
+      } else {
+        floor = Number(raw);
+        if (count("SELECT COUNT(*) AS n FROM change_log WHERE seq<=?", floor) !==
+            count(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM change_log WHERE seq<=?
+              GROUP BY entity_kind, entity_id, member_user_id)`, floor)) fail("change_log_floor_invalid");
+      }
+    } catch { fail("change_log_floor_invalid"); }
     try {
       // R2c.1 change_log reconciliation with live state (set-based, index-driven).
       // 'leave' rows are ignored: only the latest upsert/tombstone of an entity
@@ -233,7 +250,7 @@ export function inspectIsolatedTargetStore(
         const area = kind === "task" ? "COALESCE(l.area_id, p.area_id)" : "l.area_id";
         const join = kind === "task" ? "LEFT JOIN projects p ON p.id=l.project_id" : "";
         const latest = `(SELECT MAX(x.seq) FROM change_log x WHERE x.entity_kind='${kind}'
-          AND x.entity_id=%ID% AND x.op IN ('upsert','tombstone'))`;
+          AND x.entity_id=%ID% AND x.member_user_id IS NULL AND x.op IN ('upsert','tombstone'))`;
         return count(`SELECT COUNT(*) AS n FROM ${live} l ${join} WHERE NOT EXISTS (
           SELECT 1 FROM change_log c WHERE c.entity_kind='${kind}' AND c.entity_id=l.id
             AND c.op='upsert' AND c.revision=l.revision AND c.area_id=${area}
@@ -250,7 +267,9 @@ export function inspectIsolatedTargetStore(
       // the log (a correlated subquery per row was quadratic in membership churn):
       // the latest entry is the live row's state (add/role with its role) or a
       // removal when no row exists, and the first removal follows a first
-      // add/role entry. This does not enforce strict add/remove alternation.
+      // add/role entry (unless that removal is the compacted last row at or below the
+      // floor, whose earlier add was legitimately compacted away). This does not
+      // enforce strict add/remove alternation.
       const perMember = `(SELECT entity_id AS area, member_user_id AS who, MAX(seq) AS last,
           MIN(CASE WHEN op IN ('member_add','member_role') THEN seq END) AS first_grant,
           MIN(CASE WHEN op='member_remove' THEN seq END) AS first_remove
@@ -263,7 +282,8 @@ export function inspectIsolatedTargetStore(
             WHERE c.op<>'member_remove' AND NOT EXISTS (
               SELECT 1 FROM area_members a WHERE a.area_id=g.area AND a.user_id=g.who)`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM ${perMember} g
-            WHERE g.first_remove IS NOT NULL AND (g.first_grant IS NULL OR g.first_grant > g.first_remove)`) !== 0) {
+            WHERE g.first_remove IS NOT NULL AND g.first_remove > ${floor}
+              AND (g.first_grant IS NULL OR g.first_grant > g.first_remove)`) !== 0) {
         fail("membership_log_invalid");
       }
     } catch { fail("membership_log_invalid"); }
