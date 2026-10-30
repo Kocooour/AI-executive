@@ -734,14 +734,18 @@ test("keyset order of Area ids (readable and lost slots) is UTF-8 byte order acr
   insertTasks(fx, ["l-1", "l-2"], lost);
   insertTasks(fx, Array.from({ length: 30 }, (_, i) => `e-${String(i).padStart(3, "0")}`), emoji);
   const b = login(fx, "bob");
-  const boot = await drain(fx, b, null, async pageNumber => {
+  const boot = await drain(fx, b, null, async (pageNumber, body) => {
     // The first page ends inside the U+FF61 Area; the lost slot follows it in byte order.
-    if (pageNumber === 1) mutate(fx, removeMemberSql("bob", lost));
+    if (pageNumber === 1) {
+      assert.equal(body.items.length, 100);
+      assert.equal(body.items.at(-1).areaId, halfwidth, "page boundary inside the U+FF61 Area");
+      mutate(fx, removeMemberSql("bob", lost));
+    }
   });
   const keys = boot.items.map(i => i.type === "access_lost" ? `lost:${i.areaId}` : `${i.areaId}:${i.id}`);
   assert.equal(new Set(keys).size, keys.length, "nothing served twice");
-  assert.deepEqual(boot.items.filter(i => i.areaId === halfwidth).length, 120);
-  assert.deepEqual(boot.items.filter(i => i.areaId === emoji).length, 30);
+  assert.equal(boot.items.filter(i => i.areaId === halfwidth).length, 120);
+  assert.equal(boot.items.filter(i => i.areaId === emoji).length, 30);
   assert.deepEqual(boot.items.filter(i => i.areaId === lost).map(i => i.type), ["access_lost"], "no data, one notice");
   const areaOrder = [...new Set(boot.items.map(i => i.areaId))].filter(id => [halfwidth, lost, emoji].includes(id));
   assert.deepEqual(areaOrder, [halfwidth, lost, emoji]);
