@@ -156,13 +156,14 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
         return {
           db,
           verifyOpened: () => {
-            const newlyOpened = [...regularFiles()].filter(([fd]) => !beforeOpen.has(fd));
+            const afterOpen = regularFiles();
+            const newlyOpened = [...afterOpen].filter(([fd]) => !beforeOpen.has(fd));
             // Writers keep the strict rule (exactly one new regular file, the pinned
             // inode). A read-only open in a long-lived server may see unrelated
             // concurrent opens, so it only requires that the pinned inode was opened.
             const matches = (entry: [number, { dev: number; ino: number }]) =>
               entry[1].dev === pinned.dev && entry[1].ino === pinned.ino;
-            return (options.readOnly ? hasNewPinnedReadDescriptor(beforeOpen, regularFiles(), pinned)
+            return (options.readOnly ? hasNewPinnedReadDescriptor(beforeOpen, afterOpen, pinned)
               : newlyOpened.length === 1 && matches(newlyOpened[0])) && stillPinned();
           },
         };
