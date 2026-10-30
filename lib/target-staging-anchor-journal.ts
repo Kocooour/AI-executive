@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import {
   closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, writeSync,
 } from "node:fs";
+import { readTargetStagingWitness } from "./target-staging-anchor-witness";
 
 export const TARGET_STAGING_JOURNAL_FILENAME = "lumi-target.journal";
 export const TARGET_STAGING_JOURNAL_GENESIS_PREV = "0".repeat(64);
@@ -480,7 +481,17 @@ export function checkTargetStagingJournal(
   if (fd === null) return "journal_invalid";
   try {
     const scan = scanTargetStagingJournalFd(fd, generation);
-    return evaluateTargetStagingAnchor(scan ? scan.state : null, parseTargetStagingAnchor(anchorRaw));
+    const anchor = parseTargetStagingAnchor(anchorRaw);
+    if (!scan || anchor === null) return "journal_invalid";
+    // The witness is committed atomically with the main DB (SQLite super-journal).
+    // In particular it distinguishes a genuine pre-COMMIT crash (witness stays
+    // at the old n) from an older DB restored after COMMIT without JSONL confirm.
+    const witnessed = readTargetStagingWitness(directoryRoot, generation,
+      targetStagingJournalGenesis(generation).hash);
+    if (witnessed === null) return "journal_invalid";
+    if (anchor < witnessed) return "restore_pending";
+    if (anchor > witnessed) return "journal_invalid";
+    return evaluateTargetStagingAnchor(scan.state, anchor);
   } finally {
     try { closeSync(fd); } catch { /* fail closed */ }
   }
