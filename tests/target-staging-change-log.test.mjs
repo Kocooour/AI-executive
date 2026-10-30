@@ -537,3 +537,53 @@ test("preflight reconciles the change log with live state: fake, stale, silently
   tamper(removed.db, ["area_policy_member_delete"], "DELETE FROM area_members WHERE user_id='bob'");
   assert.deepEqual(issues(removed.stage), ["membership_log_invalid"]);
 });
+
+test("preflight rejects forged 'leave' entries and removals without a prior add; legitimate histories stay green", () => {
+  const forgedTask = fixture();
+  forgedTask.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision) VALUES ('task','never','team-area','leave',1)`).run();
+  assert.deepEqual(issues(forgedTask.stage), ["change_log_invalid"]);
+  const forgedProject = fixture();
+  forgedProject.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision) VALUES ('project','never','team-area','leave',1)`).run();
+  assert.deepEqual(issues(forgedProject.stage), ["change_log_invalid"]);
+  const forgedRemove = fixture();
+  forgedRemove.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,member_user_id) VALUES ('membership','team-area','team-area','member_remove','carol')`).run();
+  assert.deepEqual(issues(forgedRemove.stage), ["membership_log_invalid"]);
+
+  const ok = fixture();
+  const { db } = ok;
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('m','team-area','x')").run();
+  db.prepare("UPDATE tasks SET area_id='other-area' WHERE id='m'").run();
+  db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='m'").run();
+  tombstoneAndDelete(db, "m");
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','viewer')").run();
+  db.prepare("INSERT OR REPLACE INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(issues(ok.stage), []);
+});
+
+test("preflight membership reconciliation stays linear in membership churn", () => {
+  const { stage, db } = fixture();
+  // 4000 users added and removed plus 4000 live viewers in one Area: the
+  // previous correlated checks took several seconds here and grew quadratically.
+  db.exec("BEGIN");
+  const identity = db.prepare("INSERT INTO identities(id) VALUES (?)");
+  const workspace = db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)");
+  const privateArea = db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+    VALUES (?, ?, 'private', ?, ?, 'unassigned')`);
+  const add = db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area', ?, 'viewer')");
+  const remove = db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id=?");
+  for (let i = 0; i < 8000; i += 1) {
+    const user = `churn-${i}`;
+    identity.run(user);
+    workspace.run(`${user}-personal`, user);
+    privateArea.run(`${user}-private`, user, `${user}-personal`, user);
+    add.run(user);
+    if (i < 4000) remove.run(user);
+  }
+  db.exec("COMMIT");
+  const started = performance.now();
+  assert.deepEqual(issues(stage), []);
+  assert.ok(performance.now() - started < 1500, "membership reconciliation must not scale quadratically");
+});

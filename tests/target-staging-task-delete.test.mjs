@@ -677,3 +677,46 @@ test("preflight: a raw delete receipt without an audit row (live task) is reject
   assert.deepEqual(authority.deleteTask(write.sessionToken, request), { ok: false, reason: "unauthorized" });
   assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n, 1);
 });
+
+test("library: the session recheck immediately before COMMIT rolls back tombstone, delete, log, receipt and audit", () => {
+  const { writer, authority, s } = libFixture();
+  writer.prepare("INSERT INTO identities(id) VALUES ('bob')").run();
+  writer.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bob-personal','personal','bob')").run();
+  writer.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key) VALUES ('bob-private','Bob','private','bob-personal','bob','unassigned')").run();
+  writer.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  writer.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('t','team-area','x')").run();
+  const issued = durable.issueDurableTargetStagingSession(
+    { stagingDirectory: s.directory, expectedRestoreGeneration: s.restoreGeneration }, "bob", 120);
+  assert.equal(issued.ok, true);
+  const tokenHash = createHash("sha256").update(issued.sessionToken).digest("hex");
+  const write = authority.issueWritable("bob");
+  const request = { commandId: randomUUID(), taskId: "t", expectedRevision: token(authority, write.sessionToken, "t") };
+  const snap = () => JSON.stringify([
+    writer.prepare("SELECT COUNT(*) AS n FROM tasks").get().n,
+    writer.prepare("SELECT COUNT(*) AS n FROM task_tombstones").get().n,
+    writer.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log").get().n,
+    writer.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?").get(TARGET_STAGING_DELETE_RECEIPT_PREFIX + "%").n,
+    writer.prepare("SELECT COUNT(*) AS n FROM task_delete_audit").get().n,
+    writer.prepare("SELECT content_revision AS n FROM areas WHERE id='team-area'").get().n,
+  ]);
+  const before = snap();
+  const realNow = Date.now;
+  const realPrepare = DatabaseSync.prototype.prepare;
+  let skew = 0;
+  try {
+    // Session live at the first in-transaction check, expired by the second (after the audit INSERT).
+    Date.now = () => realNow() + skew;
+    DatabaseSync.prototype.prepare = function (sql) {
+      if (/^\s*INSERT INTO task_delete_audit/.test(sql)) skew = 10 * 60 * 1000;
+      return realPrepare.call(this, sql);
+    };
+    const result = authority.deleteTask(write.sessionToken, request, false, tokenHash);
+    assert.deepEqual(result, { ok: false, reason: "session_revoked" });
+    assert.ok(skew > 0, "the audit INSERT was reached before the second check");
+  } finally {
+    Date.now = realNow;
+    DatabaseSync.prototype.prepare = realPrepare;
+  }
+  assert.equal(snap(), before);
+  assert.equal(writer.prepare("SELECT COUNT(*) AS n FROM tasks WHERE id='t'").get().n, 1);
+});

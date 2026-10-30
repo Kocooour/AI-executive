@@ -124,7 +124,7 @@ export function inspectIsolatedTargetStore(
   }
   try {
     const all = (sql: string) => db.prepare(sql).all();
-    const count = (sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
+    const count = (sql: string, ...args: (string | number)[]) => Number((db.prepare(sql).get(...args) as { n: number }).n);
     try {
       if (!matchesCanonicalSchema(db)) fail("schema_invalid");
     } catch { fail("schema_invalid"); }
@@ -195,9 +195,9 @@ export function inspectIsolatedTargetStore(
               OR ts.change_seq<>a.change_seq`) !== 0) fail("audit_invalid");
       // Delete receipts are 1:1 with delete audit rows: a raw receipt for a task
       // that was never deleted would otherwise replay as "committed".
-      if (count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,${TARGET_STAGING_DELETE_RECEIPT_PREFIX.length})=?
-        AND NOT EXISTS (SELECT 1 FROM task_delete_audit a WHERE a.receipt_key=m.key)`
-        .replace("=?", `='${TARGET_STAGING_DELETE_RECEIPT_PREFIX}'`)) !== 0) fail("audit_invalid");
+      if (count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
+        AND NOT EXISTS (SELECT 1 FROM task_delete_audit a WHERE a.receipt_key=m.key)`,
+        TARGET_STAGING_DELETE_RECEIPT_PREFIX.length, TARGET_STAGING_DELETE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
     try {
       // R2c.1 tombstones and change log. Every check is a primary-key or
@@ -225,7 +225,8 @@ export function inspectIsolatedTargetStore(
       // 'leave' rows are ignored: only the latest upsert/tombstone of an entity
       // is authoritative, whatever order SQLite fired the move triggers in. A live
       // task/project must end in an 'upsert' matching its revision and effective
-      // Area; a gone one must end in the 'tombstone' its tombstone row names.
+      // Area; every entity ID appearing anywhere in the log (even only as 'leave')
+      // must be live or end in the 'tombstone' its tombstone row names.
       const reconcile = (kind: "task" | "project") => {
         const live = kind === "task" ? "tasks" : "projects";
         const tomb = kind === "task" ? "task_tombstones" : "project_tombstones";
@@ -238,24 +239,31 @@ export function inspectIsolatedTargetStore(
             AND c.op='upsert' AND c.revision=l.revision AND c.area_id=${area}
             AND c.seq=${latest.replace("%ID%", "l.id")})`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM (SELECT entity_id AS id, MAX(seq) AS last FROM change_log
-            WHERE entity_kind='${kind}' AND op IN ('upsert','tombstone') GROUP BY entity_id) g
+            WHERE entity_kind='${kind}' GROUP BY entity_id) g
             WHERE NOT EXISTS (SELECT 1 FROM ${live} l WHERE l.id=g.id)
               AND NOT EXISTS (SELECT 1 FROM ${tomb} ts WHERE ts.id=g.id AND ts.change_seq=g.last)`) !== 0;
       };
       if (reconcile("task") || reconcile("project")) fail("change_log_invalid");
     } catch { fail("change_log_invalid"); }
     try {
-      // Membership: the latest entry per (Area, user) is the live row's state, or a removal.
-      if (count(`SELECT COUNT(*) AS n FROM area_members m WHERE NOT EXISTS (
-            SELECT 1 FROM change_log c WHERE c.entity_kind='membership' AND c.entity_id=m.area_id
-              AND c.member_user_id=m.user_id AND c.op IN ('member_add','member_role') AND c.member_role=m.role
-              AND c.seq=(SELECT MAX(x.seq) FROM change_log x WHERE x.entity_kind='membership'
-                AND x.entity_id=m.area_id AND x.member_user_id=m.user_id))`) !== 0 ||
-          count(`SELECT COUNT(*) AS n FROM (SELECT entity_id AS area, member_user_id AS who, MAX(seq) AS last
-              FROM change_log WHERE entity_kind='membership' GROUP BY entity_id, member_user_id) g
-            JOIN change_log c ON c.seq=g.last
+      // Membership, one aggregate per (Area, user) so the cost stays linear in
+      // the log (a correlated subquery per row was quadratic in membership churn):
+      // the latest entry is the live row's state (add/role with its role) or a
+      // removal when no row exists, and the first removal follows a first
+      // add/role entry. This does not enforce strict add/remove alternation.
+      const perMember = `(SELECT entity_id AS area, member_user_id AS who, MAX(seq) AS last,
+          MIN(CASE WHEN op IN ('member_add','member_role') THEN seq END) AS first_grant,
+          MIN(CASE WHEN op='member_remove' THEN seq END) AS first_remove
+        FROM change_log WHERE entity_kind='membership' GROUP BY entity_id, member_user_id)`;
+      if (count(`SELECT COUNT(*) AS n FROM area_members m
+            LEFT JOIN ${perMember} g ON g.area=m.area_id AND g.who=m.user_id
+            LEFT JOIN change_log c ON c.seq=g.last
+            WHERE c.seq IS NULL OR c.op NOT IN ('member_add','member_role') OR c.member_role IS NOT m.role`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM ${perMember} g JOIN change_log c ON c.seq=g.last
             WHERE c.op<>'member_remove' AND NOT EXISTS (
-              SELECT 1 FROM area_members a WHERE a.area_id=g.area AND a.user_id=g.who)`) !== 0) {
+              SELECT 1 FROM area_members a WHERE a.area_id=g.area AND a.user_id=g.who)`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM ${perMember} g
+            WHERE g.first_remove IS NOT NULL AND (g.first_grant IS NULL OR g.first_grant > g.first_remove)`) !== 0) {
         fail("membership_log_invalid");
       }
     } catch { fail("membership_log_invalid"); }
