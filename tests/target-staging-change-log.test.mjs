@@ -537,3 +537,28 @@ test("preflight reconciles the change log with live state: fake, stale, silently
   tamper(removed.db, ["area_policy_member_delete"], "DELETE FROM area_members WHERE user_id='bob'");
   assert.deepEqual(issues(removed.stage), ["membership_log_invalid"]);
 });
+
+test("preflight rejects forged 'leave' entries and removals without a prior add; legitimate histories stay green", () => {
+  const forgedTask = fixture();
+  forgedTask.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision) VALUES ('task','never','team-area','leave',1)`).run();
+  assert.deepEqual(issues(forgedTask.stage), ["change_log_invalid"]);
+  const forgedProject = fixture();
+  forgedProject.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision) VALUES ('project','never','team-area','leave',1)`).run();
+  assert.deepEqual(issues(forgedProject.stage), ["change_log_invalid"]);
+  const forgedRemove = fixture();
+  forgedRemove.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,member_user_id) VALUES ('membership','team-area','team-area','member_remove','carol')`).run();
+  assert.deepEqual(issues(forgedRemove.stage), ["membership_log_invalid"]);
+
+  const ok = fixture();
+  const { db } = ok;
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('m','team-area','x')").run();
+  db.prepare("UPDATE tasks SET area_id='other-area' WHERE id='m'").run();
+  db.prepare("UPDATE tasks SET area_id='team-area' WHERE id='m'").run();
+  tombstoneAndDelete(db, "m");
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','viewer')").run();
+  db.prepare("INSERT OR REPLACE INTO area_members(area_id,user_id,role) VALUES ('team-area','bob','editor')").run();
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(issues(ok.stage), []);
+});
