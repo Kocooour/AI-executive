@@ -649,6 +649,59 @@ test("preflight validates anchor_seq (a missing or malformed value fails the sto
   assert.ok(check.issues.includes("metadata_invalid") || check.issues.includes("schema_invalid"));
 });
 
+test("writer waits for a short EXCLUSIVE main SQLite lock before its first SELECT", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "exclusive-lock-"));
+  const running = runChild(fx, "exclusive-lock", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(10);
+  assert.ok(existsSync(path.join(gate, "ready")), "competing process took its EXCLUSIVE lock");
+  const result = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  const finished = await running.done;
+  assert.equal(finished.code, 0, JSON.stringify(finished));
+  assert.equal(result, "ok", "the writer waits for a short lock instead of throwing SQLITE_BUSY");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("witness detects a changed middle commit hash despite an unchanged head and count", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "first").ok, true);
+  assert.equal(titleWrite(fx, "t1", "second").ok, true);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok"); // warm both prefix caches
+  const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+  try {
+    witness.exec("DROP TRIGGER commits_immutable_update");
+    witness.prepare("UPDATE commits SET journal_hash=? WHERE n=1").run("f".repeat(64));
+  } finally { witness.close(); }
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600),
+    { ok: false, reason: "unavailable" }, "writer must not alter an invalid witness");
+});
+
+test("witness rejects missing internal committed sequence numbers", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "first").ok, true);
+  assert.equal(titleWrite(fx, "t1", "second").ok, true);
+  const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+  try {
+    witness.exec("DROP TRIGGER commits_immutable_delete");
+    witness.exec("DELETE FROM commits WHERE n=1");
+  } finally { witness.close(); }
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+});
+
+test("witness rejects a changed last committed intent hash", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "first").ok, true);
+  const witness = new DatabaseSync(path.join(fx.stage.directory, "lumi-target-witness.sqlite"));
+  try {
+    witness.exec("DROP TRIGGER commits_immutable_update");
+    witness.prepare("UPDATE commits SET journal_hash=? WHERE n=1").run("e".repeat(64));
+  } finally { witness.close(); }
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+});
+
 // Synthetic journal inflation bypasses the real writers solely for performance measurements.
 // Mirror every fabricated committed intent into the independent witness as well.
 function seedSyntheticWitness(fx, entries) {
