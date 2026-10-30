@@ -15,7 +15,7 @@ const realFsync = fs.fsyncSync;
 let intentWritten = false;
 fs.writeSync = (fd, data, ...rest) => {
   const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
-  if (mode === "crash-before-confirm" && text.includes('"t":"confirm"')) process.kill(process.pid, "SIGKILL");
+  if ((mode === "crash-before-confirm" || mode === "crash-before-confirm-revoke") && text.includes('"t":"confirm"')) process.kill(process.pid, "SIGKILL");
   const result = realWrite(fd, data, ...rest);
   if (text.includes('"t":"intent"')) intentWritten = true;
   return result;
@@ -42,6 +42,13 @@ if (mode === "raw") {
   process.exit(0);
 }
 const durable = await import("../../lib/target-staging-durable-session.ts");
+if (mode === "crash-before-confirm-revoke") {
+  // gate carries the already-issued durable session ID. Its revocation COMMIT
+  // must survive restoration of only the main database, even without JSONL confirm.
+  durable.revokeDurableTargetStagingSession(
+    { stagingDirectory: directory, expectedRestoreGeneration: generation }, gate);
+  throw new Error("Expected SIGKILL during the post-COMMIT confirm");
+}
 let result = { ok: true };
 let done = 0;
 for (let i = 0; i < Number(rounds) && result.ok; i++, done++) {
