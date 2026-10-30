@@ -236,7 +236,10 @@ export function withPinnedTargetStagingWrite<T>(
     // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
     // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
     // ambiguous after a restore of just the main DB.
-    if (!attachTargetStagingWitness(db, files.directoryFdPath,
+    // ATTACH MUST use the durable canonical filesystem pathname, not the
+    // /proc/self/fd/N alias: SQLite records attached journal paths in its
+    // crash-recovery super-journal, which must remain valid after process exit.
+    if (!attachTargetStagingWitness(db, files.directory,
         store.expectedRestoreGeneration, genesisHash)) return denied();
     db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE`);
     transaction = true;
