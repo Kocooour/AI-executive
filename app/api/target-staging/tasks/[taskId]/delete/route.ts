@@ -1,3 +1,4 @@
+import { logStagingFailure } from "../../../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingUnauthorizedRefusal, stagingChildSessionConfig,
@@ -129,6 +130,7 @@ export async function POST(request: Request,
     return Response.json(result.replayed ? { ok: true, replayed: true } : { ok: true }, { headers });
   } catch (error) {
     if (error instanceof HttpInputError) return answer(error.status, error.message);
+    logStagingFailure("target-staging/tasks/[taskId]/delete", "route_exception", error);
     return answer(503, "Staging unavailable");
   }
 }

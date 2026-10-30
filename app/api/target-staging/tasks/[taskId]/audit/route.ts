@@ -1,3 +1,4 @@
+import { logStagingFailure } from "../../../../../../lib/target-staging-failure-log";
 import path from "node:path";
 import {
   resolveStagingHttpIdentity, stagingAnchorRefusal, stagingUnauthenticatedRefusal, stagingChildSessionConfig,
@@ -67,7 +68,8 @@ export async function GET(
     if (!result) return answer(503, "Staging unavailable");
     if (!result.ok) return answer(404, "Not found");
     return Response.json({ events: result.events }, { headers });
-  } catch {
+  } catch (error) {
+    logStagingFailure("target-staging/tasks/[taskId]/audit", "route_exception", error);
     return answer(503, "Staging unavailable");
   }
 }

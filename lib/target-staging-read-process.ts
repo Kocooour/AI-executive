@@ -1,6 +1,7 @@
 /** Short-lived, bounded subprocesses keep synchronous staging reads off the HTTP event loop. */
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-authority";
 import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
@@ -37,7 +38,10 @@ export function createStagingReadRunner(
 ): (config: StagingPersonalReadConfig, scriptName: string, args: string[]) => Promise<unknown | null> {
   let active = 0;
   return async (config, scriptName, args) => {
-    if (active >= MAX_CONCURRENT) return null;
+    if (active >= MAX_CONCURRENT) {
+      logStagingFailure("read_child", "concurrency_limit");
+      return null;
+    }
     active++;
     try {
       const cwd = process.cwd();
@@ -58,35 +62,43 @@ export function createStagingReadRunner(
           child = startChild(process.execPath,
             ["--experimental-loader", loader, script, ...args],
             { cwd, env: environment, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        } catch {
+        } catch (error) {
+          logStagingFailure("read_child", "spawn_exception", error);
           resolve(null);
           return;
         }
         let bytes = 0;
         const chunks: Buffer[] = [];
-        let exceeded = false;
+        let failureReason: "timeout" | "output_limit" | "child_error" | null = null;
         const timer = setTimeout(() => {
-          exceeded = true;
+          failureReason ??= "timeout";
           child.kill("SIGKILL");
         }, timeoutMs);
         child.stdout.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_OUTPUT_BYTES) {
-            exceeded = true;
+            failureReason ??= "output_limit";
             child.kill("SIGKILL");
           } else {
             chunks.push(chunk);
           }
         });
-        child.on("error", () => { exceeded = true; });
+        child.on("error", () => { failureReason ??= "child_error"; });
         child.on("close", code => {
           clearTimeout(timer);
-          if (exceeded || code !== 0) return resolve(null);
+          if (failureReason !== null || code !== 0) {
+            logStagingFailure("read_child", failureReason ?? "nonzero_exit");
+            return resolve(null);
+          }
           try {
             const payload: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-            if (!payload || typeof payload !== "object") return resolve(null);
+            if (!payload || typeof payload !== "object") {
+              logStagingFailure("read_child", "non_object_json");
+              return resolve(null);
+            }
             resolve(payload);
-          } catch {
+          } catch (error) {
+            logStagingFailure("read_child", bytes === 0 ? "empty_stdout" : "invalid_json", error);
             resolve(null);
           }
         });
@@ -133,7 +145,9 @@ export async function readStagingPersonalPageInChild(
   config: StagingPersonalReadConfig, limit: number, offset: number,
 ): Promise<TargetStagingPersonalOffsetPage | null> {
   const payload = await runChild(config, "target-staging-read-child.mjs", [String(limit), String(offset)]);
-  return parseStagingPersonalPage(payload);
+  const parsed = parseStagingPersonalPage(payload);
+  if (payload !== null && !parsed) logStagingFailure("read_child", "invalid_personal_page_dto");
+  return parsed;
 }
 
 export type StagingPersonalDetailResult =
