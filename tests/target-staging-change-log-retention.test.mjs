@@ -243,6 +243,34 @@ test("401 codes take precedence over invalid path / query input on every route",
   }
 });
 
+test("in-transaction refusal mapper: a session dying inside the write TX keeps its 401 code", async () => {
+  // A write child reports `session_revoked` only when the session dies between its two
+  // in-transaction checks; routes then call stagingUnauthorizedRefusal. That window is not
+  // reachable over HTTP without a child test hook (the library-level clock-skew tests cover
+  // the writer), so the mapper is asserted directly against the live store.
+  const fx = makeFixture();
+  const issue = (user, seconds) => {
+    const r = durable.issueDurableTargetStagingSession(fx.store, user, seconds);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    return r;
+  };
+  const expired = issue("alice", 1);
+  const revoked = issue("alice", 900);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, revoked.sessionId).ok, true);
+  await sleep(1300);
+  const refusal = async cookie => {
+    const request = get("tasks/f-1", cookie);
+    const identity = identityLib.resolveStagingHttpIdentity(request);
+    assert.ok(identity, "identity resolves from the cookie");
+    return identityLib.stagingUnauthorizedRefusal(request, identity, fx.store);
+  };
+  await expectBody(await refusal(sessionCookie(expired.sessionToken)), { ...AUTH, code: "session_expired" }, "expired");
+  await expectBody(await refusal(sessionCookie(revoked.sessionToken)), { ...AUTH, code: "session_revoked" }, "revoked");
+  await expectBody(await refusal(sessionCookie(randomBytes(32).toString("base64url"))),
+    { ...AUTH, code: "session_revoked" }, "unknown");
+  await expectBody(await refusal(ownerCookie()), AUTH, "owner cookie keeps the code-less body");
+});
+
 let gateCounter = 0;
 async function withGatedChild(run, between) {
   const gate = path.join(root, `gate-${++gateCounter}`);
