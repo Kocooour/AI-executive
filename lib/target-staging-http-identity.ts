@@ -83,6 +83,7 @@ export function stagingCursorIdentity(
  */
 export function verifyStagingIdentityBeforeRelease(
   request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+  stage: "admission" | "release" = "release",
 ): StagingIdentityCheck {
   if (identity.kind === "owner") {
     const auth = getAuthState(request);
@@ -92,7 +93,7 @@ export function verifyStagingIdentityBeforeRelease(
   if (!auth.enabled || !auth.configured) return "unauthorized";
   const live = verifyDurableTargetStagingSessionLiveCoded(store, identity.tokenHash);
   if (live.ok === true) return "ok";
-  if (live.reason === "unavailable") logStagingFailure("identity_release", "live_read_unavailable");
+  if (live.reason === "unavailable") logStagingFailure(stage === "admission" ? "identity_admission" : "identity_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : "unavailable";
 }
 
@@ -161,7 +162,7 @@ export function stagingUnauthorizedRefusal(
 ): Response {
   if (identity.kind === "session") {
     try {
-      const check = verifyStagingIdentityBeforeRelease(request, identity, store);
+      const check = verifyStagingIdentityBeforeRelease(request, identity, store, "admission");
       if (check === "session_expired" || check === "session_revoked") return coded(check);
     } catch { /* fall through to the code-less body */ }
   }
