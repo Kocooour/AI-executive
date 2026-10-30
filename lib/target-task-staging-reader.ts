@@ -27,6 +27,9 @@ import type {
   TargetPrivateTaskTitleAuditResult, TargetReadLinearization, TargetScopedOffsetPage,
   TargetScopedReadableTask,
 } from "./target-task-read-model";
+import { readChangeFeedPage } from "./target-change-feed-read-model";
+import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
+import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
@@ -500,6 +503,25 @@ export function readPreflightedScopedTaskPage(
       return readScopedTaskOffsetPage(db, {
         actorUserId, scope: request.scope, limit: request.limit, offset: request.offset,
         restoreGeneration: store.expectedRestoreGeneration,
+      });
+    }, () => null));
+}
+
+/**
+ * R2c.2a bootstrap / Area bootstrap / feed page: one canonical pinned snapshot for
+ * preflight, actor, claim verification, rows and the linearization record. Cursor
+ * failures are returned as results; a denied session or store yields null.
+ */
+export function readPreflightedChangeFeedPage(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, claims: FeedClaims | null,
+): TargetChangeFeedResult | null {
+  return withPreflightedStore<TargetChangeFeedResult | null>(store, () => null, (db, preflight) =>
+    inReadSnapshot<TargetChangeFeedResult | null>(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return null;
+      return readChangeFeedPage(db, {
+        actorUserId, restoreGeneration: store.expectedRestoreGeneration, claims,
       });
     }, () => null));
 }

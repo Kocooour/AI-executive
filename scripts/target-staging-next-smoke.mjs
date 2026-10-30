@@ -147,6 +147,25 @@ try {
   assert.equal((await fetch(`${origin}/api/target-staging/tasks?scope=bogus`, {
     headers: { cookie }, signal: AbortSignal.timeout(10_000),
   })).status, 400);
+  // R2c.2a: the bootstrap / change feed route is routed, authenticated and no-store.
+  const feedFirst = await fetch(`${origin}/api/target-staging/changes`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(feedFirst.status, 200);
+  assert.equal(feedFirst.headers.get("cache-control"), "no-store");
+  const feedBody = await feedFirst.json();
+  assert.equal(feedBody.phase, "bootstrap");
+  assert.equal(feedBody.more, false);
+  assert.ok(feedBody.items.some(item => item.id === "shared-secret"));
+  assert.equal(JSON.stringify(feedBody).includes("Bob secret"), false);
+  const feedNext = await fetch(`${origin}/api/target-staging/changes?cursor=${feedBody.cursor}`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(feedNext.status, 200);
+  assert.deepEqual((await feedNext.json()).items, []);
+  assert.equal((await fetch(`${origin}/api/target-staging/changes`)).status, 401);
+  assert.equal((await fetch(`${origin}/api/target-staging/changes?cursor=garbage`, {
+    headers: { cookie } })).status, 400);
   const unauthenticated = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`);
   assert.equal(unauthenticated.status, 401);
   for (const id of ids) {
