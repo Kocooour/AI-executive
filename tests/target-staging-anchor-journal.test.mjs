@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  appendFileSync, chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync,
+  appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync,
   renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -431,7 +431,19 @@ test("crash after the intent but before COMMIT: reads stay ok, the next writer a
   const anchorBefore = anchorOf(fx);
   const result = await runChild(fx, "crash-before-commit").done;
   assert.equal(result.signal, "SIGKILL");
-  recoverHotJournal(fx);
+  // The killed writer left a NON-hot SQLite journal (zero header). A normal open does not clear
+  // it, and the sidecar rule refuses every writer and the read child until the operator acts.
+  const sidecar = fx.databasePath + "-journal";
+  assert.equal(existsSync(sidecar), true);
+  assert.deepEqual([...readFileSync(sidecar).subarray(0, 8)], [0, 0, 0, 0, 0, 0, 0, 0], "zero magic: not hot");
+  const opener = new DatabaseSync(fx.databasePath);
+  opener.prepare("SELECT COUNT(*) FROM metadata").get();
+  opener.close();
+  assert.equal(existsSync(sidecar), true, "a normal open does not clear it");
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600), { ok: false, reason: "unavailable" });
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok", "still no restore state");
+  recoverHotJournal(fx); // documented runbook: header magic is zero -> remove it
   assert.equal(anchorOf(fx), anchorBefore, "nothing committed");
   const crashed = journalState(fx);
   assert.equal(crashed.pending, anchorBefore + 1);
@@ -500,7 +512,8 @@ test("DOCUMENTED LIMITATION: restoring the copy taken just before a write whose 
 
 const tampers = {
   "missing": fx => unlinkSync(fx.journalPath),
-  "truncated mid-line": fx => truncateSync(fx.journalPath, statSync(fx.journalPath).size - 12),
+  "non-canonical unterminated fragment": fx => appendFileSync(fx.journalPath, '{"n": 1}'),
+  "oversized unterminated fragment": fx => appendFileSync(fx.journalPath, "x".repeat(5000)),
   "empty": fx => truncateSync(fx.journalPath, 0),
   "a line edited (chain break)": fx => {
     const text = journalText(fx);
@@ -546,6 +559,9 @@ for (const [label, tamper] of Object.entries(tampers)) {
     const armed = { title: prepareTitle(fx, "t2", "late"), member: prepareMember(fx, "add", "carol", "viewer"),
       delete: prepareDelete(fx, "t3") };
     tamper(fx);
+    // Edits of EARLIER lines are only caught by a process without a verified prefix (a restart);
+    // the cache trade-off is asserted explicitly in the prefix-cache test.
+    journalLib.clearTargetStagingJournalCache();
     const dbBefore = readFileSync(fx.databasePath);
     const entryBefore = existsSync(fx.journalPath);
     const journalBefore = existsSync(fx.journalPath) && statSync(fx.journalPath).isFile() ? journalText(fx) : null;
@@ -656,3 +672,130 @@ test("performance: full-chain verification of a 5000-write journal stays far bel
   assert.equal(anchorOf(fx), 5001);
   assert.ok(writeMs < 2000, `write ${writeMs} ms`);
 });
+
+// ---- FIFO at the journal path ---------------------------------------------------------------
+
+test("a FIFO planted at the journal path is refused without blocking (gate and writer)", () => {
+  const fx = makeFixture();
+  unlinkSync(fx.journalPath);
+  execFileSync("mkfifo", ["-m", "600", fx.journalPath]);
+  const run = spawnSync(process.execPath, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+    "tests/support/target-anchor-gate-child.mjs", fx.stage.directory, fx.stage.restoreGeneration],
+  { encoding: "utf8", timeout: 20_000 });
+  assert.equal(run.error, undefined, "the child did not hang: " + String(run.error));
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), { gate: "journal_invalid", ok: false, reason: "unavailable" });
+});
+
+// ---- torn tail ------------------------------------------------------------------------------
+
+test("an unterminated trailing fragment is ignored by readers; the next writer cuts it and appends correctly", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+  const clean = journalText(fx);
+  // A writer's append in flight (or torn by ENOSPC/EIO): half of a would-be intent line.
+  const half = journalLib.serializeTargetStagingJournalLine({
+    n: anchorOf(fx) + 1, t: "intent", k: "title", p: { seq: [9, 9] }, g: fx.stage.restoreGeneration,
+    prev: journalState(fx).lastHash }).text.slice(0, 60);
+  appendFileSync(fx.journalPath, half);
+  assert.equal(journalState(fx).confirmed, anchorOf(fx));
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  assert.equal((await routes["tasks list"](ownerCookie())).status, 200);
+  assert.equal(durable.issueDurableTargetStagingSession(fx.store, "bob", 600).ok, true);
+  const text = journalText(fx);
+  assert.ok(text.startsWith(clean), "complete lines untouched");
+  assert.ok(!text.includes(half.slice(0, 60)) || text.split(half).length === 1, "fragment gone");
+  assert.equal(text.endsWith("\n"), true);
+  assert.deepEqual(journalLines(fx).slice(-2).map(line => line.t), ["intent", "confirm"]);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("a torn confirm after a committed write: reads ok, the next writer repairs and confirms", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "warm").ok, true);
+  const n = anchorOf(fx);
+  truncateSync(fx.journalPath, statSync(fx.journalPath).size - 12); // cut the confirm line
+  assert.equal(journalState(fx).pending, n);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(fx.store, "bob").ok, true);
+  assert.deepEqual(journalLines(fx).slice(-4).map(line => [line.t, line.n]),
+    [["intent", n], ["confirm", n], ["intent", n + 1], ["confirm", n + 1]]);
+});
+
+// ---- verified-prefix cache ------------------------------------------------------------------
+
+const cachedFd = (fx, fn) => {
+  const fd = journalLib.openTargetStagingJournal(fx.stage.directory, false);
+  try { return fn(fd); } finally { closeSync(fd); }
+};
+test("prefix cache: appended lines verify incrementally; a changed last line, shrink or new inode forces full checks", () => {
+  const fx = makeFixture();
+  for (let i = 0; i < 3; i++) assert.equal(titleWrite(fx, "t1", `w${i}`).ok, true);
+  const gen = fx.stage.restoreGeneration;
+  assert.ok(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)));
+  // Append through a real writer: incremental result equals a fresh full verification.
+  assert.equal(titleWrite(fx, "t1", "more").ok, true);
+  const incremental = cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen));
+  assert.deepEqual(incremental.state, journalLib.verifyTargetStagingJournal(journalText(fx), gen));
+  // Edit the LAST line in place (same size): detected at the boundary.
+  const text = journalText(fx);
+  const lines = text.split("\n");
+  const last = lines.length - 2;
+  lines[last] = lines[last].replace(/[0-9a-f]/, c => (c === "a" ? "b" : "a")); // flips a prev/hash hex digit
+  writeFileSync(fx.journalPath, lines.join("\n"), { mode: 0o600 });
+  assert.equal(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)), null);
+  // Documented trade-off: an in-place edit of an EARLIER line is invisible to this process (cached
+  // prefix) but a restarted process (empty cache) rejects it.
+  const early = text.split("\n");
+  early[1] = early[1].replace('"k":"title"', '"k":"delete"');
+  writeFileSync(fx.journalPath, early.join("\n"), { mode: 0o600 });
+  assert.equal(early.join("\n") === text, false);
+  cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen));
+  journalLib.clearTargetStagingJournalCache();
+  assert.equal(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)), null);
+  // Restore, then shrink below the cached end: full verification of the shorter chain.
+  writeFileSync(fx.journalPath, text, { mode: 0o600 });
+  assert.ok(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)));
+  const shorter = lines.slice(0, 3).join("\n") + "\n";
+  writeFileSync(fx.journalPath, shorter, { mode: 0o600 });
+  assert.equal(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)).state.records, 3);
+  // A replacement file (new inode) with a broken chain is verified in full.
+  const swapped = fx.journalPath + ".new";
+  writeFileSync(swapped, shorter.replace('"k":"title"', '"k":"delete"') + text.slice(shorter.length), { mode: 0o600 });
+  renameSync(swapped, fx.journalPath);
+  assert.equal(cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)), null);
+});
+
+for (const writes of [5000, 20000]) {
+  test(`performance: cached per-request check on a ${writes}-write journal (cold vs warm vs +1 append)`, () => {
+    const fx = makeFixture();
+    const gen = fx.stage.restoreGeneration;
+    let prev = journalLines(fx).at(-1).h;
+    const chunks = [];
+    for (let n = 1; n <= writes; n++) {
+      const intent = journalLib.serializeTargetStagingJournalLine({ n, t: "intent", k: "title", p: { seq: [n, n] }, g: gen, prev });
+      const confirm = journalLib.serializeTargetStagingJournalLine({ n, t: "confirm", k: null, p: null, g: gen, prev: intent.hash });
+      chunks.push(intent.text, confirm.text);
+      prev = confirm.hash;
+    }
+    appendFileSync(fx.journalPath, chunks.join(""));
+    fx.db.prepare("UPDATE metadata SET value=? WHERE key='anchor_seq'").run(String(writes));
+    const ms = fn => { const t = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t) / 1e6; };
+    const median = (fn, rounds = 15) => {
+      const samples = Array.from({ length: rounds }, () => ms(fn)).sort((a, b) => a - b);
+      return samples[Math.floor(samples.length / 2)];
+    };
+    const full = median(() => journalLib.verifyTargetStagingJournal(journalText(fx), gen), 5);
+    const cold = ms(() => assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok"));
+    const warm = median(() => assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok"));
+    const scanWarm = median(() => cachedFd(fx, fd => journalLib.scanTargetStagingJournalFd(fd, gen)));
+    // One more real write, then the first check after it (incremental: only the new lines).
+    assert.equal(durable.issueDurableTargetStagingSession(fx.store, "bob", 600).ok, true);
+    const afterAppend = ms(() => assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok"));
+    process.stdout.write(`# R2c.4a perf ${writes} writes: full verify ${full.toFixed(1)} ms, cold gate ${cold.toFixed(1)} ms, `
+      + `warm gate ${warm.toFixed(1)} ms (journal scan alone ${scanWarm.toFixed(2)} ms), gate after +1 write ${afterAppend.toFixed(1)} ms\n`);
+    assert.ok(scanWarm < 15, `warm journal scan ${scanWarm} ms`);
+    assert.ok(afterAppend < 150, `incremental ${afterAppend} ms`);
+    assert.ok(warm < Math.max(40, cold), `warm gate ${warm} ms`);
+  });
+}

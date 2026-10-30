@@ -17,7 +17,7 @@
  */
 import { createHash } from "node:crypto";
 import {
-  closeSync, constants, fstatSync, fsyncSync, openSync, readSync, writeSync,
+  closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, writeSync,
 } from "node:fs";
 
 export const TARGET_STAGING_JOURNAL_FILENAME = "lumi-target.journal";
@@ -118,12 +118,122 @@ const validPayload = (value: unknown): boolean => {
   return entries.length <= 8 && entries.every(([key, item]) => key.length <= 32 && validValue(item));
 };
 
+/** Chain-verification context; resumable (per-process prefix cache, see verifyTargetStagingJournalFd). */
+interface VerifyContext {
+  prev: string;
+  records: number;
+  lastIntent: number;
+  confirmed: number;
+  pending: number | null;
+  status: Map<number, "pending" | "confirmed" | "aborted">;
+}
+const newContext = (): VerifyContext => ({
+  prev: "", records: 0, lastIntent: 0, confirmed: 0, pending: null, status: new Map(),
+});
+
+/** Verify one complete line (without its newline) and advance the context; false = invalid. */
+function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolean {
+  if (raw.length === 0 || raw.length > MAX_LINE_BYTES) return false;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  if (Object.keys(parsed).sort().join(",") !== "g,h,k,n,p,prev,t") return false;
+  const { n, t, k, p, g, prev: linkedPrev, h } = parsed as {
+    n: unknown; t: unknown; k: unknown; p: unknown; g: unknown; prev: unknown; h: unknown };
+  if (canonicalJournalJson(parsed) !== raw) return false;
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 ||
+      (t !== "genesis" && t !== "intent" && t !== "confirm" && t !== "abort") ||
+      typeof g !== "string" || !UUID.test(g) || g.toLowerCase() !== generation.toLowerCase() ||
+      typeof linkedPrev !== "string" || !HEX64.test(linkedPrev) ||
+      typeof h !== "string" || !HEX64.test(h) || !validPayload(p)) return false;
+  const first = ctx.records === 0;
+  if (first ? linkedPrev !== TARGET_STAGING_JOURNAL_GENESIS_PREV : linkedPrev !== ctx.prev) return false;
+  const record = { n, t, k, p, g, prev: linkedPrev } as TargetStagingJournalRecord;
+  if (chainHash(record) !== h) return false;
+  if (t === "genesis") {
+    if (!first || n !== 0 || k !== null || p !== null) return false;
+  } else {
+    if (first) return false;
+    if (t === "intent") {
+      if (n !== ctx.lastIntent + 1 || typeof k !== "string" || !KINDS.has(k) || p === null) return false;
+      // The previous intent must be resolved before the next one is appended.
+      if (ctx.pending !== null) return false;
+      ctx.lastIntent = n;
+      ctx.pending = n;
+      ctx.status.set(n, "pending");
+    } else {
+      if (k !== null || p !== null) return false;
+      const status = ctx.status.get(n);
+      if (t === "abort") {
+        if (status !== "pending") return false;
+        ctx.status.set(n, "aborted");
+      } else {
+        if (status !== "pending" && status !== "confirmed") return false;
+        ctx.status.set(n, "confirmed");
+        if (n > ctx.confirmed) ctx.confirmed = n;
+      }
+      if (ctx.pending === n) ctx.pending = null;
+    }
+  }
+  ctx.prev = h;
+  ctx.records += 1;
+  return true;
+}
+
+const stateOf = (ctx: VerifyContext, generation: string): TargetStagingJournalState => ({
+  lastIntent: ctx.lastIntent, confirmed: ctx.confirmed, pending: ctx.pending,
+  lastHash: ctx.prev, generation, records: ctx.records,
+});
+
+export interface TargetStagingJournalScan {
+  readonly state: TargetStagingJournalState;
+  /** Byte length of the terminated (complete) part of the file. */
+  readonly completeBytes: number;
+  /** An unterminated trailing fragment follows (a writer's append in flight or torn). */
+  readonly torn: boolean;
+}
+
+/**
+ * Verify `buffer` (the file from byte `base`, or all of it) line by line, continuing `ctx`.
+ * ONLY an unterminated fragment after the last newline is tolerated, and only when it is a
+ * (possibly cut-off) line: it does not parse as JSON, or parses to exactly its canonical text
+ * (just the newline missing). A parseable but non-canonical fragment is invalid. Every
+ * terminated line must be canonical and chained. Returns the bytes consumed or null.
+ */
+function scanBuffer(
+  buffer: Buffer, generation: string, ctx: VerifyContext,
+): { completeBytes: number; torn: boolean; lastLineStart: number } | null {
+  const lastNewline = buffer.lastIndexOf(10);
+  const complete = lastNewline + 1;
+  let lastLineStart = 0;
+  if (complete > 0) {
+    const lines = buffer.subarray(0, complete).toString("utf8").slice(0, -1).split("\n");
+    let offset = 0;
+    for (const line of lines) {
+      lastLineStart = offset;
+      if (!verifyLine(line, generation, ctx)) return null;
+      offset += Buffer.byteLength(line, "utf8") + 1;
+    }
+  }
+  const rest = buffer.subarray(complete);
+  let torn = false;
+  if (rest.length > 0) {
+    if (rest.length > MAX_LINE_BYTES) return null;
+    const fragment = rest.toString("utf8");
+    let parsed: unknown;
+    let parses = true;
+    try { parsed = JSON.parse(fragment); } catch { parses = false; }
+    if (parses && canonicalJournalJson(parsed) !== fragment) return null;
+    torn = true;
+  }
+  return { completeBytes: complete, torn, lastLineStart };
+}
+
 /**
  * Verify the whole chain and derive the state, or null when ANYTHING is wrong:
- * unparsable or non-canonical line, missing final newline (truncation), hash or
- * prev mismatch, wrong shape, non-consecutive intent numbers, a resolution which
- * does not match an intent, an intent appended while the previous one is still
- * unresolved, or a generation which differs from `generation`.
+ * unparsable or non-canonical line, hash or prev mismatch, wrong shape, non-consecutive
+ * intent numbers, a resolution which does not match an intent, an intent appended while the
+ * previous one is still unresolved, or a generation which differs from `generation`.
+ * An unterminated trailing fragment is ignored (see scanBuffer).
  *
  * A `confirm` may repeat or arrive late (two processes may race to confirm the same
  * committed intent; both are true statements), but never for an aborted intent, and
@@ -133,64 +243,87 @@ export function verifyTargetStagingJournal(
   text: string, generation: string,
 ): TargetStagingJournalState | null {
   try {
-    if (typeof text !== "string" || text.length === 0 || !text.endsWith("\n") ||
-        !UUID.test(generation)) return null;
-    const lines = text.slice(0, -1).split("\n");
-    let prev = "";
-    let lastIntent = 0;
-    let confirmed = 0;
-    let pending: number | null = null;
-    const state = new Map<number, "pending" | "confirmed" | "aborted">();
-    for (let index = 0; index < lines.length; index += 1) {
-      const raw = lines[index];
-      if (raw.length === 0 || raw.length > MAX_LINE_BYTES) return null;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-      if (Object.keys(parsed).sort().join(",") !== "g,h,k,n,p,prev,t") return null;
-      const { n, t, k, p, g, prev: linkedPrev, h } = parsed as {
-        n: unknown; t: unknown; k: unknown; p: unknown; g: unknown; prev: unknown; h: unknown };
-      if (canonicalJournalJson(parsed) !== raw) return null;
-      if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 ||
-          (t !== "genesis" && t !== "intent" && t !== "confirm" && t !== "abort") ||
-          typeof g !== "string" || !UUID.test(g) || g.toLowerCase() !== generation.toLowerCase() ||
-          typeof linkedPrev !== "string" || !HEX64.test(linkedPrev) ||
-          typeof h !== "string" || !HEX64.test(h) || !validPayload(p)) return null;
-      if (index === 0 ? linkedPrev !== TARGET_STAGING_JOURNAL_GENESIS_PREV : linkedPrev !== prev) return null;
-      const record = { n, t, k, p, g, prev: linkedPrev } as TargetStagingJournalRecord;
-      if (chainHash(record) !== h) return null;
-      prev = h;
-      if (t === "genesis") {
-        if (index !== 0 || n !== 0 || k !== null || p !== null) return null;
-        continue;
-      }
-      if (index === 0) return null;
-      if (t === "intent") {
-        if (n !== lastIntent + 1 || typeof k !== "string" || !KINDS.has(k) || p === null) return null;
-        // The previous intent must be resolved before the next one is appended.
-        if (pending !== null) return null;
-        lastIntent = n;
-        pending = n;
-        state.set(n, "pending");
-      } else {
-        if (k !== null || p !== null) return null;
-        const status = state.get(n);
-        if (t === "abort") {
-          if (status !== "pending") return null;
-          state.set(n, "aborted");
-        } else {
-          if (status !== "pending" && status !== "confirmed") return null;
-          state.set(n, "confirmed");
-          if (n > confirmed) confirmed = n;
+    if (typeof text !== "string" || !UUID.test(generation)) return null;
+    const ctx = newContext();
+    const scanned = scanBuffer(Buffer.from(text, "utf8"), generation, ctx);
+    return scanned && ctx.records > 0 ? stateOf(ctx, generation) : null;
+  } catch { return null; }
+}
+
+/**
+ * Per-process verified-prefix cache keyed by (dev, ino): the context after the last
+ * terminated line, its byte end and start. A later check requires size >= the cached end,
+ * re-reads and re-verifies the cached last line at the boundary (it must still hash to the
+ * cached value) and verifies only the appended bytes. Any mismatch, shrink or inode change
+ * drops the entry and falls back to a FULL verification, so the verdict stays fail-closed.
+ * Trade-off: an in-place edit of an EARLIER line is not noticed by a process which already
+ * verified it; a fresh process (restart) always verifies the full chain once.
+ */
+interface CachedPrefix { generation: string; end: number; lastLineStart: number; ctx: VerifyContext }
+const prefixCache = new Map<string, CachedPrefix>();
+const PREFIX_CACHE_MAX = 16;
+
+function readRange(fd: number, start: number, size: number): Buffer | null {
+  const buffer = Buffer.alloc(size - start);
+  let offset = 0;
+  while (offset < buffer.length) {
+    const read = readSync(fd, buffer, offset, buffer.length - offset, start + offset);
+    if (read <= 0) return null;
+    offset += read;
+  }
+  return buffer;
+}
+
+/** A fresh process starts empty; tests call this to simulate a restart. */
+export function clearTargetStagingJournalCache(): void { prefixCache.clear(); }
+
+export function scanTargetStagingJournalFd(fd: number, generation: string): TargetStagingJournalScan | null {
+  try {
+    if (!UUID.test(generation)) return null;
+    const info = fstatSync(fd);
+    const size = info.size;
+    if (size === 0 || size > TARGET_STAGING_JOURNAL_MAX_BYTES) return null;
+    const key = info.dev + ":" + info.ino;
+    const cached = prefixCache.get(key);
+    if (cached && cached.generation === generation && size >= cached.end) {
+      const tail = readRange(fd, cached.lastLineStart, size);
+      const boundary = tail === null ? -1 : tail.indexOf(10);
+      if (tail !== null && boundary >= 0 && cached.lastLineStart + boundary + 1 === cached.end) {
+        // Re-verify the cached last line (content must still hash to the cached chain value).
+        const lineText = tail.subarray(0, boundary).toString("utf8");
+        let sameLine = false;
+        try {
+          const { h, ...record } = JSON.parse(lineText) as Record<string, unknown>;
+          sameLine = canonicalJournalJson({ ...record, h }) === lineText && h === cached.ctx.prev &&
+            chainHash(record as unknown as TargetStagingJournalRecord) === h;
+        } catch { sameLine = false; }
+        if (sameLine) {
+          const appended = tail.subarray(boundary + 1);
+          // Copy the status map only when something was appended (it is mutated by the scan).
+          const ctx: VerifyContext = appended.length === 0 ? cached.ctx
+            : { ...cached.ctx, status: new Map(cached.ctx.status) };
+          const scanned = scanBuffer(appended, generation, ctx);
+          if (scanned) {
+            const end = cached.end + scanned.completeBytes;
+            if (scanned.completeBytes > 0) {
+              prefixCache.set(key, { generation, end, ctx,
+                lastLineStart: cached.end + scanned.lastLineStart });
+            }
+            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn };
+          }
         }
-        if (pending === n) pending = null;
       }
     }
-    if (lines.length === 0) return null;
-    // A late duplicate confirm can never re-open a resolved tail.
-    return { lastIntent, confirmed, pending, lastHash: prev, generation, records: lines.length };
-  } catch {
-    return null;
-  }
+    prefixCache.delete(key);
+    const buffer = readRange(fd, 0, size);
+    if (buffer === null) return null;
+    const ctx = newContext();
+    const scanned = scanBuffer(buffer, generation, ctx);
+    if (!scanned || ctx.records === 0) return null;
+    if (prefixCache.size >= PREFIX_CACHE_MAX) prefixCache.clear();
+    prefixCache.set(key, { generation, end: scanned.completeBytes, ctx, lastLineStart: scanned.lastLineStart });
+    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn };
+  } catch { return null; }
 }
 
 /** Canonical decimal anchor, or null when absent or malformed. */
@@ -235,13 +368,19 @@ export function resolveTargetStagingJournalTail(
  * owned by this uid, mode exactly 0600. Returns the fd (caller closes) or null.
  */
 export function openTargetStagingJournal(directoryRoot: string, writable: boolean): number | null {
-  if (constants.O_NOFOLLOW === undefined || !process.getuid) return null;
+  if (constants.O_NOFOLLOW === undefined || constants.O_NONBLOCK === undefined || !process.getuid) return null;
   let fd: number | null = null;
   try {
-    fd = openSync(directoryRoot + "/" + TARGET_STAGING_JOURNAL_FILENAME,
-      (writable ? constants.O_RDWR | constants.O_APPEND : constants.O_RDONLY) | constants.O_NOFOLLOW);
+    const target = directoryRoot + "/" + TARGET_STAGING_JOURNAL_FILENAME;
+    // lstat first, and O_NONBLOCK below: a FIFO (or device) planted at the path must be refused,
+    // never block the event loop of the pre-auth gate waiting for a peer.
+    const before = lstatSync(target);
+    if (!before.isFile() || before.isSymbolicLink()) return null;
+    fd = openSync(target, (writable ? constants.O_RDWR | constants.O_APPEND : constants.O_RDONLY) |
+      constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = fstatSync(fd);
     if (!info.isFile() || info.nlink !== 1 || info.uid !== process.getuid() ||
+        info.dev !== before.dev || info.ino !== before.ino ||
         (info.mode & 0o777) !== 0o600 || info.size > TARGET_STAGING_JOURNAL_MAX_BYTES) {
       closeSync(fd);
       return null;
@@ -266,6 +405,16 @@ export function readTargetStagingJournalText(fd: number): string | null {
     }
     return buffer.toString("utf8");
   } catch { return null; }
+}
+
+/**
+ * Writer-only, under the SQLite write lock: cut a torn trailing fragment back to the last newline
+ * (fsync). Safe: an intent is fully fsynced before its COMMIT, so a fragment is always an
+ * unfinished intent (DB not committed) or an unfinished confirm (resolved again from anchor == n).
+ */
+export function truncateTargetStagingJournal(fd: number, bytes: number): void {
+  ftruncateSync(fd, bytes);
+  fsyncSync(fd);
 }
 
 /** Append one line (O_APPEND fd) and fsync; throws on any failure. */
@@ -293,9 +442,8 @@ export function checkTargetStagingJournal(
   const fd = openTargetStagingJournal(directoryRoot, false);
   if (fd === null) return "journal_invalid";
   try {
-    const text = readTargetStagingJournalText(fd);
-    const state = text === null ? null : verifyTargetStagingJournal(text, generation);
-    return evaluateTargetStagingAnchor(state, parseTargetStagingAnchor(anchorRaw));
+    const scan = scanTargetStagingJournalFd(fd, generation);
+    return evaluateTargetStagingAnchor(scan ? scan.state : null, parseTargetStagingAnchor(anchorRaw));
   } finally {
     try { closeSync(fd); } catch { /* fail closed */ }
   }

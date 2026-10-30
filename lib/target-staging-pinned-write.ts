@@ -19,8 +19,8 @@ import { DatabaseSync } from "node:sqlite";
 import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target-store-bootstrap";
 import {
   appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
-  openTargetStagingJournal, parseTargetStagingAnchor, readTargetStagingJournalText,
-  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, verifyTargetStagingJournal,
+  openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd,
+  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, truncateTargetStagingJournal,
 } from "./target-staging-anchor-journal";
 import type {
   TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
@@ -246,8 +246,13 @@ export function withPinnedTargetStagingWrite<T>(
     const anchorRaw = (connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
       .get() as { value: unknown } | undefined)?.value;
     const anchor = parseTargetStagingAnchor(anchorRaw);
-    const text = readTargetStagingJournalText(journal);
-    let state = text === null ? null : verifyTargetStagingJournal(text, store.expectedRestoreGeneration);
+    const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
+    let state = scan ? scan.state : null;
+    if (scan && scan.torn) {
+      // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
+      // killed append) back to the last complete line before resolving the tail.
+      truncateTargetStagingJournal(journal, scan.completeBytes);
+    }
     if (!state || anchor === null || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
     const generation = state.generation;
     if (state.pending !== null) {
@@ -295,8 +300,9 @@ export function withPinnedTargetStagingWrite<T>(
         try {
           connection.exec("BEGIN IMMEDIATE");
           transaction = true;
-          const fresh = readTargetStagingJournalText(journal);
-          const current = fresh === null ? null : verifyTargetStagingJournal(fresh, generation);
+          const fresh = scanTargetStagingJournalFd(journal, generation);
+          if (fresh && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
+          const current = fresh ? fresh.state : null;
           if (current && current.pending === n) {
             appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
               n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
