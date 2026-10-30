@@ -67,9 +67,9 @@ async function scopedList(input: {
   }
   if (released === "stale") return answer(409, "read_stale_reload");
   if (!page) {
-      logStagingFailure("tasks_list", "child_page_unavailable");
-      return answer(503, "Staging unavailable");
-    }
+    logStagingFailure("tasks_list", "child_page_unavailable");
+    return answer(503, "Staging unavailable");
+  }
   if (previous?.ok === true && previous.revision !== page.revision) {
     return answer(409, "Cursor stale");
   }
