@@ -663,12 +663,15 @@ test("HTTP: flag off 404, 401 without a session, no-store, rate limit, bounded c
   const viaOwner = await okJson(feedRequest(fx, ownerCookie(), null), "owner");
   assert.deepEqual(viaOwner.items, (await ok.json()).items);
 
-  // Oversized cursor, unknown / duplicated parameters: 400 before any work.
+  // Empty or oversized cursor, unknown / duplicated parameters: 400 after identity,
+  // before decrypting or spawning the read child.
   const huge = "a".repeat(feedCursor.MAX_FEED_CURSOR_LENGTH + 1);
-  assert.equal((await feedRequest(fx, a.cookie, huge)).status, 400);
-  assert.equal((await feedRequest(fx, a.cookie, null, "?limit=5")).status, 400);
-  assert.equal((await feedRequest(fx, a.cookie, null, "?since=1")).status, 400);
-  assert.equal((await feedRequest(fx, a.cookie, "x", "&cursor=y")).status, 400);
+  for (const [cursor, extra] of [[huge, ""], [null, "?cursor="], [null, "?limit=5"], [null, "?since=1"], ["x", "&cursor=y"]]) {
+    const response = await feedRequest(fx, a.cookie, cursor, extra);
+    assert.equal(response.status, 400, `${extra || "oversized"}`);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { error: "Invalid request" });
+  }
 
   // Rate limit: refused before decrypting or spawning a child (cheap garbage cursors).
   const limited = makeFixture();
