@@ -218,6 +218,49 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
 }
 
 /**
+ * The single trust rule of every journal-modifying step (pre-write tail resolution AND the
+ * post-COMMIT confirm). Must run inside a write transaction on a connection with the witness
+ * ATTACHed (the attachment lives until the connection closes). Returns the complete-line scan
+ * and the anchor only when the journal, the main `anchor_seq` and the atomic SQLite witness
+ * agree (anchor === witness, verdict "ok"); otherwise null and the caller must not modify
+ * the store. A restored main DB may equal the last JSONL confirm yet trail a COMMITTED
+ * unconfirmed intent: only the witness detects that.
+ */
+export function trustedTargetStagingTail(
+  connection: DatabaseSync, journal: number, generation: string, genesisHash: string, directoryFdPath: string,
+): { scan: NonNullable<ReturnType<typeof scanTargetStagingJournalFd>>; anchor: number } | null {
+  const anchor = parseTargetStagingAnchor((connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+    .get() as { value: unknown } | undefined)?.value);
+  const scan = scanTargetStagingJournalFd(journal, generation);
+  if (!scan || anchor === null) return null;
+  const witnessed = readAttachedTargetStagingWitness(connection, generation, genesisHash, directoryFdPath,
+    scan.intentHashes, scan.intentStatuses);
+  if (witnessed === null || anchor !== witnessed ||
+      evaluateTargetStagingAnchor(scan.state, anchor) !== "ok") return null;
+  return { scan, anchor };
+}
+
+/**
+ * Post-COMMIT step, inside a fresh write transaction: append `confirm n` only for a TRUSTED
+ * store (same verdict as before the write, including the witness) whose tail is still the
+ * pending intent n. An untrusted store (e.g. restored in place since the COMMIT) is left
+ * byte-for-byte untouched, fragment included; the next writer refuses it.
+ */
+export function appendTargetStagingConfirmIfTrusted(
+  connection: DatabaseSync, journal: number, generation: string, genesisHash: string,
+  directoryFdPath: string, n: number,
+): boolean {
+  const trusted = trustedTargetStagingTail(connection, journal, generation, genesisHash, directoryFdPath);
+  if (!trusted) return false;
+  if (trusted.scan.torn) truncateTargetStagingJournal(journal, trusted.scan.completeBytes);
+  if (trusted.scan.state.pending !== n) return false;
+  appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
+    n, t: "confirm", k: null, p: null, g: generation, prev: trusted.scan.state.lastHash,
+  }).text);
+  return true;
+}
+
+/**
  * Establish the pinned connection, take the RESERVED write lock, run the
  * canonical r2-model preflight on that very connection, then call body. The
  * caller cannot supply a DatabaseSync, file descriptor or generation.
@@ -292,20 +335,13 @@ export function withPinnedTargetStagingWrite<T>(
     journalFd = openTargetStagingJournal(pinnedFiles.directoryFdPath, true);
     if (journalFd === null) return denied();
     const journal = journalFd;
-    const anchorRaw = (connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
-      .get() as { value: unknown } | undefined)?.value;
-    const anchor = parseTargetStagingAnchor(anchorRaw);
-    const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
-    let state = scan ? scan.state : null;
-    const witnessed = scan ? readAttachedTargetStagingWitness(connection,
-      store.expectedRestoreGeneration, genesisHash, pinnedFiles.directoryFdPath,
-      scan.intentHashes, scan.intentStatuses) : null;
+    const trustedTail = trustedTargetStagingTail(connection, journal, store.expectedRestoreGeneration,
+      genesisHash, pinnedFiles.directoryFdPath);
     // Verdict first, on the complete lines: an untrusted store is never modified.
-    // A restored main DB may have the same number as the last JSONL confirm but
-    // be behind a COMMITTED unconfirmed intent. The atomic witness detects it.
-    if (!state || anchor === null || witnessed === null || anchor !== witnessed ||
-        evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
-    if (scan && scan.torn) {
+    if (!trustedTail) return denied();
+    const { scan, anchor } = trustedTail;
+    let state = scan.state;
+    if (scan.torn) {
       // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
       // killed append) back to the last complete line before resolving the tail.
       truncateTargetStagingJournal(journal, scan.completeBytes);
@@ -359,20 +395,8 @@ export function withPinnedTargetStagingWrite<T>(
         try {
           connection.exec("BEGIN IMMEDIATE");
           transaction = true;
-          const fresh = scanTargetStagingJournalFd(journal, generation);
-          const freshAnchor = parseTargetStagingAnchor((connection.prepare(
-            "SELECT value FROM metadata WHERE key='anchor_seq'").get() as { value: unknown } | undefined)?.value);
-          // Same rule as before the write: an untrusted store (e.g. restored in place since
-          // the COMMIT) is never modified; the next writer refuses it.
-          const trusted = fresh !== null && freshAnchor !== null &&
-            evaluateTargetStagingAnchor(fresh.state, freshAnchor) === "ok";
-          if (trusted && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
-          const current = trusted ? fresh.state : null;
-          if (current && current.pending === n) {
-            appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
-              n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
-            }).text);
-          }
+          appendTargetStagingConfirmIfTrusted(connection, journal, generation, genesisHash,
+            pinnedFiles.directoryFdPath, n);
           connection.exec("ROLLBACK");
           transaction = false;
         } catch { /* resolved by the next writer */ }
