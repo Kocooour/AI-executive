@@ -544,7 +544,7 @@ exec "${realNode}" "$@"
   } finally { process.execPath = realNode; }
 }
 
-test("HTTP: a session revoked or expired INSIDE the pending membership write gets the coded 401, nothing written", async () => {
+test("HTTP: a session revoked or expired before the membership child starts (no-result fallback) gets the coded 401, nothing written", async () => {
   client++;
   const area = makeArea({ bob: "admin" });
   for (const mode of ["revoked", "expired"]) {

@@ -4,8 +4,8 @@
  * BEGIN IMMEDIATE write helper, whose canonical preflight runs inside the
  * transaction before this body.
  *
- * The new floor is the newest sequence committed before `now - retentionDays`
- * (never lower than the current floor). Rows at or below it are then deleted
+ * The new floor is MIN(seq committed at or after `now - retentionDays`) - 1, or
+ * MAX(seq) when no row is that recent, and never lower than the current floor. Rows at or below it are then deleted
  * only where a later row of the same key also lies at or below the floor, so the
  * last row <= floor of every key and everything above the floor survive; the
  * schema's guarded-delete trigger enforces exactly that, even for direct SQL.
@@ -64,13 +64,14 @@ export function compactTargetStagingChangeLog(
       if (raised.changes !== 1) return { ok: false, reason: "write_failed" };
     }
     // Superseded rows only: a later row of the same key at or below the floor exists (the
-    // trigger re-checks this for every row). The probe seeks change_log_by_entity (the
-    // unary + keeps the NULL member column of task/project rows out of the index choice) and
-    // progresses by sequence, so the work is linear in the log. One transaction, bounded batches.
+    // trigger re-checks this for every row). The probe seeks the full key in change_log_by_key
+    // (membership rows share the Area as entity_id, so the member column must be part of the
+    // seek) and progresses by sequence, so the work is linear in the log. One transaction,
+    // bounded batches.
     const select = db.prepare(`SELECT c.seq AS seq FROM change_log c WHERE c.seq > ? AND c.seq <= ? AND EXISTS (
-        SELECT 1 FROM change_log x INDEXED BY change_log_by_entity
+        SELECT 1 FROM change_log x INDEXED BY change_log_by_key
          WHERE x.entity_kind = c.entity_kind AND x.entity_id = c.entity_id
-           AND +x.member_user_id IS c.member_user_id AND x.seq > c.seq AND x.seq <= ?)
+           AND x.member_user_id IS c.member_user_id AND x.seq > c.seq AND x.seq <= ?)
       ORDER BY c.seq LIMIT ?`);
     const remove = db.prepare("DELETE FROM change_log WHERE seq = ?");
     let deleted = 0;

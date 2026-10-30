@@ -717,19 +717,19 @@ test("differential (seeded): compacted store == uncompacted store for every P >=
   }
 });
 
-test("compaction probes seek change_log_by_entity (never the NULL-heavy member index) and stay linear", () => {
+test("compaction probes seek the full key (change_log_by_key) and stay linear for tasks and memberships", () => {
   const fx = makeFixture();
   const plan = sql => fx.db.prepare("EXPLAIN QUERY PLAN " + sql).all().map(r => r.detail).join("\n");
-  const probe = `SELECT 1 FROM change_log x INDEXED BY change_log_by_entity
-    WHERE x.entity_kind = 'task' AND x.entity_id = 'f-1' AND +x.member_user_id IS NULL AND x.seq > 1 AND x.seq <= 9`;
-  assert.match(plan(probe), /USING (COVERING )?INDEX change_log_by_entity \(entity_kind=\? AND entity_id=\? AND seq>\? AND seq<\?\)/);
-  // The same probe without INDEXED BY, as written in the guarded-delete trigger, must not pick the member index.
+  const keySeek = /USING (COVERING )?INDEX change_log_by_key \(entity_kind=\? AND entity_id=\? AND member_user_id=\? AND seq>\? AND seq<\?\)/;
+  for (const where of ["x.entity_kind = 'task' AND x.entity_id = 'f-1' AND x.member_user_id IS NULL",
+    "x.entity_kind = 'membership' AND x.entity_id = 'family-area' AND x.member_user_id IS 'bob'"]) {
+    const probe = `SELECT 1 FROM change_log x WHERE ${where} AND x.seq > 1 AND x.seq <= 9`;
+    assert.match(plan(probe), keySeek, plan(probe));
+    assert.match(plan(probe.replace("FROM change_log x", "FROM change_log x INDEXED BY change_log_by_key")), keySeek);
+  }
   const trigger = fx.db.prepare("SELECT sql FROM sqlite_schema WHERE name='change_log_guarded_delete'").get().sql;
-  assert.match(trigger, /\+x\.member_user_id IS OLD\.member_user_id/);
-  const triggerProbe = `SELECT 1 FROM change_log x WHERE x.entity_kind = 'task' AND x.entity_id = 'f-1'
-    AND +x.member_user_id IS NULL AND x.seq > 1 AND x.seq <= 9`;
-  assert.doesNotMatch(plan(triggerProbe), /change_log_by_member/, plan(triggerProbe));
-  assert.match(plan(triggerProbe), /change_log_by_entity/);
+  assert.match(trigger, /x\.member_user_id IS OLD\.member_user_id/);
+  assert.doesNotMatch(trigger, /\+x\.member_user_id/);
 
   // 8000 tasks x 2 rows each compact in one pass well within the lock budget.
   fx.db.exec("BEGIN");
@@ -746,6 +746,33 @@ test("compaction probes seek change_log_by_entity (never the NULL-heavy member i
   assert.ok(result.deleted >= 8000, JSON.stringify(result));
   assert.ok(elapsed < 4000, `compaction took ${Math.round(elapsed)} ms for ${rowsBefore} rows`);
   assert.equal(preflight(fx).ok, true);
+
+  // 6000 members of ONE Area x 2 rows each: membership keys share entity_id (the Area),
+  // so a seek without the member column would walk the whole Area per row (quadratic).
+  const m = makeFixture();
+  m.db.exec("BEGIN");
+  const identity = m.db.prepare("INSERT INTO identities(id) VALUES (?)");
+  const workspace = m.db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?, 'personal', ?)");
+  const privateArea = m.db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+    VALUES (?, ?, 'private', ?, ?, 'unassigned')`);
+  const add = m.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area', ?, 'viewer')");
+  const promote = m.db.prepare("UPDATE area_members SET role='editor' WHERE area_id='family-area' AND user_id=?");
+  for (let i = 0; i < 6000; i++) {
+    const user = `perf-member-${i}`;
+    identity.run(user);
+    workspace.run(`${user}-personal`, user);
+    privateArea.run(`${user}-private`, user, `${user}-personal`, user);
+    add.run(user);
+    promote.run(user);
+  }
+  m.db.exec("COMMIT");
+  const memberStarted = performance.now();
+  const memberResult = compactTargetStagingChangeLog(m.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS });
+  const memberElapsed = performance.now() - memberStarted;
+  assert.equal(memberResult.ok, true, JSON.stringify(memberResult));
+  assert.ok(memberResult.deleted >= 6000, JSON.stringify(memberResult));
+  assert.ok(memberElapsed < 4000, `membership compaction took ${Math.round(memberElapsed)} ms`);
+  assert.equal(preflight(m).ok, true);
 });
 
 test("floor never passes a row still inside retention, even when commit times are not monotonic", () => {

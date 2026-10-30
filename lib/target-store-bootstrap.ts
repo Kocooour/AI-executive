@@ -288,9 +288,10 @@ CREATE TABLE change_log (
 -- index keeps other users' membership rows out of that walk.
 CREATE INDEX change_log_content_by_area ON change_log(area_id, seq) WHERE entity_kind <> 'membership';
 CREATE INDEX change_log_tombstones ON change_log(seq) WHERE op = 'tombstone';
--- Preflight reconciles the latest entry per entity with the live state; these
--- checks must be index-driven (latest upsert/tombstone of one task/project/membership).
-CREATE INDEX change_log_by_entity ON change_log(entity_kind, entity_id, seq);
+-- Preflight reconciles the latest entry per entity with the live state, and compaction
+-- looks for a later row of the same key; both seek the FULL key. Membership rows use the
+-- Area as entity_id, so (kind, entity_id) alone would walk every member of the Area.
+CREATE INDEX change_log_by_key ON change_log(entity_kind, entity_id, member_user_id, seq);
 -- R2c.2b: the own-membership lookup of the feed seeks by (kind, user) instead of
 -- scanning every membership row of the log.
 CREATE INDEX change_log_by_member ON change_log(entity_kind, member_user_id, seq);
@@ -305,7 +306,7 @@ CREATE TRIGGER change_log_guarded_delete BEFORE DELETE ON change_log
 WHEN OLD.seq > COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0)
   OR NOT EXISTS(SELECT 1 FROM change_log x
     WHERE x.entity_kind = OLD.entity_kind AND x.entity_id = OLD.entity_id
-      AND +x.member_user_id IS OLD.member_user_id AND x.seq > OLD.seq
+      AND x.member_user_id IS OLD.member_user_id AND x.seq > OLD.seq
       AND x.seq <= COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0))
 BEGIN SELECT RAISE(ABORT, 'change log rows may only be compacted below the floor'); END;
 -- The floor is a canonical decimal integer which only ever increases, never above

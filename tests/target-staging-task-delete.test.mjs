@@ -409,7 +409,7 @@ const waitUntilExpired = async issued => {
   await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.expiresAtMs - Date.now()) + 400));
 };
 
-test("a durable session which EXPIRES between dispatch and the write transaction gets 401 session_expired, nothing written", async () => {
+test("a durable session which EXPIRES before the delete child starts (no-result fallback) gets 401 session_expired, nothing written", async () => {
   const taskId = sharedTask();
   const issued = durable.issueDurableTargetStagingSession(store, "bob", 3);
   assert.equal(issued.ok, true);
