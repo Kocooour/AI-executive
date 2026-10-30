@@ -74,11 +74,15 @@ export interface PinnedTargetStagingFiles {
   /** Path still names the pinned inode (no swap, hard link or symlink). */
   stillPinned(): boolean;
   /**
-   * Open SQLite on the verified path, then (after the caller ran its first
-   * statement, which is when SQLite really opens the file) prove that exactly
-   * one new regular-file descriptor appeared and that it is the pinned inode.
+   * Open SQLite on the verified path. The read-only proof permits recycled
+   * descriptor numbers; the writer retains its strict fd-set check.
+   * afterSnapshotBeforeSQLiteOpen is a synchronous, internal TEST-ONLY seam,
+   * never populated by staging routes or writer code.
    */
-  openDatabase(options: { readOnly: boolean }): { db: DatabaseSync; verifyOpened(): boolean };
+  openDatabase(options: {
+    readOnly: boolean;
+    afterSnapshotBeforeSQLiteOpen?: () => void;
+  }): { db: DatabaseSync; verifyOpened(): boolean };
   close(): void;
 }
 
@@ -152,6 +156,12 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
       directory, databasePath, databaseFd: dbFd, stillPinned,
       openDatabase: options => {
         const beforeOpen = regularFiles();
+        // Deterministically reproduce concurrent descriptor recycling in tests.
+        // No production call passes this hook; writer opens cannot supply it.
+        if (options.afterSnapshotBeforeSQLiteOpen) {
+          if (!options.readOnly) throw new PinDenied();
+          options.afterSnapshotBeforeSQLiteOpen();
+        }
         const db = new DatabaseSync(databasePath, { readOnly: options.readOnly });
         return {
           db,

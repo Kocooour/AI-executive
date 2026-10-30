@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -34,7 +34,7 @@ test("staging diagnostic messages contain only allowlisted codes, never exceptio
   ]);
 });
 
-test("real SQLite inode proof and durable-session HTTP list remain available under repeated reads", async () => {
+test("real SQLite fd recycling and Bob's durable-session HTTP list remain available under repeated reads", async () => {
   // This uses the actual pinned read-only SQLite connection and the original
   // HTTP session route. Each request must succeed on its first attempt.
   const root = mkdtempSync(path.join(os.tmpdir(), "lumi-issue164-"));
@@ -69,37 +69,85 @@ test("real SQLite inode proof and durable-session HTTP list remain available und
     const db = new DatabaseSync(stage.databasePath);
     try {
       db.prepare("INSERT INTO tasks(id, area_id, title) VALUES (?,?,?)")
-        .run("issue164-1", stage.unassignedAreaId, "Synthetic task");
+        .run("issue164-alice", stage.unassignedAreaId, "Alice private");
+      db.prepare("INSERT INTO identities(id) VALUES (?)").run("bob");
+      db.prepare("INSERT INTO workspaces(id, kind, owner_user_id) VALUES (?, ?, ?)")
+        .run("bob-personal", "personal", "bob");
+      db.prepare("INSERT INTO areas(id, title, kind, workspace_id, owner_user_id, system_key) VALUES (?,?,?,?,?,?)")
+        .run("bob-private", "Bob", "private", "bob-personal", "bob", "unassigned");
+      db.prepare("INSERT INTO tasks(id, area_id, title) VALUES (?,?,?)")
+        .run("issue164-bob", "bob-private", "Bob private");
     } finally { db.close(); }
     const unrelatedPath = path.join(root, "unrelated");
     writeFileSync(unrelatedPath, "not a database");
+    const descriptorRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
+    const regularFdSnapshot = () => {
+      const descriptors = new Map();
+      for (const name of readdirSync(descriptorRoot)) {
+        if (!/^[0-9]+$/.test(name)) continue;
+        const fd = Number(name);
+        try {
+          const stat = fstatSync(fd);
+          if (stat.isFile()) descriptors.set(fd, { dev: stat.dev, ino: stat.ino });
+        } catch { /* the directory scan itself can close its temporary fd */ }
+      }
+      return descriptors;
+    };
     for (let n = 0; n < 24; n++) {
       const pinned = pinTargetStagingFiles(stage.directory);
       assert.ok(pinned, "source database must be pinned");
       const unrelatedFd = openSync(unrelatedPath, "r");
+      let unrelatedIsOpen = true;
       let opened;
+      let beforeSqliteOpen;
       try {
-        opened = pinned.openDatabase({ readOnly: true });
-        // Closing an unrelated *regular* file between the before/after fd
-        // scans must not invalidate the SQLite source-inode proof.
-        closeSync(unrelatedFd);
+        opened = pinned.openDatabase({
+          readOnly: true,
+          afterSnapshotBeforeSQLiteOpen: () => {
+            // The production code has already captured its 'before' fd map.
+            // Free the numeric fd NOW, before DatabaseSync opens SQLite.
+            beforeSqliteOpen = regularFdSnapshot();
+            assert.ok(beforeSqliteOpen.has(unrelatedFd));
+            closeSync(unrelatedFd);
+            unrelatedIsOpen = false;
+          },
+        });
         opened.db.exec("BEGIN");
         opened.db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-        assert.equal(opened.verifyOpened(), true, "SQLite must open the pinned inode");
+        const afterSqliteOpen = regularFdSnapshot();
+        const pinnedStat = fstatSync(pinned.databaseFd);
+        assert.deepEqual(afterSqliteOpen.get(unrelatedFd),
+          { dev: pinnedStat.dev, ino: pinnedStat.ino },
+          "SQLite must recycle the just-freed numeric fd for the pinned DB");
+        assert.equal(
+          [...afterSqliteOpen].filter(([fd]) => !beforeSqliteOpen.has(fd))
+            .some(([, stat]) => stat.dev === pinnedStat.dev && stat.ino === pinnedStat.ino),
+          false, "the previous fd-number-difference proof must fail on this real scenario");
+        assert.equal(
+          hasNewPinnedReadDescriptor(beforeSqliteOpen, afterSqliteOpen, pinnedStat),
+          true, "the new inode-count proof must succeed on the same real scenario");
+        assert.equal(opened.verifyOpened(), true, "production SQLite inode verification must succeed");
         opened.db.exec("ROLLBACK");
       } finally {
         if (opened) opened.db.close();
-        else closeSync(unrelatedFd);
+        if (unrelatedIsOpen) closeSync(unrelatedFd);
         pinned.close();
       }
     }
 
-    const issued = durable.issueDurableTargetStagingSession(store, "alice");
-    assert.equal(issued.ok, true);
-    const cookie = durable.TARGET_STAGING_SESSION_COOKIE + "=" + issued.sessionToken;
-    const request = new Request("http://localhost:3001/api/target-staging/tasks", {
-      headers: { cookie, "x-forwarded-for": "10.164.1.1" },
+    const bob = durable.issueDurableTargetStagingSession(store, "bob");
+    const alice = durable.issueDurableTargetStagingSession(store, "alice");
+    assert.equal(bob.ok, true);
+    assert.equal(alice.ok, true);
+    const requestFor = (token, ip) => new Request("http://localhost:3001/api/target-staging/tasks", {
+      headers: {
+        cookie: durable.TARGET_STAGING_SESSION_COOKIE + "=" + token,
+        "x-forwarded-for": ip,
+      },
     });
+    // The FIRST list request below uses Bob's session, not the configured owner.
+    const request = requestFor(bob.sessionToken, "10.164.1.1");
+    const ownerRequest = requestFor(alice.sessionToken, "10.164.1.2");
     const identity = identityLib.resolveStagingHttpIdentity(request);
     assert.equal(identity?.kind, "session");
 
@@ -119,15 +167,20 @@ test("real SQLite inode proof and durable-session HTTP list remain available und
     assert.equal(logs.filter(line => line.includes("stage=identity_admission reason=live_read_unavailable")).length, 1);
     assert.equal(logs.filter(line => line.includes("stage=identity_release reason=live_read_unavailable")).length, 2);
 
-    // Exercise both real live SQLite verification points AND the original
-    // route/child response, with no retry and unchanged HTTP expectations.
+    // Reproduce the original FIRST GET for a different, non-owner identity.
+    // Every subsequent HTTP read must succeed on its FIRST attempt, never retry.
     for (let n = 0; n < 48; n++) {
       const response = await GET(request);
-      assert.equal(response.status, 200, "first-attempt HTTP session list #" + n);
+      assert.equal(response.status, 200, "first-attempt Bob HTTP session list #" + n);
       assert.equal(response.headers.get("cache-control"), "no-store");
       const result = await response.json();
-      assert.deepEqual(result.tasks.map(task => task.title), ["Synthetic task"]);
+      assert.deepEqual(result.tasks.map(task => [task.id, task.title]),
+        [["issue164-bob", "Bob private"]], "Bob must not see Alice's private task");
     }
+    const aliceResponse = await GET(ownerRequest);
+    assert.equal(aliceResponse.status, 200);
+    assert.deepEqual((await aliceResponse.json()).tasks.map(task => [task.id, task.title]),
+      [["issue164-alice", "Alice private"]], "Alice must not see Bob's private task");
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
