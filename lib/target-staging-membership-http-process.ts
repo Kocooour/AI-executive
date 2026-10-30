@@ -4,7 +4,7 @@ import type { StagingPersonalReadConfig } from "./target-staging-read-process";
 import type { TargetStagingMembershipCommand, TargetStagingMembershipResult } from "./target-staging-membership-command";
 
 const REASONS = ["unauthorized", "unauthenticated", "unavailable", "stale_policy_revision", "idempotency_conflict", "already_member",
-  "last_admin", "write_failed", "session_revoked"];
+  "last_admin", "write_failed", "session_revoked", "resync_required"];
 
 function parse(value: unknown): TargetStagingMembershipResult | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;

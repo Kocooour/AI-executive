@@ -21,6 +21,7 @@ import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { verifiedActor } from "./target-task-authenticated-read";
 import type { TargetStagingReadCredential } from "./target-task-authenticated-read";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
+import { targetStoreRestoreGeneration } from "./target-task-write-preflight";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -37,6 +38,10 @@ export interface TargetStagingMembershipCommand {
   readonly expectedPolicyRevision: number;
   readonly action: TargetStagingMembershipAction;
   readonly targetUserId: string;
+  /** R2c.3: must equal `areaId` (the route rejects a mismatch with 400 before the admin check). */
+  readonly writeAreaId: string;
+  /** R2c.3: the restore generation the client synchronized to. */
+  readonly restoreGeneration: string;
   /** Required for add / set_role, forbidden for remove. */
   readonly role?: TargetStagingMembershipRole;
 }
@@ -47,7 +52,7 @@ export type TargetStagingMembershipResult =
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unauthenticated" | "unavailable" | "stale_policy_revision" |
         "idempotency_conflict" | "already_member" | "last_admin" | "write_failed" |
-        "session_revoked" };
+        "session_revoked" | "resync_required" };
 
 /** Pin / store integrity loss (HTTP 503). */
 const denied = (): TargetStagingMembershipResult => ({ ok: false, reason: "unauthorized" });
@@ -64,11 +69,13 @@ export function validTargetStagingMembershipCommand(
   const keys = Object.keys(v).sort().join(",");
   if (v.action !== "add" && v.action !== "remove" && v.action !== "set_role") return false;
   if (keys !== (v.action === "remove"
-    ? "action,areaId,commandId,expectedPolicyRevision,targetUserId"
-    : "action,areaId,commandId,expectedPolicyRevision,role,targetUserId")) return false;
+    ? "action,areaId,commandId,expectedPolicyRevision,restoreGeneration,targetUserId,writeAreaId"
+    : "action,areaId,commandId,expectedPolicyRevision,restoreGeneration,role,targetUserId,writeAreaId")) return false;
   if (v.action !== "remove" && !(typeof v.role === "string" && roles.includes(v.role))) return false;
   return typeof v.commandId === "string" && UUID.test(v.commandId) &&
     typeof v.areaId === "string" && ID.test(v.areaId) &&
+    typeof v.writeAreaId === "string" && v.writeAreaId === v.areaId &&
+    typeof v.restoreGeneration === "string" && UUID.test(v.restoreGeneration) &&
     typeof v.targetUserId === "string" && ID.test(v.targetUserId) &&
     typeof v.expectedPolicyRevision === "number" && Number.isSafeInteger(v.expectedPolicyRevision) &&
     v.expectedPolicyRevision >= 0 && v.expectedPolicyRevision <= MAX_REVISION;
@@ -106,6 +113,13 @@ export function applyTargetStagingMembershipCommand(
       return live !== null && live.userId === actor;
     };
     if (!sessionLive()) return { ok: false, reason: "session_revoked" };
+
+    // R2c.3: a client synchronized to another restore generation writes nothing.
+    // Store-level, so it reveals nothing about Areas; runs before the admin check.
+    const generation = targetStoreRestoreGeneration(db);
+    if (generation === null || generation !== command.restoreGeneration.toLowerCase()) {
+      return { ok: false, reason: "resync_required" };
+    }
 
     // Not-admin, unknown Area and private Area are one indistinguishable denial.
     const area = db.prepare(`

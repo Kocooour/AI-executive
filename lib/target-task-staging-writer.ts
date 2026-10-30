@@ -22,11 +22,15 @@ import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import { verifiedActor } from "./target-task-authenticated-read";
 import type { TargetStagingReadCredential } from "./target-task-authenticated-read";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
-import { canEditIsolatedTargetTaskTitle, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
+import {
+  checkTargetTaskWriteContract, targetTaskTitleEditRevision,
+  validTargetTaskTitleEditPreviewRequest,
+} from "./target-task-write-preflight";
 
 const CHUNK_BYTES = 64 * 1024;
 const MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 4096;
+const WRITE_AREA_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const COMMAND_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetStagingTaskTitleWriteRequest {
@@ -36,6 +40,10 @@ export interface TargetStagingTaskTitleWriteRequest {
   readonly title: string;
   /** Mandatory task + policy SHA-256 returned by the staging preview. */
   readonly expectedRevision: string;
+  /** R2c.3: the Area the client believes it writes into (never trusted, always verified). */
+  readonly writeAreaId: string;
+  /** R2c.3: the restore generation the client synchronized to. */
+  readonly restoreGeneration: string;
 }
 
 export type TargetStagingTaskTitleWriteResult =
@@ -43,7 +51,7 @@ export type TargetStagingTaskTitleWriteResult =
   | { ok: false;
       reason: "invalid_request" | "unauthorized" | "unavailable" |
         "stale_revision" | "unchanged" | "idempotency_conflict" | "write_failed" |
-        "session_revoked" };
+        "session_revoked" | "resync_required" | "write_area_mismatch" };
 
 const denied = (): TargetStagingTaskTitleWriteResult =>
   ({ ok: false, reason: "unauthorized" });
@@ -55,8 +63,11 @@ export function validTargetStagingTaskTitleWriteRequest(
 ): value is TargetStagingTaskTitleWriteRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).sort().join(",") !== "commandId,expectedRevision,taskId,title" ||
+  if (Object.keys(input).sort().join(",") !== "commandId,expectedRevision,restoreGeneration,taskId,title,writeAreaId" ||
       typeof input.commandId !== "string" || !COMMAND_ID.test(input.commandId)) return false;
+  if (typeof input.writeAreaId !== "string" || !WRITE_AREA_ID.test(input.writeAreaId) ||
+      typeof input.restoreGeneration !== "string" ||
+      !COMMAND_ID.test(input.restoreGeneration)) return false;
   if (typeof input.expectedRevision !== "string" ||
       !validTargetTaskTitleEditPreviewRequest({
         taskId: input.taskId, expectedRevision: input.expectedRevision,
@@ -82,7 +93,7 @@ export function targetTaskTitleReceiptKey(actor: string, taskId: string, command
 /** Digest exact request semantics, including the preview revision. */
 export function targetTaskTitleReceiptDigest(request: TargetStagingTaskTitleWriteRequest): string {
   return createHash("sha256")
-    .update(JSON.stringify([request.taskId, request.title, request.expectedRevision]))
+    .update(JSON.stringify([request.taskId, request.title, request.expectedRevision, request.writeAreaId]))
     .digest("hex");
 }
 
@@ -145,9 +156,9 @@ export function writePreflightedTargetTaskTitle(
       return live !== null && live.userId === actor;
     };
     if (!sessionLive()) return { ok: false, reason: "session_revoked" };
-    if (!canEditIsolatedTargetTaskTitle(db, actor, request.taskId, privateOnly)) {
-      return { ok: false, reason: "unavailable" };
-    }
+    // R2c.3 contract, before any receipt lookup, CAS or mutation.
+    const contract = checkTargetTaskWriteContract(db, actor, request, privateOnly);
+    if (contract.ok === false) return { ok: false, reason: contract.reason };
     // Persist the receipt in the *same transaction* as the UPDATE. The actor
     // and operation UUID are hashed into the key; only a request digest is
     // stored (never the title or task content). Replays are checked after the

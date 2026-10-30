@@ -16,7 +16,7 @@ try {
   if (!available) throw new Error("Unavailable");
   const input = await readTitleCommand(process.stdin);
   if (!input || typeof input !== "object" || Array.isArray(input) ||
-      Object.keys(input).sort().join(",") !== "commandId,expectedRevision,taskId,title") {
+      Object.keys(input).sort().join(",") !== "commandId,expectedRevision,restoreGeneration,taskId,title,writeAreaId") {
     throw new Error("Invalid input");
   }
   const authority = new TargetStagingSessionAuthority({
@@ -32,7 +32,8 @@ try {
     const result = authority.updateTaskTitle(issued.sessionToken, input, false, resolved.sessionTokenHash);
     if (result.ok) process.stdout.write(JSON.stringify(result.replayed
       ? { ok: true, replayed: true } : { ok: true }));
-    else if (result.reason === "unavailable" || result.reason === "stale_revision" ||
+    else if (result.reason === "resync_required" || result.reason === "write_area_mismatch" ||
+        result.reason === "unavailable" || result.reason === "stale_revision" ||
         result.reason === "idempotency_conflict" || result.reason === "unchanged" ||
         result.reason === "write_failed" || result.reason === "session_revoked") {
       process.stdout.write(JSON.stringify({ ok: false, reason: result.reason }));

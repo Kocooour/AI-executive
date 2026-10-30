@@ -245,7 +245,8 @@ try {
   const titleTaskId = ids[0]; // Encoded slash also checks nested Next route matching.
   const titleUrl = `${origin}/api/target-staging/tasks/${encodeURIComponent(titleTaskId)}/title`;
   const statusUrl = `${titleUrl}/status`;
-  const writeHeaders = { cookie, origin, "content-type": "application/json" };
+  // R2c.3: every write names the protocol version, its Area and the restore generation.
+  const writeHeaders = { cookie, origin, "content-type": "application/json", "x-lumi-target-protocol": "1" };
   const preview = await fetch(titleUrl, {
     headers: { cookie }, signal: AbortSignal.timeout(10_000),
   });
@@ -255,6 +256,7 @@ try {
   const titleCommand = {
     commandId: randomUUID(), title: "HTTP reconciled title",
     expectedRevision: snapshotRevision,
+    writeAreaId: stage.unassignedAreaId, restoreGeneration: stage.restoreGeneration,
   };
   const checkStatus = (id, payload) => fetch(
     `${origin}/api/target-staging/tasks/${encodeURIComponent(id)}/title/status`,
@@ -286,6 +288,18 @@ try {
     assert.equal(hidden.status, 404, `Status leaked task ${id}`);
     assert.deepEqual(await hidden.json(), { error: "Not found" });
   }
+  // R2c.3 barrier through the real build: no/other protocol header and snapshot-shaped bodies write nothing.
+  const titleBefore = db.prepare("SELECT title,revision FROM tasks WHERE id=?").get(titleTaskId);
+  const { "x-lumi-target-protocol": _omitted, ...noProtocol } = writeHeaders;
+  const unversioned = await fetch(titleUrl, { method: "PATCH", headers: noProtocol,
+    body: JSON.stringify({ ...titleCommand, commandId: randomUUID(), title: "No version" }), signal: AbortSignal.timeout(10_000) });
+  assert.equal(unversioned.status, 400);
+  assert.deepEqual(await unversioned.json(), { error: "Invalid request", code: "protocol_unsupported" });
+  const legacyShape = await fetch(titleUrl, { method: "PATCH", headers: writeHeaders,
+    body: JSON.stringify({ entities: [], relations: [], baseRevision: "x" }), signal: AbortSignal.timeout(10_000) });
+  assert.equal(legacyShape.status, 400);
+  assert.deepEqual(await legacyShape.json(), { error: "Invalid request", code: "legacy_snapshot_rejected" });
+  assert.deepEqual(db.prepare("SELECT title,revision FROM tasks WHERE id=?").get(titleTaskId), titleBefore);
   const unauthenticatedStatus = await fetch(statusUrl, {
     method: "POST", headers: { origin, "content-type": "application/json" },
     body: JSON.stringify(titleCommand), signal: AbortSignal.timeout(10_000),
@@ -311,21 +325,22 @@ try {
   const carolCookie = sessionCookieFor("carol");
   const sharedUrl = `${origin}/api/target-staging/tasks/shared-secret`;
   const sharedAs = async (who, method, suffix, payload) => fetch(sharedUrl + suffix, {
-    method, headers: { cookie: who, origin, "content-type": "application/json" },
+    method, headers: { cookie: who, origin, "content-type": "application/json", "x-lumi-target-protocol": "1" },
     ...(payload ? { body: JSON.stringify(payload) } : {}), signal: AbortSignal.timeout(10_000),
   });
+  const sharedArea = { writeAreaId: "family-area", restoreGeneration: stage.restoreGeneration };
   const bobDetail = await (await sharedAs(bobCookie, "GET", "")).json();
   assert.match(bobDetail.snapshotRevision, /^[a-f0-9]{64}$/, "editor gets the title CAS token");
   const carolDetail = await sharedAs(carolCookie, "GET", "");
   assert.equal(carolDetail.status, 200);
   assert.deepEqual(Object.keys(await carolDetail.json()), ["task"], "viewer gets no title CAS token");
-  const viewerCommand = { commandId: randomUUID(), title: "Viewer must not write", expectedRevision: bobDetail.snapshotRevision };
+  const viewerCommand = { commandId: randomUUID(), title: "Viewer must not write", expectedRevision: bobDetail.snapshotRevision, ...sharedArea };
   for (const [method, suffix, payload] of [["GET", "/title"], ["PATCH", "/title", viewerCommand], ["POST", "/title/status", viewerCommand]]) {
     const refused = await sharedAs(carolCookie, method, suffix, payload);
     assert.equal(refused.status, 404, `viewer ${method} ${suffix}`);
     assert.deepEqual(await refused.json(), { error: "Not found" });
   }
-  const sharedCommand = { commandId: randomUUID(), title: "Shared title by bob", expectedRevision: bobDetail.snapshotRevision };
+  const sharedCommand = { commandId: randomUUID(), title: "Shared title by bob", expectedRevision: bobDetail.snapshotRevision, ...sharedArea };
   const sharedWritten = await sharedAs(bobCookie, "PATCH", "/title", sharedCommand);
   assert.equal(sharedWritten.status, 200, "Next shared title PATCH failed");
   assert.deepEqual(await sharedWritten.json(), { ok: true });
@@ -336,7 +351,7 @@ try {
     "a stale token is a conflict");
   const ownerShared = await (await sharedAs(cookie, "GET", "")).json();
   assert.equal(ownerShared.task.title, "Shared title by bob");
-  const ownerCommand = { commandId: randomUUID(), title: "Shared title by alice", expectedRevision: ownerShared.snapshotRevision };
+  const ownerCommand = { commandId: randomUUID(), title: "Shared title by alice", expectedRevision: ownerShared.snapshotRevision, ...sharedArea };
   assert.equal((await sharedAs(cookie, "PATCH", "/title", ownerCommand)).status, 200);
   assert.deepEqual(
     db.prepare("SELECT actor_user_id AS a FROM task_title_audit WHERE task_id='shared-secret' ORDER BY id").all().map(row => row.a),
@@ -346,7 +361,7 @@ try {
   // R2c.1: tombstoning task delete + status through the real build. Viewer -> 404; editor deletes;
   // the exact retry replays (the task is gone, the tombstone Area decides); a non-deleter learns nothing.
   const deleteToken = (await (await sharedAs(bobCookie, "GET", "")).json()).snapshotRevision;
-  const deleteCommand = { commandId: randomUUID(), expectedRevision: deleteToken };
+  const deleteCommand = { commandId: randomUUID(), expectedRevision: deleteToken, ...sharedArea };
   for (const suffix of ["/delete", "/delete/status"]) {
     const refused = await sharedAs(carolCookie, "POST", suffix, deleteCommand);
     assert.equal(refused.status, 404, `viewer POST ${suffix}`);

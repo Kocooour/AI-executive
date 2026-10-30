@@ -58,8 +58,10 @@ function preview(authority, token) {
   return result.snapshotRevision;
 }
 function write(authority, token, title, expectedRevision) {
+  const { stage } = fixtures.find(value => value.authority === authority);
   return authority.updateTaskTitle(token, {
     commandId: randomUUID(), taskId: "task", title, expectedRevision,
+    writeAreaId: stage.unassignedAreaId, restoreGeneration: stage.restoreGeneration,
   });
 }
 function insertAudit(db, stage, key, revision = "c".repeat(64),
