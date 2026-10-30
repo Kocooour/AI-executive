@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -512,9 +512,60 @@ test("HTTP: a durable session admin acts as itself; a revoked session gets 401 w
   const rev = revision(area);
   const refused = await post(area, body(area, "add", "erin", { role: "viewer" }), { cookie });
   assert.equal(refused.status, 401);
+  assert.deepEqual(await refused.json(), { error: "Authentication required", code: "session_revoked" });
   assert.equal(role(area, "erin"), null);
   assert.equal(revision(area), rev);
   assert.deepEqual(counts(), state);
+});
+
+let gateCounter = 0;
+async function withChildGatedBeforeStart(run, between) {
+  const realNode = process.execPath;
+  const gate = path.join(root, `gate-${++gateCounter}`);
+  mkdirSync(gate);
+  const script = path.join(gate, "node-wrapper.sh");
+  writeFileSync(script, `#!/bin/sh
+PATH=/usr/bin:/bin
+: > "${gate}/started"
+while [ ! -e "${gate}/go" ]; do sleep 0.02; done
+exec "${realNode}" "$@"
+`);
+  chmodSync(script, 0o755);
+  process.execPath = script;
+  try {
+    const pending = run();
+    for (let waited = 0; !existsSync(path.join(gate, "started")); waited += 20) {
+      assert.ok(waited < 30_000, "gated child never started");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    await between();
+    writeFileSync(path.join(gate, "go"), "");
+    return await pending;
+  } finally { process.execPath = realNode; }
+}
+
+test("HTTP: a session revoked or expired INSIDE the pending membership write gets the coded 401, nothing written", async () => {
+  client++;
+  const area = makeArea({ bob: "admin" });
+  for (const mode of ["revoked", "expired"]) {
+    const issued = durable.issueDurableTargetStagingSession(store, "bob", mode === "expired" ? 3 : 600);
+    assert.equal(issued.ok, true);
+    const cookie = sessionCookie(issued.sessionToken);
+    const state = counts();
+    const rev = revision(area);
+    const response = await withChildGatedBeforeStart(
+      () => post(area, body(area, "add", "erin", { role: "viewer" }), { cookie }),
+      async () => {
+        if (mode === "revoked") assert.equal(durable.revokeDurableTargetStagingSession(store, issued.sessionId).ok, true);
+        else await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.expiresAtMs - Date.now()) + 400));
+      });
+    assert.equal(response.status, 401, mode);
+    assert.deepEqual(await response.json(),
+      { error: "Authentication required", code: mode === "expired" ? "session_expired" : "session_revoked" }, mode);
+    assert.equal(role(area, "erin"), null);
+    assert.equal(revision(area), rev);
+    assert.deepEqual(counts(), state);
+  }
 });
 
 test("HTTP: flag, auth, Origin, query and body gates refuse before any write", async () => {

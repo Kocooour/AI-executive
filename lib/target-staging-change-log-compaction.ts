@@ -52,30 +52,37 @@ export function compactTargetStagingChangeLog(
     const current = Number((db.prepare("SELECT value FROM metadata WHERE key='change_log_floor'")
       .get() as { value: string } | undefined)?.value);
     if (!Number.isSafeInteger(current) || current < 0) return { ok: false, reason: "write_failed" };
-    const candidate = Number((db.prepare(
-      "SELECT COALESCE(MAX(seq), 0) AS n FROM change_log WHERE committed_at_ms < ?",
-    ).get(cutoff) as { n: number }).n);
+    // Rows still within retention are never compacted, even if commit times are not
+    // monotonic (clock steps): the floor stops just before the FIRST row newer than the cutoff.
+    const candidate = Number((db.prepare(`SELECT COALESCE(
+        (SELECT MIN(seq) FROM change_log WHERE committed_at_ms >= ?) - 1,
+        (SELECT COALESCE(MAX(seq), 0) FROM change_log)) AS n`).get(cutoff) as { n: number }).n);
     const floor = Math.max(current, candidate);
     if (floor > current) {
       const raised = db.prepare("UPDATE metadata SET value = ? WHERE key = 'change_log_floor'")
         .run(String(floor));
       if (raised.changes !== 1) return { ok: false, reason: "write_failed" };
     }
-    // Superseded rows only: a later row of the same key at or below the floor exists
-    // (the trigger re-checks this for every row). Bounded batches, one transaction.
-    const select = db.prepare(`SELECT c.seq AS seq FROM change_log c WHERE c.seq <= ? AND EXISTS (
-        SELECT 1 FROM change_log x WHERE x.entity_kind = c.entity_kind AND x.entity_id = c.entity_id
-          AND x.member_user_id IS c.member_user_id AND x.seq > c.seq AND x.seq <= ?)
+    // Superseded rows only: a later row of the same key at or below the floor exists (the
+    // trigger re-checks this for every row). The probe seeks change_log_by_entity (the
+    // unary + keeps the NULL member column of task/project rows out of the index choice) and
+    // progresses by sequence, so the work is linear in the log. One transaction, bounded batches.
+    const select = db.prepare(`SELECT c.seq AS seq FROM change_log c WHERE c.seq > ? AND c.seq <= ? AND EXISTS (
+        SELECT 1 FROM change_log x INDEXED BY change_log_by_entity
+         WHERE x.entity_kind = c.entity_kind AND x.entity_id = c.entity_id
+           AND +x.member_user_id IS c.member_user_id AND x.seq > c.seq AND x.seq <= ?)
       ORDER BY c.seq LIMIT ?`);
     const remove = db.prepare("DELETE FROM change_log WHERE seq = ?");
     let deleted = 0;
+    let after = 0;
     for (;;) {
-      const batch = select.all(floor, floor, BATCH) as { seq: number }[];
+      const batch = select.all(after, floor, floor, BATCH) as { seq: number }[];
       if (batch.length === 0) break;
       for (const row of batch) {
         if (remove.run(row.seq).changes !== 1) return { ok: false, reason: "write_failed" };
       }
       deleted += batch.length;
+      after = batch[batch.length - 1].seq;
     }
     if (!context.stillPinned()) return { ok: false, reason: "write_failed" };
     context.commit();

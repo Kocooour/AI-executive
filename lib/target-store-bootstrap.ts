@@ -305,7 +305,7 @@ CREATE TRIGGER change_log_guarded_delete BEFORE DELETE ON change_log
 WHEN OLD.seq > COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0)
   OR NOT EXISTS(SELECT 1 FROM change_log x
     WHERE x.entity_kind = OLD.entity_kind AND x.entity_id = OLD.entity_id
-      AND x.member_user_id IS OLD.member_user_id AND x.seq > OLD.seq
+      AND +x.member_user_id IS OLD.member_user_id AND x.seq > OLD.seq
       AND x.seq <= COALESCE((SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'change_log_floor'), 0))
 BEGIN SELECT RAISE(ABORT, 'change log rows may only be compacted below the floor'); END;
 -- The floor is a canonical decimal integer which only ever increases, never above
@@ -317,6 +317,10 @@ WHEN OLD.key = 'change_log_floor' AND (NEW.key <> 'change_log_floor'
   OR CAST(NEW.value AS INTEGER) < CAST(OLD.value AS INTEGER)
   OR CAST(NEW.value AS INTEGER) > COALESCE((SELECT MAX(seq) FROM change_log), 0))
 BEGIN SELECT RAISE(ABORT, 'change log floor may only increase up to the newest sequence'); END;
+-- Covers UPDATE OR REPLACE which renames another row onto the floor key.
+CREATE TRIGGER change_log_floor_no_rename_onto BEFORE UPDATE ON metadata
+WHEN NEW.key = 'change_log_floor' AND OLD.key <> 'change_log_floor'
+BEGIN SELECT RAISE(ABORT, 'change log floor cannot be replaced'); END;
 CREATE TRIGGER change_log_floor_no_delete BEFORE DELETE ON metadata
 WHEN OLD.key = 'change_log_floor'
 BEGIN SELECT RAISE(ABORT, 'change log floor cannot be deleted'); END;

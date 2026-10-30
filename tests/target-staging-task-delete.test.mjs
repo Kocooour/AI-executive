@@ -398,9 +398,30 @@ test("a durable session revoked between dispatch and the write transaction write
     () => del(taskId, bob.cookie, command(token)),
     async () => { assert.equal(durable.revokeDurableTargetStagingSession(store, bob.sessionId).ok, true); });
   assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_revoked" });
   assert.deepEqual(world(), before);
   assert.equal(count(`SELECT COUNT(*) AS n FROM tasks WHERE id='${taskId}'`), 1);
   assert.equal((await delStatus(taskId, bob.cookie, command(token))).status, 401);
+});
+
+
+const waitUntilExpired = async issued => {
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.expiresAtMs - Date.now()) + 400));
+};
+
+test("a durable session which EXPIRES between dispatch and the write transaction gets 401 session_expired, nothing written", async () => {
+  const taskId = sharedTask();
+  const issued = durable.issueDurableTargetStagingSession(store, "bob", 3);
+  assert.equal(issued.ok, true);
+  const cookie = `${durable.TARGET_STAGING_SESSION_COOKIE}=${issued.sessionToken}`;
+  const token = await revisionOf(taskId, cookie);
+  const before = world();
+  const response = await withChildGatedBeforeStart(
+    () => del(taskId, cookie, command(token)), () => waitUntilExpired(issued));
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Authentication required", code: "session_expired" });
+  assert.deepEqual(world(), before);
+  assert.equal(count(`SELECT COUNT(*) AS n FROM tasks WHERE id='${taskId}'`), 1);
 });
 
 test("demotion or removal after the delete hides the stored result; a restored role replays it", async () => {

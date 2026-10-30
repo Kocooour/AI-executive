@@ -321,6 +321,15 @@ test("floor triggers: only increases, never above MAX(seq), cannot be deleted, r
   for (const bad of ["", "x", "-1", "05", "6.0", "1e1", " 7", "5\u0000x", "5\u0000"]) assert.throws(() => setFloor(bad), /may only increase/, bad);
   assert.throws(() => db.exec("UPDATE metadata SET key='other' WHERE key='change_log_floor'"), /may only increase/);
   assert.throws(() => db.exec("DELETE FROM metadata WHERE key='change_log_floor'"), /cannot be deleted/);
+  // No other row can be renamed onto the key, with or without OR REPLACE; the floor stays.
+  const keep = floorOf(db);
+  for (const verb of ["UPDATE", "UPDATE OR REPLACE", "UPDATE OR IGNORE", "UPDATE OR ABORT"]) {
+    assert.throws(() => db.exec(`${verb} metadata SET key='change_log_floor', value='0' WHERE key='activated'`),
+      /cannot be replaced/, verb);
+  }
+  assert.throws(() => db.exec("REPLACE INTO metadata(key,value) VALUES ('change_log_floor','0')"), /cannot be replaced/);
+  assert.equal(floorOf(db), keep);
+  assert.equal(db.prepare("SELECT value FROM metadata WHERE key='activated'").get().value, "false");
   assert.throws(() => db.exec("INSERT OR REPLACE INTO metadata(key,value) VALUES ('change_log_floor','0')"), /cannot be replaced/);
   assert.throws(() => db.exec("INSERT INTO metadata(key,value) VALUES ('change_log_floor','9')"));
   assert.throws(() => db.exec("UPDATE metadata SET key='change_log_floor' WHERE key='activated'"));
@@ -391,7 +400,7 @@ test("compaction: floor from retention, superseded rows only, preflight green, m
   fx.db.exec(deleteTaskSql("d-1"));
   fx.db.exec("UPDATE tasks SET area_id='other-area' WHERE id='mv-1'");
   const markA = maxSeq(fx.db);
-  await sleep(2100);
+  await sleep(2600);
   churn(fx.db, 2);
   const before = fx.db.prepare("SELECT * FROM change_log ORDER BY seq").all();
   const cutoff = (fx.db.prepare("SELECT MAX(committed_at_ms) AS t FROM change_log WHERE seq<=?").get(markA).t) + 1000;
@@ -428,7 +437,7 @@ test("compaction: floor from retention, superseded rows only, preflight green, m
     { ok: true, floor: markA, deleted: 0 });
   // A later run raises the floor to the newest sequence and compacts the second round too.
   const last = compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY });
-  assert.equal(last.ok, true);
+  assert.equal(last.ok, true, JSON.stringify(last));
   assert.equal(last.floor, maxSeq(fx.db));
   assert.ok(last.deleted > 0);
   assert.equal(preflight(fx).ok, true, JSON.stringify(preflight(fx)));
@@ -503,7 +512,7 @@ test("feed after compaction: P < floor -> 409 resync_required; P >= floor equals
   churn(fx.db, 1);
   fx.db.exec(deleteTaskSql("d-1"));
   const markA = maxSeq(fx.db);
-  await sleep(2100);
+  await sleep(2600);
   churn(fx.db, 2);
   fx.db.exec("UPDATE tasks SET title='after' WHERE id='f-3'");
   fx.db.exec("PRAGMA journal_mode");
@@ -678,4 +687,53 @@ test("differential (seeded): compacted store == uncompacted store for every P >=
       }
     } finally { a.close(); b.close(); }
   }
+});
+
+test("compaction probes seek change_log_by_entity (never the NULL-heavy member index) and stay linear", () => {
+  const fx = makeFixture();
+  const plan = sql => fx.db.prepare("EXPLAIN QUERY PLAN " + sql).all().map(r => r.detail).join("\n");
+  const probe = `SELECT 1 FROM change_log x INDEXED BY change_log_by_entity
+    WHERE x.entity_kind = 'task' AND x.entity_id = 'f-1' AND +x.member_user_id IS NULL AND x.seq > 1 AND x.seq <= 9`;
+  assert.match(plan(probe), /USING (COVERING )?INDEX change_log_by_entity \(entity_kind=\? AND entity_id=\? AND seq>\? AND seq<\?\)/);
+  // The same probe without INDEXED BY, as written in the guarded-delete trigger, must not pick the member index.
+  const trigger = fx.db.prepare("SELECT sql FROM sqlite_schema WHERE name='change_log_guarded_delete'").get().sql;
+  assert.match(trigger, /\+x\.member_user_id IS OLD\.member_user_id/);
+  const triggerProbe = `SELECT 1 FROM change_log x WHERE x.entity_kind = 'task' AND x.entity_id = 'f-1'
+    AND +x.member_user_id IS NULL AND x.seq > 1 AND x.seq <= 9`;
+  assert.doesNotMatch(plan(triggerProbe), /change_log_by_member/, plan(triggerProbe));
+  assert.match(plan(triggerProbe), /change_log_by_entity/);
+
+  // 8000 tasks x 2 rows each compact in one pass well within the lock budget.
+  fx.db.exec("BEGIN");
+  const insert = fx.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+  for (let i = 0; i < 8000; i++) insert.run(`perf-${i}`, "family-area", "t");
+  fx.db.exec("UPDATE tasks SET title='u' WHERE id LIKE 'perf-%'");
+  fx.db.exec("COMMIT");
+  const rowsBefore = fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n;
+  assert.ok(rowsBefore >= 16000);
+  const started = performance.now();
+  const result = compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS });
+  const elapsed = performance.now() - started;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.deleted >= 8000, JSON.stringify(result));
+  assert.ok(elapsed < 4000, `compaction took ${Math.round(elapsed)} ms for ${rowsBefore} rows`);
+  assert.equal(preflight(fx).ok, true);
+});
+
+test("floor never passes a row still inside retention, even when commit times are not monotonic", () => {
+  const fx = makeFixture();
+  churn(fx.db, 1);
+  const before = fx.db.prepare("SELECT COUNT(*) AS n FROM change_log").get().n;
+  // A clock step backwards: a later sequence stamped 100 days in the past (raw insert, out of the trust model).
+  fx.db.prepare(`INSERT INTO change_log(entity_kind,entity_id,area_id,op,revision,committed_at_ms)
+    SELECT 'task', id, area_id, 'upsert', revision, ? FROM tasks WHERE id='f-1'`).run(Date.now() - 100 * DAY_MS);
+  const stamped = maxSeq(fx.db);
+  churn(fx.db, 2);
+  assert.equal(preflight(fx).ok, true, JSON.stringify(preflight(fx)));
+  // Every earlier row is within the 30 days retention, so nothing may be compacted although a
+  // newer row looks ancient (the previous MAX(seq)-below-cutoff rule would have chosen `stamped`).
+  assert.deepEqual(compactTargetStagingChangeLog(fx.store, { retentionDays: 30, now: Date.now() }),
+    { ok: true, floor: 0, deleted: 0 });
+  assert.ok(stamped > before);
+  assert.equal(floorOf(fx.db), 0);
 });
