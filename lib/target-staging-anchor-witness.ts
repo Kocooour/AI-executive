@@ -77,7 +77,7 @@ function readRows(
       { total: number } | undefined;
     if (!total || !Number.isSafeInteger(total.total)) return null;
     const stat = statSync(path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME), { bigint: true });
-    if (!stat.isFile() || stat.nlink !== 1n) return null;
+    if (!stat.isFile() || String(stat.nlink) !== "1") return null;
     const key = `${stat.dev}:${stat.ino}:${generation}`;
     const change = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
     const old = witnessCache.get(key);
