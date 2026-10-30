@@ -143,9 +143,12 @@ interface VerifyContext {
   confirmed: number;
   pending: number | null;
   status: Map<number, "pending" | "confirmed" | "aborted">;
+  /** Validated intent hashes, including pending intents, for matching the durable witness. */
+  intents: Map<number, string>;
 }
 const newContext = (): VerifyContext => ({
-  prev: "", records: 0, lastIntent: 0, confirmed: 0, pending: null, status: new Map(),
+  prev: "", records: 0, lastIntent: 0, confirmed: 0, pending: null,
+  status: new Map(), intents: new Map(),
 });
 
 /** Verify one complete line (without its newline) and advance the context; false = invalid. */
@@ -177,6 +180,7 @@ function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolea
       ctx.lastIntent = n;
       ctx.pending = n;
       ctx.status.set(n, "pending");
+      ctx.intents.set(n, h);
     } else {
       if (k !== null || p !== null) return false;
       const status = ctx.status.get(n);
@@ -207,6 +211,8 @@ export interface TargetStagingJournalScan {
   readonly completeBytes: number;
   /** An unterminated trailing fragment follows (a writer's append in flight or torn). */
   readonly torn: boolean;
+  /** Hashes from verified intent records (the witness must match each committed one). */
+  readonly intentHashes: ReadonlyMap<number, string>;
 }
 
 /**
@@ -307,7 +313,16 @@ const readRange = readTargetStagingJournalRange;
 export function warmTargetStagingJournal(directoryRoot: string, generation: string): void {
   const fd = openTargetStagingJournal(directoryRoot, false);
   if (fd === null) return;
-  try { scanTargetStagingJournalFd(fd, generation); } finally {
+  try {
+    const scanned = scanTargetStagingJournalFd(fd, generation);
+    if (scanned) {
+      // Cold validation of the witness is done outside the SQLite main lock.
+      // Under the actual read/write lock the witness can then verify the
+      // unchanged prefix plus any newly committed suffix incrementally.
+      readTargetStagingWitness(directoryRoot, generation,
+        targetStagingJournalGenesis(generation).hash, scanned.intentHashes);
+    }
+  } finally {
     try { closeSync(fd); } catch { /* fail closed */ }
   }
 }
@@ -339,7 +354,8 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
           const appended = tail.subarray(boundary + 1);
           // Copy the status map only when something was appended (it is mutated by the scan).
           const ctx: VerifyContext = appended.length === 0 ? cached.ctx
-            : { ...cached.ctx, status: new Map(cached.ctx.status) };
+        : { ...cached.ctx, status: new Map(cached.ctx.status),
+              intents: new Map(cached.ctx.intents) };
           const scanned = scanBuffer(appended, generation, ctx);
           if (scanned) {
             const end = cached.end + scanned.completeBytes;
@@ -347,7 +363,7 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
               prefixCache.set(key, { generation, end, ctx,
                 lastLineStart: cached.end + scanned.lastLineStart });
             }
-            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn };
+            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn, intentHashes: ctx.intents };
           }
         }
       }
@@ -360,7 +376,7 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
     if (!scanned || ctx.records === 0) return null;
     if (prefixCache.size >= PREFIX_CACHE_MAX) prefixCache.clear();
     prefixCache.set(key, { generation, end: scanned.completeBytes, ctx, lastLineStart: scanned.lastLineStart });
-    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn };
+    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn, intentHashes: ctx.intents };
   } catch { return null; }
 }
 
@@ -487,7 +503,7 @@ export function checkTargetStagingJournal(
     // In particular it distinguishes a genuine pre-COMMIT crash (witness stays
     // at the old n) from an older DB restored after COMMIT without JSONL confirm.
     const witnessed = readTargetStagingWitness(directoryRoot, generation,
-      targetStagingJournalGenesis(generation).hash);
+      targetStagingJournalGenesis(generation).hash, scan.intentHashes);
     if (witnessed === null) return "journal_invalid";
     if (anchor < witnessed) return "restore_pending";
     if (anchor > witnessed) return "journal_invalid";
