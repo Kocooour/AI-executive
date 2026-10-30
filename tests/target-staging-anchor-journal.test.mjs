@@ -209,7 +209,7 @@ test("bootstrap creates a private journal (0600) with a genesis record and ancho
   assert.match(lines[0].h, /^[0-9a-f]{64}$/);
   assert.equal(anchorOf(fx), 0);
   assert.deepEqual(journalState(fx), { lastIntent: 0, confirmed: 0, pending: null, lastHash: lines[0].h,
-    generation: fx.stage.restoreGeneration, records: 1 });
+    generation: fx.stage.restoreGeneration, records: 1, pendingRestore: null });
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" }).ok, true);
 });
 

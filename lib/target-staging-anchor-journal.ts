@@ -20,6 +20,7 @@ import {
   closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, writeSync,
 } from "node:fs";
 import { readTargetStagingWitness } from "./target-staging-anchor-witness";
+import type { TargetStagingWitnessJournalView } from "./target-staging-anchor-witness";
 
 export const TARGET_STAGING_JOURNAL_FILENAME = "lumi-target.journal";
 export const TARGET_STAGING_JOURNAL_GENESIS_PREV = "0".repeat(64);
@@ -30,10 +31,10 @@ const MAX_LINE_BYTES = 2048;
 export type TargetStagingJournalType = "genesis" | "intent" | "confirm" | "abort";
 export type TargetStagingJournalKind =
   | "title" | "delete" | "membership" | "session_issue" | "session_revoke"
-  | "session_revoke_all" | "compaction";
+  | "session_revoke_all" | "compaction" | "restore";
 const KINDS = new Set<string>([
   "title", "delete", "membership", "session_issue", "session_revoke",
-  "session_revoke_all", "compaction",
+  "session_revoke_all", "compaction", "restore",
 ]);
 export type TargetStagingJournalValue = string | number | null | readonly number[];
 export type TargetStagingJournalPayload = { readonly [key: string]: TargetStagingJournalValue };
@@ -44,7 +45,12 @@ export interface TargetStagingJournalRecord {
   readonly t: TargetStagingJournalType;
   readonly k: TargetStagingJournalKind | null;
   readonly p: TargetStagingJournalPayload | null;
-  /** restore_generation the record was written under (R2c.4b extends this). */
+  /**
+   * restore_generation the record was written under. It changes ONLY at a `restore` intent (R2c.4b):
+   * that intent, and its confirm/abort, carry the NEW generation; `p.previousGeneration` names the
+   * generation in effect before it. After a confirm every record uses the new generation, after an
+   * abort the previous one again. Any other change is a broken chain.
+   */
   readonly g: string;
   readonly prev: string;
 }
@@ -59,8 +65,11 @@ export interface TargetStagingJournalState {
   /** Trailing intent without confirm/abort (crashed or in-flight write), else null. */
   readonly pending: number | null;
   readonly lastHash: string;
+  /** Generation in effect after the last RESOLVED record (a pending restore does not count yet). */
   readonly generation: string;
   readonly records: number;
+  /** A trailing unresolved `restore` intent (its resolution carries `to`), else null. */
+  readonly pendingRestore: { readonly n: number; readonly from: string; readonly to: string } | null;
 }
 
 export type TargetStagingAnchorVerdict = "ok" | "restore_pending" | "journal_invalid";
@@ -145,14 +154,34 @@ interface VerifyContext {
   status: Map<number, "pending" | "confirmed" | "aborted">;
   /** Validated intent hashes, including pending intents, for matching the durable witness. */
   intents: Map<number, string>;
+  /** R2c.4b: generation in effect after the last resolved record. */
+  gen: string;
+  genesisHash: string;
+  /** `g` of the genesis (0) and of every intent: the generation the witness row must carry. */
+  gens: Map<number, string>;
+  /** Intent number -> the generation a `restore` intent introduces. */
+  restoreTo: Map<number, string>;
+  /** Every generation ever in effect or introduced (lower case): a generation is never reused. */
+  used: Set<string>;
+  /** Number of the last CONFIRMED restore (0 = none). */
+  lastRestore: number;
+  pendingRestore: { n: number; from: string; to: string } | null;
 }
 const newContext = (): VerifyContext => ({
   prev: "", records: 0, lastIntent: 0, confirmed: 0, pending: null,
-  status: new Map(), intents: new Map(),
+  status: new Map(), intents: new Map(), gen: "", genesisHash: "", gens: new Map(),
+  restoreTo: new Map(), used: new Set(), lastRestore: 0, pendingRestore: null,
+});
+const cloneContext = (ctx: VerifyContext): VerifyContext => ({
+  ...ctx, status: new Map(ctx.status), intents: new Map(ctx.intents), gens: new Map(ctx.gens),
+  restoreTo: new Map(ctx.restoreTo), used: new Set(ctx.used),
+  pendingRestore: ctx.pendingRestore === null ? null : { ...ctx.pendingRestore },
 });
 
+const lower = (value: string): string => value.toLowerCase();
+
 /** Verify one complete line (without its newline) and advance the context; false = invalid. */
-function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolean {
+function verifyLine(raw: string, ctx: VerifyContext): boolean {
   if (raw.length === 0 || raw.length > MAX_LINE_BYTES) return false;
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
@@ -162,7 +191,7 @@ function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolea
   if (canonicalJournalJson(parsed) !== raw) return false;
   if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 ||
       (t !== "genesis" && t !== "intent" && t !== "confirm" && t !== "abort") ||
-      typeof g !== "string" || !UUID.test(g) || g.toLowerCase() !== generation.toLowerCase() ||
+      typeof g !== "string" || !UUID.test(g) ||
       typeof linkedPrev !== "string" || !HEX64.test(linkedPrev) ||
       typeof h !== "string" || !HEX64.test(h) || !validPayload(p)) return false;
   const first = ctx.records === 0;
@@ -171,26 +200,56 @@ function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolea
   if (chainHash(record) !== h) return false;
   if (t === "genesis") {
     if (!first || n !== 0 || k !== null || p !== null) return false;
+    ctx.gen = g;
+    ctx.genesisHash = h;
+    ctx.gens.set(0, g);
+    ctx.used.add(lower(g));
   } else {
     if (first) return false;
     if (t === "intent") {
       if (n !== ctx.lastIntent + 1 || typeof k !== "string" || !KINDS.has(k) || p === null) return false;
       // The previous intent must be resolved before the next one is appended.
       if (ctx.pending !== null) return false;
+      if (k === "restore") {
+        const payload = p as Record<string, unknown>;
+        const { from, through, previousGeneration } = payload;
+        // The ONLY place where the generation may change: it must name the generation in effect,
+        // introduce a generation never used before, and replay exactly up to the highest confirmed
+        // intent, starting at or after the previous restore (a backup older than it is refused).
+        if (typeof previousGeneration !== "string" || lower(previousGeneration) !== lower(ctx.gen) ||
+            lower(g) === lower(ctx.gen) || ctx.used.has(lower(g)) ||
+            typeof from !== "number" || typeof through !== "number" ||
+            !Number.isSafeInteger(from) || !Number.isSafeInteger(through) ||
+            from < 0 || from >= through || through !== ctx.confirmed || from < ctx.lastRestore) return false;
+        ctx.pendingRestore = { n, from: ctx.gen, to: g };
+        ctx.restoreTo.set(n, g);
+        ctx.used.add(lower(g));
+      } else if (lower(g) !== lower(ctx.gen)) return false;
       ctx.lastIntent = n;
       ctx.pending = n;
       ctx.status.set(n, "pending");
       ctx.intents.set(n, h);
+      ctx.gens.set(n, g);
     } else {
       if (k !== null || p !== null) return false;
       const status = ctx.status.get(n);
+      // A restore resolution carries the NEW generation (also an abort); everything else the
+      // generation in effect now.
+      const restoredTo = ctx.restoreTo.get(n);
+      if (lower(g) !== lower(restoredTo ?? ctx.gen)) return false;
       if (t === "abort") {
         if (status !== "pending") return false;
         ctx.status.set(n, "aborted");
+        if (ctx.pendingRestore !== null && ctx.pendingRestore.n === n) ctx.pendingRestore = null;
       } else {
         if (status !== "pending" && status !== "confirmed") return false;
         ctx.status.set(n, "confirmed");
         if (n > ctx.confirmed) ctx.confirmed = n;
+        if (ctx.pendingRestore !== null && ctx.pendingRestore.n === n) {
+          ctx.gen = ctx.pendingRestore.to;
+          ctx.lastRestore = n;
+          ctx.pendingRestore = null;
+        }
       }
       if (ctx.pending === n) ctx.pending = null;
     }
@@ -200,10 +259,20 @@ function verifyLine(raw: string, generation: string, ctx: VerifyContext): boolea
   return true;
 }
 
-const stateOf = (ctx: VerifyContext, generation: string): TargetStagingJournalState => ({
+const stateOf = (ctx: VerifyContext): TargetStagingJournalState => ({
   lastIntent: ctx.lastIntent, confirmed: ctx.confirmed, pending: ctx.pending,
-  lastHash: ctx.prev, generation, records: ctx.records,
+  lastHash: ctx.prev, generation: ctx.gen, records: ctx.records,
+  pendingRestore: ctx.pendingRestore === null ? null : { ...ctx.pendingRestore },
 });
+
+/**
+ * The configured generation must be the one in effect, or the one a trailing UNRESOLVED restore
+ * introduces (its commit changed the DB metadata; the DB metadata check ties the choice to the
+ * store). Anything else, in particular a genesis of another store, is not this store's journal.
+ */
+const acceptsGeneration = (ctx: VerifyContext, expected: string): boolean =>
+  UUID.test(expected) && ctx.records > 0 && (lower(expected) === lower(ctx.gen) ||
+    (ctx.pendingRestore !== null && lower(expected) === lower(ctx.pendingRestore.to)));
 
 export interface TargetStagingJournalScan {
   readonly state: TargetStagingJournalState;
@@ -215,6 +284,10 @@ export interface TargetStagingJournalScan {
   readonly intentHashes: ReadonlyMap<number, string>;
   /** The final verified state of each journal intent (abort does not commit). */
   readonly intentStatuses: ReadonlyMap<number, "pending" | "confirmed" | "aborted">;
+  /** Hash of the genesis record (the witness row 0 must carry it). */
+  readonly genesisHash: string;
+  /** Generation of the genesis (0) and of every intent record, for the witness rows. */
+  readonly generations: ReadonlyMap<number, string>;
 }
 
 /**
@@ -225,7 +298,7 @@ export interface TargetStagingJournalScan {
  * terminated line must be canonical and chained. Returns the bytes consumed or null.
  */
 function scanBuffer(
-  buffer: Buffer, generation: string, ctx: VerifyContext,
+  buffer: Buffer, ctx: VerifyContext,
 ): { completeBytes: number; torn: boolean; lastLineStart: number } | null {
   const lastNewline = buffer.lastIndexOf(10);
   const complete = lastNewline + 1;
@@ -235,7 +308,7 @@ function scanBuffer(
     let offset = 0;
     for (const line of lines) {
       lastLineStart = offset;
-      if (!verifyLine(line, generation, ctx)) return null;
+      if (!verifyLine(line, ctx)) return null;
       offset += Buffer.byteLength(line, "utf8") + 1;
     }
   }
@@ -270,8 +343,8 @@ export function verifyTargetStagingJournal(
   try {
     if (typeof text !== "string" || !UUID.test(generation)) return null;
     const ctx = newContext();
-    const scanned = scanBuffer(Buffer.from(text, "utf8"), generation, ctx);
-    return scanned && ctx.records > 0 ? stateOf(ctx, generation) : null;
+    const scanned = scanBuffer(Buffer.from(text, "utf8"), ctx);
+    return scanned && acceptsGeneration(ctx, generation) ? stateOf(ctx) : null;
   } catch { return null; }
 }
 
@@ -284,7 +357,7 @@ export function verifyTargetStagingJournal(
  * Trade-off: an in-place edit of an EARLIER line is not noticed by a process which already
  * verified it; a fresh process (restart) always verifies the full chain once.
  */
-interface CachedPrefix { generation: string; end: number; lastLineStart: number; ctx: VerifyContext }
+interface CachedPrefix { end: number; lastLineStart: number; ctx: VerifyContext }
 const prefixCache = new Map<string, CachedPrefix>();
 const PREFIX_CACHE_MAX = 16;
 
@@ -321,12 +394,19 @@ export function warmTargetStagingJournal(directoryRoot: string, generation: stri
       // Cold validation of the witness is done outside the SQLite main lock.
       // Under the actual read/write lock the witness can then verify the
       // unchanged prefix plus any newly committed suffix incrementally.
-      readTargetStagingWitness(directoryRoot, generation,
-        targetStagingJournalGenesis(generation).hash, scanned.intentHashes, scanned.intentStatuses);
+      readTargetStagingWitness(directoryRoot, generation, witnessViewOf(scanned));
     }
   } finally {
     try { closeSync(fd); } catch { /* fail closed */ }
   }
+}
+
+/** What the witness needs from a verified journal to check its rows (R2c.4b: generations may change). */
+export function witnessViewOf(scan: TargetStagingJournalScan): TargetStagingWitnessJournalView {
+  return {
+    genesisHash: scan.genesisHash, generations: scan.generations,
+    intents: scan.intentHashes, statuses: scan.intentStatuses,
+  };
 }
 
 /** A fresh process starts empty; tests call this to simulate a restart. */
@@ -340,7 +420,12 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
     if (size === 0 || size > TARGET_STAGING_JOURNAL_MAX_BYTES) return null;
     const key = info.dev + ":" + info.ino;
     const cached = prefixCache.get(key);
-    if (cached && cached.generation === generation && size >= cached.end) {
+    const result = (ctx: VerifyContext, completeBytes: number, torn: boolean): TargetStagingJournalScan | null =>
+      acceptsGeneration(ctx, generation) ? {
+        state: stateOf(ctx), completeBytes, torn, intentHashes: ctx.intents, intentStatuses: ctx.status,
+        genesisHash: ctx.genesisHash, generations: ctx.gens,
+      } : null;
+    if (cached && size >= cached.end) {
       const tail = readRange(fd, cached.lastLineStart, size);
       const boundary = tail === null ? -1 : tail.indexOf(10);
       if (tail !== null && boundary >= 0 && cached.lastLineStart + boundary + 1 === cached.end) {
@@ -354,18 +439,15 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
         } catch { sameLine = false; }
         if (sameLine) {
           const appended = tail.subarray(boundary + 1);
-          // Copy the status map only when something was appended (it is mutated by the scan).
-          const ctx: VerifyContext = appended.length === 0 ? cached.ctx
-        : { ...cached.ctx, status: new Map(cached.ctx.status),
-              intents: new Map(cached.ctx.intents) };
-          const scanned = scanBuffer(appended, generation, ctx);
+          // Copy the context only when something was appended (it is mutated by the scan).
+          const ctx: VerifyContext = appended.length === 0 ? cached.ctx : cloneContext(cached.ctx);
+          const scanned = scanBuffer(appended, ctx);
           if (scanned) {
             const end = cached.end + scanned.completeBytes;
             if (scanned.completeBytes > 0) {
-              prefixCache.set(key, { generation, end, ctx,
-                lastLineStart: cached.end + scanned.lastLineStart });
+              prefixCache.set(key, { end, ctx, lastLineStart: cached.end + scanned.lastLineStart });
             }
-            return { state: stateOf(ctx, generation), completeBytes: end, torn: scanned.torn, intentHashes: ctx.intents, intentStatuses: ctx.status };
+            return result(ctx, end, scanned.torn);
           }
         }
       }
@@ -374,11 +456,11 @@ export function scanTargetStagingJournalFd(fd: number, generation: string): Targ
     const buffer = readRange(fd, 0, size);
     if (buffer === null) return null;
     const ctx = newContext();
-    const scanned = scanBuffer(buffer, generation, ctx);
+    const scanned = scanBuffer(buffer, ctx);
     if (!scanned || ctx.records === 0) return null;
     if (prefixCache.size >= PREFIX_CACHE_MAX) prefixCache.clear();
-    prefixCache.set(key, { generation, end: scanned.completeBytes, ctx, lastLineStart: scanned.lastLineStart });
-    return { state: stateOf(ctx, generation), completeBytes: scanned.completeBytes, torn: scanned.torn, intentHashes: ctx.intents, intentStatuses: ctx.status };
+    prefixCache.set(key, { end: scanned.completeBytes, ctx, lastLineStart: scanned.lastLineStart });
+    return result(ctx, scanned.completeBytes, scanned.torn);
   } catch { return null; }
 }
 
@@ -463,6 +545,38 @@ export function readTargetStagingJournalText(fd: number): string | null {
   } catch { return null; }
 }
 
+/** A confirmed intent of the kinds a restore replays or reasons about (R2c.4b). */
+export interface TargetStagingJournalFact {
+  readonly n: number;
+  readonly k: TargetStagingJournalKind;
+  readonly p: TargetStagingJournalPayload;
+}
+const FACT_KINDS = new Set<string>([
+  "membership", "session_issue", "session_revoke", "session_revoke_all", "restore",
+]);
+
+/**
+ * Restore-only, under the SQLite write lock, AFTER the chain was verified (and a torn fragment cut):
+ * the confirmed intents of the security kinds, in journal order. `statuses` is the final resolution of
+ * every intent. Returns null when the file cannot be read as complete lines.
+ */
+export function readTargetStagingJournalFacts(
+  fd: number, statuses: ReadonlyMap<number, "pending" | "confirmed" | "aborted">,
+): TargetStagingJournalFact[] | null {
+  const text = readTargetStagingJournalText(fd);
+  if (text === null || !text.endsWith("\n")) return null;
+  try {
+    const facts: TargetStagingJournalFact[] = [];
+    for (const line of text.slice(0, -1).split("\n")) {
+      const record = JSON.parse(line) as TargetStagingJournalRecord;
+      if (record.t !== "intent" || statuses.get(record.n) !== "confirmed" || record.k === null ||
+          !FACT_KINDS.has(record.k) || record.p === null) continue;
+      facts.push({ n: record.n, k: record.k, p: record.p });
+    }
+    return facts;
+  } catch { return null; }
+}
+
 /**
  * Writer-only, under the SQLite write lock: cut a torn trailing fragment back to the last newline
  * (fsync). Safe: an intent is fully fsynced before its COMMIT, so a fragment is always an
@@ -504,8 +618,7 @@ export function checkTargetStagingJournal(
     // The witness is committed atomically with the main DB (SQLite super-journal).
     // In particular it distinguishes a genuine pre-COMMIT crash (witness stays
     // at the old n) from an older DB restored after COMMIT without JSONL confirm.
-    const witnessed = readTargetStagingWitness(directoryRoot, generation,
-      targetStagingJournalGenesis(generation).hash, scan.intentHashes, scan.intentStatuses);
+    const witnessed = readTargetStagingWitness(directoryRoot, generation, witnessViewOf(scan));
     if (witnessed === null) return "journal_invalid";
     if (anchor < witnessed) return "restore_pending";
     if (anchor > witnessed) return "journal_invalid";

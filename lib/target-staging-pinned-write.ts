@@ -10,6 +10,7 @@
  * BEGIN IMMEDIATE serializes writers; canonical preflight runs inside it.
  * Any failure or an un-committed body rolls back.
  */
+import { randomUUID } from "node:crypto";
 import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync,
   readdirSync, realpathSync,
@@ -20,11 +21,12 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import {
   appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
   openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd, warmTargetStagingJournal,
-  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, targetStagingJournalGenesis,
-  truncateTargetStagingJournal,
+  readTargetStagingJournalFacts, resolveTargetStagingJournalTail, serializeTargetStagingJournalLine,
+  truncateTargetStagingJournal, witnessViewOf,
 } from "./target-staging-anchor-journal";
 import type {
-  TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
+  TargetStagingAnchorVerdict, TargetStagingJournalFact, TargetStagingJournalKind,
+  TargetStagingJournalPayload,
 } from "./target-staging-anchor-journal";
 import {
   attachTargetStagingWitness, readAttachedTargetStagingWitness, recordTargetStagingWitnessCommit,
@@ -60,6 +62,33 @@ export interface TargetStagingJournalEntry {
   readonly kind: TargetStagingJournalKind;
   /** Content-free fields only (IDs, hashes, roles, numbers). Never titles or credentials. */
   readonly payload: TargetStagingJournalPayload;
+}
+
+/**
+ * R2c.4b restore context: the write context plus the facts of the verified journal. The body
+ * replays the confirmed security intents in (backupAnchor, confirmedThrough] and calls `commit` with
+ * kind "restore"; the helper sets from/through/previousGeneration itself and stamps the intent, its
+ * witness row and its confirm with `newGeneration`.
+ */
+export interface TargetStagingPinnedRestoreContext extends TargetStagingPinnedWriteContext {
+  /** `anchor_seq` of the restored backup (A). */
+  readonly backupAnchor: number;
+  /** Highest CONFIRMED intent (H) = the highest witnessed commit (W). */
+  readonly confirmedThrough: number;
+  /** Journal generation in effect (the configured one). */
+  readonly previousGeneration: string;
+  /** restore_generation stored in the backup's own metadata. */
+  readonly backupGeneration: string;
+  /** Fresh generation which this restore introduces. */
+  readonly newGeneration: string;
+  /** Journal number the restore intent will get. */
+  readonly intentNumber: number;
+  /** Generation of journal intent `n` (0 = genesis), or null when it does not exist. */
+  generationAt(n: number): string | null;
+  /** The intent exists and was confirmed. */
+  isConfirmed(n: number): boolean;
+  /** Confirmed security intents (and restores) of the WHOLE journal, in order. */
+  facts(): readonly TargetStagingJournalFact[] | null;
 }
 
 export function noTargetStagingSidecars(
@@ -239,6 +268,39 @@ export function withPinnedTargetStagingWrite<T>(
    */
   busyTimeoutMs = 200,
 ): T {
+  return runPinnedTargetStagingTransaction<T, TargetStagingPinnedWriteContext>(
+    "write", store, body, denied, failed, busyTimeoutMs);
+}
+
+/**
+ * R2c.4b operator restore. Same pinned open, preflight, journal open and witness ATTACH as the
+ * writer, but it accepts EXACTLY the `restore_pending` state (DB anchor below the highest witnessed
+ * commit of a verified journal) and nothing else; `journal_invalid`, an unreadable store and a store
+ * which is in step with its journal still refuse. A normal writer keeps refusing a restore_pending
+ * store: the trust rule is not weakened for it. The backup's own restore_generation must pass the
+ * canonical preflight (it is checked against its own metadata, the provenance against the journal is
+ * the caller's job via generationAt).
+ */
+export function withPinnedTargetStagingRestore<T>(
+  store: TargetStagingReadStore,
+  body: (context: TargetStagingPinnedRestoreContext) => T,
+  denied: () => T,
+  failed: () => T,
+  busyTimeoutMs = 5_000,
+): T {
+  return runPinnedTargetStagingTransaction<T, TargetStagingPinnedRestoreContext>(
+    "restore", store, body, denied, failed, busyTimeoutMs);
+}
+
+function runPinnedTargetStagingTransaction<T, C>(
+  mode: "write" | "restore",
+  store: TargetStagingReadStore,
+  body: (context: C) => T,
+  denied: () => T,
+  failed: () => T,
+  busyTimeoutMs: number,
+): T {
+  const restore = mode === "restore";
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
       !GENERATION.test(store.expectedRestoreGeneration) ||
@@ -262,25 +324,33 @@ export function withPinnedTargetStagingWrite<T>(
     // second (witness) database descriptor.
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
     if (!opened.verifyOpened()) return denied();
-    const genesisHash = targetStagingJournalGenesis(store.expectedRestoreGeneration).hash;
     // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
     // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
     // ambiguous after a restore of just the main DB.
     // ATTACH MUST use the durable canonical filesystem pathname, not the
     // /proc/self/fd/N alias: SQLite records attached journal paths in its
     // crash-recovery super-journal, which must remain valid after process exit.
-    if (!attachTargetStagingWitness(db, files.directory,
-        store.expectedRestoreGeneration, genesisHash)) return denied();
+    if (!attachTargetStagingWitness(db, files.directory, store.expectedRestoreGeneration)) return denied();
     db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
     if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath)) return denied();
 
+    // A restored backup carries its own restore_generation in its metadata; it is checked by the
+    // canonical preflight against ITSELF, and against the journal further below.
+    let dbGeneration = store.expectedRestoreGeneration;
+    if (restore) {
+      const raw = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+        .get() as { value: unknown } | undefined)?.value;
+      if (typeof raw !== "string" || !GENERATION.test(raw)) return denied();
+      dbGeneration = raw;
+    }
+
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
     const preflight = inspectIsolatedTargetStore({
       stagingDirectory: files.directory,
-      expectedRestoreGeneration: store.expectedRestoreGeneration,
+      expectedRestoreGeneration: dbGeneration,
       mode: "r2-model",
     }, { db, fd: files.databaseFd });
     if (!preflight.ok) return denied();
@@ -298,80 +368,113 @@ export function withPinnedTargetStagingWrite<T>(
     const scan = scanTargetStagingJournalFd(journal, store.expectedRestoreGeneration);
     let state = scan ? scan.state : null;
     const witnessed = scan ? readAttachedTargetStagingWitness(connection,
-      store.expectedRestoreGeneration, genesisHash, pinnedFiles.directoryFdPath,
-      scan.intentHashes, scan.intentStatuses) : null;
+      store.expectedRestoreGeneration, pinnedFiles.directoryFdPath, witnessViewOf(scan)) : null;
     // Verdict first, on the complete lines: an untrusted store is never modified.
     // A restored main DB may have the same number as the last JSONL confirm but
     // be behind a COMMITTED unconfirmed intent. The atomic witness detects it.
-    if (!state || anchor === null || witnessed === null || anchor !== witnessed ||
-        evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
+    if (!state || anchor === null || witnessed === null) return denied();
+    if (restore ? !(anchor < witnessed) :
+        anchor !== witnessed || evaluateTargetStagingAnchor(state, anchor) !== "ok") return denied();
     if (scan && scan.torn) {
       // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
       // killed append) back to the last complete line before resolving the tail.
       truncateTargetStagingJournal(journal, scan.completeBytes);
     }
-    const generation = state.generation;
+    let generation = state.generation;
+    const statuses = new Map(scan ? scan.intentStatuses : []);
     if (state.pending !== null) {
-      const tail = resolveTargetStagingJournalTail(state, anchor);
+      // A writer decides by its own anchor; the restore has only a stale anchor, so the atomic
+      // witness (committed together with the main DB) is the authority for the trailing intent.
+      const tail = resolveTargetStagingJournalTail(state, restore ? witnessed : anchor);
       if (tail.action !== "none") {
+        // A restore intent is resolved with the NEW generation it introduced (also when aborted).
+        const resolutionGeneration = state.pendingRestore ? state.pendingRestore.to : generation;
         const line = serializeTargetStagingJournalLine({
-          n: tail.n, t: tail.action, k: null, p: null, g: generation, prev: state.lastHash,
+          n: tail.n, t: tail.action, k: null, p: null, g: resolutionGeneration, prev: state.lastHash,
         });
         appendTargetStagingJournalLine(journal, line.text);
-        state = { ...state, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
-          pending: null, lastHash: line.hash, records: state.records + 1 };
+        if (tail.action === "confirm" && state.pendingRestore) generation = state.pendingRestore.to;
+        statuses.set(tail.n, tail.action === "confirm" ? "confirmed" : "aborted");
+        state = { ...state, generation, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
+          pending: null, pendingRestore: null, lastHash: line.hash, records: state.records + 1 };
       }
     }
+    // After the resolution the generation in effect must be the configured one.
+    if (generation.toLowerCase() !== store.expectedRestoreGeneration.toLowerCase()) return denied();
+    if (restore && (!(anchor < state.confirmed) || witnessed !== state.confirmed)) return denied();
     let tailState = state;
     const seqBefore = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
       .get() as { n: number }).n);
     let committed = false;
-    return body({
+    const newGeneration = restore ? randomUUID() : generation;
+    const commit = (entry: TargetStagingJournalEntry): void => {
+      // Only the restore helper may write a restore record, and it writes nothing else.
+      if (committed || !entry || typeof entry.kind !== "string" || (entry.kind === "restore") !== restore) {
+        throw new Error();
+      }
+      committed = true;
+      const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+        .get() as { n: number }).n);
+      const n = tailState.lastIntent + 1;
+      const payload = restore
+        ? { ...entry.payload, from: anchor, through: tailState.confirmed, previousGeneration: generation }
+        : entry.payload;
+      const intent = serializeTargetStagingJournalLine({
+        n, t: "intent", k: entry.kind,
+        p: { ...payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
+        g: newGeneration, prev: tailState.lastHash,
+      });
+      // Durable BEFORE the commit: a thrown error here rolls the transaction back.
+      appendTargetStagingJournalLine(journal, intent.text);
+      tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
+      const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
+        .run(String(n));
+      if (advanced.changes !== 1) throw new Error();
+      // This insert and the main anchor update are one SQLite ATTACH commit.
+      // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
+      recordTargetStagingWitnessCommit(connection, n, intent.hash, newGeneration);
+      connection.exec("COMMIT");
+      transaction = false;
+      // After the commit, under a FRESH write lock (the chain is linear: an append must be
+      // computed from the tail read while holding the lock, because another writer may have
+      // resolved this very intent already): append the confirm unless it is there. A failure
+      // here only leaves a trailing intent which the next writer resolves (anchor == intent).
+      try {
+        connection.exec("BEGIN IMMEDIATE");
+        transaction = true;
+        const fresh = scanTargetStagingJournalFd(journal, newGeneration);
+        if (fresh && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
+        const current = fresh ? fresh.state : null;
+        if (current && current.pending === n) {
+          appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
+            n, t: "confirm", k: null, p: null, g: newGeneration, prev: current.lastHash,
+          }).text);
+        }
+        connection.exec("ROLLBACK");
+        transaction = false;
+      } catch { /* resolved by the next writer */ }
+    };
+    const base: TargetStagingPinnedWriteContext = {
       db: connection, databaseFd: pinnedFiles.databaseFd, directory: pinnedFiles.directory,
       databasePath: pinnedFiles.databasePath, stillPinned: pinnedFiles.stillPinned,
       noSidecars: () => noTargetStagingSidecars(pinnedFiles.databasePath),
-      commit: entry => {
-        if (committed || !entry || typeof entry.kind !== "string") throw new Error();
-        committed = true;
-        const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
-          .get() as { n: number }).n);
-        const n = tailState.lastIntent + 1;
-        const intent = serializeTargetStagingJournalLine({
-          n, t: "intent", k: entry.kind,
-          p: { ...entry.payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
-          g: generation, prev: tailState.lastHash,
-        });
-        // Durable BEFORE the commit: a thrown error here rolls the transaction back.
-        appendTargetStagingJournalLine(journal, intent.text);
-        tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
-        const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
-          .run(String(n));
-        if (advanced.changes !== 1) throw new Error();
-        // This insert and the main anchor update are one SQLite ATTACH commit.
-        // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
-        recordTargetStagingWitnessCommit(connection, n, intent.hash, generation);
-        connection.exec("COMMIT");
-        transaction = false;
-        // After the commit, under a FRESH write lock (the chain is linear: an append must be
-        // computed from the tail read while holding the lock, because another writer may have
-        // resolved this very intent already): append the confirm unless it is there. A failure
-        // here only leaves a trailing intent which the next writer resolves (anchor == intent).
-        try {
-          connection.exec("BEGIN IMMEDIATE");
-          transaction = true;
-          const fresh = scanTargetStagingJournalFd(journal, generation);
-          if (fresh && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
-          const current = fresh ? fresh.state : null;
-          if (current && current.pending === n) {
-            appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
-              n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
-            }).text);
-          }
-          connection.exec("ROLLBACK");
-          transaction = false;
-        } catch { /* resolved by the next writer */ }
+      commit,
+    };
+    if (!restore) return body(base as unknown as C);
+    const generations = scan ? scan.generations : new Map<number, string>();
+    let cachedFacts: readonly TargetStagingJournalFact[] | null | undefined;
+    const context: TargetStagingPinnedRestoreContext = {
+      ...base,
+      backupAnchor: anchor, confirmedThrough: state.confirmed, previousGeneration: generation,
+      backupGeneration: dbGeneration, newGeneration, intentNumber: state.lastIntent + 1,
+      generationAt: n => generations.get(n) ?? null,
+      isConfirmed: n => n === 0 || statuses.get(n) === "confirmed",
+      facts: () => {
+        if (cachedFacts === undefined) cachedFacts = readTargetStagingJournalFacts(journal, statuses);
+        return cachedFacts;
       },
-    });
+    };
+    return body(context as unknown as C);
   } catch {
     return failed();
   } finally {
