@@ -360,8 +360,14 @@ export function withPinnedTargetStagingWrite<T>(
           connection.exec("BEGIN IMMEDIATE");
           transaction = true;
           const fresh = scanTargetStagingJournalFd(journal, generation);
-          if (fresh && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
-          const current = fresh ? fresh.state : null;
+          const freshAnchor = parseTargetStagingAnchor((connection.prepare(
+            "SELECT value FROM metadata WHERE key='anchor_seq'").get() as { value: unknown } | undefined)?.value);
+          // Same rule as before the write: an untrusted store (e.g. restored in place since
+          // the COMMIT) is never modified; the next writer refuses it.
+          const trusted = fresh !== null && freshAnchor !== null &&
+            evaluateTargetStagingAnchor(fresh.state, freshAnchor) === "ok";
+          if (trusted && fresh.torn) truncateTargetStagingJournal(journal, fresh.completeBytes);
+          const current = trusted ? fresh.state : null;
           if (current && current.pending === n) {
             appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
               n, t: "confirm", k: null, p: null, g: generation, prev: current.lastHash,
