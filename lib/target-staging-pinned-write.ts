@@ -272,7 +272,7 @@ export function withPinnedTargetStagingWrite<T>(
     let state = scan ? scan.state : null;
     const witnessed = scan ? readAttachedTargetStagingWitness(connection,
       store.expectedRestoreGeneration, genesisHash, pinnedFiles.directoryFdPath,
-      scan.intentHashes) : null;
+      scan.intentHashes, scan.intentStatuses) : null;
     // Verdict first, on the complete lines: an untrusted store is never modified.
     // A restored main DB may have the same number as the last JSONL confirm but
     // be behind a COMMITTED unconfirmed intent. The atomic witness detects it.
