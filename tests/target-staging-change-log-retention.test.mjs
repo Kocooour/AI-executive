@@ -38,6 +38,7 @@ const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts")
 const durable = await import("../lib/target-staging-durable-session.ts");
 const identityLib = await import("../lib/target-staging-http-identity.ts");
 const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
+const { readChangeFeedPage } = await import("../lib/target-change-feed-read-model.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
 const { GET: LIST } = await import("../app/api/target-staging/tasks/route.ts");
 const { GET: DETAIL } = await import("../app/api/target-staging/tasks/[taskId]/route.ts");
@@ -272,7 +273,7 @@ test("floor triggers: only increases, never above MAX(seq), cannot be deleted, r
   assert.equal(floorOf(db), 5);
   assert.throws(() => setFloor("4"), /may only increase/);
   assert.throws(() => setFloor(String(top + 1)), /may only increase/);
-  for (const bad of ["", "x", "-1", "05", "6.0", "1e1", " 7"]) assert.throws(() => setFloor(bad), /may only increase/, bad);
+  for (const bad of ["", "x", "-1", "05", "6.0", "1e1", " 7", "5\u0000x", "5\u0000"]) assert.throws(() => setFloor(bad), /may only increase/, bad);
   assert.throws(() => db.exec("UPDATE metadata SET key='other' WHERE key='change_log_floor'"), /may only increase/);
   assert.throws(() => db.exec("DELETE FROM metadata WHERE key='change_log_floor'"), /cannot be deleted/);
   assert.throws(() => db.exec("INSERT OR REPLACE INTO metadata(key,value) VALUES ('change_log_floor','0')"), /cannot be replaced/);
@@ -326,6 +327,9 @@ test("own-membership lookup is an index seek on change_log_by_member", () => {
   const plan = sql => db.prepare("EXPLAIN QUERY PLAN " + sql).all().map(r => r.detail).join("\n");
   const query = hint => `SELECT area_id AS areaId, seq, op, member_role AS role FROM change_log ${hint}
     WHERE entity_kind = 'membership' AND member_user_id = ? ORDER BY entity_id COLLATE BINARY ASC, seq ASC`;
+  const interval = plan(`SELECT seq FROM change_log INDEXED BY change_log_content_by_area
+    WHERE area_id = 'family-area' AND seq > 1 AND seq < 99 AND entity_kind <> 'membership' ORDER BY seq LIMIT 5`);
+  assert.match(interval, /USING (COVERING )?INDEX change_log_content_by_area \(area_id=\? AND seq>\? AND seq<\?\)/, interval);
   // The read model pins the index with INDEXED BY (the planner alone prefers the entity index).
   for (const hint of ["INDEXED BY change_log_by_member"]) {
     const detail = plan(query(hint).replace("= ?", "= 'bob'"));
@@ -534,3 +538,99 @@ test("operator CLI: strict arguments, minimum retention, JSON result", () => {
   assert.deepEqual(run(...common), { status: 0, body: { ok: true, floor: 0, deleted: 0 } });
   assert.equal(floorOf(fx.db), 0);
 }, { timeout: 60_000 });
+
+const DAY_MS = 86_400_000;
+test("stale bootstrap and Area-bootstrap cursors across a compaction -> 409 resync_required, never partial data", async () => {
+  const fx = makeFixture();
+  const seedBulk = count => {
+    const insert = fx.db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+    for (let i = 1; i <= count; i++) insert.run(`bt-${String(i).padStart(3, "0")}`, "family-area", `Bulk ${i}`);
+  };
+  seedBulk(130);
+  const bob = login(fx, "bob");
+  const first = await page(fx, bob, null);
+  assert.equal(first.more, true);
+  assert.equal(feedCursor.openStagingFeedCursor(SECRET, first.cursor).claims.pos.ph, "b");
+  fx.db.exec("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'");
+  fx.db.exec("UPDATE tasks SET title='later' WHERE id='f-1'");
+  // Dave is granted access: his Area cursor carries the grant sequence.
+  const dave = login(fx, "dave");
+  const daveStart = await drain(fx, dave);
+  fx.db.exec("INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','dave','viewer')");
+  const granted = await page(fx, dave, daveStart.cursor);
+  const areaCursor = granted.items.find(i => i.type === "access_granted").areaCursor;
+  fx.db.exec("UPDATE tasks SET title='later 2' WHERE id='f-2'");
+  const done = compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS });
+  assert.equal(done.ok, true);
+  assert.equal(done.floor, maxSeq(fx.db));
+  for (const [cookie, cursor, label] of [[bob, first.cursor, "bootstrap"], [dave, areaCursor, "area bootstrap"]]) {
+    const response = await feed(fx, cookie, cursor);
+    assert.equal(response.status, 409, label);
+    assert.deepEqual(await response.json(), { code: "resync_required" }, label);
+  }
+  // A fresh bootstrap converges with the atomic read (bob is no longer a member).
+  const fresh = await drain(fx, bob);
+  assert.deepEqual(fresh.items.map(i => i.id), []);
+  assert.ok(feedCursor.openStagingFeedCursor(SECRET, fresh.cursor).claims.pos.p >= done.floor);
+});
+
+test("compaction reports a hot journal distinctly", () => {
+  const fx = makeFixture();
+  writeFileSync(fx.databasePath + "-journal", "");
+  assert.deepEqual(compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS }),
+    { ok: false, reason: "journal_present" });
+  rmSync(fx.databasePath + "-journal");
+  assert.equal(compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS }).ok, true);
+});
+
+test("differential (seeded): compacted store == uncompacted store for every P >= floor, resync_required below", () => {
+  for (const seed of [1, 7, 42]) {
+    let state = seed * 2654435761 % 4294967296;
+    const rnd = n => { state = (state * 1664525 + 1013904223) % 4294967296; return Math.floor(state / 4294967296 * n); };
+    const plain = makeFixture();
+    const compacted = makeFixture();
+    const both = sql => { plain.db.exec(sql); compacted.db.exec(sql); };
+    let nextTask = 0;
+    const present = new Set(["f-1", "f-2", "f-3"]);
+    const members = new Map([["bob", "editor"], ["carol", "viewer"]]);
+    const step = () => {
+      const op = rnd(6);
+      if (op <= 1) both(`UPDATE tasks SET title='t${rnd(1000)}' WHERE id='${["f-1", "f-2", "f-3"][rnd(3)]}'`);
+      else if (op === 2) { const id = `n-${++nextTask}`; both(`INSERT INTO tasks(id,area_id,title) VALUES ('${id}','family-area','new')`); present.add(id); }
+      else if (op === 3) {
+        const user = ["bob", "carol", "dave"][rnd(3)];
+        if (members.has(user)) { both(`DELETE FROM area_members WHERE area_id='family-area' AND user_id='${user}'`); members.delete(user); }
+        else { const role = ["viewer", "editor"][rnd(2)]; both(`INSERT INTO area_members(area_id,user_id,role) VALUES ('family-area','${user}','${role}')`); members.set(user, role); }
+      } else if (op === 4) {
+        const user = ["bob", "carol", "dave"][rnd(3)];
+        if (members.has(user)) { const role = members.get(user) === "viewer" ? "editor" : "viewer";
+          both(`UPDATE area_members SET role='${role}' WHERE area_id='family-area' AND user_id='${user}'`); members.set(user, role); }
+      } else if (nextTask > 0 && present.has(`n-${nextTask}`)) { both(deleteTaskSql(`n-${nextTask}`)); present.delete(`n-${nextTask}`); }
+    };
+    for (let phase = 0; phase < 3; phase++) {
+      for (let i = 0; i < 12 + rnd(10); i++) step();
+      if (phase < 2 || rnd(2)) {
+        // Different floors per phase: compact only what exists so far.
+        const result = compactTargetStagingChangeLog(compacted.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS });
+        assert.equal(result.ok, true, JSON.stringify(result));
+      }
+    }
+    const floor = floorOf(compacted.db);
+    assert.ok(floor > 0);
+    assert.equal(preflight(compacted).ok, true, JSON.stringify(preflight(compacted)));
+    const open = fx => new DatabaseSync(fx.databasePath, { readOnly: true });
+    const a = open(compacted);
+    const b = open(plain);
+    try {
+      for (const user of ["alice", "bob", "carol", "dave"]) {
+        for (let p = 0; p <= maxSeq(plain.db); p++) {
+          const claims = fx => ({ uid: user, epoch: 0, gen: fx.stage.restoreGeneration, pos: { ph: "f", p } });
+          const got = readChangeFeedPage(a, { actorUserId: user, restoreGeneration: compacted.stage.restoreGeneration, claims: claims(compacted) });
+          if (p < floor) assert.deepEqual(got, { ok: false, reason: "resync_required" }, `${seed} ${user} ${p}`);
+          else assert.deepEqual(got, readChangeFeedPage(b, { actorUserId: user,
+            restoreGeneration: plain.stage.restoreGeneration, claims: claims(plain) }), `${seed} ${user} ${p}`);
+        }
+      }
+    } finally { a.close(); b.close(); }
+  }
+});

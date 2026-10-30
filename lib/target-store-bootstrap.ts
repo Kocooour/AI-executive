@@ -284,7 +284,9 @@ CREATE TABLE change_log (
 );
 -- The R2c.2 feed reads per Area in sequence order; tombstone entries are
 -- countable cheaply by preflight.
-CREATE INDEX change_log_by_area ON change_log(area_id, seq);
+-- R2c.2b: the feed's per-Area interval reads touch only task/project entries; a partial
+-- index keeps other users' membership rows out of that walk.
+CREATE INDEX change_log_content_by_area ON change_log(area_id, seq) WHERE entity_kind <> 'membership';
 CREATE INDEX change_log_tombstones ON change_log(seq) WHERE op = 'tombstone';
 -- Preflight reconciles the latest entry per entity with the live state; these
 -- checks must be index-driven (latest upsert/tombstone of one task/project/membership).
@@ -311,7 +313,7 @@ BEGIN SELECT RAISE(ABORT, 'change log rows may only be compacted below the floor
 CREATE TRIGGER change_log_floor_update BEFORE UPDATE ON metadata
 WHEN OLD.key = 'change_log_floor' AND (NEW.key <> 'change_log_floor'
   OR typeof(NEW.value) <> 'text' OR NEW.value = '' OR length(NEW.value) > 15
-  OR NEW.value GLOB '*[^0-9]*' OR (length(NEW.value) > 1 AND substr(NEW.value, 1, 1) = '0')
+  OR length(CAST(NEW.value AS BLOB)) <> length(NEW.value) OR NEW.value GLOB '*[^0-9]*' OR (length(NEW.value) > 1 AND substr(NEW.value, 1, 1) = '0')
   OR CAST(NEW.value AS INTEGER) < CAST(OLD.value AS INTEGER)
   OR CAST(NEW.value AS INTEGER) > COALESCE((SELECT MAX(seq) FROM change_log), 0))
 BEGIN SELECT RAISE(ABORT, 'change log floor may only increase up to the newest sequence'); END;

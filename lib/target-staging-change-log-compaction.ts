@@ -11,6 +11,9 @@
  * schema's guarded-delete trigger enforces exactly that, even for direct SQL.
  * Feed cursors behind the floor answer 409 resync_required.
  */
+import { lstatSync } from "node:fs";
+import path from "node:path";
+import { TARGET_STORE_FILENAME } from "./target-store-bootstrap";
 import { withPinnedTargetStagingWrite } from "./target-staging-pinned-write";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
@@ -23,7 +26,7 @@ const BUSY_MS = 5_000;
 
 export type TargetStagingChangeLogCompaction =
   | { ok: true; floor: number; deleted: number }
-  | { ok: false; reason: "invalid_request" | "unavailable" | "write_failed" };
+  | { ok: false; reason: "invalid_request" | "journal_present" | "unavailable" | "write_failed" };
 
 export function compactTargetStagingChangeLog(
   store: TargetStagingReadStore,
@@ -35,6 +38,14 @@ export function compactTargetStagingChangeLog(
     return { ok: false, reason: "invalid_request" };
   }
   const cutoff = now - retentionDays * DAY_MS;
+  // A hot rollback journal (e.g. after a killed compaction) makes every pinned writer
+  // refuse; report it distinctly so the operator runbook (ARCHITECTURE R2c.2b) applies.
+  try {
+    if (typeof store?.stagingDirectory === "string") {
+      lstatSync(path.join(store.stagingDirectory, TARGET_STORE_FILENAME + "-journal"));
+      return { ok: false, reason: "journal_present" };
+    }
+  } catch { /* no journal: the normal path */ }
   return withPinnedTargetStagingWrite<TargetStagingChangeLogCompaction>(store, context => {
     const { db } = context;
     if (!context.stillPinned() || !context.noSidecars()) return { ok: false, reason: "write_failed" };

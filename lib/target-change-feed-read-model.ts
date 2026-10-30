@@ -298,7 +298,7 @@ function intervalEntries(
 ): Candidate[] {
   return (db.prepare(`SELECT seq, entity_kind AS kind, entity_id AS id, area_id AS areaId, op,
         revision, NULL AS role
-      FROM change_log INDEXED BY change_log_by_area
+      FROM change_log INDEXED BY change_log_content_by_area
      WHERE area_id = ? AND seq > ? AND seq < ? AND entity_kind <> 'membership'
      ORDER BY seq ASC LIMIT ?`).all(areaId, fromSeq, toSeq, limit) as Candidate[]);
 }
@@ -342,13 +342,6 @@ function currentItem(db: DatabaseSync, kind: "task" | "project", id: string): Cu
 function feedPage(
   db: DatabaseSync, actor: string, epoch: number, position: number,
 ): TargetChangeFeedResult {
-  // R2c.2b: entries at or below the compaction floor may be gone, so a cursor behind it
-  // cannot be continued (409 resync_required; the client re-bootstraps keeping its queue).
-  const floorRow = db.prepare("SELECT value FROM metadata WHERE key = 'change_log_floor'")
-    .get() as { value: string } | undefined;
-  const floor = Number(floorRow?.value);
-  if (!floorRow || !Number.isSafeInteger(floor) || floor < 0) return denied("unavailable");
-  if (position < floor) return denied("resync_required");
   // Too many relevant Areas to serve a feed page: the client must re-bootstrap (409).
   const readable = readableAreas(db, actor);
   if (!readable) return denied("resync_required");
@@ -437,6 +430,16 @@ export function readChangeFeedPage(
       if (claims.epoch !== identity.epoch) return denied("cursor_invalid");
     }
     const pos = claims?.pos ?? null;
+    if (pos !== null) {
+      // R2c.2b: membership history at or below the compaction floor may be gone, so a cursor
+      // whose position (feed p, bootstrap watermark w, grant sequence w) lies behind it can
+      // no longer be served exactly: 409 resync_required, never partial data.
+      const floorRow = db.prepare("SELECT value FROM metadata WHERE key = 'change_log_floor'")
+        .get() as { value: string } | undefined;
+      const floor = Number(floorRow?.value);
+      if (!floorRow || !Number.isSafeInteger(floor) || floor < 0) return denied("unavailable");
+      if ((pos.ph === "f" ? pos.p : pos.w) < floor) return denied("resync_required");
+    }
     if (pos === null) return bootstrapPage(db, actor, identity.epoch, null);
     if (pos.ph === "b") return bootstrapPage(db, actor, identity.epoch, pos);
     if (pos.ph === "a") return areaBootstrapPage(db, actor, identity.epoch, pos);
