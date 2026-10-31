@@ -436,9 +436,18 @@ test("six un-retried concurrent writers never classify transient contention as d
   assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
     JSON.stringify(counts));
   assert.ok(totals.ok > 0, "some writes must have committed");
-  assert.equal(anchorOf(fx), totals.ok, "every successful COMMIT advances the anchor exactly once");
-  assert.equal(journalState(fx).pending, null);
-  assert.equal(journalState(fx).confirmed, totals.ok);
+  // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
+  // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
+  // need not equal the number of successful writes. Finish with one uncontended
+  // write, which also closes any pending intent left by the last failed writer.
+  const settled = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed");
+  assert.equal(settled, "ok", "the shared store remains writable after contention");
+  const state = journalState(fx);
+  assert.equal(state.pending, null);
+  assert.equal(state.confirmed, anchorOf(fx));
+  assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
