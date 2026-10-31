@@ -462,6 +462,9 @@ test("reactivation waits for an in-flight storage commit without waiting for tra
   const ns = device.client.session.ns;
   const original = ns.transaction.bind(ns);
   ns.transaction = async ops => {
+    // Token acquisition performs a feed sync first. Delay only the actual edit
+    // transaction, which atomically writes both draft/ and cmd/ records.
+    if (!ops.some(op => op.key?.startsWith("draft/"))) return original(ops);
     entered();
     await gate;
     return original(ops);
