@@ -389,3 +389,59 @@ test("activate validates the user id; re-activating the same unlocked identity k
   assert.equal(again.restoreGeneration, G1);
   assert.equal(Object.keys(await titles(device.client)).length, 3);
 });
+
+
+test("explicit generation activation retains queued drafts for bootstrap migration", async () => {
+  const server = makeServer();
+  const device = makeDevice(server, "bob");
+  await device.start();
+  idle(await device.client.sync());
+  await three(device);
+  server.restore({ generation: G2, tasks: [["t1", "team", "restored t1"], ["t2", "team", "restored t2"]] });
+  await device.client.activate({ userId: "bob", restoreGeneration: G2 });
+  assert.deepEqual(await device.client.listDrafts(), { locked: true, reason: "resyncing" });
+  idle(await device.client.sync());
+  const drafts = await draftsOf(device.client);
+  assert.deepEqual(Object.keys(drafts).sort(), ["t1", "t2"]);
+  assert.ok(Object.values(drafts).every(draft => draft.status === "local"));
+  assert.equal(server.writes.length, 0);
+  assert.deepEqual((await device.storage.listNamespaces()).length, 1);
+});
+
+test("reactivation during an in-flight feed does not commit the old response into a new generation", async () => {
+  const server = makeServer();
+  const device = makeDevice(server, "bob");
+  await device.start();
+  idle(await device.client.sync());
+  let release;
+  let entered;
+  const enteredPromise = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const original = device.client.transport.fetchChanges;
+  device.client.transport.fetchChanges = async (...args) => {
+    entered();
+    await gate;
+    return original(...args);
+  };
+  const pending = device.client.sync();
+  await enteredPromise;
+  server.restore({ generation: G2, tasks: [["t1", "team", "new generation"]] });
+  await device.client.activate({ userId: "bob", restoreGeneration: G2 });
+  release();
+  assert.equal((await pending).status, "signed_out");
+  assert.deepEqual(await device.client.listDrafts(), { locked: false, value: [] });
+  idle(await device.client.sync());
+  assert.equal((await titles(device.client)).t1, "new generation");
+});
+
+test("queued draft cannot be resubmitted after session expiry", async () => {
+  const server = makeServer();
+  const device = makeDevice(server, "bob");
+  await device.start();
+  idle(await device.client.sync());
+  await device.client.editTitle("t1", "pending");
+  server.setSession(device.holder.token, "expired");
+  assert.equal((await device.client.sync()).status, "locked");
+  assert.notEqual((await device.client.resubmitDraft("t1")).ok, true);
+  assert.equal(server.writes.length, 0);
+});
