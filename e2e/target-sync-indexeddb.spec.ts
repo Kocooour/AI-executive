@@ -39,8 +39,15 @@ const browserSource = "(function () {\n" + browserPrelude + "\n" +
   sourceFiles.map(compile).join("\n") +
   "\nglobalThis.__lumiSync = { IndexedDbTargetSyncStorage, TargetSyncClient, FakeTargetServer };\n})();";
 
+// The focused suite needs a secure localhost origin for IndexedDB and crypto,
+// but not a Next.js build, user login, or the expensive shared E2E setup.
 async function harness(page: Page): Promise<void> {
-  await page.goto("/");
+  const url = "http://localhost:3101/target-sync-indexeddb";
+  await page.route(url, route => route.fulfill({
+    status: 200, contentType: "text/html",
+    body: "<!doctype html><html><head><title>Lumi IndexedDB tests</title></head><body></body></html>",
+  }));
+  await page.goto(url);
   await page.addScriptTag({ content: browserSource });
 }
 
