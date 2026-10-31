@@ -25,9 +25,9 @@ export type TargetAuthorizedProjectIndexPage = {
 const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
 type AreaRow = {
   areaId: string; areaKind: "private" | "shared"; policyRevision: number;
-  contentRevision: number; role: string | null;
+  projectContentRevision: number; role: string | null;
 };
-type ProjectRow = TargetAuthorizedReadableProject & { projectRevision: number };
+type ProjectRow = TargetAuthorizedReadableProject;
 const accessOf = (area: AreaRow): TargetReadAreaAccess | null =>
   area.areaKind === "private" ? "private-owner" :
     area.role === "viewer" || area.role === "editor" || area.role === "admin" ? area.role : null;
@@ -57,7 +57,7 @@ export function readAuthorizedProjectIndexPage(
     // including Areas whose projects fall beyond the current page. No foreign
     // Area or private project is included in a cursor revision.
     const areas = db.prepare(`SELECT a.id AS areaId, a.kind AS areaKind,
-      a.policy_revision AS policyRevision, a.content_revision AS contentRevision,
+      a.policy_revision AS policyRevision, a.project_content_revision AS projectContentRevision,
       member.role AS role ${from}
       AND EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area WHERE p.area_id = a.id)
       ORDER BY a.id COLLATE BINARY ASC
@@ -71,38 +71,29 @@ export function readAuthorizedProjectIndexPage(
       if (!access || !a.areaId ||
           a.areaKind !== (request.scope === "personal" ? "private" : "shared") ||
           !Number.isSafeInteger(a.policyRevision) || a.policyRevision < 0 ||
-          !Number.isSafeInteger(a.contentRevision) || a.contentRevision < 0) return null;
+          !Number.isSafeInteger(a.projectContentRevision) || a.projectContentRevision < 0) return null;
       linearization.areas.push({
         areaId: a.areaId, areaKind: a.areaKind, policyRevision: a.policyRevision, access,
       });
-      hash.update(JSON.stringify([a.areaId, a.areaKind, a.policyRevision, a.contentRevision, access]))
+      hash.update(JSON.stringify([a.areaId, a.areaKind, a.policyRevision, a.projectContentRevision, access]))
         .update("\0");
     }
-    const rows = db.prepare(`SELECT p.id AS id, p.title AS title, a.id AS areaId,
-      a.kind AS areaKind, p.revision AS projectRevision
+    // Project mutation triggers bump each contributing Area's monotonic
+    // project_content_revision. Cursor staleness is thus independent of the
+    // number of project rows; LIMIT bounds the rows hydrated for each page.
+    // This also avoids invalidating project cursors for task-only changes.
+    const page = db.prepare(`SELECT p.id AS id, p.title AS title, a.id AS areaId,
+      a.kind AS areaKind
       FROM projects p JOIN areas a ON a.id = p.area_id
       JOIN workspaces w ON w.id = a.workspace_id
       JOIN identities actor ON actor.id = ?
       LEFT JOIN area_members member ON member.area_id = a.id AND member.user_id = actor.id
-      WHERE ${policy} ORDER BY p.id COLLATE BINARY ASC`).iterate(request.actorUserId) as Iterable<ProjectRow>;
-    const page: ProjectRow[] = [];
-    let visible = 0;
-    for (const row of rows) {
-      if (!isReadableStagingProjectId(row.id)) continue;
-      if (typeof row.title !== "string" || !Number.isSafeInteger(row.projectRevision) ||
-          row.projectRevision < 0) return null;
-      // The R2c staging schema bumps project.revision on title edits but does
-      // not increment Area.content_revision for project title changes.
-      // Hash ALL visible project rows, not just the current page; otherwise an
-      // earlier title mutation can leave a later page cursor falsely current.
-      hash.update(JSON.stringify([
-        row.id, row.title, row.areaId, row.areaKind, row.projectRevision,
-      ])).update("\\0");
-      if (visible >= request.offset && page.length <= request.limit) page.push(row);
-      visible++;
-    }
+      WHERE ${policy} ORDER BY p.id COLLATE BINARY ASC
+      LIMIT ? OFFSET ?`).all(request.actorUserId, request.limit + 1, request.offset) as ProjectRow[];
     const knownAreas = new Set(linearization.areas.map(a => a.areaId));
-    if (page.some(row => !knownAreas.has(row.areaId))) return null;
+    if (page.some(row =>
+      !isReadableStagingProjectId(row.id) || typeof row.title !== "string" ||
+      !knownAreas.has(row.areaId))) return null;
     return {
       projects: page.slice(0, request.limit).map(row => ({
         id: row.id, title: row.title, areaId: row.areaId, areaKind: row.areaKind,
