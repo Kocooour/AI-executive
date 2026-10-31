@@ -46,7 +46,7 @@ if (mode === "exclusive-lock") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "hold-sidecar") {
+if (mode === "hold-sidecar" || mode === "hold-sidecar-long") {
   // Hold a real rollback journal open while the parent starts a second pinned
   // writer. Roll back so the shared synthetic fixture stays consistent.
   const { DatabaseSync } = await import("node:sqlite");
@@ -55,7 +55,7 @@ if (mode === "hold-sidecar") {
     db.exec("BEGIN IMMEDIATE; UPDATE tasks SET title=title || ' (uncommitted)' WHERE id='t1'");
     if (!existsSync(directory + "/lumi-target.sqlite-journal")) throw new Error("No rollback journal");
     writeFileSync(gate + "/ready", "");
-    wait(120);
+    wait(mode === "hold-sidecar-long" ? 750 : 120);
     db.exec("ROLLBACK");
   } finally { db.close(); }
   process.stdout.write("released");
