@@ -206,6 +206,46 @@ test("project moved after child snapshot invalidates even the lookahead row", as
   assert.deepEqual(current.projects.map(p => p.id), ["family-project"]);
 });
 
+test("project-only Area epochs bound pagination and detect distant edits without task churn", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys = ON");
+  const insert = db.prepare("INSERT INTO projects(id, area_id, title) VALUES (?, 'family-area', ?)");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < 400; i++) {
+      insert.run("zz-bulk-" + String(i).padStart(4, "0"), "Extra " + i);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  const epoch = () => db.prepare("SELECT project_content_revision FROM areas WHERE id='family-area'")
+    .get().project_content_revision;
+  const before = epoch();
+  const page = await ok(get(fx, "?scope=shared&limit=1", bob));
+  assert.deepEqual(page.projects.map(p => p.id), ["family-project"]);
+  assert.equal(page.hasMore, true);
+
+  // A task edit in the same Area must not invalidate a project-only cursor.
+  db.prepare("UPDATE tasks SET title='Task changed' WHERE id='s-1'").run();
+  assert.equal(epoch(), before);
+  const following = await ok(get(fx, "?scope=shared&limit=1&cursor=" + page.nextCursor, bob));
+  assert.deepEqual(following.projects.map(p => p.id), ["family-second"]);
+
+  // An edit hundreds of rows beyond the page MUST invalidate its cursor.
+  db.prepare("UPDATE projects SET title='Renamed last' WHERE id='zz-bulk-0399'").run();
+  assert.equal(epoch(), before + 1);
+  assert.equal((await get(fx, "?scope=shared&limit=1&cursor=" + page.nextCursor, bob)).status, 409);
+
+  const fresh = await ok(get(fx, "?scope=shared&limit=1", bob));
+  db.prepare("UPDATE projects SET title='Unrelated' WHERE id='other-project'").run();
+  assert.equal((await get(fx, "?scope=shared&limit=1&cursor=" + fresh.nextCursor, bob)).status, 200);
+  db.close();
+});
+
 test("malformed requests, child metadata injection and feature-off fail closed", async () => {
   const fx = fixture();
   const good = await readProcess.readStagingAuthorizedProjectIndexInChild({
