@@ -343,8 +343,10 @@ export function withPinnedTargetStagingWrite<T>(
       try {
         const sidecar = lstatSync(files.databasePath + "-journal");
         if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink !== 1) return denied();
-      } catch {
-        // The journal disappeared between the two observations: retry the check.
+      } catch (error) {
+        // ENOENT means the journal disappeared between observations. All
+        // other filesystem errors are trust/boundary failures, not contention.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return denied();
         continue;
       }
       const remaining = sidecarDeadline - Date.now();
