@@ -8,6 +8,7 @@ import type {
 } from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
+import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import { isReadableStagingProjectId } from "./target-project-id";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
@@ -609,5 +610,60 @@ export async function readStagingAuthorizedProjectTasksInChild(
     [projectId, String(limit), String(offset)]);
   const result = parseStagingProjectTasks(payload, projectId);
   if (payload !== null && !result) logStagingFailure("project_tasks", "invalid_child_dto");
+  return result;
+}
+
+/** R2d.1b strict child-to-HTTP boundary: no membership or account IDs in DTO. */
+export function parseStagingAuthorizedProjectIndex(
+  value: unknown, scope: TargetProjectIndexScope,
+): TargetAuthorizedProjectIndexPage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      (scope !== "personal" && scope !== "shared")) return null;
+  const data = value as Record<string, unknown>;
+  if (Object.keys(data).sort().join(",") !==
+        "guardProjects,hasMore,linearization,ok,projects,revision" ||
+      data.ok !== true || !Array.isArray(data.projects) || data.projects.length > 100 ||
+      !Array.isArray(data.guardProjects) || data.guardProjects.length > 101 ||
+      data.guardProjects.length !== data.projects.length + (data.hasMore === true ? 1 : 0) ||
+      typeof data.hasMore !== "boolean" || typeof data.revision !== "string" ||
+      !REVISION.test(data.revision)) return null;
+  const kind = scope === "personal" ? "private" : "shared";
+  const projects: TargetAuthorizedProjectIndexPage["projects"] = [];
+  const seen = new Set<string>();
+  for (const input of data.projects) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    const row = input as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !== "areaId,areaKind,id,title" ||
+        !isReadableStagingProjectId(row.id) || seen.has(row.id) ||
+        typeof row.title !== "string" || typeof row.areaId !== "string" ||
+        !row.areaId || row.areaKind !== kind) return null;
+    seen.add(row.id);
+    projects.push({ id: row.id, title: row.title, areaId: row.areaId, areaKind: kind });
+  }
+  const guards: TargetAuthorizedProjectIndexPage["guardProjects"] = [];
+  for (const input of data.guardProjects) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    const row = input as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !== "areaId,id" ||
+        !isReadableStagingProjectId(row.id) || typeof row.areaId !== "string" ||
+        !row.areaId || guards.some(g => g.id === row.id)) return null;
+    guards.push({ id: row.id, areaId: row.areaId });
+  }
+  if (projects.some((p, i) => p.id !== guards[i]?.id || p.areaId !== guards[i]?.areaId)) return null;
+  const linearization = parseLinearization(data.linearization,
+    new Map(guards.map(g => [g.areaId, kind] as const)));
+  if (!linearization || linearization.areas.some(a => a.areaKind !== kind)) return null;
+  return { projects, hasMore: data.hasMore, revision: data.revision,
+    linearization, guardProjects: guards };
+}
+
+export async function readStagingAuthorizedProjectIndexInChild(
+  config: StagingPersonalReadConfig, scope: TargetProjectIndexScope,
+  limit: number, offset: number,
+): Promise<TargetAuthorizedProjectIndexPage | null> {
+  const payload = await runChild(config, "target-staging-project-index-child.mjs",
+    [scope, String(limit), String(offset)]);
+  const result = parseStagingAuthorizedProjectIndex(payload, scope);
+  if (payload !== null && !result) logStagingFailure("project_index", "invalid_child_dto");
   return result;
 }
