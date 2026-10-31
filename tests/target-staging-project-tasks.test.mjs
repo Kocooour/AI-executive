@@ -205,6 +205,43 @@ test("project child moved after the snapshot fails live membership check even wi
   assert.deepEqual(current.tasks.map(task => task.id), ["s-1", "s-2"]);
 });
 
+test("project moved to an unreadable Area after snapshot cannot release inherited tasks", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const read = await readProcess.readStagingAuthorizedProjectTasksInChild({
+    stagingDirectory: fx.stage.directory, expectedRestoreGeneration: fx.stage.restoreGeneration,
+    ownerUserId: "alice", sessionTokenHash: tokenHash,
+  }, "family-project", 10, 0);
+  assert.equal(read?.ok, true);
+  assert.equal(read.page.project.areaId, "family-area");
+  assert.deepEqual(read.page.tasks.map(task => task.id), ["s-1", "s-2", "s-3"]);
+
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys = ON");
+  // All children now inherit another shared Area. Bob has no membership there;
+  // the project move must invalidate the previously authorized snapshot.
+  db.prepare("UPDATE projects SET area_id='other-area' WHERE id='family-project'").run();
+  db.close();
+
+  const guard = {
+    projectId: "family-project", areaId: read.page.project.areaId,
+    taskIds: read.page.tasks.map(task => task.id),
+  };
+  assert.equal(verifyStagingReadBeforeRelease(
+    req(fx, "family-project", "", bob), { kind: "session", tokenHash },
+    fx.store, "alice", read.page.linearization, guard,
+  ), "stale");
+  const denied = await get(fx, "family-project", "", bob);
+  assert.equal(denied.status, 404);
+  assert.equal(denied.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await denied.json(), { error: "Not found" });
+  // The new Area's legitimate member sees the project's current inherited tasks.
+  const erin = await ok(get(fx, "family-project", "", login(fx, "erin")));
+  assert.equal(erin.project.areaId, "other-area");
+  assert.deepEqual(erin.tasks.map(task => task.id), ["s-1", "s-2", "s-3"]);
+});
+
 test("bad child DTOs, invalid params and disabled gate never expose project data", async () => {
   const fx = fixture();
   const good = await readProcess.readStagingAuthorizedProjectTasksInChild({
