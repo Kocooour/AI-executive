@@ -178,8 +178,8 @@ export class TargetSyncClient {
         previous.closed = true;
         if (previous.timer !== null) this.sched.clearTimeout(previous.timer);
         this.session = null;
-        // Let already-running serialized operations settle before reopening storage.
-        await previous.chain;
+        // Do not await in-flight network calls: they may remain pending indefinitely.
+        // Closing the old session invalidates their responses before they can commit.
       }
       const names = await this.storage.listNamespaces();
       const foreign = names.filter(name => parseNamespaceName(name)?.userId !== userId);
