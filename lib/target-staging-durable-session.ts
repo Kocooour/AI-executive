@@ -388,15 +388,28 @@ export type TargetStagingReadLive =
  * Task reassignment does NOT bump policy_revision, so a my-plan response may
  * lag one request behind a reassignment away from the actor; that is accepted.
  */
+/** Optional R2d.1a project/child row guard checked INSIDE the Area ACL transaction. */
+export type TargetProjectReadLiveGuard = {
+  projectId: string;
+  areaId: string;
+  taskIds: string[];
+};
+
 export function verifyTargetStagingReadLive(
   store: TargetStagingReadStore,
   subject: { readonly tokenHash: string } | { readonly ownerUserId: string },
   observed: TargetReadLinearization,
   nowMs = Date.now(),
+  projectGuard?: TargetProjectReadLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
       !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
+  if (projectGuard && (typeof projectGuard.projectId !== "string" || !projectGuard.projectId ||
+      typeof projectGuard.areaId !== "string" || !projectGuard.areaId ||
+      !Array.isArray(projectGuard.taskIds) || projectGuard.taskIds.length > 100 ||
+      projectGuard.taskIds.some(id => typeof id !== "string" || !id) ||
+      new Set(projectGuard.taskIds).size !== projectGuard.taskIds.length)) return unavailable;
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
     return { ok: false, reason: "invalid", code: "session_revoked" };
   }
@@ -430,6 +443,21 @@ export function verifyTargetStagingReadLive(
       const access = current.kind === "private" ? "private-owner" : current.role;
       if (access !== area.access || current.policy_revision !== area.policyRevision) {
         return { ok: false, reason: "stale" };
+      }
+    }
+    if (projectGuard) {
+      // Membership-only checks are insufficient when task or project rows
+      // leave the old Area after the snapshot. Verify all returned child IDs
+      // inside the SAME live transaction that checked actor and Area policy.
+      const project = db.prepare("SELECT area_id AS areaId FROM projects WHERE id = ?")
+        .get(projectGuard.projectId) as { areaId: string } | undefined;
+      if (!project || project.areaId !== projectGuard.areaId) {
+        return { ok: false, reason: "stale" };
+      }
+      const child = db.prepare(`SELECT id FROM tasks
+        WHERE id = ? AND project_id = ? AND area_id IS NULL`);
+      for (const id of projectGuard.taskIds) {
+        if (!child.get(id, projectGuard.projectId)) return { ok: false, reason: "stale" };
       }
     }
     return { ok: true };
