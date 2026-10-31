@@ -26,7 +26,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // append-only lumi-target.journal next to the database; no v9 migration, same rule). v11
 // (R2c.4b) adds the append-only restore bookkeeping: the generation history and the sessions a
 // restore superseded (the 401 code `session_restored`); no v10 migration, same rule.
-export const TARGET_STORE_SCHEMA_VERSION = 11;
+// v12 (R2d.1b) adds a per-Area monotonic project-content epoch so project
+// pagination never hashes all project rows. Existing staging v11 stores are
+// deliberately NOT migrated; recreate a new isolated staging directory.
+export const TARGET_STORE_SCHEMA_VERSION = 12;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -192,6 +195,7 @@ CREATE TABLE areas (
   system_key TEXT CHECK(system_key IS NULL OR system_key = 'unassigned'),
   policy_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0 AND policy_revision < 9007199254740991),
   content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(content_revision)='integer' AND content_revision >= 0 AND content_revision < 9007199254740991),
+  project_content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(project_content_revision)='integer' AND project_content_revision >= 0 AND project_content_revision < 9007199254740991),
   workspace_kind TEXT GENERATED ALWAYS AS (
     CASE kind WHEN 'private' THEN 'personal' ELSE 'shared' END
   ) STORED,
@@ -640,12 +644,14 @@ END;
 -- cursor epochs advance exactly once.
 CREATE TRIGGER project_change_log_insert AFTER INSERT ON projects
 BEGIN
+  UPDATE areas SET project_content_revision = project_content_revision + 1 WHERE id = NEW.area_id;
   INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
     VALUES ('project', NEW.id, NEW.area_id, 'upsert', NEW.revision);
 END;
 CREATE TRIGGER project_change_log_revision AFTER UPDATE OF revision ON projects
 WHEN NEW.revision IS NOT OLD.revision
 BEGIN
+  UPDATE areas SET project_content_revision = project_content_revision + 1 WHERE id = NEW.area_id;
   INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
     VALUES ('project', NEW.id, NEW.area_id, 'upsert', NEW.revision);
 END;
@@ -662,15 +668,18 @@ BEGIN
   INSERT INTO change_log(entity_kind, entity_id, area_id, op, revision)
     SELECT 'task', t.id, NEW.area_id, 'upsert', t.revision FROM tasks t
      WHERE t.project_id = NEW.id ORDER BY t.rowid;
-  UPDATE areas SET content_revision = content_revision + 1 WHERE id = OLD.area_id;
-  UPDATE areas SET content_revision = content_revision + 1 WHERE id = NEW.area_id;
+  UPDATE areas SET content_revision = content_revision + 1,
+    project_content_revision = project_content_revision + 1 WHERE id = OLD.area_id;
+  UPDATE areas SET content_revision = content_revision + 1,
+    project_content_revision = project_content_revision + 1 WHERE id = NEW.area_id;
 END;
 CREATE TRIGGER project_delete_log AFTER DELETE ON projects
 BEGIN
   INSERT INTO change_log(seq, entity_kind, entity_id, area_id, op, revision)
     SELECT ts.change_seq, 'project', ts.id, ts.area_id, 'tombstone', ts.revision
       FROM project_tombstones ts WHERE ts.id = OLD.id;
-  UPDATE areas SET content_revision = content_revision + 1
+  UPDATE areas SET content_revision = content_revision + 1,
+    project_content_revision = project_content_revision + 1
     WHERE id = (SELECT area_id FROM project_tombstones WHERE id = OLD.id);
 END;
 CREATE TRIGGER area_policy_member_insert AFTER INSERT ON area_members
@@ -707,6 +716,9 @@ BEGIN SELECT RAISE(ABORT, 'Area policy revision must increment by one'); END;
 CREATE TRIGGER area_content_revision_guard BEFORE UPDATE OF content_revision ON areas
 WHEN NEW.content_revision <> OLD.content_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area content revision must increment by one'); END;
+CREATE TRIGGER area_project_content_revision_guard BEFORE UPDATE OF project_content_revision ON areas
+WHEN NEW.project_content_revision <> OLD.project_content_revision + 1
+BEGIN SELECT RAISE(ABORT, 'Area project content revision must increment by one'); END;
 -- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
 -- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 -- A tombstoned ID is never reusable: re-creating it would reset the revision
