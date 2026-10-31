@@ -1321,12 +1321,12 @@ test("the witness follows the same generation rule: a row of the wrong generatio
 });
 
 // =====================================================================================================
-// schema v11 and the session code
+// schema v12 and the session code
 // =====================================================================================================
 
-test("schema v11: the restore tables are append-only and capacity-bound", () => {
+test("schema v12: the restore tables are append-only and capacity-bound", () => {
   const fx = makeFixture();
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 11);
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 12);
   assert.equal(generationOf(fx) !== undefined, true);
   const db = fx.db;
   assert.throws(() => db.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)")
