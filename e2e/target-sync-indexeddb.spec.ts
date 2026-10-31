@@ -14,7 +14,8 @@ function compile(file: string): string {
   }).outputText
     .replace(/^\s*import[^;\n]+from ["'][^"']+["'];?\s*$/gm, "")
     .replace(/\bexport\s+\{\s*\};?/g, "")
-    .replace(/\bexport\s+(?=(?:class|const|function)\b)/g, "");
+    .replace(/\bexport\s+(?=(?:async\s+)?(?:class|const|function)\b)/g, "");
+  // Catch future runtime exports/imports that the small browser harness does not support.
   if (/^\s*(?:import|export)\s/m.test(js)) throw new Error("Unexpected module syntax in " + file);
   return js;
 }
