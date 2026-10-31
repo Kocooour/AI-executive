@@ -429,8 +429,9 @@ test("reactivation during an in-flight feed does not commit the old response int
   await device.client.activate({ userId: "bob", restoreGeneration: G2 });
   release();
   assert.equal((await pending).status, "signed_out");
-  assert.deepEqual(await device.client.listDrafts(), { locked: false, value: [] });
+  assert.deepEqual(await device.client.listDrafts(), { locked: true, reason: "resyncing" });
   idle(await device.client.sync());
+  assert.deepEqual(unwrap(await device.client.listDrafts()), []);
   assert.equal((await titles(device.client)).t1, "new generation");
 });
 
@@ -452,13 +453,14 @@ test("reactivation waits for an in-flight storage commit without waiting for tra
   const device = makeDevice(server, "bob");
   await device.start();
   idle(await device.client.sync());
-  const names = await device.storage.listNamespaces();
-  const ns = await device.storage.openNamespace(names[0]);
-  const original = ns.transaction.bind(ns);
+  // The client already holds its namespace instance: patch the storage transaction
+  // at the backing store level so the interception applies to that existing handle.
   let release;
   let entered;
   const enteredPromise = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
+  const ns = device.client.session.ns;
+  const original = ns.transaction.bind(ns);
   ns.transaction = async ops => {
     entered();
     await gate;
