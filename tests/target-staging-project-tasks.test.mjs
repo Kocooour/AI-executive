@@ -219,10 +219,26 @@ test("project moved to an unreadable Area after snapshot cannot release inherite
 
   const db = new DatabaseSync(fx.stage.databasePath);
   db.exec("PRAGMA foreign_keys = ON");
-  // All children now inherit another shared Area. Bob has no membership there;
-  // the project move must invalidate the previously authorized snapshot.
-  db.prepare("UPDATE projects SET area_id='other-area' WHERE id='family-project'").run();
-  db.close();
+  // R2 currently blocks project moves until the confirmed move command exists.
+  // Simulate its eventual committed result ONLY in this isolated fixture:
+  // temporarily lift the move guard, preserve its exact SQL and restore it
+  // atomically. Unassign children first to preserve the destination Area ACL.
+  const moveGuard = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='project_area_assignment_guard'")
+    .get()?.sql;
+  assert.equal(typeof moveGuard, "string");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE project_id='family-project'").run();
+    db.exec("DROP TRIGGER project_area_assignment_guard");
+    db.prepare("UPDATE projects SET area_id='other-area' WHERE id='family-project'").run();
+    db.exec(moveGuard + ";");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.close();
+  }
 
   const guard = {
     projectId: "family-project", areaId: read.page.project.areaId,
