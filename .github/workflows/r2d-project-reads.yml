@@ -1,0 +1,40 @@
+name: R2d project read regressions
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r2d-project-reads.yml"
+      - "lib/target-project-task-read-model.ts"
+      - "lib/target-task-staging-reader.ts"
+      - "lib/target-staging-session-authority.ts"
+      - "lib/target-staging-read-process.ts"
+      - "scripts/target-staging-project-tasks-child.mjs"
+      - "app/api/target-staging/projects/**"
+      - "tests/target-staging-project-tasks.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r2d-project-reads-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  focused-projects:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Targeted ACL and project pagination tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs
