@@ -33,6 +33,8 @@ import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
+import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
+import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
@@ -612,6 +614,24 @@ export function readPreflightedAuthorizedProjectTasks(
           actorUserId, projectId, limit, offset,
           restoreGeneration: store.expectedRestoreGeneration,
         });
+      }, () => null),
+  );
+}
+
+/** R2d.1b: authenticated project list, pinned/preflighted once per page. */
+export function readPreflightedAuthorizedProjectIndex(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  scope: TargetProjectIndexScope, limit: number, offset: number,
+): TargetAuthorizedProjectIndexPage | null {
+  return withPreflightedStore<TargetAuthorizedProjectIndexPage | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<TargetAuthorizedProjectIndexPage | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId ? readAuthorizedProjectIndexPage(db, {
+          actorUserId, scope, limit, offset,
+          restoreGeneration: store.expectedRestoreGeneration,
+        }) : null;
       }, () => null),
   );
 }

@@ -478,7 +478,7 @@ test("compaction: floor from retention, superseded rows only, preflight green, m
 
 const login = (fx, user) => {
   const issued = durable.issueDurableTargetStagingSession(fx.store, user, 900);
-  assert.equal(issued.ok, true);
+  assert.equal(issued.ok, true, `session issue failed for ${user}: ${JSON.stringify(issued)}`);
   return sessionCookie(issued.sessionToken);
 };
 const feed = (fx, cookie, cursor) => FEED(new Request(`${base}changes${cursor ? "?cursor=" + cursor : ""}`,

@@ -70,8 +70,8 @@ function tombstoneAndDelete(db, taskId, now = Date.now()) {
   return { ...task, seq };
 }
 
-test("schema v11: tombstone and change-log tables exist, are content-free and v7 fails preflight", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 11);
+test("schema v12: tombstone and change-log tables exist, are content-free and v7 fails preflight", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 12);
   const { stage, db } = fixture();
   for (const table of ["task_tombstones", "project_tombstones"]) {
     assert.deepEqual(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name),
