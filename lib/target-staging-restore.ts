@@ -67,15 +67,24 @@ export type TargetStagingRestoreFailure =
   | "grant_invalid"
   /** A grant names an Area which the last-admin invariant does NOT block without it: refused, nothing changed. */
   | "grant_unneeded"
+  /**
+   * A grant names a user whom the journal (confirmed intents in (A,H]) finally removed from that Area or
+   * lowered below admin: a restore never brings back a removed membership or a lowered role. Nothing changes.
+   */
+  | "grant_removed_by_journal"
   /** restore_generations or restore_superseded_sessions is full: a new staging store is needed. */
   | "capacity_exhausted"
   /** The journal holds a payload the replay does not understand, or the replay hit an unexpected error. */
   | "replay_failed"
   /**
-   * The restore COMMITTED but its `confirm` was not appended: after the commit the store was no longer
-   * fully trusted under the new generation (main DB, witness or journal replaced or rolled back in the
-   * window, or the confirm append failed). Do NOT set the new generation; the store fails closed until
-   * an operator inspects it (a benign lost confirm is resolved by the next writer, not by this tool).
+   * The restore COMMITTED (the witness has it; the result carries `restoreGeneration` and
+   * `previousGeneration`) but its `confirm` could not be appended safely: a path was replaced or changed
+   * during the run, or the append failed. Do NOT start the server until the staging directory has been
+   * inspected (only the expected files, nothing replaced). Then the operator may set the new generation
+   * and start: the gate verifies the store on every request; if trusted, the first writer appends the
+   * confirm; if not, everything stays 503 and recovery needs a DB copy taken AFTER this restore (a backup
+   * from before it is refused with backup_predates_restore). Rerunning this tool closes the trailing
+   * restore intent like any writer (truthful confirm/abort decided by the witness) and then refuses.
    */
   | "confirm_untrusted"
   | "write_failed";
@@ -88,7 +97,8 @@ export type TargetStagingRestoreResult =
     skipped: number; epochsBumped: number; grantedAdmins: number; grantAdmin: [string, string][];
     stampedSessions: number;
   }
-  | { ok: false; reason: TargetStagingRestoreFailure; blockedAreas?: string[] };
+  | { ok: false; reason: TargetStagingRestoreFailure; blockedAreas?: string[];
+      restoreGeneration?: string; previousGeneration?: string };
 
 const lower = (value: string): string => value.toLowerCase();
 const text = (value: unknown, max = 120): value is string =>
@@ -283,7 +293,8 @@ function restoreBody(
   // ---- operator grants, then the replay --------------------------------------------------------
   // A grant is applied BEFORE the replay (so a journal demotion of the previous admin keeps the
   // invariant triggers satisfied) and asserted again AFTER it (so the journal cannot take it back).
-  // A grant may (re)add a user whom the journal removed: that is the operator's explicit decision.
+  // A grant never overrides the journal: a user whom the journal finally removed from the Area or lowered
+  // below admin (last confirmed membership intent in (A,H] for the pair) refuses the restore.
   const existsForGrant = (grant: TargetStagingRestoreGrant) => {
     const area = db.prepare("SELECT 1 AS ok FROM areas WHERE id = ? AND kind = 'shared'").get(grant.areaId);
     const person = db.prepare(`SELECT 1 AS ok FROM identities i JOIN workspaces w
@@ -348,6 +359,12 @@ function restoreBody(
     // A grant is only for an Area which the invariant would otherwise block: evaluate the replay WITHOUT
     // grants first (inside this transaction, rolled back to the savepoint), then refuse any other grant.
     for (const grant of grants) existsForGrant(grant);
+    const finalRole = new Map<string, string | null>();
+    for (const op of membership) if (op.op !== "noop") finalRole.set(`${op.area}\0${op.user}`, op.op === "remove" ? null : op.role);
+    for (const grant of grants) {
+      const last = finalRole.get(`${grant.areaId}\0${grant.userId}`);
+      if (last !== undefined && last !== "admin") throw new ReplayAbort("grant_removed_by_journal");
+    }
     db.exec("SAVEPOINT replay_dry");
     let dry: Set<string>;
     try {
@@ -395,7 +412,10 @@ function restoreBody(
     superseded: superseded.size, skipped, grantAdmin: grantPairs,
   } });
   // Never report success for a restore whose confirm is missing: the operator must not set the new generation.
-  if (!confirmed) return { ok: false, reason: "confirm_untrusted" };
+  if (!confirmed) {
+    return { ok: false, reason: "confirm_untrusted", restoreGeneration: context.newGeneration,
+      previousGeneration: context.previousGeneration };
+  }
   return {
     ok: true, restoreGeneration: context.newGeneration, previousGeneration: context.previousGeneration,
     backupAnchor: A, confirmedThrough: H, replayedMembership: replayed, revokedTokens: revoked.size,

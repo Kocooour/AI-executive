@@ -21,8 +21,15 @@
  *      reasons include invalid_request (also a --generation which is not a UUID), generation_mismatch (a
  *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
  *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store),
- *      confirm_untrusted (the restore COMMITTED but the store was not fully trusted afterwards, so no confirm was
- *      appended: do NOT set the new generation; the store fails closed until an operator inspects it).
+ *      grant_removed_by_journal (a grant names a user whom the journal removed or demoted below admin),
+ *      confirm_untrusted (the restore COMMITTED, the JSON carries restoreGeneration and previousGeneration, but
+ *      its confirm could not be appended safely: a path was replaced or changed during the run, or the append
+ *      failed. Do NOT start the server until the staging directory has been inspected (only the expected
+ *      files, nothing replaced). Then set the new generation and start: the gate verifies the store on every
+ *      request; if trusted, the first writer appends the confirm; if not, everything stays 503 and recovery
+ *      needs a DB copy taken AFTER this restore, since a backup from before it is refused with
+ *      backup_predates_restore. A rerun of this tool closes the trailing restore intent like any writer
+ *      and then refuses; this is expected).
  *   4. Set AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION to the printed value and start the server. While
  *      the configured generation differs the store fails closed. If the tool died after its commit and the
  *      output was lost, the new value is in the database: SELECT value FROM metadata WHERE key='restore_generation'.
@@ -30,7 +37,9 @@
  * --grant-admin <areaId>:<userId> (repeatable, at most 16): operator decision when the replay would leave a
  *   shared Area without an admin (refusal reason "last_admin" lists the Areas). Only an Area which the
  *   last-admin invariant would block without the grant is accepted (else "grant_unneeded", nothing changes).
- *   The identity must exist; the grant may (re)add a user whom the journal removed. The decision is recorded
+ *   The identity must exist. A grant never overrides the journal: if the journal (after the backup) finally
+ *   removed that user from the Area or lowered them below admin, the restore is refused with
+ *   "grant_removed_by_journal" and nothing changes. The decision is recorded
  *   as sorted [areaId,userId] pairs in the journal record of the restore and printed in the report.
  * --help: print this text.
  */

@@ -461,7 +461,7 @@ test("a grant for an Area which the last-admin invariant does not block is refus
   memberWrite(fx, "remove", "bob");
   copyBack(fx, backup);
   const before = worldHash(fx);
-  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "bob" }] }),
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "carol" }] }),
     { ok: false, reason: "grant_unneeded" });
   assert.equal(worldHash(fx), before, "dry evaluation left no trace");
   assert.equal(roleOf(fx, "bob"), "editor");
@@ -498,6 +498,42 @@ test("grant limits: more than 16 grants or an over-long list is invalid_request"
   assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: long }), { ok: false, reason: "invalid_request" });
 });
 
+test("a grant never overrides the journal: a user removed or demoted after the backup refuses the restore (grant_removed_by_journal)", () => {
+  for (const [name, change] of [["removed", fx => memberWrite(fx, "remove", "bob")],
+    ["demoted", fx => memberWrite(fx, "set_role", "bob", "editor")]]) {
+    const fx = makeFixture();
+    assert.equal(titleWrite(fx, "t1", "x").ok, true);
+    memberWrite(fx, "set_role", "bob", "admin");
+    const backup = backupOf(fx);
+    addIdentity(fx.db, "erin");
+    memberWrite(fx, "add", "erin", "admin");   // skipped on restore: erin is unknown there
+    change(fx);
+    memberWrite(fx, "set_role", "alice", "viewer");
+    copyBack(fx, backup);
+    const before = worldHash(fx);
+    const journalBefore = readFileSync(fx.journalPath);
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "bob" }] }),
+      { ok: false, reason: "grant_removed_by_journal" }, name);
+    assert.equal(worldHash(fx), before, `${name}: nothing changed`);
+    assert.deepEqual(readFileSync(fx.journalPath), journalBefore, `${name}: journal bytes unchanged`);
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+    // A grant for another eligible user still works.
+    const ok = restoreNow(fx, [{ areaId: "team-area", userId: "carol" }]);
+    assert.equal(ok.ok, true, `${name}: ${JSON.stringify(ok)}`);
+    assert.equal(roleOf(fx, "carol"), "admin");
+  }
+  // The LAST op decides: removed, then re-added as admin, is eligible.
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  memberWrite(fx, "remove", "bob");
+  memberWrite(fx, "add", "bob", "admin");
+  memberWrite(fx, "set_role", "alice", "viewer");
+  copyBack(fx, backup);
+  const ok = restoreNow(fx, []);
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+});
+
 test("the largest accepted grant list (16 pairs of long IDs within the limit) still fits one journal line", () => {
   const pairs = Array.from({ length: 5 }, (_, i) => [`${"a".repeat(100)}${i}`, "u".repeat(100)]);
   assert.ok(JSON.stringify(pairs).length <= 1200);
@@ -506,7 +542,7 @@ test("the largest accepted grant list (16 pairs of long IDs within the limit) st
   assert.ok(Buffer.byteLength(line.text) <= 2048);
 });
 
-test("an operator grant is asserted after the replay: the journal cannot take it back", () => {
+test("an operator grant holds through the replay when the journal demotes and later re-promotes the user", () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "x").ok, true);
   const backup = backupOf(fx);
@@ -514,16 +550,17 @@ test("an operator grant is asserted after the replay: the journal cannot take it
   memberWrite(fx, "add", "erin", "admin");          // skipped by the restore: erin does not exist in the backup
   memberWrite(fx, "set_role", "alice", "viewer");   // blocked without a grant
   memberWrite(fx, "set_role", "carol", "admin", "erin");
-  memberWrite(fx, "set_role", "bob", "viewer", "erin"); // with the grant the journal takes bob's admin role back
+  memberWrite(fx, "set_role", "bob", "viewer", "erin"); // an intermediate demotion; the LAST op for bob is admin
+  memberWrite(fx, "set_role", "bob", "admin", "erin");
   copyBack(fx, backup);
   const result = restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]);
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(roleOf(fx, "bob"), "admin", "the grant is asserted again after the replay");
+  assert.equal(roleOf(fx, "bob"), "admin", "the grant holds after the replay");
   assert.equal(roleOf(fx, "carol"), "admin");
   assert.equal(roleOf(fx, "alice"), "viewer");
 });
 
-test("a grant may re-add a user whom the journal removed (explicit operator decision)", () => {
+test("a grant does not re-add a user whom the journal removed (grant_removed_by_journal, nothing changes)", () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "x").ok, true);
   const backup = backupOf(fx);
@@ -533,8 +570,10 @@ test("a grant may re-add a user whom the journal removed (explicit operator deci
   memberWrite(fx, "set_role", "carol", "admin", "erin");
   memberWrite(fx, "remove", "bob", undefined, "erin");
   copyBack(fx, backup);
-  assert.equal(restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]).ok, true);
-  assert.equal(roleOf(fx, "bob"), "admin");
+  const before = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "bob" }] }),
+    { ok: false, reason: "grant_removed_by_journal" });
+  assert.equal(worldHash(fx), before);
 });
 
 // =====================================================================================================
@@ -698,7 +737,8 @@ function restoreWithSwapAfterCommit(swap) {
   return { fx, result, afterCommit, newStore };
 }
 function assertNoConfirmAndFailClosed({ fx, result, afterCommit, newStore }) {
-  assert.deepEqual(result, { ok: false, reason: "confirm_untrusted" }, "the tool must not report ok");
+  assert.deepEqual(result, { ok: false, reason: "confirm_untrusted", restoreGeneration: newStore.expectedRestoreGeneration,
+    previousGeneration: fx.stage.restoreGeneration }, "the tool must not report ok, but names the committed generation");
   assert.deepEqual(readFileSync(fx.journalPath), afterCommit, "no confirm appended, journal bytes as right after COMMIT");
   for (const store of [fx.store, newStore]) {
     assert.notEqual(durable.checkTargetStagingAnchorLive(store), "ok", "store fails closed");
@@ -723,7 +763,8 @@ test("restore: older witness renamed over the canonical path between COMMIT and 
 
 test("restore: older journal renamed over the canonical path between COMMIT and confirm: no confirm into the orphan, not ok", () => {
   const run = restoreWithSwapAfterCommit((fx, old) => atomicReplace(fx.journalPath, old.journal, 0o600));
-  assert.deepEqual(run.result, { ok: false, reason: "confirm_untrusted" });
+  assert.deepEqual(run.result, { ok: false, reason: "confirm_untrusted", restoreGeneration: run.newStore.expectedRestoreGeneration,
+    previousGeneration: run.fx.stage.restoreGeneration });
   // The replacement journal is untouched (the orphan inode got nothing either: it is unlinked).
   assert.deepEqual(readFileSync(run.fx.journalPath), readFileSync(path.join(root, `${run.fx.name}.j-old`)));
   assert.notEqual(durable.checkTargetStagingAnchorLive(run.fx.store), "ok");
@@ -736,6 +777,28 @@ test("restore: main DB rolled back to the backup IN PLACE after the COMMIT: no c
 
 test("restore: witness copied back IN PLACE after the COMMIT: no confirm, not ok, fails closed", () => {
   assertNoConfirmAndFailClosed(restoreWithSwapAfterCommit((fx, old, witnessPath) => copyFileSync(old.witness, witnessPath)));
+});
+
+test("restore: confirm_untrusted after a benign swap (identical bytes renamed in): the new generation is reported, the gate accepts it, the next writer appends the confirm", () => {
+  const run = restoreWithSwapAfterCommit((fx) => {
+    const copy = `${fx.databasePath}.same`;
+    copyFileSync(fx.databasePath, copy);
+    renameSync(copy, fx.databasePath);
+  });
+  assert.equal(run.result.ok, false);
+  assert.equal(run.result.reason, "confirm_untrusted");
+  assert.equal(run.result.restoreGeneration, run.newStore.expectedRestoreGeneration);
+  assert.equal(run.result.previousGeneration, run.fx.stage.restoreGeneration);
+  assert.deepEqual(readFileSync(run.fx.journalPath), run.afterCommit, "no confirm yet");
+  // The operator inspected the directory (nothing hostile) and sets the printed generation.
+  assert.notEqual(durable.checkTargetStagingAnchorLive(run.fx.store), "ok", "the old generation stays closed");
+  assert.equal(durable.checkTargetStagingAnchorLive(run.newStore), "ok", "the gate verifies the store under the new generation");
+  useStore(run.fx, run.result.restoreGeneration);
+  assert.equal(titleWrite(run.fx, "t1", "after").ok, true, "the first writer is admitted");
+  const lines = journalLines(run.fx);
+  const restoreN = lines.find(line => line.t === "intent" && line.k === "restore").n;
+  assert.equal(lines.some(line => line.t === "confirm" && line.n === restoreN && line.g === run.result.restoreGeneration), true,
+    "the writer appended the missing confirm of the restore intent");
 });
 
 test("restore: an untouched run still confirms under the new generation and reports ok (control)", () => {
