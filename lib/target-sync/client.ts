@@ -172,16 +172,21 @@ export class TargetSyncClient {
       const userId = input.userId;
       await this.finishPendingWipe();
       const previous = this.session;
-      if (previous && previous.userId !== userId) {
+      // Retire even a same-user session before any asynchronous namespace work.
+      // In-flight transport responses must never mutate the newly activated generation.
+      if (previous) {
         previous.closed = true;
+        if (previous.timer !== null) this.sched.clearTimeout(previous.timer);
         this.session = null;
+        // Let already-running serialized operations settle before reopening storage.
+        await previous.chain;
       }
       const names = await this.storage.listNamespaces();
       const foreign = names.filter(name => parseNamespaceName(name)?.userId !== userId);
       if (foreign.length > 0) await this.storage.deleteNamespaces(foreign);
       const own = names.filter(name => parseNamespaceName(name)?.userId === userId);
       let ns = await this.chooseNamespace(userId, own, input.restoreGeneration);
-      const s: Session = previous && previous.userId === userId && !previous.closed ? previous : {
+      const s: Session = {
         userId, ns: null, closed: false, chain: Promise.resolve(), memoryLock: null, timer: null, timerAt: 0,
         feedFailures: 0, feedBackoffUntil: 0,
       };
@@ -217,7 +222,13 @@ export class TargetSyncClient {
     if (generation !== undefined) {
       const name = namespaceName(userId, generation);
       const ns = await this.storage.openNamespace(name);
-      if (!(await ns.get(K.meta))) await ns.transaction([{ kind: "put", key: K.meta, value: freshMeta(userId, generation) }]);
+      if (!(await ns.get(K.meta))) {
+        // An explicitly supplied generation is also a restore boundary: preserve
+        // earlier drafts as migration sources instead of silently orphaning them.
+        const sources = own.filter(source => source !== name);
+        const meta = { ...freshMeta(userId, generation), supersedes: sources, migrated: sources.length === 0 };
+        await ns.transaction([{ kind: "put", key: K.meta, value: meta }]);
+      }
       return ns;
     }
     const candidates: Array<{ ns: TargetSyncNamespace; meta: NamespaceMeta }> = [];
