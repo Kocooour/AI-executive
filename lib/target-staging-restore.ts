@@ -135,6 +135,13 @@ class ReplayAbort extends Error {
   }
 }
 
+/** CLI exit code: 0 success; 1 refusal (nothing changed except a possible trailing-intent close);
+ *  2 committed but unconfirmed (confirm_untrusted: the new generation exists, inspect before starting). */
+export function restoreExitCode(result: { readonly ok: boolean; readonly reason?: string }): 0 | 1 | 2 {
+  if (result.ok) return 0;
+  return result.reason === "confirm_untrusted" ? 2 : 1;
+}
+
 export function restoreTargetStagingFromBackup(
   store: TargetStagingReadStore,
   options: { readonly grantAdmin?: readonly TargetStagingRestoreGrant[]; readonly now?: number } = {},
@@ -292,7 +299,9 @@ function restoreBody(
 
   // ---- operator grants, then the replay --------------------------------------------------------
   // A grant is applied BEFORE the replay (so a journal demotion of the previous admin keeps the
-  // invariant triggers satisfied) and asserted again AFTER it (so the journal cannot take it back).
+  // invariant triggers satisfied) and asserted again AFTER it as defense in depth: a journal op that
+  // would take the grant back is already refused up front as grant_removed_by_journal, so the
+  // post-replay assertion should be unreachable.
   // A grant never overrides the journal: a user whom the journal finally removed from the Area or lowered
   // below admin (last confirmed membership intent in (A,H] for the pair) refuses the restore.
   const existsForGrant = (grant: TargetStagingRestoreGrant) => {

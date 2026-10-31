@@ -14,15 +14,16 @@
  *        node --experimental-loader ./scripts/target-staging-ts-loader.mjs \
  *          scripts/target-staging-restore.mjs --directory /abs/stage --generation <current-generation-uuid> \
  *          [--grant-admin <areaId>:<userId>]...
- *      It prints JSON with the NEW restoreGeneration (no tokens, no content). Exit 0 on success, 1 on refusal.
- *      A refusal leaves the store restore_pending and its state unchanged; the only thing a refusal may
+ *      It prints JSON with the NEW restoreGeneration (no tokens, no content). Exit 0 on success, 1 on refusal, 2 on
+ *      confirm_untrusted (the restore COMMITTED but is unconfirmed; see below).
+ *      A refusal (exit 1) leaves the store restore_pending and its state unchanged; the only thing a refusal may
  *      persist is the same tail resolution any writer performs first (cutting a torn journal fragment and
  *      confirming or aborting a trailing intent of a crashed writer, decided by the witness). Refusal
  *      reasons include invalid_request (also a --generation which is not a UUID), generation_mismatch (a
  *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
  *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store),
  *      grant_removed_by_journal (a grant names a user whom the journal removed or demoted below admin),
- *      confirm_untrusted (the restore COMMITTED, the JSON carries restoreGeneration and previousGeneration, but
+ *      confirm_untrusted = exit 2 (the restore COMMITTED, the JSON carries restoreGeneration and previousGeneration, but
  *      its confirm could not be appended safely: a path was replaced or changed during the run, or the append
  *      failed. Do NOT start the server until the staging directory has been inspected (only the expected
  *      files, nothing replaced). Then set the new generation and start: the gate verifies the store on every
@@ -44,7 +45,7 @@
  * --help: print this text.
  */
 import path from "node:path";
-import { restoreTargetStagingFromBackup } from "../lib/target-staging-restore.ts";
+import { restoreExitCode, restoreTargetStagingFromBackup } from "../lib/target-staging-restore.ts";
 
 const USAGE = "usage: target-staging-restore.mjs --directory <abs staging dir> --generation <current restore generation uuid> [--grant-admin <areaId>:<userId>]...";
 const ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -85,7 +86,7 @@ try {
       { stagingDirectory: directory, expectedRestoreGeneration: generation },
       { grantAdmin: parsed.grants });
     process.stdout.write(JSON.stringify(result));
-    if (!result.ok) process.exitCode = 1;
+    process.exitCode = restoreExitCode(result);
   }
 } catch {
   process.stdout.write(JSON.stringify({ ok: false, reason: "invalid_request", usage: USAGE }));

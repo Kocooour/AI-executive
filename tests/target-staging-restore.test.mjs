@@ -534,6 +534,30 @@ test("a grant never overrides the journal: a user removed or demoted after the b
   assert.equal(ok.ok, true, JSON.stringify(ok));
 });
 
+test("a grant is refused when the last journal op for the pair is an add with a non-admin role (grant_removed_by_journal)", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  addIdentity(fx.db, "erin");
+  memberWrite(fx, "add", "erin", "admin");          // skipped on restore: erin is unknown there
+  memberWrite(fx, "set_role", "alice", "viewer");   // blocks the Area without a grant
+  memberWrite(fx, "remove", "bob", undefined, "erin");
+  memberWrite(fx, "add", "bob", "editor", "erin");  // the LAST op for bob: add, non-admin
+  copyBack(fx, backup);
+  const before = worldHash(fx);
+  const journalBefore = readFileSync(fx.journalPath);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "bob" }] }),
+    { ok: false, reason: "grant_removed_by_journal" });
+  assert.equal(worldHash(fx), before);
+  assert.deepEqual(readFileSync(fx.journalPath), journalBefore);
+});
+
+test("restoreExitCode: 0 success, 1 refusal, 2 confirm_untrusted", () => {
+  assert.equal(restoreLib.restoreExitCode({ ok: true }), 0);
+  assert.equal(restoreLib.restoreExitCode({ ok: false, reason: "last_admin" }), 1);
+  assert.equal(restoreLib.restoreExitCode({ ok: false, reason: "confirm_untrusted" }), 2);
+});
+
 test("the largest accepted grant list (16 pairs of long IDs within the limit) still fits one journal line", () => {
   const pairs = Array.from({ length: 5 }, (_, i) => [`${"a".repeat(100)}${i}`, "u".repeat(100)]);
   assert.ok(JSON.stringify(pairs).length <= 1200);
