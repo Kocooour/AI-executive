@@ -16,7 +16,7 @@ function fixture() {
       owner_user_id TEXT, policy_revision INTEGER);
     CREATE TABLE area_members(area_id TEXT, user_id TEXT, role TEXT,
       PRIMARY KEY(area_id,user_id));
-    CREATE TABLE projects(id TEXT PRIMARY KEY, area_id TEXT NOT NULL);
+    CREATE TABLE projects(id TEXT PRIMARY KEY, area_id TEXT NOT NULL, revision INTEGER);
     CREATE TABLE notes(id TEXT PRIMARY KEY, project_id TEXT, area_id TEXT,
       title TEXT, body TEXT, revision INTEGER);
   `);
@@ -41,7 +41,7 @@ function fixture() {
   for (const [id, area] of [
     ["private-project", "alice-private"], ["family-project", "family"],
     ["other-project", "other"],
-  ]) db.prepare("INSERT INTO projects VALUES (?,?)").run(id, area);
+  ]) db.prepare("INSERT INTO projects VALUES (?,?,0)").run(id, area);
   const insert = db.prepare("INSERT INTO notes VALUES (?,?,?,?,?,?)");
   insert.run("private-note", null, "alice-private", "Private", "Alice secret", 0);
   insert.run("bob-private", null, "bob-private", "Bob", "Bob secret", 0);
@@ -76,6 +76,7 @@ test("standalone note belongs to its own Area; a direct project note inherits th
       });
       assert.deepEqual(result?.guard, {
         noteId: "family-direct", projectId: "family-project", areaId: "family",
+        noteRevision: 2, parentRevision: 0,
       });
       assert.equal(get(db, user, "family-standalone")?.note.areaId, "family");
       assert.equal(get(db, user, "other-direct"), null);
@@ -113,10 +114,18 @@ test("new reads respect live membership and parent movement; no content at stale
     db.prepare("UPDATE areas SET policy_revision=1 WHERE id='family'").run();
     assert.equal(get(db, "carol", "family-direct"), null);
     assert.equal(get(db, "bob", "family-direct")?.linearization.areas[0].policyRevision, 1);
-    db.prepare("UPDATE projects SET area_id='alice-private' WHERE id='family-project'").run();
+    db.prepare("UPDATE projects SET area_id='alice-private', revision=revision+1 WHERE id='family-project'").run();
     assert.equal(get(db, "bob", "family-direct"), null);
     assert.equal(get(db, "alice", "family-direct")?.note.areaId, "alice-private");
-    db.prepare("UPDATE notes SET project_id=NULL, area_id='other' WHERE id='family-direct'").run();
+    assert.deepEqual(get(db, "alice", "family-direct")?.guard, {
+      noteId: "family-direct", projectId: "family-project", areaId: "alice-private",
+      noteRevision: 2, parentRevision: 1,
+    });
+    db.prepare("UPDATE notes SET project_id=NULL, area_id='other', revision=revision+1 WHERE id='family-direct'").run();
+    assert.deepEqual(get(db, "erin", "family-direct")?.guard, {
+      noteId: "family-direct", projectId: null, areaId: "other",
+      noteRevision: 3, parentRevision: null,
+    });
     assert.equal(get(db, "alice", "family-direct"), null);
     assert.equal(get(db, "erin", "family-direct")?.note.body, "Shared decisions");
   } finally {
