@@ -12,7 +12,7 @@
  */
 import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync,
-  readdirSync, realpathSync,
+  readFileSync, readdirSync, realpathSync,
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -74,6 +74,36 @@ export function noTargetStagingSidecars(
     }
   }
   return true;
+}
+
+/**
+ * Best-effort, read-only distinction between an active SQLite rollback-journal
+ * writer and a leftover journal after the bounded sidecar wait. On Linux,
+ * SQLite's POSIX RESERVED/EXCLUSIVE write lock is visible in /proc/locks; the
+ * pinned fd supplies the actual main database inode (no path-following).
+ *
+ * A positive result is sufficient to classify a TIMEOUT as retryable, never to
+ * permit a database open. On platforms without /proc/locks the owner cannot
+ * safely distinguish a stalled writer from a stale regular sidecar: return
+ * unknown, and still refuse the write (retryable, not an auth denial).
+ */
+function activeSQLiteWriterLock(databaseFd: number): boolean | null {
+  if (process.platform !== "linux") return null;
+  try {
+    const file = fstatSync(databaseFd, { bigint: true });
+    const dev = file.dev;
+    const major = ((dev & 0xfff00n) >> 8n) | ((dev >> 32n) & 0xfffff000n);
+    const minor = (dev & 0xffn) | ((dev >> 12n) & 0xffffff00n);
+    const ino = file.ino;
+    for (const line of readFileSync("/proc/locks", "utf8").split("\\n")) {
+      // Ignore waiting lock requests (prefixed "->"), SHARED readers and
+      // unrelated inodes. A live writer holds a POSIX WRITE byte-range lock.
+      const match = /^\\d+:\\s+(?:POSIX|OFDLCK)\\s+ADVISORY\\s+WRITE\\s+\\S+\\s+([0-9a-f]+):([0-9a-f]+):(\\d+)\\s+\\d+\\s+(?:\\d+|EOF)$/.exec(line);
+      if (match && BigInt("0x" + match[1]) === major &&
+          BigInt("0x" + match[2]) === minor && BigInt(match[3]) === ino) return true;
+    }
+    return false;
+  } catch { return null; } // absent /proc or restricted lock visibility
 }
 
 /** A numeric fd can be reused after another file closes: prove a net-new
@@ -305,11 +335,29 @@ export function withPinnedTargetStagingWrite<T>(
     // the operator must handle a stale or hot journal, never this writer.
     const sidecarDeadline = Date.now() + busyTimeoutMs;
     const sidecarSleep = new Int32Array(new SharedArrayBuffer(4));
-    while (!noTargetStagingSidecars(files.databasePath)) {
+    while (!noTargetStagingSidecars(files.databasePath, ["-journal"])) {
+      // WAL/SHM are never part of this rollback-mode store; neither is a
+      // replaced main DB or a non-regular/symlinked rollback sidecar.
+      if (!files.stillPinned() ||
+          !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return denied();
+      try {
+        const sidecar = lstatSync(files.databasePath + "-journal");
+        if (!sidecar.isFile() || sidecar.isSymbolicLink() || sidecar.nlink !== 1) return denied();
+      } catch {
+        // The journal disappeared between the two observations: retry the check.
+        continue;
+      }
       const remaining = sidecarDeadline - Date.now();
-      if (remaining <= 0) return denied();
+      if (remaining <= 0) {
+        // A verified active SQLite writer is contention, not an untrusted
+        // store. Without a reliable lock probe remain fail-closed, but classify
+        // a bounded wait as retryable. A confirmed stale journal stays denied.
+        return activeSQLiteWriterLock(files.databaseFd) === false ? denied() : failed();
+      }
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
     }
+    if (!noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"]) ||
+        !files.stillPinned()) return denied();
     // R2c.4a: the (possibly long) cold chain verification happens BEFORE the write lock.
     warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
