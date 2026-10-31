@@ -204,7 +204,14 @@ export function attachTargetStagingWitness(
         } catch { return false; }
       },
     };
-  } catch { return null; }
+  } catch (error) {
+    // ATTACH / journal_mode can race another writer *before* our BEGIN IMMEDIATE.
+    // SQLite lock contention is retryable; it must not masquerade as a bad
+    // witness or a permission failure. Structural failures still fail closed.
+    if (error && typeof error === "object" && "errcode" in error &&
+        (error.errcode === 5 || error.errcode === 6)) throw error; // SQLITE_BUSY / SQLITE_LOCKED
+    return null;
+  }
 }
 
 /** Use inside the same transaction as UPDATE metadata.anchor_seq. */
