@@ -448,21 +448,6 @@ export function openTargetStagingJournal(directoryRoot: string, writable: boolea
   }
 }
 
-export function readTargetStagingJournalText(fd: number): string | null {
-  try {
-    const size = fstatSync(fd).size;
-    if (size === 0 || size > TARGET_STAGING_JOURNAL_MAX_BYTES) return null;
-    const buffer = Buffer.alloc(size);
-    let offset = 0;
-    while (offset < size) {
-      const read = readSync(fd, buffer, offset, size - offset, offset);
-      if (read <= 0) return null;
-      offset += read;
-    }
-    return buffer.toString("utf8");
-  } catch { return null; }
-}
-
 /**
  * Writer-only, under the SQLite write lock: cut a torn trailing fragment back to the last newline
  * (fsync). Safe: an intent is fully fsynced before its COMMIT, so a fragment is always an

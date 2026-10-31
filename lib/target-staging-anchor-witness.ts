@@ -126,24 +126,32 @@ function readRows(
 }
 
 /** Validate the on-disk witness before allowing SQLite to open its pathname. */
-function validWitnessFile(directoryRoot: string): boolean {
+function validWitnessFile(directoryRoot: string): { dev: number; ino: number } | null {
   if (constants.O_NOFOLLOW === undefined || constants.O_NONBLOCK === undefined ||
-      typeof process.getuid !== "function") return false;
+      typeof process.getuid !== "function") return null;
   const filename = path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME);
   let fd: number | null = null;
   try {
     const before = lstatSync(filename);
-    if (!before.isFile() || before.isSymbolicLink()) return false;
+    if (!before.isFile() || before.isSymbolicLink()) return null;
     fd = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const now = fstatSync(fd);
     const header = Buffer.alloc(20);
-    return now.isFile() && now.nlink === 1 && now.uid === process.getuid() &&
+    const ok = now.isFile() && now.nlink === 1 && now.uid === process.getuid() &&
       (now.mode & 0o777) === 0o600 && now.dev === before.dev && now.ino === before.ino &&
       readSync(fd, header, 0, 20, 0) === 20 &&
       header.toString("ascii", 0, 16) === "SQLite format 3\0" &&
       header[18] === 1 && header[19] === 1;
-  } catch { return false; }
+    return ok ? { dev: now.dev, ino: now.ino } : null;
+  } catch { return null; }
   finally { if (fd !== null) { try { closeSync(fd); } catch { /* fail closed */ } } }
+}
+
+/** Handle of a successfully ATTACHed witness. */
+export interface AttachedTargetStagingWitness {
+  /** The canonical witness path still names the inode that was validated and attached
+   * (no atomic replacement by rename, hard link or symlink). */
+  stillAttached(): boolean;
 }
 
 /** Bootstrap exclusively, with a private file on the same filesystem as main. */
@@ -172,19 +180,31 @@ export function bootstrapTargetStagingWitness(
 /** Attach BEFORE BEGIN IMMEDIATE so the writer holds both RESERVED locks. */
 export function attachTargetStagingWitness(
   db: DatabaseSync, directoryRoot: string, generation: string, genesisHash: string,
-): boolean {
+): AttachedTargetStagingWitness | null {
   try {
-    if (!validWitnessFile(directoryRoot)) return false;
+    const identity = validWitnessFile(directoryRoot);
+    if (!identity) return null;
     db.prepare(`ATTACH DATABASE ? AS ${TARGET_STAGING_WITNESS_ALIAS}`)
       .run(path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME));
     db.exec("PRAGMA main.synchronous=FULL; PRAGMA lumi_witness.synchronous=FULL");
     // ATTACH cannot be made WAL-backed: it would lose cross-file atomicity.
     const mainMode = db.prepare("PRAGMA main.journal_mode").get() as { journal_mode: string };
     const witnessMode = db.prepare("PRAGMA lumi_witness.journal_mode").get() as { journal_mode: string };
+    const after = validWitnessFile(directoryRoot);
     if (mainMode.journal_mode !== "delete" || witnessMode.journal_mode !== "delete" ||
-        !validWitnessFile(directoryRoot)) return false;
-    return readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, genesisHash, directoryRoot) !== null;
-  } catch { return false; }
+        !after || after.dev !== identity.dev || after.ino !== identity.ino) return null;
+    if (readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, genesisHash, directoryRoot) === null) return null;
+    const filename = path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME);
+    return {
+      stillAttached: () => {
+        try {
+          const current = lstatSync(filename);
+          return current.isFile() && !current.isSymbolicLink() && current.nlink === 1 &&
+            current.dev === identity.dev && current.ino === identity.ino;
+        } catch { return false; }
+      },
+    };
+  } catch { return null; }
 }
 
 /** Use inside the same transaction as UPDATE metadata.anchor_seq. */
