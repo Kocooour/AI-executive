@@ -6,6 +6,10 @@
  * SQL describes the future canonical notes table and is exercised against a
  * synthetic schema in tests. Later integration MUST add a preflighted/pinned
  * snapshot and a live post-read identity + note/parent Area check before release.
+ * The canonical notes schema MUST enforce monotonic revisions for every content
+ * or parent mutation (including ABA) and permanent ID non-reuse. The revision
+ * fields below are only snapshot markers until the future live release guard
+ * compares both note/parent revisions against current rows in one transaction.
  *
  * A direct project note inherits ONLY its project's Area; a standalone note
  * belongs to exactly one Area. A backlink, mention or other reference to a
