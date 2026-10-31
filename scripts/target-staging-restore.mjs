@@ -1,0 +1,104 @@
+/**
+ * Operator-only CLI for R2c.4b: restore of an isolated staging store from a backup of
+ * lumi-target.sqlite with the anti-rollback procedure. Not reachable over HTTP. Mechanism proposed for
+ * owner approval (docs/ARCHITECTURE.md, R2c.4b).
+ *
+ * PROCEDURE
+ *   1. Stop the server and every writer.
+ *   2. Replace ONLY lumi-target.sqlite by a consistent backup made at the CURRENT schema version
+ *      (sqlite3 ".backup" or VACUUM INTO). NEVER restore or copy back lumi-target.journal,
+ *      lumi-target-witness.sqlite, the staging directory or a host snapshot: that rolls the irreversible
+ *      source back and cannot be detected. A stale lumi-target.sqlite-journal is removed only by the
+ *      rules of ARCHITECTURE R2c.4a. Until step 3 has finished every endpoint answers 503 restore_pending.
+ *   3. Run this tool (same directory and CURRENT generation as the server's environment):
+ *        node --experimental-loader ./scripts/target-staging-ts-loader.mjs \
+ *          scripts/target-staging-restore.mjs --directory /abs/stage --generation <current-generation-uuid> \
+ *          [--grant-admin <areaId>:<userId>]...
+ *      It prints JSON with the NEW restoreGeneration (no tokens, no content). Exit 0 on success, 1 on refusal, 2 on
+ *      confirm_untrusted (the restore COMMITTED but is unconfirmed; see below).
+ *      A refusal (exit 1) leaves the store restore_pending with its content unchanged; the journal may still
+ *      change: the tail resolution any writer performs first (cutting a torn journal fragment, confirming or
+ *      aborting a trailing intent, decided by the witness), and a failure right before or at COMMIT can
+ *      leave an unconfirmed restore intent. A normal writer on a still-restore_pending store is denied and leaves
+ *      that intent; only the next run of this tool aborts it (per the witness). Refusal
+ *      reasons (exhaustive): invalid_request (also a --generation which is not a UUID), generation_mismatch (a
+ *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
+ *      unavailable (the store is not in a restorable restore_pending state: healthy, already restored, journal_invalid or unreadable),
+ *      unsupported_backup (the backup is at another schema version), backup_provenance (the backup is not the
+ *      state of this journal at its anchor), backup_predates_restore (a restore already happened after the
+ *      backup), replay_failed (unreadable journal payload or unexpected replay error), write_failed (the
+ *      restore transaction failed and nothing was committed; on a runtime where DatabaseSync.isTransaction is
+ *      not a boolean, i.e. outside Node >= 22 as in CI, a COMMIT which throws is treated as not committed even
+ *      if it took effect: fail closed, inspect the store before rerunning),
+ *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store),
+ *      grant_removed_by_journal (a grant names a user whom the journal removed or demoted below admin),
+ *      confirm_untrusted = exit 2 (the restore COMMITTED, the JSON carries restoreGeneration and previousGeneration, but
+ *      its confirm could not be appended safely: a path was replaced or changed during the run, or the append
+ *      failed. Do NOT start the server until the staging directory has been inspected (only the expected
+ *      files, nothing replaced). Then set the new generation and start: the gate verifies the store on every
+ *      request; if trusted, the first writer appends the confirm; if not, everything stays 503 and recovery
+ *      needs a DB copy taken AFTER this restore, since a backup from before it is refused with
+ *      backup_predates_restore. A rerun of this tool does not close anything: the store is no longer
+ *      restore_pending, so it exits 1 with `unavailable` and leaves the trailing intent; the first trusted
+ *      writer under the new generation appends the confirm. This is expected).
+ *   4. Set AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION to the printed value and start the server. While
+ *      the configured generation differs the store fails closed. If the tool died after its commit and the
+ *      output was lost, the new value is in the database: SELECT value FROM metadata WHERE key='restore_generation'.
+ *
+ * --grant-admin <areaId>:<userId> (repeatable, at most 16): operator decision when the replay would leave a
+ *   shared Area without an admin (refusal reason "last_admin" lists the Areas). Only an Area which the
+ *   last-admin invariant would block without the grant is accepted (else "grant_unneeded", nothing changes).
+ *   The identity must exist. A grant never overrides the journal: if the journal (after the backup) finally
+ *   removed that user from the Area or lowered them below admin, the restore is refused with
+ *   "grant_removed_by_journal" and nothing changes. The decision is recorded
+ *   as sorted [areaId,userId] pairs in the journal record of the restore and printed in the report.
+ * --help: print this text.
+ */
+import path from "node:path";
+import { restoreExitCode, restoreTargetStagingFromBackup } from "../lib/target-staging-restore.ts";
+
+const USAGE = "usage: target-staging-restore.mjs --directory <abs staging dir> --generation <current restore generation uuid> [--grant-admin <areaId>:<userId>]...";
+const ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
+
+/** Strict parser: known options only; only --grant-admin may repeat; no option-like values. */
+function parse(argv) {
+  const options = new Map();
+  const grants = [];
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const name = typeof flag === "string" && flag.startsWith("--") ? flag.slice(2) : "";
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) return null;
+    if (name === "grant-admin") {
+      // Area IDs may themselves contain ":" (e.g. "area:unassigned:alice"): the separator is the LAST
+      // ":", so a user ID with ":" cannot be named here (refused rather than guessed).
+      const split = value.lastIndexOf(":");
+      if (split < 1 || !ID.test(value.slice(0, split)) || !ID.test(value.slice(split + 1))) return null;
+      grants.push({ areaId: value.slice(0, split), userId: value.slice(split + 1) });
+      continue;
+    }
+    if ((name !== "directory" && name !== "generation") || options.has(name)) return null;
+    options.set(name, value);
+  }
+  return { options, grants };
+}
+
+try {
+  if (process.argv.slice(2).includes("--help")) {
+    process.stdout.write(USAGE + "\n");
+  } else {
+    const parsed = parse(process.argv.slice(2));
+    if (!parsed) throw new Error("Invalid arguments");
+    const directory = parsed.options.get("directory");
+    const generation = parsed.options.get("generation");
+    if (!directory || !path.isAbsolute(directory) || !generation) throw new Error("Invalid arguments");
+    const result = restoreTargetStagingFromBackup(
+      { stagingDirectory: directory, expectedRestoreGeneration: generation },
+      { grantAdmin: parsed.grants });
+    process.stdout.write(JSON.stringify(result));
+    process.exitCode = restoreExitCode(result);
+  }
+} catch {
+  process.stdout.write(JSON.stringify({ ok: false, reason: "invalid_request", usage: USAGE }));
+  process.exitCode = 1;
+}

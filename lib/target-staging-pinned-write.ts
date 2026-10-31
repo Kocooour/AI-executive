@@ -10,6 +10,7 @@
  * BEGIN IMMEDIATE serializes writers; canonical preflight runs inside it.
  * Any failure or an un-committed body rolls back.
  */
+import { randomUUID } from "node:crypto";
 import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync,
   readdirSync, realpathSync,
@@ -20,11 +21,13 @@ import { TARGET_STORE_FILENAME, verifyExistingTargetStagingPath } from "./target
 import {
   appendTargetStagingJournalLine, checkTargetStagingJournal, evaluateTargetStagingAnchor,
   openTargetStagingJournal, parseTargetStagingAnchor, scanTargetStagingJournalFd, warmTargetStagingJournal,
-  resolveTargetStagingJournalTail, serializeTargetStagingJournalLine, targetStagingJournalGenesis,
-  truncateTargetStagingJournal,
+  TARGET_STAGING_JOURNAL_FILENAME,
+  readTargetStagingJournalFacts, resolveTargetStagingJournalTail, serializeTargetStagingJournalLine,
+  truncateTargetStagingJournal, witnessViewOf,
 } from "./target-staging-anchor-journal";
 import type {
-  TargetStagingAnchorVerdict, TargetStagingJournalKind, TargetStagingJournalPayload,
+  TargetStagingAnchorVerdict, TargetStagingJournalFact, TargetStagingJournalKind,
+  TargetStagingJournalPayload,
 } from "./target-staging-anchor-journal";
 import {
   attachTargetStagingWitness, readAttachedTargetStagingWitness, recordTargetStagingWitnessCommit,
@@ -52,14 +55,46 @@ export interface TargetStagingPinnedWriteContext {
    * is the content-free journal record of this write; the intent is appended and
    * fsynced just before COMMIT (a failure rolls the transaction back), `anchor_seq` is
    * advanced in the same transaction and the confirm follows the COMMIT.
+   * Returns true when the `confirm` was appended after the COMMIT (a TRUSTED store); false when the
+   * COMMIT happened but the confirm was withheld or failed (untrusted store or paths swapped in the
+   * window; the next writer resolves a benign case, a hostile one fails closed). Only the restore
+   * tool acts on it: it must not report success for a restore whose confirm is missing.
+   * Throws (transaction rolled back) when nothing was committed.
    */
-  commit(entry: TargetStagingJournalEntry): void;
+  commit(entry: TargetStagingJournalEntry): boolean;
 }
 
 export interface TargetStagingJournalEntry {
   readonly kind: TargetStagingJournalKind;
   /** Content-free fields only (IDs, hashes, roles, numbers). Never titles or credentials. */
   readonly payload: TargetStagingJournalPayload;
+}
+
+/**
+ * R2c.4b restore context: the write context plus the facts of the verified journal. The body
+ * replays the confirmed security intents in (backupAnchor, confirmedThrough] and calls `commit` with
+ * kind "restore"; the helper sets from/through/previousGeneration itself and stamps the intent, its
+ * witness row and its confirm with `newGeneration`.
+ */
+export interface TargetStagingPinnedRestoreContext extends TargetStagingPinnedWriteContext {
+  /** `anchor_seq` of the restored backup (A). */
+  readonly backupAnchor: number;
+  /** Highest CONFIRMED intent (H) = the highest witnessed commit (W). */
+  readonly confirmedThrough: number;
+  /** Journal generation in effect (the configured one). */
+  readonly previousGeneration: string;
+  /** restore_generation stored in the backup's own metadata. */
+  readonly backupGeneration: string;
+  /** Fresh generation which this restore introduces. */
+  readonly newGeneration: string;
+  /** Journal number the restore intent will get. */
+  readonly intentNumber: number;
+  /** Generation of journal intent `n` (0 = genesis), or null when it does not exist. */
+  generationAt(n: number): string | null;
+  /** The intent exists and was confirmed. */
+  isConfirmed(n: number): boolean;
+  /** Confirmed security intents (and restores) of the WHOLE journal, in order. */
+  facts(): readonly TargetStagingJournalFact[] | null;
 }
 
 export function noTargetStagingSidecars(
@@ -218,42 +253,48 @@ export function pinTargetStagingFiles(stagingDirectory: string): PinnedTargetSta
 }
 
 /**
- * The single trust rule of every journal-modifying step (pre-write tail resolution AND the
- * post-COMMIT confirm). Must run inside a write transaction on a connection with the witness
- * ATTACHed (the attachment lives until the connection closes). Returns the complete-line scan
- * and the anchor only when the journal, the main `anchor_seq` and the atomic SQLite witness
- * agree (anchor === witness, verdict "ok"); otherwise null and the caller must not modify
- * the store. A restored main DB may equal the last JSONL confirm yet trail a COMMITTED
- * unconfirmed intent: only the witness detects that.
+ * The single trust rule of every journal-modifying step (pre-body tail resolution AND the
+ * post-COMMIT confirm), for the normal writer and the restore mode alike. Must run inside a write
+ * transaction on a connection with the witness ATTACHed. Returns the complete-line scan, the anchor
+ * and the witnessed number only when the journal, the main `anchor_seq` and the atomic SQLite witness
+ * agree; otherwise null and the caller must not modify the store.
+ *  - "ok" (every writer, and the restore's own post-COMMIT confirm under the NEW generation):
+ *    anchor === witness and the journal verdict is "ok".
+ *  - "restore_pending" (the restore's pre-body state ONLY): the DB anchor is below the highest
+ *    witnessed commit of a verified journal.
+ * A restored main DB may equal the last JSONL confirm yet trail a COMMITTED unconfirmed intent: only
+ * the witness detects that.
  */
 export function trustedTargetStagingTail(
-  connection: DatabaseSync, journal: number, generation: string, genesisHash: string, directoryFdPath: string,
-): { scan: NonNullable<ReturnType<typeof scanTargetStagingJournalFd>>; anchor: number } | null {
+  connection: DatabaseSync, journal: number, generation: string, directoryFdPath: string,
+  requirement: "ok" | "restore_pending" = "ok",
+): { scan: NonNullable<ReturnType<typeof scanTargetStagingJournalFd>>; anchor: number; witnessed: number } | null {
   const anchor = parseTargetStagingAnchor((connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
     .get() as { value: unknown } | undefined)?.value);
   const scan = scanTargetStagingJournalFd(journal, generation);
   if (!scan || anchor === null) return null;
-  const witnessed = readAttachedTargetStagingWitness(connection, generation, genesisHash, directoryFdPath,
-    scan.intentHashes, scan.intentStatuses);
-  if (witnessed === null || anchor !== witnessed ||
-      evaluateTargetStagingAnchor(scan.state, anchor) !== "ok") return null;
-  return { scan, anchor };
+  const witnessed = readAttachedTargetStagingWitness(connection, generation, directoryFdPath, witnessViewOf(scan));
+  if (witnessed === null) return null;
+  if (requirement === "restore_pending" ? !(anchor < witnessed) :
+      anchor !== witnessed || evaluateTargetStagingAnchor(scan.state, anchor) !== "ok") return null;
+  return { scan, anchor, witnessed };
 }
 
 /**
  * Post-COMMIT step, inside a fresh write transaction: append `confirm n` only for a TRUSTED
- * store (same verdict as before the write, including the witness) whose tail is still the
- * pending intent n. An untrusted store (e.g. restored in place since the COMMIT) is left
- * byte-for-byte untouched, fragment included; the next writer refuses it.
+ * store (same verdict as before the write, including the witness, under the generation the intent
+ * introduced) whose tail is still the pending intent n. The paths are checked before AND after the
+ * verdict. An untrusted store (e.g. restored in place since the COMMIT) is left byte-for-byte
+ * untouched, fragment included; the next writer refuses it. Returns whether the confirm was appended.
  */
 export function appendTargetStagingConfirmIfTrusted(
-  connection: DatabaseSync, journal: number, generation: string, genesisHash: string,
+  connection: DatabaseSync, journal: number, generation: string,
   directoryFdPath: string, n: number, pathsStillTrusted: () => boolean,
 ): boolean {
-  // The canonical main/witness paths must still name the inodes this connection holds
+  // The canonical main/witness/journal paths must still name the inodes this connection holds
   // (an atomic rename of an older copy leaves the open connection on the old inode).
   if (!pathsStillTrusted()) return false;
-  const trusted = trustedTargetStagingTail(connection, journal, generation, genesisHash, directoryFdPath);
+  const trusted = trustedTargetStagingTail(connection, journal, generation, directoryFdPath, "ok");
   if (!trusted || !pathsStillTrusted()) return false;
   if (trusted.scan.torn) truncateTargetStagingJournal(journal, trusted.scan.completeBytes);
   if (trusted.scan.state.pending !== n) return false;
@@ -285,6 +326,39 @@ export function withPinnedTargetStagingWrite<T>(
    */
   busyTimeoutMs = 200,
 ): T {
+  return runPinnedTargetStagingTransaction<T, TargetStagingPinnedWriteContext>(
+    "write", store, body, denied, failed, busyTimeoutMs);
+}
+
+/**
+ * R2c.4b operator restore. Same pinned open, preflight, journal open and witness ATTACH as the
+ * writer, but it accepts EXACTLY the `restore_pending` state (DB anchor below the highest witnessed
+ * commit of a verified journal) and nothing else; `journal_invalid`, an unreadable store and a store
+ * which is in step with its journal still refuse. A normal writer keeps refusing a restore_pending
+ * store: the trust rule is not weakened for it. The backup's own restore_generation must pass the
+ * canonical preflight (it is checked against its own metadata, the provenance against the journal is
+ * the caller's job via generationAt).
+ */
+export function withPinnedTargetStagingRestore<T>(
+  store: TargetStagingReadStore,
+  body: (context: TargetStagingPinnedRestoreContext) => T,
+  denied: () => T,
+  failed: () => T,
+  busyTimeoutMs = 5_000,
+): T {
+  return runPinnedTargetStagingTransaction<T, TargetStagingPinnedRestoreContext>(
+    "restore", store, body, denied, failed, busyTimeoutMs);
+}
+
+function runPinnedTargetStagingTransaction<T, C>(
+  mode: "write" | "restore",
+  store: TargetStagingReadStore,
+  body: (context: C) => T,
+  denied: () => T,
+  failed: () => T,
+  busyTimeoutMs: number,
+): T {
+  const restore = mode === "restore";
   if (!store || typeof store.stagingDirectory !== "string" ||
       typeof store.expectedRestoreGeneration !== "string" ||
       !GENERATION.test(store.expectedRestoreGeneration) ||
@@ -308,28 +382,54 @@ export function withPinnedTargetStagingWrite<T>(
     // second (witness) database descriptor.
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
     if (!opened.verifyOpened()) return denied();
-    const genesisHash = targetStagingJournalGenesis(store.expectedRestoreGeneration).hash;
     // ATTACH before BEGIN IMMEDIATE: the two durable SQLite files commit as one
     // rollback-journal transaction (no WAL). A lost JSONL confirm is no longer
     // ambiguous after a restore of just the main DB.
     // ATTACH MUST use the durable canonical filesystem pathname, not the
     // /proc/self/fd/N alias: SQLite records attached journal paths in its
     // crash-recovery super-journal, which must remain valid after process exit.
-    const witness = attachTargetStagingWitness(db, files.directory,
-        store.expectedRestoreGeneration, genesisHash);
+    const witness = attachTargetStagingWitness(db, files.directory, store.expectedRestoreGeneration);
     if (!witness) return denied();
     db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    const pathsStillTrusted = (): boolean => files !== null && files.stillPinned() &&
-      witness.stillAttached() && noTargetStagingSidecars(files.databasePath);
+    // Identity of the journal fd, recorded right after it is opened (below). Until then it is null
+    // and no journal check applies; afterwards the canonical journal path must keep naming that very
+    // inode, otherwise an atomic rename of an older journal would send the intent/confirm to an
+    // orphaned inode while the write is acknowledged.
+    let journalPin: { dev: number; ino: number } | null = null;
+    const journalStillPinned = (): boolean => {
+      if (journalPin === null) return true;
+      if (files === null) return false;
+      try {
+        const current = lstatSync(files.directoryFdPath + "/" + TARGET_STAGING_JOURNAL_FILENAME);
+        return current.isFile() && !current.isSymbolicLink() && current.nlink === 1 &&
+          current.dev === journalPin.dev && current.ino === journalPin.ino;
+      } catch { return false; }
+    };
+    // Inode identities only: inside the open write transaction SQLite's own rollback `-journal`
+    // legitimately exists, so the no-sidecar rule applies only outside it (pathsStillTrusted).
+    const identitiesStillTrusted = (): boolean => files !== null && files.stillPinned() &&
+      witness.stillAttached() && journalStillPinned();
+    const pathsStillTrusted = (): boolean => identitiesStillTrusted() &&
+      noTargetStagingSidecars(files!.databasePath);
     if (!pathsStillTrusted()) return denied();
+
+    // A restored backup carries its own restore_generation in its metadata; it is checked by the
+    // canonical preflight against ITSELF, and against the journal further below.
+    let dbGeneration = store.expectedRestoreGeneration;
+    if (restore) {
+      const raw = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+        .get() as { value: unknown } | undefined)?.value;
+      if (typeof raw !== "string" || !GENERATION.test(raw)) return denied();
+      dbGeneration = raw;
+    }
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
     const preflight = inspectIsolatedTargetStore({
       stagingDirectory: files.directory,
-      expectedRestoreGeneration: store.expectedRestoreGeneration,
+      expectedRestoreGeneration: dbGeneration,
       mode: "r2-model",
     }, { db, fd: files.databaseFd });
     if (!preflight.ok) return denied();
@@ -341,73 +441,148 @@ export function withPinnedTargetStagingWrite<T>(
     journalFd = openTargetStagingJournal(pinnedFiles.directoryFdPath, true);
     if (journalFd === null) return denied();
     const journal = journalFd;
+    const journalInfo = fstatSync(journal);
+    journalPin = { dev: journalInfo.dev, ino: journalInfo.ino };
+    // Verdict first, on the complete lines: an untrusted store is never modified. The restore
+    // mode differs only in accepting the restore_pending state (anchor below the witness).
     const trustedTail = trustedTargetStagingTail(connection, journal, store.expectedRestoreGeneration,
-      genesisHash, pinnedFiles.directoryFdPath);
-    // Verdict first, on the complete lines: an untrusted store is never modified.
+      pinnedFiles.directoryFdPath, restore ? "restore_pending" : "ok");
     if (!trustedTail || !pathsStillTrusted()) return denied();
-    const { scan, anchor } = trustedTail;
+    const { scan, anchor, witnessed } = trustedTail;
     let state = scan.state;
     if (scan.torn) {
       // Under the write lock nobody else appends: cut the unfinished fragment (a failed or
       // killed append) back to the last complete line before resolving the tail.
       truncateTargetStagingJournal(journal, scan.completeBytes);
     }
-    const generation = state.generation;
+    let generation = state.generation;
+    const statuses = new Map(scan.intentStatuses);
     if (state.pending !== null) {
-      const tail = resolveTargetStagingJournalTail(state, anchor);
+      // A writer decides by its own anchor; the restore has only a stale anchor, so the atomic
+      // witness (committed together with the main DB) is the authority for the trailing intent.
+      const tail = resolveTargetStagingJournalTail(state, restore ? witnessed : anchor);
       if (tail.action !== "none") {
+        // A restore intent is resolved with the NEW generation it introduced (also when aborted).
+        const resolutionGeneration = state.pendingRestore ? state.pendingRestore.to : generation;
         const line = serializeTargetStagingJournalLine({
-          n: tail.n, t: tail.action, k: null, p: null, g: generation, prev: state.lastHash,
+          n: tail.n, t: tail.action, k: null, p: null, g: resolutionGeneration, prev: state.lastHash,
         });
         appendTargetStagingJournalLine(journal, line.text);
-        state = { ...state, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
-          pending: null, lastHash: line.hash, records: state.records + 1 };
+        if (tail.action === "confirm" && state.pendingRestore) generation = state.pendingRestore.to;
+        statuses.set(tail.n, tail.action === "confirm" ? "confirmed" : "aborted");
+        state = { ...state, generation, confirmed: tail.action === "confirm" ? Math.max(state.confirmed, tail.n) : state.confirmed,
+          pending: null, pendingRestore: null, lastHash: line.hash, records: state.records + 1 };
       }
     }
+    // After the resolution the generation in effect must be the configured one.
+    if (generation.toLowerCase() !== store.expectedRestoreGeneration.toLowerCase()) return denied();
+    if (restore && (!(anchor < state.confirmed) || witnessed !== state.confirmed)) return denied();
     let tailState = state;
     const seqBefore = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
       .get() as { n: number }).n);
     let committed = false;
-    return body({
+    const newGeneration = restore ? randomUUID() : generation;
+    const commit = (entry: TargetStagingJournalEntry): boolean => {
+      // Only the restore helper may write a restore record, and it writes nothing else.
+      if (committed || !entry || typeof entry.kind !== "string" || (entry.kind === "restore") !== restore) {
+        throw new Error();
+      }
+      committed = true;
+      // Nothing durable yet: a swapped main/witness/journal inode rolls the transaction back.
+      if (!identitiesStillTrusted()) throw new Error();
+      const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
+        .get() as { n: number }).n);
+      const n = tailState.lastIntent + 1;
+      const payload = restore
+        ? { ...entry.payload, from: anchor, through: tailState.confirmed, previousGeneration: generation }
+        : entry.payload;
+      const intent = serializeTargetStagingJournalLine({
+        n, t: "intent", k: entry.kind,
+        p: { ...payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
+        g: newGeneration, prev: tailState.lastHash,
+      });
+      // Durable BEFORE the commit: a thrown error here rolls the transaction back.
+      appendTargetStagingJournalLine(journal, intent.text);
+      tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
+      const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
+        .run(String(n));
+      if (advanced.changes !== 1) throw new Error();
+      // This insert and the main anchor update are one SQLite ATTACH commit.
+      // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
+      recordTargetStagingWitnessCommit(connection, n, intent.hash, newGeneration);
+      // Last check before COMMIT narrows the window (a rename after it is the accepted residual).
+      if (!identitiesStillTrusted()) throw new Error();
+      try {
+        connection.exec("COMMIT");
+      } catch (commitError) {
+        // COMMIT may throw AFTER it took effect (e.g. an I/O error on the final fsync/close). Decide from
+        // the CONNECTION STATE, never from a failed ROLLBACK; isTransaction === true means the transaction
+        // is still open (nothing committed): roll back (keep `transaction` set if that fails so the
+        // finally retries) and fail with the original error. Only when it is false has the transaction
+        // ended, and then only the durable state decides whether that was our commit (anchor and
+        // witness row both carry intent n) or an automatic rollback. A non-boolean value (a runtime
+        // without DatabaseSync.isTransaction; this repo targets Node 22, see CI) is unknown: a COMMIT that
+        // throws is then treated as NOT committed (failed / write_failed) even if it took effect: fail
+        // closed, never claim durable. The restore's "never write_failed after a committed COMMIT" holds
+        // only where isTransaction is available. A committed restore must still get its
+        // confirm attempt, never a plain failure.
+        const open = (connection as unknown as { isTransaction?: unknown }).isTransaction;
+        if (open !== false) {
+          try { connection.exec("ROLLBACK"); transaction = false; } catch { /* the finally retries */ }
+          throw commitError;
+        }
+        transaction = false;
+        let durable = false;
+        try {
+          const anchorRow = connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+            .get() as { value: unknown } | undefined;
+          const witnessRow = connection.prepare(
+            "SELECT 1 AS present FROM lumi_witness.commits WHERE n = ? AND journal_hash = ?")
+            .get(n, intent.hash) as { present: number } | undefined;
+          durable = String(anchorRow?.value) === String(n) && witnessRow?.present === 1;
+        } catch { durable = false; }
+        // A normal writer that cannot tell reports failure (an acknowledged-false-negative: the write
+        // may exist; the next writer resolves the trailing intent). The restore path never does.
+        if (!durable) throw commitError;
+      }
+      transaction = false;
+      // After the commit, under a FRESH write lock (the chain is linear: an append must be
+      // computed from the tail read while holding the lock, because another writer may have
+      // resolved this very intent already): append the confirm unless the store is untrusted.
+      // A failure here only leaves a trailing intent which the next writer resolves (anchor == intent).
+      // For a restore the store must now be fully trusted under the NEW generation.
+      let confirmed = false;
+      try {
+        connection.exec("BEGIN IMMEDIATE");
+        transaction = true;
+        confirmed = appendTargetStagingConfirmIfTrusted(connection, journal, newGeneration,
+          pinnedFiles.directoryFdPath, n, pathsStillTrusted);
+        connection.exec("ROLLBACK");
+        transaction = false;
+      } catch { /* resolved by the next writer */ }
+      return confirmed;
+    };
+    const base: TargetStagingPinnedWriteContext = {
       db: connection, databaseFd: pinnedFiles.databaseFd, directory: pinnedFiles.directory,
       databasePath: pinnedFiles.databasePath, stillPinned: pinnedFiles.stillPinned,
       noSidecars: () => noTargetStagingSidecars(pinnedFiles.databasePath),
-      commit: entry => {
-        if (committed || !entry || typeof entry.kind !== "string") throw new Error();
-        committed = true;
-        const seqAfter = Number((connection.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM change_log")
-          .get() as { n: number }).n);
-        const n = tailState.lastIntent + 1;
-        const intent = serializeTargetStagingJournalLine({
-          n, t: "intent", k: entry.kind,
-          p: { ...entry.payload, ...(seqAfter > seqBefore ? { seq: [seqBefore + 1, seqAfter] } : {}) },
-          g: generation, prev: tailState.lastHash,
-        });
-        // Durable BEFORE the commit: a thrown error here rolls the transaction back.
-        appendTargetStagingJournalLine(journal, intent.text);
-        tailState = { ...tailState, lastIntent: n, pending: n, lastHash: intent.hash, records: tailState.records + 1 };
-        const advanced = connection.prepare("UPDATE metadata SET value = ? WHERE key = 'anchor_seq'")
-          .run(String(n));
-        if (advanced.changes !== 1) throw new Error();
-        // This insert and the main anchor update are one SQLite ATTACH commit.
-        // Without it a crash after COMMIT, before JSONL confirm, is ambiguous.
-        recordTargetStagingWitnessCommit(connection, n, intent.hash, generation);
-        connection.exec("COMMIT");
-        transaction = false;
-        // After the commit, under a FRESH write lock (the chain is linear: an append must be
-        // computed from the tail read while holding the lock, because another writer may have
-        // resolved this very intent already): append the confirm unless it is there. A failure
-        // here only leaves a trailing intent which the next writer resolves (anchor == intent).
-        try {
-          connection.exec("BEGIN IMMEDIATE");
-          transaction = true;
-          appendTargetStagingConfirmIfTrusted(connection, journal, generation, genesisHash,
-            pinnedFiles.directoryFdPath, n, pathsStillTrusted);
-          connection.exec("ROLLBACK");
-          transaction = false;
-        } catch { /* resolved by the next writer */ }
+      commit,
+    };
+    if (!restore) return body(base as unknown as C);
+    const generations = scan.generations;
+    let cachedFacts: readonly TargetStagingJournalFact[] | null | undefined;
+    const context: TargetStagingPinnedRestoreContext = {
+      ...base,
+      backupAnchor: anchor, confirmedThrough: state.confirmed, previousGeneration: generation,
+      backupGeneration: dbGeneration, newGeneration, intentNumber: state.lastIntent + 1,
+      generationAt: n => generations.get(n) ?? null,
+      isConfirmed: n => n === 0 || statuses.get(n) === "confirmed",
+      facts: () => {
+        if (cachedFacts === undefined) cachedFacts = readTargetStagingJournalFacts(journal, statuses);
+        return cachedFacts;
       },
-    });
+    };
+    return body(context as unknown as C);
   } catch {
     return failed();
   } finally {

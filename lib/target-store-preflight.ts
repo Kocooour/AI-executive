@@ -6,7 +6,8 @@ import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
-  TARGET_STAGING_MAX_TOMBSTONES, verifyExistingTargetStagingPath,
+  TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_RESTORE_HISTORY_MAX,
+  TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -17,7 +18,8 @@ export type TargetPreflightCode =
   | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
-  | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing";
+  | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
+  | "restore_history_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -59,6 +61,34 @@ function matchesCanonicalSchema(actual: DatabaseSync): boolean {
 export interface TargetPinnedPreflightConnection {
   readonly db: DatabaseSync;
   readonly fd: number;
+}
+
+/**
+ * R2c.4b: the restore history must be exactly ONE chain. Walk the predecessors from the current
+ * generation through the rows (generation -> previous_generation); a cycle (also a self-loop) fails,
+ * EVERY row must be reached exactly once (no detached chain or cycle), previous generations are
+ * unique, and the walk ends at a generation which is not itself a row's generation (the original).
+ * An empty history is the original generation alone.
+ */
+export function restoreHistoryIsOneChain(
+  history: readonly { generation: unknown; previous_generation: unknown }[], current: string,
+): boolean {
+  if (history.length === 0) return true;
+  const byGeneration = new Map<unknown, unknown>();
+  const previous = new Set<unknown>();
+  for (const row of history) {
+    if (byGeneration.has(row.generation) || previous.has(row.previous_generation)) return false;
+    byGeneration.set(row.generation, row.previous_generation);
+    previous.add(row.previous_generation);
+  }
+  const seen = new Set<unknown>();
+  let cursor: unknown = current;
+  while (byGeneration.has(cursor)) {
+    if (seen.has(cursor)) return false;
+    seen.add(cursor);
+    cursor = byGeneration.get(cursor);
+  }
+  return seen.size === history.length && !byGeneration.has(cursor);
 }
 
 export function inspectIsolatedTargetStore(
@@ -173,6 +203,19 @@ export function inspectIsolatedTargetStore(
           !uuid.test(meta.get("restore_generation") as string)) fail("metadata_invalid");
       if (options.expectedRestoreGeneration !== undefined &&
           meta.get("restore_generation") !== options.expectedRestoreGeneration) fail("expected_generation_mismatch");
+      // R2c.4b: a restore replaces restore_generation and leaves the earlier ones in the append-only
+      // history, so audit rows written under an earlier generation of THIS store stay valid. The
+      // history must be one chain which ends at the current generation, and every superseded
+      // session must name a generation of that history. Audit rows of any other generation fail.
+      const history = all("SELECT generation, previous_generation FROM restore_generations") as
+        { generation: string; previous_generation: string }[];
+      const current = meta.get("restore_generation");
+      if (history.length > TARGET_STAGING_RESTORE_HISTORY_MAX ||
+          !restoreHistoryIsOneChain(history, current as string) ||
+          count("SELECT COUNT(*) AS n FROM restore_superseded_sessions") > TARGET_STAGING_SUPERSEDED_SESSIONS_MAX ||
+          count(`SELECT COUNT(*) AS n FROM restore_superseded_sessions s LEFT JOIN restore_generations g
+            ON g.generation=s.restore_generation WHERE g.generation IS NULL`) !== 0) fail("restore_history_invalid");
+      const allowedGenerations = new Set<unknown>([current, ...history.map(row => row.previous_generation)]);
       const audit = all("SELECT receipt_key, expected_revision, restore_generation FROM task_title_audit") as
         { receipt_key: unknown; expected_revision: unknown; restore_generation: unknown }[];
       if (audit.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
@@ -180,7 +223,7 @@ export function inspectIsolatedTargetStore(
             !row.receipt_key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
             !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_RECEIPT_PREFIX.length)) ||
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
-            row.restore_generation !== meta.get("restore_generation") ||
+            !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key))) fail("audit_invalid");
       // R2c.1 delete audit: bounded, content-free, backed by a delete receipt and
       // by the tombstone (same Area, revision and change sequence) it describes.
@@ -191,7 +234,7 @@ export function inspectIsolatedTargetStore(
             !row.receipt_key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
             !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_DELETE_RECEIPT_PREFIX.length)) ||
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
-            row.restore_generation !== meta.get("restore_generation") ||
+            !allowedGenerations.has(row.restore_generation) ||
             !meta.has(row.receipt_key)) ||
           count(`SELECT COUNT(*) AS n FROM task_delete_audit a LEFT JOIN task_tombstones ts ON ts.id=a.task_id
             WHERE ts.id IS NULL OR ts.area_id<>a.area_id OR ts.revision<>a.tombstone_revision
@@ -300,7 +343,8 @@ export function inspectIsolatedTargetStore(
           count("SELECT COUNT(*) AS n FROM area_membership_audit") > TARGET_STAGING_AUDIT_MAX_EVENTS ||
           Number((db.prepare(`SELECT COUNT(*) AS n FROM area_membership_audit a
             LEFT JOIN area_membership_receipts r ON r.receipt_key=a.receipt_key
-            WHERE r.receipt_key IS NULL OR r.outcome<>'applied' OR a.restore_generation<>?`)
+            WHERE r.receipt_key IS NULL OR r.outcome<>'applied' OR a.restore_generation NOT IN (
+              SELECT ? UNION SELECT previous_generation FROM restore_generations)`)
             .get(generation) as { n: number }).n) !== 0) fail("audit_invalid");
     } catch { fail("audit_invalid"); }
     try {

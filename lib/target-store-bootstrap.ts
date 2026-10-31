@@ -23,8 +23,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // change_log commit timestamp, the own-membership index and the monotonic
 // compaction floor with its guarded delete (no v8 migration, same rule). v10
 // (R2c.4a) adds the monotonic anti-rollback anchor `anchor_seq` (mirrored by the
-// append-only lumi-target.journal next to the database; no v9 migration, same rule).
-export const TARGET_STORE_SCHEMA_VERSION = 10;
+// append-only lumi-target.journal next to the database; no v9 migration, same rule). v11
+// (R2c.4b) adds the append-only restore bookkeeping: the generation history and the sessions a
+// restore superseded (the 401 code `session_restored`); no v10 migration, same rule.
+export const TARGET_STORE_SCHEMA_VERSION = 11;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -55,6 +57,9 @@ export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
 export const TARGET_STAGING_SESSION_MAX_LIFETIME_MS = 15 * 60 * 1000;
 export const TARGET_STAGING_SESSION_MAX_ROWS = 4096;
 export const TARGET_STAGING_SESSION_RETENTION_DAYS = 90;
+/** R2c.4b staging bounds of the append-only restore bookkeeping tables. */
+export const TARGET_STAGING_RESTORE_HISTORY_MAX = 256;
+export const TARGET_STAGING_SUPERSEDED_SESSIONS_MAX = 16384;
 
 export interface TargetStoreBootstrapOptions {
   /** Absolute path for a directory which MUST NOT exist yet. Its parent must exist. */
@@ -881,6 +886,44 @@ BEGIN SELECT RAISE(ABORT, 'session revocation is irreversible'); END;
 CREATE TRIGGER staging_session_retention BEFORE DELETE ON staging_sessions
 WHEN strftime('%s','now') IS NULL OR OLD.expires_at_ms > (CAST(strftime('%s','now') AS INTEGER) * 1000 - ${TARGET_STAGING_SESSION_RETENTION_DAYS} * 86400000)
 BEGIN SELECT RAISE(ABORT, 'session retention window is active'); END;
+
+-- R2c.4b restore bookkeeping, all append-only (no UPDATE, no DELETE, no REPLACE).
+-- The generation history: every restore replaces the store's restore_generation by a fresh one and
+-- leaves the previous one here, so audit rows written under it stay valid (preflight).
+CREATE TABLE restore_generations (
+  generation TEXT PRIMARY KEY CHECK(length(generation) = 36),
+  previous_generation TEXT NOT NULL UNIQUE CHECK(length(previous_generation) = 36 AND previous_generation <> generation),
+  journal_n INTEGER NOT NULL CHECK(typeof(journal_n)='integer' AND journal_n >= 1),
+  restored_at_ms INTEGER NOT NULL CHECK(typeof(restored_at_ms)='integer' AND restored_at_ms > 0)
+) WITHOUT ROWID;
+CREATE TRIGGER restore_generations_no_update BEFORE UPDATE ON restore_generations
+BEGIN SELECT RAISE(ABORT, 'restore history is append-only'); END;
+CREATE TRIGGER restore_generations_no_delete BEFORE DELETE ON restore_generations
+BEGIN SELECT RAISE(ABORT, 'restore history is append-only'); END;
+CREATE TRIGGER restore_generations_replace_guard BEFORE INSERT ON restore_generations
+WHEN EXISTS(SELECT 1 FROM restore_generations WHERE generation = NEW.generation OR previous_generation = NEW.previous_generation)
+BEGIN SELECT RAISE(ABORT, 'restore history replacement is forbidden'); END;
+CREATE TRIGGER restore_generations_capacity BEFORE INSERT ON restore_generations
+WHEN (SELECT COUNT(*) FROM restore_generations) >= ${TARGET_STAGING_RESTORE_HISTORY_MAX}
+BEGIN SELECT RAISE(ABORT, 'restore history capacity reached'); END;
+-- Tokens which were live under the irreversible source when a restore replaced the store: the
+-- presenter gets the 401 code session_restored (never an unknown token: only a restore writes here).
+CREATE TABLE restore_superseded_sessions (
+  token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
+  user_id TEXT NOT NULL CHECK(length(trim(user_id)) > 0),
+  restore_generation TEXT NOT NULL CHECK(length(restore_generation) = 36)
+) WITHOUT ROWID;
+CREATE TRIGGER restore_superseded_sessions_no_update BEFORE UPDATE ON restore_superseded_sessions
+BEGIN SELECT RAISE(ABORT, 'superseded sessions are append-only'); END;
+CREATE TRIGGER restore_superseded_sessions_no_delete BEFORE DELETE ON restore_superseded_sessions
+BEGIN SELECT RAISE(ABORT, 'superseded sessions are append-only'); END;
+CREATE TRIGGER restore_superseded_sessions_replace_guard BEFORE INSERT ON restore_superseded_sessions
+WHEN EXISTS(SELECT 1 FROM restore_superseded_sessions WHERE token_hash = NEW.token_hash)
+  OR NOT EXISTS(SELECT 1 FROM restore_generations WHERE generation = NEW.restore_generation)
+BEGIN SELECT RAISE(ABORT, 'superseded session replacement is forbidden'); END;
+CREATE TRIGGER restore_superseded_sessions_capacity BEFORE INSERT ON restore_superseded_sessions
+WHEN (SELECT COUNT(*) FROM restore_superseded_sessions) >= ${TARGET_STAGING_SUPERSEDED_SESSIONS_MAX}
+BEGIN SELECT RAISE(ABORT, 'superseded session capacity reached'); END;
 `;
 
 /**

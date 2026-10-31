@@ -36,12 +36,24 @@ WHEN EXISTS(SELECT 1 FROM commits WHERE n >= NEW.n)
 BEGIN SELECT RAISE(ABORT, 'committed witness must increase'); END;
 `;
 
-function validRow(row: unknown, generation: string): row is { n: number; journal_hash: string; generation: string } {
+/**
+ * R2c.4b: the generation of a witness row follows the journal. It is the `g` of the intent the row
+ * mirrors, i.e. it changes only at a committed `restore` intent, exactly as in the journal.
+ */
+export interface TargetStagingWitnessJournalView {
+  readonly genesisHash: string;
+  /** n -> generation of the journal record (0 = genesis, then every intent). */
+  readonly generations: ReadonlyMap<number, string>;
+  readonly intents: ReadonlyMap<number, string>;
+  readonly statuses: ReadonlyMap<number, JournalIntentStatus>;
+}
+
+function validRow(row: unknown, generation: string | undefined): row is { n: number; journal_hash: string; generation: string } {
   if (!row || typeof row !== "object") return false;
   const r = row as { n?: unknown; journal_hash?: unknown; generation?: unknown };
   return typeof r.n === "number" && Number.isSafeInteger(r.n) && r.n >= 0 &&
     typeof r.journal_hash === "string" && HASH.test(r.journal_hash) &&
-    typeof r.generation === "string" && r.generation === generation;
+    typeof generation === "string" && typeof r.generation === "string" && r.generation === generation;
 }
 
 /**
@@ -60,17 +72,25 @@ export function clearTargetStagingWitnessCache(): void { witnessCache.clear(); }
 type JournalIntentStatus = "pending" | "confirmed" | "aborted";
 
 function readRows(
-  db: DatabaseSync, name: string, generation: string, genesisHash: string,
-  directoryRoot: string, intents?: ReadonlyMap<number, string>,
-  statuses?: ReadonlyMap<number, JournalIntentStatus>,
+  db: DatabaseSync, name: string, generation: string,
+  directoryRoot: string, view?: TargetStagingWitnessJournalView,
 ): number | null {
   try {
-    if (!UUID.test(generation) || !HASH.test(genesisHash)) return null;
+    if (!UUID.test(generation)) return null;
     const genesis = db.prepare(`SELECT n,journal_hash,generation FROM ${name}.commits WHERE n=0`).get();
     const last = db.prepare(`SELECT n,journal_hash,generation FROM ${name}.commits ORDER BY n DESC LIMIT 1`).get();
-    if (!validRow(genesis, generation) || genesis.journal_hash !== genesisHash ||
-        !validRow(last, generation)) return null;
-    if (!intents || !statuses) return last.n; // ATTACH preflight; verified after journal scan.
+    // The LAST committed row always carries the configured generation.
+    if (!validRow(last, generation)) return null;
+    if (!view) {
+      // ATTACH preflight; the genesis row is only shape-checked here (its hash and generation come
+      // from the journal, which is verified next).
+      const g = genesis as { n?: unknown; journal_hash?: unknown; generation?: unknown } | undefined;
+      return g && g.n === 0 && typeof g.journal_hash === "string" && HASH.test(g.journal_hash) &&
+        typeof g.generation === "string" && UUID.test(g.generation) ? last.n : null;
+    }
+    const { intents, statuses, generations } = view;
+    if (!HASH.test(view.genesisHash) || !validRow(genesis, generations.get(0)) ||
+        genesis.journal_hash !== view.genesisHash) return null;
     if (last.n > intents.size || (last.n > 0 && intents.get(last.n) !== last.journal_hash))
       return null;
     const total = db.prepare(`SELECT COUNT(*) AS total FROM ${name}.commits`).get() as
@@ -101,8 +121,9 @@ function readRows(
     const found = new Set<number>();
     let previous = start - 1;
     for (const row of rows) {
-      if (!validRow(row, generation) || row.n <= previous ||
-          (row.n === 0 ? row.journal_hash !== genesisHash :
+      const rowN = (row as { n?: unknown }).n;
+      if (typeof rowN !== "number" || !validRow(row, generations.get(rowN)) || row.n <= previous ||
+          (row.n === 0 ? row.journal_hash !== view.genesisHash :
             intents.get(row.n) !== row.journal_hash ||
             (statuses.get(row.n) !== "confirmed" && statuses.get(row.n) !== "pending")))
         return null;
@@ -179,7 +200,7 @@ export function bootstrapTargetStagingWitness(
 
 /** Attach BEFORE BEGIN IMMEDIATE so the writer holds both RESERVED locks. */
 export function attachTargetStagingWitness(
-  db: DatabaseSync, directoryRoot: string, generation: string, genesisHash: string,
+  db: DatabaseSync, directoryRoot: string, generation: string,
 ): AttachedTargetStagingWitness | null {
   try {
     const identity = validWitnessFile(directoryRoot);
@@ -193,7 +214,7 @@ export function attachTargetStagingWitness(
     const after = validWitnessFile(directoryRoot);
     if (mainMode.journal_mode !== "delete" || witnessMode.journal_mode !== "delete" ||
         !after || after.dev !== identity.dev || after.ino !== identity.ino) return null;
-    if (readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, genesisHash, directoryRoot) === null) return null;
+    if (readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, directoryRoot) === null) return null;
     const filename = path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME);
     return {
       stillAttached: () => {
@@ -218,24 +239,21 @@ export function recordTargetStagingWitnessCommit(
 
 /** Read-only witness check while the caller holds its source SQLite SHARED lock. */
 export function readTargetStagingWitness(
-  directoryRoot: string, generation: string, genesisHash: string,
-  intents: ReadonlyMap<number, string>, statuses: ReadonlyMap<number, JournalIntentStatus>,
+  directoryRoot: string, generation: string, view: TargetStagingWitnessJournalView,
 ): number | null {
   if (!validWitnessFile(directoryRoot)) return null;
   let db: DatabaseSync | null = null;
   try {
     db = new DatabaseSync(path.join(directoryRoot, TARGET_STAGING_WITNESS_FILENAME), { readOnly: true });
     db.exec("PRAGMA busy_timeout=2000; PRAGMA query_only=ON");
-    return readRows(db, "main", generation, genesisHash, directoryRoot, intents, statuses);
+    return readRows(db, "main", generation, directoryRoot, view);
   } catch { return null; }
   finally { if (db) { try { db.close(); } catch { /* fail closed */ } } }
 }
 
 /** Writer's attached witness snapshot under BEGIN IMMEDIATE. */
 export function readAttachedTargetStagingWitness(
-  db: DatabaseSync, generation: string, genesisHash: string,
-  directoryRoot: string, intents: ReadonlyMap<number, string>,
-  statuses: ReadonlyMap<number, JournalIntentStatus>,
+  db: DatabaseSync, generation: string, directoryRoot: string, view: TargetStagingWitnessJournalView,
 ): number | null {
-  return readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, genesisHash, directoryRoot, intents, statuses);
+  return readRows(db, TARGET_STAGING_WITNESS_ALIAS, generation, directoryRoot, view);
 }
