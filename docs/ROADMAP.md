@@ -41,7 +41,7 @@
 | [#148](https://github.com/Kocooour/AI-executive/pull/148) | Sloučeno | Výchozí vypnuté POST ověření výsledku přesného příkazu změny názvu |
 | [#149](https://github.com/Kocooour/AI-executive/pull/149) | Sloučeno | Detail soukromého úkolu vrací title CAS `snapshotRevision` ze stejného preflightovaného snapshotu |
 | [#150](https://github.com/Kocooour/AI-executive/pull/150) | Sloučeno | Revize stavu R2 a plán iterace R2-ID |
-| [#151](https://github.com/Kocooour/AI-executive/pull/151) | Sloučeno | Povinné nezávislé code review na každém PR (AGENTS.md, DEVELOPMENT.md) |
+| [#151](https://github.com/Kocooour/AI-executive/pull/151) | Sloučeno | Historicky zavedlo povinné nezávislé code review; aktuální pravidla vyžadují okamžité review každého PR a každé změny, ale nezávislost recenzenta je volitelná (AGENTS.md, DEVELOPMENT.md) |
 | [#152](https://github.com/Kocooour/AI-executive/pull/152) | Sloučeno | R2-ID.1: trvalé staging sessions, revokační epocha, živé ověření session před uvolněním odpovědi i v zápisové transakci |
 | [#153](https://github.com/Kocooour/AI-executive/pull/153) | Sloučeno | R2-ID.2a: idempotentní admin příkaz členství, schema v6, ochrana posledního admina, `WITHOUT ROWID` a rowid triggery |
 | [#154](https://github.com/Kocooour/AI-executive/pull/154) | Sloučeno | R2-ID.2b: čtení `Sdílené` / `Můj plán`, linearizační kontrola všech přispívajících Oblastí, `read_stale_reload` |
@@ -163,13 +163,15 @@ Neprodlužovat R2 sérií dalších samostatných diagnostických helperů bez v
 
 Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsledek se má posuzovat podle konkrétních akceptačních scénářů, **ne podle počtu PR**. Staging helper není prod-ready endpoint; přepnutí `enabled` v UI není serverové oprávnění.
 
+**Aktuální pravidlo dokončení PR (rozhodnutí vlastníka 2026-10-31):** Po otevření PR a po každém pushi měnícím diff se bez vyžádání provede úplné code review aktuálního head. Review může provést primární model/autor, nezávislý recenzent je doporučený, nikoli povinný. PR je hotové až při posledním review bez nových oprávněných připomínek, s vyřešenými všemi staršími vlákny a úspěšným `PR Checks`; změny přísnější GitHub branch protection se musí provést samostatně na úrovni nastavení repozitáře. Dva testovací agenti zůstávají samostatnou testovací rolí.
+
 ## Kritéria dokončení R2 před D3
 
 - **Read/write bezpečnost:** neautorizovaný aktér nemůže číst ani upravit osobní či cizí sdílenou Oblast; viewer nezapisuje, editor/admin jen dle aktuálního členství, projektové děti vždy dědí Oblast.
 - **Transakční konzistence:** souběžná změna oprávnění/revize/generace během zápisu vede k bezpečnému zamítnutí; opakování příkazu nezpůsobí dvojí změnu, audit a Undo neobejdou ACL.
 - **Synchronizace a revokace:** starý snapshot/pozdní offline fronta nemění novou generaci, po revokaci nevytéká obsah ani přes cache či odvozené kanály; uživatelské profily oddělené. Offline ztracená práva nelze zpětně odebrat již zkopírovanému obsahu, ale server musí po připojení přístup odmítnout.
 - **Funkční úplnost:** autorizované task/project/detail a Home/Today/Inbox/Upcoming/search výsledky jsou vzájemně konzistentní. `Můj plán` obsahuje soukromé a mně přidělené sdílené úkoly, `Sdílené` také nepřidělené oprávněné položky.
-- **Testování:** syntetické 2–3 identity, pozitivní i negativní scénáře pro čtení/zápis/souběh/offline/revokaci, pravidelné `PR Checks`, [povinné nezávislé code review](../AGENTS.md#mandatory-code-review-on-every-pr). Celá Browser E2E sada **jen před nasazením** dle [AGENTS.md](../AGENTS.md).
+- **Testování:** syntetické 2–3 identity, pozitivní i negativní scénáře pro čtení/zápis/souběh/offline/revokaci, pravidelné `PR Checks`, [povinné okamžité code review s čistým posledním kolem](../AGENTS.md#mandatory-code-review-on-every-pr) (recenzent nemusí být nezávislý). Celá Browser E2E sada **jen před nasazením** dle [AGENTS.md](../AGENTS.md).
 
 ## Co se nemění
 
