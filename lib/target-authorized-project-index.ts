@@ -27,7 +27,7 @@ type AreaRow = {
   areaId: string; areaKind: "private" | "shared"; policyRevision: number;
   contentRevision: number; role: string | null;
 };
-type ProjectRow = TargetAuthorizedReadableProject;
+type ProjectRow = TargetAuthorizedReadableProject & { projectRevision: number };
 const accessOf = (area: AreaRow): TargetReadAreaAccess | null =>
   area.areaKind === "private" ? "private-owner" :
     area.role === "viewer" || area.role === "editor" || area.role === "admin" ? area.role : null;
@@ -79,7 +79,8 @@ export function readAuthorizedProjectIndexPage(
         .update("\0");
     }
     const rows = db.prepare(`SELECT p.id AS id, p.title AS title, a.id AS areaId,
-      a.kind AS areaKind FROM projects p JOIN areas a ON a.id = p.area_id
+      a.kind AS areaKind, p.revision AS projectRevision
+      FROM projects p JOIN areas a ON a.id = p.area_id
       JOIN workspaces w ON w.id = a.workspace_id
       JOIN identities actor ON actor.id = ?
       LEFT JOIN area_members member ON member.area_id = a.id AND member.user_id = actor.id
@@ -88,10 +89,16 @@ export function readAuthorizedProjectIndexPage(
     let visible = 0;
     for (const row of rows) {
       if (!isReadableStagingProjectId(row.id)) continue;
-      if (visible >= request.offset && page.length <= request.limit) {
-        page.push(row);
-        if (page.length > request.limit) break;
-      }
+      if (typeof row.title !== "string" || !Number.isSafeInteger(row.projectRevision) ||
+          row.projectRevision < 0) return null;
+      // The R2c staging schema bumps project.revision on title edits but does
+      // not increment Area.content_revision for project title changes.
+      // Hash ALL visible project rows, not just the current page; otherwise an
+      // earlier title mutation can leave a later page cursor falsely current.
+      hash.update(JSON.stringify([
+        row.id, row.title, row.areaId, row.areaKind, row.projectRevision,
+      ])).update("\\0");
+      if (visible >= request.offset && page.length <= request.limit) page.push(row);
       visible++;
     }
     const knownAreas = new Set(linearization.areas.map(a => a.areaId));
