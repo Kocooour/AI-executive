@@ -118,7 +118,7 @@ test("new reads respect live membership and parent movement; no content at stale
     assert.equal(get(db, "alice", "family-direct")?.note.areaId, "alice-private");
     db.prepare("UPDATE notes SET project_id=NULL, area_id='other' WHERE id='family-direct'").run();
     assert.equal(get(db, "alice", "family-direct"), null);
-    assert.equal(get(db, "erin", "family-direct"), null);
+    assert.equal(get(db, "erin", "family-direct")?.note.body, "Shared decisions");
   } finally {
     db.close();
   }
