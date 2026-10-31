@@ -92,8 +92,11 @@ function activeSQLiteWriterLock(databaseFd: number): boolean | null {
   try {
     const file = fstatSync(databaseFd, { bigint: true });
     const dev = file.dev;
-    const major = ((dev & 0xfff00n) >> 8n) | ((dev >> 32n) & 0xfffff000n);
-    const minor = (dev & 0xffn) | ((dev >> 12n) & 0xffffff00n);
+    // BigInt() rather than bigint literals: the project's TS target is < ES2020.
+    const major = ((dev & BigInt(0xfff00)) >> BigInt(8)) |
+      ((dev >> BigInt(32)) & BigInt(0xfffff000));
+    const minor = (dev & BigInt(0xff)) |
+      ((dev >> BigInt(12)) & BigInt(0xffffff00));
     const ino = file.ino;
     for (const line of readFileSync("/proc/locks", "utf8").split("\n")) {
       // Ignore waiting lock requests (prefixed "->"), SHARED readers and
