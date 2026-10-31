@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 11);
+  assert.equal(result.schemaVersion, 12);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "11");
+    assert.equal(metadata.schema_version, "12");
     assert.equal(metadata.anchor_seq, "0");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
@@ -123,12 +123,19 @@ test("project revision survives title ABA and rejects counter reset or ID recycl
     db.prepare("INSERT INTO projects(id, area_id, title) VALUES ('p', ?, 'A')")
       .run(store.unassignedAreaId);
     const row = () => db.prepare("SELECT title, revision FROM projects WHERE id='p'").get();
+    const areaEpoch = () => db.prepare("SELECT project_content_revision FROM areas WHERE id=?")
+      .get(store.unassignedAreaId).project_content_revision;
+    assert.equal(areaEpoch(), 1);
     assert.deepEqual({ ...row() }, { title: "A", revision: 0 });
     db.prepare("UPDATE projects SET title='B' WHERE id='p'").run();
     db.prepare("UPDATE projects SET title='A' WHERE id='p'").run();
     assert.deepEqual({ ...row() }, { title: "A", revision: 2 });
+    assert.equal(areaEpoch(), 3);
+    assert.throws(() => db.prepare("UPDATE areas SET project_content_revision=0 WHERE id=?")
+      .run(store.unassignedAreaId), /Area project content revision must increment by one/);
     db.prepare("UPDATE projects SET title=title WHERE id='p'").run();
     assert.equal(row().revision, 2);
+    assert.equal(areaEpoch(), 3);
     assert.throws(() => db.prepare("UPDATE projects SET revision=0 WHERE id='p'").run(),
       /project revision must increment by one/);
     assert.throws(() => db.prepare("INSERT OR REPLACE INTO projects(id, area_id, title) VALUES ('p', ?, 'A')")
