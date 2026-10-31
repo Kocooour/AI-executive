@@ -520,8 +520,11 @@ function runPinnedTargetStagingTransaction<T, C>(
         // is still open (nothing committed): roll back (keep `transaction` set if that fails so the
         // finally retries) and fail with the original error. Only when it is false has the transaction
         // ended, and then only the durable state decides whether that was our commit (anchor and
-        // witness row both carry intent n) or an automatic rollback. A non-boolean value (unsupported
-        // runtime) is unknown: fail closed, never claim durable. A committed restore must still get its
+        // witness row both carry intent n) or an automatic rollback. A non-boolean value (a runtime
+        // without DatabaseSync.isTransaction; this repo targets Node 22, see CI) is unknown: a COMMIT that
+        // throws is then treated as NOT committed (failed / write_failed) even if it took effect: fail
+        // closed, never claim durable. The restore's "never write_failed after a committed COMMIT" holds
+        // only where isTransaction is available. A committed restore must still get its
         // confirm attempt, never a plain failure.
         const open = (connection as unknown as { isTransaction?: unknown }).isTransaction;
         if (open !== false) {

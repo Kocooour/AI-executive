@@ -19,7 +19,9 @@
  *   - journals the restore as a `restore` intent (two-phase, like every other writer).
  * A refusal or failure rolls the restore transaction back: the database is unchanged and the store stays
  * `restore_pending`. The only thing which may persist is the tail resolution every writer performs first
- * (cutting a torn journal fragment, confirming/aborting a trailing intent, decided by the witness).
+ * (cutting a torn journal fragment, confirming/aborting a trailing intent, decided by the witness). A failed restore may leave its own
+ * unconfirmed intent: a normal writer on the still-restore_pending store is denied and leaves it; only the
+ * next run of this tool aborts it (per the witness).
  */
 import { closeSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";

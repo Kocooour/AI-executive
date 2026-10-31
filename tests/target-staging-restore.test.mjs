@@ -1673,6 +1673,54 @@ test("restore: COMMIT fails without effect and ROLLBACK also fails: write_failed
   assert.equal(generationOf(fx), genBefore);
 });
 
+/** COMMIT fails and SQLite auto-rolled-back: the hook runs the real ROLLBACK, then throws (isTransaction === false, durable state = pre-txn). */
+function withCommitAutoRollback(fn) {
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      origExec.call(this, "ROLLBACK");
+      throw new Error("injected: COMMIT failed, transaction rolled back automatically");
+    }
+    return origExec.call(this, sql);
+  };
+  try { return fn(); } finally { DatabaseSync.prototype.exec = origExec; }
+}
+
+test("normal writer: COMMIT throws and the transaction auto-rolled-back: failed, nothing committed, next writer recovers", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const anchorBefore = anchorValueOf(fx);
+  const res = withCommitAutoRollback(() => titleWrite(fx, "t1", "never"));
+  assert.notEqual(res.ok, true, "an uncommitted write must not be acknowledged");
+  assert.equal(anchorValueOf(fx), anchorBefore);
+  assert.equal(taskTitleOf(fx, "t1"), "one");
+  assert.equal(titleWrite(fx, "t1", "after").ok, true);
+  assert.equal(taskTitleOf(fx, "t1"), "after");
+});
+
+test("restore: COMMIT throws and the transaction auto-rolled-back: write_failed, nothing committed, generation unchanged", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  copyBack(fx, backup);
+  const genBefore = generationOf(fx);
+  const anchorBefore = anchorValueOf(fx);
+  const result = withCommitAutoRollback(() => restoreLib.restoreTargetStagingFromBackup(fx.store));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "write_failed", JSON.stringify(result));
+  assert.equal(restoreLib.restoreExitCode(result), 1);
+  assert.equal("restoreGeneration" in result, false);
+  assert.equal(generationOf(fx), genBefore);
+  assert.equal(anchorValueOf(fx), anchorBefore);
+});
+
+// A non-boolean isTransaction is not simulated: it is a native non-configurable own accessor of each
+// DatabaseSync instance (Object.getOwnPropertyDescriptor: configurable false), which neither a prototype
+// hook nor Object.defineProperty can override without a production test hook.
+
 test("normal writer: COMMIT throwing after its effect is acknowledged ok, confirm appended, gate ok", () => {
   const fx = makeFixture();
   const origExec = DatabaseSync.prototype.exec;

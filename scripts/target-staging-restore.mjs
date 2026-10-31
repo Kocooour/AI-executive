@@ -19,10 +19,17 @@
  *      A refusal (exit 1) leaves the store restore_pending with its content unchanged; the journal may still
  *      change: the tail resolution any writer performs first (cutting a torn journal fragment, confirming or
  *      aborting a trailing intent, decided by the witness), and a failure right before or at COMMIT can
- *      leave an unconfirmed restore intent which the next tool run or writer aborts per the witness. Refusal
- *      reasons include invalid_request (also a --generation which is not a UUID), generation_mismatch (a
+ *      leave an unconfirmed restore intent. A normal writer on a still-restore_pending store is denied and leaves
+ *      that intent; only the next run of this tool aborts it (per the witness). Refusal
+ *      reasons (exhaustive): invalid_request (also a --generation which is not a UUID), generation_mismatch (a
  *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
  *      unavailable (the store is not in a restorable restore_pending state: healthy, already restored, journal_invalid or unreadable),
+ *      unsupported_backup (the backup is at another schema version), backup_provenance (the backup is not the
+ *      state of this journal at its anchor), backup_predates_restore (a restore already happened after the
+ *      backup), replay_failed (unreadable journal payload or unexpected replay error), write_failed (the
+ *      restore transaction failed and nothing was committed; on a runtime where DatabaseSync.isTransaction is
+ *      not a boolean, i.e. outside Node >= 22 as in CI, a COMMIT which throws is treated as not committed even
+ *      if it took effect: fail closed, inspect the store before rerunning),
  *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store),
  *      grant_removed_by_journal (a grant names a user whom the journal removed or demoted below admin),
  *      confirm_untrusted = exit 2 (the restore COMMITTED, the JSON carries restoreGeneration and previousGeneration, but
