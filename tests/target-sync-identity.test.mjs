@@ -445,3 +445,33 @@ test("queued draft cannot be resubmitted after session expiry", async () => {
   assert.notEqual((await device.client.resubmitDraft("t1")).ok, true);
   assert.equal(server.writes.length, 0);
 });
+
+
+test("reactivation waits for an in-flight storage commit without waiting for transport", async () => {
+  const server = makeServer();
+  const device = makeDevice(server, "bob");
+  await device.start();
+  idle(await device.client.sync());
+  const names = await device.storage.listNamespaces();
+  const ns = await device.storage.openNamespace(names[0]);
+  const original = ns.transaction.bind(ns);
+  let release;
+  let entered;
+  const enteredPromise = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  ns.transaction = async ops => {
+    entered();
+    await gate;
+    return original(ops);
+  };
+  const editing = device.client.editTitle("t1", "pending write");
+  await enteredPromise;
+  let activated = false;
+  const activation = device.client.activate({ userId: "bob" }).then(() => { activated = true; });
+  await Promise.resolve();
+  assert.equal(activated, false, "activation must wait for the storage transaction");
+  release();
+  await Promise.all([editing, activation]);
+  assert.equal(activated, true);
+  assert.equal(unwrap(await device.client.pendingCounts()).drafts, 1);
+});
