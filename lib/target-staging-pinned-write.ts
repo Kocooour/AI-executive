@@ -95,10 +95,10 @@ function activeSQLiteWriterLock(databaseFd: number): boolean | null {
     const major = ((dev & 0xfff00n) >> 8n) | ((dev >> 32n) & 0xfffff000n);
     const minor = (dev & 0xffn) | ((dev >> 12n) & 0xffffff00n);
     const ino = file.ino;
-    for (const line of readFileSync("/proc/locks", "utf8").split("\\n")) {
+    for (const line of readFileSync("/proc/locks", "utf8").split("\n")) {
       // Ignore waiting lock requests (prefixed "->"), SHARED readers and
       // unrelated inodes. A live writer holds a POSIX WRITE byte-range lock.
-      const match = /^\\d+:\\s+(?:POSIX|OFDLCK)\\s+ADVISORY\\s+WRITE\\s+\\S+\\s+([0-9a-f]+):([0-9a-f]+):(\\d+)\\s+\\d+\\s+(?:\\d+|EOF)$/.exec(line);
+      const match = /^\d+:\s+(?:POSIX|OFDLCK)\s+ADVISORY\s+WRITE\s+\S+\s+([0-9a-f]+):([0-9a-f]+):(\d+)\s+\d+\s+(?:\d+|EOF)$/.exec(line);
       if (match && BigInt("0x" + match[1]) === major &&
           BigInt("0x" + match[2]) === minor && BigInt(match[3]) === ino) return true;
     }
