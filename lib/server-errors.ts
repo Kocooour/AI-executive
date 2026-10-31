@@ -172,6 +172,16 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "storage",
   "injected_write_failure",
   "injected_delete_failure",
+  // R2c.5b browser-only IndexedDB storage adapter. Internal invariant/storage diagnostics
+  // remain within the local sync library and are not HTTP messages or UI copy.
+  "indexeddb_request_failed",
+  "indexeddb_aborted",
+  "indexeddb_unavailable",
+  "indexeddb_open_failed",
+  "indexeddb_blocked",
+  "invalid_namespace",
+  "namespace_deleted",
+  "indexeddb_cursor_failed",
   // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
   "Cannot resolve a safe staging path",
   "R1 staging directory must be absolute",
