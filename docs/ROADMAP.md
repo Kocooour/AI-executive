@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-10-31 po sloučení R2c.5b (#173) a zahájení R2d.1a.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-10-31 po sloučení R2d.1a (#174) a zahájení R2d.1b.** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **R2c dokončeno, R2d zahájeno** (#131–173 sloučeny) | R2-ID identity, ACL, trvalé sessions, revokace, R2c změnový feed, zapisovací protokol, anti-rollback obnova a sync/IndexedDB klient jsou implementovány na izolovaném stagingu. **Následuje R2d.1a** (autorizované projektové detaily a děděné úkoly, samostatné PR). R2d rozšíří ACL na veškeré odvozené pohledy a data. |
+| **R2 — Identity, ACL, zápisy a sync** | **R2c dokončeno, R2d zahájeno** (#131–173 sloučeny) | R2-ID identity, ACL, trvalé sessions, revokace, R2c změnový feed, zapisovací protokol, anti-rollback obnova a sync/IndexedDB klient jsou implementovány na izolovaném stagingu. **R2d.1a (#174) je sloučeno; následuje R2d.1b** (autorizované seznamy projektů). R2d rozšíří ACL na veškeré odvozené pohledy a data. |
 | **R3 — Aktivace D3** | **Připraveno, neaktivováno** | Čtecí selektor #103 a přepínač #108 existují, nejsou bezpečně propojené se serverovou aplikací. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
@@ -55,8 +55,8 @@
 
 R2c.1–R2c.5b je implementováno a sloučeno do `main` (poslední [#173](https://github.com/Kocooour/AI-executive/pull/173), 4/4 cílených Chromium testů). Jde o **staging-only implementaci**, nikoli zapojení klienta do produkčního UI; otevřené zůstávají release/integrační brány a R2d.
 
-- **R2d.1a (probíhá):** izolovaný GET `/api/target-staging/projects/[projectId]/tasks` vrací autorizovaný detail soukromého či sdíleného projektu a omezenou stránku jeho úkolů. Projektové úkoly dědí jednu Oblast, viewer/editor/admin mohou číst aktuální sdílené projekty. Před odpovědí musí proběhnout živá kontrola Area policy a session; cizí či odebrané projekty vracejí nerozlišitelné 404. Cursor je podepsaný, vázaný na identitu, projekt a restore generaci; při změně project/task revize vrací 409. Testy ověřují 2–3 identity, ztrátu členství, cizí metadata, revize a fail-closed stav.
-- **R2d.1b (další):** autorizované stránkované seznamy soukromých a sdílených projektů, navigace mezi projekty a úkoly, live-policy linearizace, kontrola konzistence děděných Oblastí.
+- **R2d.1a (sloučeno, #174):** izolovaný GET `/api/target-staging/projects/[projectId]/tasks` vrací autorizovaný detail soukromého či sdíleného projektu a omezenou stránku jeho úkolů. Projektové úkoly dědí jednu Oblast, viewer/editor/admin mohou číst aktuální sdílené projekty. Před odpovědí musí proběhnout živá kontrola Area policy a session; cizí či odebrané projekty vracejí nerozlišitelné 404. Cursor je podepsaný, vázaný na identitu, projekt a restore generaci; při změně project/task revize vrací 409. Testy ověřují 2–3 identity, ztrátu členství, cizí metadata, revize a fail-closed stav.
+- **R2d.1b (probíhá):** nový opt-in staging GET `/api/target-staging/project-index?scope=personal|shared`, stránkované seznamy podle aktuálního actor/Area ACL (nikoli client-supplied actor/Area), s podepsaným scope/session cursor, live-policy linearizací všech přispívajících Oblastí a projektovým guardem včetně lookahead. Projekty lze navigovat na autorizované R2d.1a detail+tasks přes jejich ID. Legacy owner-private projektový endpoint zůstává nedotčen; bez aktivace produkčního UI.
 - **R2d.2:** poznámky, vztahy, kontext a související záznamy včetně správy přístupu.
 - **R2d.3:** serverové rozsahy Home/Today/Inbox/Upcoming/Projects, counts a kompletní Můj plán.
 - **R2d.4:** Search, AI a bezpečné odvozené indexy.
