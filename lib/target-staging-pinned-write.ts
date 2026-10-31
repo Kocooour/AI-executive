@@ -512,7 +512,31 @@ function runPinnedTargetStagingTransaction<T, C>(
       recordTargetStagingWitnessCommit(connection, n, intent.hash, newGeneration);
       // Last check before COMMIT narrows the window (a rename after it is the accepted residual).
       if (!identitiesStillTrusted()) throw new Error();
-      connection.exec("COMMIT");
+      try {
+        connection.exec("COMMIT");
+      } catch (commitError) {
+        // COMMIT may throw AFTER it took effect (e.g. an I/O error on the final fsync/close). Probe: a
+        // ROLLBACK that succeeds proves the transaction was still open (nothing committed: fail as
+        // before); "no transaction is active" means it ended, and only the durable state decides
+        // whether that was our commit (anchor and witness row both carry intent n) or an automatic
+        // rollback. A committed restore must still get its confirm attempt, never a plain failure.
+        let stillOpen = true;
+        try { connection.exec("ROLLBACK"); } catch { stillOpen = false; }
+        transaction = false;
+        if (stillOpen) throw commitError;
+        let durable = false;
+        try {
+          const anchorRow = connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")
+            .get() as { value: unknown } | undefined;
+          const witnessRow = connection.prepare(
+            "SELECT 1 AS present FROM lumi_witness.commits WHERE n = ? AND journal_hash = ?")
+            .get(n, intent.hash) as { present: number } | undefined;
+          durable = String(anchorRow?.value) === String(n) && witnessRow?.present === 1;
+        } catch { durable = false; }
+        // A normal writer that cannot tell reports failure (an acknowledged-false-negative: the write
+        // may exist; the next writer resolves the trailing intent). The restore path never does.
+        if (!durable) throw commitError;
+      }
       transaction = false;
       // After the commit, under a FRESH write lock (the chain is linear: an append must be
       // computed from the tail read while holding the lock, because another writer may have

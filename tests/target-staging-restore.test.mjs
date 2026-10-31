@@ -1558,3 +1558,103 @@ test("pinned helper: a normal writer cannot journal a restore record, and the re
   assert.equal(asRestore, "denied");
   assert.equal(ran, false);
 });
+
+// ---- COMMIT that throws AFTER it took effect (R2c.4b round 4, F1) ----------------------------------
+
+/** The real COMMIT happens, then the first one throws; `afterReal` may also tamper with the files. */
+function restoreWithThrowAfterCommit(afterReal = () => {}) {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  copyBack(fx, backup);
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  DatabaseSync.prototype.exec = function (sql) {
+    const out = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      afterReal(fx);
+      throw new Error("injected: COMMIT failed after taking effect");
+    }
+    return out;
+  };
+  let result;
+  try { result = restoreLib.restoreTargetStagingFromBackup(fx.store); } finally { DatabaseSync.prototype.exec = origExec; }
+  return { fx, result };
+}
+
+test("restore: COMMIT throwing after its effect still confirms (trusted store): ok, generation reported, journal confirmed", () => {
+  const { fx, result } = restoreWithThrowAfterCommit();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(restoreLib.restoreExitCode(result), 0);
+  assert.equal(generationOf(fx), result.restoreGeneration);
+  const lines = journalLines(fx);
+  const restoreN = lines.find(l => l.t === "intent" && l.k === "restore").n;
+  assert.equal(lines.some(l => l.t === "confirm" && l.n === restoreN && l.g === result.restoreGeneration), true);
+  useStore(fx, result.restoreGeneration);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  assert.equal(titleWrite(fx, "t1", "after").ok, true);
+});
+
+test("restore: COMMIT throwing after its effect on an untrusted store: confirm_untrusted with the generation, exit 2, next writer confirms", () => {
+  const { fx, result } = restoreWithThrowAfterCommit(f => {
+    const copy = `${f.databasePath}.same`;
+    copyFileSync(f.databasePath, copy);
+    renameSync(copy, f.databasePath);
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "confirm_untrusted");
+  assert.equal(result.restoreGeneration, generationOf(fx));
+  assert.equal(result.previousGeneration, fx.stage.restoreGeneration);
+  assert.equal(restoreLib.restoreExitCode(result), 2);
+  useStore(fx, result.restoreGeneration);
+  assert.equal(titleWrite(fx, "t1", "after").ok, true, "the gate accepts the committed store");
+  const lines = journalLines(fx);
+  const restoreN = lines.find(l => l.t === "intent" && l.k === "restore").n;
+  assert.equal(lines.some(l => l.t === "confirm" && l.n === restoreN), true);
+});
+
+test("CLI: confirm_untrusted exits 2 and prints restoreGeneration (child process with a test-local exec hook)", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "two").ok, true);
+  copyBack(fx, backup);
+  fx.db.close();
+  const hook = path.join(root, `${fx.name}.exec-hook.mjs`);
+  writeFileSync(hook, `
+import { DatabaseSync } from "node:sqlite";
+import { copyFileSync, renameSync } from "node:fs";
+const DB = process.env.HOOK_DB;
+const orig = DatabaseSync.prototype.exec;
+let done = false;
+DatabaseSync.prototype.exec = function (sql, ...rest) {
+  const out = orig.call(this, sql, ...rest);
+  if (!done && String(sql).trim() === "COMMIT") {
+    done = true;
+    copyFileSync(DB, DB + ".tmp"); renameSync(DB + ".tmp", DB);
+  }
+  return out;
+};
+`);
+  const run = spawnSync(REAL_NODE, ["--no-warnings", "--import", `file://${hook}`, "--experimental-loader",
+    "./tests/ts-loader.mjs", "scripts/target-staging-restore.mjs", "--directory", fx.stage.directory,
+    "--generation", fx.stage.restoreGeneration], { encoding: "utf8", env: { ...process.env, HOOK_DB: fx.databasePath } });
+  assert.equal(run.status, 2, run.stdout + run.stderr);
+  const report = JSON.parse(run.stdout);
+  assert.equal(report.ok, false);
+  assert.equal(report.reason, "confirm_untrusted");
+  assert.match(report.restoreGeneration, /^[0-9a-f-]{36}$/);
+  assert.equal(report.previousGeneration, fx.stage.restoreGeneration);
+  const db = new DatabaseSync(fx.databasePath, { readOnly: true });
+  try {
+    assert.equal(db.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value, report.restoreGeneration);
+  } finally { db.close(); }
+  // A rerun is not a restore any more: unavailable, exit 1.
+  const again = spawnSync(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+    "scripts/target-staging-restore.mjs", "--directory", fx.stage.directory, "--generation", report.restoreGeneration],
+  { encoding: "utf8" });
+  assert.equal(again.status, 1);
+  assert.equal(JSON.parse(again.stdout).reason, "unavailable");
+});

@@ -83,8 +83,9 @@ export type TargetStagingRestoreFailure =
    * inspected (only the expected files, nothing replaced). Then the operator may set the new generation
    * and start: the gate verifies the store on every request; if trusted, the first writer appends the
    * confirm; if not, everything stays 503 and recovery needs a DB copy taken AFTER this restore (a backup
-   * from before it is refused with backup_predates_restore). Rerunning this tool closes the trailing
-   * restore intent like any writer (truthful confirm/abort decided by the witness) and then refuses.
+   * from before it is refused with backup_predates_restore). Rerunning this tool closes nothing: the store is no longer
+   * restore_pending, so it refuses with `unavailable` and leaves the tail; the first trusted writer under
+   * the new generation appends the confirm.
    */
   | "confirm_untrusted"
   | "write_failed";
