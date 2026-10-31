@@ -394,6 +394,10 @@ export type TargetProjectReadLiveGuard = {
   areaId: string;
   taskIds: string[];
 };
+/** Project list guard also covers the lookahead row (which influences hasMore). */
+export type TargetProjectIndexLiveGuard = {
+  projects: Array<{ id: string; areaId: string }>;
+};
 
 export function verifyTargetStagingReadLive(
   store: TargetStagingReadStore,
@@ -401,6 +405,7 @@ export function verifyTargetStagingReadLive(
   observed: TargetReadLinearization,
   nowMs = Date.now(),
   projectGuard?: TargetProjectReadLiveGuard,
+  projectIndexGuard?: TargetProjectIndexLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -410,6 +415,15 @@ export function verifyTargetStagingReadLive(
       !Array.isArray(projectGuard.taskIds) || projectGuard.taskIds.length > 100 ||
       projectGuard.taskIds.some(id => typeof id !== "string" || !id) ||
       new Set(projectGuard.taskIds).size !== projectGuard.taskIds.length)) return unavailable;
+  if (projectIndexGuard && (
+      !Array.isArray(projectIndexGuard.projects) ||
+      projectIndexGuard.projects.length > 101 ||
+      projectIndexGuard.projects.some(project =>
+        !project || typeof project.id !== "string" || !project.id ||
+        typeof project.areaId !== "string" || !project.areaId ||
+        !observed.areas.some(area => area.areaId === project.areaId)) ||
+      new Set(projectIndexGuard.projects.map(project => project.id)).size !==
+        projectIndexGuard.projects.length)) return unavailable;
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
     return { ok: false, reason: "invalid", code: "session_revoked" };
   }
@@ -458,6 +472,16 @@ export function verifyTargetStagingReadLive(
         WHERE id = ? AND project_id = ? AND area_id IS NULL`);
       for (const id of projectGuard.taskIds) {
         if (!child.get(id, projectGuard.projectId)) return { ok: false, reason: "stale" };
+      }
+    }
+    if (projectIndexGuard) {
+      // Membership/role are checked above; also rebind every released project
+      // and the lookahead row to the same accessible Area in this LIVE txn.
+      const lookup = db.prepare("SELECT area_id AS areaId FROM projects WHERE id = ?");
+      for (const row of projectIndexGuard.projects) {
+        const current = lookup.get(row.id) as { areaId: string } | undefined;
+        if (!current || current.areaId !== row.areaId)
+          return { ok: false, reason: "stale" };
       }
     }
     return { ok: true };
