@@ -155,14 +155,20 @@ class IndexedDbNamespace implements TargetSyncNamespace {
         else if (op.kind === "deletePrefix") {
           const range = prefixRange(this.name, op.prefix);
           await new Promise<void>((resolve, reject) => {
-            const cursor = records.openKeyCursor(range);
+            // Key-only cursors cannot delete records. Use a value cursor for
+            // atomic in-transaction deletion instead.
+            const cursor = records.openCursor(range);
             cursor.onerror = () => reject(cursor.error ?? new Error("indexeddb_cursor_failed"));
             cursor.onsuccess = () => {
-              const row = cursor.result;
-              if (!row) { resolve(); return; }
-              if (!(row.key as string[])[1].startsWith(op.prefix)) { resolve(); return; }
-              row.delete();
-              row.continue();
+              try {
+                const row = cursor.result;
+                if (!row) { resolve(); return; }
+                if (!(row.key as string[])[1].startsWith(op.prefix)) { resolve(); return; }
+                row.delete();
+                row.continue();
+              } catch (error) {
+                reject(error);
+              }
             };
           });
         }
