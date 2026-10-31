@@ -180,6 +180,31 @@ test("revoked membership fails closed and live release rejects stale snapshot", 
   assert.equal((await get(fx, "family-project", "", bob)).status, 404);
 });
 
+test("project child moved after the snapshot fails live membership check even without an ACL change", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const read = await readProcess.readStagingAuthorizedProjectTasksInChild({
+    stagingDirectory: fx.stage.directory, expectedRestoreGeneration: fx.stage.restoreGeneration,
+    ownerUserId: "alice", sessionTokenHash: tokenHash,
+  }, "family-project", 10, 0);
+  assert.equal(read.ok, true);
+  const db = new DatabaseSync(fx.stage.databasePath);
+  // Move one inherited child to a different project of the same Area; role
+  // and policy_revision stay the same, so an Area-only check would miss it.
+  db.prepare("UPDATE tasks SET project_id='family-second' WHERE id='s-3'").run();
+  db.close();
+  assert.equal(verifyStagingReadBeforeRelease(
+    req(fx, "family-project", "", bob), { kind: "session", tokenHash },
+    fx.store, "alice", read.page.linearization, {
+      projectId: "family-project", areaId: "family-area",
+      taskIds: read.page.tasks.map(task => task.id),
+    },
+  ), "stale");
+  const current = await ok(get(fx, "family-project", "", bob));
+  assert.deepEqual(current.tasks.map(task => task.id), ["s-1", "s-2"]);
+});
+
 test("bad child DTOs, invalid params and disabled gate never expose project data", async () => {
   const fx = fixture();
   const good = await readProcess.readStagingAuthorizedProjectTasksInChild({
