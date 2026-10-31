@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
-  appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync,
-  writeFileSync,
+  appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync,
+  unlinkSync, writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +32,8 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION, TARGET_STAGING_RESTORE_HISTORY_MAX, TARGET_STAGING_SUPERSEDED_SESSIONS_MAX } = await import("../lib/target-store-bootstrap.ts");
-const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
+const preflightLib = await import("../lib/target-store-preflight.ts");
+const { inspectIsolatedTargetStore } = preflightLib;
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const journalLib = await import("../lib/target-staging-anchor-journal.ts");
@@ -659,6 +660,90 @@ test("a backup whose anchor names an intent which never committed (aborted) is r
 // the new generation (e)
 // =====================================================================================================
 
+// ---- the restore's own post-COMMIT confirm uses the writer's trust rule ----------------------------
+
+/**
+ * A restore_pending store plus older copies of the main DB (the backup), the witness and the journal.
+ * `swap` runs once right after the restore's COMMIT (test-local exec hook, restored in finally), before
+ * its confirm; the journal bytes at that moment are returned.
+ */
+function restoreWithSwapAfterCommit(swap) {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const witnessPath = path.join(fx.stage.directory, "lumi-target-witness.sqlite");
+  const old = { db: backupOf(fx), witness: path.join(root, `${fx.name}.w-old`), journal: path.join(root, `${fx.name}.j-old`) };
+  copyFileSync(witnessPath, old.witness);
+  copyFileSync(fx.journalPath, old.journal);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  copyBack(fx, old.db);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  let afterCommit = null;
+  DatabaseSync.prototype.exec = function (sql) {
+    const result = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      afterCommit = readFileSync(fx.journalPath);
+      swap(fx, old, witnessPath);
+    }
+    return result;
+  };
+  let result;
+  try { result = restoreLib.restoreTargetStagingFromBackup(fx.store); } finally { DatabaseSync.prototype.exec = origExec; }
+  assert.ok(afterCommit, "the hook ran after the restore COMMIT");
+  const lines = afterCommit.toString("utf8").trimEnd().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual([lines.at(-1).t, lines.at(-1).k], ["intent", "restore"], "the restore intent is the tail");
+  const newStore = { stagingDirectory: fx.stage.directory, expectedRestoreGeneration: lines.at(-1).g };
+  return { fx, result, afterCommit, newStore };
+}
+function assertNoConfirmAndFailClosed({ fx, result, afterCommit, newStore }) {
+  assert.deepEqual(result, { ok: false, reason: "confirm_untrusted" }, "the tool must not report ok");
+  assert.deepEqual(readFileSync(fx.journalPath), afterCommit, "no confirm appended, journal bytes as right after COMMIT");
+  for (const store of [fx.store, newStore]) {
+    assert.notEqual(durable.checkTargetStagingAnchorLive(store), "ok", "store fails closed");
+  }
+  assert.equal(fx.authority.issueWritable("alice"), null, "no writer is admitted");
+  assert.deepEqual(readFileSync(fx.journalPath), afterCommit, "refused writers and live checks leave the journal untouched");
+}
+const atomicReplace = (target, source, mode = null) => {
+  const temp = `${target}.swap`;
+  copyFileSync(source, temp);
+  if (mode !== null) chmodSync(temp, mode);
+  renameSync(temp, target);
+};
+
+test("restore: older main DB renamed over the canonical path between COMMIT and confirm: no confirm, not ok, fails closed", () => {
+  assertNoConfirmAndFailClosed(restoreWithSwapAfterCommit((fx, old) => atomicReplace(fx.databasePath, old.db)));
+});
+
+test("restore: older witness renamed over the canonical path between COMMIT and confirm: no confirm, not ok, fails closed", () => {
+  assertNoConfirmAndFailClosed(restoreWithSwapAfterCommit((fx, old, witnessPath) => atomicReplace(witnessPath, old.witness, 0o600)));
+});
+
+test("restore: older journal renamed over the canonical path between COMMIT and confirm: no confirm into the orphan, not ok", () => {
+  const run = restoreWithSwapAfterCommit((fx, old) => atomicReplace(fx.journalPath, old.journal, 0o600));
+  assert.deepEqual(run.result, { ok: false, reason: "confirm_untrusted" });
+  // The replacement journal is untouched (the orphan inode got nothing either: it is unlinked).
+  assert.deepEqual(readFileSync(run.fx.journalPath), readFileSync(path.join(root, `${run.fx.name}.j-old`)));
+  assert.notEqual(durable.checkTargetStagingAnchorLive(run.fx.store), "ok");
+  assert.notEqual(durable.checkTargetStagingAnchorLive(run.newStore), "ok");
+});
+
+test("restore: main DB rolled back to the backup IN PLACE after the COMMIT: no confirm, not ok, fails closed", () => {
+  assertNoConfirmAndFailClosed(restoreWithSwapAfterCommit((fx, old) => copyFileSync(old.db, fx.databasePath)));
+});
+
+test("restore: witness copied back IN PLACE after the COMMIT: no confirm, not ok, fails closed", () => {
+  assertNoConfirmAndFailClosed(restoreWithSwapAfterCommit((fx, old, witnessPath) => copyFileSync(old.witness, witnessPath)));
+});
+
+test("restore: an untouched run still confirms under the new generation and reports ok (control)", () => {
+  const { result, fx } = restoreWithSwapAfterCommit(() => {});
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(journalLines(fx).at(-1).t, "confirm");
+});
+
 test("after the restore an old offline command, an old cursor and an old CAS token are refused", async () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "x").ok, true);
@@ -1192,6 +1277,61 @@ test("preflight: audit rows of an unknown generation fail, rows of a recorded ea
   // A history whose newest generation is not the current one is rejected.
   fx.db.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'").run(G2);
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" }).issues.includes("restore_history_invalid"), true);
+});
+
+test("preflight: the restore history is exactly one chain from the current generation (detached cycle or chain, self-loop, duplicate previous fail)", () => {
+  const issues = fx => inspectIsolatedTargetStore({ stagingDirectory: fx.stage.directory, mode: "r2-model" });
+  const insert = (fx, generation, previous, n) =>
+    fx.db.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(generation, previous, n, Date.now());
+  const fresh = () => {
+    const fx = makeFixture();
+    assert.equal(titleWrite(fx, "t1", "x").ok, true);
+    return { fx, current: generationOf(fx) };
+  };
+  // Valid multi-restore chain C <- B <- A (A is the original, not a row's generation).
+  {
+    const { fx, current } = fresh();
+    const [B, A] = [randomUUID(), randomUUID()];
+    insert(fx, current, B, 2);
+    insert(fx, B, A, 1);
+    assert.equal(issues(fx).ok, true, "valid two-restore chain");
+    assert.equal(issues(fx).issues.includes("restore_history_invalid"), false);
+  }
+  // Detached cycle: metadata C; rows (C,B),(B,A),(X,Y),(Y,X) used to pass.
+  {
+    const { fx, current } = fresh();
+    const [B, A, X, Y] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    insert(fx, current, B, 2);
+    insert(fx, B, A, 1);
+    insert(fx, X, Y, 3);
+    insert(fx, Y, X, 4);
+    assert.equal(issues(fx).issues.includes("restore_history_invalid"), true, "detached cycle");
+  }
+  // Detached chain: every row must be reached from the current generation.
+  {
+    const { fx, current } = fresh();
+    const [B, A, X, Y] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    insert(fx, current, B, 2);
+    insert(fx, B, A, 1);
+    insert(fx, X, Y, 3);
+    assert.equal(issues(fx).issues.includes("restore_history_invalid"), true, "detached chain");
+  }
+  // A single detached row besides a valid chain, and a history not containing the current generation.
+  {
+    const { fx } = fresh();
+    insert(fx, randomUUID(), randomUUID(), 1);
+    assert.equal(issues(fx).issues.includes("restore_history_invalid"), true, "current generation not in history");
+  }
+  // The schema already forbids a self-loop and a duplicate previous generation; the validator rejects them
+  // on its own as well (defense in depth, e.g. against a DDL which is ever relaxed).
+  const [C, B, A, D] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const row = (generation, previous_generation) => ({ generation, previous_generation });
+  assert.equal(preflightLib.restoreHistoryIsOneChain([], C), true);
+  assert.equal(preflightLib.restoreHistoryIsOneChain([row(C, B), row(B, A)], C), true);
+  assert.equal(preflightLib.restoreHistoryIsOneChain([row(C, C)], C), false, "self-loop");
+  assert.equal(preflightLib.restoreHistoryIsOneChain([row(C, B), row(D, B)], C), false, "duplicate previous");
+  assert.equal(preflightLib.restoreHistoryIsOneChain([row(C, B), row(B, C)], C), false, "cycle through the current generation");
+  assert.equal(preflightLib.restoreHistoryIsOneChain([row(C, B), row(B, A), row(D, C)], C), false, "a later generation is not the current one");
 });
 
 test("a superseded token keeps the restore code across expiry, and revocation precedence holds for tokens listed by an earlier restore", async () => {

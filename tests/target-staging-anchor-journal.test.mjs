@@ -1207,7 +1207,132 @@ test("post-commit atomic rename of an older witness: no confirm, store fails clo
   const fx = makeFixture();
   const witnessPath = path.join(fx.stage.directory, witnessLib.TARGET_STAGING_WITNESS_FILENAME);
   const { four, intentOnly } = atomicReplaceAfterCommit(fx, witnessPath, "w2rename");
-  assert.notEqual(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
   assert.equal(four().ok, false);
   assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "next writer leaves the journal untouched");
+});
+
+// Run `swap` once, right before the writer runs its anchor UPDATE: after the pre-write check
+// and the durable intent, before the witness insert and COMMIT.
+function runWithSwapBeforeCommit(write, swap, prefix = "UPDATE metadata SET value = ?") {
+  const origPrepare = DatabaseSync.prototype.prepare;
+  let armed = true;
+  DatabaseSync.prototype.prepare = function (sql) {
+    if (armed && String(sql).includes(prefix)) { armed = false; swap(); }
+    return origPrepare.call(this, sql);
+  };
+  try { return write(); } finally { DatabaseSync.prototype.prepare = origPrepare; }
+}
+
+test("older journal renamed over the canonical path before COMMIT: write not ok, anchor not advanced", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = path.join(root, `${fx.name}.jold.jsonl`);
+  copyFileSync(fx.journalPath, backup);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const anchorBefore = anchorOf(fx);
+  const three = prepareTitle(fx, "t1", "three");
+  const result = runWithSwapBeforeCommit(three, () => {
+    const temp = `${fx.journalPath}.swap`;
+    copyFileSync(backup, temp);
+    chmodSync(temp, 0o600);
+    renameSync(temp, fx.journalPath);
+  });
+  assert.equal(result.ok, false, "write must not be acknowledged");
+  assert.equal(anchorOf(fx), anchorBefore, "anchor not advanced");
+  const raw = new DatabaseSync(fx.databasePath, { readOnly: true });
+  try {
+    assert.equal(raw.prepare("SELECT title FROM tasks WHERE id='t1'").get().title, "two");
+  } finally { raw.close(); }
+});
+
+test("older journal renamed over the canonical path after COMMIT: no confirm into the orphan, store fails closed", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = path.join(root, `${fx.name}.jold2.jsonl`);
+  copyFileSync(fx.journalPath, backup);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const three = prepareTitle(fx, "t1", "three");
+  const four = prepareTitle(fx, "t1", "four");
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  DatabaseSync.prototype.exec = function (sql) {
+    const result = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      const temp = `${fx.journalPath}.swap`;
+      copyFileSync(backup, temp);
+      chmodSync(temp, 0o600);
+      renameSync(temp, fx.journalPath);
+    }
+    return result;
+  };
+  try { three(); } finally { DatabaseSync.prototype.exec = origExec; }
+  assert.deepEqual(readFileSync(fx.journalPath), readFileSync(backup), "replacement journal untouched");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+  assert.equal(four().ok, false);
+});
+
+test("main DB renamed over the canonical path before COMMIT: write not ok, nothing committed", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const backup = path.join(root, `${fx.name}.mold.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  const three = prepareTitle(fx, "t1", "three");
+  const result = runWithSwapBeforeCommit(three, () => {
+    const temp = `${fx.databasePath}.swap`;
+    copyFileSync(backup, temp);
+    renameSync(temp, fx.databasePath);
+  });
+  assert.equal(result.ok, false, "write must not be acknowledged");
+  assert.deepEqual(readFileSync(fx.databasePath), readFileSync(backup), "canonical DB holds no committed write");
+});
+
+// In-place overwrite (same inode) of the witness between COMMIT and confirm.
+test("post-commit in-place copy of an older witness: no confirm, journal bytes unchanged, next writer denied", () => {
+  const fx = makeFixture();
+  const witnessPath = path.join(fx.stage.directory, witnessLib.TARGET_STAGING_WITNESS_FILENAME);
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const backup = path.join(root, `${fx.name}.w2inplace.sqlite`);
+  copyFileSync(witnessPath, backup);
+  const three = prepareTitle(fx, "t1", "three");
+  const four = prepareTitle(fx, "t1", "four");
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  let intentOnly = null;
+  DatabaseSync.prototype.exec = function (sql) {
+    const result = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      intentOnly = readFileSync(fx.journalPath);
+      copyFileSync(backup, witnessPath);
+    }
+    return result;
+  };
+  try { three(); } finally { DatabaseSync.prototype.exec = origExec; }
+  assert.ok(intentOnly, "hook ran after COMMIT");
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "no confirm appended");
+  assert.equal(journalLines(fx).at(-1).t, "intent");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "journal_invalid");
+  assert.equal(four().ok, false);
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "next writer leaves the journal untouched");
+});
+
+test("main DB renamed before the writer's pre-write check: nothing durable, journal bytes unchanged", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = path.join(root, `${fx.name}.mold2.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  const journalBefore = readFileSync(fx.journalPath);
+  const two = prepareTitle(fx, "t1", "two");
+  // The audit INSERT is the last statement the title body prepares before commit().
+  const result = runWithSwapBeforeCommit(two, () => {
+    const temp = `${fx.databasePath}.swap`;
+    copyFileSync(backup, temp);
+    renameSync(temp, fx.databasePath);
+  }, "INSERT INTO task_title_audit");
+  assert.equal(result.ok, false);
+  assert.deepEqual(readFileSync(fx.journalPath), journalBefore, "no intent appended");
 });

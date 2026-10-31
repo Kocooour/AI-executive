@@ -63,6 +63,34 @@ export interface TargetPinnedPreflightConnection {
   readonly fd: number;
 }
 
+/**
+ * R2c.4b: the restore history must be exactly ONE chain. Walk the predecessors from the current
+ * generation through the rows (generation -> previous_generation); a cycle (also a self-loop) fails,
+ * EVERY row must be reached exactly once (no detached chain or cycle), previous generations are
+ * unique, and the walk ends at a generation which is not itself a row's generation (the original).
+ * An empty history is the original generation alone.
+ */
+export function restoreHistoryIsOneChain(
+  history: readonly { generation: unknown; previous_generation: unknown }[], current: string,
+): boolean {
+  if (history.length === 0) return true;
+  const byGeneration = new Map<unknown, unknown>();
+  const previous = new Set<unknown>();
+  for (const row of history) {
+    if (byGeneration.has(row.generation) || previous.has(row.previous_generation)) return false;
+    byGeneration.set(row.generation, row.previous_generation);
+    previous.add(row.previous_generation);
+  }
+  const seen = new Set<unknown>();
+  let cursor: unknown = current;
+  while (byGeneration.has(cursor)) {
+    if (seen.has(cursor)) return false;
+    seen.add(cursor);
+    cursor = byGeneration.get(cursor);
+  }
+  return seen.size === history.length && !byGeneration.has(cursor);
+}
+
 export function inspectIsolatedTargetStore(
   options: TargetPreflightOptions,
   pinned?: TargetPinnedPreflightConnection,
@@ -182,11 +210,8 @@ export function inspectIsolatedTargetStore(
       const history = all("SELECT generation, previous_generation FROM restore_generations") as
         { generation: string; previous_generation: string }[];
       const current = meta.get("restore_generation");
-      const generationsKnown = new Set<unknown>(history.map(row => row.generation));
       if (history.length > TARGET_STAGING_RESTORE_HISTORY_MAX ||
-          (history.length > 0 && (!generationsKnown.has(current) ||
-            history.some(row => row.previous_generation === current) ||
-            history.filter(row => !generationsKnown.has(row.previous_generation)).length !== 1)) ||
+          !restoreHistoryIsOneChain(history, current as string) ||
           count("SELECT COUNT(*) AS n FROM restore_superseded_sessions") > TARGET_STAGING_SUPERSEDED_SESSIONS_MAX ||
           count(`SELECT COUNT(*) AS n FROM restore_superseded_sessions s LEFT JOIN restore_generations g
             ON g.generation=s.restore_generation WHERE g.generation IS NULL`) !== 0) fail("restore_history_invalid");
