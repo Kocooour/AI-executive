@@ -165,6 +165,13 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "Cannot establish snapshot directory ownership",
   "Staging snapshot requires Linux tmpfs",
   "Unsafe staging snapshot root",
+  // R2c.5a client sync core (lib/target-sync): programmer errors of a library without UI, never sent by a route.
+  "invalid_user_id",
+  "invalid_generation",
+  "namespace_closed",
+  "storage",
+  "injected_write_failure",
+  "injected_delete_failure",
   // R1 isolated bootstrap is a developer-only staging utility, never exposed by a route.
   "Cannot resolve a safe staging path",
   "R1 staging directory must be absolute",
