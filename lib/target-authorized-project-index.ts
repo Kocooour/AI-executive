@@ -23,6 +23,16 @@ export type TargetAuthorizedProjectIndexPage = {
 };
 
 const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
+// Mirror isReadableStagingProjectId in SQLite *before* OFFSET/LIMIT and the
+// contributing-Area EXISTS check. Invalid but structurally stored IDs must not
+// consume page positions, turn an entire page into 503, or affect its ACL epoch.
+// GLOB's character class excludes ASCII controls 1-31 and DEL; NUL must be
+// checked as BLOB because SQLite text/pattern operations can stop at NUL.
+const readableProjectIdSql = `p.id NOT IN ('', '.', '..')
+  AND length(CAST(p.id AS BLOB)) <= 512
+  AND instr(CAST(p.id AS BLOB), x'00') = 0
+  AND p.id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')`;
+
 type AreaRow = {
   areaId: string; areaKind: "private" | "shared"; policyRevision: number;
   projectContentRevision: number; role: string | null;
@@ -59,7 +69,8 @@ export function readAuthorizedProjectIndexPage(
     const areas = db.prepare(`SELECT a.id AS areaId, a.kind AS areaKind,
       a.policy_revision AS policyRevision, a.project_content_revision AS projectContentRevision,
       member.role AS role ${from}
-      AND EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area WHERE p.area_id = a.id)
+      AND EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area
+        WHERE p.area_id = a.id AND ${readableProjectIdSql})
       ORDER BY a.id COLLATE BINARY ASC
       LIMIT ?`).all(request.actorUserId, MAX_SCOPED_READ_AREAS + 1) as AreaRow[];
     if (areas.length > MAX_SCOPED_READ_AREAS) return null;
@@ -88,8 +99,8 @@ export function readAuthorizedProjectIndexPage(
       JOIN workspaces w ON w.id = a.workspace_id
       JOIN identities actor ON actor.id = ?
       LEFT JOIN area_members member ON member.area_id = a.id AND member.user_id = actor.id
-      WHERE ${policy} ORDER BY p.id COLLATE BINARY ASC
-      LIMIT ? OFFSET ?`).all(request.actorUserId, request.limit + 1, request.offset) as ProjectRow[];
+      WHERE ${policy} AND ${readableProjectIdSql}
+      ORDER BY p.id COLLATE BINARY ASC LIMIT ? OFFSET ?`).all(request.actorUserId, request.limit + 1, request.offset) as ProjectRow[];
     const knownAreas = new Set(linearization.areas.map(a => a.areaId));
     if (page.some(row =>
       !isReadableStagingProjectId(row.id) || typeof row.title !== "string" ||
