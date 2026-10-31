@@ -46,13 +46,34 @@ if (mode === "exclusive-lock") {
   process.stdout.write("released");
   process.exit(0);
 }
-if (mode === "raw") {
+if (mode === "hold-sidecar") {
+  // Hold a real rollback journal open while the parent starts a second pinned
+  // writer. Roll back so the shared synthetic fixture stays consistent.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(directory + "/lumi-target.sqlite");
+  try {
+    db.exec("BEGIN IMMEDIATE; UPDATE tasks SET title=title || ' (uncommitted)' WHERE id='t1'");
+    if (!existsSync(directory + "/lumi-target.sqlite-journal")) throw new Error("No rollback journal");
+    writeFileSync(gate + "/ready", "");
+    wait(120);
+    db.exec("ROLLBACK");
+  } finally { db.close(); }
+  process.stdout.write("released");
+  process.exit(0);
+}
+if (mode === "raw" || mode === "raw-many") {
   const { withPinnedTargetStagingWrite } = await import("../../lib/target-staging-pinned-write.ts");
-  const outcome = withPinnedTargetStagingWrite(
-    { stagingDirectory: directory, expectedRestoreGeneration: generation },
-    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
-    () => "denied", () => "failed");
-  process.stdout.write(JSON.stringify({ outcome }));
+  const counts = { ok: 0, failed: 0, denied: 0 };
+  const attempts = mode === "raw" ? 1 : Number(rounds);
+  for (let i = 0; i < attempts; i++) {
+    const outcome = withPinnedTargetStagingWrite(
+      { stagingDirectory: directory, expectedRestoreGeneration: generation },
+      context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+      () => "denied", () => "failed");
+    counts[outcome]++;
+  }
+  process.stdout.write(JSON.stringify(mode === "raw" ?
+    { outcome: Object.keys(counts).find(key => counts[key]) } : counts));
   process.exit(0);
 }
 const durable = await import("../../lib/target-staging-durable-session.ts");
