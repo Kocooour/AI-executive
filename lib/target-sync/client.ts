@@ -335,9 +335,14 @@ export class TargetSyncClient {
     if (!s) return { locked: false, value: empty };
     return this.guarded<Readable<T>>(s, { locked: false, value: empty }, async () => {
       const reason = await this.lockReason(s);
+      this.live(s);
       if (reason) return { locked: true, reason };
       if (!s.ns) return { locked: false, value: empty };
-      return { locked: false, value: await fn(s.ns, await this.readMeta(s)) };
+      const ns = s.ns;
+      const value = await fn(ns, await this.readMeta(s));
+      this.live(s);
+      if (s.ns !== ns) throw new StaleSession();
+      return { locked: false, value };
     });
   }
   listItems(): Promise<Readable<SyncItem[]>> {
@@ -1054,7 +1059,12 @@ export class TargetSyncClient {
   /** Explicit: a conflicting, unsendable or restored (local) draft is based on the current item again and queued. */
   resubmitDraft(taskId: string): Promise<EditResult> {
     return this.guarded<EditResult>(this.session, { ok: false, reason: "inactive" }, async s => {
-      const draft = s.ns ? await s.ns.get<SyncDraft>(K.draft(taskId)) : undefined;
+      this.live(s);
+      if (await this.lockReason(s)) return { ok: false, reason: "locked" };
+      const ns = s.ns;
+      const draft = ns ? await ns.get<SyncDraft>(K.draft(taskId)) : undefined;
+      this.live(s);
+      if (s.ns !== ns) return { ok: false, reason: "inactive" };
       if (!draft) return { ok: false, reason: "unknown_task" };
       if (draft.status === "queued") return { ok: true, status: "queued", commandId: draft.commandId };
       return this.editSafe(s, draft.kind, taskId, draft.title, true);
@@ -1082,11 +1092,14 @@ export class TargetSyncClient {
       if (after) return { locked: true, reason: after };
       const ns = s.ns;
       if (!ns) return { locked: false, value: { ...empty, sync } };
-      return { locked: false, value: {
+      const value = {
         item: (await ns.get<SyncItem>(K.item("task", taskId))) ?? null,
         tombstoned: (await ns.get(K.tomb("task", taskId))) !== undefined,
         draft: (await ns.get<SyncDraft>(K.draft(taskId))) ?? null, sync,
-      } };
+      };
+      this.live(s);
+      if (s.ns !== ns) throw new StaleSession();
+      return { locked: false, value };
     });
   }
 
