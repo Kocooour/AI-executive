@@ -246,6 +246,52 @@ test("project-only Area epochs bound pagination and detect distant edits without
   db.close();
 });
 
+test("unaddressable project IDs are excluded before limit, offset and Area revisions", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys = ON");
+  const insert = db.prepare("INSERT INTO projects(id, area_id, title) VALUES (?, ?, ?)");
+  const badIds = [
+    "", ".", "..",
+    "a" + String.fromCharCode(0) + "nul",
+    "b" + String.fromCharCode(1) + "control",
+    "b" + String.fromCharCode(31) + "control",
+    "c" + String.fromCharCode(127) + "del",
+    "t".repeat(513),
+  ];
+  for (const id of badIds) insert.run(id, "family-area", "Not addressable");
+  insert.run("aaa-first", "family-area", "Valid first");
+  insert.run("zz-last", "family-area", "Valid last");
+
+  // An Area containing only inaccessible project IDs must not contribute to
+  // the cursor revision or its policy linearization.
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bad-only-ws','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('bad-only-area','Only invalid IDs','shared','bad-only-ws','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('bad-only-area','alice','admin')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('bad-only-area','bob','editor')").run();
+  insert.run("x" + String.fromCharCode(0) + "invalid-only", "bad-only-area", "Hidden");
+
+  const visible = [];
+  let cursor = null;
+  for (let i = 0; i < 4; i++) {
+    const query = "?scope=shared&limit=1" + (cursor ? "&cursor=" + cursor : "");
+    const page = await ok(get(fx, query, bob));
+    assert.equal(page.projects.length, 1);
+    visible.push(page.projects[0].id);
+    if (i === 0) {
+      // An Area that contributes no readable project must be irrelevant
+      // even if its membership changes after the first page.
+      db.prepare("DELETE FROM area_members WHERE area_id='bad-only-area' AND user_id='bob'").run();
+    }
+    cursor = page.nextCursor;
+    assert.equal(page.hasMore, i < 3);
+  }
+  assert.equal(cursor, null);
+  assert.deepEqual(visible, ["aaa-first", "family-project", "family-second", "zz-last"]);
+  db.close();
+});
+
 test("malformed requests, child metadata injection and feature-off fail closed", async () => {
   const fx = fixture();
   const good = await readProcess.readStagingAuthorizedProjectIndexInChild({
