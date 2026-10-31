@@ -404,6 +404,44 @@ test("concurrent writers in several processes keep one linear, valid chain (ever
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("a transient SQLite rollback sidecar is not mistaken for an untrusted store", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "sidecar-contention-"));
+  const holding = runChild(fx, "hold-sidecar", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(5);
+  assert.ok(existsSync(path.join(gate, "ready")), "child started its real SQLite write");
+  assert.equal(existsSync(fx.databasePath + "-journal"), true, "sidecar exists before second writer");
+  // This previously returned `denied` immediately, without ever attempting
+  // the SQLite lock, despite a legitimate writer holding the rollback journal.
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  const holder = await holding.done;
+  assert.equal(holder.code, 0, JSON.stringify(holder));
+  assert.equal(outcome, "ok", "the sidecar disappears within the bounded lock wait");
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("six un-retried concurrent writers never classify transient contention as denied", async () => {
+  const fx = makeFixture();
+  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 40));
+  const results = await Promise.all(workers.map(w => w.done));
+  assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
+  const counts = results.map(r => JSON.parse(r.stdout));
+  const totals = counts.reduce((sum, r) => ({
+    ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
+  }), { ok: 0, failed: 0, denied: 0 });
+  assert.equal(totals.ok + totals.failed + totals.denied, 240, JSON.stringify(counts));
+  assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
+    JSON.stringify(counts));
+  assert.ok(totals.ok > 0, "some writes must have committed");
+  assert.equal(anchorOf(fx), totals.ok, "every successful COMMIT advances the anchor exactly once");
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(journalState(fx).confirmed, totals.ok);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("a write in flight on another process (intent appended, not committed) does not trip reads", async () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "warm").ok, true);
