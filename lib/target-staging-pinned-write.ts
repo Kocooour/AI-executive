@@ -296,7 +296,20 @@ export function withPinnedTargetStagingWrite<T>(
   let journalFd: number | null = null;
   try {
     files = pinTargetStagingFiles(store.stagingDirectory);
-    if (!files || !noTargetStagingSidecars(files.databasePath)) return denied();
+    if (!files) return denied();
+    // A *different* writer creates a SQLite -journal while committing. This check
+    // precedes our SQLite lock (opening a DB with an untrusted sidecar could perform
+    // crash recovery), so a single observation must not become an auth/trust denial.
+    // Give a legitimate in-flight writer the same bounded grace as busy_timeout.
+    // A sidecar that does not disappear is still refused WITHOUT opening SQLite:
+    // the operator must handle a stale or hot journal, never this writer.
+    const sidecarDeadline = Date.now() + busyTimeoutMs;
+    const sidecarSleep = new Int32Array(new SharedArrayBuffer(4));
+    while (!noTargetStagingSidecars(files.databasePath)) {
+      const remaining = sidecarDeadline - Date.now();
+      if (remaining <= 0) return denied();
+      Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
+    }
     // R2c.4a: the (possibly long) cold chain verification happens BEFORE the write lock.
     warmTargetStagingJournal(files.directoryFdPath, store.expectedRestoreGeneration);
     const opened = files.openDatabase({ readOnly: false });
