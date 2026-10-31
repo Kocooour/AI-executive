@@ -5,10 +5,18 @@ on:
     paths:
       - ".github/workflows/r2d-project-reads.yml"
       - "lib/target-project-task-read-model.ts"
+      - "lib/target-project-id.ts"
+      - "lib/target-task-read-model.ts"
+      - "lib/target-staging-read-limits.ts"
+      - "lib/target-staging-project-http-cursor.ts"
+      - "lib/target-staging-durable-session.ts"
+      - "lib/target-staging-http-identity.ts"
+      - "lib/target-store-bootstrap.ts"
       - "lib/target-task-staging-reader.ts"
       - "lib/target-staging-session-authority.ts"
       - "lib/target-staging-read-process.ts"
       - "scripts/target-staging-project-tasks-child.mjs"
+      - "scripts/target-staging-child-actor.mjs"
       - "app/api/target-staging/projects/**"
       - "tests/target-staging-project-tasks.test.mjs"
   workflow_dispatch:
