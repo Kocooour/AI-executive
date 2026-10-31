@@ -515,15 +515,20 @@ function runPinnedTargetStagingTransaction<T, C>(
       try {
         connection.exec("COMMIT");
       } catch (commitError) {
-        // COMMIT may throw AFTER it took effect (e.g. an I/O error on the final fsync/close). Probe: a
-        // ROLLBACK that succeeds proves the transaction was still open (nothing committed: fail as
-        // before); "no transaction is active" means it ended, and only the durable state decides
-        // whether that was our commit (anchor and witness row both carry intent n) or an automatic
-        // rollback. A committed restore must still get its confirm attempt, never a plain failure.
-        let stillOpen = true;
-        try { connection.exec("ROLLBACK"); } catch { stillOpen = false; }
+        // COMMIT may throw AFTER it took effect (e.g. an I/O error on the final fsync/close). Decide from
+        // the CONNECTION STATE, never from a failed ROLLBACK; isTransaction === true means the transaction
+        // is still open (nothing committed): roll back (keep `transaction` set if that fails so the
+        // finally retries) and fail with the original error. Only when it is false has the transaction
+        // ended, and then only the durable state decides whether that was our commit (anchor and
+        // witness row both carry intent n) or an automatic rollback. A non-boolean value (unsupported
+        // runtime) is unknown: fail closed, never claim durable. A committed restore must still get its
+        // confirm attempt, never a plain failure.
+        const open = (connection as unknown as { isTransaction?: unknown }).isTransaction;
+        if (open !== false) {
+          try { connection.exec("ROLLBACK"); transaction = false; } catch { /* the finally retries */ }
+          throw commitError;
+        }
         transaction = false;
-        if (stillOpen) throw commitError;
         let durable = false;
         try {
           const anchorRow = connection.prepare("SELECT value FROM metadata WHERE key='anchor_seq'")

@@ -1615,6 +1615,83 @@ test("restore: COMMIT throwing after its effect on an untrusted store: confirm_u
   assert.equal(lines.some(l => l.t === "confirm" && l.n === restoreN), true);
 });
 
+/** COMMIT throws WITHOUT taking effect and the first ROLLBACK throws too (transaction still open). */
+function withCommitAndRollbackFailing(fn) {
+  const origExec = DatabaseSync.prototype.exec;
+  let commitArmed = true;
+  let rollbackArmed = false;
+  DatabaseSync.prototype.exec = function (sql) {
+    if (commitArmed && sql === "COMMIT") {
+      commitArmed = false;
+      rollbackArmed = true;
+      throw new Error("injected: COMMIT failed without effect");
+    }
+    if (rollbackArmed && sql === "ROLLBACK") {
+      rollbackArmed = false;
+      throw new Error("injected: ROLLBACK failed (IOERR/BUSY)");
+    }
+    return origExec.call(this, sql);
+  };
+  try { return fn(); } finally { DatabaseSync.prototype.exec = origExec; }
+}
+
+function taskTitleOf(fx, id) {
+  const db = new DatabaseSync(fx.databasePath, { readOnly: true });
+  try { return db.prepare("SELECT title FROM tasks WHERE id = ?").get(id)?.title; } finally { db.close(); }
+}
+function anchorValueOf(fx) {
+  const db = new DatabaseSync(fx.databasePath, { readOnly: true });
+  try { return db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value; } finally { db.close(); }
+}
+
+test("normal writer: COMMIT fails without effect and ROLLBACK also fails (txn open): failed, nothing committed, next writer recovers", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const anchorBefore = anchorValueOf(fx);
+  const titleBefore = taskTitleOf(fx, "t1");
+  const res = withCommitAndRollbackFailing(() => titleWrite(fx, "t1", "never"));
+  assert.notEqual(res.ok, true, "an uncommitted write must not be acknowledged");
+  assert.equal(anchorValueOf(fx), anchorBefore);
+  assert.equal(taskTitleOf(fx, "t1"), titleBefore);
+  assert.equal(titleWrite(fx, "t1", "after").ok, true, "the next writer aborts the trailing intent and succeeds");
+  assert.equal(taskTitleOf(fx, "t1"), "after");
+  assert.equal(journalLines(fx).some(l => l.t === "abort"), true);
+});
+
+test("restore: COMMIT fails without effect and ROLLBACK also fails: write_failed, exit 1, generation unchanged, no restoreGeneration", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  copyBack(fx, backup);
+  const genBefore = generationOf(fx);
+  const result = withCommitAndRollbackFailing(() => restoreLib.restoreTargetStagingFromBackup(fx.store));
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "write_failed", JSON.stringify(result));
+  assert.equal(restoreLib.restoreExitCode(result), 1);
+  assert.equal("restoreGeneration" in result, false);
+  assert.equal(generationOf(fx), genBefore);
+});
+
+test("normal writer: COMMIT throwing after its effect is acknowledged ok, confirm appended, gate ok", () => {
+  const fx = makeFixture();
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  DatabaseSync.prototype.exec = function (sql) {
+    const out = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") { armed = false; throw new Error("injected: COMMIT failed after taking effect"); }
+    return out;
+  };
+  let res;
+  try { res = titleWrite(fx, "t1", "one"); } finally { DatabaseSync.prototype.exec = origExec; }
+  assert.equal(res.ok, true);
+  assert.equal(taskTitleOf(fx, "t1"), "one");
+  const lines = journalLines(fx);
+  const n = lines.filter(l => l.t === "intent").at(-1).n;
+  assert.equal(lines.some(l => l.t === "confirm" && l.n === n), true);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("CLI: confirm_untrusted exits 2 and prints restoreGeneration (child process with a test-local exec hook)", () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "one").ok, true);
