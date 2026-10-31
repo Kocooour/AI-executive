@@ -84,6 +84,39 @@ test("note parent exclusivity, foreign keys, malformed IDs and size limits fail 
   } finally { db.close(); }
 });
 
+test("note reparenting changes visibility and advances a non-ABA revision", () => {
+  const db = fixture();
+  try {
+    const before = read(db, "bob", "n-shared");
+    assert.ok(before);
+    db.prepare("UPDATE notes SET project_id=NULL, area_id='a-private' WHERE id='n-shared'").run();
+    assert.equal(read(db, "bob", "n-shared"), null);
+    assert.equal(read(db, "alice", "n-shared")?.note.areaId, "a-private");
+    assert.equal(rev(db, "n-shared"), 1);
+    db.prepare("UPDATE notes SET project_id='p-shared', area_id=NULL WHERE id='n-shared'").run();
+    assert.equal(read(db, "bob", "n-shared")?.note.areaId, "a-shared");
+    const after = read(db, "bob", "n-shared");
+    assert.ok(after);
+    assert.equal(rev(db, "n-shared"), 2);
+    assert.notDeepEqual(after.guard, before.guard);
+  } finally { db.close(); }
+});
+
+test("an attached note blocks a project deletion even with a valid project tombstone", () => {
+  const db = fixture();
+  try {
+    const project = db.prepare("SELECT area_id, revision FROM projects WHERE id='p-shared'").get();
+    const next = db.prepare("SELECT COALESCE(MAX(seq),0)+1 AS seq FROM change_log").get().seq;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("INSERT INTO project_tombstones(id,area_id,revision,change_seq,deleted_at_ms) VALUES (?,?,?,?,?)")
+        .run("p-shared", project.area_id, project.revision + 1, next, Date.now());
+      assert.throws(() => db.prepare("DELETE FROM projects WHERE id='p-shared'").run());
+    } finally { db.exec("ROLLBACK"); }
+    assert.equal(read(db, "bob", "n-shared")?.note.projectId, "p-shared");
+  } finally { db.close(); }
+});
+
 const root = mkdtempSync(path.join(os.tmpdir(), "lumi-notes-v13-"));
 const legacy = path.join(root, "legacy");
 mkdirSync(legacy);
