@@ -138,6 +138,14 @@ export class TargetSyncClient {
   private identityChain: Promise<unknown> = Promise.resolve();
   /** Namespaces whose deletion failed: completed before any identity is activated again. */
   private pendingWipe: string[] = [];
+  /** Tracks writes independently of the session chain, which may await network indefinitely. */
+  private readonly storageWrites = new Set<Promise<unknown>>();
+
+  private async drainStorageWrites(): Promise<void> {
+    while (this.storageWrites.size > 0) {
+      await Promise.allSettled([...this.storageWrites]);
+    }
+  }
 
   constructor(options: TargetSyncClientOptions) {
     this.storage = options.storage;
@@ -181,6 +189,7 @@ export class TargetSyncClient {
         // Do not await in-flight network calls: they may remain pending indefinitely.
         // Closing the old session invalidates their responses before they can commit.
       }
+      await this.drainStorageWrites();
       const names = await this.storage.listNamespaces();
       const foreign = names.filter(name => parseNamespaceName(name)?.userId !== userId);
       if (foreign.length > 0) await this.storage.deleteNamespaces(foreign);
@@ -332,7 +341,13 @@ export class TargetSyncClient {
   private async rawCommit(s: Session, ns: TargetSyncNamespace, ops: StorageOp[]): Promise<void> {
     this.live(s);
     try {
-      await ns.transaction(ops);
+      const write = ns.transaction(ops);
+      this.storageWrites.add(write);
+      try {
+        await write;
+      } finally {
+        this.storageWrites.delete(write);
+      }
     } catch (error) {
       if (s.closed || this.session !== s) throw new StaleSession();
       throw new StorageFailure(error instanceof Error ? error.message : "storage");
