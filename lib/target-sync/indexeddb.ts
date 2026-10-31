@@ -27,6 +27,21 @@ function copy<T>(value: T): T {
   return structuredClone(value);
 }
 
+/**
+ * All record keys are [namespace, stringKey]. Arrays sort after strings in
+ * IndexedDB, so [namespace, []] is above every stringKey (including strings
+ * containing U+FFFF). Unlike a "\\uffff" sentinel, this bound cannot leave
+ * records behind when an identity is wiped.
+ */
+function namespaceRange(name: string): IDBKeyRange {
+  return IDBKeyRange.bound([name], [name, []], false, true);
+}
+
+/** Prefix matches form a contiguous interval beginning with [name, prefix]. */
+function prefixRange(name: string, prefix: string): IDBKeyRange {
+  return IDBKeyRange.bound([name, prefix], [name, []], false, true);
+}
+
 export class IndexedDbTargetSyncStorage implements TargetSyncStorage {
   private readonly dbPromise: Promise<IDBDatabase>;
 
@@ -80,7 +95,7 @@ export class IndexedDbTargetSyncStorage implements TargetSyncStorage {
     const records = tx.objectStore(RECORDS);
     for (const name of new Set(names)) {
       markers.delete(name);
-      records.delete(IDBKeyRange.bound([name, ""], [name, "\uffff"], false, false));
+      records.delete(namespaceRange(name));
     }
     await done;
   }
@@ -115,7 +130,7 @@ class IndexedDbNamespace implements TargetSyncNamespace {
   list<T = unknown>(prefix: string): Promise<Array<{ key: string; value: T }>> {
     return this.run("readonly", async records => {
       const rows: Array<{ key: string; value: T }> = [];
-      const range = IDBKeyRange.bound([this.name, prefix], [this.name, prefix + "\uffff"]);
+      const range = prefixRange(this.name, prefix);
       await new Promise<void>((resolve, reject) => {
         const cursor = records.openCursor(range);
         cursor.onerror = () => reject(cursor.error ?? new Error("indexeddb_cursor_failed"));
@@ -123,7 +138,8 @@ class IndexedDbNamespace implements TargetSyncNamespace {
           const row = cursor.result;
           if (!row) { resolve(); return; }
           const key = (row.key as string[])[1];
-          if (key.startsWith(prefix)) rows.push({ key, value: copy(row.value as T) });
+          if (!key.startsWith(prefix)) { resolve(); return; }
+          rows.push({ key, value: copy(row.value as T) });
           row.continue();
         };
       });
@@ -137,14 +153,15 @@ class IndexedDbNamespace implements TargetSyncNamespace {
         if (op.kind === "put") records.put(copy(op.value), [this.name, op.key]);
         else if (op.kind === "delete") records.delete([this.name, op.key]);
         else if (op.kind === "deletePrefix") {
-          const range = IDBKeyRange.bound([this.name, op.prefix], [this.name, op.prefix + "\uffff"]);
+          const range = prefixRange(this.name, op.prefix);
           await new Promise<void>((resolve, reject) => {
             const cursor = records.openKeyCursor(range);
             cursor.onerror = () => reject(cursor.error ?? new Error("indexeddb_cursor_failed"));
             cursor.onsuccess = () => {
               const row = cursor.result;
               if (!row) { resolve(); return; }
-              if ((row.key as string[])[1].startsWith(op.prefix)) row.delete();
+              if (!(row.key as string[])[1].startsWith(op.prefix)) { resolve(); return; }
+              row.delete();
               row.continue();
             };
           });
