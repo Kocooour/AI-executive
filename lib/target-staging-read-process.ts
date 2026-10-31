@@ -7,6 +7,7 @@ import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
 } from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
+import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { isReadableStagingProjectId } from "./target-project-id";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
@@ -556,4 +557,57 @@ export async function readStagingFeedPageInChild(
   const encoded = claims === null ? "-" : Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
   const payload = await runChild(config, "target-staging-feed-child.mjs", [encoded]);
   return parseStagingFeedResult(payload);
+}
+
+
+/** R2d.1a strict project+children subprocess boundary; all data is allowlisted. */
+export type StagingProjectTasksResult =
+  | { ok: true; page: TargetAuthorizedProjectTasksPage }
+  | { ok: false; reason: "unavailable" };
+
+export function parseStagingProjectTasks(
+  value: unknown, projectId: string,
+): StagingProjectTasksResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  if (data.ok === false && data.reason === "unavailable" &&
+      Object.keys(data).sort().join(",") === "ok,reason") return { ok: false, reason: "unavailable" };
+  if (data.ok !== true ||
+      Object.keys(data).sort().join(",") !== "hasMore,linearization,ok,project,revision,tasks" ||
+      !data.project || typeof data.project !== "object" || Array.isArray(data.project) ||
+      !Array.isArray(data.tasks) || data.tasks.length > 100 ||
+      typeof data.hasMore !== "boolean" || typeof data.revision !== "string" ||
+      !REVISION.test(data.revision)) return null;
+  const project = data.project as Record<string, unknown>;
+  if (Object.keys(project).sort().join(",") !== "areaId,areaKind,id,title" ||
+      !isReadableStagingProjectId(project.id) || project.id !== projectId ||
+      typeof project.title !== "string" || typeof project.areaId !== "string" ||
+      !project.areaId ||
+      (project.areaKind !== "private" && project.areaKind !== "shared")) return null;
+  const tasks: TargetScopedReadableTask[] = [];
+  for (const item of data.tasks) {
+    const task = parseScopedTask(item, project.areaKind === "shared" ? "shared" : "my-plan");
+    if (!task || task.projectId !== projectId || task.areaId !== project.areaId ||
+        task.areaKind !== project.areaKind) return null;
+    tasks.push(task);
+  }
+  const linearization = parseLinearization(data.linearization,
+    new Map([[project.areaId as string, project.areaKind]]));
+  if (!linearization || linearization.areas.length !== 1 ||
+      linearization.areas[0].areaId !== project.areaId) return null;
+  return { ok: true, page: {
+    project: { id: project.id, title: project.title, areaId: project.areaId,
+      areaKind: project.areaKind },
+    tasks, hasMore: data.hasMore, revision: data.revision, linearization,
+  } };
+}
+
+export async function readStagingAuthorizedProjectTasksInChild(
+  config: StagingPersonalReadConfig, projectId: string, limit: number, offset: number,
+): Promise<StagingProjectTasksResult | null> {
+  const payload = await runChild(config, "target-staging-project-tasks-child.mjs",
+    [projectId, String(limit), String(offset)]);
+  const result = parseStagingProjectTasks(payload, projectId);
+  if (payload !== null && !result) logStagingFailure("project_tasks", "invalid_child_dto");
+  return result;
 }
