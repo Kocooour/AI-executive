@@ -7,7 +7,7 @@ import {
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_RESTORE_HISTORY_MAX,
-  TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, verifyExistingTargetStagingPath,
+  TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -19,7 +19,7 @@ export type TargetPreflightCode =
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
-  | "restore_history_invalid";
+  | "restore_history_invalid" | "note_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -170,6 +170,26 @@ export function inspectIsolatedTargetStore(
     try {
       if (all("PRAGMA foreign_key_check").length !== 0) fail("foreign_key_failed");
     } catch { fail("foreign_key_failed"); }
+    // Notes are staging-only until a validated command/HTTP/sync contract exists.
+    // Recheck row invariants even when a writer disabled CHECK/FK enforcement.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM notes") > TARGET_STAGING_MAX_NOTES ||
+          count(`SELECT COUNT(*) AS n FROM notes n
+            LEFT JOIN projects p ON p.id=n.project_id
+            LEFT JOIN areas a ON a.id=n.area_id
+            WHERE (n.project_id IS NULL AND n.area_id IS NULL)
+               OR (n.project_id IS NOT NULL AND (n.area_id IS NOT NULL OR p.id IS NULL))
+               OR (n.project_id IS NULL AND a.id IS NULL)
+               OR typeof(n.id)<>'text' OR n.id='' OR n.id<>trim(n.id)
+               OR n.id IN ('.','..') OR length(CAST(n.id AS BLOB))>512
+               OR instr(n.id,char(0))>0
+               OR n.id GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')
+               OR typeof(n.title)<>'text' OR length(trim(n.title))=0
+               OR length(CAST(n.title AS BLOB))>4096 OR typeof(n.body)<>'text'
+               OR length(CAST(n.body AS BLOB))>131072 OR typeof(n.revision)<>'integer'
+               OR n.revision<0 OR n.revision>=9007199254740991`) !== 0)
+        fail("note_invalid");
+    } catch { fail("note_invalid"); }
     try {
       const rows = all("SELECT key, value FROM metadata") as { key: unknown; value: unknown }[];
       const meta = new Map(rows.map(row => [row.key, row.value]));
