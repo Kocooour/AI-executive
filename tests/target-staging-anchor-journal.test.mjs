@@ -1095,10 +1095,11 @@ async function confirmAttempt(fx, { fragment = false, restore = null } = {}) {
   const fd = journalLib.openTargetStagingJournal(fx.stage.directory, true);
   try {
     assert.ok(fd !== null);
-    assert.equal(witnessLib.attachTargetStagingWitness(db, fx.stage.directory, fx.stage.restoreGeneration, genesis), true);
+    const witness = witnessLib.attachTargetStagingWitness(db, fx.stage.directory, fx.stage.restoreGeneration, genesis);
+    assert.ok(witness);
     db.exec("BEGIN IMMEDIATE");
     const appended = pinned.appendTargetStagingConfirmIfTrusted(db, fd, fx.stage.restoreGeneration, genesis,
-      fx.stage.directory, n);
+      fx.stage.directory, n, () => witness.stillAttached());
     db.exec("ROLLBACK");
     return { appended, before, after: readFileSync(fx.journalPath), n };
   } finally { db.close(); if (fd !== null) closeSync(fd); }
@@ -1161,6 +1162,53 @@ test("post-commit in-place restore through the real writer: no confirm, journal 
   assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "no confirm appended on the restored store");
   assert.equal(journalLines(fx).at(-1).t, "intent");
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  assert.equal(four().ok, false);
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "next writer leaves the journal untouched");
+});
+
+// Atomic replacement (rename) swaps the inode: the open connection keeps the ORIGINAL file,
+// so anchor_seq and the attached witness still read n. Only the path/inode re-check detects it.
+function atomicReplaceAfterCommit(fx, target, backupName) {
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const backup = path.join(root, `${fx.name}.${backupName}.sqlite`);
+  copyFileSync(target, backup); // state at anchor 2
+  const three = prepareTitle(fx, "t1", "three");
+  const four = prepareTitle(fx, "t1", "four");
+  const origExec = DatabaseSync.prototype.exec;
+  let armed = true;
+  let intentOnly = null;
+  DatabaseSync.prototype.exec = function (sql) {
+    const result = origExec.call(this, sql);
+    if (armed && sql === "COMMIT") {
+      armed = false;
+      intentOnly = readFileSync(fx.journalPath);
+      const temp = path.join(path.dirname(target), `${path.basename(target)}.swap`);
+      copyFileSync(backup, temp);
+      renameSync(temp, target);
+    }
+    return result;
+  };
+  try { three(); } finally { DatabaseSync.prototype.exec = origExec; }
+  assert.ok(intentOnly, "hook ran after COMMIT");
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "no confirm appended");
+  assert.equal(journalLines(fx).at(-1).t, "intent");
+  return { four, intentOnly };
+}
+
+test("post-commit atomic rename of an older main DB: no confirm, journal bytes unchanged, next writer denied", () => {
+  const fx = makeFixture();
+  const { four, intentOnly } = atomicReplaceAfterCommit(fx, fx.databasePath, "p2rename");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  assert.equal(four().ok, false);
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "next writer leaves the journal untouched");
+});
+
+test("post-commit atomic rename of an older witness: no confirm, store fails closed", () => {
+  const fx = makeFixture();
+  const witnessPath = path.join(fx.stage.directory, witnessLib.TARGET_STAGING_WITNESS_FILENAME);
+  const { four, intentOnly } = atomicReplaceAfterCommit(fx, witnessPath, "w2rename");
+  assert.notEqual(durable.checkTargetStagingAnchorLive(fx.store), "ok");
   assert.equal(four().ok, false);
   assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "next writer leaves the journal untouched");
 });

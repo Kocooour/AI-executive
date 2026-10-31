@@ -248,10 +248,13 @@ export function trustedTargetStagingTail(
  */
 export function appendTargetStagingConfirmIfTrusted(
   connection: DatabaseSync, journal: number, generation: string, genesisHash: string,
-  directoryFdPath: string, n: number,
+  directoryFdPath: string, n: number, pathsStillTrusted: () => boolean,
 ): boolean {
+  // The canonical main/witness paths must still name the inodes this connection holds
+  // (an atomic rename of an older copy leaves the open connection on the old inode).
+  if (!pathsStillTrusted()) return false;
   const trusted = trustedTargetStagingTail(connection, journal, generation, genesisHash, directoryFdPath);
-  if (!trusted) return false;
+  if (!trusted || !pathsStillTrusted()) return false;
   if (trusted.scan.torn) truncateTargetStagingJournal(journal, trusted.scan.completeBytes);
   if (trusted.scan.state.pending !== n) return false;
   appendTargetStagingJournalLine(journal, serializeTargetStagingJournalLine({
@@ -312,12 +315,15 @@ export function withPinnedTargetStagingWrite<T>(
     // ATTACH MUST use the durable canonical filesystem pathname, not the
     // /proc/self/fd/N alias: SQLite records attached journal paths in its
     // crash-recovery super-journal, which must remain valid after process exit.
-    if (!attachTargetStagingWitness(db, files.directory,
-        store.expectedRestoreGeneration, genesisHash)) return denied();
+    const witness = attachTargetStagingWitness(db, files.directory,
+        store.expectedRestoreGeneration, genesisHash);
+    if (!witness) return denied();
     db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
     transaction = true;
     db.prepare("SELECT value FROM metadata WHERE key='schema_version'").get();
-    if (!files.stillPinned() || !noTargetStagingSidecars(files.databasePath)) return denied();
+    const pathsStillTrusted = (): boolean => files !== null && files.stillPinned() &&
+      witness.stillAttached() && noTargetStagingSidecars(files.databasePath);
+    if (!pathsStillTrusted()) return denied();
 
     // All checks, including current roles and the pinned source integrity check,
     // occur under the same SQLite RESERVED write lock.
@@ -338,7 +344,7 @@ export function withPinnedTargetStagingWrite<T>(
     const trustedTail = trustedTargetStagingTail(connection, journal, store.expectedRestoreGeneration,
       genesisHash, pinnedFiles.directoryFdPath);
     // Verdict first, on the complete lines: an untrusted store is never modified.
-    if (!trustedTail) return denied();
+    if (!trustedTail || !pathsStillTrusted()) return denied();
     const { scan, anchor } = trustedTail;
     let state = scan.state;
     if (scan.torn) {
@@ -396,7 +402,7 @@ export function withPinnedTargetStagingWrite<T>(
           connection.exec("BEGIN IMMEDIATE");
           transaction = true;
           appendTargetStagingConfirmIfTrusted(connection, journal, generation, genesisHash,
-            pinnedFiles.directoryFdPath, n);
+            pinnedFiles.directoryFdPath, n, pathsStillTrusted);
           connection.exec("ROLLBACK");
           transaction = false;
         } catch { /* resolved by the next writer */ }
