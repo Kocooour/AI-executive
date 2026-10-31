@@ -68,8 +68,8 @@ export function readAuthorizedProjectIndexPage(
       .update(request.scope).update("\0").update(request.restoreGeneration).update("\0");
     for (const a of areas) {
       const access = accessOf(a);
-      if (!access || !a.areaId || a.areaKind !== request.scope.replace("personal", "private") &&
-          a.areaKind !== "shared" ||
+      if (!access || !a.areaId ||
+          a.areaKind !== (request.scope === "personal" ? "private" : "shared") ||
           !Number.isSafeInteger(a.policyRevision) || a.policyRevision < 0 ||
           !Number.isSafeInteger(a.contentRevision) || a.contentRevision < 0) return null;
       linearization.areas.push({
