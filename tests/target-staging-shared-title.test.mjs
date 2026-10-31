@@ -201,7 +201,10 @@ test("editor B and admin A (session and owner cookie) write a shared task title;
   const [alice, bob] = [login("alice"), login("bob")];
 
   // Preview (GET) and detail agree on one CAS token for an editor.
-  const previewBody = await (await preview(taskId, bob.cookie)).json();
+  const previewResponse = await preview(taskId, bob.cookie);
+  const previewText = await previewResponse.text();
+  assert.equal(previewResponse.status, 200, `preview ${previewResponse.status}: ${previewText.slice(0, 200)}`);
+  const previewBody = JSON.parse(previewText);
   const fromDetail = await revisionOf(taskId, bob.cookie);
   assert.equal(previewBody.snapshotRevision, fromDetail);
 

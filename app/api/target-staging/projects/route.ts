@@ -30,10 +30,10 @@ export async function GET(request: Request): Promise<Response> {
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true") {
     return answer(404, "Not found");
   }
-  // isAuthenticated alone accepts an insecure development bypass. This route
-  // deliberately requires real, configured owner-cookie authentication.
   const anchorRefused = stagingAnchorRefusal(request);
   if (anchorRefused) return anchorRefused;
+  // isAuthenticated alone accepts an insecure development bypass. This route
+  // deliberately requires real, configured owner-cookie authentication.
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;

@@ -20,7 +20,9 @@
  *      confirming or aborting a trailing intent of a crashed writer, decided by the witness). Refusal
  *      reasons include invalid_request (also a --generation which is not a UUID), generation_mismatch (a
  *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
- *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store).
+ *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store),
+ *      confirm_untrusted (the restore COMMITTED but the store was not fully trusted afterwards, so no confirm was
+ *      appended: do NOT set the new generation; the store fails closed until an operator inspects it).
  *   4. Set AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION to the printed value and start the server. While
  *      the configured generation differs the store fails closed. If the tool died after its commit and the
  *      output was lost, the new value is in the database: SELECT value FROM metadata WHERE key='restore_generation'.

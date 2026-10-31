@@ -71,6 +71,13 @@ export type TargetStagingRestoreFailure =
   | "capacity_exhausted"
   /** The journal holds a payload the replay does not understand, or the replay hit an unexpected error. */
   | "replay_failed"
+  /**
+   * The restore COMMITTED but its `confirm` was not appended: after the commit the store was no longer
+   * fully trusted under the new generation (main DB, witness or journal replaced or rolled back in the
+   * window, or the confirm append failed). Do NOT set the new generation; the store fails closed until
+   * an operator inspects it (a benign lost confirm is resolved by the next writer, not by this tool).
+   */
+  | "confirm_untrusted"
   | "write_failed";
 
 export type TargetStagingRestoreResult =
@@ -384,9 +391,11 @@ function restoreBody(
   if (!check.ok || !context.stillPinned()) throw new ReplayAbort("write_failed");
 
   const grantPairs = grants.map(grant => [grant.areaId, grant.userId] as [string, string]);
-  context.commit({ kind: "restore", payload: {
+  const confirmed = context.commit({ kind: "restore", payload: {
     superseded: superseded.size, skipped, grantAdmin: grantPairs,
   } });
+  // Never report success for a restore whose confirm is missing: the operator must not set the new generation.
+  if (!confirmed) return { ok: false, reason: "confirm_untrusted" };
   return {
     ok: true, restoreGeneration: context.newGeneration, previousGeneration: context.previousGeneration,
     backupAnchor: A, confirmedThrough: H, replayedMembership: replayed, revokedTokens: revoked.size,
