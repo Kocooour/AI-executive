@@ -86,7 +86,11 @@ export async function GET(
       ...stagingChildSessionConfig(identity),
     }, projectId, limit, offset);
     const released = result?.ok === true
-      ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId, result.page.linearization)
+      ? verifyStagingReadBeforeRelease(
+        request, identity, store, ownerUserId, result.page.linearization,
+        { projectId, areaId: result.page.project.areaId,
+          taskIds: result.page.tasks.map(task => task.id) },
+      )
       : verifyStagingIdentityBeforeRelease(request, identity, store);
     if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
