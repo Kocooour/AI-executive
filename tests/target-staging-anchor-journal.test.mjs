@@ -404,6 +404,75 @@ test("concurrent writers in several processes keep one linear, valid chain (ever
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("a transient SQLite rollback sidecar is not mistaken for an untrusted store", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "sidecar-contention-"));
+  const holding = runChild(fx, "hold-sidecar", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(5);
+  assert.ok(existsSync(path.join(gate, "ready")), "child started its real SQLite write");
+  assert.equal(existsSync(fx.databasePath + "-journal"), true, "sidecar exists before second writer");
+  // This previously returned `denied` immediately, without ever attempting
+  // the SQLite lock, despite a legitimate writer holding the rollback journal.
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  const holder = await holding.done;
+  assert.equal(holder.code, 0, JSON.stringify(holder));
+  assert.equal(outcome, "ok", "the sidecar disappears within the bounded lock wait");
+  assert.equal(journalState(fx).pending, null);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("an active SQLite rollback lock beyond busy_timeout is retryable, not denied", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "sidecar-long-contention-"));
+  const holding = runChild(fx, "hold-sidecar-long", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(5);
+  assert.ok(existsSync(path.join(gate, "ready")), "child holds a live SQLite write transaction");
+  assert.equal(existsSync(fx.databasePath + "-journal"), true);
+  const before = { anchor: anchorOf(fx), journal: journalText(fx) };
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  assert.equal(outcome, "failed", "real lock timeout must not look like untrusted data");
+  assert.deepEqual({ anchor: anchorOf(fx), journal: journalText(fx) }, before,
+    "a failed writer cannot touch the DB or irreversible journal");
+  const holder = await holding.done;
+  assert.equal(holder.code, 0, JSON.stringify(holder));
+  assert.equal(pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed"), "ok", "the writer can retry after the other lock releases");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
+  const fx = makeFixture();
+  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
+  const results = await Promise.all(workers.map(w => w.done));
+  assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
+  const counts = results.map(r => JSON.parse(r.stdout));
+  const totals = counts.reduce((sum, r) => ({
+    ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
+  }), { ok: 0, failed: 0, denied: 0 });
+  assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
+  assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
+    JSON.stringify(counts));
+  assert.ok(totals.ok > 0, "some writes must have committed");
+  // A failed attempt may have fsynced its intent before a SQLite COMMIT failure.
+  // Such an intent consumes an n and gets an abort at the NEXT write: anchor_seq
+  // need not equal the number of successful writes. Finish with one uncontended
+  // write, which also closes any pending intent left by the last failed writer.
+  const settled = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed");
+  assert.equal(settled, "ok", "the shared store remains writable after contention");
+  const state = journalState(fx);
+  assert.equal(state.pending, null);
+  assert.equal(state.confirmed, anchorOf(fx));
+  assert.equal(journalLines(fx).filter(line => line.t === "confirm").length, totals.ok + 1);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("a write in flight on another process (intent appended, not committed) does not trip reads", async () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "warm").ok, true);
@@ -453,7 +522,11 @@ test("crash after the intent but before COMMIT: reads stay ok, the next writer a
   opener.prepare("SELECT COUNT(*) FROM metadata").get();
   opener.close();
   assert.equal(existsSync(sidecar), true, "a normal open does not clear it");
-  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600), { ok: false, reason: "unavailable" });
+  // Linux /proc/locks proves that the killed writer no longer holds a lock;
+  // where lock visibility is unavailable we fail closed with retryable timeout.
+  const staleReason = process.platform === "linux" ? "unavailable" : "write_failed";
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600),
+    { ok: false, reason: staleReason });
   assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok", "still no restore state");
   recoverHotJournal(fx); // documented runbook: header magic is zero -> remove it
