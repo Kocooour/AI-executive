@@ -31,7 +31,7 @@ process.env.AI_EXECUTIVE_SESSION_SECRET = SECRET;
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED = "true";
 
-const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION } = await import("../lib/target-store-bootstrap.ts");
+const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION, TARGET_STAGING_RESTORE_HISTORY_MAX, TARGET_STAGING_SUPERSEDED_SESSIONS_MAX } = await import("../lib/target-store-bootstrap.ts");
 const { inspectIsolatedTargetStore } = await import("../lib/target-store-preflight.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
@@ -141,9 +141,9 @@ const titleWrite = (fx, taskId, title = SECRET_TITLE) => {
   return fx.authority.updateTaskTitle(token, { commandId: randomUUID(), taskId, title,
     expectedRevision: preview.snapshotRevision, ...writeFields(fx.db, taskId, fx.stage.restoreGeneration) });
 };
-const memberWrite = (fx, action, user, role) => {
+const memberWrite = (fx, action, user, role, actor = "alice") => {
   const policy = fx.db.prepare("SELECT policy_revision AS r FROM areas WHERE id='team-area'").get().r;
-  const result = fx.authority.applyMembershipCommand(writableToken(fx), { commandId: randomUUID(),
+  const result = fx.authority.applyMembershipCommand(fx.authority.issueWritable(actor).sessionToken, { commandId: randomUUID(),
     areaId: "team-area", expectedPolicyRevision: policy, writeAreaId: "team-area",
     restoreGeneration: fx.stage.restoreGeneration, action, targetUserId: user, ...(role ? { role } : {}) });
   assert.equal(result.ok, true, `${action} ${user}: ${JSON.stringify(result)}`);
@@ -320,10 +320,26 @@ test("acceptance: backup before removing B, revoking C and revokeAll D; the rest
   assert.equal(restoreIntent.p.previousGeneration, generationBefore);
   assert.equal(restoreIntent.p.from, anchorAtBackupOf(backup));
   assert.equal(restoreIntent.p.superseded, 3);
-  assert.equal(restoreIntent.p.grantAdmin, 0);
+  assert.deepEqual(restoreIntent.p.grantAdmin, []);
   assert.ok(!journalText(fx).includes(SECRET_TITLE));
   assert.equal(journalState(fx).pending, null);
 });
+test("a token issued after the backup (journal only) and then revoked by revokeAll is session_revoked, a later one session_restored", async () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  const early = issue(fx, "alice");   // journal-only after the backup, epoch below the later revokeAll
+  revokeAll(fx, "alice");
+  const late = issue(fx, "alice");    // journal-only, issued after the revokeAll: live under the source
+  copyBack(fx, backup);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM staging_sessions").get().n, 0, "neither token is in the backup rows");
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.supersededTokens, 1, "only the token which was live under the irreversible source is listed");
+  await expectDeadEverywhere(early.sessionToken, "session_revoked", "journal-only token revoked by a later revokeAll");
+  await expectDeadEverywhere(late.sessionToken, "session_restored", "journal-only token issued after the revokeAll");
+});
+
 function anchorAtBackupOf(file) {
   const raw = new DatabaseSync(file, { readOnly: true });
   try { return Number(raw.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value); } finally { raw.close(); }
@@ -432,24 +448,92 @@ test("a last-admin violation blocks the restore (store unchanged, still 503) unt
   assert.equal(roleOf(fx, "alice"), "viewer", "the journaled demotion still applies");
   assert.equal(preflight(fx).ok, true);
   const record = journalLines(fx).find(line => line.k === "restore");
-  assert.equal(record.p.grantAdmin, 1);
-  assert.equal(record.p.grantDigest, createHash("sha256").update(JSON.stringify(["team-area\0bob"])).digest("hex"));
-  assert.ok(!journalText(fx).includes('"bob"') || true);
+  assert.deepEqual(record.p.grantAdmin, [["team-area", "bob"]], "readable ID pairs, nothing else");
+  assert.deepEqual(result.grantAdmin, [["team-area", "bob"]]);
+  assert.equal("grantDigest" in record.p, false);
+});
+
+test("a grant for an Area which the last-admin invariant does not block is refused (grant_unneeded), nothing changes", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  memberWrite(fx, "remove", "bob");
+  copyBack(fx, backup);
+  const before = worldHash(fx);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: [{ areaId: "team-area", userId: "bob" }] }),
+    { ok: false, reason: "grant_unneeded" });
+  assert.equal(worldHash(fx), before, "dry evaluation left no trace");
+  assert.equal(roleOf(fx, "bob"), "editor");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  // One needed and one unneeded grant: the whole restore is refused.
+  const second = makeFixture();
+  second.db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('team2','shared','alice')").run();
+  second.db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('other-area','Other','shared','team2','alice')").run();
+  second.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('other-area','alice','admin')").run();
+  assert.equal(titleWrite(second, "t1", "x").ok, true);
+  const secondBackup = backupOf(second);
+  addIdentity(second.db, "erin");
+  memberWrite(second, "add", "erin", "admin");
+  memberWrite(second, "set_role", "alice", "viewer");
+  copyBack(second, secondBackup);
+  const secondBefore = worldHash(second);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(second.store, { grantAdmin: [
+    { areaId: "team-area", userId: "bob" }, { areaId: "other-area", userId: "bob" }] }),
+  { ok: false, reason: "grant_unneeded" });
+  assert.equal(worldHash(second), secondBefore);
+  // Two grants for the same blocked Area are fine; duplicates collapse; the pairs are sorted.
+  const ok = restoreNow(second, [{ areaId: "team-area", userId: "carol" }, { areaId: "team-area", userId: "bob" },
+    { areaId: "team-area", userId: "carol" }]);
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.deepEqual(ok.grantAdmin, [["team-area", "bob"], ["team-area", "carol"]]);
+  assert.equal(ok.grantedAdmins, 2);
+});
+
+test("grant limits: more than 16 grants or an over-long list is invalid_request", () => {
+  const fx = makeFixture();
+  const many = Array.from({ length: 17 }, (_, i) => ({ areaId: `a${i}`, userId: "bob" }));
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: many }), { ok: false, reason: "invalid_request" });
+  const long = Array.from({ length: 6 }, (_, i) => ({ areaId: `${"a".repeat(119)}${i}`, userId: "u".repeat(120) }));
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store, { grantAdmin: long }), { ok: false, reason: "invalid_request" });
+});
+
+test("the largest accepted grant list (16 pairs of long IDs within the limit) still fits one journal line", () => {
+  const pairs = Array.from({ length: 5 }, (_, i) => [`${"a".repeat(100)}${i}`, "u".repeat(100)]);
+  assert.ok(JSON.stringify(pairs).length <= 1200);
+  const line = journalLib.serializeTargetStagingJournalLine({ n: 2, t: "intent", k: "restore", g: G1, prev: "0".repeat(64),
+    p: { from: 0, through: 1, previousGeneration: G0, superseded: 16384, skipped: 999999, grantAdmin: pairs, seq: [1, 2] } });
+  assert.ok(Buffer.byteLength(line.text) <= 2048);
 });
 
 test("an operator grant is asserted after the replay: the journal cannot take it back", () => {
   const fx = makeFixture();
   assert.equal(titleWrite(fx, "t1", "x").ok, true);
   const backup = backupOf(fx);
-  memberWrite(fx, "set_role", "carol", "admin");
-  memberWrite(fx, "set_role", "bob", "admin");
-  memberWrite(fx, "set_role", "bob", "viewer"); // the journal demotes bob again; carol is still an admin
-  memberWrite(fx, "set_role", "alice", "viewer");
+  addIdentity(fx.db, "erin");
+  memberWrite(fx, "add", "erin", "admin");          // skipped by the restore: erin does not exist in the backup
+  memberWrite(fx, "set_role", "alice", "viewer");   // blocked without a grant
+  memberWrite(fx, "set_role", "carol", "admin", "erin");
+  memberWrite(fx, "set_role", "bob", "viewer", "erin"); // with the grant the journal takes bob's admin role back
   copyBack(fx, backup);
   const result = restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]);
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(roleOf(fx, "bob"), "admin");
+  assert.equal(roleOf(fx, "bob"), "admin", "the grant is asserted again after the replay");
   assert.equal(roleOf(fx, "carol"), "admin");
+  assert.equal(roleOf(fx, "alice"), "viewer");
+});
+
+test("a grant may re-add a user whom the journal removed (explicit operator decision)", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  addIdentity(fx.db, "erin");
+  memberWrite(fx, "add", "erin", "admin");
+  memberWrite(fx, "set_role", "alice", "viewer");
+  memberWrite(fx, "set_role", "carol", "admin", "erin");
+  memberWrite(fx, "remove", "bob", undefined, "erin");
+  copyBack(fx, backup);
+  assert.equal(restoreNow(fx, [{ areaId: "team-area", userId: "bob" }]).ok, true);
+  assert.equal(roleOf(fx, "bob"), "admin");
 });
 
 // =====================================================================================================
@@ -523,7 +607,7 @@ test("a wrong configured generation refuses; a backup of another store refuses",
   assert.equal(titleWrite(other, "t1", "z").ok, true);
   copyBack(fx, backup);
   const wrong = { stagingDirectory: fx.stage.directory, expectedRestoreGeneration: randomUUID() };
-  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "unavailable" });
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "generation_mismatch" });
   // The backup of ANOTHER store (another restore_generation) is not this journal's state at its anchor.
   const otherBackup = backupOf(other);
   copyBack(fx, otherBackup);
@@ -729,6 +813,81 @@ test("a stale configuration after a restore fails closed: the old generation doe
 // failures and crashes
 // =====================================================================================================
 
+test("--generation: malformed is invalid_request; well-formed but not this store's is generation_mismatch only for this store's own journal", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  assert.equal(titleWrite(fx, "t2", "y").ok, true);
+  copyBack(fx, backup);
+  const before = worldHash(fx);
+  for (const bad of ["not-a-uuid", "", "00000000-0000-0000-0000-000000000000", 7, undefined, null]) {
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup({ stagingDirectory: fx.stage.directory, expectedRestoreGeneration: bad }),
+      { ok: false, reason: "invalid_request" }, String(bad));
+  }
+  // Well-formed, wrong: the reply carries nothing beyond the reason.
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup({ stagingDirectory: fx.stage.directory, expectedRestoreGeneration: randomUUID() }),
+    { ok: false, reason: "generation_mismatch" });
+  assert.equal(worldHash(fx), before);
+  // A store which is not otherwise recognised stays `unavailable`: a tampered journal, a missing journal,
+  // a backup of another store, another directory.
+  const wrong = { stagingDirectory: fx.stage.directory, expectedRestoreGeneration: randomUUID() };
+  const other = makeFixture();
+  assert.equal(titleWrite(other, "t1", "z").ok, true);
+  const otherBackup = backupOf(other);
+  copyBack(fx, otherBackup);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "unavailable" }, "backup of another store");
+  copyBack(fx, backup);
+  const journalBytes = readFileSync(fx.journalPath);
+  appendFileSync(fx.journalPath, "not json\n");
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "unavailable" }, "tampered journal");
+  writeFileSync(fx.journalPath, journalBytes, { mode: 0o600 });
+  unlinkSync(fx.journalPath);
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(wrong), { ok: false, reason: "unavailable" }, "missing journal");
+  writeFileSync(fx.journalPath, journalBytes, { mode: 0o600 });
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup({ stagingDirectory: path.join(root, "nope"), expectedRestoreGeneration: randomUUID() }),
+    { ok: false, reason: "unavailable" }, "no store");
+  // The right generation still restores.
+  assert.equal(restoreNow(fx).ok, true);
+});
+
+/** Make a table of a backup FILE genuinely full (the preflight checks the trigger DDL, so no shortcut). */
+function fillBackup(file, table) {
+  const raw = new DatabaseSync(file);
+  try {
+    const current = raw.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get().value;
+    raw.exec("BEGIN");
+    if (table === "restore_generations") {
+      // One chain of 256 rows which ends at the current generation.
+      let next = current;
+      for (let i = 0; i < TARGET_STAGING_RESTORE_HISTORY_MAX; i++) {
+        const before = randomUUID();
+        raw.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(next, before, 1, Date.now());
+        next = before;
+      }
+    } else {
+      raw.prepare("INSERT INTO restore_generations VALUES (?,?,?,?)").run(current, randomUUID(), 1, Date.now());
+      const insert = raw.prepare("INSERT INTO restore_superseded_sessions VALUES (?,?,?)");
+      for (let i = 0; i < TARGET_STAGING_SUPERSEDED_SESSIONS_MAX; i++) insert.run(randomBytes(32).toString("hex"), "alice", current);
+    }
+    raw.exec("COMMIT");
+  } finally { raw.close(); }
+}
+for (const table of ["restore_generations", "restore_superseded_sessions"]) {
+  test(`${table} full: capacity_exhausted (not write_failed), nothing changes, the store stays restore_pending`, () => {
+    const fx = makeFixture();
+    assert.equal(titleWrite(fx, "t1", "x").ok, true);
+    issue(fx, "carol");                       // live under the source: superseded needs a row
+    const backup = backupOf(fx);
+    memberWrite(fx, "remove", "bob");
+    fillBackup(backup, table);
+    copyBack(fx, backup);
+    const before = worldHash(fx);
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "capacity_exhausted" });
+    assert.equal(worldHash(fx), before);
+    assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  });
+}
+
 function runRestoreChild(fx, mode) {
   const child = spawn(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
     "tests/support/target-restore-gated-child.mjs", fx.stage.directory, fx.stage.restoreGeneration, mode],
@@ -879,7 +1038,7 @@ const genesis = { n: 0, t: "genesis", k: null, p: null, g: G0 };
 const title = (n, g) => ({ n, t: "intent", k: "title", p: { seq: [n, n] }, g });
 const resolve = (n, t, g) => ({ n, t, k: null, p: null, g });
 const restoreRecord = (n, g, p = {}) => ({ n, t: "intent", k: "restore",
-  p: { from: 0, through: 1, previousGeneration: G0, superseded: 0, skipped: 0, ...p }, g });
+  p: { from: 0, through: 1, previousGeneration: G0, superseded: 0, skipped: 0, grantAdmin: [], ...p }, g });
 
 test("verifier: a restore intent is the only place the generation changes; resolutions carry the new generation", () => {
   const good = [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
@@ -913,6 +1072,25 @@ const invalidChains = {
   "record after the confirm uses the old generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1), title(3, G0)],
   "record after the abort uses the new generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "abort", G1), title(3, G1)],
   "restore does not end at the highest confirmed intent": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { through: 0 })],
+  // through > from in all of these, so ONLY the `through === highest confirmed` rule can reject them
+  "restore stops below the highest confirmed intent": [genesis, title(1, G0), resolve(1, "confirm", G0), title(2, G0), resolve(2, "confirm", G0),
+    restoreRecord(3, G1, { from: 0, through: 1 })],
+  "restore claims to replay beyond the highest confirmed intent": [genesis, title(1, G0), resolve(1, "confirm", G0), title(2, G0), resolve(2, "confirm", G0),
+    restoreRecord(3, G1, { from: 0, through: 3 })],
+  "restore reuses a generation which was aborted": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "abort", G1),
+    restoreRecord(3, G1, { from: 0, through: 1 })],
+  "restore returns to an earlier generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
+    restoreRecord(3, G0, { previousGeneration: G1, from: 2, through: 2 })],
+  "restore without grantAdmin": [genesis, title(1, G0), resolve(1, "confirm", G0), { n: 2, t: "intent", k: "restore", g: G1,
+    p: { from: 0, through: 1, previousGeneration: G0, superseded: 0, skipped: 0 } }],
+  "restore grantAdmin as a number (old count shape)": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: 1 })],
+  "restore grantAdmin unsorted": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: [["b", "u"], ["a", "u"]] })],
+  "restore grantAdmin with a duplicate": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: [["a", "u"], ["a", "u"]] })],
+  "restore grantAdmin with a malformed pair": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: [["a"]] })],
+  "restore grantAdmin with a bad ID": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: [["a b", "u"]] })],
+  "restore grantAdmin above the cap": [genesis, title(1, G0), resolve(1, "confirm", G0),
+    restoreRecord(2, G1, { grantAdmin: Array.from({ length: 17 }, (_, i) => [`a${String(i).padStart(2, "0")}`, "u"]) })],
+  "grantAdmin on an ordinary intent": [genesis, { ...title(1, G0), p: { seq: [1, 1], grantAdmin: [["a", "u"]] } }],
   "restore replays from the future": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { from: 1, through: 1 })],
   "restore starts before the previous restore": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
     restoreRecord(3, G2, { previousGeneration: G1, from: 1, through: 2 })],
@@ -921,11 +1099,32 @@ const invalidChains = {
   "restore resolution of an ordinary intent with the new generation": [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1), resolve(2, "confirm", G1),
     resolve(1, "confirm", G0)],
 };
+/** The same chain WITHOUT the serializer's own shape check, so the VERIFIER alone must reject it. */
+function rawChainOf(steps) {
+  let prev = "0".repeat(64);
+  let text = "";
+  for (const step of steps) {
+    const record = { k: null, p: null, ...step, prev };
+    const h = createHash("sha256").update(prev + journalLib.canonicalJournalJson(record)).digest("hex");
+    text += journalLib.canonicalJournalJson({ ...record, h }) + "\n";
+    prev = h;
+  }
+  return text;
+}
+test("verifier: the raw chain builder produces chains the verifier accepts (control for the rejection tests)", () => {
+  const good = [genesis, title(1, G0), resolve(1, "confirm", G0), restoreRecord(2, G1, { grantAdmin: [["a", "u"], ["a", "v"], ["b", "u"]] }),
+    resolve(2, "confirm", G1), title(3, G1), resolve(3, "confirm", G1)];
+  for (const build of [chainOf, rawChainOf]) assert.equal(journalLib.verifyTargetStagingJournal(build(good), G1).generation, G1, build.name);
+  assert.equal(journalLib.verifyTargetStagingJournal(rawChainOf(good), G1).confirmed, 3);
+});
+
 for (const [label, steps] of Object.entries(invalidChains)) {
   test(`verifier rejects: ${label}`, () => {
-    let text;
-    try { text = chainOf(steps); } catch { return; } // the serializer already refuses a malformed record
-    for (const generation of [G0, G1, G2]) assert.equal(journalLib.verifyTargetStagingJournal(text, generation), null, generation);
+    for (const build of [chainOf, rawChainOf]) {
+      let text;
+      try { text = build(steps); } catch { continue; } // the serializer already refuses a malformed record
+      for (const generation of [G0, G1, G2]) assert.equal(journalLib.verifyTargetStagingJournal(text, generation), null, `${build.name} ${generation}`);
+    }
   });
 }
 
@@ -1037,7 +1236,8 @@ test("CLI: help, strict arguments, a refusal, and a success whose output carries
   assert.match(run("--help").stdout, /--grant-admin/);
   for (const bad of [[], ["--directory", "relative", "--generation", fx.stage.restoreGeneration], [...common, "--bogus", "1"],
     [...common, "--directory", fx.stage.directory], [...common, "--grant-admin", "nocolon"], [...common, "--grant-admin"],
-    [...common, "--grant-admin", ":bob"], ["--generation", fx.stage.restoreGeneration]]) {
+    [...common, "--grant-admin", ":bob"], ["--generation", fx.stage.restoreGeneration],
+    ["--directory", fx.stage.directory, "--generation", "not-a-uuid"]]) {
     const result = run(...bad);
     assert.equal(result.status, 1, bad.join(" "));
     assert.equal(JSON.parse(result.stdout).reason, "invalid_request");
@@ -1047,14 +1247,19 @@ test("CLI: help, strict arguments, a refusal, and a success whose output carries
   assert.deepEqual(run(...common), { status: 1, stdout: JSON.stringify({ ok: false, reason: "unavailable" }) });
   assert.equal(worldHash(fx), before);
   copyBack(fx, backup);
-  const done = run(...common, "--grant-admin", "team-area:alice");
+  assert.deepEqual(run("--directory", fx.stage.directory, "--generation", randomUUID()),
+    { status: 1, stdout: JSON.stringify({ ok: false, reason: "generation_mismatch" }) });
+  assert.deepEqual(run(...common, "--grant-admin", "team-area:alice"),
+    { status: 1, stdout: JSON.stringify({ ok: false, reason: "grant_unneeded" }) });
+  const done = run(...common);
   assert.equal(done.status, 0, done.stdout);
   const report = JSON.parse(done.stdout);
   assert.equal(report.ok, true);
   assert.match(report.restoreGeneration, /^[0-9a-f-]{36}$/);
   assert.equal(report.replayedMembership, 1);
-  assert.equal(report.grantedAdmins, 1);
-  assert.deepEqual(Object.keys(report).sort(), ["backupAnchor", "confirmedThrough", "epochsBumped", "grantedAdmins", "ok",
+  assert.equal(report.grantedAdmins, 0);
+  assert.deepEqual(report.grantAdmin, []);
+  assert.deepEqual(Object.keys(report).sort(), ["backupAnchor", "confirmedThrough", "epochsBumped", "grantAdmin", "grantedAdmins", "ok",
     "previousGeneration", "replayedMembership", "restoreGeneration", "revokedTokens", "skipped", "stampedSessions",
     "supersededTokens"]);
   for (const secret of [session.sessionToken, durable.hashTargetStagingSessionToken(session.sessionToken), SECRET_TITLE]) {
@@ -1068,6 +1273,24 @@ test("CLI: help, strict arguments, a refusal, and a success whose output carries
   assert.equal(again.status, 1);
 });
 
+test("CLI: --grant-admin for a blocked Area prints the readable ID pairs, sorted, and the journal carries the same", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "x").ok, true);
+  const backup = backupOf(fx);
+  addIdentity(fx.db, "erin");
+  memberWrite(fx, "add", "erin", "admin");
+  memberWrite(fx, "set_role", "alice", "viewer");
+  copyBack(fx, backup);
+  const run = spawnSync(REAL_NODE, ["--experimental-loader", "./tests/ts-loader.mjs", "--no-warnings",
+    "scripts/target-staging-restore.mjs", "--directory", fx.stage.directory, "--generation", fx.stage.restoreGeneration,
+    "--grant-admin", "team-area:carol", "--grant-admin", "team-area:bob"], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stdout);
+  const report = JSON.parse(run.stdout);
+  assert.deepEqual(report.grantAdmin, [["team-area", "bob"], ["team-area", "carol"]]);
+  assert.equal(report.grantedAdmins, 2);
+  assert.deepEqual(journalLines(fx).find(line => line.k === "restore").p.grantAdmin, report.grantAdmin);
+});
+
 test("the restore never reads or modifies content: titles stay out of the journal and the report", () => {
   const { fx } = stalePending();
   const result = restoreNow(fx);
@@ -1076,7 +1299,7 @@ test("the restore never reads or modifies content: titles stay out of the journa
   assert.ok(!JSON.stringify(result).includes(SECRET_TITLE));
   for (const line of journalLines(fx).filter(l => l.k === "restore")) {
     assert.deepEqual(Object.keys(line.p).sort().filter(k => !["seq"].includes(k)),
-      ["from", "grantAdmin", "grantDigest", "previousGeneration", "skipped", "superseded", "through"]);
+      ["from", "grantAdmin", "previousGeneration", "skipped", "superseded", "through"]);
   }
 });
 

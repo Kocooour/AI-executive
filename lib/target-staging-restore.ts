@@ -17,10 +17,16 @@
  *     answer `resync_required`),
  *   - keeps the last-admin invariant of every shared Area (otherwise nothing is committed), and
  *   - journals the restore as a `restore` intent (two-phase, like every other writer).
- * Any failure leaves the store exactly as it was (still `restore_pending`).
+ * A refusal or failure rolls the restore transaction back: the database is unchanged and the store stays
+ * `restore_pending`. The only thing which may persist is the tail resolution every writer performs first
+ * (cutting a torn journal fragment, confirming/aborting a trailing intent, decided by the witness).
  */
-import { createHash } from "node:crypto";
+import { closeSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  describeTargetStagingJournalGenerations, openTargetStagingJournal, readTargetStagingJournalText,
+  TARGET_STAGING_RESTORE_MAX_GRANTS,
+} from "./target-staging-anchor-journal";
 import { pinTargetStagingFiles, withPinnedTargetStagingRestore } from "./target-staging-pinned-write";
 import type { TargetStagingPinnedRestoreContext } from "./target-staging-pinned-write";
 import { TARGET_STORE_SCHEMA_VERSION } from "./target-store-bootstrap";
@@ -32,13 +38,21 @@ const HASH = /^[0-9a-f]{64}$/;
 const ROLES = new Set(["viewer", "editor", "admin"]);
 /** The identity epoch grows by exactly one per UPDATE (trigger); bound the work per identity. */
 const MAX_EPOCH_STEPS = 100_000;
-const MAX_GRANTS = 64;
+const MAX_GRANTS = TARGET_STAGING_RESTORE_MAX_GRANTS;
+/** Canonical JSON of the sorted grant pairs which still fits the 2048-byte journal line with the other fields. */
+const MAX_GRANT_JSON = 1200;
+const GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface TargetStagingRestoreGrant { readonly areaId: string; readonly userId: string }
 
 export type TargetStagingRestoreFailure =
-  /** Bad arguments. */
+  /** Bad arguments, including a malformed `--generation` (not a UUID) and too many/too long grants. */
   | "invalid_request"
+  /**
+   * A well-formed `--generation` which is not the generation of this store's journal (the journal
+   * verifies on its own and the backup belongs to it, but the configuration names another generation).
+   */
+  | "generation_mismatch"
   /** Store not restorable: not restore_pending, journal/witness invalid or missing, backup not a valid store. */
   | "unavailable"
   /** The backup was made at another schema version (older stores are never migrated). */
@@ -51,6 +65,10 @@ export type TargetStagingRestoreFailure =
   | "last_admin"
   /** An operator grant names an unknown Area or identity. */
   | "grant_invalid"
+  /** A grant names an Area which the last-admin invariant does NOT block without it: refused, nothing changed. */
+  | "grant_unneeded"
+  /** restore_generations or restore_superseded_sessions is full: a new staging store is needed. */
+  | "capacity_exhausted"
   /** The journal holds a payload the replay does not understand, or the replay hit an unexpected error. */
   | "replay_failed"
   | "write_failed";
@@ -60,7 +78,8 @@ export type TargetStagingRestoreResult =
     ok: true; restoreGeneration: string; previousGeneration: string;
     backupAnchor: number; confirmedThrough: number;
     replayedMembership: number; revokedTokens: number; supersededTokens: number;
-    skipped: number; epochsBumped: number; grantedAdmins: number; stampedSessions: number;
+    skipped: number; epochsBumped: number; grantedAdmins: number; grantAdmin: [string, string][];
+    stampedSessions: number;
   }
   | { ok: false; reason: TargetStagingRestoreFailure; blockedAreas?: string[] };
 
@@ -103,26 +122,72 @@ export function restoreTargetStagingFromBackup(
   store: TargetStagingReadStore,
   options: { readonly grantAdmin?: readonly TargetStagingRestoreGrant[]; readonly now?: number } = {},
 ): TargetStagingRestoreResult {
-  const grants = options.grantAdmin ?? [];
+  const given = options.grantAdmin ?? [];
   const now = options.now ?? Date.now();
-  if (!Array.isArray(grants) || grants.length > MAX_GRANTS || !Number.isSafeInteger(now) || now <= 0 ||
-      grants.some(grant => !grant || !text(grant.areaId) || !text(grant.userId))) {
+  if (!Array.isArray(given) || given.length > MAX_GRANTS || !Number.isSafeInteger(now) || now <= 0 ||
+      given.some(grant => !grant || !text(grant.areaId) || !text(grant.userId)) ||
+      typeof store?.expectedRestoreGeneration !== "string" || !GENERATION.test(store.expectedRestoreGeneration)) {
+    return { ok: false, reason: "invalid_request" };
+  }
+  // Sorted, duplicate-free pairs: the journal records exactly these.
+  const grants = [...new Map(given.map(grant => [`${grant.areaId}\0${grant.userId}`,
+    { areaId: grant.areaId, userId: grant.userId }] as const)).entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, grant]) => grant);
+  if (JSON.stringify(grants.map(grant => [grant.areaId, grant.userId])).length > MAX_GRANT_JSON) {
     return { ok: false, reason: "invalid_request" };
   }
   const version = typeof store?.stagingDirectory === "string" ? backupSchemaVersion(store) : null;
   if (version !== null && version !== String(TARGET_STORE_SCHEMA_VERSION)) {
     return { ok: false, reason: "unsupported_backup" };
   }
-  return withPinnedTargetStagingRestore<TargetStagingRestoreResult>(store, context => {
+  const result = withPinnedTargetStagingRestore<TargetStagingRestoreResult>(store, context => {
     try {
       return restoreBody(context, grants, now);
     } catch (error) {
       if (error instanceof ReplayAbort) {
         return { ok: false, reason: error.reason, ...(error.blockedAreas ? { blockedAreas: error.blockedAreas } : {}) };
       }
+      if (/(restore history|superseded session) capacity reached/.test(String((error as Error | null)?.message ?? ""))) {
+        return { ok: false, reason: "capacity_exhausted" };
+      }
       return { ok: false, reason: "write_failed" };
     }
   }, () => ({ ok: false, reason: "unavailable" }), () => ({ ok: false, reason: "write_failed" }));
+  // Operator diagnosis only, after the store was refused and nothing was changed by this call.
+  return result.ok === false && result.reason === "unavailable" && generationMismatch(store)
+    ? { ok: false, reason: "generation_mismatch" } : result;
+}
+
+/**
+ * The configured generation is well-formed but not this store's: the journal verifies on its own, the
+ * backup's restore_generation is one this journal used, and the configuration is neither the generation in
+ * effect nor the one a trailing unresolved restore introduces. Anything else stays `unavailable`
+ * (another store's directory is never identified as this store).
+ */
+function generationMismatch(store: TargetStagingReadStore): boolean {
+  const files = pinTargetStagingFiles(store.stagingDirectory);
+  if (!files) return false;
+  let db: DatabaseSync | null = null;
+  let fd: number | null = null;
+  try {
+    const opened = files.openDatabase({ readOnly: true });
+    db = opened.db;
+    db.exec("PRAGMA busy_timeout=2000");
+    const row = db.prepare("SELECT value FROM metadata WHERE key='restore_generation'").get() as
+      { value: unknown } | undefined;
+    if (!opened.verifyOpened() || typeof row?.value !== "string" || !GENERATION.test(row.value)) return false;
+    fd = openTargetStagingJournal(files.directoryFdPath, false);
+    const journalText = fd === null ? null : readTargetStagingJournalText(fd);
+    const described = journalText === null ? null : describeTargetStagingJournalGenerations(journalText);
+    if (!described || !described.used.has(lower(row.value))) return false;
+    const configured = lower(store.expectedRestoreGeneration);
+    return configured !== lower(described.inEffect) && configured !== (described.pendingTo === null ? "" : lower(described.pendingTo));
+  } catch { return false; }
+  finally {
+    if (db) { try { db.close(); } catch { /* fail closed */ } }
+    if (fd !== null) { try { closeSync(fd); } catch { /* fail closed */ } }
+    files.close();
+  }
 }
 
 function restoreBody(
@@ -211,11 +276,15 @@ function restoreBody(
   // ---- operator grants, then the replay --------------------------------------------------------
   // A grant is applied BEFORE the replay (so a journal demotion of the previous admin keeps the
   // invariant triggers satisfied) and asserted again AFTER it (so the journal cannot take it back).
-  const grantAdmin = (grant: TargetStagingRestoreGrant) => {
+  // A grant may (re)add a user whom the journal removed: that is the operator's explicit decision.
+  const existsForGrant = (grant: TargetStagingRestoreGrant) => {
     const area = db.prepare("SELECT 1 AS ok FROM areas WHERE id = ? AND kind = 'shared'").get(grant.areaId);
     const person = db.prepare(`SELECT 1 AS ok FROM identities i JOIN workspaces w
       ON w.owner_user_id = i.id AND w.kind = 'personal' WHERE i.id = ?`).get(grant.userId);
     if (!area || !person) throw new ReplayAbort("grant_invalid");
+  };
+  const grantAdmin = (grant: TargetStagingRestoreGrant) => {
+    existsForGrant(grant);
     const member = db.prepare("SELECT role FROM area_members WHERE area_id = ? AND user_id = ?")
       .get(grant.areaId, grant.userId) as { role: string } | undefined;
     if (!member) {
@@ -224,46 +293,65 @@ function restoreBody(
       db.prepare("UPDATE area_members SET role='admin' WHERE area_id = ? AND user_id = ?").run(grant.areaId, grant.userId);
     }
   };
-  for (const grant of grants) grantAdmin(grant);
-
-  let replayed = 0;
-  let skipped = 0;
-  const blocked = new Set<string>();
   const unassign = db.prepare(`UPDATE tasks SET assignee_user_id=NULL
      WHERE assignee_user_id=? AND id IN (
        SELECT task_id FROM task_effective_areas WHERE effective_area_id=? AND assignee_user_id=?)`);
-  for (const op of membership) {
-    if (op.op === "noop") continue;
-    const area = db.prepare("SELECT 1 AS ok FROM areas WHERE id = ? AND kind = 'shared'").get(op.area);
-    const person = db.prepare("SELECT 1 AS ok FROM identities WHERE id = ?").get(op.user);
-    if (!area || !person) { skipped++; continue; }
-    const member = db.prepare("SELECT role FROM area_members WHERE area_id = ? AND user_id = ?")
-      .get(op.area, op.user) as { role: string } | undefined;
-    if ((op.op === "set_role" || op.op === "remove") && !member) { skipped++; continue; }
-    const after = op.op === "remove" ? null : op.role;
-    if (member && member.role === after) continue; // already converged: nothing to apply
-    db.exec("SAVEPOINT replay_op");
-    try {
-      // Unassign BEFORE the membership change so the existing guards pass (same as the live command).
-      if (after === null || after === "viewer") unassign.run(op.user, op.area, op.user);
-      if (after === null) db.prepare("DELETE FROM area_members WHERE area_id = ? AND user_id = ?").run(op.area, op.user);
-      else if (member) db.prepare("UPDATE area_members SET role = ? WHERE area_id = ? AND user_id = ?").run(after, op.area, op.user);
-      else db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,?)").run(op.area, op.user, after);
-      db.exec("RELEASE replay_op");
-      replayed++;
-    } catch (error) {
-      db.exec("ROLLBACK TO replay_op");
-      db.exec("RELEASE replay_op");
-      // The only expected refusal is the last-admin invariant. Skipping it would hand back a role
-      // which the journal took away, so the whole restore is refused instead (collect every Area).
-      if (/at least one admin/.test(String((error as Error | null)?.message ?? ""))) blocked.add(op.area);
-      else throw new ReplayAbort("replay_failed");
+  /** The replay with or without the grants; returns the counts and every Area the invariant blocks. */
+  const replay = (withGrants: boolean) => {
+    if (withGrants) for (const grant of grants) grantAdmin(grant);
+    let replayed = 0;
+    let skipped = 0;
+    const blocked = new Set<string>();
+    for (const op of membership) {
+      if (op.op === "noop") continue;
+      const area = db.prepare("SELECT 1 AS ok FROM areas WHERE id = ? AND kind = 'shared'").get(op.area);
+      const person = db.prepare("SELECT 1 AS ok FROM identities WHERE id = ?").get(op.user);
+      if (!area || !person) { skipped++; continue; }
+      const member = db.prepare("SELECT role FROM area_members WHERE area_id = ? AND user_id = ?")
+        .get(op.area, op.user) as { role: string } | undefined;
+      if ((op.op === "set_role" || op.op === "remove") && !member) { skipped++; continue; }
+      const after = op.op === "remove" ? null : op.role;
+      if (member && member.role === after) continue; // already converged: nothing to apply
+      db.exec("SAVEPOINT replay_op");
+      try {
+        // Unassign BEFORE the membership change so the existing guards pass (same as the live command).
+        if (after === null || after === "viewer") unassign.run(op.user, op.area, op.user);
+        if (after === null) db.prepare("DELETE FROM area_members WHERE area_id = ? AND user_id = ?").run(op.area, op.user);
+        else if (member) db.prepare("UPDATE area_members SET role = ? WHERE area_id = ? AND user_id = ?").run(after, op.area, op.user);
+        else db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES (?,?,?)").run(op.area, op.user, after);
+        db.exec("RELEASE replay_op");
+        replayed++;
+      } catch (error) {
+        db.exec("ROLLBACK TO replay_op");
+        db.exec("RELEASE replay_op");
+        // The only expected refusal is the last-admin invariant. Skipping it would hand back a role
+        // which the journal took away, so the whole restore is refused instead (collect every Area).
+        if (/at least one admin/.test(String((error as Error | null)?.message ?? ""))) blocked.add(op.area);
+        else throw new ReplayAbort("replay_failed");
+      }
     }
+    if (withGrants) for (const grant of grants) grantAdmin(grant);
+    const unguarded = db.prepare(`SELECT a.id AS id FROM areas a WHERE a.kind = 'shared' AND NOT EXISTS (
+      SELECT 1 FROM area_members m WHERE m.area_id = a.id AND m.role = 'admin') ORDER BY a.id`).all() as { id: string }[];
+    for (const row of unguarded) blocked.add(row.id);
+    return { replayed, skipped, blocked };
+  };
+
+  if (grants.length > 0) {
+    // A grant is only for an Area which the invariant would otherwise block: evaluate the replay WITHOUT
+    // grants first (inside this transaction, rolled back to the savepoint), then refuse any other grant.
+    for (const grant of grants) existsForGrant(grant);
+    db.exec("SAVEPOINT replay_dry");
+    let dry: Set<string>;
+    try {
+      dry = replay(false).blocked;
+    } finally {
+      db.exec("ROLLBACK TO replay_dry");
+      db.exec("RELEASE replay_dry");
+    }
+    if (grants.some(grant => !dry.has(grant.areaId))) throw new ReplayAbort("grant_unneeded");
   }
-  for (const grant of grants) grantAdmin(grant);
-  const unguarded = db.prepare(`SELECT a.id AS id FROM areas a WHERE a.kind = 'shared' AND NOT EXISTS (
-    SELECT 1 FROM area_members m WHERE m.area_id = a.id AND m.role = 'admin') ORDER BY a.id`).all() as { id: string }[];
-  for (const row of unguarded) blocked.add(row.id);
+  const { replayed, skipped, blocked } = replay(true);
   if (blocked.size > 0) throw new ReplayAbort("last_admin", [...blocked].sort());
 
   // ---- every session dies: the epoch of every identity ends above everything the journal knows ----
@@ -295,15 +383,14 @@ function restoreBody(
   }, { db, fd: context.databaseFd });
   if (!check.ok || !context.stillPinned()) throw new ReplayAbort("write_failed");
 
-  const digest = grants.length === 0 ? null : createHash("sha256").update(JSON.stringify(
-    grants.map(grant => `${grant.areaId}\0${grant.userId}`).sort())).digest("hex");
+  const grantPairs = grants.map(grant => [grant.areaId, grant.userId] as [string, string]);
   context.commit({ kind: "restore", payload: {
-    superseded: superseded.size, skipped, grantAdmin: grants.length, grantDigest: digest,
+    superseded: superseded.size, skipped, grantAdmin: grantPairs,
   } });
   return {
     ok: true, restoreGeneration: context.newGeneration, previousGeneration: context.previousGeneration,
     backupAnchor: A, confirmedThrough: H, replayedMembership: replayed, revokedTokens: revoked.size,
-    supersededTokens: superseded.size, skipped, epochsBumped, grantedAdmins: grants.length,
+    supersededTokens: superseded.size, skipped, epochsBumped, grantedAdmins: grants.length, grantAdmin: grantPairs,
     stampedSessions: stamped,
   };
 }

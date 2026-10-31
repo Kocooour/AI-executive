@@ -36,7 +36,7 @@ const KINDS = new Set<string>([
   "title", "delete", "membership", "session_issue", "session_revoke",
   "session_revoke_all", "compaction", "restore",
 ]);
-export type TargetStagingJournalValue = string | number | null | readonly number[];
+export type TargetStagingJournalValue = string | number | null | readonly number[] | readonly (readonly string[])[];
 export type TargetStagingJournalPayload = { readonly [key: string]: TargetStagingJournalValue };
 
 export interface TargetStagingJournalRecord {
@@ -111,7 +111,7 @@ function validRecordShape(record: TargetStagingJournalRecord): boolean {
       (t !== "genesis" && t !== "intent" && t !== "confirm" && t !== "abort") ||
       typeof g !== "string" || !UUID.test(g) || typeof prev !== "string" || !HEX64.test(prev) ||
       !validPayload(p)) return false;
-  if (t === "intent") return n >= 1 && typeof k === "string" && KINDS.has(k) && p !== null;
+  if (t === "intent") return n >= 1 && typeof k === "string" && KINDS.has(k) && p !== null && kindPayloadOk(k, p);
   if (t === "genesis") return n === 0 && k === null && p === null && prev === TARGET_STAGING_JOURNAL_GENESIS_PREV;
   return n >= 1 && k === null && p === null;
 }
@@ -137,11 +137,32 @@ const validValue = (value: unknown): boolean =>
   value === null || (typeof value === "string" && value.length <= 256) ||
   (typeof value === "number" && Number.isSafeInteger(value)) ||
   (Array.isArray(value) && value.length <= 4 && value.every(item => Number.isSafeInteger(item)));
+/** R2c.4b: operator --grant-admin decisions, readable as ID pairs; the cap keeps the line below MAX_LINE_BYTES. */
+export const TARGET_STAGING_RESTORE_MAX_GRANTS = 16;
+const GRANT_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
+/** [[areaId, userId], ...] strictly ascending by (areaId, userId): sorted, no duplicate. */
+const validGrantPairs = (value: unknown): boolean => {
+  if (!Array.isArray(value) || value.length > TARGET_STAGING_RESTORE_MAX_GRANTS) return false;
+  let before = "";
+  for (const [index, pair] of value.entries()) {
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(id => typeof id === "string" && GRANT_ID.test(id))) return false;
+    const key = `${pair[0]}\0${pair[1]}`;
+    if (index > 0 && !(key > before)) return false;
+    before = key;
+  }
+  return true;
+};
 const validPayload = (value: unknown): boolean => {
   if (value === null) return true;
   if (typeof value !== "object" || Array.isArray(value)) return false;
   const entries = Object.entries(value as Record<string, unknown>);
-  return entries.length <= 8 && entries.every(([key, item]) => key.length <= 32 && validValue(item));
+  return entries.length <= 8 && entries.every(([key, item]) =>
+    key.length <= 32 && (key === "grantAdmin" ? validGrantPairs(item) : validValue(item)));
+};
+/** `grantAdmin` is a restore-only key, and every restore intent carries it. */
+const kindPayloadOk = (k: unknown, p: unknown): boolean => {
+  const has = p !== null && typeof p === "object" && Object.prototype.hasOwnProperty.call(p, "grantAdmin");
+  return k === "restore" ? has : !has;
 };
 
 /** Chain-verification context; resumable (per-process prefix cache, see verifyTargetStagingJournalFd). */
@@ -207,7 +228,8 @@ function verifyLine(raw: string, ctx: VerifyContext): boolean {
   } else {
     if (first) return false;
     if (t === "intent") {
-      if (n !== ctx.lastIntent + 1 || typeof k !== "string" || !KINDS.has(k) || p === null) return false;
+      if (n !== ctx.lastIntent + 1 || typeof k !== "string" || !KINDS.has(k) || p === null ||
+          !kindPayloadOk(k, p)) return false;
       // The previous intent must be resolved before the next one is appended.
       if (ctx.pending !== null) return false;
       if (k === "restore") {
@@ -345,6 +367,23 @@ export function verifyTargetStagingJournal(
     const ctx = newContext();
     const scanned = scanBuffer(Buffer.from(text, "utf8"), ctx);
     return scanned && acceptsGeneration(ctx, generation) ? stateOf(ctx) : null;
+  } catch { return null; }
+}
+
+/**
+ * Identify a journal WITHOUT knowing the configured generation (operator diagnosis only): the chain
+ * must verify on its own. Returns the generation in effect, the one a trailing unresolved restore
+ * introduces (or null) and every generation the journal ever used (lower case).
+ */
+export function describeTargetStagingJournalGenerations(
+  text: string,
+): { inEffect: string; pendingTo: string | null; used: ReadonlySet<string> } | null {
+  try {
+    if (typeof text !== "string") return null;
+    const ctx = newContext();
+    const scanned = scanBuffer(Buffer.from(text, "utf8"), ctx);
+    if (!scanned || ctx.records === 0) return null;
+    return { inEffect: ctx.gen, pendingTo: ctx.pendingRestore ? ctx.pendingRestore.to : null, used: new Set(ctx.used) };
   } catch { return null; }
 }
 

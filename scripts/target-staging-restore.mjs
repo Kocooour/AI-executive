@@ -14,15 +14,22 @@
  *        node --experimental-loader ./scripts/target-staging-ts-loader.mjs \
  *          scripts/target-staging-restore.mjs --directory /abs/stage --generation <current-generation-uuid> \
  *          [--grant-admin <areaId>:<userId>]...
- *      It prints JSON with the NEW restoreGeneration (no tokens, no content). Exit 0 on success, 1 on refusal;
- *      a refusal changes nothing and the store stays restore_pending.
+ *      It prints JSON with the NEW restoreGeneration (no tokens, no content). Exit 0 on success, 1 on refusal.
+ *      A refusal leaves the store restore_pending and its state unchanged; the only thing a refusal may
+ *      persist is the same tail resolution any writer performs first (cutting a torn journal fragment and
+ *      confirming or aborting a trailing intent of a crashed writer, decided by the witness). Refusal
+ *      reasons include invalid_request (also a --generation which is not a UUID), generation_mismatch (a
+ *      well-formed --generation which is not this store's), last_admin, grant_invalid, grant_unneeded,
+ *      capacity_exhausted (restore history or superseded-session table full: bootstrap a new store).
  *   4. Set AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION to the printed value and start the server. While
  *      the configured generation differs the store fails closed. If the tool died after its commit and the
  *      output was lost, the new value is in the database: SELECT value FROM metadata WHERE key='restore_generation'.
  *
- * --grant-admin <areaId>:<userId> (repeatable): operator decision when the replay would leave a shared Area
- *   without an admin (refusal reason "last_admin" lists the Areas). The identity must exist; the decision is
- *   counted and hashed in the journal record of the restore.
+ * --grant-admin <areaId>:<userId> (repeatable, at most 16): operator decision when the replay would leave a
+ *   shared Area without an admin (refusal reason "last_admin" lists the Areas). Only an Area which the
+ *   last-admin invariant would block without the grant is accepted (else "grant_unneeded", nothing changes).
+ *   The identity must exist; the grant may (re)add a user whom the journal removed. The decision is recorded
+ *   as sorted [areaId,userId] pairs in the journal record of the restore and printed in the report.
  * --help: print this text.
  */
 import path from "node:path";
