@@ -33,11 +33,13 @@ export type TargetAuthorizedNote = {
   /** The eventual HTTP gateway must revalidate this and the exact note parent. */
   linearization: TargetReadLinearization;
   /** Captures the ACL-parent identity for a live guard; not an HTTP field. */
-  guard: { noteId: string; projectId: string | null; areaId: string };
+  guard: { noteId: string; projectId: string | null; areaId: string;
+    noteRevision: number; parentRevision: number | null };
 };
 
 type NoteRow = TargetReadableNote & {
   policyRevision: number;
+  parentRevision: number | null;
   memberRole: string | null;
 };
 
@@ -60,7 +62,8 @@ export function readAuthorizedTargetNote(
     const row = db.prepare(`SELECT
         n.id AS id, n.title AS title, n.body AS body,
         n.project_id AS projectId, a.id AS areaId, a.kind AS areaKind,
-        n.revision AS revision, a.policy_revision AS policyRevision,
+        n.revision AS revision, p.revision AS parentRevision,
+        a.policy_revision AS policyRevision,
         member.role AS memberRole
       FROM notes n
       LEFT JOIN projects p ON p.id = n.project_id
@@ -86,6 +89,8 @@ export function readAuthorizedTargetNote(
         !validNoteId(row.areaId) ||
         (row.areaKind !== "private" && row.areaKind !== "shared") ||
         !Number.isSafeInteger(row.revision) || row.revision < 0 ||
+        (row.projectId === null ? row.parentRevision !== null :
+          !Number.isSafeInteger(row.parentRevision) || (row.parentRevision as number) < 0) ||
         !Number.isSafeInteger(row.policyRevision) || row.policyRevision < 0) return null;
     const access: TargetReadAreaAccess =
       row.areaKind === "private" ? "private-owner"
@@ -107,7 +112,10 @@ export function readAuthorizedTargetNote(
           policyRevision: row.policyRevision, access,
         }],
       },
-      guard: { noteId: row.id, projectId: row.projectId, areaId: row.areaId },
+      guard: {
+        noteId: row.id, projectId: row.projectId, areaId: row.areaId,
+        noteRevision: row.revision, parentRevision: row.parentRevision,
+      },
     };
   } catch {
     // No SQL exception details, data or foreign ID are exposed.
