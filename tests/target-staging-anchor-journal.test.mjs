@@ -1336,3 +1336,40 @@ test("main DB renamed before the writer's pre-write check: nothing durable, jour
   assert.equal(result.ok, false);
   assert.deepEqual(readFileSync(fx.journalPath), journalBefore, "no intent appended");
 });
+
+// A rename landing DURING the confirm's verdict (after the first path check, inside the fresh
+// transaction) is caught only by the second path check, after the verdict.
+test("older main DB renamed during the post-commit verdict: no confirm, store fails closed", () => {
+  const fx = makeFixture();
+  assert.equal(titleWrite(fx, "t1", "one").ok, true);
+  const backup = path.join(root, `${fx.name}.mverdict.sqlite`);
+  copyFileSync(fx.databasePath, backup);
+  assert.equal(titleWrite(fx, "t1", "two").ok, true);
+  const three = prepareTitle(fx, "t1", "three");
+  const origExec = DatabaseSync.prototype.exec;
+  const origPrepare = DatabaseSync.prototype.prepare;
+  let phase = 0;
+  let intentOnly = null;
+  DatabaseSync.prototype.exec = function (sql) {
+    const result = origExec.call(this, sql);
+    if (phase === 0 && sql === "COMMIT") { phase = 1; intentOnly = readFileSync(fx.journalPath); }
+    return result;
+  };
+  DatabaseSync.prototype.prepare = function (sql) {
+    // The confirm's verdict reads the anchor first: swap right then (phase 1 = after COMMIT).
+    if (phase === 1 && String(sql).includes("SELECT value FROM metadata WHERE key='anchor_seq'")) {
+      phase = 2;
+      const temp = `${fx.databasePath}.swap`;
+      copyFileSync(backup, temp);
+      renameSync(temp, fx.databasePath);
+    }
+    return origPrepare.call(this, sql);
+  };
+  try { three(); } finally {
+    DatabaseSync.prototype.exec = origExec;
+    DatabaseSync.prototype.prepare = origPrepare;
+  }
+  assert.equal(phase, 2, "the swap ran inside the confirm verdict");
+  assert.deepEqual(readFileSync(fx.journalPath), intentOnly, "no confirm appended");
+  assert.notEqual(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
