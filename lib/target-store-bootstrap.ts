@@ -29,7 +29,11 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v12 (R2d.1b) adds a per-Area monotonic project-content epoch so project
 // pagination never hashes all project rows. Existing staging v11 stores are
 // deliberately NOT migrated; recreate a new isolated staging directory.
-export const TARGET_STORE_SCHEMA_VERSION = 12;
+// v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
+// monotonic revisions; old staging v12 stores are never migrated.
+export const TARGET_STORE_SCHEMA_VERSION = 13;
+/** Staging-only cap; no note deletion until a complete tombstone/audit protocol exists. */
+export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
  * Staging-only R2 receipt namespace in the existing metadata table. No schema
@@ -548,6 +552,57 @@ WHEN NEW.role <> 'admin' AND EXISTS(
   AND NOT EXISTS(
   SELECT 1 FROM area_members m WHERE m.area_id = NEW.area_id AND m.role = 'admin' AND m.user_id <> NEW.user_id)
 BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
+
+
+-- R2d.2b: canonical but NOT activated notes. A note is either standalone in
+-- one Area OR directly attached to a project and inherits its current Area.
+-- Typed links/backlinks never confer parentage. No HTTP/write/sync interface
+-- exists for notes; deletes are prohibited until an auditable tombstone protocol
+-- is implemented. This prevents ID recycling even via raw staging SQL.
+CREATE TABLE notes (
+  id TEXT PRIMARY KEY CHECK(typeof(id)='text' AND id <> '' AND id = trim(id)
+    AND id NOT IN ('.', '..') AND length(CAST(id AS BLOB)) <= 512
+    AND instr(id, char(0)) = 0
+    AND id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')),
+  project_id TEXT REFERENCES projects(id),
+  area_id TEXT REFERENCES areas(id),
+  title TEXT NOT NULL CHECK(typeof(title)='text' AND length(trim(title)) > 0
+    AND length(CAST(title AS BLOB)) <= 4096),
+  body TEXT NOT NULL CHECK(typeof(body)='text' AND length(CAST(body AS BLOB)) <= 131072),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991),
+  CHECK((project_id IS NULL AND area_id IS NOT NULL)
+    OR (project_id IS NOT NULL AND area_id IS NULL))
+) WITHOUT ROWID;
+CREATE INDEX notes_by_area ON notes(area_id);
+CREATE INDEX notes_by_project ON notes(project_id);
+CREATE TRIGGER note_capacity_guard BEFORE INSERT ON notes
+WHEN (SELECT COUNT(*) FROM notes) >= ${TARGET_STAGING_MAX_NOTES}
+BEGIN SELECT RAISE(ABORT, 'note capacity reached'); END;
+CREATE TRIGGER note_replacement_guard BEFORE INSERT ON notes
+WHEN EXISTS(SELECT 1 FROM notes WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'note ID cannot be replaced'); END;
+CREATE TRIGGER note_id_guard BEFORE UPDATE OF id ON notes
+WHEN NEW.id IS NOT OLD.id
+BEGIN SELECT RAISE(ABORT, 'note ID is immutable'); END;
+CREATE TRIGGER note_delete_guard BEFORE DELETE ON notes
+BEGIN SELECT RAISE(ABORT, 'note delete protocol unavailable'); END;
+-- Fail on a mixed explicit revision/content change. Content-only updates bump
+-- automatically, direct revision-only increments remain monotonic.
+CREATE TRIGGER note_content_revision_guard BEFORE UPDATE OF title, body, project_id, area_id ON notes
+WHEN (NEW.title IS NOT OLD.title OR NEW.body IS NOT OLD.body
+  OR NEW.project_id IS NOT OLD.project_id OR NEW.area_id IS NOT OLD.area_id)
+  AND NEW.revision IS NOT OLD.revision
+BEGIN SELECT RAISE(ABORT, 'note content and revision cannot be changed together'); END;
+CREATE TRIGGER note_revision_guard BEFORE UPDATE OF revision ON notes
+WHEN NEW.revision <> OLD.revision + 1
+BEGIN SELECT RAISE(ABORT, 'note revision must increment by one'); END;
+CREATE TRIGGER note_revision_bump AFTER UPDATE OF title, body, project_id, area_id ON notes
+WHEN NEW.title IS NOT OLD.title OR NEW.body IS NOT OLD.body
+  OR NEW.project_id IS NOT OLD.project_id OR NEW.area_id IS NOT OLD.area_id
+BEGIN
+  UPDATE notes SET revision = OLD.revision + 1 WHERE id = NEW.id;
+END;
 
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
