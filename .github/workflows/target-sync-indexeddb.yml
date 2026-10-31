@@ -1,0 +1,40 @@
+name: Focused IndexedDB browser
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/target-sync-indexeddb.yml"
+      - "lib/target-sync/**"
+      - "e2e/target-sync-indexeddb.spec.ts"
+      - "e2e/playwright.indexeddb.config.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: indexeddb-browser-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  chromium:
+    name: IndexedDB regression (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install focused browser
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run isolated IndexedDB scenarios
+        run: pnpm exec playwright test --config e2e/playwright.indexeddb.config.ts
