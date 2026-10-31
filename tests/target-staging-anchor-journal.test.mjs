@@ -522,7 +522,11 @@ test("crash after the intent but before COMMIT: reads stay ok, the next writer a
   opener.prepare("SELECT COUNT(*) FROM metadata").get();
   opener.close();
   assert.equal(existsSync(sidecar), true, "a normal open does not clear it");
-  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600), { ok: false, reason: "unavailable" });
+  // Linux /proc/locks proves that the killed writer no longer holds a lock;
+  // where lock visibility is unavailable we fail closed with retryable timeout.
+  const staleReason = process.platform === "linux" ? "unavailable" : "write_failed";
+  assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600),
+    { ok: false, reason: staleReason });
   assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok", "still no restore state");
   recoverHotJournal(fx); // documented runbook: header magic is zero -> remove it
