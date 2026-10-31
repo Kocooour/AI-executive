@@ -21,6 +21,10 @@ export const TARGET_STAGING_WITNESS_ALIAS = "lumi_witness";
 const HASH = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const sqliteContention = (error: unknown): boolean =>
+  !!error && typeof error === "object" && "errcode" in error &&
+  (error.errcode === 5 || error.errcode === 6); // SQLITE_BUSY / SQLITE_LOCKED
+
 const DDL = `
 CREATE TABLE commits (
   n INTEGER PRIMARY KEY CHECK(n >= 0),
@@ -122,7 +126,12 @@ function readRows(
     if (witnessCache.size >= WITNESS_CACHE_MAX && !witnessCache.has(key)) witnessCache.clear();
     witnessCache.set(key, { n: last.n, hash: last.journal_hash, change, count: total.total });
     return last.n;
-  } catch { return null; }
+  } catch (error) {
+    // The attached witness is read before BEGIN IMMEDIATE; a competing
+    // COMMIT can exhaust busy_timeout here as well as during ATTACH.
+    if (sqliteContention(error)) throw error;
+    return null;
+  }
 }
 
 /** Validate the on-disk witness before allowing SQLite to open its pathname. */
@@ -208,8 +217,7 @@ export function attachTargetStagingWitness(
     // ATTACH / journal_mode can race another writer *before* our BEGIN IMMEDIATE.
     // SQLite lock contention is retryable; it must not masquerade as a bad
     // witness or a permission failure. Structural failures still fail closed.
-    if (error && typeof error === "object" && "errcode" in error &&
-        (error.errcode === 5 || error.errcode === 6)) throw error; // SQLITE_BUSY / SQLITE_LOCKED
+    if (sqliteContention(error)) throw error;
     return null;
   }
 }
