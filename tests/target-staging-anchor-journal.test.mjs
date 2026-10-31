@@ -423,16 +423,38 @@ test("a transient SQLite rollback sidecar is not mistaken for an untrusted store
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
-test("six un-retried concurrent writers never classify transient contention as denied", async () => {
+test("an active SQLite rollback lock beyond busy_timeout is retryable, not denied", async () => {
   const fx = makeFixture();
-  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 40));
+  const gate = mkdtempSync(path.join(root, "sidecar-long-contention-"));
+  const holding = runChild(fx, "hold-sidecar-long", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(5);
+  assert.ok(existsSync(path.join(gate, "ready")), "child holds a live SQLite write transaction");
+  assert.equal(existsSync(fx.databasePath + "-journal"), true);
+  const before = { anchor: anchorOf(fx), journal: journalText(fx) };
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  assert.equal(outcome, "failed", "real lock timeout must not look like untrusted data");
+  assert.deepEqual({ anchor: anchorOf(fx), journal: journalText(fx) }, before,
+    "a failed writer cannot touch the DB or irreversible journal");
+  const holder = await holding.done;
+  assert.equal(holder.code, 0, JSON.stringify(holder));
+  assert.equal(pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed"), "ok", "the writer can retry after the other lock releases");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
+  const fx = makeFixture();
+  const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
   const results = await Promise.all(workers.map(w => w.done));
   assert.ok(results.every(r => r.code === 0), JSON.stringify(results));
   const counts = results.map(r => JSON.parse(r.stdout));
   const totals = counts.reduce((sum, r) => ({
     ok: sum.ok + r.ok, failed: sum.failed + r.failed, denied: sum.denied + r.denied,
   }), { ok: 0, failed: 0, denied: 0 });
-  assert.equal(totals.ok + totals.failed + totals.denied, 240, JSON.stringify(counts));
+  assert.equal(totals.ok + totals.failed + totals.denied, 480, JSON.stringify(counts));
   assert.equal(totals.denied, 0, "legitimate concurrency must not be an authorization/trust refusal: " +
     JSON.stringify(counts));
   assert.ok(totals.ok > 0, "some writes must have committed");
