@@ -32,6 +32,8 @@ import { readChangeFeedPage } from "./target-change-feed-read-model";
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
+import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
+import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetReadableTask, TargetTaskOffsetListResult, TargetTaskScope } from "./target-task-read-model";
 import { canEditIsolatedTargetTaskTitle, checkTargetTaskWriteContract, targetTaskTitleEditRevision, validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -591,3 +593,25 @@ export function readPreflightedPrivateTaskTitleAudit(
 }
 
 
+
+/**
+ * R2d.1a project + inherited task page on ONE authenticated, pinned snapshot.
+ * HTTP must perform a live Area read-linearization check on successful results.
+ */
+export function readPreflightedAuthorizedProjectTasks(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  projectId: string, limit: number, offset: number,
+): TargetAuthorizedProjectTasksResult | null {
+  return withPreflightedStore<TargetAuthorizedProjectTasksResult | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<TargetAuthorizedProjectTasksResult | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        if (!actorUserId) return null;
+        return readAuthorizedProjectTasksPage(db, {
+          actorUserId, projectId, limit, offset,
+          restoreGeneration: store.expectedRestoreGeneration,
+        });
+      }, () => null),
+  );
+}

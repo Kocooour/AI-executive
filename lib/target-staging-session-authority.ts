@@ -29,10 +29,12 @@ import {
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
+  readPreflightedAuthorizedProjectTasks,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
+import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
@@ -329,6 +331,22 @@ export class TargetStagingSessionAuthority {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedScopedTaskPage(this.#store, credential, { scope, limit, offset }) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R2d.1a: project detail and children on one pinned ACL-checked snapshot. */
+  readAuthorizedProjectTasks(
+    actorUserId: string, projectId: string, limit: number, offset: number,
+  ): TargetAuthorizedProjectTasksResult | null {
+    if (this.#closed || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_STAGING_PAGE_OFFSET) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedAuthorizedProjectTasks(this.#store, credential, projectId, limit, offset)
+        : null;
     } catch {
       return null;
     }
