@@ -169,8 +169,10 @@ export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok"
  * R2c.4a anti-rollback gate: call right after the feature-flag 404 and BEFORE identity
  * resolution. A store whose anchor is behind the irreversible journal (`restore_pending`) or whose
  * journal cannot be verified (`journal_invalid`) answers 503 with a stable code and no
- * data on every target-staging route. Missing or invalid configuration returns null here
- * and keeps the route's own 503 handling, as does a store which cannot be read at all. Content-free and independent of any credential.
+ * data on every target-staging route. Missing/invalid configuration is handled
+ * by each route. By default an unreadable store is also delegated to the route;
+ * note HTTP uses failOnUnavailable=true to fail with 503 before reading content.
+ * Content-free and independent of any credential.
  */
 export function stagingAnchorRefusal(
   request: Request, failOnUnavailable = false,
