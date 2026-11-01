@@ -118,7 +118,7 @@ export function editPreflightedTargetNote(
       noteId: request.noteId, expectedRevision: request.expectedRevision,
       writeAreaId: request.writeAreaId, restoreGeneration: request.restoreGeneration,
     });
-    if (!contract.ok) return { ok: false, reason: contract.reason };
+    if (contract.ok === false) return { ok: false, reason: contract.reason };
     fingerprint(databaseFd);
     const note = readAuthorizedTargetNote(db, { actorUserId: actor, noteId: request.noteId });
     const area = note?.linearization.areas[0];
