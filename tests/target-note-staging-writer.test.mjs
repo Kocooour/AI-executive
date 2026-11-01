@@ -21,6 +21,9 @@ const { previewTargetNoteWrite } =
   await import("../lib/target-note-write-contract.ts");
 const { validTargetStagingNoteEditRequest, targetNoteEditReceiptKey } =
   await import("../lib/target-note-staging-writer.ts");
+const { hashTargetStagingSessionToken, issueDurableTargetStagingSession,
+  revokeDurableTargetStagingSession } =
+  await import("../lib/target-staging-durable-session.ts");
 
 const fixtures = [];
 function fixture() {
@@ -29,7 +32,15 @@ function fixture() {
   });
   const db = new DatabaseSync(stage.databasePath);
   db.exec("PRAGMA foreign_keys=ON");
-  for (const id of ["bob", "carol"]) db.prepare("INSERT INTO identities(id) VALUES (?)").run(id);
+  for (const id of ["bob", "carol"]) {
+    db.prepare("INSERT INTO identities(id) VALUES (?)").run(id);
+    // Canonical staging requires a personal workspace and Unassigned Area for EVERY identity.
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES (?,'personal',?)")
+      .run(`personal-${id}`, id);
+    db.prepare(`INSERT INTO areas(id,title,kind,workspace_id,owner_user_id,system_key)
+      VALUES (?,'Unassigned','private',?,?,'unassigned')`)
+      .run(`unassigned-${id}`, `personal-${id}`, id);
+  }
   db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('team','shared','alice')").run();
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES('team-area','Team','shared','team','alice')").run();
   for (const [user, role] of [["alice", "admin"], ["bob", "editor"], ["carol", "viewer"]]) {
@@ -138,7 +149,34 @@ test("membership revocation makes even a known successful command unavailable", 
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 1);
 });
 
-test("invalid payload, foreign Area, revoked durable hash and orphan audit fail closed", () => {
+test("live durable session binds actor to note writes and revocation blocks retries and fresh edits", () => {
+  const { authority, db, stage } = fixture();
+  const store = { stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration };
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const durable = issueDurableTargetStagingSession(store, "bob");
+  const foreign = issueDurableTargetStagingSession(store, "alice");
+  assert.equal(durable.ok, true, JSON.stringify(durable));
+  assert.equal(foreign.ok, true, JSON.stringify(foreign));
+  const request = command(db, "bob", "child", "Durable edit", "Before revocation");
+  assert.deepEqual(authority.updateNote(bob.sessionToken, request,
+    hashTargetStagingSessionToken(foreign.sessionToken)), refused("session_revoked"));
+  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 0);
+  const tokenHash = hashTargetStagingSessionToken(durable.sessionToken);
+  assert.deepEqual(authority.updateNote(bob.sessionToken, request, tokenHash), { ok: true });
+  const next = command(db, "bob", "child", "Forbidden later edit", "After revocation");
+  assert.deepEqual(revokeDurableTargetStagingSession(store, durable.sessionId),
+    { ok: true, changed: true });
+  assert.deepEqual(authority.updateNote(bob.sessionToken, request, tokenHash),
+    refused("session_revoked"), "even previously committed retries need a live session");
+  assert.deepEqual(authority.updateNote(bob.sessionToken, next, tokenHash),
+    refused("session_revoked"), "revoked durable session cannot write new content");
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id='child'").get().body, "Before revocation");
+  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 1);
+});
+
+test("invalid payload, foreign Area, unknown durable hash and orphan audit fail closed", () => {
   const { authority, db } = fixture();
   const alice = authority.issueWritable("alice");
   assert.ok(alice);
