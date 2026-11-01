@@ -100,7 +100,7 @@ test("project metadata ABA invalidates inherited note snapshots even without Are
   assert.deepEqual(release(store, "bob", snapshot(db, "bob", "child")), { ok: true });
 });
 
-test("reparenting a note or moving its project revokes a previously readable snapshot", () => {
+test("reparenting and a future confirmed project move invalidate the old note snapshot", () => {
   const { store, db, stage } = fixture();
   const child = snapshot(db, "bob", "child");
   // Same effective Area, but the note no longer inherits the parent.
@@ -110,10 +110,33 @@ test("reparenting a note or moving its project revokes a previously readable sna
   assert.equal(newView.guard.projectId, null);
   assert.deepEqual(release(store, "bob", newView), { ok: true });
 
-  const projectChild = snapshot(db, "bob", "direct");
-  // A standalone note is unaffected by project changes.
-  db.prepare("UPDATE projects SET area_id=? WHERE id='project'").run(stage.unassignedAreaId);
-  assert.deepEqual(release(store, "bob", projectChild), { ok: true });
+  const attached = snapshot(db, "bob", "direct");
+  // Independent standalone notes are unaffected by a project title change.
+  db.prepare("UPDATE projects SET title='New project title' WHERE id='project'").run();
+  assert.deepEqual(release(store, "bob", attached), { ok: true });
+
+  // Project Area moves are intentionally forbidden in the active staging model.
+  // Simulate a future confirmed move in this disposable store only, restoring
+  // exactly the canonical guard before committing (same as project ACL tests).
+  db.prepare("INSERT INTO notes(id,project_id,title,body) VALUES ('attached','project','Linked','Contents')").run();
+  const beforeMove = snapshot(db, "bob", "attached");
+  const moveGuard = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='project_area_assignment_guard'",
+  ).get()?.sql;
+  assert.equal(typeof moveGuard, "string");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DROP TRIGGER project_area_assignment_guard");
+    db.prepare("UPDATE projects SET area_id=? WHERE id='project'").run(stage.unassignedAreaId);
+    db.exec(moveGuard + ";");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  assert.deepEqual(release(store, "bob", beforeMove), stale);
+  assert.equal(readAuthorizedTargetNote(db, { actorUserId: "bob", noteId: "attached" }), null);
+  assert.equal(snapshot(db, "alice", "attached").note.areaId, stage.unassignedAreaId);
 });
 
 test("role revocation and valid durable-session revocation invalidate the live release", () => {
