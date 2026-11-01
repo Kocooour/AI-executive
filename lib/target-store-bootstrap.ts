@@ -31,7 +31,9 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // deliberately NOT migrated; recreate a new isolated staging directory.
 // v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
 // monotonic revisions; old staging v12 stores are never migrated.
-export const TARGET_STORE_SCHEMA_VERSION = 13;
+// v14 (R2d.2c.2a) adds a content-free, bounded note write audit;
+// no automatic migration from isolated v13 and no production activation.
+export const TARGET_STORE_SCHEMA_VERSION = 14;
 /** Staging-only cap; no note deletion until a complete tombstone/audit protocol exists. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -51,6 +53,8 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
  * cap is also bounded by the tombstone and delete-audit caps below.
  */
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
+/** Actor/note/command-scoped staging note edit confirmations; never note content. */
+export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 /** Per-table cap for task_tombstones and project_tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
@@ -603,6 +607,35 @@ WHEN NEW.title IS NOT OLD.title OR NEW.body IS NOT OLD.body
 BEGIN
   UPDATE notes SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
+
+-- R2d.2c.2a: committed note content edits. Only content-free metadata
+-- is retained; title/body are never copied into this audit.
+CREATE TABLE note_edit_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE,
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  note_id TEXT NOT NULL REFERENCES notes(id),
+  project_id TEXT,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
+  revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before>=0),
+  revision_after INTEGER NOT NULL CHECK(typeof(revision_after)='integer' AND revision_after=revision_before+1),
+  expected_revision TEXT NOT NULL CHECK(length(expected_revision)=64),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0)
+);
+CREATE INDEX note_edit_audit_by_note ON note_edit_audit(note_id,id);
+CREATE TRIGGER note_edit_audit_no_update BEFORE UPDATE ON note_edit_audit
+BEGIN SELECT RAISE(ABORT, 'note audit rows are immutable'); END;
+CREATE TRIGGER note_edit_audit_retention BEFORE DELETE ON note_edit_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000-${TARGET_STAGING_AUDIT_RETENTION_DAYS}*86400000)
+BEGIN SELECT RAISE(ABORT, 'note audit retention window is active'); END;
+CREATE TRIGGER note_edit_audit_replace_guard BEFORE INSERT ON note_edit_audit
+WHEN EXISTS(SELECT 1 FROM note_edit_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'note audit replacement is forbidden'); END;
+CREATE TRIGGER note_edit_audit_capacity BEFORE INSERT ON note_edit_audit
+WHEN (SELECT COUNT(*) FROM note_edit_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'note audit capacity reached'); END;
 
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
