@@ -232,8 +232,19 @@ test("bad request IDs, queries, missing identity, disabled gate and invalid stor
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
   assert.deepEqual(await denied(get("shared", alice), 404), { error: "Not found" });
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+  const bob = login(fx, "bob");
+  // Missing and foreign notes are still indistinguishable on a healthy store.
+  assert.deepEqual(await denied(get("absent", alice), 404), { error: "Not found" });
+  assert.deepEqual(await denied(get("bob-private", alice), 404), { error: "Not found" });
+  assert.deepEqual(await denied(get("alice-private", bob), 404), { error: "Not found" });
+  // An unavailable live store is a server failure regardless of cookie type
+  // or note existence, and must never return content or a 404.
   process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = randomUUID();
-  assert.equal((await get("shared", alice)).status, 503);
+  for (const cookie of [alice, bob]) {
+    for (const noteId of ["shared", "absent"]) {
+      assert.deepEqual(await denied(get(noteId, cookie), 503), { error: "Staging unavailable" });
+    }
+  }
   process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = fx.stage.restoreGeneration;
   assert.equal((await success(get("shared", alice))).title, "Shared");
 });
