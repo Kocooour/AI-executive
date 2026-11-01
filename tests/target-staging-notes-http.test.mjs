@@ -9,7 +9,8 @@ import { after, test } from "node:test";
 const envNames = [
   "NODE_ENV", "AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_AUTH_ENABLED",
   "AI_EXECUTIVE_PASSWORD_HASH", "AI_EXECUTIVE_SESSION_SECRET",
-  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION", "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
 ];
 const old = Object.fromEntries(envNames.map(key => [key, process.env[key]]));
@@ -24,6 +25,7 @@ process.env.AI_EXECUTIVE_PASSWORD_HASH = "scrypt:" + Buffer.alloc(16, 1).toStrin
   ":" + Buffer.alloc(64, 2).toString("base64url");
 process.env.AI_EXECUTIVE_SESSION_SECRET = "isolated-r2d-note-http-session-secret-long-enough";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
@@ -202,14 +204,11 @@ test("strict DTO parser rejects extra fields, forged guards, alternate identity 
     { ...v, guard: { ...v.guard, noteRevision: 11 } },
     { ...v, guard: { ...v.guard, projectId: "team-project", parentRevision: 0 } },
     { ...v, guard: { ...v.guard, secret: true } },
-    { ...v, linearization: { ...v.linearization, actorUserId: "bogus" } },
     { ...v, linearization: { ...v.linearization, areas: [] } },
   ]) {
-    // A syntactically well-formed but alternate actor is guarded by the live
-    // request identity comparison; malformed or extra DTO fields fail here.
-    if (invalid.linearization?.actorUserId === "bogus") continue;
     assert.equal(parseStagingNoteDetail(invalid, "shared"), null);
   }
+  // A syntactically valid alternate actor is still rejected by the live identity gate.
   const forgedActor = parseStagingNoteDetail({
     ...v, linearization: { ...v.linearization, actorUserId: "bogus" },
   }, "shared");
@@ -227,6 +226,9 @@ test("bad request IDs, queries, missing identity, disabled gate and invalid stor
     assert.deepEqual(await denied(get("shared", alice, query), 400), { error: "Invalid request" });
   }
   assert.deepEqual(await denied(get("shared", null), 401), { error: "Authentication required" });
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED = "false";
+  assert.deepEqual(await denied(get("shared", alice), 404), { error: "Not found" });
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED = "true";
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "false";
   assert.deepEqual(await denied(get("shared", alice), 404), { error: "Not found" });
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
