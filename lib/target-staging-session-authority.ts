@@ -42,6 +42,8 @@ import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
+import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 import type {
@@ -613,6 +615,24 @@ export class TargetStagingSessionAuthority {
     return writePreflightedTargetTaskTitle(
       this.#store, credential, request, privateOnly, durableSessionTokenHash,
     );
+  }
+
+  /**
+   * R2d.2c.2a isolated note edits. This method is NOT an HTTP endpoint.
+   * The process-local write credential is checked here; the pinned writer
+   * rechecks current Area policy and an optional durable session under lock.
+   */
+  updateNote(
+    sessionToken: string,
+    request: TargetStagingNoteEditRequest,
+    durableSessionTokenHash?: string,
+  ): TargetStagingNoteEditResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingNoteEditRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return editPreflightedTargetNote(this.#store, credential, request, durableSessionTokenHash);
   }
 
   /**

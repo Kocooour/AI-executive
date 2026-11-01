@@ -31,7 +31,7 @@ const rev = (db, id) => db.prepare("SELECT revision FROM notes WHERE id=?").get(
 test("R2d.2b canonical schema protects private/parent-inherited note reads", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 13);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION, 14);
     assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
     assert.equal(read(db, "bob", "n-private"), null);
     assert.equal(read(db, "bob", "n-shared")?.note.body, "Shared content");
@@ -117,7 +117,7 @@ test("an attached note blocks a project deletion even with a valid project tombs
   } finally { db.close(); }
 });
 
-const root = mkdtempSync(path.join(os.tmpdir(), "lumi-notes-v13-"));
+const root = mkdtempSync(path.join(os.tmpdir(), "lumi-notes-v14-"));
 const legacy = path.join(root, "legacy");
 mkdirSync(legacy);
 const previousDataDir = process.env.AI_EXECUTIVE_DATA_DIR;
@@ -128,7 +128,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("fresh v13 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
+test("fresh v14 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "staging"), ownerUserId: "alice",
   });
