@@ -94,10 +94,16 @@ test("idempotent replay survives note revision changes; changed payload conflict
   const first = command(db, "bob", "child", "First edit", "X");
   assert.deepEqual(authority.updateNote(bob.sessionToken, first), { ok: true });
   assert.deepEqual(authority.updateNote(bob.sessionToken, first), { ok: true, replayed: true });
+  const second = command(db, "bob", "child", "Second edit", "Z");
+  assert.deepEqual(authority.updateNote(bob.sessionToken, second), { ok: true });
+  // A retry acknowledges the original command even after another edit,
+  // but it must not overwrite the later content or insert another audit.
+  assert.deepEqual(authority.updateNote(bob.sessionToken, first), { ok: true, replayed: true });
   assert.deepEqual(authority.updateNote(bob.sessionToken, { ...first, body: "Y" }),
     refused("idempotency_conflict"));
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 1);
-  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 2);
+  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 2);
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id='child'").get().body, "Z");
   const key = targetNoteEditReceiptKey("bob", "child", first.commandId);
   assert.ok(db.prepare("SELECT value FROM metadata WHERE key=?").get(key));
 });
