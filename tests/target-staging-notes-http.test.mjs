@@ -35,6 +35,7 @@ const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
 const { GET: EDIT_PREVIEW, PATCH: EDIT } = await import("../app/api/target-staging/notes/[noteId]/edit/route.ts");
+const { POST: EDIT_STATUS } = await import("../app/api/target-staging/notes/[noteId]/edit/status/route.ts");
 const { readStagingAuthorizedNoteInChild, parseStagingNoteDetail } =
   await import("../lib/target-staging-read-process.ts");
 const { verifyStagingNoteBeforeRelease } = await import("../lib/target-staging-http-identity.ts");
@@ -397,5 +398,103 @@ test("note edit rejects disabled, cross-origin, legacy, bad protocol and malform
   assert.equal((await edit("alice-private", alice, { ...command, noteId: "foreign" })).status, 400);
   assert.equal(db.prepare("SELECT revision FROM notes WHERE id='alice-private'").get().revision, before);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id='alice-private'").get().n, 0);
+  db.close();
+});
+
+function status(noteId, cookie, payload, options = {}) {
+  return EDIT_STATUS(new Request("http://localhost:3001/api/target-staging/notes/" +
+    encodeURIComponent(noteId) + "/edit/status" + (options.query || ""), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options.protocol === null ? {} : { "x-lumi-target-protocol": options.protocol || "1" }),
+      ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
+      ...(cookie ? { cookie } : {}),
+      "x-forwarded-for": "10.9.0.18",
+    },
+    body: options.raw === undefined ? JSON.stringify(payload) : options.raw,
+  }), editContext(noteId));
+}
+
+test("note command reconciliation distinguishes missing, committed and conflicting receipts without writing", async () => {
+  const fx = fixture();
+  const alice = ownerCookie();
+  const preview = await authorizedEditPreview("alice-private", alice);
+  const command = { ...preview, commandId: randomUUID(), title: "Edited", body: "Private status content" };
+  const before = await status("alice-private", alice, command);
+  assert.equal(before.status, 200);
+  assert.deepEqual(await before.json(), { status: "not_recorded" });
+  assert.deepEqual(await (await edit("alice-private", alice, command)).json(), { ok: true });
+  const committed = await status("alice-private", alice, command);
+  assert.equal(committed.status, 200);
+  assert.equal(committed.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await committed.json(), { status: "committed" });
+
+  const conflict = await status("alice-private", alice, { ...command, body: "Different body" });
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), { error: "Revision conflict" });
+  // Another edit changes today's note CAS; the ORIGINAL durable receipt stays valid.
+  const later = { ...(await authorizedEditPreview("alice-private", alice)),
+    commandId: randomUUID(), title: "Later", body: "Next" };
+  assert.equal((await edit("alice-private", alice, later)).status, 200);
+  assert.deepEqual(await (await status("alice-private", alice, command)).json(),
+    { status: "committed" });
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_edit_audit").get().n, 2);
+  assert.equal(db.prepare("SELECT body FROM notes WHERE id='alice-private'").get().body, "Next");
+  db.close();
+});
+
+test("note receipt status is isolated by actor, Area, role and durable session", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob"), carol = login(fx, "carol"), dave = login(fx, "dave");
+  const preview = await authorizedEditPreview("child", bob);
+  const command = { ...preview, commandId: randomUUID(),
+    title: "Shared editor update", body: "Sensitive value" };
+  assert.equal((await edit("child", bob, command)).status, 200);
+  for (const cookie of [carol, dave]) {
+    assert.deepEqual(await denied(status("child", cookie, command), 404), { error: "Not found" });
+  }
+  assert.deepEqual(await denied(status("alice-private", bob, command), 404),
+    { error: "Not found" });
+  assert.deepEqual(await denied(status("child", null, command), 401),
+    { error: "Authentication required" });
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(await denied(status("child", bob, command), 404), { error: "Not found" });
+  db.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(await (await status("child", bob, command)).json(), { status: "committed" });
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, tokenHash);
+  assert.equal(live.ok, true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  assert.equal((await denied(status("child", bob, command), 401)).code, "session_revoked");
+  db.close();
+});
+
+test("note status rejects malformed, legacy, wrong-origin or disabled requests without mutations", async () => {
+  const fx = fixture();
+  const alice = ownerCookie();
+  const preview = await authorizedEditPreview("alice-private", alice);
+  const command = { ...preview, commandId: randomUUID(), title: "Never", body: "Never written" };
+  assert.deepEqual(await denied(status("alice-private", alice, command, { origin: null }), 403),
+    { error: "Cross-origin request rejected" });
+  assert.equal((await status("alice-private", alice, command, { protocol: null })).status, 400);
+  assert.equal((await status("alice-private", alice, { entities: [] })).status, 400);
+  assert.equal((await status("alice-private", alice, { ...command, actorUserId: "alice" })).status, 400);
+  assert.equal((await status("alice-private", alice, { ...command, noteId: "other" })).status, 400);
+  assert.equal((await status("alice-private", alice, command, { query: "?actor=alice" })).status, 400);
+  assert.equal((await status("alice-private", alice, { ...command, body: "x".repeat(131073) })).status, 400);
+  assert.equal((await status("alice-private", alice, command, { raw: Buffer.alloc(192 * 1024 + 1, 0x20) })).status, 413);
+  assert.deepEqual(await denied(status("absent", alice, command), 404), { error: "Not found" });
+  assert.equal((await status("alice-private", alice, { ...command, restoreGeneration: randomUUID() })).status, 409);
+  assert.equal((await status("alice-private", alice, { ...command, writeAreaId: "team-area" })).status, 409);
+  assert.equal((await status("alice-private", alice, { ...command, writeAreaId: "foreign" })).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "false";
+  assert.equal((await status("alice-private", alice, command)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "true";
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='alice-private'").get().revision, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_edit_audit").get().n, 0);
   db.close();
 });
