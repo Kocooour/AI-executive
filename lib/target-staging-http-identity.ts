@@ -172,7 +172,9 @@ export function stagingIdentityRefusal(check: Exclude<StagingIdentityCheck, "ok"
  * data on every target-staging route. Missing or invalid configuration returns null here
  * and keeps the route's own 503 handling, as does a store which cannot be read at all. Content-free and independent of any credential.
  */
-export function stagingAnchorRefusal(request: Request): Response | null {
+export function stagingAnchorRefusal(
+  request: Request, failOnUnavailable = false,
+): Response | null {
   try {
     const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
     const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
@@ -184,9 +186,12 @@ export function stagingAnchorRefusal(request: Request): Response | null {
       status: 429, headers: { ...headers, "retry-after": String(limited.retryAfter) },
     });
     const verdict = checkTargetStagingAnchorLive({ stagingDirectory, expectedRestoreGeneration });
-    // "unavailable" (unreadable store, busy, schema mismatch) is left to the route's own
-    // fail-closed handling (child preflight and live checks), which already answer 503/401.
-    if (verdict === "ok" || verdict === "unavailable") return null;
+    // Ordinary staging routes retain their existing child/live-check behavior.
+    // Note HTTP opts into strict readiness: if the live source cannot be verified,
+    // return a content-free 503 before any child read or note-existence lookup.
+    // This distinguishes server misconfiguration from unauthorized/missing notes.
+    if (verdict === "ok" || (verdict === "unavailable" && !failOnUnavailable)) return null;
+    if (verdict === "unavailable") return answer(503, unavailableMessage);
     return Response.json({ error: unavailableMessage, code: verdict }, { status: 503, headers });
   } catch {
     return answer(503, "Staging unavailable");
