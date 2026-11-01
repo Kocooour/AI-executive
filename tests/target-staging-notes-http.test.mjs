@@ -481,6 +481,8 @@ test("note status rejects malformed, legacy, wrong-origin or disabled requests w
   const preview = await authorizedEditPreview("alice-private", alice);
   const command = { ...preview, commandId: randomUUID(), title: "Never", body: "Never written" };
   assert.deepEqual(await denied(status("alice-private", alice, command, { origin: null }), 403),
+    { error: "Origin header is required" });
+  assert.deepEqual(await denied(status("alice-private", alice, command, { origin: "https://other.test" }), 403),
     { error: "Cross-origin request rejected" });
   assert.equal((await status("alice-private", alice, command, { protocol: null })).status, 400);
   assert.equal((await status("alice-private", alice, { entities: [] })).status, 400);
