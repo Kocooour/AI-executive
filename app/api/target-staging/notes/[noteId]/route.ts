@@ -27,7 +27,9 @@ export async function GET(
   if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
       process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED !== "true")
     return answer(404, "Not found");
-  const anchor = stagingAnchorRefusal(request);
+  // Unlike generic staging readers, note HTTP must refuse an unverified live
+  // store (including a mismatched restore generation) with 503, not a 404.
+  const anchor = stagingAnchorRefusal(request, true);
   if (anchor) return anchor;
   const identity = resolveStagingHttpIdentity(request);
   if (!identity) return stagingUnauthenticatedRefusal(request);
