@@ -30,11 +30,13 @@ import {
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
+  readPreflightedAuthorizedTargetNote,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
+import type { TargetAuthorizedNote } from "./target-note-access";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
@@ -350,6 +352,18 @@ export class TargetStagingSessionAuthority {
       return credential
         ? readPreflightedAuthorizedProjectTasks(this.#store, credential, projectId, limit, offset)
         : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R2d.2c.2c: authenticated note + exact parent/Area guard on one snapshot.
+   * Only server-derived actor identities are accepted, and the guard is never public. */
+  readAuthorizedNote(actorUserId: string, noteId: string): TargetAuthorizedNote | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedAuthorizedTargetNote(this.#store, credential, noteId) : null;
     } catch {
       return null;
     }

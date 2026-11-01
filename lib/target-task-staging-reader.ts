@@ -34,6 +34,8 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
+import { readAuthorizedTargetNote } from "./target-note-access";
+import type { TargetAuthorizedNote } from "./target-note-access";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -632,6 +634,20 @@ export function readPreflightedAuthorizedProjectIndex(
           actorUserId, scope, limit, offset,
           restoreGeneration: store.expectedRestoreGeneration,
         }) : null;
+      }, () => null),
+  );
+}
+
+/** R2d.2c.2c: exact actor-scoped note, same preflighted pinned snapshot as tasks/projects. */
+export function readPreflightedAuthorizedTargetNote(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, noteId: string,
+): TargetAuthorizedNote | null {
+  return withPreflightedStore<TargetAuthorizedNote | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<TargetAuthorizedNote | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId ? readAuthorizedTargetNote(db, { actorUserId, noteId }) : null;
       }, () => null),
   );
 }

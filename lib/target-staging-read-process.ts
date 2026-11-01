@@ -10,6 +10,8 @@ import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-p
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import { isReadableStagingProjectId } from "./target-project-id";
+import type { TargetReadableNote } from "./target-note-access";
+import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
 import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
@@ -666,4 +668,77 @@ export async function readStagingAuthorizedProjectIndexInChild(
   const result = parseStagingAuthorizedProjectIndex(payload, scope);
   if (payload !== null && !result) logStagingFailure("project_index", "invalid_child_dto");
   return result;
+}
+
+/** R2d.2c.2c: strict note child-to-HTTP boundary. Internal guards never go to clients. */
+export type StagingNoteDetailResult =
+  | { ok: true; note: TargetReadableNote; linearization: TargetReadLinearization;
+      guard: TargetNoteReadLiveGuard }
+  | { ok: false; reason: "unavailable" };
+
+const validNoteHttpId = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.trim() === value &&
+  value !== "." && value !== ".." &&
+  Buffer.byteLength(value, "utf8") <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
+const validNoteRevision = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+export function parseStagingNoteDetail(
+  value: unknown, noteId: string,
+): StagingNoteDetailResult | null {
+  if (!validNoteHttpId(noteId) || !value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const data = value as Record<string, unknown>;
+  if (data.ok === false && data.reason === "unavailable" &&
+      Object.keys(data).sort().join(",") === "ok,reason") return { ok: false, reason: "unavailable" };
+  if (data.ok !== true || Object.keys(data).sort().join(",") !== "guard,linearization,note,ok" ||
+      !data.note || typeof data.note !== "object" || Array.isArray(data.note) ||
+      !data.guard || typeof data.guard !== "object" || Array.isArray(data.guard)) return null;
+  const n = data.note as Record<string, unknown>;
+  const g = data.guard as Record<string, unknown>;
+  if (Object.keys(n).sort().join(",") !== "areaId,areaKind,body,id,projectId,revision,title" ||
+      Object.keys(g).sort().join(",") !==
+        "areaId,noteId,noteRevision,parentRevision,projectId" ||
+      n.id !== noteId || !validNoteHttpId(n.id) ||
+      !validNoteHttpId(n.areaId) ||
+      (n.areaKind !== "private" && n.areaKind !== "shared") ||
+      (n.projectId !== null && !validNoteHttpId(n.projectId)) ||
+      typeof n.title !== "string" || n.title.trim().length === 0 ||
+      Buffer.byteLength(n.title, "utf8") > 4096 ||
+      typeof n.body !== "string" || Buffer.byteLength(n.body, "utf8") > 131072 ||
+      n.title.includes("\0") || n.body.includes("\0") ||
+      !validNoteRevision(n.revision) ||
+      g.noteId !== n.id || g.projectId !== n.projectId ||
+      g.areaId !== n.areaId || g.noteRevision !== n.revision ||
+      (n.projectId === null ? g.parentRevision !== null :
+        !validNoteRevision(g.parentRevision))) return null;
+  const linearization = parseLinearization(
+    data.linearization, new Map([[n.areaId as string, n.areaKind]]),
+  );
+  if (!linearization || linearization.areas.length !== 1 ||
+      linearization.areas[0]?.areaId !== n.areaId ||
+      linearization.areas[0]?.areaKind !== n.areaKind) return null;
+  return {
+    ok: true,
+    note: {
+      id: n.id as string, title: n.title, body: n.body,
+      projectId: n.projectId as string | null, areaId: n.areaId as string,
+      areaKind: n.areaKind, revision: n.revision,
+    },
+    linearization,
+    guard: {
+      noteId: g.noteId as string, projectId: g.projectId as string | null,
+      areaId: g.areaId as string, noteRevision: g.noteRevision as number,
+      parentRevision: g.parentRevision as number | null,
+    },
+  };
+}
+
+export async function readStagingAuthorizedNoteInChild(
+  config: StagingPersonalReadConfig, noteId: string,
+): Promise<StagingNoteDetailResult | null> {
+  const payload = await runChild(config, "target-staging-note-child.mjs", [noteId]);
+  const parsed = parseStagingNoteDetail(payload, noteId);
+  if (payload !== null && !parsed) logStagingFailure("note_detail", "invalid_child_dto");
+  return parsed;
 }

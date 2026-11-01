@@ -28,7 +28,27 @@ export type TargetStagingChangeLogCompaction =
   | { ok: true; floor: number; deleted: number }
   | { ok: false; reason: "invalid_request" | "journal_present" | "unavailable" | "write_failed" };
 
+/**
+ * A pinned preflight may refuse a healthy store transiently (for example, if
+ * the runtime's fd snapshot races an unrelated file descriptor). Such a refusal
+ * occurs before the compaction body, so a bounded NEW full preflight attempt is
+ * safe; no result or partial write from a denied attempt is reused.
+ *
+ * Never retry write_failed, journal_present, or invalid_request. A damaged store
+ * still fails closed on every attempt; do not weaken fd/anchor/ACL checks.
+ */
 export function compactTargetStagingChangeLog(
+  store: TargetStagingReadStore,
+  options: { retentionDays: number; now: number },
+): TargetStagingChangeLogCompaction {
+  const first = compactTargetStagingChangeLogOnce(store, options);
+  if (first.ok === true || first.reason !== "unavailable") return first;
+  // At most one retry of a *pre-body* boundary refusal. Re-check the journal
+  // and ALL trust predicates rather than trusting the prior failing attempt.
+  return compactTargetStagingChangeLogOnce(store, options);
+}
+
+function compactTargetStagingChangeLogOnce(
   store: TargetStagingReadStore,
   options: { retentionDays: number; now: number },
 ): TargetStagingChangeLogCompaction {
