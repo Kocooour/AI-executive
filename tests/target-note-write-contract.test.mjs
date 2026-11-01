@@ -71,6 +71,26 @@ test("note preflight protects private, shared and project-inherited Area without
   } finally { db.close(); }
 });
 
+test("canonical Area IDs containing spaces, Unicode, punctuation or more than 120 characters work", () => {
+  const { db } = fixture();
+  try {
+    const ids = ["rodina doma", "rodina/🗒️/poznámky", "a".repeat(160)];
+    for (const [index, areaId] of ids.entries()) {
+      const noteId = "unusual-" + index;
+      db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES(?,?,'private','wa','alice')")
+        .run(areaId, "Area " + index);
+      db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES(?,?,?,?)")
+        .run(noteId, areaId, "Title", "Private contents");
+      const request = allowed(db, "alice", noteId);
+      assert.equal(request.writeAreaId, areaId);
+      assert.equal(validTargetNoteWriteContractRequest(request), true);
+      assert.equal(check(db, "alice", request).ok, true);
+      assert.deepEqual(preview(db, "bob", noteId), rejected("unavailable"));
+      assert.deepEqual(check(db, "bob", request), rejected("unavailable"));
+    }
+  } finally { db.close(); }
+});
+
 test("stale note, parent and Area policy ABA revisions all invalidate a previous preview", () => {
   const { db } = fixture();
   try {
