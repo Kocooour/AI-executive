@@ -35,6 +35,8 @@ import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-pr
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedTargetNote } from "./target-note-access";
+import { readTargetNoteEditCommandStatus, type TargetNoteEditCommandStatus } from "./target-note-command-status";
+import { validTargetStagingNoteEditRequest, type TargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetAuthorizedNote } from "./target-note-access";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
@@ -436,6 +438,27 @@ export function readPreflightedTargetTaskTitleCommandStatus(
   );
 }
 
+
+/**
+ * R2d.2c.2e: a canonical pinned snapshot checks the actor's current WRITE
+ * right and the exact original command before reading the opaque receipt.
+ * The HTTP gateway separately rechecks the live note guard before releasing.
+ */
+export function readPreflightedTargetNoteEditCommandStatus(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  request: TargetStagingNoteEditRequest,
+): TargetNoteEditCommandStatus | { ok: false; reason: "unauthorized" } {
+  if (!validTargetStagingNoteEditRequest(request))
+    return { ok: false, reason: "invalid_request" };
+  const denied = () => ({ ok: false as const, reason: "unauthorized" as const });
+  return withPreflightedStore(store, denied, (db, preflight) =>
+    inReadSnapshot(db, () => {
+      if (!preflight(db)) return denied();
+      const actor = verifiedActor(db, access, true);
+      if (!actor) return denied();
+      return readTargetNoteEditCommandStatus(db, actor, request);
+    }, denied));
+}
 
 /**
  * R2c.1 read-only reconciliation of an uncertain task-delete response. Same
