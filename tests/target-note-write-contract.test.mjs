@@ -103,7 +103,9 @@ test("role revocation, parent move and foreign write Area fail closed", () => {
     db.prepare("DELETE FROM area_members WHERE area_id='team' AND user_id='bob'").run();
     assert.deepEqual(check(db, "bob", old), rejected("unavailable"));
     assert.deepEqual(preview(db, "bob", "direct"), rejected("unavailable"));
-    db.prepare("UPDATE projects SET area_id='private' WHERE id='project'").run();
+    // Canonical v13 forbids project Area moves without a confirmed move command.
+    // Reparenting the note itself IS supported and must change its effective ACL.
+    db.prepare("UPDATE notes SET project_id=NULL, area_id='private' WHERE id='direct'").run();
     assert.deepEqual(check(db, "alice", { ...old }), rejected("write_area_mismatch"));
     assert.equal(check(db, "alice", allowed(db, "alice", "direct")).ok, true);
     assert.deepEqual(preview(db, "bob", "direct"), rejected("unavailable"));
