@@ -19,7 +19,6 @@ import {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HEX64 = /^[0-9a-f]{64}$/;
-const AREA_ID = /^[A-Za-z0-9_.:@-]{1,120}$/;
 
 export interface TargetNoteWriteContractRequest {
   readonly noteId: string;
@@ -52,9 +51,12 @@ export function validTargetNoteWriteContractRequest(value: unknown): value is Ta
   const r = value as Record<string, unknown>;
   return Object.keys(r).sort().join(",") ===
       "expectedRevision,noteId,restoreGeneration,writeAreaId" &&
+    // Effective Area IDs come from the canonical note reader, which accepts
+    // non-ASCII, whitespace-containing and longer (<512-byte) SQLite IDs.
+    // Match that reader rather than imposing the unrelated actor-ID pattern.
     validNoteId(r.noteId) && typeof r.expectedRevision === "string" &&
     HEX64.test(r.expectedRevision) && typeof r.writeAreaId === "string" &&
-    AREA_ID.test(r.writeAreaId) && typeof r.restoreGeneration === "string" &&
+    validNoteId(r.writeAreaId) && typeof r.restoreGeneration === "string" &&
     UUID.test(r.restoreGeneration);
 }
 
