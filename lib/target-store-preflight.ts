@@ -201,8 +201,8 @@ export function inspectIsolatedTargetStore(
       const noteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX));
       // The only extra metadata entries allowed are strictly validated,
-      // content-free, staging-only receipt hashes (title and, since R2c.1,
-      // delete namespaces, each capped separately). Reject unknown metadata,
+      // content-free, staging-only receipt hashes (title, delete and note
+      // namespaces, each capped separately). Reject unknown metadata,
       // malformed hashes and oversized ledgers; never expose receipt contents.
       const receiptValid = (list: typeof rows, prefix: string) => list.every(row =>
         typeof row.key === "string" &&
