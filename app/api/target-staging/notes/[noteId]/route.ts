@@ -24,7 +24,8 @@ const answer = (status: number, error: string): Response =>
 export async function GET(
   request: Request, context: { params: Promise<{ noteId: string }> },
 ): Promise<Response> {
-  if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true")
+  if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
+      process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED !== "true")
     return answer(404, "Not found");
   const anchor = stagingAnchorRefusal(request);
   if (anchor) return anchor;
@@ -61,6 +62,7 @@ export async function GET(
       : verifyStagingIdentityBeforeRelease(request, identity, store);
     if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
+        process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED !== "true" ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY !== stagingDirectory ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION !== expectedRestoreGeneration ||
         process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID !== ownerUserId)
