@@ -255,7 +255,10 @@ test("bad request IDs, queries, missing identity, disabled gate and invalid stor
 
 function editContext(noteId) { return { params: Promise.resolve({ noteId }) }; }
 function editPreview(noteId, cookie, query = "") {
-  return EDIT_PREVIEW(req(noteId, cookie, query), editContext(noteId));
+  return EDIT_PREVIEW(new Request("http://localhost:3001/api/target-staging/notes/" +
+    encodeURIComponent(noteId) + "/edit" + query, { headers: {
+      ...(cookie ? { cookie } : {}), "x-forwarded-for": "10.9.0.16",
+    } }), editContext(noteId));
 }
 function edit(noteId, cookie, payload, options = {}) {
   return EDIT(new Request("http://localhost:3001/api/target-staging/notes/" +
@@ -378,6 +381,13 @@ test("note edit rejects disabled, cross-origin, legacy, bad protocol and malform
   })).status, 413);
   assert.deepEqual(await denied(edit("absent", alice, command), 404), { error: "Not found" });
   assert.equal((await edit("alice-private", alice, { ...command, restoreGeneration: randomUUID() })).status, 409);
+  const wrongArea = await edit("alice-private", alice, { ...command, writeAreaId: "team-area" });
+  assert.equal(wrongArea.status, 409, "a writer of both Areas gets a mismatch, not a move");
+  assert.equal((await edit("alice-private", alice, { ...command, writeAreaId: "unknown-area" })).status, 404);
+  assert.equal((await edit("alice-private", alice, command, {
+    raw: Buffer.concat([Buffer.from('{"title":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}')]),
+  })).status, 400);
+  assert.equal((await edit("alice-private", alice, { ...command, noteId: "foreign" })).status, 400);
   assert.equal(db.prepare("SELECT revision FROM notes WHERE id='alice-private'").get().revision, before);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id='alice-private'").get().n, 0);
   db.close();
