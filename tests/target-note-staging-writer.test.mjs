@@ -58,7 +58,8 @@ after(() => {
 function command(db, actor, noteId, title, body, commandId = randomUUID()) {
   const preview = previewTargetNoteWrite(db, actor, noteId);
   assert.equal(preview.ok, true, JSON.stringify(preview));
-  return { ...preview, noteId, title, body, commandId };
+  const { ok: _authorized, ...fields } = preview;
+  return { ...fields, noteId, title, body, commandId };
 }
 const refused = reason => ({ ok: false, reason });
 
