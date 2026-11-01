@@ -42,7 +42,7 @@ export function compactTargetStagingChangeLog(
   options: { retentionDays: number; now: number },
 ): TargetStagingChangeLogCompaction {
   const first = compactTargetStagingChangeLogOnce(store, options);
-  if (first.ok || first.reason !== "unavailable") return first;
+  if (first.ok === true || first.reason !== "unavailable") return first;
   // At most one retry of a *pre-body* boundary refusal. Re-check the journal
   // and ALL trust predicates rather than trusting the prior failing attempt.
   return compactTargetStagingChangeLogOnce(store, options);
