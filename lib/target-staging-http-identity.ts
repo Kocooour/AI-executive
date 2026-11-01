@@ -129,6 +129,24 @@ export function verifyStagingReadBeforeRelease(
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
 }
 
+/**
+ * Mandatory note-specific release entry point for a future note HTTP route.
+ * Unlike the generic project/list read helper, callers must supply the exact
+ * server-derived note/parent revision guard from the preflighted snapshot.
+ * A null/undefined or client-provided guard is never an authorization proof.
+ */
+export function verifyStagingNoteBeforeRelease(
+  request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+  ownerUserId: string, observed: TargetReadLinearization,
+  noteGuard: TargetNoteReadLiveGuard,
+): StagingReadCheck {
+  if (!noteGuard) return "unavailable";
+  return verifyStagingReadBeforeRelease(
+    request, identity, store, ownerUserId, observed,
+    undefined, undefined, noteGuard,
+  );
+}
+
 const headers = { "cache-control": "no-store" };
 const unavailableMessage = "Staging unavailable";
 
