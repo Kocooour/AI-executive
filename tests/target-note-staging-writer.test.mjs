@@ -84,7 +84,7 @@ test("signed write session edits notes; audit and receipt contain no note conten
   assert.equal(validTargetStagingNoteEditRequest(own), true);
   assert.deepEqual(authority.updateNote(alice.sessionToken, own), { ok: true });
   assert.deepEqual(authority.updateNote(bob.sessionToken, shared), { ok: true });
-  assert.deepEqual(db.prepare("SELECT title,body,revision FROM notes WHERE id='child'").get(),
+  assert.deepEqual({ ...db.prepare("SELECT title,body,revision FROM notes WHERE id='child'").get() },
     { title: "Project updated", body: "Updated child content", revision: 1 });
   const audit = db.prepare("SELECT * FROM note_edit_audit ORDER BY id").all();
   assert.equal(audit.length, 2);
@@ -193,8 +193,9 @@ test("invalid payload, foreign Area, unknown durable hash and orphan audit fail 
   assert.deepEqual(authority.updateNote(alice.sessionToken, c, "a".repeat(64)), refused("session_revoked"));
   assert.equal(db.prepare("SELECT body FROM notes WHERE id='own'").get().body, "Confidential");
   // Even a syntactically valid receipt without an audit invalidates canonical preflight.
+  // The pinned-store security gate denies access before the note writer is entered.
   const forged = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "a".repeat(64);
   db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(forged, "b".repeat(64));
-  assert.deepEqual(authority.updateNote(alice.sessionToken, c), refused("write_failed"));
+  assert.deepEqual(authority.updateNote(alice.sessionToken, c), refused("unauthorized"));
   assert.equal(db.prepare("SELECT body FROM notes WHERE id='own'").get().body, "Confidential");
 });
