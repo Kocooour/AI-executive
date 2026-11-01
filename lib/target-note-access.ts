@@ -1,15 +1,15 @@
 /**
  * R2d.2a: isolated target-model note ACL read foundation.
  *
- * Notes are NOT in the current staging schema yet. This selector is deliberately
- * not wired to HTTP, synchronization, search, AI, or the production store. Its
- * SQL describes the future canonical notes table and is exercised against a
- * synthetic schema in tests. Later integration MUST add a preflighted/pinned
- * snapshot and a live post-read identity + note/parent Area check before release.
- * The canonical notes schema MUST enforce monotonic revisions for every content
- * or parent mutation (including ABA) and permanent ID non-reuse. The revision
- * fields below are only snapshot markers until the future live release guard
- * compares both note/parent revisions against current rows in one transaction.
+ * R2d.2b adds the canonical notes table to isolated staging schema v13.
+ * This selector remains deliberately disconnected from HTTP, sync, search, AI
+ * and production. R2d.2a synthetic tests still test malformed legacy rows;
+ * R2d.2b separately exercises the canonical schema and its write guards.
+ * Later integration MUST add a preflighted/pinned snapshot and a live post-read
+ * identity, exact note revision and exact note/parent Area check before release.
+ * Staging notes cannot be deleted until a tombstone/change-feed protocol exists.
+ * The revision fields below remain snapshot markers until the live release
+ * guard compares them with current rows inside one transaction.
  *
  * A direct project note inherits ONLY its project's Area; a standalone note
  * belongs to exactly one Area. A backlink, mention or other reference to a
