@@ -26,6 +26,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -42,6 +43,7 @@ import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
+import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
@@ -647,6 +649,16 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     }
     return editPreflightedTargetNote(this.#store, credential, request, durableSessionTokenHash);
+  }
+
+  /** Read-only status of the exact note edit for its current authorized writer. */
+  noteEditCommandStatus(
+    sessionToken: string,
+    request: TargetStagingNoteEditRequest,
+  ): TargetNoteEditCommandStatus | { ok: false; reason: "unauthorized" } {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    return readPreflightedTargetNoteEditCommandStatus(this.#store, credential, request);
   }
 
   /**

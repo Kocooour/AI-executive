@@ -90,6 +90,7 @@ const exempt = {
   "POST /api/target-staging/tasks/[taskId]/delete": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation, live session, ACL and revision atomically",
   "POST /api/target-staging/tasks/[taskId]/delete/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
   "POST /api/target-staging/tasks/[taskId]/title/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
+  "POST /api/target-staging/notes/[noteId]/edit/status": "read-only receipt reconciliation over the isolated staging notes store; no persisted mutation, gated by live staging restore generation and note ACL",
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
 
 };
@@ -100,6 +101,20 @@ function routeFiles(directory) {
     return statSync(file).isDirectory() ? routeFiles(file) : name === "route.ts" ? [file] : [];
   });
 }
+
+test("restore-fence exception inventory never declares a route twice", () => {
+  // Object literals silently overwrite duplicate keys. Check the source
+  // declarations, not only Object.keys(exempt), to preserve the reviewable
+  // security-exemption inventory.
+  const source = readFileSync(new URL(import.meta.url), "utf8");
+  const inventory = source.split("const exempt = {")[1]?.split("\n};")[0];
+  assert.ok(inventory, "missing restore-fence exemption inventory");
+  const declarations = [...inventory.matchAll(/"((?:POST|PUT|PATCH|DELETE) \/api\/[^"]+)"\s*:/g)]
+    .map((match) => match[1]);
+  assert.ok(declarations.length > 0, "no route exemptions found");
+  assert.equal(new Set(declarations).size, declarations.length,
+    "duplicate restore-fence route exemption");
+});
 
 test("every mutating owner route that writes covered data calls the restore fence, and every exemption is listed with its reason", () => {
   const root = path.resolve("app/api");

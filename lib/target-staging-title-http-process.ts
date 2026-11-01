@@ -186,6 +186,15 @@ export async function readTaskDeleteCommandStatusInChild(
   return parseStatus(value);
 }
 
+/** A read-only note status child returns no note content and no receipt key. */
+export async function readStagingNoteEditCommandStatusInChild(
+  config: StagingPersonalReadConfig,
+  request: import("./target-note-staging-writer").TargetStagingNoteEditRequest,
+): Promise<Status | null> {
+  const value = await run(config, "target-staging-note-status-child.mjs", JSON.stringify(request));
+  return parseStatus(value);
+}
+
 /** R2d.2c.2d: bounded staging-only note edit child. All content travels through stdin. */
 export async function writeStagingNoteInChild(
   config: StagingPersonalReadConfig,
