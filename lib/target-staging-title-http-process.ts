@@ -91,7 +91,7 @@ function parseStatus(value: unknown): Status | null {
 
 async function run(config: StagingPersonalReadConfig, scriptName: string,
   input: string): Promise<unknown | null> {
-  if (active >= 2 || Buffer.byteLength(input) > 32 * 1024) return null;
+  if (active >= 2 || Buffer.byteLength(input) > 192 * 1024) return null;
   active++;
   try {
     return await new Promise<unknown | null>(resolve => {
@@ -182,4 +182,13 @@ export async function readTaskDeleteCommandStatusInChild(
 ): Promise<Status | null> {
   const value = await run(config, "target-staging-delete-status-child.mjs", JSON.stringify(request));
   return parseStatus(value);
+}
+
+/** R2d.2c.2d: bounded staging-only note edit child. All content travels through stdin. */
+export async function writeStagingNoteInChild(
+  config: StagingPersonalReadConfig,
+  request: import("./target-note-staging-writer").TargetStagingNoteEditRequest,
+): Promise<Write | null> {
+  const value = await run(config, "target-staging-note-write-child.mjs", JSON.stringify(request));
+  return parseWrite(value);
 }
