@@ -451,13 +451,15 @@ export function readPreflightedTargetNoteEditCommandStatus(
   if (!validTargetStagingNoteEditRequest(request))
     return { ok: false, reason: "invalid_request" };
   const denied = () => ({ ok: false as const, reason: "unauthorized" as const });
-  return withPreflightedStore(store, denied, (db, preflight) =>
-    inReadSnapshot(db, () => {
-      if (!preflight(db)) return denied();
-      const actor = verifiedActor(db, access, true);
-      if (!actor) return denied();
-      return readTargetNoteEditCommandStatus(db, actor, request);
-    }, denied));
+  return withPreflightedStore<TargetNoteEditCommandStatus | { ok: false; reason: "unauthorized" }>(
+    store, denied, (db, preflight) =>
+      inReadSnapshot<TargetNoteEditCommandStatus | { ok: false; reason: "unauthorized" }>(
+        db, () => {
+          if (!preflight(db)) return denied();
+          const actor = verifiedActor(db, access, true);
+          if (!actor) return denied();
+          return readTargetNoteEditCommandStatus(db, actor, request);
+        }, denied));
 }
 
 /**
