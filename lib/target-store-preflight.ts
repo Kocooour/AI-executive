@@ -191,6 +191,26 @@ export function inspectIsolatedTargetStore(
                OR n.revision<0 OR n.revision>=9007199254740991`) !== 0)
         fail("note_invalid");
     } catch { fail("note_invalid"); }
+    // A tombstone cannot coexist with a live note. The marker keeps only
+    // immutable ID/Area/parent/revision/time, not deleted title or body.
+    // Recheck even when SQLite CHECK/FK enforcement was bypassed by a writer.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM note_tombstones") > TARGET_STAGING_MAX_TOMBSTONES ||
+          count(`SELECT COUNT(*) AS n FROM note_tombstones t
+            LEFT JOIN areas a ON a.id=t.area_id
+            LEFT JOIN notes n ON n.id=t.id
+            WHERE n.id IS NOT NULL OR a.id IS NULL
+              OR typeof(t.id)<>'text' OR t.id='' OR t.id<>trim(t.id)
+              OR t.id IN ('.','..') OR length(CAST(t.id AS BLOB))>512
+              OR instr(t.id,char(0))>0
+              OR t.id GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')
+              OR typeof(t.area_id)<>'text'
+              OR (t.project_id IS NOT NULL AND
+                (typeof(t.project_id)<>'text' OR t.project_id='' OR length(CAST(t.project_id AS BLOB))>512))
+              OR typeof(t.revision)<>'integer' OR t.revision<=0 OR t.revision>=9007199254740991
+              OR typeof(t.deleted_at_ms)<>'integer' OR t.deleted_at_ms<=0`) !== 0)
+        fail("tombstone_invalid");
+    } catch { fail("tombstone_invalid"); }
     try {
       const rows = all("SELECT key, value FROM metadata") as { key: unknown; value: unknown }[];
       const meta = new Map(rows.map(row => [row.key, row.value]));
