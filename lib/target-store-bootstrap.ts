@@ -560,8 +560,9 @@ BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
 
 -- R2d.2b: canonical but NOT activated notes. A note is either standalone in
 -- one Area OR directly attached to a project and inherits its current Area.
--- Typed links/backlinks never confer parentage. No HTTP/write/sync interface
--- exists for notes; deletes are prohibited until an auditable tombstone protocol
+-- Typed links/backlinks never confer parentage. No HTTP/sync interface
+-- exists for notes; internal updates use a separate pinned writer; deletes
+-- are prohibited until an auditable tombstone protocol
 -- is implemented. This prevents ID recycling even via raw staging SQL.
 CREATE TABLE notes (
   id TEXT PRIMARY KEY CHECK(typeof(id)='text' AND id <> '' AND id = trim(id)
