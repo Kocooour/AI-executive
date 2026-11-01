@@ -399,6 +399,23 @@ export type TargetProjectIndexLiveGuard = {
   projects: Array<{ id: string; areaId: string }>;
 };
 
+/**
+ * R2d.2c.2b: Exact note snapshot guard, never a client DTO.
+ * Check note identity, one canonical parent, effective Area and BOTH revisions
+ * in the SAME live transaction as actor/session and Area permission.
+ */
+export type TargetNoteReadLiveGuard = {
+  noteId: string;
+  projectId: string | null;
+  areaId: string;
+  noteRevision: number;
+  parentRevision: number | null;
+};
+const validNoteGuardId = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.trim() === value &&
+  value !== "." && value !== ".." && Buffer.byteLength(value, "utf8") <= 512 &&
+  !/[\u0000-\u001f\u007f]/u.test(value);
+
 export function verifyTargetStagingReadLive(
   store: TargetStagingReadStore,
   subject: { readonly tokenHash: string } | { readonly ownerUserId: string },
@@ -406,6 +423,7 @@ export function verifyTargetStagingReadLive(
   nowMs = Date.now(),
   projectGuard?: TargetProjectReadLiveGuard,
   projectIndexGuard?: TargetProjectIndexLiveGuard,
+  noteGuard?: TargetNoteReadLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -424,6 +442,15 @@ export function verifyTargetStagingReadLive(
         !observed.areas.some(area => area.areaId === project.areaId)) ||
       new Set(projectIndexGuard.projects.map(project => project.id)).size !==
         projectIndexGuard.projects.length)) return unavailable;
+  if (noteGuard && (
+      !validNoteGuardId(noteGuard.noteId) || !validNoteGuardId(noteGuard.areaId) ||
+      (noteGuard.projectId !== null && !validNoteGuardId(noteGuard.projectId)) ||
+      !Number.isSafeInteger(noteGuard.noteRevision) || noteGuard.noteRevision < 0 ||
+      (noteGuard.projectId === null ? noteGuard.parentRevision !== null :
+        !Number.isSafeInteger(noteGuard.parentRevision) || (noteGuard.parentRevision as number) < 0) ||
+      observed.areas.length !== 1 || observed.areas[0]?.areaId !== noteGuard.areaId)) {
+    return unavailable;
+  }
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
     return { ok: false, reason: "invalid", code: "session_revoked" };
   }
@@ -482,6 +509,28 @@ export function verifyTargetStagingReadLive(
         const current = lookup.get(row.id) as { areaId: string } | undefined;
         if (!current || current.areaId !== row.areaId)
           return { ok: false, reason: "stale" };
+      }
+    }
+    if (noteGuard) {
+      // A policy-only check is NOT enough: content ABA, reparenting, an Area
+      // move of its parent project and parent-title ABA must all invalidate.
+      const row = db.prepare(`SELECT n.id AS noteId, n.project_id AS projectId,
+        n.area_id AS directAreaId, n.revision AS noteRevision,
+        p.area_id AS parentAreaId, p.revision AS parentRevision
+        FROM notes n LEFT JOIN projects p ON p.id = n.project_id
+        WHERE n.id = ? LIMIT 1`).get(noteGuard.noteId) as {
+          noteId: string; projectId: string | null; directAreaId: string | null;
+          noteRevision: number; parentAreaId: string | null; parentRevision: number | null;
+        } | undefined;
+      if (!row || row.noteId !== noteGuard.noteId ||
+          row.projectId !== noteGuard.projectId ||
+          row.noteRevision !== noteGuard.noteRevision ||
+          (noteGuard.projectId === null
+            ? row.directAreaId !== noteGuard.areaId || row.parentAreaId !== null ||
+              row.parentRevision !== null
+            : row.directAreaId !== null || row.parentAreaId !== noteGuard.areaId ||
+              row.parentRevision !== noteGuard.parentRevision)) {
+        return { ok: false, reason: "stale" };
       }
     }
     return { ok: true };

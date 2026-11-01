@@ -20,7 +20,7 @@ import {
   checkTargetStagingAnchorLive,
 } from "./target-staging-durable-session";
 import type { TargetReadLinearization } from "./target-task-read-model";
-import type { TargetProjectReadLiveGuard, TargetProjectIndexLiveGuard } from "./target-staging-durable-session";
+import type { TargetProjectReadLiveGuard, TargetProjectIndexLiveGuard, TargetNoteReadLiveGuard } from "./target-staging-durable-session";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 export type StagingHttpIdentity =
@@ -116,16 +116,35 @@ export function verifyStagingReadBeforeRelease(
   ownerUserId: string, observed: TargetReadLinearization,
   projectGuard?: TargetProjectReadLiveGuard,
   projectIndexGuard?: TargetProjectIndexLiveGuard,
+  noteGuard?: TargetNoteReadLiveGuard,
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
   if (identity.kind === "owner" && !auth.authenticated) return "unauthorized";
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash },
-    observed, Date.now(), projectGuard, projectIndexGuard);
+    observed, Date.now(), projectGuard, projectIndexGuard, noteGuard);
   if (live.ok === true) return "ok";
   if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
+}
+
+/**
+ * Mandatory note-specific release entry point for a future note HTTP route.
+ * Unlike the generic project/list read helper, callers must supply the exact
+ * server-derived note/parent revision guard from the preflighted snapshot.
+ * A null/undefined or client-provided guard is never an authorization proof.
+ */
+export function verifyStagingNoteBeforeRelease(
+  request: Request, identity: StagingHttpIdentity, store: TargetStagingReadStore,
+  ownerUserId: string, observed: TargetReadLinearization,
+  noteGuard: TargetNoteReadLiveGuard,
+): StagingReadCheck {
+  if (!noteGuard) return "unavailable";
+  return verifyStagingReadBeforeRelease(
+    request, identity, store, ownerUserId, observed,
+    undefined, undefined, noteGuard,
+  );
 }
 
 const headers = { "cache-control": "no-store" };
