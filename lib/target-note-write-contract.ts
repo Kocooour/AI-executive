@@ -66,7 +66,7 @@ function editableNote(note: TargetAuthorizedNote): boolean {
 }
 
 /** Content-free, deterministic optimistic marker. Never serialize note text. */
-function noteWriteRevision(note: TargetAuthorizedNote, actor: string, generation: string): string {
+export function noteWriteRevision(note: TargetAuthorizedNote, actor: string, generation: string): string {
   const a = note.linearization.areas[0];
   return createHash("sha256").update(JSON.stringify([
     "r2d.2c.1", actor, generation.toLowerCase(), note.guard.noteId,
