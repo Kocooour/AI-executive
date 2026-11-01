@@ -381,6 +381,13 @@ test("note edit rejects disabled, cross-origin, legacy, bad protocol and malform
   })).status, 413);
   assert.deepEqual(await denied(edit("absent", alice, command), 404), { error: "Not found" });
   assert.equal((await edit("alice-private", alice, { ...command, restoreGeneration: randomUUID() })).status, 409);
+  // This staging-only route is intentionally exempt from the *legacy* backup
+  // fence, but a mismatched live staging generation must still block writes
+  // before accessing the note or dispatching the transactional child.
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = randomUUID();
+  assert.deepEqual(await denied(edit("alice-private", alice, command), 503),
+    { error: "Staging unavailable" });
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = fx.stage.restoreGeneration;
   const wrongArea = await edit("alice-private", alice, { ...command, writeAreaId: "team-area" });
   assert.equal(wrongArea.status, 409, "a writer of both Areas gets a mismatch, not a move");
   assert.equal((await edit("alice-private", alice, { ...command, writeAreaId: "unknown-area" })).status, 404);
