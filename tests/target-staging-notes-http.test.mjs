@@ -452,6 +452,9 @@ test("note receipt status is isolated by actor, Area, role and durable session",
   const command = { ...preview, commandId: randomUUID(),
     title: "Shared editor update", body: "Sensitive value" };
   assert.equal((await edit("child", bob, command)).status, 200);
+  // Alice is an admin of the SAME shared note, but Bob's receipt is not hers.
+  assert.deepEqual(await (await status("child", ownerCookie(), command)).json(),
+    { status: "not_recorded" });
   for (const cookie of [carol, dave]) {
     assert.deepEqual(await denied(status("child", cookie, command), 404), { error: "Not found" });
   }
