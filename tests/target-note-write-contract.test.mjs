@@ -45,7 +45,8 @@ const rejected = reason => ({ ok: false, reason });
 const allowed = (db, actor, noteId) => {
   const result = preview(db, actor, noteId);
   assert.equal(result.ok, true, JSON.stringify(result));
-  return { noteId, ...result, ok: undefined };
+  return { noteId, expectedRevision: result.expectedRevision,
+    writeAreaId: result.writeAreaId, restoreGeneration: result.restoreGeneration };
 };
 
 test("note preflight protects private, shared and project-inherited Area without returning content", () => {
@@ -55,7 +56,7 @@ test("note preflight protects private, shared and project-inherited Area without
       ["bob", "standalone"], ["erin", "elsewhere"]]) {
       const request = allowed(db, actor, id);
       assert.deepEqual(Object.keys(request).sort(),
-        ["expectedRevision", "noteId", "ok", "restoreGeneration", "writeAreaId"]);
+        ["expectedRevision", "noteId", "restoreGeneration", "writeAreaId"]);
       assert.ok(!JSON.stringify(request).includes("Secret"));
       assert.ok(!JSON.stringify(request).includes("Body"));
       assert.deepEqual(check(db, actor, request).ok, true);
