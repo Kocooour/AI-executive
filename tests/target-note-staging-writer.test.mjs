@@ -139,7 +139,7 @@ test("invalid payload, foreign Area, revoked durable hash and orphan audit fail 
   const c = command(db, "alice", "own", "Changed", "Secret content");
   for (const wrong of [
     { ...c, body: "x".repeat(131073) }, { ...c, title: "   " },
-    { ...c, noteId: "../wrong" }, { ...c, extra: "unexpected" },
+    { ...c, noteId: ".." }, { ...c, extra: "unexpected" },
   ]) {
     assert.equal(validTargetStagingNoteEditRequest(wrong), false);
     assert.deepEqual(authority.updateNote(alice.sessionToken, wrong), refused("invalid_request"));
