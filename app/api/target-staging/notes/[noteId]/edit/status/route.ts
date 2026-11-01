@@ -89,24 +89,26 @@ export async function POST(request: Request, context: { params: Promise<{ noteId
     if (!unchanged(base)) return answer(503, "Staging unavailable");
 
     const childConfig = { ...base, ...stagingChildSessionConfig(identity) };
-    const result = await readStagingNoteEditCommandStatusInChild(childConfig, command);
-    const checked = verifyStagingIdentityBeforeRelease(request, identity, base);
-    if (checked !== "ok") return stagingIdentityRefusal(checked);
-    if (!unchanged(base) || !result) return answer(503, "Staging unavailable");
-    if (result.ok === false && result.reason === "unavailable") return answer(404, "Not found");
-
-    // Recheck the exact current note/parent/Area and writer role against the
-    // LIVE store before releasing even a content-free receipt status.
+    // Take the note/parent/Area proof BEFORE the receipt read, then demand
+    // that this exact observed scope is still live AFTER reconciliation.
+    // A move, membership change or edit across the two snapshots refuses
+    // rather than attributing a receipt to a different current note scope.
     const note = await readStagingAuthorizedNoteInChild(childConfig, params.noteId);
-    const release = note?.ok === true
-      ? verifyStagingNoteBeforeRelease(request, identity, base, base.ownerUserId,
-          note.linearization, note.guard)
-      : verifyStagingIdentityBeforeRelease(request, identity, base);
-    if (release !== "ok" && release !== "stale") return stagingIdentityRefusal(release);
+    const admittedNote = verifyStagingIdentityBeforeRelease(request, identity, base);
+    if (admittedNote !== "ok") return stagingIdentityRefusal(admittedNote);
     if (!unchanged(base) || !note) return answer(503, "Staging unavailable");
-    if (release === "stale" || note.ok === false) return answer(404, "Not found");
+    if (note.ok === false) return answer(404, "Not found");
     const role = note.linearization.areas[0]?.access;
     if (role !== "private-owner" && role !== "editor" && role !== "admin")
+      return answer(404, "Not found");
+
+    const result = await readStagingNoteEditCommandStatusInChild(childConfig, command);
+    const released = verifyStagingNoteBeforeRelease(request, identity, base,
+      base.ownerUserId, note.linearization, note.guard);
+    if (released !== "ok" && released !== "stale") return stagingIdentityRefusal(released);
+    if (!unchanged(base) || !result) return answer(503, "Staging unavailable");
+    if (released === "stale") return answer(404, "Not found");
+    if (result.ok === false && result.reason === "unavailable")
       return answer(404, "Not found");
     if (result.ok === false) {
       if (result.reason === "resync_required") return resyncRequiredResponse();
