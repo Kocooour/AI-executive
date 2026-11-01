@@ -4,7 +4,7 @@
  * write-audience session credential and a canonical pinned store. Parent/Area
  * are not writable here. No create/delete/sync/UI/production activation.
  *
- * A signed preview is NOT authority. Recheck effective ACL, note/project
+ * A content-free preview digest is NOT authority. Recheck effective ACL, note/project
  * revision, Area policy and restore generation inside one pinned BEGIN IMMEDIATE.
  * The content edit, opaque receipt and content-free audit are atomic, including
  * rollback on revocation, pin failure or audit exhaustion.
