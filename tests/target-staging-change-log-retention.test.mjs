@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync,
 } from "node:fs";
@@ -668,6 +668,25 @@ test("compaction reports a hot journal distinctly", () => {
     { ok: false, reason: "journal_present" });
   rmSync(fx.databasePath + "-journal");
   assert.equal(compactTargetStagingChangeLog(fx.store, { retentionDays: 7, now: Date.now() + 8 * DAY_MS }).ok, true);
+});
+
+test("bounded compaction retry never bypasses a mismatched restore generation", () => {
+  const fx = makeFixture();
+  const originalFloor = floorOf(fx.db);
+  const originalAnchor = fx.db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value;
+  const wrongGeneration = { ...fx.store, expectedRestoreGeneration: randomUUID() };
+  // Both full pinned attempts must deny the same untrusted source, without
+  // writing a compaction intent or advancing the retention floor.
+  assert.deepEqual(compactTargetStagingChangeLog(wrongGeneration,
+    { retentionDays: 7, now: Date.now() + 8 * DAY_MS }),
+  { ok: false, reason: "unavailable" });
+  assert.equal(floorOf(fx.db), originalFloor);
+  assert.equal(fx.db.prepare("SELECT value FROM metadata WHERE key='anchor_seq'").get().value,
+    originalAnchor);
+  assert.equal(preflight(fx).ok, true);
+  // A subsequent correctly configured attempt still succeeds.
+  assert.equal(compactTargetStagingChangeLog(fx.store,
+    { retentionDays: 7, now: Date.now() + 8 * DAY_MS }).ok, true);
 });
 
 test("differential (seeded): compacted store == uncompacted store for every P >= floor, resync_required below", () => {
