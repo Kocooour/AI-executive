@@ -294,6 +294,11 @@ export function inspectIsolatedTargetStore(
             !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_NOTE_RECEIPT_PREFIX.length)) ||
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) || !meta.has(row.receipt_key)) ||
+          // v15 audit history survives note deletion, but must still refer to
+          // either an existing note or an immutable tombstone (never to nowhere).
+          count(`SELECT COUNT(*) AS n FROM note_edit_audit a
+            WHERE NOT EXISTS(SELECT 1 FROM notes n WHERE n.id=a.note_id)
+              AND NOT EXISTS(SELECT 1 FROM note_tombstones t WHERE t.id=a.note_id)`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_edit_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_RECEIPT_PREFIX.length, TARGET_STAGING_NOTE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
