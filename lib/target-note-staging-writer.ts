@@ -114,7 +114,10 @@ export function editPreflightedTargetNote(
       ? { ok: true, replayed: true } : { ok: false, reason: "idempotency_conflict" };
 
     // Only a brand-new command requires unchanged optimistic revision.
-    const contract = checkTargetNoteWriteContract(db, actor, request);
+    const contract = checkTargetNoteWriteContract(db, actor, {
+      noteId: request.noteId, expectedRevision: request.expectedRevision,
+      writeAreaId: request.writeAreaId, restoreGeneration: request.restoreGeneration,
+    });
     if (!contract.ok) return { ok: false, reason: contract.reason };
     fingerprint(databaseFd);
     const note = readAuthorizedTargetNote(db, { actorUserId: actor, noteId: request.noteId });
