@@ -149,7 +149,7 @@ export function createStagingNoteHttpClient(
         const body = await boundedJson(response);
         if (!active()) return { kind: "superseded" };
         const next = applyNoteSyncPage(state, body);
-        if (!next.ok) {
+        if (next.ok === false) {
           if (next.reason === "resync_required") {
             state = emptyNoteSyncPageState();
             return { kind: "resync_required" };
