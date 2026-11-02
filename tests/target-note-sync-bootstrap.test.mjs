@@ -39,8 +39,8 @@ function fixture() {
   add.run("child", "team-project", null, "Child note", "SECOND SHARED CONTENT", 2);
   return db;
 }
-function page(db, actor, area, limit = 100, afterId = null) {
-  return read(db, { actorUserId: actor, areaId: area, limit, afterId });
+function page(db, actor, area, limit = 100, afterId = null, expectedSnapshotRevision) {
+  return read(db, { actorUserId: actor, areaId: area, limit, afterId, expectedSnapshotRevision });
 }
 const ids = p => p?.entries.map(x => x.id);
 
@@ -78,7 +78,7 @@ test("bounded keyset pages share one Area snapshot revision and never repeat IDs
   const db = fixture();
   try {
     const first = page(db, "bob", "team-area", 1);
-    const second = page(db, "bob", "team-area", 1, first.nextAfterId);
+    const second = page(db, "bob", "team-area", 1, first.nextAfterId, first.snapshotRevision);
     assert.deepEqual(ids(first), ["child"]);
     assert.deepEqual(ids(second), ["direct"]);
     assert.equal(first.hasMore, true);
@@ -86,7 +86,8 @@ test("bounded keyset pages share one Area snapshot revision and never repeat IDs
     assert.equal(second.nextAfterId, null);
     assert.equal(first.snapshotRevision, second.snapshotRevision);
     assert.match(first.snapshotRevision, /^[a-f0-9]{64}$/);
-    assert.deepEqual(ids(page(db, "bob", "team-area", 1, "z")), []);
+    assert.deepEqual(ids(page(db, "bob", "team-area", 1, "z", first.snapshotRevision)), []);
+    assert.equal(page(db, "bob", "team-area", 1, first.nextAfterId), null);
   } finally { db.close(); }
 });
 
@@ -97,6 +98,7 @@ test("edits, parent ABA, moves and deletions change the manifest digest", () => 
     db.prepare("UPDATE notes SET body='changed',revision=revision+1 WHERE id='direct'").run();
     const changed = page(db, "bob", "team-area").snapshotRevision;
     assert.notEqual(changed, initial);
+    assert.equal(page(db, "bob", "team-area", 1, "child", initial), null);
     db.prepare("UPDATE notes SET body='SHARED CONTENT',revision=revision+1 WHERE id='direct'").run();
     const aba = page(db, "bob", "team-area").snapshotRevision;
     assert.notEqual(aba, initial);
