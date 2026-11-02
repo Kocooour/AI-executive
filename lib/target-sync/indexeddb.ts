@@ -102,7 +102,17 @@ export class IndexedDbTargetSyncStorage implements TargetSyncStorage {
 }
 
 class IndexedDbNamespace implements TargetSyncNamespace {
-  constructor(private readonly db: IDBDatabase, readonly name: string, private readonly token: string) {}
+  private readonly db: IDBDatabase;
+  readonly name: string;
+  private readonly token: string;
+
+  // Keep constructor semantics unchanged while remaining executable under
+  // Node 22's built-in TypeScript strip-only test loader.
+  constructor(db: IDBDatabase, name: string, token: string) {
+    this.db = db;
+    this.name = name;
+    this.token = token;
+  }
 
   private async run<T>(mode: IDBTransactionMode, action: (records: IDBObjectStore) => Promise<T>): Promise<T> {
     const tx = this.db.transaction([MARKERS, RECORDS], mode);
