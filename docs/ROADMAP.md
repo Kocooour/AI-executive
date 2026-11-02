@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-02 po sloučení R2d.2c.2g.1 (#189); rozpracováno R2d.2c.2g.2a (šifrovaný note sync cursor).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-11-02 po sloučení R2d.2c.2g.2a (#190); rozpracováno R2d.2c.2g.2b.1 (izolovaný note journal).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -70,8 +70,9 @@ R2c.1–R2c.5b je implementováno a sloučeno do `main` (poslední [#173](https:
 - **R2d.2c.2f.2 (sloučeno, #186, staging-only):** interní transakční smazání poznámky v kanonickém v16 staging modelu: současná signed write-audience identity a trvalá session, serverově odvozené ACL owner/editor/admin, přesný CAS poznámky/projektu/policy/generace, atomický trvalý tombstone + actor/note/UUID receipt + content-free `note_delete_audit` + nevratný `note_delete` journal. Replay jen s původním receipt a současným oprávněním v tombstonované Oblasti. Preflight vyžaduje audit pro **každý** tombstone, a obnova ze zálohy starší než potvrzené smazání poznámky je fail-closed odmítnuta (`backup_predates_note_delete`), protože obsahově prázdný journal smazání nedokáže přehrát. Bez HTTP, UI, sync, produkční migrace či aktivace. Staré izolované v15 store jsou odmítnuty, nikoli migrovány.
 - **R2d.2c.2f.2–.4 (sloučeno #186–#188):** izolovaný autorizovaný transakční delete + audit/receipt/journal, opt-in HTTP DELETE a actor-bound read-only command-status. Žádný note sync ani produkční změna.
 - **R2d.2c.2g.1 (sloučeno, #189, staging-only):** interní ACL-scoped obsahově prázdný stránkovaný manifest poznámek po Oblastech včetně revizí rodičovských projektů a celkového otisku snapshotu, odmítnutí změny mezi stránkami; [kontrakt](R2D-NOTE-SYNC.md). Není to HTTP endpoint, change feed ani aktivovaný klient.
-- **R2d.2c.2g.2a (rozpracováno, staging-only):** samostatný šifrovaný AES-256-GCM kurzor vázaný na aktéra, revokační epochu, Oblast, roli, policy revizi a restore generaci; pevná délka a sedmidenní expirace, dva typy pozic pro manifest a budoucí note-only žurnál. Bez HTTP, schématu, skutečného žurnálu či aktivace; [kontrakt](R2D-NOTE-SYNC.md).
-- **R2d.2c.2g.2b+:** monotónní note-specific žurnál a oprávnění/retence, bounded live-release HTTP čtení, pak offline klientská synchronizace a typované vztahy.
+- **R2d.2c.2g.2a (sloučeno, #190, staging-only):** samostatný šifrovaný AES-256-GCM kurzor vázaný na aktéra, revokační epochu, Oblast, roli, policy revizi a restore generaci; pevná délka a sedmidenní expirace, dva typy pozic pro manifest a budoucí note-only žurnál. Bez HTTP, schématu, skutečného žurnálu či aktivace; [kontrakt](R2D-NOTE-SYNC.md).
+- **R2d.2c.2g.2b.1 (rozpracováno, staging-only):** izolovaný návrh a testy obsahově prázdného monotónního note-specific žurnálu, transakční append kontrakt, Area ACL stránkování, policy/generation fence a zákaz retence; bez napojení na kanonické schéma v16 a skutečné writery.
+- **R2d.2c.2g.2b.2+:** schéma v17, atomický zápis událostí edit/delete, preflight, řešení move/create a bezpečná retence/gapy; teprve pak bounded live-release HTTP čtení a offline klientská synchronizace.
 - **R2d.3:** serverové rozsahy Home/Today/Inbox/Upcoming/Projects, counts a kompletní Můj plán.
 - **R2d.4:** Search, AI a bezpečné odvozené indexy.
 - **R2d.5:** attention, push, zneplatnění cache a souhrnné bezpečnostní testy.
