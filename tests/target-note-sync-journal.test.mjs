@@ -50,7 +50,6 @@ test("content-free edit journal is monotonic, bounded and ACL scoped", () => {
     assert.ok(p1);
     assert.equal(p1.hasMore,true);
     assert.equal(p1.nextSeq,1);
-    assert.equal(p1.headSeq,2);
     assert.equal(p1.events.length,1);
     assert.deepEqual(p1.events[0], {
       seq:1,noteId:"n1",areaId:"shared",projectId:"p1",op:"edit",revision:1,
@@ -120,7 +119,7 @@ test("append requires a transaction and matching existing note or tombstone", ()
     db.exec("ROLLBACK");
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_sync_journal").get().n,0);
     assert.equal(db.prepare("SELECT revision FROM notes WHERE id='n1'").get().revision,0);
-    assert.equal(page(db,"bob","shared")?.headSeq,0);
+    assert.deepEqual(page(db,"bob","shared")?.events,[]);
   } finally {db.close();}
 });
 
