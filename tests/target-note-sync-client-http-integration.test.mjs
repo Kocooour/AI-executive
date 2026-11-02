@@ -258,3 +258,123 @@ test("durable session revocation causes HTTP 401 and local cache wipe", async ()
   assert.equal(client.currentScope(), null);
   assert.deepEqual(client.read(), []);
 });
+
+
+/**
+ * Hold a response AFTER the real authenticated route has returned a page.
+ * The transport intentionally ignores AbortSignal while waiting. No timers,
+ * extra listeners, or mocked response bodies: the race is deterministic.
+ */
+function holdFirstHttpResponse(cookie, nextCookie = cookie) {
+  const original = transport(cookie);
+  const replacement = transport(nextCookie);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let ready;
+  const arrived = new Promise(resolve => { ready = resolve; });
+  let signal;
+  let pending = true;
+  const send = async (url, init) => {
+    if (!pending) return replacement(url, init);
+    pending = false;
+    signal = init.signal;
+    const response = await original(url, init);
+    ready(response.status);
+    await gate; // deliberately ignore an abort fired after the real GET
+    return response;
+  };
+  return { send, arrived, release: () => release(), signal: () => signal };
+}
+
+test("late real HTTP page cannot cross actor and Area activation even when transport ignores abort", async () => {
+  const fx = fixture();
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('bob-private-note','private-bob','Only Bob','secret')")
+    .run();
+  db.close();
+  const bob = login(fx, "bob"), carol = login(fx, "carol");
+  const held = holdFirstHttpResponse(bob, carol);
+  const client = createStagingNoteHttpClient(held.send);
+  client.activate({ ...scope(fx, "bob"), areaId: "private-bob" });
+  const late = client.pull();
+  assert.equal(await held.arrived, 200, "old response was produced by the real HTTP route");
+  assert.equal(held.signal().aborted, false);
+
+  client.activate({ ...scope(fx, "carol"), areaId: "private-carol" });
+  assert.equal(held.signal().aborted, true, "old request received an abort signal");
+  applied(await client.pull()); // different real cookie and empty private Area
+  assert.deepEqual(client.read(), []);
+  held.release();
+  assert.deepEqual(await late, { kind: "superseded" });
+  assert.deepEqual(client.read(), [], "Bob's private note never leaked into Carol's Area");
+  assert.deepEqual(client.currentScope(), { ...scope(fx, "carol"), areaId: "private-carol" });
+});
+
+test("real HTTP response arriving after logout cannot resurrect notes despite ignored abort", async () => {
+  const fx = fixture(), bob = login(fx, "bob");
+  const held = holdFirstHttpResponse(bob);
+  const client = createStagingNoteHttpClient(held.send);
+  client.activate(scope(fx, "bob"));
+  const late = client.pull();
+  assert.equal(await held.arrived, 200);
+  client.clear();
+  assert.equal(held.signal().aborted, true);
+  held.release();
+  assert.deepEqual(await late, { kind: "superseded" });
+  assert.deepEqual(client.read(), []);
+  assert.equal(client.currentScope(), null);
+  assert.deepEqual(await client.pull(), { kind: "inactive" });
+});
+
+test("restore generation changes during real paged HTTP read discard pending data and cursor", async () => {
+  const fx = fixture(201), bob = login(fx, "bob");
+  const urls = [];
+  const held = holdFirstHttpResponse(bob);
+  const client = createStagingNoteHttpClient((url, init) => {
+    urls.push(url);
+    return held.send(url, init);
+  });
+  client.activate(scope(fx, "bob"));
+  const late = client.pull();
+  assert.equal(await held.arrived, 200);
+  assert.deepEqual(client.read(), [], "first page must remain private");
+
+  // Invalidate the actual server store while a real HTTP bootstrap page is in flight.
+  const rotated = randomUUID();
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'").run(rotated);
+  db.close();
+  // The verified-session controller is responsible for explicit generation rebinding.
+  client.activate({ ...scope(fx, "bob"), restoreGeneration: rotated });
+  assert.equal(held.signal().aborted, true);
+  held.release();
+  assert.deepEqual(await late, { kind: "superseded" });
+  assert.deepEqual(client.read(), []);
+  assert.equal(client.currentScope().restoreGeneration, rotated);
+
+  // The old credential/configured generation no longer authenticates the restored
+  // store. Regardless of error, the replacement scope must use a NEW, empty cursor.
+  const next = await client.pull();
+  assert.notEqual(next.kind, "applied");
+  assert.equal(new URL(urls[1], "http://localhost:3001").searchParams.has("cursor"), false);
+  assert.deepEqual(client.read(), []);
+});
+
+test("real HTTP cursor invalidation after shared role change reboots before publishing new manifest", async () => {
+  const fx = fixture(201), bob = login(fx, "bob");
+  const client = makeClient(fx, "bob", bob);
+  applied(await client.pull());
+  assert.deepEqual(client.read(), [], "incomplete editor bootstrap stays hidden");
+
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  db.close();
+  assert.deepEqual(await client.pull(), { kind: "resync_required" });
+  assert.deepEqual(client.read(), [], "old editor cursor and partial manifest discarded");
+
+  for (let i = 0; i < 3; i++) applied(await client.pull());
+  assert.equal(client.read().length, 205, "viewer may rebuild the newly authorized manifest");
+});
