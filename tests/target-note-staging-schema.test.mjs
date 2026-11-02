@@ -201,7 +201,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("fresh v16 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
+test("fresh v17 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "staging"), ownerUserId: "alice",
   });
@@ -220,7 +220,7 @@ test("fresh v16 staging preflight accepts notes and rejects bypassed CHECK const
   } finally { db.close(); }
 });
 
-test("v16 preflight requires a delete audit and receipt for every permanent tombstone", () => {
+test("v17 preflight requires a delete audit and receipt for every permanent tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "deleted-audited-note"), ownerUserId: "alice",
   });
@@ -288,7 +288,7 @@ test("v16 preflight requires a delete audit and receipt for every permanent tomb
   } finally { db.close(); }
 });
 
-test("v16 preflight rejects an orphaned pending note tombstone", () => {
+test("v17 preflight rejects an orphaned pending note tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "pending-tombstone"), ownerUserId: "alice",
   });
@@ -304,7 +304,7 @@ test("v16 preflight rejects an orphaned pending note tombstone", () => {
   } finally { db.close(); }
 });
 
-test("v16 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
+test("v17 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "orphan-edit-audit"), ownerUserId: "alice",
   });
@@ -326,7 +326,7 @@ test("v16 preflight refuses a forged edit audit referencing neither live note no
   } finally { db.close(); }
 });
 
-test("v16 preflight rejects audit revision beyond a live note", () => {
+test("v17 preflight rejects audit revision beyond a live note", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "future-edit-audit"), ownerUserId: "alice",
   });
