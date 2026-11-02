@@ -355,7 +355,12 @@ export function inspectIsolatedTargetStore(
     // signed audit-backed note mutations. Never trust a raw inserted event.
     // There is deliberately no HTTP or client consumption of this table.
     try {
-      if (count("SELECT COUNT(*) AS n FROM note_change_journal") > TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS ||
+      if (count(`SELECT COUNT(*) AS n FROM areas a WHERE
+            typeof(a.note_sync_revision)<>'integer' OR a.note_sync_revision<0
+            OR a.note_sync_revision>=9007199254740991
+            OR a.note_sync_revision <
+              (SELECT COUNT(*) FROM note_change_journal j WHERE j.area_id=a.id)`) !== 0 ||
+          count("SELECT COUNT(*) AS n FROM note_change_journal") > TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS ||
           count(`SELECT COUNT(*) AS n FROM note_change_journal j
             LEFT JOIN note_edit_audit e ON j.kind='edit' AND e.receipt_key=j.receipt_key
             LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key

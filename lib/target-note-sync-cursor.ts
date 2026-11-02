@@ -39,7 +39,7 @@ export type NoteSyncCursorScope = {
 };
 export type NoteSyncCursorPosition =
   | { phase: "bootstrap"; afterId: string; snapshotRevision: string }
-  | { phase: "changes"; afterSeq: number };
+  | { phase: "changes"; afterSeq: number; contentRevision: number };
 export type OpenedNoteSyncCursor =
   | { ok: true; position: NoteSyncCursorPosition; issuedAt: number }
   | { ok: false };
@@ -73,7 +73,8 @@ export function validNoteSyncCursorPosition(value: unknown): value is NoteSyncCu
       typeof p.snapshotRevision === "string" && SHA256.test(p.snapshotRevision);
   }
   if (p.phase === "changes") {
-    return exactKeys(p, "afterSeq,phase") && validInt(p.afterSeq);
+    return exactKeys(p, "afterSeq,contentRevision,phase") &&
+      validInt(p.afterSeq) && validInt(p.contentRevision);
   }
   return false;
 }
