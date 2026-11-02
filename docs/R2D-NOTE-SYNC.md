@@ -17,10 +17,13 @@ note synchronization, not an HTTP endpoint or an activated sync client.
   note title, body, actor receipts or tombstones. For contents use the
   separately authorized exact-note GET with a live-release guard.
 - A SHA-256 snapshot revision binds the **entire** capped Area manifest,
-  its access role, policy revision, actor and Area. This detects edits,
-  ABA, parent revisions, membership/role changes and deletions between pages.
+  its access role, policy revision, actor, Area, and **canonical restore generation**
+  read from the same pinned/preflighted SQLite snapshot. A missing or malformed
+  UUID generation fails closed. This detects edits, ABA, parent revisions,
+  membership/role changes, deletions, and store restoration between pages.
   After the first page, an internal `afterId` is accepted **only together**
-  with the expected snapshot revision. A mismatch fails closed (null).
+  with the expected snapshot revision. A mismatch, including across a restored
+  store with otherwise identical data, fails closed (null).
   ID order is SQLite binary UTF-8; the same order is used for keyset filtering.
 - The 4096-note limit is enforced for **eligible notes in this Area** *before pagination*; the required canonical store preflight separately enforces the **global** staging cap. Any
   malformed eligible row, missing schema, excessive count or unauthorized
