@@ -198,3 +198,79 @@ test("a second simultaneous pull is busy rather than duplicating a disk commit",
   assert.deepEqual(p.read(), [note("one")]);
   assert.equal(storage.committed, 1);
 });
+
+
+test("read is fenced to the last committed manifest during a delayed second disk write", async () => {
+  for (const fail of [false, true]) {
+    const durable = new MemoryTargetSyncStorage();
+    let holdNext = false;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let entered;
+    const reachedCommit = new Promise(resolve => { entered = resolve; });
+    const storage = {
+      listNamespaces: () => durable.listNamespaces(),
+      deleteNamespaces: names => durable.deleteNamespaces(names),
+      openNamespace: async name => {
+        const ns = await durable.openNamespace(name);
+        return {
+          name: ns.name,
+          get: key => ns.get(key),
+          list: prefix => ns.list(prefix),
+          transaction: async ops => {
+            if (holdNext && ops.some(op => op.kind === "put" && op.key === "checkpoint")) {
+              holdNext = false;
+              entered();
+              await gate;
+            }
+            return ns.transaction(ops);
+          },
+        };
+      },
+    };
+    const feed = scripted(
+      json(boot([note("one")], false, C)),
+      json(change([{ kind: "edit", noteId: "one", projectId: null, revision: 2 }], D)),
+    );
+    const p = client(storage, feed.transport);
+    await p.activate(scope());
+    applied(await p.pull());
+    assert.deepEqual(p.read(), [note("one")]);
+    const partition = noteMetadataNamespace(scope());
+    assert.equal(durable.dump()[partition].checkpoint.state.cursor, C);
+
+    if (fail) durable.injectFailure({ transaction: 1, afterOps: 0 });
+    holdNext = true;
+    const second = p.pull();
+    await reachedCommit; // real HTTP page has already advanced its volatile manifest
+    const publicSnapshot = p.read();
+    assert.deepEqual(publicSnapshot, [note("one")],
+      "a newer HTTP manifest must not publish before its IndexedDB commit");
+    publicSnapshot[0].revision = 123;
+    assert.deepEqual(p.read(), [note("one")], "reads must not expose the stored object");
+    assert.deepEqual(durable.dump()[partition].checkpoint.state.visible, [note("one")]);
+    assert.equal(durable.dump()[partition].checkpoint.state.cursor, C);
+    release();
+
+    if (fail) {
+      assert.deepEqual(await second, { kind: "storage_error" });
+      assert.deepEqual(p.read(), [], "storage failure locks the client");
+      assert.equal(p.currentScope(), null);
+      assert.equal(durable.dump()[partition].checkpoint.state.cursor, C,
+        "failed transaction did not commit a newer cursor");
+      const freshWire = scripted(json(change([
+        { kind: "edit", noteId: "one", projectId: null, revision: 2 },
+      ], D)));
+      const restarted = client(storage, freshWire.transport);
+      assert.equal(await restarted.activate(scope()), "restored_unverified");
+      assert.deepEqual(restarted.read(), [], "old disk contents need fresh auth");
+      applied(await restarted.pull());
+      assert.deepEqual(restarted.read(), [note("one", 2)]);
+    } else {
+      applied(await second);
+      assert.deepEqual(p.read(), [note("one", 2)]);
+      assert.deepEqual(durable.dump()[partition].checkpoint.state.visible, [note("one", 2)]);
+      assert.equal(durable.dump()[partition].checkpoint.state.cursor, D);
+    }
+  }
+});
