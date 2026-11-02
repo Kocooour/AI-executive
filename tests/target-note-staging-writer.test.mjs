@@ -316,3 +316,37 @@ test("forged orphan note deletion receipts/audit fail canonical preflight before
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes WHERE id='own'").get().n, 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
 });
+
+test("note deletion preserves previous edit audit and prevents second delete audit for same note", () => {
+  const { stage, db, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const edit = command(db, "alice", "own", "Revised", "Private text after edit");
+  assert.deepEqual(authority.updateNote(alice.sessionToken, edit), { ok: true });
+  const deletion = deleteCommand(db, "alice", "own");
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, deletion), { ok: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id='own'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id='own'").get().n, 1);
+  assert.throws(() => db.prepare(`INSERT INTO note_delete_audit (
+    receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+    revision_before,tombstone_revision,expected_revision,restore_generation,committed_at_ms
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+    "r2:note-delete-receipt-v1:" + "f".repeat(64), "alice", "own", null,
+    stage.unassignedAreaId, 0, 1, 2, "d".repeat(64), stage.restoreGeneration, Date.now(),
+  ));
+  assert.throws(() => db.prepare("UPDATE note_delete_audit SET policy_revision=5").run());
+  assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+    { ok: true, mode: "stage", issues: [] });
+});
+
+test("note delete requires unchanged parent project revision, not just note revision", () => {
+  const { db, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const request = deleteCommand(db, "bob", "child");
+  db.prepare("UPDATE projects SET title='Changed' WHERE id='project'").run();
+  db.prepare("UPDATE projects SET title='Project' WHERE id='project'").run();
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, request), refused("stale_revision"));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 0);
+});
