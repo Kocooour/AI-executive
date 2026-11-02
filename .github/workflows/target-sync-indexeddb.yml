@@ -6,6 +6,7 @@ on:
       - ".github/workflows/target-sync-indexeddb.yml"
       - "lib/target-sync/**"
       - "e2e/target-sync-indexeddb.spec.ts"
+      - "e2e/note-persistent-indexeddb.spec.ts"
       - "e2e/playwright.indexeddb.config.ts"
   workflow_dispatch:
 
