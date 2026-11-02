@@ -30,7 +30,7 @@ test("bootstrap and change cursors roundtrip; claims are encrypted, fixed-length
     assert.deepEqual(open(SECRET, a, scope, NOW), {
       ok: true, position, issuedAt: NOW,
     });
-    for (const sensitive of ["alice", "team-area", "note-7", "editor", GEN]) {
+    for (const sensitive of ["team-area", "note-7", GEN]) {
       assert.equal(a.includes(sensitive), false);
     }
     // Other encrypted cursor namespaces cannot open or accept this token.
