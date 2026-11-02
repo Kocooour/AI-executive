@@ -26,8 +26,12 @@ combined real-HTTP integration tests (#198) are already in main.
   Corrupt, content-bearing or future-version records are deleted before
   starting cursorless bootstrap.
 - A successful page can publish only after the atomic IndexedDB transaction
-  commits the new metadata and cursor together. Failed storage I/O fails closed
-  and locks the client. Concurrent pull() calls are serialized per scope;
+  commits the new metadata and cursor together. Reads return **detached copies
+  of the last committed manifest**, never the volatile HTTP client's already
+  advanced in-flight state. A subsequent page remains invisible while its
+  transaction is pending; a failed transaction cannot publish it. Failed
+  storage I/O fails closed and locks the client.
+  Concurrent pull() calls are serialized per scope;
   epoch fencing prevents delayed requests from recreating purged namespaces.
   A resumed partial bootstrap remains invisible.
 - This is NOT end-to-end offline functionality or multi-tab writer
