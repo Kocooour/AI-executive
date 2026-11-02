@@ -205,6 +205,15 @@ export async function writeStagingNoteInChild(
 }
 
 
+/** R2d.2c.2f.4: bounded, read-only note delete command-status worker. */
+export async function readStagingNoteDeleteCommandStatusInChild(
+  config: StagingPersonalReadConfig,
+  request: import("./target-note-delete-writer").TargetStagingNoteDeleteRequest,
+): Promise<Status | null> {
+  const value = await run(config, "target-staging-note-delete-status-child.mjs", JSON.stringify(request));
+  return parseStatus(value);
+}
+
 /** R2d.2c.2f.3: bounded HTTP note deletion worker, no note contents in output. */
 export async function deleteStagingNoteInChild(
   config: StagingPersonalReadConfig,

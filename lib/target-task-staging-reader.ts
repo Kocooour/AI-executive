@@ -36,6 +36,8 @@ import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readTargetNoteEditCommandStatus, type TargetNoteEditCommandStatus } from "./target-note-command-status";
+import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
+import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
 import { validTargetStagingNoteEditRequest, type TargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetAuthorizedNote } from "./target-note-access";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
@@ -459,6 +461,25 @@ export function readPreflightedTargetNoteEditCommandStatus(
           const actor = verifiedActor(db, access, true);
           if (!actor) return denied();
           return readTargetNoteEditCommandStatus(db, actor, request);
+        }, denied));
+}
+
+/** R2d.2c.2f.4: canonical, write-audience, content-free note delete status. */
+export function readPreflightedTargetNoteDeleteCommandStatus(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  request: TargetStagingNoteDeleteRequest,
+): TargetNoteDeleteCommandStatus | { ok: false; reason: "unauthorized" } {
+  if (!validTargetStagingNoteDeleteRequest(request))
+    return { ok: false, reason: "invalid_request" };
+  const denied = () => ({ ok: false as const, reason: "unauthorized" as const });
+  return withPreflightedStore<TargetNoteDeleteCommandStatus | { ok: false; reason: "unauthorized" }>(
+    store, denied, (db, preflight) =>
+      inReadSnapshot<TargetNoteDeleteCommandStatus | { ok: false; reason: "unauthorized" }>(
+        db, () => {
+          if (!preflight(db)) return denied();
+          const actor = verifiedActor(db, access, true);
+          if (!actor) return denied();
+          return readTargetNoteDeleteCommandStatus(db, actor, request);
         }, denied));
 }
 

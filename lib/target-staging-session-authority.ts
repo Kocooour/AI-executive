@@ -26,7 +26,7 @@ import {
   previewPreflightedTargetTaskTitleEdit, readPreflightedIsolatedTargetTask,
   readPreflightedIsolatedPersonalTargetTask, readPreflightedPersonalTargetTaskWithRevision,
   readPreflightedTargetTaskTitleCommandStatus, readPreflightedTargetTaskDeleteCommandStatus,
-  readPreflightedTargetNoteEditCommandStatus,
+  readPreflightedTargetNoteEditCommandStatus, readPreflightedTargetNoteDeleteCommandStatus,
   listPreflightedPrivateProjectsAtOffset, readPreflightedPrivateProjectDetail,
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
@@ -44,6 +44,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
 import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
+import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
@@ -679,6 +680,18 @@ export class TargetStagingSessionAuthority {
     const credential = this.#credential(sessionToken, true);
     if (!credential) return { ok: false, reason: "unauthorized" };
     return readPreflightedTargetNoteEditCommandStatus(this.#store, credential, request);
+  }
+
+  /** Read-only, actor-scoped verification of an uncertain note deletion. */
+  noteDeleteCommandStatus(
+    sessionToken: string,
+    request: TargetStagingNoteDeleteRequest,
+  ): TargetNoteDeleteCommandStatus | { ok: false; reason: "unauthorized" } {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingNoteDeleteRequest(request))
+      return { ok: false, reason: "invalid_request" };
+    return readPreflightedTargetNoteDeleteCommandStatus(this.#store, credential, request);
   }
 
   /**

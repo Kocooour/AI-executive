@@ -91,6 +91,7 @@ const exempt = {
   "POST /api/target-staging/tasks/[taskId]/delete/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
   "POST /api/target-staging/tasks/[taskId]/title/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",
   "POST /api/target-staging/notes/[noteId]/edit/status": "read-only receipt reconciliation over the isolated staging notes store; no persisted mutation, gated by live staging restore generation and note ACL",
+  "POST /api/target-staging/notes/[noteId]/delete/status": "read-only exact note-delete receipt reconciliation on isolated staging SQLite; current actor, Area ACL, generation and session checks, no persisted mutation",
   "PATCH /api/target-staging/notes/[noteId]/edit": "writes only isolated staging SQLite outside the legacy backup scope; staging anchor validates the server restore generation and the transactional note writer rechecks client generation, durable session, ACL, parent and note revisions before atomic commit",
   "DELETE /api/target-staging/notes/[noteId]": "writes only isolated staging SQLite outside legacy backup scope; staging anchor verifies live restore state and the pinned delete writer checks client restore generation, durable session, Area ACL, note and parent CAS before atomic tombstone, audit and receipt commit",
 

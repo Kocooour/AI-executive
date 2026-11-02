@@ -2,8 +2,10 @@
 
 The v15 tombstone substrate was introduced by #185. R2d.2c.2f.2 adds a
 **staging-only authenticated delete writer** and dedicated audit/receipt in v16.
-This is not an HTTP endpoint, change feed, sync implementation, UI feature,
-deployment or permission to reset any database. Target staging flags remain default-off. Legacy production
+The tombstone substrate and internal writer are staging-only; the later
+opt-in HTTP DELETE and read-only status routes are described below. Neither
+introduces a change feed, sync implementation, UI feature, deployment or
+permission to reset any database. Target staging flags remain default-off. Legacy production
 storage and credentials are unchanged.
 
 ## Invariants
@@ -77,14 +79,26 @@ stdin, checks live durable session and actor/Area policy within the pinned
 write, and returns content-free `ok` / `replayed` or refusal.
 The route does not expose tombstones, write credentials or actor receipts.
 
-An isolated HTTP **delete command-status** endpoint still needs to be built.
-For now, an uncertain DELETE response can be reconciled by retrying the
-original exact command ID and body (while still authorized), but this is not
-an offline sync/change feed contract. A later isolated HTTP status must
-enforce same-origin, exact command/session validation and live release checks,
-including safe reconciliation of an uncertain response. Notes still have no
-change-feed/cursor/sync semantics; their tombstones must not be interpreted as
-task or project feed entries. No activation of notes UI or production migration.
+R2d.2c.2f.4 adds default-off
+`POST /api/target-staging/notes/[noteId]/delete/status` to reconcile an uncertain
+DELETE **without another mutation**. It accepts precisely the same four-field
+command, uses an actor-bound signed write audience and an isolated, preflighted
+read-only snapshot. For a still-live note, the current Area editor/admin or
+private owner may see `not_recorded`. For a deleted note, only the issuer's
+exact actor/note/command UUID receipt and current tombstone-Area write access
+may return `committed`; missing, foreign, viewer and unrecorded tombstones
+are hidden as 404. A different payload for the actor's recorded command
+returns 409. Restore generation and write Area must still match current
+policy. Durable session identity is checked before and after the child read,
+and every result (including conflict and Area mismatch) receives another
+read-only ACL/receipt check before release. The endpoint requires same-origin Origin, protocol v1 and all four
+staging/notes/write flags; status response is content-free with `no-store`.
+It never exposes note contents, tombstone/receipt IDs, audit or credentials.
+
+This is **not** a notes change feed, cursor, offline synchronization protocol,
+UI activation or production migration. Note tombstones do not appear as task
+or project change-feed entries. The next separate iteration is scoped note
+sync semantics and typed relationships; any activation requires further gates.
 
 Only recreate a disposable **test** staging store. Any future production cutover
 requires separate owner approval of the exact scope, verified archival backup
