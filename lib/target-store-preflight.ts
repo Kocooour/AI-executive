@@ -337,7 +337,13 @@ export function inspectIsolatedTargetStore(
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_delete_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX.length,
-            TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
+            TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) !== 0 ||
+          // A raw SQL tombstone+DELETE with no audit or receipt must not become
+          // a trusted note deletion. This reverse check is essential: the above
+          // checks only audit -> tombstone, not tombstone -> audit.
+          count(`SELECT COUNT(*) AS n FROM note_tombstones t
+            LEFT JOIN note_delete_audit a ON a.note_id=t.id
+            WHERE a.id IS NULL`) !== 0) fail("audit_invalid");
       // Delete receipts are 1:1 with delete audit rows: a raw receipt for a task
       // that was never deleted would otherwise replay as "committed".
       if (count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
