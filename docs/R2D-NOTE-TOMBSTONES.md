@@ -1,8 +1,9 @@
-# R2d.2c.2f.1 — note tombstones in isolated staging (schema v15)
+# R2d.2c.2f — note tombstones and authenticated delete (isolated schema v16)
 
-This is a **schema boundary only**, not an authenticated deletion command, HTTP
-endpoint, change feed, sync implementation, UI feature, deployment or permission
-to reset any database. Target staging flags remain default-off. Legacy production
+The v15 tombstone substrate was introduced by #185. R2d.2c.2f.2 adds a
+**staging-only authenticated delete writer** and dedicated audit/receipt in v16.
+This is not an HTTP endpoint, change feed, sync implementation, UI feature,
+deployment or permission to reset any database. Target staging flags remain default-off. Legacy production
 storage and credentials are unchanged.
 
 ## Invariants
@@ -31,20 +32,35 @@ storage and credentials are unchanged.
   and absence of live/tombstone overlap even if SQLite CHECK/FK enforcement was
   bypassed. It fails closed on older schemas (including v14).
 
+## R2d.2c.2f.2 — internal delete writer (schema v16)
+
+- A signed staging **write-audience** session is required. Server authority
+  verifies it, then a pinned `BEGIN IMMEDIATE` verifies current identity,
+  Area editor/admin (private-owner), note/project revision, policy, expected
+  write Area and restore generation again. If supplied, the durable HTTP session
+  hash is checked both before and immediately before commit.
+- One transaction inserts the matching immutable tombstone, deletes exactly one
+  note revision, records an actor/note/UUID-specific opaque receipt and a
+  content-free immutable `note_delete_audit` row. The shared writer wraps this
+  in the irreversible `note_delete` intent/witness/confirm sequence. Failed
+  validation and failed writes roll back all database mutations.
+- An existing deletion may be replayed only by its original actor, with the
+  exact request digest and **current** write permission in the tombstone's Area.
+  Unknown IDs, other actors' tombstones and unpermitted Areas are indistinguishable.
+- Canonical preflight validates the new audit, receipt pairing, bounds, historical
+  restore generations, and exact tombstone Area/parent/revision/timestamp. A
+  corrupted or orphaned delete receipt cannot become a successful replay.
+- All staging schema v15 stores are intentionally refused rather than migrated
+  to v16. No existing production data is touched.
+
 ## Next activation gates
 
-A real note deletion command is **not yet implemented**. Before it can be used,
-the same signed write-audience actor, durable-session check, current Area/editor
-authorization, exact note+project+policy revision and restore generation must be
-revalidated under one pinned `BEGIN IMMEDIATE` transaction. Tombstone insertion,
-deletion, actor/command-UUID receipt, content-free delete audit and the irreversible
-journal/witness commit must be atomic. Denied requests and retries must not leak
-the deleted note or other actors' receipts; uncertain responses need a bounded
-status endpoint. Note tombstones are **not in the current task/project change
-feed**, and no client may interpret this schema as a working note sync protocol.
-The deletion writer and note-specific feed/cursor semantics need separate tests
-and code review before any HTTP or UI activation.
+The writer is **internal only**. A later isolated HTTP DELETE/status must
+enforce same-origin, exact command/session validation and live release checks,
+including safe reconciliation of an uncertain response. Notes still have no
+change-feed/cursor/sync semantics; their tombstones must not be interpreted as
+task or project feed entries. No activation of notes UI or production migration.
 
-There is no migration or backfill from v14 here. Only recreate an **isolated,
-disposable test** staging store. A future production cutover/reset needs explicit
-owner approval, an archival backup and a verified restore plan.
+Only recreate a disposable **test** staging store. Any future production cutover
+requires separate owner approval of the exact scope, verified archival backup
+and a restore rehearsal.
