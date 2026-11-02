@@ -107,14 +107,18 @@ export function appendTrustedTargetNoteJournalEvent(
       .get() as { value: string } | undefined;
     if (!policy || !validInt(policy.policyRevision) || !meta ||
         typeof meta.value !== "string" || !GENERATION.test(meta.value)) return denied;
-    const result = db.prepare(`INSERT INTO note_sync_journal
-      (note_id,area_id,project_id,op,revision,policy_revision,restore_generation,committed_at_ms)
-      VALUES (?,?,?,?,?,?,?,?)`).run(
-      noteId, source.areaId, source.projectId, op, source.revision,
+    // BEGIN IMMEDIATE serializes concurrent Area-local sequence allocation.
+    const prior = db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM note_sync_journal WHERE area_id=?")
+      .get(source.areaId) as { seq: number };
+    if (!validInt(prior.seq) || prior.seq >= MAX_SAFE - 1) return denied;
+    const seq = prior.seq + 1;
+    db.prepare(`INSERT INTO note_sync_journal
+      (area_id,seq,note_id,project_id,op,revision,policy_revision,restore_generation,committed_at_ms)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      source.areaId, seq, noteId, source.projectId, op, source.revision,
       policy.policyRevision, meta.value.toLowerCase(), committedAtMs,
     );
-    const seq = Number(result.lastInsertRowid);
-    return validInt(seq) && seq > 0 ? { ok: true, seq } : denied;
+    return { ok: true, seq };
   } catch {
     return denied;
   }
@@ -159,8 +163,8 @@ export function readAuthorizedTargetNoteJournalPage(
     const meta = db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
       .get() as { value: string } | undefined;
     if (!meta || typeof meta.value !== "string" || !GENERATION.test(meta.value)) return null;
-    const count = db.prepare("SELECT COUNT(*) AS n, COALESCE(MAX(seq),0) AS head FROM note_sync_journal")
-      .get() as { n: number; head: number };
+    const count = db.prepare("SELECT COUNT(*) AS n, COALESCE(MAX(seq),0) AS head FROM note_sync_journal WHERE area_id=?")
+      .get(request.areaId) as { n: number; head: number };
     if (!validInt(count.n) || count.n > NOTE_SYNC_JOURNAL_MAX_EVENTS ||
         !validInt(count.head) || count.head !== count.n ||
         request.afterSeq > count.head) return null;
