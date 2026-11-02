@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { TARGET_SCHEMA_SQL, TARGET_STORE_SCHEMA_VERSION, TARGET_STAGING_NOTE_RECEIPT_PREFIX, bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
+import { TARGET_SCHEMA_SQL, TARGET_STORE_SCHEMA_VERSION, TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX, bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { inspectIsolatedTargetStore } from "../lib/target-store-preflight.ts";
 import { readAuthorizedTargetNote } from "../lib/target-note-access.ts";
 
@@ -31,7 +31,7 @@ const rev = (db, id) => db.prepare("SELECT revision FROM notes WHERE id=?").get(
 test("R2d.2b canonical schema protects private/parent-inherited note reads", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 15);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION, 16);
     assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
     assert.equal(read(db, "bob", "n-private"), null);
     assert.equal(read(db, "bob", "n-shared")?.note.body, "Shared content");
@@ -201,7 +201,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
+test("fresh v16 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "staging"), ownerUserId: "alice",
   });
@@ -220,7 +220,7 @@ test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK const
   } finally { db.close(); }
 });
 
-test("v15 preflight accepts an audited note after its tombstoned deletion", () => {
+test("v16 preflight requires a delete audit and receipt for every permanent tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "deleted-audited-note"), ownerUserId: "alice",
   });
@@ -233,27 +233,62 @@ test("v15 preflight accepts an audited note after its tombstoned deletion", () =
       .run(id, stage.unassignedAreaId, "Title", "Body");
     db.prepare("UPDATE notes SET body='New body' WHERE id=?").run(id);
     assert.equal(db.prepare("SELECT revision FROM notes WHERE id=?").get(id).revision, 1);
+    // Synthetic historical timestamps, preserving edit-before-delete ordering.
+    const deletedAt = Date.now() - 91 * 86400000;
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
     db.prepare(`INSERT INTO note_edit_audit (
       receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
       revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
       key, "alice", id, null, stage.unassignedAreaId, 0,
-      0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+      0, 1, "c".repeat(64), stage.restoreGeneration, deletedAt - 1_000,
     );
+    // The deletion predates the staging audit's 90-day retention window.
+    // Permanent tombstones require an equally permanent delete audit ledger.
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`INSERT INTO note_tombstones (id,area_id,project_id,revision,deleted_at_ms)
-        VALUES (?,?,NULL,2,?)`).run(id, stage.unassignedAreaId, Date.now());
+        VALUES (?,?,NULL,2,?)`).run(id, stage.unassignedAreaId, deletedAt);
       db.prepare("DELETE FROM notes WHERE id=?").run(id);
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
+    const absentAudit = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+    assert.equal(absentAudit.ok, false);
+    assert.ok(absentAudit.issues.includes("audit_invalid"), JSON.stringify(absentAudit));
+    // Schema-only synthetic ledger: writer tests separately prove that real
+    // deletions append this receipt/audit atomically with their journal intent.
+    const deleteKey = TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX + "d".repeat(64);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(deleteKey, "f".repeat(64));
+    db.prepare(`INSERT INTO note_delete_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,tombstone_revision,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      deleteKey, "alice", id, null, stage.unassignedAreaId, 0,
+      1, 2, "c".repeat(64), stage.restoreGeneration, deletedAt,
+    );
+    assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+      { ok: true, mode: "stage", issues: [] });
+    assert.ok(deletedAt < Date.now() - 90 * 86400000, "delete audit is older than 90 days");
+    assert.throws(() => db.prepare("DELETE FROM note_delete_audit WHERE note_id=?").run(id),
+      /note deletion audit is permanent/);
+    // REPLACE can bypass a DELETE trigger: the unique-key insert guard must
+    // also prevent silently replacing this historic audit.
+    assert.throws(() => db.prepare(`INSERT OR REPLACE INTO note_delete_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,tombstone_revision,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      deleteKey, "alice", id, null, stage.unassignedAreaId, 0,
+      1, 2, "c".repeat(64), stage.restoreGeneration, deletedAt,
+    ), /note deletion audit replacement forbidden/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id=?").get(id).n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones WHERE id=?").get(id).n, 1);
+    // Rejected retention cleanup must leave a canonical, usable store.
     assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
       { ok: true, mode: "stage", issues: [] });
   } finally { db.close(); }
 });
 
-test("v15 preflight rejects an orphaned pending note tombstone", () => {
+test("v16 preflight rejects an orphaned pending note tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "pending-tombstone"), ownerUserId: "alice",
   });
@@ -269,7 +304,7 @@ test("v15 preflight rejects an orphaned pending note tombstone", () => {
   } finally { db.close(); }
 });
 
-test("v15 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
+test("v16 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "orphan-edit-audit"), ownerUserId: "alice",
   });
@@ -291,7 +326,7 @@ test("v15 preflight refuses a forged edit audit referencing neither live note no
   } finally { db.close(); }
 });
 
-test("v15 preflight rejects audit revision beyond a live note", () => {
+test("v16 preflight rejects audit revision beyond a live note", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "future-edit-audit"), ownerUserId: "alice",
   });

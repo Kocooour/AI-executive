@@ -31,10 +31,10 @@ const MAX_LINE_BYTES = 2048;
 export type TargetStagingJournalType = "genesis" | "intent" | "confirm" | "abort";
 export type TargetStagingJournalKind =
   | "title" | "delete" | "membership" | "session_issue" | "session_revoke"
-  | "session_revoke_all" | "compaction" | "restore" | "note_edit";
+  | "session_revoke_all" | "compaction" | "restore" | "note_edit" | "note_delete";
 const KINDS = new Set<string>([
   "title", "delete", "membership", "session_issue", "session_revoke",
-  "session_revoke_all", "compaction", "restore", "note_edit",
+  "session_revoke_all", "compaction", "restore", "note_edit", "note_delete",
 ]);
 export type TargetStagingJournalValue = string | number | null | readonly number[] | readonly (readonly string[])[];
 export type TargetStagingJournalPayload = { readonly [key: string]: TargetStagingJournalValue };
@@ -591,7 +591,8 @@ export interface TargetStagingJournalFact {
   readonly p: TargetStagingJournalPayload;
 }
 const FACT_KINDS = new Set<string>([
-  "membership", "session_issue", "session_revoke", "session_revoke_all", "restore",
+  "membership", "session_issue", "session_revoke", "session_revoke_all",
+  "restore", "note_delete",
 ]);
 
 /**

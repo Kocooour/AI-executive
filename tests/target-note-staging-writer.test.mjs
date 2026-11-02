@@ -21,6 +21,10 @@ const { previewTargetNoteWrite } =
   await import("../lib/target-note-write-contract.ts");
 const { validTargetStagingNoteEditRequest, targetNoteEditReceiptKey } =
   await import("../lib/target-note-staging-writer.ts");
+const { validTargetStagingNoteDeleteRequest, targetNoteDeleteReceiptKey } =
+  await import("../lib/target-note-delete-writer.ts");
+const { inspectIsolatedTargetStore } =
+  await import("../lib/target-store-preflight.ts");
 const { hashTargetStagingSessionToken, issueDurableTargetStagingSession,
   revokeDurableTargetStagingSession } =
   await import("../lib/target-staging-durable-session.ts");
@@ -198,4 +202,151 @@ test("invalid payload, foreign Area, unknown durable hash and orphan audit fail 
   db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(forged, "b".repeat(64));
   assert.deepEqual(authority.updateNote(alice.sessionToken, c), refused("unauthorized"));
   assert.equal(db.prepare("SELECT body FROM notes WHERE id='own'").get().body, "Confidential");
+});
+
+function deleteCommand(db, actor, noteId, commandId = randomUUID()) {
+  const preview = previewTargetNoteWrite(db, actor, noteId);
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  const { ok: _authorized, ...fields } = preview;
+  return { ...fields, noteId, commandId };
+}
+
+test("signed note deletion is atomic and content-free: private + inherited shared Area", () => {
+  const { stage, db, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  const bob = authority.issueWritable("bob");
+  assert.ok(alice && bob);
+  const own = deleteCommand(db, "alice", "own");
+  const child = deleteCommand(db, "bob", "child");
+  assert.equal(validTargetStagingNoteDeleteRequest(own), true);
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, own), { ok: true });
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, child), { ok: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes").get().n, 0);
+  assert.deepEqual(db.prepare("SELECT note_id,project_id,area_id,revision_before,tombstone_revision FROM note_delete_audit ORDER BY id").all()
+    .map(x => ({ ...x })), [
+    { note_id: "own", project_id: null, area_id: stage.unassignedAreaId, revision_before: 0, tombstone_revision: 1 },
+    { note_id: "child", project_id: "project", area_id: "team-area", revision_before: 0, tombstone_revision: 1 },
+  ]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 2);
+  assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
+  assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+    { ok: true, mode: "stage", issues: [] });
+  const serialized = JSON.stringify(db.prepare("SELECT * FROM note_delete_audit").all()) +
+    readFileSync(path.join(stage.directory, "lumi-target.journal"), "utf8");
+  assert.ok(!serialized.includes("Confidential") && !serialized.includes("Initial"));
+  assert.ok(serialized.includes("note_delete"), "delete recorded in irreversible journal");
+  assert.throws(() => db.prepare("INSERT INTO notes(id,project_id,title,body) VALUES('child','project','Return','Secret')").run());
+});
+
+test("note deletion replay is actor-scoped, exact-request and requires current Area access", () => {
+  const { db, authority } = fixture();
+  const bob = authority.issueWritable("bob"), alice = authority.issueWritable("alice");
+  const carol = authority.issueWritable("carol");
+  assert.ok(bob && alice && carol);
+  const request = deleteCommand(db, "bob", "child");
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, request), { ok: true });
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, request), { ok: true, replayed: true });
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, { ...request, expectedRevision: "f".repeat(64) }),
+    refused("idempotency_conflict"));
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, { ...request, commandId: randomUUID() }),
+    refused("unavailable"));
+  assert.deepEqual(authority.deleteNote(carol.sessionToken, request), refused("unavailable"));
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, request), refused("unavailable"));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
+  db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, request), refused("unavailable"));
+});
+
+test("note deletion denies viewer, foreign private note, stale revisions and malformed commands", () => {
+  const { db, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  const carol = authority.issueWritable("carol");
+  const alice = authority.issueWritable("alice");
+  assert.ok(bob && carol && alice);
+  const stale = deleteCommand(db, "bob", "child");
+  assert.deepEqual(authority.deleteNote(carol.sessionToken, stale), refused("unavailable"));
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, {
+    ...stale, writeAreaId: "unassigned-bob",
+  }), refused("write_area_mismatch"));
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, { ...stale, commandId: "invalid" }),
+    refused("invalid_request"));
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, { ...stale, extraneous: true }),
+    refused("invalid_request"));
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, {
+    ...stale, restoreGeneration: randomUUID(),
+  }), refused("resync_required"));
+  db.prepare("UPDATE notes SET body='Mutation' WHERE id='child'").run();
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, stale), refused("stale_revision"));
+  const privateRequest = deleteCommand(db, "alice", "own");
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, privateRequest), refused("unavailable"));
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, privateRequest), { ok: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
+});
+
+test("durable note deletion session is tied to actor and blocks revoked credentials", () => {
+  const { stage, db, authority } = fixture();
+  const store = { stagingDirectory: stage.directory, expectedRestoreGeneration: stage.restoreGeneration };
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const own = deleteCommand(db, "alice", "own");
+  const session = issueDurableTargetStagingSession(store, "alice");
+  const other = issueDurableTargetStagingSession(store, "bob");
+  assert.equal(session.ok, true); assert.equal(other.ok, true);
+  const otherHash = hashTargetStagingSessionToken(other.sessionToken);
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, own, otherHash), refused("session_revoked"));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+  const hash = hashTargetStagingSessionToken(session.sessionToken);
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, own, hash), { ok: true });
+  assert.equal(revokeDurableTargetStagingSession(store, session.sessionId).ok, true);
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, own, hash), refused("session_revoked"));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
+});
+
+test("forged orphan note deletion receipts/audit fail canonical preflight before mutation", () => {
+  const { stage, db, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const req = deleteCommand(db, "alice", "own");
+  const key = targetNoteDeleteReceiptKey("alice", req.noteId, req.commandId);
+  db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "a".repeat(64));
+  const check = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+  assert.equal(check.ok, false);
+  assert.ok(check.issues.includes("audit_invalid"), JSON.stringify(check));
+  assert.notDeepEqual(authority.deleteNote(alice.sessionToken, req), { ok: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes WHERE id='own'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+});
+
+test("note deletion preserves previous edit audit and prevents second delete audit for same note", () => {
+  const { stage, db, authority } = fixture();
+  const alice = authority.issueWritable("alice");
+  assert.ok(alice);
+  const edit = command(db, "alice", "own", "Revised", "Private text after edit");
+  assert.deepEqual(authority.updateNote(alice.sessionToken, edit), { ok: true });
+  const deletion = deleteCommand(db, "alice", "own");
+  assert.deepEqual(authority.deleteNote(alice.sessionToken, deletion), { ok: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id='own'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id='own'").get().n, 1);
+  assert.throws(() => db.prepare(`INSERT INTO note_delete_audit (
+    receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+    revision_before,tombstone_revision,expected_revision,restore_generation,committed_at_ms
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+    "r2:note-delete-receipt-v1:" + "f".repeat(64), "alice", "own", null,
+    stage.unassignedAreaId, 0, 1, 2, "d".repeat(64), stage.restoreGeneration, Date.now(),
+  ));
+  assert.throws(() => db.prepare("UPDATE note_delete_audit SET policy_revision=5").run());
+  assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+    { ok: true, mode: "stage", issues: [] });
+});
+
+test("note delete requires unchanged parent project revision, not just note revision", () => {
+  const { db, authority } = fixture();
+  const bob = authority.issueWritable("bob");
+  assert.ok(bob);
+  const request = deleteCommand(db, "bob", "child");
+  db.prepare("UPDATE projects SET title='Changed' WHERE id='project'").run();
+  db.prepare("UPDATE projects SET title='Project' WHERE id='project'").run();
+  assert.deepEqual(authority.deleteNote(bob.sessionToken, request), refused("stale_revision"));
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 0);
 });

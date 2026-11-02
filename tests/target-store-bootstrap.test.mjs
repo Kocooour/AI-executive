@@ -39,7 +39,7 @@ function seedShared(db, owner, suffix) {
 
 test("R1 creates a separate inactive store with one private Unassigned Area and no user data", () => {
   const result = fresh("empty-model");
-  assert.equal(result.schemaVersion, 15);
+  assert.equal(result.schemaVersion, 16);
   assert.equal(result.directory, path.join(root, "empty-model"));
   assert.equal(result.databasePath, path.join(result.directory, "lumi-target.sqlite"));
   assert.equal(readFileSync(sentinel, "utf8"), "do-not-touch-legacy-database");
@@ -49,7 +49,7 @@ test("R1 creates a separate inactive store with one private Unassigned Area and 
   try {
     const metadata = Object.fromEntries(db.prepare("SELECT key, value FROM metadata").all()
       .map(row => [row.key, row.value]));
-    assert.equal(metadata.schema_version, "15");
+    assert.equal(metadata.schema_version, "16");
     assert.equal(metadata.anchor_seq, "0");
     assert.equal(metadata.write_protocol, "per-item-only");
     assert.equal(metadata.activated, "false");
