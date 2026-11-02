@@ -84,7 +84,8 @@ export function readAuthorizedTargetNoteBootstrapPage(
       JOIN identities actor ON actor.id = ?
       LEFT JOIN area_members m ON m.area_id = a.id AND m.user_id = actor.id
       WHERE a.id = ? LIMIT 1`).get(request.actorUserId, request.areaId) as AreaRow | undefined;
-    if (!area || area.areaOwner !== area.workspaceOwner ||
+    if (!area || typeof area.areaOwner !== "string" ||
+        !ACTOR.test(area.areaOwner) || area.areaOwner !== area.workspaceOwner ||
         !Number.isSafeInteger(area.policyRevision) || area.policyRevision < 0) return null;
     let access: TargetReadAreaAccess;
     if (area.areaKind === "private" && area.workspaceKind === "personal" &&
