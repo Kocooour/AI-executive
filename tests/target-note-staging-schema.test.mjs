@@ -241,7 +241,9 @@ test("v16 preflight requires a delete audit and receipt for every permanent tomb
       key, "alice", id, null, stage.unassignedAreaId, 0,
       0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
     );
-    const deletedAt = Date.now();
+    // The deletion predates the staging audit's 90-day retention window.
+    // Permanent tombstones require an equally permanent delete audit ledger.
+    const deletedAt = Date.now() - 91 * 86400000;
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`INSERT INTO note_tombstones (id,area_id,project_id,revision,deleted_at_ms)
@@ -263,6 +265,14 @@ test("v16 preflight requires a delete audit and receipt for every permanent tomb
       deleteKey, "alice", id, null, stage.unassignedAreaId, 0,
       1, 2, "c".repeat(64), stage.restoreGeneration, deletedAt,
     );
+    assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+      { ok: true, mode: "stage", issues: [] });
+    assert.ok(deletedAt < Date.now() - 90 * 86400000, "delete audit is older than 90 days");
+    assert.throws(() => db.prepare("DELETE FROM note_delete_audit WHERE note_id=?").run(id),
+      /note deletion audit is permanent/);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id=?").get(id).n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones WHERE id=?").get(id).n, 1);
+    // Rejected retention cleanup must leave a canonical, usable store.
     assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
       { ok: true, mode: "stage", issues: [] });
   } finally { db.close(); }
