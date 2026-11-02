@@ -295,10 +295,14 @@ export function inspectIsolatedTargetStore(
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) || !meta.has(row.receipt_key)) ||
           // v15 audit history survives note deletion, but must still refer to
-          // either an existing note or an immutable tombstone (never to nowhere).
+          // a live note or immutable tombstone. An audit for a future revision
+          // would otherwise be accepted after removing the live-note FK.
           count(`SELECT COUNT(*) AS n FROM note_edit_audit a
-            WHERE NOT EXISTS(SELECT 1 FROM notes n WHERE n.id=a.note_id)
-              AND NOT EXISTS(SELECT 1 FROM note_tombstones t WHERE t.id=a.note_id)`) !== 0 ||
+            LEFT JOIN notes n ON n.id=a.note_id
+            LEFT JOIN note_tombstones t ON t.id=a.note_id
+            WHERE (n.id IS NULL AND t.id IS NULL)
+              OR (n.id IS NOT NULL AND a.revision_after>n.revision)
+              OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_edit_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_RECEIPT_PREFIX.length, TARGET_STAGING_NOTE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
