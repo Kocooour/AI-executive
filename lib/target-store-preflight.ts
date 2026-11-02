@@ -6,7 +6,7 @@ import {
   TARGET_SCHEMA_SQL, TARGET_STORE_FILENAME, TARGET_STORE_SCHEMA_VERSION,
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
-  TARGET_STAGING_NOTE_RECEIPT_PREFIX,
+  TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
@@ -220,6 +220,8 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX));
       const noteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX));
+      const noteDeleteReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX));
       // The only extra metadata entries allowed are strictly validated,
       // content-free, staging-only receipt hashes (title, delete and note
       // namespaces, each capped separately). Reject unknown metadata,
@@ -228,19 +230,22 @@ export function inspectIsolatedTargetStore(
         typeof row.key === "string" &&
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 6 + receipts.length + deleteReceipts.length + noteReceipts.length ||
+      if (rows.length !== 6 + receipts.length + deleteReceipts.length + noteReceipts.length + noteDeleteReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(noteReceipts, TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
+          !receiptValid(noteDeleteReceipts, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
           meta.size !== rows.length ||
           !rows.every(row => typeof row.key === "string" &&
             (CONTROL_METADATA_KEYS.has(row.key) ||
               row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX))) ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
@@ -306,6 +311,26 @@ export function inspectIsolatedTargetStore(
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_edit_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_RECEIPT_PREFIX.length, TARGET_STAGING_NOTE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
+      // Delete audit must be bound 1:1 to the actor's receipt and the exact
+      // immutable note tombstone, never to a resurrected or foreign parent.
+      const noteDeleteAudit = all("SELECT receipt_key, expected_revision, restore_generation FROM note_delete_audit") as
+        { receipt_key: unknown; expected_revision: unknown; restore_generation: unknown }[];
+      if (noteDeleteAudit.length > TARGET_STAGING_AUDIT_MAX_EVENTS ||
+          noteDeleteAudit.some(row => typeof row.receipt_key !== "string" ||
+            !row.receipt_key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
+            !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX.length)) ||
+            typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
+            !allowedGenerations.has(row.restore_generation) || !meta.has(row.receipt_key)) ||
+          count(`SELECT COUNT(*) AS n FROM note_delete_audit a
+            LEFT JOIN note_tombstones t ON t.id=a.note_id
+            WHERE t.id IS NULL OR t.area_id<>a.area_id
+              OR t.project_id IS NOT a.project_id
+              OR t.revision<>a.tombstone_revision
+              OR t.deleted_at_ms<>a.committed_at_ms`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
+            AND NOT EXISTS(SELECT 1 FROM note_delete_audit a WHERE a.receipt_key=m.key)`,
+            TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX.length,
+            TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
       // Delete receipts are 1:1 with delete audit rows: a raw receipt for a task
       // that was never deleted would otherwise replay as "committed".
       if (count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
