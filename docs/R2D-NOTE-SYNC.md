@@ -92,3 +92,43 @@ into note edits and deletes (and future create/move operations), with
 visibility-history/retroactive permission rules, bounded retention and
 rebootstrap-on-gap behavior; only then expose bounded HTTP pages with live
 session/release guards and this encrypted cursor.
+
+## R2d.2c.2g.2b.1 — isolated note journal contract (not activated)
+
+`lib/target-note-sync-journal.ts` defines an **opt-in, synthetic-fixture-only**
+`note_sync_journal` SQLite table and internal append/read helpers. It is NOT
+yet installed in the canonical v16 schema. No deployed SQLite database,
+production data, HTTP API, client cache, sync endpoint, task feed or writer is
+changed. This increment establishes the note-only journal invariants to use
+in the next schema/writer PR.
+
+- Events carry only a monotonic sequence, note ID, effective Area, historical
+  project parent, `edit` or `delete`, note revision, Area policy revision,
+  restore generation and commit timestamp. There is no title, body, actor,
+  receipt, direct task feed reuse, or unrestricted global watermark in the
+  response. An event is derived from the **current canonical note** after an
+  edit or from its immutable **tombstone** after deletion.
+- Append is restricted to an existing SQLite transaction and requires a
+  corresponding revised note/tombstone. Future writers must call it inside
+  their already authenticated, pinned `BEGIN IMMEDIATE` transaction together
+  with note mutation, receipt and audit (and they must rollback if it fails).
+  No direct client-controlled Area, policy, project or generation is accepted.
+- The synthetic schema enforces append-only rows, dense sequence, unique
+  note/revision pairs and a conservative 8192-event cap. No pruning/retention
+  mechanism is enabled; journal exhaustion fails closed until a separately
+  reviewed compaction/floor protocol exists.
+- Internal pages are bounded to 100 Area-scoped, currently ACL-authorized
+  events. Every returned event must have the **current** policy revision and
+  restore generation, otherwise pagination fails closed and the client must
+  rebootstrap. Newly granted/changed-role users cannot read historical
+  events from a prior policy epoch. The reader emits no global head or other
+  Area activity and is **not** a live session/release guard.
+- Tests exercise multi-actor ACL, project-child effective Area, edits/deletion,
+  page boundaries, policy changes, restore changes, transactional rollback,
+  sequence gaps, and attempted history mutation.
+
+**Not yet done:** canonical v17 schema, automatic/atomic integration with real
+note edit/delete writers, all-note source coverage and preflight, project
+reparent/move events, allowed retention and gap handling, HTTP release guards,
+offline consumers, E2E and deployment. A cursor from the preceding .2a
+iteration must not be wired to this isolated proof-of-contract yet.
