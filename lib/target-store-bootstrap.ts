@@ -749,7 +749,7 @@ CREATE TRIGGER note_change_journal_no_delete BEFORE DELETE ON note_change_journa
 BEGIN SELECT RAISE(ABORT, 'note change journal permanent'); END;
 CREATE TRIGGER note_change_journal_no_replace BEFORE INSERT ON note_change_journal
 WHEN EXISTS(SELECT 1 FROM note_change_journal
-  WHERE seq=NEW.seq OR receipt_key=NEW.receipt_key)
+  WHERE (area_id=NEW.area_id AND seq=NEW.seq) OR receipt_key=NEW.receipt_key)
 BEGIN SELECT RAISE(ABORT, 'note change journal replacement forbidden'); END;
 CREATE TRIGGER note_change_journal_on_edit AFTER INSERT ON note_edit_audit
 BEGIN
