@@ -30,7 +30,8 @@ const areaIdValid = (s: unknown): s is string =>
   !/[\u0000-\u001f\u007f]/u.test(s);
 function validScope(s: NoteHttpScope): boolean {
   return s !== null && typeof s === "object" &&
-    USER.test(s.userId) && typeof s.restoreGeneration === "string" &&
+    typeof s.userId === "string" && USER.test(s.userId) &&
+    typeof s.restoreGeneration === "string" &&
     UUID.test(s.restoreGeneration) && areaIdValid(s.areaId);
 }
 
