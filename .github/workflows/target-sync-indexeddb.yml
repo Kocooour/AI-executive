@@ -35,6 +35,8 @@ jobs:
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Focused note checkpoint and error classification unit tests
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-note-sync-persistent.test.mjs tests/server-errors.test.mjs
       - name: Install focused browser
         run: pnpm exec playwright install --with-deps chromium
       - name: Run isolated IndexedDB scenarios
