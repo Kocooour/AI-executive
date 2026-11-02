@@ -48,6 +48,8 @@ import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-pref
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
+import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
+import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } from "./target-note-delete-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
 import type {
@@ -649,6 +651,24 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     }
     return editPreflightedTargetNote(this.#store, credential, request, durableSessionTokenHash);
+  }
+
+  /**
+   * Staging-only note delete. No HTTP method exposes this command: callers must
+   * possess a signed write-audience credential. Durable-session and live Area
+   * permissions are checked again inside the pinned SQLite transaction.
+   */
+  deleteNote(
+    sessionToken: string,
+    request: TargetStagingNoteDeleteRequest,
+    durableSessionTokenHash?: string,
+  ): TargetStagingNoteDeleteResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingNoteDeleteRequest(request)) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    return deletePreflightedTargetNote(this.#store, credential, request, durableSessionTokenHash);
   }
 
   /** Read-only status of the exact note edit for its current authorized writer. */
