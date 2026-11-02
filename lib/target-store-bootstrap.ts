@@ -693,7 +693,7 @@ CREATE TABLE note_delete_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   receipt_key TEXT NOT NULL UNIQUE,
   actor_user_id TEXT NOT NULL REFERENCES identities(id),
-  note_id TEXT NOT NULL,
+  note_id TEXT NOT NULL UNIQUE,
   project_id TEXT,
   area_id TEXT NOT NULL REFERENCES areas(id),
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
@@ -710,7 +710,7 @@ CREATE TRIGGER note_delete_audit_retention BEFORE DELETE ON note_delete_audit
 WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000-${TARGET_STAGING_AUDIT_RETENTION_DAYS}*86400000)
 BEGIN SELECT RAISE(ABORT, 'note deletion audit retention active'); END;
 CREATE TRIGGER note_delete_audit_replace_guard BEFORE INSERT ON note_delete_audit
-WHEN EXISTS(SELECT 1 FROM note_delete_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+WHEN EXISTS(SELECT 1 FROM note_delete_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key OR note_id=NEW.note_id)
 BEGIN SELECT RAISE(ABORT, 'note deletion audit replacement forbidden'); END;
 CREATE TRIGGER note_delete_audit_capacity BEFORE INSERT ON note_delete_audit
 WHEN (SELECT COUNT(*) FROM note_delete_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
