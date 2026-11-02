@@ -55,3 +55,40 @@ and mid-page revocation.
 This PR does **not** modify schema, task/project feeds, production API,
 client cache, IndexedDB, UI, deployment, credentials or persisted data.
 All target staging flags remain default-off.
+
+## R2d.2c.2g.2a — encrypted continuation cursor (staging-only)
+
+`lib/target-note-sync-cursor.ts` provides a **standalone cursor primitive** for
+future note bootstrap pagination and note-specific change journal consumption.
+It does not enumerate changes, expose HTTP or grant any new read rights.
+
+- A cursor carries **one Area**, a verified actor ID, session revocation epoch,
+  restore generation, Area policy revision and current access role; the
+  consumer compares every field with **server-derived** current values.
+- Positions have two disjoint, strictly validated types: continuation after
+  a bounded manifest entry with its whole-snapshot digest, or an exclusive
+  monotonic `afterSeq` for a **future** note-only journal. No client-supplied
+  first-page cursor or task/project change-log reuse.
+- AES-256-GCM with fresh random 96-bit nonce, HKDF key separation from the
+  existing task feed, authenticated domain and fixed-size padding keeps all
+  metadata/positions confidential and limits structure leakage. Decode rejects
+  noncanonical tokens, altered ciphertext, invalid bounds and extra claims.
+- Tokens expire after seven days (up to 60s clock skew), and every failure
+  has one uniform denied result. Role/policy changes, revoked session epochs
+  and restore generation differences invalidate issued cursors.
+- **Not an authorization decision**: API/child integration must separately
+  validate current live durable session, actor, Area ACL, restore generation,
+  note/parent guards and canonical pinned snapshot **before releasing data**.
+  The caller must never seal an unchecked actor or client-selected position.
+  A changed bootstrap digest forces full restart, not an inferred deletion.
+
+Tests cover 2 actors and multiple role/Area/epoch/generation boundaries,
+tampering and key separation, expiry, length privacy, bounds and roundtrips.
+There is no schema migration, note journal writer, deletion visibility,
+new API, client sync, UI, production change or deployment in this step.
+
+**Next:** schema-guarded monotonic note-only journal integrated atomically
+into note edits and deletes (and future create/move operations), with
+visibility-history/retroactive permission rules, bounded retention and
+rebootstrap-on-gap behavior; only then expose bounded HTTP pages with live
+session/release guards and this encrypted cursor.
