@@ -212,6 +212,11 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "OFFLINE_RECOVERY_LOCK_UNAVAILABLE",
   "OFFLINE_RECOVERY_WIPE_PRECEDED_HOLD",
   "OFFLINE_RECOVERY_GENERATION_INVALID",
+  // Note metadata IndexedDB adapter errors are internal fail-closed signals,
+  // not error messages emitted from an HTTP endpoint or rendered by the UI.
+  "note_cache_unavailable",
+  "checkpoint_unavailable",
+  "scope_changed",
   "Invalid retention clock", // Programmer-only guard for a non-finite maintenance timestamp.
   "Invalid mail retention cutoff", // Programmer-only guard for a non-finite clock or corrupt consent retention.
 
