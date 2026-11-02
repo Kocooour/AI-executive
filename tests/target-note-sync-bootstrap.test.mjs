@@ -153,7 +153,7 @@ test("the 4096-note staging ceiling is enforced before pagination, even for limi
   try {
     const insert = db.prepare("INSERT INTO notes VALUES (?,NULL,'team-area','N','B',0)");
     db.exec("BEGIN");
-    for (let i = 0; i < 4095; i++) insert.run("extra-" + String(i).padStart(4, "0"));
+    for (let i = 0; i < 4096; i++) insert.run("extra-" + String(i).padStart(4, "0"));
     db.exec("COMMIT");
     assert.equal(page(db, "bob", "team-area", 1), null);
     db.prepare("DELETE FROM notes WHERE id='extra-0000'").run();
