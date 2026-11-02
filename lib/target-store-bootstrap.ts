@@ -32,7 +32,8 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
 // monotonic revisions; old staging v12 stores are never migrated.
 // v16 (R2d.2c.2f.2) adds immutable, receipt-backed note-delete audit.
-// v17 (R2d.2c.2g.2b.1) adds immutable note-specific audit-triggered journal.\n// Old staging v16 stores are deliberately rejected, never auto-migrated.
+// v17 (R2d.2c.2g.2b.1) adds immutable note-specific audit-triggered journal.
+// Old staging v16 stores are deliberately rejected, never auto-migrated.
 // No HTTP, sync, production migration or activation is authorized.
 export const TARGET_STORE_SCHEMA_VERSION = 17;
 /** Staging-only cap on live notes. */
@@ -61,7 +62,8 @@ export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt
 /** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
-export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;\n/** Maximum authenticated note edit + delete events in the isolated staging journal. */\nexport const TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS = 8192;
+export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
+/** Maximum authenticated note edit + delete events in the isolated staging journal. */\nexport const TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS = 8192;
 export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
 /**
  * R2-ID.1 durable staging sessions. A session is a short-lived server-side
