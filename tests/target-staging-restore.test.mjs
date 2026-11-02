@@ -42,6 +42,7 @@ const restoreLib = await import("../lib/target-staging-restore.ts");
 const identityLib = await import("../lib/target-staging-http-identity.ts");
 const feedCursor = await import("../lib/target-staging-feed-cursor.ts");
 const writePreflight = await import("../lib/target-task-write-preflight.ts");
+const noteWritePreflight = await import("../lib/target-note-write-contract.ts");
 const { compactTargetStagingChangeLog } = await import("../lib/target-staging-change-log-compaction.ts");
 const { TargetStagingSessionAuthority } = await import("../lib/target-staging-session-authority.ts");
 const pinned = await import("../lib/target-staging-pinned-write.ts");
@@ -179,6 +180,52 @@ function restoreNow(fx, grants = []) {
   }
   return result;
 }
+
+// The note delete intent intentionally carries no note ID, so recovery cannot
+// reapply a confirmed deletion to a backed-up live note. Only a backup from
+// AFTER the deletion is safe to restore.
+function deleteSharedNote(fx, noteId) {
+  const token = writableToken(fx);
+  const preview = noteWritePreflight.previewTargetNoteWrite(fx.db, "alice", noteId);
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  const { ok: _allowed, ...fields } = preview;
+  return fx.authority.deleteNote(token, { ...fields, noteId, commandId: randomUUID() });
+}
+
+test("restore refuses a backup older than a confirmed note deletion without resurrecting the note", () => {
+  const fx = makeFixture();
+  fx.db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('sensitive',?,'Private','Sensitive text')")
+    .run(fx.stage.unassignedAreaId);
+  const backup = backupOf(fx);
+  assert.deepEqual(deleteSharedNote(fx, "sensitive"), { ok: true });
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM notes WHERE id='sensitive'").get().n, 0);
+  assert.equal(preflight(fx).ok, true);
+  assert.ok(journalLines(fx).some(row => row.t === "intent" && row.k === "note_delete"));
+  copyBack(fx, backup);
+  const before = worldHash(fx);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
+  assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store),
+    { ok: false, reason: "backup_predates_note_delete" });
+  assert.equal(worldHash(fx), before, "refused restore does not change DB, journal or witness");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending",
+    "resurrected snapshot is still inaccessible to the staging API");
+});
+
+test("restore accepts a backup after note deletion when only replayable events followed", () => {
+  const fx = makeFixture();
+  fx.db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('sensitive',?,'Private','Sensitive text')")
+    .run(fx.stage.unassignedAreaId);
+  assert.deepEqual(deleteSharedNote(fx, "sensitive"), { ok: true });
+  const backup = backupOf(fx);
+  assert.deepEqual(titleWrite(fx, "t1", "Post-deletion edit"), { ok: true });
+  copyBack(fx, backup);
+  const result = restoreNow(fx);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM notes WHERE id='sensitive'").get().n, 0);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM note_tombstones WHERE id='sensitive'").get().n, 1);
+  assert.equal(fx.db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id='sensitive'").get().n, 1);
+  assert.equal(preflight(fx).ok, true);
+});
 
 // ---- HTTP helpers --------------------------------------------------------------------------------
 
