@@ -96,6 +96,9 @@ export function appendTrustedTargetNoteJournalEvent(
     if (!source || !validInt(source.revision) || source.revision === 0 ||
         !validId(source.areaId) ||
         (source.projectId !== null && !validId(source.projectId))) return denied;
+    // A tombstone is prepared *before* DELETE within the pinned transaction.
+    // It is not proof of a completed deletion until the live row is absent.
+    if (op === "delete" && db.prepare("SELECT 1 FROM notes WHERE id=?").get(noteId)) return denied;
     const policy = db.prepare("SELECT policy_revision AS policyRevision FROM areas WHERE id=?")
       .get(source.areaId) as { policyRevision: number } | undefined;
     const meta = db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
