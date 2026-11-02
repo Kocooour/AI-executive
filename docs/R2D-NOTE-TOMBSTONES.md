@@ -51,6 +51,11 @@ storage and credentials are unchanged.
   tombstone must have exactly one delete audit, and each audit must have its
   receipt and matching immutable tombstone (Area, parent, revision, timestamp).
   Corrupted, orphaned or raw SQL-only deletions fail closed.
+- Note-deletion audit rows and receipts are **permanent**, just like their
+  tombstones. The general staging audit 90-day deletion window does not apply
+  to `note_delete_audit`: its SQLite DELETE guard never expires. The bounded
+  audit/tombstone/receipt tables therefore eventually refuse additional note
+  deletions instead of discarding required proof.
 - Restore from a backup taken **before any confirmed note deletion** is
   refused with `backup_predates_note_delete`: journal entries are deliberately
   content-free and cannot replay the erased ID. A backup taken after the last
