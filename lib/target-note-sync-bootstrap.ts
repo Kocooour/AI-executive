@@ -19,6 +19,7 @@ const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const MAX_NOTE_ID_BYTES = 512;
 const MAX_NOTES = 4096;
 const REVISION = /^[a-f0-9]{64}$/;
+const RESTORE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const NOTE_BOOTSTRAP_PAGE_LIMIT = 100;
 
 function validId(value: unknown): value is string {
@@ -109,9 +110,14 @@ export function readAuthorizedTargetNoteBootstrapPage(
       LIMIT ?`).all(request.areaId, request.areaId, MAX_NOTES + 1) as NoteRow[];
     if (rows.length > MAX_NOTES) return null;
 
+    // The generation is read from the very same pinned, preflighted snapshot
+    // as the Area and note rows; an old page may not survive a store restore.
+    const generation = (db.prepare("SELECT value FROM metadata WHERE key='restore_generation'")
+      .get() as { value: unknown } | undefined)?.value;
+    if (typeof generation !== "string" || !RESTORE_GENERATION.test(generation)) return null;
     const digest = createHash("sha256");
     digest.update(JSON.stringify([
-      "note-bootstrap-v1", request.actorUserId, request.areaId,
+      "note-bootstrap-v2", generation.toLowerCase(), request.actorUserId, request.areaId,
       area.areaKind, access, area.policyRevision,
     ]) + "\n");
     const entries: NoteBootstrapEntry[] = [];
