@@ -63,7 +63,8 @@ export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
 export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
-/** Maximum authenticated note edit + delete events in the isolated staging journal. */\nexport const TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS = 8192;
+/** Maximum authenticated note edit + delete events in the isolated staging journal. */
+export const TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS = 8192;
 export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
 /**
  * R2-ID.1 durable staging sessions. A session is a short-lived server-side
