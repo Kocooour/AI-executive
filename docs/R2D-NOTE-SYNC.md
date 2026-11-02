@@ -96,7 +96,7 @@ session/release guards and this encrypted cursor.
 ## R2d.2c.2g.2b.1 — audit-triggered note journal (staging only)
 
 Schema v17 adds a dedicated, append-only note_change_journal table, with an
-AUTOINCREMENT sequence and an Area+sequence index. Audit INSERT triggers
+Area-local monotonic sequence (`(area_id, seq)`) and no global client-visible position. Audit INSERT triggers
 append one content-free event for each authorized note edit or deletion
 (kind, receipt key, actor, note ID, effective Area, historical parent,
 Area policy revision, resulting note revision, timestamp). Audit and event
