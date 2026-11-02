@@ -124,6 +124,8 @@ test("R2d.2c.2f.1 note tombstones preserve Area/parent and forbid ID reuse", () 
 test("content-free note edit audit survives a tombstoned deletion", () => {
   const db = fixture();
   try {
+    db.prepare("UPDATE notes SET body='Edited' WHERE id='n-private'").run();
+    assert.equal(rev(db, "n-private"), 1);
     db.prepare(`INSERT INTO note_edit_audit (
       receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
       revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
@@ -133,7 +135,7 @@ test("content-free note edit audit survives a tombstoned deletion", () => {
     );
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.prepare("INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES ('n-private','a-private',NULL,1,?)").run(Date.now());
+      db.prepare("INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES ('n-private','a-private',NULL,2,?)").run(Date.now());
       db.prepare("DELETE FROM notes WHERE id='n-private'").run();
       db.exec("COMMIT");
     } catch (error) { db.exec("ROLLBACK"); throw error; }
@@ -249,6 +251,30 @@ test("v15 preflight refuses a forged edit audit referencing neither live note no
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
       key, "alice", "never-existed", null, stage.unassignedAreaId, 0,
       0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+    );
+    const result = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.includes("audit_invalid"), JSON.stringify(result));
+  } finally { db.close(); }
+});
+
+test("v15 preflight rejects audit revision beyond a live note", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "future-edit-audit"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('existing',?,'Title','Body')")
+      .run(stage.unassignedAreaId);
+    const key = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "f".repeat(64);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      key, "alice", "existing", null, stage.unassignedAreaId, 0,
+      3, 4, "c".repeat(64), stage.restoreGeneration, Date.now(),
     );
     const result = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
     assert.equal(result.ok, false);
