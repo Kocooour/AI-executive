@@ -233,17 +233,18 @@ test("v16 preflight requires a delete audit and receipt for every permanent tomb
       .run(id, stage.unassignedAreaId, "Title", "Body");
     db.prepare("UPDATE notes SET body='New body' WHERE id=?").run(id);
     assert.equal(db.prepare("SELECT revision FROM notes WHERE id=?").get(id).revision, 1);
+    // Synthetic historical timestamps, preserving edit-before-delete ordering.
+    const deletedAt = Date.now() - 91 * 86400000;
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
     db.prepare(`INSERT INTO note_edit_audit (
       receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
       revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
       key, "alice", id, null, stage.unassignedAreaId, 0,
-      0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+      0, 1, "c".repeat(64), stage.restoreGeneration, deletedAt - 1_000,
     );
     // The deletion predates the staging audit's 90-day retention window.
     // Permanent tombstones require an equally permanent delete audit ledger.
-    const deletedAt = Date.now() - 91 * 86400000;
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`INSERT INTO note_tombstones (id,area_id,project_id,revision,deleted_at_ms)
@@ -270,6 +271,15 @@ test("v16 preflight requires a delete audit and receipt for every permanent tomb
     assert.ok(deletedAt < Date.now() - 90 * 86400000, "delete audit is older than 90 days");
     assert.throws(() => db.prepare("DELETE FROM note_delete_audit WHERE note_id=?").run(id),
       /note deletion audit is permanent/);
+    // REPLACE can bypass a DELETE trigger: the unique-key insert guard must
+    // also prevent silently replacing this historic audit.
+    assert.throws(() => db.prepare(`INSERT OR REPLACE INTO note_delete_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,tombstone_revision,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      deleteKey, "alice", id, null, stage.unassignedAreaId, 0,
+      1, 2, "c".repeat(64), stage.restoreGeneration, deletedAt,
+    ), /note deletion audit replacement forbidden/);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit WHERE note_id=?").get(id).n, 1);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones WHERE id=?").get(id).n, 1);
     // Rejected retention cleanup must leave a canonical, usable store.
