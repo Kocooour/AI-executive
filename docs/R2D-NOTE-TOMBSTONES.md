@@ -2,8 +2,10 @@
 
 The v15 tombstone substrate was introduced by #185. R2d.2c.2f.2 adds a
 **staging-only authenticated delete writer** and dedicated audit/receipt in v16.
-This is not an HTTP endpoint, change feed, sync implementation, UI feature,
-deployment or permission to reset any database. Target staging flags remain default-off. Legacy production
+The tombstone substrate and internal writer are staging-only; the later
+opt-in HTTP DELETE and read-only status routes are described below. Neither
+introduces a change feed, sync implementation, UI feature, deployment or
+permission to reset any database. Target staging flags remain default-off. Legacy production
 storage and credentials are unchanged.
 
 ## Invariants
@@ -88,8 +90,8 @@ may return `committed`; missing, foreign, viewer and unrecorded tombstones
 are hidden as 404. A different payload for the actor's recorded command
 returns 409. Restore generation and write Area must still match current
 policy. Durable session identity is checked before and after the child read,
-and successful results receive another read-only current ACL check before
-release. The endpoint requires same-origin Origin, protocol v1 and all four
+and every result (including conflict and Area mismatch) receives another
+read-only ACL/receipt check before release. The endpoint requires same-origin Origin, protocol v1 and all four
 staging/notes/write flags; status response is content-free with `no-store`.
 It never exposes note contents, tombstone/receipt IDs, audit or credentials.
 
