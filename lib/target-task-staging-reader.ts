@@ -35,6 +35,8 @@ import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-pr
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedTargetNote } from "./target-note-access";
+import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
+import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import { readTargetNoteEditCommandStatus, type TargetNoteEditCommandStatus } from "./target-note-command-status";
 import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -696,4 +698,47 @@ export function readPreflightedAuthorizedTargetNote(
         return actorUserId ? readAuthorizedTargetNote(db, { actorUserId, noteId }) : null;
       }, () => null),
   );
+}
+
+export type PreflightedNoteSyncResult =
+  | { ok: true; page: TargetNoteSyncPage; epoch: number;
+      stamp: { areaId: string; contentRevision: number; head: number } }
+  | { ok: false; reason: "inaccessible" | "resync_required" | "unavailable" };
+
+/** One canonical pinned snapshot for ACL, cursor read, and the release stamp. */
+export function readPreflightedAuthorizedNoteSync(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  request: { areaId: string; limit: number; cursor?: string; secret: string },
+): PreflightedNoteSyncResult {
+  const unavailable = (): PreflightedNoteSyncResult => ({ ok: false, reason: "unavailable" });
+  return withPreflightedStore(store, unavailable, (db, preflight) =>
+    inReadSnapshot(db, () => {
+      if (!preflight(db)) return unavailable();
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return unavailable();
+      const decision = evaluateTargetAreaPolicy(db, {
+        actorUserId, areaId: request.areaId, permission: "read",
+      });
+      if (!decision.allowed) return decision.reason === "query_failed" ? unavailable()
+        : { ok: false as const, reason: "inaccessible" as const };
+      const epochRow = db.prepare("SELECT revocation_epoch AS epoch FROM identities WHERE id=?")
+        .get(actorUserId) as { epoch: number } | undefined;
+      if (!epochRow || !Number.isSafeInteger(epochRow.epoch) || epochRow.epoch < 0)
+        return unavailable();
+      const page = readAuthorizedTargetNoteSyncPage(db, {
+        actorUserId, areaId: request.areaId, sessionEpoch: epochRow.epoch,
+        secret: request.secret, cursor: request.cursor, limit: request.limit,
+      });
+      if (!page) return request.cursor === undefined ? unavailable()
+        : { ok: false as const, reason: "resync_required" as const };
+      const stamp = db.prepare(`SELECT a.note_sync_revision AS contentRevision,
+        COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0) AS head
+        FROM areas a WHERE a.id=?`).get(request.areaId) as
+        { contentRevision: number; head: number } | undefined;
+      if (!stamp || !Number.isSafeInteger(stamp.contentRevision) ||
+          !Number.isSafeInteger(stamp.head) || stamp.contentRevision < 0 || stamp.head < 0)
+        return unavailable();
+      return { ok: true as const, page, epoch: epochRow.epoch,
+        stamp: { areaId: request.areaId, ...stamp } };
+    }, unavailable));
 }

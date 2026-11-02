@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-02 po sloučení R2d.2c.2g.2b.1 (#193); rozpracováno R2d.2c.2g.2b.2 (interní autorizované čtení note žurnálu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-11-02 po sloučení R2d.2c.2g.2b.2 (#194); rozpracováno R2d.2c.2g.2b.3 (staging HTTP čtení note metadat).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
 
 ## Aktuální pozice
 
@@ -72,8 +72,9 @@ R2c.1–R2c.5b je implementováno a sloučeno do `main` (poslední [#173](https:
 - **R2d.2c.2g.1 (sloučeno, #189, staging-only):** interní ACL-scoped obsahově prázdný stránkovaný manifest poznámek po Oblastech včetně revizí rodičovských projektů a celkového otisku snapshotu, odmítnutí změny mezi stránkami; [kontrakt](R2D-NOTE-SYNC.md). Není to HTTP endpoint, change feed ani aktivovaný klient.
 - **R2d.2c.2g.2a (sloučeno, #190, staging-only):** šifrovaný AES-256-GCM kurzor manifestu i budoucího note-only žurnálu; bez API ani změnových událostí.
 - **R2d.2c.2g.2b.1 (sloučeno, #193, staging-only):** izolovaný v17 neměnný kanonický note-only žurnál s hustou Area-local sekvencí (bez globálního klientského pořadí), atomické append triggery pro ověřené edit/delete audity, preflight provenience a limit 8192 událostí. Izolovaný prototyp #192 je supersedován, nevzniká druhá tabulka. Není čitelný přes HTTP ani klienta; starý v16 staging store se nemigruje.
-- **R2d.2c.2g.2b.2 (rozpracováno, staging-only):** v18 Area-local monotónní svědek všech změn poznámek i rodičovských projektů; interní stránkované čtení note-only žurnálu po úplném bootstrapu, s aktuálním Area ACL, revokační epochou, policy/generation-bound šifrovaným cursorem a vynuceným rebootstrapem při neodžurnálované tvorbě, přesunu, editaci či změně rodiče. Nový či znovu přidaný člen začíná na aktuální hlavě logu; historická ID a smazání nedostane. Bez HTTP, klienta, produkce či deploymentu.
-- **R2d.2c.2g.2b.3+:** live-release HTTP, plný create/move žurnál, retenční hranice a offline klientská synchronizace; před aktivací musí být odděleně navrženy a ověřeny.
+- **R2d.2c.2g.2b.2 (sloučeno, #194, staging-only):** v18 Area-local monotónní svědek všech změn poznámek i rodičovských projektů; interní stránkované čtení note-only žurnálu po úplném bootstrapu, s aktuálním Area ACL, revokační epochou, policy/generation-bound šifrovaným cursorem a vynuceným rebootstrapem při neodžurnálované tvorbě, přesunu, editaci či změně rodiče. Nový či znovu přidaný člen začíná na aktuální hlavě logu; historická ID a smazání nedostane. Bez HTTP, klienta, produkce či deploymentu.
+- **R2d.2c.2g.2b.3 (rozpracováno, staging-only):** výchozí vypnuté autentizované GET `/api/target-staging/note-sync` pro omezené Area-local metadata bootstrap a edit/delete žurnál, s šifrovaným cursorem a živým ověřením session, ACL, policy, epochy, Area witness a hlavy žurnálu před vydáním. Bez klientské/UI/produkční aktivace.
+- **R2d.2c.2g.2b.4+:** plný create/move žurnál, retenční hranice a offline klientská synchronizace; před aktivací musí být odděleně navrženy a ověřeny.
 - **R2d.3:** serverové rozsahy Home/Today/Inbox/Upcoming/Projects, counts a kompletní Můj plán.
 - **R2d.4:** Search, AI a bezpečné odvozené indexy.
 - **R2d.5:** attention, push, zneplatnění cache a souhrnné bezpečnostní testy.

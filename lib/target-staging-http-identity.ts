@@ -20,7 +20,7 @@ import {
   checkTargetStagingAnchorLive,
 } from "./target-staging-durable-session";
 import type { TargetReadLinearization } from "./target-task-read-model";
-import type { TargetProjectReadLiveGuard, TargetProjectIndexLiveGuard, TargetNoteReadLiveGuard } from "./target-staging-durable-session";
+import type { TargetProjectReadLiveGuard, TargetProjectIndexLiveGuard, TargetNoteReadLiveGuard, TargetNoteSyncLiveGuard } from "./target-staging-durable-session";
 import type { TargetStagingReadStore } from "./target-task-staging-reader";
 
 export type StagingHttpIdentity =
@@ -117,13 +117,14 @@ export function verifyStagingReadBeforeRelease(
   projectGuard?: TargetProjectReadLiveGuard,
   projectIndexGuard?: TargetProjectIndexLiveGuard,
   noteGuard?: TargetNoteReadLiveGuard,
+  noteSyncGuard?: TargetNoteSyncLiveGuard,
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
   if (identity.kind === "owner" && !auth.authenticated) return "unauthorized";
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash },
-    observed, Date.now(), projectGuard, projectIndexGuard, noteGuard);
+    observed, Date.now(), projectGuard, projectIndexGuard, noteGuard, noteSyncGuard);
   if (live.ok === true) return "ok";
   if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
