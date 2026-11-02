@@ -134,10 +134,15 @@ test("ACL revocation and role/policy changes are reflected at each page, fail cl
 test("malformed identifiers, bounds, invalid schema and excessive rows are rejected", () => {
   const db = fixture();
   try {
+    const current = page(db, "bob", "team-area");
     for (const bad of ["", " ", "..", "x\u0001y", "x".repeat(513)]) {
       assert.equal(page(db, "bob", bad), null);
-      assert.equal(page(db, "bob", "team-area", 2, bad), null);
+      assert.equal(page(db, "bob", "team-area", 2, bad, current.snapshotRevision), null);
     }
+    assert.equal(read(db, { actorUserId: 123, areaId: "team-area", limit: 1, afterId: null }), null);
+    assert.equal(read(db, { actorUserId: "bob", areaId: "team-area", limit: 1,
+      afterId: "child", expectedSnapshotRevision: { toString: () => { throw Error("coerce"); } } }), null);
+    assert.equal(page(db, "bob", "team-area", 1, "child", "invalid"), null);
     for (const limit of [0, 101, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       assert.equal(page(db, "bob", "team-area", limit), null);
     }
