@@ -89,3 +89,31 @@ test("audit provenance and journal are exactly one event per successful write", 
     assert.equal(event.receipt_key, "edit-1");
   } finally { db.close(); }
 });
+
+
+test("interleaved Areas retain independent dense journal sequences", () => {
+  const db = fixture();
+  try {
+    db.prepare("INSERT INTO identities(id) VALUES ('bob')").run();
+    db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('bob-personal','personal','bob')").run();
+    db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('bob-private','Bob private','private','bob-personal','bob')").run();
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('two','bob-private','Bob secret','No disclosure')").run();
+    edit(db, "alice-1", 1000);
+    db.prepare("UPDATE notes SET body='Bob revised' WHERE id='two'").run();
+    db.prepare(`INSERT INTO note_edit_audit
+      (receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+       revision_before,revision_after,expected_revision,restore_generation,committed_at_ms)
+      VALUES ('bob-1','bob','two',NULL,'bob-private',0,0,1,?,
+       '00000000-0000-4000-8000-000000000001',?)`).run("c".repeat(64), 1100);
+    db.prepare("UPDATE notes SET body='Alice revised again' WHERE id='one'").run();
+    db.prepare(`INSERT INTO note_edit_audit
+      (receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+       revision_before,revision_after,expected_revision,restore_generation,committed_at_ms)
+      VALUES ('alice-2','alice','one',NULL,'private',0,1,2,?,
+       '00000000-0000-4000-8000-000000000001',?)`).run("d".repeat(64), 1200);
+    assert.deepEqual(db.prepare("SELECT area_id,seq FROM note_change_journal ORDER BY area_id,seq").all(), [
+      { area_id:"bob-private", seq:1 }, { area_id:"private", seq:1 }, { area_id:"private", seq:2 },
+    ]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal WHERE area_id='private' AND seq=2").get().n, 1);
+  } finally { db.close(); }
+});
