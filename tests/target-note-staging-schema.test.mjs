@@ -220,6 +220,39 @@ test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK const
   } finally { db.close(); }
 });
 
+test("v15 preflight accepts an audited note after its tombstoned deletion", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "deleted-audited-note"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    const id = "edited-then-deleted";
+    const key = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "e".repeat(64);
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES (?,?,?,?)")
+      .run(id, stage.unassignedAreaId, "Title", "Body");
+    db.prepare("UPDATE notes SET body='New body' WHERE id=?").run(id);
+    assert.equal(db.prepare("SELECT revision FROM notes WHERE id=?").get(id).revision, 1);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      key, "alice", id, null, stage.unassignedAreaId, 0,
+      0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+    );
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(`INSERT INTO note_tombstones (id,area_id,project_id,revision,deleted_at_ms)
+        VALUES (?,?,NULL,2,?)`).run(id, stage.unassignedAreaId, Date.now());
+      db.prepare("DELETE FROM notes WHERE id=?").run(id);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+      { ok: true, mode: "stage", issues: [] });
+  } finally { db.close(); }
+});
+
 test("v15 preflight rejects an orphaned pending note tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "pending-tombstone"), ownerUserId: "alice",
