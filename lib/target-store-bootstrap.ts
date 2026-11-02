@@ -31,10 +31,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // deliberately NOT migrated; recreate a new isolated staging directory.
 // v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
 // monotonic revisions; old staging v12 stores are never migrated.
-// v15 (R2d.2c.2f.1) reserves permanent note tombstones and prevents note ID
-// reuse. Deletion is still NOT exposed by any authenticated command or HTTP API.
-// Isolated v14 stores intentionally fail preflight; never migrate production.
-export const TARGET_STORE_SCHEMA_VERSION = 15;
+// v16 (R2d.2c.2f.2) adds immutable, receipt-backed note-delete audit.
+// Old staging v15 stores are deliberately rejected, never auto-migrated.
+// No HTTP, sync, production migration or activation is authorized.
+export const TARGET_STORE_SCHEMA_VERSION = 16;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -56,6 +56,8 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
 /** Actor/note/command-scoped staging note edit confirmations; never note content. */
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
+/** Isolated actor/note/command receipts for the irreversible note deletion. */
+export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt-v1:";
 /** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
@@ -683,6 +685,36 @@ BEGIN SELECT RAISE(ABORT, 'note audit replacement is forbidden'); END;
 CREATE TRIGGER note_edit_audit_capacity BEFORE INSERT ON note_edit_audit
 WHEN (SELECT COUNT(*) FROM note_edit_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'note audit capacity reached'); END;
+
+
+-- R2d.2c.2f.2: immutable, content-free proof of the exact note deletion.
+-- A historical parent is NOT a live foreign key and can subsequently be removed.
+CREATE TABLE note_delete_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE,
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  note_id TEXT NOT NULL,
+  project_id TEXT,
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
+  revision_before INTEGER NOT NULL CHECK(typeof(revision_before)='integer' AND revision_before>=0),
+  tombstone_revision INTEGER NOT NULL CHECK(typeof(tombstone_revision)='integer' AND tombstone_revision=revision_before+1),
+  expected_revision TEXT NOT NULL CHECK(length(expected_revision)=64),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0)
+);
+CREATE INDEX note_delete_audit_by_note ON note_delete_audit(note_id,id);
+CREATE TRIGGER note_delete_audit_no_update BEFORE UPDATE ON note_delete_audit
+BEGIN SELECT RAISE(ABORT, 'note deletion audit immutable'); END;
+CREATE TRIGGER note_delete_audit_retention BEFORE DELETE ON note_delete_audit
+WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000-${TARGET_STAGING_AUDIT_RETENTION_DAYS}*86400000)
+BEGIN SELECT RAISE(ABORT, 'note deletion audit retention active'); END;
+CREATE TRIGGER note_delete_audit_replace_guard BEFORE INSERT ON note_delete_audit
+WHEN EXISTS(SELECT 1 FROM note_delete_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'note deletion audit replacement forbidden'); END;
+CREATE TRIGGER note_delete_audit_capacity BEFORE INSERT ON note_delete_audit
+WHEN (SELECT COUNT(*) FROM note_delete_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'note deletion audit capacity reached'); END;
 
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
