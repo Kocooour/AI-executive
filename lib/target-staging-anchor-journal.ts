@@ -591,7 +591,8 @@ export interface TargetStagingJournalFact {
   readonly p: TargetStagingJournalPayload;
 }
 const FACT_KINDS = new Set<string>([
-  "membership", "session_issue", "session_revoke", "session_revoke_all", "restore",
+  "membership", "session_issue", "session_revoke", "session_revoke_all",
+  "restore", "note_delete",
 ]);
 
 /**
