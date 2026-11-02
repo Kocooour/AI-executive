@@ -237,6 +237,12 @@ test("signed note deletion is atomic and content-free: private + inherited share
     { note_id: "child", project_id: "project", area_id: "team-area", revision_before: 0, tombstone_revision: 1 },
   ]);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 2);
+  assert.deepEqual(db.prepare("SELECT seq,kind,note_id,area_id,revision FROM note_change_journal ORDER BY seq").all()
+    .map(e => [e.seq,e.kind,e.note_id,e.revision]), [
+      [1,"delete","own",1], [2,"delete","child",1],
+    ]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal WHERE kind='delete'").get().n, 2);
+
   assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
   assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
     { ok: true, mode: "stage", issues: [] });
