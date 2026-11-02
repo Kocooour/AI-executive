@@ -117,7 +117,12 @@ export function deletePreflightedTargetNote(
       .get(receiptKey) as { value: string } | undefined;
     if (prior) return prior.value === receiptDigest
       ? { ok: true, replayed: true } : { ok: false, reason: "idempotency_conflict" };
-    const contract = checkTargetNoteWriteContract(db, actor, request);
+    // The note-write CAS contract has an exact four-field shape; commandId is
+    // strictly a delete idempotency token and must not enter that validator.
+    const contract = checkTargetNoteWriteContract(db, actor, {
+      noteId: request.noteId, expectedRevision: request.expectedRevision,
+      writeAreaId: request.writeAreaId, restoreGeneration: request.restoreGeneration,
+    });
     if (contract.ok === false) return { ok: false, reason: contract.reason };
     fingerprint(databaseFd);
     const note = readAuthorizedTargetNote(db, { actorUserId: actor, noteId: request.noteId });
