@@ -75,6 +75,8 @@ test("tombstone deletion is represented without contents; read is denied after r
     edit(db);
     db.exec("BEGIN IMMEDIATE");
     db.prepare("INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES('n1','shared','p1',2,?)").run(NOW+1);
+    assert.deepEqual(append(db,"delete","n1",NOW+1),{ok:false},
+      "a prepared tombstone is not yet a completed deletion");
     db.prepare("DELETE FROM notes WHERE id='n1'").run();
     assert.deepEqual(append(db,"delete","n1",NOW+1),{ok:true,seq:2});
     db.exec("COMMIT");
