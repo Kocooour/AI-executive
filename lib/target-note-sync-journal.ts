@@ -24,7 +24,7 @@ const validId = (x: unknown): x is string =>
 /** Install on synthetic v16 SQLite fixtures ONLY; canonical schema is unchanged. */
 export const TARGET_NOTE_JOURNAL_SCHEMA_SQL = `
 CREATE TABLE note_sync_journal (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  seq INTEGER NOT NULL CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
   note_id TEXT NOT NULL CHECK(typeof(note_id)='text' AND note_id<>'' AND note_id=trim(note_id)
     AND length(CAST(note_id AS BLOB))<=512),
   area_id TEXT NOT NULL REFERENCES areas(id),
@@ -34,22 +34,23 @@ CREATE TABLE note_sync_journal (
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
   restore_generation TEXT NOT NULL CHECK(length(restore_generation)=36),
   committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
+  PRIMARY KEY(area_id,seq),
   UNIQUE(note_id,revision)
-);
-CREATE INDEX note_sync_journal_by_area ON note_sync_journal(area_id,seq);
+) WITHOUT ROWID;
 CREATE TRIGGER note_sync_journal_no_update BEFORE UPDATE ON note_sync_journal
 BEGIN SELECT RAISE(ABORT, 'note journal events are immutable'); END;
 CREATE TRIGGER note_sync_journal_no_delete BEFORE DELETE ON note_sync_journal
 BEGIN SELECT RAISE(ABORT, 'note journal retention not approved'); END;
 CREATE TRIGGER note_sync_journal_no_replace BEFORE INSERT ON note_sync_journal
 WHEN EXISTS(SELECT 1 FROM note_sync_journal
-  WHERE (note_id=NEW.note_id AND revision=NEW.revision) OR seq=NEW.seq)
+  WHERE (note_id=NEW.note_id AND revision=NEW.revision)
+    OR (area_id=NEW.area_id AND seq=NEW.seq))
 BEGIN SELECT RAISE(ABORT, 'note journal replacement denied'); END;
 CREATE TRIGGER note_sync_journal_capacity BEFORE INSERT ON note_sync_journal
 WHEN (SELECT COUNT(*) FROM note_sync_journal)>=${NOTE_SYNC_JOURNAL_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'note journal capacity reached'); END;
 CREATE TRIGGER note_sync_journal_dense AFTER INSERT ON note_sync_journal
-WHEN NEW.seq<>(SELECT COUNT(*) FROM note_sync_journal)
+WHEN NEW.seq<>(SELECT COUNT(*) FROM note_sync_journal WHERE area_id=NEW.area_id)
 BEGIN SELECT RAISE(ABORT, 'noncontiguous note journal sequence'); END;
 `;
 
@@ -74,7 +75,8 @@ export type TargetNoteJournalAppend = { ok: true; seq: number } | Denied;
 
 /**
  * A trusted future note writer MUST call this in the SAME BEGIN IMMEDIATE
- * transaction as the edit/tombstone and its audit. Derive all journal claims
+ * transaction as the edit/tombstone and its audit. Sequence is per Area: a
+ * global sequence would leak unrelated Area activity through gaps. Derive all journal claims
  * from SQLite, never from a caller-selected Area or client payload.
  */
 export function appendTrustedTargetNoteJournalEvent(
@@ -120,7 +122,7 @@ export function appendTrustedTargetNoteJournalEvent(
 
 /**
  * Internal ACL-scoped event paging. No first-page HTTP API is provided.
- * The response reveals no global head or unrelated Area activity.
+ * All positions are Area-local; no global head or unrelated Area activity.
  * A policy/generation mismatch at ANY returned event forces rebootstrap;
  * never retroactively disclose events recorded before a membership change.
  * With no approved pruning, any missing seq is corruption, not a deletion.
