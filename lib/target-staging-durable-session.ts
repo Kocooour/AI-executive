@@ -411,6 +411,9 @@ export type TargetNoteReadLiveGuard = {
   noteRevision: number;
   parentRevision: number | null;
 };
+export type TargetNoteSyncLiveGuard = {
+  areaId: string; epoch: number; contentRevision: number; head: number;
+};
 const validNoteGuardId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.trim() === value &&
   value !== "." && value !== ".." && Buffer.byteLength(value, "utf8") <= 512 &&
@@ -424,6 +427,7 @@ export function verifyTargetStagingReadLive(
   projectGuard?: TargetProjectReadLiveGuard,
   projectIndexGuard?: TargetProjectIndexLiveGuard,
   noteGuard?: TargetNoteReadLiveGuard,
+  noteSyncGuard?: TargetNoteSyncLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -451,6 +455,13 @@ export function verifyTargetStagingReadLive(
       observed.areas.length !== 1 || observed.areas[0]?.areaId !== noteGuard.areaId)) {
     return unavailable;
   }
+  if (noteSyncGuard && (observed.areas.length !== 1 ||
+      observed.areas[0]?.areaId !== noteSyncGuard.areaId ||
+      !validNoteGuardId(noteSyncGuard.areaId) ||
+      !Number.isSafeInteger(noteSyncGuard.epoch) || noteSyncGuard.epoch < 0 ||
+      !Number.isSafeInteger(noteSyncGuard.contentRevision) || noteSyncGuard.contentRevision < 0 ||
+      !Number.isSafeInteger(noteSyncGuard.head) || noteSyncGuard.head < 0 ||
+      noteSyncGuard.head > noteSyncGuard.contentRevision)) return unavailable;
   if ("tokenHash" in subject && !isTargetStagingSessionTokenHash(subject.tokenHash)) {
     return { ok: false, reason: "invalid", code: "session_revoked" };
   }
@@ -468,6 +479,17 @@ export function verifyTargetStagingReadLive(
     }
     // The snapshot must have been read for this very actor.
     if (actorUserId !== observed.actorUserId) return unavailable;
+    if (noteSyncGuard) {
+      const row = db.prepare(`SELECT i.revocation_epoch AS epoch,
+        a.note_sync_revision AS contentRevision,
+        COALESCE((SELECT MAX(j.seq) FROM note_change_journal j WHERE j.area_id=a.id),0) AS head
+        FROM identities i JOIN areas a ON a.id=? WHERE i.id=?`)
+        .get(noteSyncGuard.areaId, actorUserId) as
+        { epoch: number; contentRevision: number; head: number } | undefined;
+      if (!row || row.epoch !== noteSyncGuard.epoch ||
+          row.contentRevision !== noteSyncGuard.contentRevision || row.head !== noteSyncGuard.head)
+        return { ok: false, reason: "stale" };
+    }
     for (const area of observed.areas) {
       if (!area || typeof area.areaId !== "string" || !Number.isSafeInteger(area.policyRevision)) {
         return unavailable;

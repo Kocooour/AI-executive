@@ -32,12 +32,14 @@ import {
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
   readPreflightedAuthorizedTargetNote,
+  readPreflightedAuthorizedNoteSync,
 } from "./target-task-staging-reader";
 import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, TargetPreflightedSharedTaskDetail,
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetAuthorizedNote } from "./target-note-access";
+import type { PreflightedNoteSyncResult } from "./target-task-staging-reader";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
@@ -369,6 +371,18 @@ export class TargetStagingSessionAuthority {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedAuthorizedTargetNote(this.#store, credential, noteId) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  readAuthorizedNoteSync(actorUserId: string,
+    request: { areaId: string; limit: number; cursor?: string; secret: string },
+  ): PreflightedNoteSyncResult | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedAuthorizedNoteSync(this.#store, credential, request) : null;
     } catch {
       return null;
     }

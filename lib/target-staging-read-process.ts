@@ -14,6 +14,8 @@ import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { FEED_PAGE_LIMIT } from "./target-change-feed-read-model";
+import { NOTE_SYNC_CURSOR_LENGTH } from "./target-note-sync-cursor";
+import type { TargetNoteSyncPage } from "./target-note-sync-read-model";
 import type { FeedItem, TargetChangeFeedPage } from "./target-change-feed-read-model";
 import { validFeedClaims, validFeedPosition } from "./target-staging-feed-cursor";
 import type { FeedClaims, FeedPosition } from "./target-staging-feed-cursor";
@@ -33,6 +35,7 @@ export interface StagingPersonalReadConfig {
    * ownerUserId. The raw token never reaches a child process.
    */
   sessionTokenHash?: string;
+  noteSyncSecret?: string;
 }
 
 /** Only the production-owned instance is used by HTTP handlers. Injection is for lifecycle tests. */
@@ -59,6 +62,8 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
         AI_EXECUTIVE_TARGET_STAGING_SESSION_HASH: config.sessionTokenHash || "",
+        ...(config.noteSyncSecret ?
+          { AI_EXECUTIVE_TARGET_STAGING_NOTE_SYNC_SECRET: config.noteSyncSecret } : {}),
       };
       return await new Promise<unknown | null>(resolve => {
         let child: ReturnType<typeof spawn>;
@@ -114,6 +119,84 @@ export function createStagingReadRunner(
 }
 
 const runChild = createStagingReadRunner();
+
+export type StagingNoteSyncResult =
+  | { ok: true; page: TargetNoteSyncPage; epoch: number;
+      stamp: { areaId: string; contentRevision: number; head: number } }
+  | { ok: false; reason: "inaccessible" | "resync_required" | "unavailable" };
+const noteSyncId = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.trim() === value &&
+  value !== "." && value !== ".." && value.isWellFormed() &&
+  Buffer.byteLength(value, "utf8") <= 512 && !/[\u0000-\u001f\u007f]/u.test(value);
+const noteSyncInt = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const exact = (value: Record<string, unknown>, keys: string): boolean =>
+  Object.keys(value).sort().join(",") === keys;
+
+export function parseStagingNoteSyncResult(value: unknown, areaId: string, limit: number): StagingNoteSyncResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  if (data.ok === false) return exact(data, "ok,reason") &&
+    (data.reason === "inaccessible" || data.reason === "resync_required" || data.reason === "unavailable")
+    ? { ok: false, reason: data.reason } : null;
+  if (data.ok !== true || !exact(data, "epoch,ok,page,stamp") || !noteSyncInt(data.epoch) ||
+      !data.stamp || typeof data.stamp !== "object" || Array.isArray(data.stamp) ||
+      !data.page || typeof data.page !== "object" || Array.isArray(data.page)) return null;
+  const stamp = data.stamp as Record<string, unknown>;
+  const page = data.page as Record<string, unknown>;
+  if (!exact(stamp, "areaId,contentRevision,head") || stamp.areaId !== areaId ||
+      !noteSyncInt(stamp.contentRevision) || !noteSyncInt(stamp.head) || stamp.head > stamp.contentRevision ||
+      !exact(page, "changes,cursor,entries,linearization,more,phase") ||
+      (page.phase !== "bootstrap" && page.phase !== "changes") ||
+      !Array.isArray(page.entries) || !Array.isArray(page.changes) ||
+      page.entries.length > limit || page.changes.length > limit ||
+      (page.phase === "bootstrap" ? page.changes.length !== 0 : page.entries.length !== 0) ||
+      typeof page.more !== "boolean" || typeof page.cursor !== "string" ||
+      page.cursor.length !== NOTE_SYNC_CURSOR_LENGTH || !/^[A-Za-z0-9_-]+$/.test(page.cursor)) return null;
+  const entries: TargetNoteSyncPage["entries"] = [];
+  for (const input of page.entries) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    const row = input as Record<string, unknown>;
+    if (!exact(row, "id,parentRevision,projectId,revision") || !noteSyncId(row.id) ||
+        !noteSyncInt(row.revision) || (row.projectId !== null && !noteSyncId(row.projectId)) ||
+        (row.projectId === null ? row.parentRevision !== null : !noteSyncInt(row.parentRevision))) return null;
+    entries.push({ id: row.id, revision: row.revision,
+      projectId: row.projectId as string | null, parentRevision: row.parentRevision as number | null });
+  }
+  if (entries.some((entry, i) => i > 0 &&
+      Buffer.compare(Buffer.from(entries[i - 1].id), Buffer.from(entry.id)) >= 0)) return null;
+  const changes: TargetNoteSyncPage["changes"] = [];
+  for (const input of page.changes) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+    const row = input as Record<string, unknown>;
+    if (!exact(row, "kind,noteId,projectId,revision,seq") ||
+        (row.kind !== "edit" && row.kind !== "delete") || !noteSyncId(row.noteId) ||
+        (row.projectId !== null && !noteSyncId(row.projectId)) ||
+        !noteSyncInt(row.revision) || row.revision < 1 ||
+        !noteSyncInt(row.seq) || row.seq < 1 || row.seq > stamp.head ||
+        (changes.length > 0 && row.seq !== changes[changes.length - 1].seq + 1)) return null;
+    changes.push({ seq: row.seq, kind: row.kind, noteId: row.noteId,
+      projectId: row.projectId as string | null, revision: row.revision });
+  }
+  if (page.more && (page.phase === "bootstrap" ? entries.length : changes.length) !== limit)
+    return null;
+  const linearization = parseLinearization(page.linearization, new Map());
+  if (!linearization || linearization.areas.length !== 1 || linearization.areas[0]?.areaId !== areaId ||
+      (linearization.areas[0]?.areaKind !== "private" && linearization.areas[0]?.areaKind !== "shared")) return null;
+  return { ok: true, epoch: data.epoch, stamp: { areaId,
+    contentRevision: stamp.contentRevision, head: stamp.head },
+    page: { phase: page.phase, entries, changes, more: page.more,
+      cursor: page.cursor, linearization } };
+}
+
+export async function readStagingNoteSyncInChild(config: StagingPersonalReadConfig,
+  areaId: string, limit: number, cursor?: string): Promise<StagingNoteSyncResult | null> {
+  const payload = await runChild(config, "target-staging-note-sync-child.mjs",
+    [areaId, String(limit), cursor ?? "-"]);
+  const result = parseStagingNoteSyncResult(payload, areaId, limit);
+  if (payload !== null && !result) logStagingFailure("note_sync", "invalid_child_dto");
+  return result;
+}
 
 /** The child is trusted code, but its serialized output is still an HTTP data boundary. */
 export function parseStagingPersonalPage(value: unknown): TargetStagingPersonalOffsetPage | null {
