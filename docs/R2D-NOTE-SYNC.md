@@ -113,8 +113,9 @@ in the next schema/writer PR.
   their already authenticated, pinned `BEGIN IMMEDIATE` transaction together
   with note mutation, receipt and audit (and they must rollback if it fails).
   No direct client-controlled Area, policy, project or generation is accepted.
-- The synthetic schema enforces append-only rows, dense sequence, unique
-  note/revision pairs and a conservative 8192-event cap. No pruning/retention
+- The synthetic schema enforces append-only rows, dense **Area-local**
+  sequences (no sequence gaps from other Areas), unique note/revision pairs
+  and a conservative 8192-event global cap. No pruning/retention
   mechanism is enabled; journal exhaustion fails closed until a separately
   reviewed compaction/floor protocol exists.
 - Internal pages are bounded to 100 Area-scoped, currently ACL-authorized
