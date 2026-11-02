@@ -198,6 +198,21 @@ test("scope must be valid and comes from trusted caller, never the feed response
   for (const candidate of [
     scope(""), scope("alice", ".."), scope("alice", "line" + String.fromCharCode(10)),
     scope("alice", "x", "not-a-uuid"), null,
+    { ...scope(), userId: undefined },
+    { ...scope(), userId: null },
+    { ...scope(), userId: 123 },
+    { ...scope(), userId: false },
+    { ...scope(), userId: {} },
+    { areaId: "personal", restoreGeneration: scope().restoreGeneration },
   ]) assert.throws(() => client.activate(candidate), TypeError);
   assert.equal(client.currentScope(), null);
+
+  // Runtime validation must also reject malformed identity after valid activation,
+  // without clearing existing trusted metadata or changing the selected scope.
+  client.activate(scope());
+  const trusted = client.currentScope();
+  for (const invalid of [undefined, null, 123, false, {}]) {
+    assert.throws(() => client.activate({ ...scope(), userId: invalid }), TypeError);
+    assert.deepEqual(client.currentScope(), trusted);
+  }
 });
