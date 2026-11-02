@@ -66,7 +66,6 @@ export type TargetNoteJournalPage = {
   events: TargetNoteJournalEvent[];
   nextSeq: number;
   hasMore: boolean;
-  headSeq: number;
   policyRevision: number;
   restoreGeneration: string;
 };
@@ -118,6 +117,7 @@ export function appendTrustedTargetNoteJournalEvent(
 
 /**
  * Internal ACL-scoped event paging. No first-page HTTP API is provided.
+ * The response reveals no global head or unrelated Area activity.
  * A policy/generation mismatch at ANY returned event forces rebootstrap;
  * never retroactively disclose events recorded before a membership change.
  * With no approved pruning, any missing seq is corruption, not a deletion.
@@ -183,8 +183,8 @@ export function readAuthorizedTargetNoteJournalPage(
       events: items.map(({ seq, noteId, areaId, projectId, op, revision }) => ({
         seq, noteId, areaId, projectId, op: op as TargetNoteJournalOp, revision,
       })),
-      nextSeq: hasMore ? items[items.length - 1].seq : count.head,
-      hasMore, headSeq: count.head,
+      nextSeq: items.length ? items[items.length - 1].seq : request.afterSeq,
+      hasMore,
       policyRevision: area.policyRevision,
       restoreGeneration: meta.value.toLowerCase(),
     };
