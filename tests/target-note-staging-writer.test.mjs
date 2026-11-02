@@ -297,7 +297,7 @@ test("durable note deletion session is tied to actor and blocks revoked credenti
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
   const hash = hashTargetStagingSessionToken(session.sessionToken);
   assert.deepEqual(authority.deleteNote(alice.sessionToken, own, hash), { ok: true });
-  assert.equal(revokeDurableTargetStagingSession(store, session.sessionToken).ok, true);
+  assert.equal(revokeDurableTargetStagingSession(store, session.sessionId).ok, true);
   assert.deepEqual(authority.deleteNote(alice.sessionToken, own, hash), refused("session_revoked"));
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
 });
