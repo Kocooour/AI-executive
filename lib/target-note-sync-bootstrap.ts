@@ -67,9 +67,11 @@ export function readAuthorizedTargetNoteBootstrapPage(
   request: { actorUserId: string; areaId: string; afterId: string | null;
     limit: number; expectedSnapshotRevision?: string },
 ): TargetNoteBootstrapPage | null {
-  if (!request || !ACTOR.test(request.actorUserId) || !validId(request.areaId) ||
+  if (!request || typeof request.actorUserId !== "string" ||
+      !ACTOR.test(request.actorUserId) || !validId(request.areaId) ||
       (request.afterId !== null && (!validId(request.afterId) ||
-        !REVISION.test(request.expectedSnapshotRevision ?? ""))) ||
+        typeof request.expectedSnapshotRevision !== "string" ||
+        !REVISION.test(request.expectedSnapshotRevision))) ||
       (request.afterId === null && request.expectedSnapshotRevision !== undefined) ||
       !Number.isInteger(request.limit) || request.limit < 1 ||
       request.limit > NOTE_BOOTSTRAP_PAGE_LIMIT) return null;
