@@ -70,7 +70,7 @@ test("rolled-back note edit and audit never leave a ghost journal event", () => 
     db.exec("ROLLBACK");
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal").get().n, 0);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 0);
-    assert.deepEqual(db.prepare("SELECT body,revision FROM notes WHERE id='one'").get(),
+    assert.deepEqual({ ...db.prepare("SELECT body,revision FROM notes WHERE id='one'").get() },
       { body:"Top secret", revision:0 });
   } finally { db.close(); }
 });
