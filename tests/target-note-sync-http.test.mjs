@@ -193,8 +193,8 @@ test("network failures and 503 preserve state for bounded caller retry", async (
   applied(await client.pull());
 });
 
-test("scope must be valid and comes from trusted caller, never the feed response", () => {
-  const { client } = make();
+test("scope must be valid and comes from trusted caller, never the feed response", async () => {
+  const { client } = make(json(boot([note("kept")])));
   for (const candidate of [
     scope(""), scope("alice", ".."), scope("alice", "line" + String.fromCharCode(10)),
     scope("alice", "x", "not-a-uuid"), null,
@@ -210,9 +210,12 @@ test("scope must be valid and comes from trusted caller, never the feed response
   // Runtime validation must also reject malformed identity after valid activation,
   // without clearing existing trusted metadata or changing the selected scope.
   client.activate(scope());
+  applied(await client.pull());
   const trusted = client.currentScope();
+  const visible = client.read();
   for (const invalid of [undefined, null, 123, false, {}]) {
     assert.throws(() => client.activate({ ...scope(), userId: invalid }), TypeError);
     assert.deepEqual(client.currentScope(), trusted);
+    assert.deepEqual(client.read(), visible);
   }
 });
