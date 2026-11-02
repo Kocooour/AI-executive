@@ -100,6 +100,13 @@ test("signed write session edits notes; audit and receipt contain no note conten
   assert.ok(!serialized.includes("Updated child content"));
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
     .get(TARGET_STAGING_NOTE_RECEIPT_PREFIX + "%").n, 2);
+  const changes = db.prepare("SELECT seq,kind,note_id,area_id,project_id,revision FROM note_change_journal ORDER BY seq").all();
+  assert.deepEqual(changes.map(x => [x.seq,x.kind,x.note_id,x.revision]), [
+    [1,"edit","own",1], [2,"edit","child",1],
+  ]);
+  assert.equal(changes[1].area_id,"team-area");
+  assert.equal(changes[1].project_id,"project");
+  assert.equal(JSON.stringify(changes).includes("Highly confidential body"),false);
 });
 
 test("idempotent replay survives note revision changes; changed payload conflicts", () => {
@@ -117,6 +124,8 @@ test("idempotent replay survives note revision changes; changed payload conflict
   assert.deepEqual(authority.updateNote(bob.sessionToken, { ...first, body: "Y" }),
     refused("idempotency_conflict"));
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal").get().n, 2,
+    "idempotent replay must not append a new event");
   assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 2);
   assert.equal(db.prepare("SELECT body FROM notes WHERE id='child'").get().body, "Z");
   const key = targetNoteEditReceiptKey("bob", "child", first.commandId);
