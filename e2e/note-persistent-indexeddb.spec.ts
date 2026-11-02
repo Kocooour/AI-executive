@@ -103,3 +103,76 @@ test("real IndexedDB isolation wipes prior actor on replacement and on denied HT
   expect(result.denied).toEqual({ kind: "locked" });
   expect(result.gone).toEqual([]);
 });
+
+
+test("real IndexedDB never exposes a newer manifest before the second transaction commits", async ({ page }) => {
+  await harness(page);
+  const result = await page.evaluate(async () => {
+    const { IndexedDbTargetSyncStorage: Storage,
+      createStagingNotePersistentClient: create, noteMetadataNamespace } =
+      (globalThis as any).__noteClient;
+    const db = "lumi-note-test-" + crypto.randomUUID();
+    const scope = { userId: "alice", areaId: "A", restoreGeneration: "123e4567-e89b-42d3-a456-426614174000" };
+    const firstNote = { id: "one", revision: 1, projectId: null, parentRevision: null };
+    const C = "A".repeat(4135), D = "B".repeat(4135);
+    const base = new Storage(db);
+    let armed = false;
+    let unblock: () => void = () => {};
+    const gate = new Promise<void>(resolve => { unblock = resolve; });
+    let signal: () => void = () => {};
+    const reached = new Promise<void>(resolve => { signal = resolve; });
+    const storage = {
+      listNamespaces: () => base.listNamespaces(),
+      deleteNamespaces: (names: string[]) => base.deleteNamespaces(names),
+      openNamespace: async (name: string) => {
+        const handle = await base.openNamespace(name);
+        return {
+          name: handle.name,
+          get: (key: string) => handle.get(key),
+          list: (prefix: string) => handle.list(prefix),
+          transaction: async (ops: any[]) => {
+            if (armed) {
+              armed = false;
+              signal();
+              await gate;
+            }
+            return handle.transaction(ops);
+          },
+        };
+      },
+    };
+    let calls = 0;
+    const client = create({ storage, transport: async () => {
+      calls++;
+      return calls === 1
+        ? Response.json({ phase: "bootstrap", entries: [firstNote],
+            changes: [], more: false, cursor: C })
+        : Response.json({ phase: "changes", entries: [],
+            changes: [{ kind: "edit", noteId: "one", projectId: null, revision: 2 }],
+            more: false, cursor: D });
+    } });
+    await client.activate(scope);
+    await client.pull();
+    armed = true;
+    const pending = client.pull();
+    await reached;
+    const before = client.read();
+    const handle = await new Storage(db).openNamespace(noteMetadataNamespace(scope));
+    const savedBefore = await handle.get("checkpoint");
+    unblock();
+    const afterPull = await pending;
+    const after = client.read();
+    const savedAfter = await handle.get("checkpoint");
+    await client.clear();
+    return { before, cursorBefore: savedBefore.state.cursor,
+      savedBefore: savedBefore.state.visible, afterPull, after,
+      cursorAfter: savedAfter.state.cursor, savedAfter: savedAfter.state.visible };
+  });
+  expect(result.before).toEqual([{ id: "one", revision: 1, projectId: null, parentRevision: null }]);
+  expect(result.savedBefore).toEqual(result.before);
+  expect(result.cursorBefore).toBe("A".repeat(4135));
+  expect(result.afterPull.kind).toBe("applied");
+  expect(result.after).toEqual([{ id: "one", revision: 2, projectId: null, parentRevision: null }]);
+  expect(result.savedAfter).toEqual(result.after);
+  expect(result.cursorAfter).toBe("B".repeat(4135));
+});
