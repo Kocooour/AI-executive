@@ -33,7 +33,7 @@ process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "true";
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
-const { GET } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
+const { GET, DELETE: DELETE_NOTE } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
 const { GET: EDIT_PREVIEW, PATCH: EDIT } = await import("../app/api/target-staging/notes/[noteId]/edit/route.ts");
 const { POST: EDIT_STATUS } = await import("../app/api/target-staging/notes/[noteId]/edit/status/route.ts");
 const { readStagingAuthorizedNoteInChild, parseStagingNoteDetail } =
@@ -501,5 +501,110 @@ test("note status rejects malformed, legacy, wrong-origin or disabled requests w
   const db = new DatabaseSync(fx.stage.databasePath);
   assert.equal(db.prepare("SELECT revision FROM notes WHERE id='alice-private'").get().revision, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM note_edit_audit").get().n, 0);
+  db.close();
+});
+
+
+function deleteNote(noteId, cookie, command, options = {}) {
+  return DELETE_NOTE(new Request("http://localhost:3001/api/target-staging/notes/" +
+    encodeURIComponent(noteId) + (options.query || ""), {
+    method: "DELETE",
+    headers: {
+      "content-type": "application/json",
+      ...(options.protocol === null ? {} : { "x-lumi-target-protocol": options.protocol || "1" }),
+      ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
+      ...(cookie ? { cookie } : {}),
+      "x-forwarded-for": "10.9.0.19",
+    },
+    body: options.raw === undefined ? JSON.stringify(command) : options.raw,
+  }), editContext(noteId));
+}
+const deleteCommand = (preview) => ({ ...preview, commandId: randomUUID() });
+
+test("note HTTP DELETE permanently tombstones with exact actor replay and one audit", async () => {
+  const fx = fixture(), alice = ownerCookie(), bob = login(fx, "bob");
+  const command = deleteCommand(await authorizedEditPreview("alice-private", alice));
+  const first = await deleteNote("alice-private", alice, command);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await first.json(), { ok: true });
+  assert.deepEqual(await (await deleteNote("alice-private", alice, command)).json(),
+    { ok: true, replayed: true });
+  assert.deepEqual(await denied(get("alice-private", alice), 404), { error: "Not found" });
+  assert.deepEqual(await denied(deleteNote("alice-private", bob, command), 404),
+    { error: "Not found" });
+  assert.deepEqual(await denied(deleteNote("alice-private", alice,
+    { ...command, expectedRevision: "a".repeat(64) }), 409), { error: "Revision conflict" });
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM notes WHERE id='alice-private'").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit WHERE note_id='alice-private'").get().n, 1);
+  const tomb = db.prepare("SELECT area_id,revision FROM note_tombstones WHERE id='alice-private'").get();
+  assert.equal(tomb.area_id, fx.stage.unassignedAreaId);
+  assert.equal(tomb.revision, 1);
+  assert.throws(() => db.prepare(
+    "INSERT INTO notes(id,area_id,title,body) VALUES ('alice-private',?,'Resurrect','Secret')"
+  ).run(fx.stage.unassignedAreaId));
+  db.close();
+});
+
+test("note HTTP DELETE enforces inherited Area edit role, CAS, parent ABA and revocation", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob"), carol = login(fx, "carol"), dave = login(fx, "dave");
+  const command = deleteCommand(await authorizedEditPreview("child", bob));
+  for (const cookie of [carol, dave]) {
+    assert.deepEqual(await denied(deleteNote("child", cookie, command), 404),
+      { error: "Not found" });
+  }
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.prepare("UPDATE projects SET title='Changed' WHERE id='team-project'").run();
+  db.prepare("UPDATE projects SET title='Shared project' WHERE id='team-project'").run();
+  assert.equal((await deleteNote("child", bob, command)).status, 409, "parent ABA must fail CAS");
+  const fresh = deleteCommand(await authorizedEditPreview("child", bob));
+  assert.deepEqual(await (await deleteNote("child", bob, fresh)).json(), { ok: true });
+  assert.deepEqual(await (await deleteNote("child", bob, fresh)).json(),
+    { ok: true, replayed: true });
+  db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(await denied(deleteNote("child", bob, fresh), 404), { error: "Not found" });
+  db.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, tokenHash);
+  assert.equal(live.ok, true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  assert.equal((await denied(deleteNote("child", bob, fresh), 401)).code, "session_revoked");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit WHERE note_id='child'").get().n, 1);
+  assert.equal(db.prepare("SELECT project_id FROM note_tombstones WHERE id='child'").get().project_id,
+    "team-project");
+  db.close();
+});
+
+test("note HTTP DELETE rejects malformed/legacy/cross-origin/disabled requests without mutation", async () => {
+  const fx = fixture(), alice = ownerCookie();
+  const command = deleteCommand(await authorizedEditPreview("alice-private", alice));
+  for (const options of [{ origin: null }, { origin: "https://other.test" }])
+    assert.equal((await deleteNote("alice-private", alice, command, options)).status, 403);
+  assert.equal((await deleteNote("alice-private", alice, command, { protocol: null })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, { entities: [] })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, { ...command, actorUserId: "alice" })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, { ...command, noteId: "other" })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, command, { query: "?actor=bob" })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, command, {
+    raw: Buffer.alloc(16 * 1024 + 1, 0x20),
+  })).status, 413);
+  assert.deepEqual(await denied(deleteNote("absent", alice, command), 404), { error: "Not found" });
+  assert.deepEqual(await denied(deleteNote("bob-private", alice, command), 404), { error: "Not found" });
+  assert.equal((await deleteNote("alice-private", alice, { ...command, restoreGeneration: randomUUID() })).status, 409);
+  assert.equal((await deleteNote("alice-private", alice, { ...command, writeAreaId: "team-area" })).status, 409);
+  assert.equal((await deleteNote("alice-private", alice, { ...command, writeAreaId: "private-bob" })).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "false";
+  assert.equal((await deleteNote("alice-private", alice, command)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = randomUUID();
+  assert.deepEqual(await denied(deleteNote("alice-private", alice, command), 503),
+    { error: "Staging unavailable" });
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = fx.stage.restoreGeneration;
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM notes WHERE id='alice-private'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_tombstones").get().n, 0);
   db.close();
 });

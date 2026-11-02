@@ -203,3 +203,13 @@ export async function writeStagingNoteInChild(
   const value = await run(config, "target-staging-note-write-child.mjs", JSON.stringify(request));
   return parseWrite(value);
 }
+
+
+/** R2d.2c.2f.3: bounded HTTP note deletion worker, no note contents in output. */
+export async function deleteStagingNoteInChild(
+  config: StagingPersonalReadConfig,
+  request: import("./target-note-delete-writer").TargetStagingNoteDeleteRequest,
+): Promise<DeleteWrite | null> {
+  const value = await run(config, "target-staging-note-delete-child.mjs", JSON.stringify(request));
+  return parseDeleteWrite(value);
+}
