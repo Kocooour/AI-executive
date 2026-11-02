@@ -157,11 +157,13 @@ export function decodeNoteSyncCheckpoint(value: unknown): NoteSyncPageState | nu
       !Array.isArray(value.visible) || !Array.isArray(value.pending) ||
       value.visible.length > MAX_AREA_NOTES || value.pending.length > MAX_AREA_NOTES ||
       !value.visible.every(entry) || !value.pending.every(entry)) return null;
+  // Narrow this untrusted disk field once for both phases and the typed return.
+  if (value.cursor !== null && !validCursor(value.cursor)) return null;
   if (value.phase === "bootstrap") {
     if (value.visible.length !== 0 ||
-        (value.cursor === null ? value.pending.length !== 0 : !validCursor(value.cursor) || value.pending.length === 0))
+        (value.cursor === null ? value.pending.length !== 0 : value.pending.length === 0))
       return null;
-  } else if (!validCursor(value.cursor) || value.pending.length !== 0) return null;
+  } else if (value.cursor === null || value.pending.length !== 0) return null;
   const selected = value.phase === "bootstrap" ? value.pending : value.visible;
   if (new Set(selected.map((v: NoteMetadata) => v.id)).size !== selected.length) return null;
   return {
