@@ -126,6 +126,11 @@ test("ACL revocation and role/policy changes are reflected at each page, fail cl
     db.prepare("DELETE FROM area_members WHERE area_id='team-area' AND user_id='carol'").run();
     assert.equal(page(db, "carol", "team-area"), null);
     assert.ok(page(db, "bob", "team-area"));
+    db.prepare("UPDATE areas SET owner_user_id=NULL WHERE id='team-area'").run();
+    db.prepare("UPDATE workspaces SET owner_user_id=NULL WHERE id='team-space'").run();
+    assert.equal(page(db, "bob", "team-area"), null);
+    db.prepare("UPDATE areas SET owner_user_id='alice' WHERE id='team-area'").run();
+    db.prepare("UPDATE workspaces SET owner_user_id='alice' WHERE id='team-space'").run();
     db.prepare("UPDATE workspaces SET kind='personal' WHERE id='team-space'").run();
     assert.equal(page(db, "bob", "team-area"), null);
   } finally { db.close(); }
