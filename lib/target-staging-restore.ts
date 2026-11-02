@@ -63,6 +63,8 @@ export type TargetStagingRestoreFailure =
   | "backup_provenance"
   /** A restore already happened after the backup: use a newer backup. */
   | "backup_predates_restore"
+  /** A confirmed note deletion after the backup cannot be replayed without content; refuse restore. */
+  | "backup_predates_note_delete"
   /** A shared Area would have no admin: decide with --grant-admin. `blockedAreas` names them. */
   | "last_admin"
   /** An operator grant names an unknown Area or identity. */
@@ -238,6 +240,14 @@ function restoreBody(
   if (facts.some(fact => fact.k === "restore" && fact.n > A && fact.n <= H) ||
       lower(context.previousGeneration) !== lower(context.backupGeneration)) {
     throw new ReplayAbort("backup_predates_restore");
+  }
+  // Note deletions currently have a content-free journal intent (no note ID).
+  // Unlike membership/session revocations, they cannot safely be replayed
+  // from this journal. A backup older than a confirmed deletion is therefore
+  // NOT restorable; accepting it would resurrect a permanently tombstoned ID.
+  // This applies even if the note was deleted and later unrelated writes ran.
+  if (facts.some(fact => fact.k === "note_delete" && fact.n > A && fact.n <= H)) {
+    throw new ReplayAbort("backup_predates_note_delete");
   }
 
   // ---- facts of the whole journal --------------------------------------------------------------
