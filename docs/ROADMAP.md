@@ -71,7 +71,7 @@ R2c.1–R2c.5b je implementováno a sloučeno do `main` (poslední [#173](https:
 - **R2d.2c.2f.2–.4 (sloučeno #186–#188):** izolovaný autorizovaný transakční delete + audit/receipt/journal, opt-in HTTP DELETE a actor-bound read-only command-status. Žádný note sync ani produkční změna.
 - **R2d.2c.2g.1 (sloučeno, #189, staging-only):** interní ACL-scoped obsahově prázdný stránkovaný manifest poznámek po Oblastech včetně revizí rodičovských projektů a celkového otisku snapshotu, odmítnutí změny mezi stránkami; [kontrakt](R2D-NOTE-SYNC.md). Není to HTTP endpoint, change feed ani aktivovaný klient.
 - **R2d.2c.2g.2a (sloučeno, #190, staging-only):** šifrovaný AES-256-GCM kurzor manifestu i budoucího note-only žurnálu; bez API ani změnových událostí.
-- **R2d.2c.2g.2b.1 (rozpracováno, staging-only):** izolovaný v17 neměnný note-only žurnál, atomické append triggery pro ověřené edit/delete audity, preflight provenience a limit 8192 událostí. Není čitelný přes HTTP ani klienta; starý v16 staging store se nemigruje.
+- **R2d.2c.2g.2b.1 (rozpracováno, staging-only):** izolovaný v17 neměnný kanonický note-only žurnál s hustou Area-local sekvencí (bez globálního klientského pořadí), atomické append triggery pro ověřené edit/delete audity, preflight provenience a limit 8192 událostí. Izolovaný prototyp #192 je supersedován, nevzniká druhá tabulka. Není čitelný přes HTTP ani klienta; starý v16 staging store se nemigruje.
 - **R2d.2c.2g.2b.2+:** historie ACL, retroaktivní přístup, retenční hranice, rebootstrap a create/move; potom bounded live-release HTTP a offline klientská synchronizace.
 - **R2d.3:** serverové rozsahy Home/Today/Inbox/Upcoming/Projects, counts a kompletní Můj plán.
 - **R2d.4:** Search, AI a bezpečné odvozené indexy.
