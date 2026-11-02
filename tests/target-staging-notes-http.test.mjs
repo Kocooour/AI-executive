@@ -36,6 +36,7 @@ const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts")
 const { GET, DELETE: DELETE_NOTE } = await import("../app/api/target-staging/notes/[noteId]/route.ts");
 const { GET: EDIT_PREVIEW, PATCH: EDIT } = await import("../app/api/target-staging/notes/[noteId]/edit/route.ts");
 const { POST: EDIT_STATUS } = await import("../app/api/target-staging/notes/[noteId]/edit/status/route.ts");
+const { POST: DELETE_STATUS } = await import("../app/api/target-staging/notes/[noteId]/delete/status/route.ts");
 const { readStagingAuthorizedNoteInChild, parseStagingNoteDetail } =
   await import("../lib/target-staging-read-process.ts");
 const { verifyStagingNoteBeforeRelease } = await import("../lib/target-staging-http-identity.ts");
@@ -628,5 +629,109 @@ test("revoked durable session cannot delete a live note or leave a tombstone", a
   assert.equal(db.prepare("SELECT COUNT(*) n FROM notes WHERE id='shared'").get().n, 1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM note_tombstones WHERE id='shared'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit").get().n, 0);
+  db.close();
+});
+
+function deleteStatus(noteId, cookie, command, options = {}) {
+  return DELETE_STATUS(new Request("http://localhost:3001/api/target-staging/notes/" +
+    encodeURIComponent(noteId) + "/delete/status" + (options.query || ""), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options.protocol === null ? {} : { "x-lumi-target-protocol": options.protocol || "1" }),
+      ...(options.origin === null ? {} : { origin: options.origin || "http://localhost:3001" }),
+      ...(cookie ? { cookie } : {}),
+      "x-forwarded-for": "10.9.0.20",
+    },
+    body: options.raw === undefined ? JSON.stringify(command) : options.raw,
+  }), editContext(noteId));
+}
+
+test("note delete status is read-only: before, after commit, replay and changed digest", async () => {
+  const fx = fixture(), alice = ownerCookie();
+  const command = deleteCommand(await authorizedEditPreview("alice-private", alice));
+  const before = await deleteStatus("alice-private", alice, command);
+  assert.equal(before.status, 200);
+  assert.deepEqual(await before.json(), { status: "not_recorded" });
+  assert.deepEqual(await (await deleteNote("alice-private", alice, command)).json(), { ok: true });
+  const afterDelete = await deleteStatus("alice-private", alice, command);
+  assert.equal(afterDelete.status, 200);
+  assert.equal(afterDelete.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await afterDelete.json(), { status: "committed" });
+  assert.deepEqual(await (await deleteStatus("alice-private", alice, command)).json(),
+    { status: "committed" });
+  assert.deepEqual(await denied(deleteStatus("alice-private", alice,
+    { ...command, expectedRevision: "b".repeat(64) }), 409), { error: "Revision conflict" });
+  assert.deepEqual(await denied(deleteStatus("alice-private", alice,
+    { ...command, commandId: randomUUID() }), 404), { error: "Not found" });
+  assert.deepEqual(await denied(deleteStatus("absent", alice, command), 404), { error: "Not found" });
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 1);
+  db.close();
+});
+
+test("note delete status is actor scoped and requires live Area role and session", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob"), carol = login(fx, "carol"), dave = login(fx, "dave");
+  const command = deleteCommand(await authorizedEditPreview("child", bob));
+  assert.deepEqual(await (await deleteStatus("child", bob, command)).json(),
+    { status: "not_recorded" });
+  assert.equal((await deleteNote("child", bob, command)).status, 200);
+  assert.deepEqual(await (await deleteStatus("child", bob, command)).json(),
+    { status: "committed" });
+  // Admin can write the same Area, but cannot inspect another actor's receipt.
+  for (const cookie of [ownerCookie(), carol, dave]) {
+    assert.deepEqual(await denied(deleteStatus("child", cookie, command), 404),
+      { error: "Not found" });
+  }
+  assert.deepEqual(await denied(deleteStatus("child", null, command), 401),
+    { error: "Authentication required" });
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(await denied(deleteStatus("child", bob, command), 404),
+    { error: "Not found" });
+  db.prepare("UPDATE area_members SET role='editor' WHERE area_id='team-area' AND user_id='bob'").run();
+  assert.deepEqual(await (await deleteStatus("child", bob, command)).json(),
+    { status: "committed" });
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, tokenHash);
+  assert.equal(live.ok, true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  assert.equal((await denied(deleteStatus("child", bob, command), 401)).code,
+    "session_revoked");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 1);
+  db.close();
+});
+
+test("note delete status fails closed on bad origin, protocol, legacy body, flags and restore", async () => {
+  const fx = fixture(), alice = ownerCookie();
+  const command = deleteCommand(await authorizedEditPreview("alice-private", alice));
+  for (const opts of [{ origin: null }, { origin: "https://other.test" }])
+    assert.equal((await deleteStatus("alice-private", alice, command, opts)).status, 403);
+  assert.equal((await deleteStatus("alice-private", alice, command, { protocol: null })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, { entities: [] })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, { ...command, actorUserId: "alice" })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, { ...command, noteId: "other" })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, command, { query: "?area=team-area" })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, command, { raw: Buffer.alloc(16 * 1024 + 1, 0x20) })).status, 413);
+  assert.equal((await deleteStatus("alice-private", alice, command, { raw: Buffer.from([0xc3, 0x28]) })).status, 400);
+  assert.equal((await deleteStatus("alice-private", alice, command, { raw: "{" })).status, 400);
+  assert.deepEqual(await denied(deleteStatus("alice-private", alice,
+    { ...command, restoreGeneration: randomUUID() }), 409),
+    { error: "Resync required", code: "resync_required" });
+  assert.equal((await deleteStatus("alice-private", alice,
+    { ...command, writeAreaId: "team-area" })).status, 409);
+  assert.equal((await deleteStatus("alice-private", alice,
+    { ...command, writeAreaId: "private-bob" })).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "false";
+  assert.equal((await deleteStatus("alice-private", alice, command)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_WRITE_ENABLED = "true";
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = randomUUID();
+  assert.equal((await deleteStatus("alice-private", alice, command)).status, 503);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION = fx.stage.restoreGeneration;
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_delete_audit").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
   db.close();
 });
