@@ -44,8 +44,16 @@ test("content-free edit journal is monotonic, bounded and ACL scoped", () => {
   const db=fixture();
   try {
     const first=edit(db);
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare("UPDATE notes SET body='Private changed' WHERE id='n-private'").run();
+    assert.deepEqual(append(db,"edit","n-private",NOW),{ok:true,seq:1},
+      "private Area has its own sequence, independent of shared");
+    db.exec("COMMIT");
     const second=edit(db,"Another confidential body");
-    assert.deepEqual([first,second],[1,2]);
+    assert.deepEqual([first,second],[1,2],
+      "interleaved private writes must not leave shared sequence gaps");
+    assert.deepEqual(page(db,"bob","private"),null);
+    assert.deepEqual(page(db,"alice","private")?.events.map(e=>e.seq),[1]);
     const p1=page(db,"bob","shared",0,1);
     assert.ok(p1);
     assert.equal(p1.hasMore,true);
