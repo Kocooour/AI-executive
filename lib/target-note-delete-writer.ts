@@ -1,6 +1,6 @@
 /**
  * R2d.2c.2f.2: staging-only, authenticated deletion of one existing note.
- * No HTTP route, sync or production activation. All state changes are in a
+ * Opt-in HTTP callers may use this internal writer; no sync or production activation. All state changes are in a
  * pinned BEGIN IMMEDIATE transaction with canonical store preflight.
  */
 import { createHash } from "node:crypto";

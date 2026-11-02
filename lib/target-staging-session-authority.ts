@@ -654,7 +654,7 @@ export class TargetStagingSessionAuthority {
   }
 
   /**
-   * Staging-only note delete. No HTTP method exposes this command: callers must
+   * Staging-only note delete. An HTTP DELETE child may invoke it; callers must
    * possess a signed write-audience credential. Durable-session and live Area
    * permissions are checked again inside the pinned SQLite transaction.
    */

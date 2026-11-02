@@ -590,6 +590,12 @@ test("note HTTP DELETE rejects malformed/legacy/cross-origin/disabled requests w
   assert.equal((await deleteNote("alice-private", alice, command, {
     raw: Buffer.alloc(16 * 1024 + 1, 0x20),
   })).status, 413);
+  assert.equal((await deleteNote("alice-private", alice, command, {
+    raw: Buffer.from([0xc3, 0x28]),
+  })).status, 400);
+  assert.equal((await deleteNote("alice-private", alice, command, { raw: "{" })).status, 400);
+  assert.deepEqual(await denied(deleteNote("bad note id ", alice, command), 400),
+    { error: "Invalid request" });
   assert.deepEqual(await denied(deleteNote("absent", alice, command), 404), { error: "Not found" });
   assert.deepEqual(await denied(deleteNote("bob-private", alice, command), 404), { error: "Not found" });
   assert.equal((await deleteNote("alice-private", alice, { ...command, restoreGeneration: randomUUID() })).status, 409);
@@ -606,5 +612,21 @@ test("note HTTP DELETE rejects malformed/legacy/cross-origin/disabled requests w
   assert.equal(db.prepare("SELECT COUNT(*) n FROM notes WHERE id='alice-private'").get().n, 1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM note_tombstones").get().n, 0);
+  db.close();
+});
+
+
+test("revoked durable session cannot delete a live note or leave a tombstone", async () => {
+  const fx = fixture(), bob = login(fx, "bob");
+  const command = deleteCommand(await authorizedEditPreview("shared", bob));
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, tokenHash);
+  assert.equal(live.ok, true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  assert.equal((await denied(deleteNote("shared", bob, command), 401)).code, "session_revoked");
+  const db = new DatabaseSync(fx.stage.databasePath);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM notes WHERE id='shared'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_tombstones WHERE id='shared'").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM note_delete_audit").get().n, 0);
   db.close();
 });
