@@ -18,6 +18,7 @@ import type { TargetReadAreaAccess, TargetReadLinearization } from "./target-tas
 const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const MAX_NOTE_ID_BYTES = 512;
 const MAX_NOTES = 4096;
+const REVISION = /^[a-f0-9]{64}$/;
 export const NOTE_BOOTSTRAP_PAGE_LIMIT = 100;
 
 function validId(value: unknown): value is string {
@@ -63,10 +64,13 @@ type NoteRow = NoteBootstrapEntry & { directAreaId: string | null; projectAreaId
  */
 export function readAuthorizedTargetNoteBootstrapPage(
   db: DatabaseSync,
-  request: { actorUserId: string; areaId: string; afterId: string | null; limit: number },
+  request: { actorUserId: string; areaId: string; afterId: string | null;
+    limit: number; expectedSnapshotRevision?: string },
 ): TargetNoteBootstrapPage | null {
   if (!request || !ACTOR.test(request.actorUserId) || !validId(request.areaId) ||
-      (request.afterId !== null && !validId(request.afterId)) ||
+      (request.afterId !== null && (!validId(request.afterId) ||
+        !REVISION.test(request.expectedSnapshotRevision ?? ""))) ||
+      (request.afterId === null && request.expectedSnapshotRevision !== undefined) ||
       !Number.isInteger(request.limit) || request.limit < 1 ||
       request.limit > NOTE_BOOTSTRAP_PAGE_LIMIT) return null;
   try {
@@ -130,9 +134,12 @@ export function readAuthorizedTargetNoteBootstrapPage(
     }
     const page = entries.slice(0, request.limit);
     const hasMore = entries.length > page.length;
+    const snapshotRevision = digest.digest("hex");
+    if (request.expectedSnapshotRevision !== undefined &&
+        request.expectedSnapshotRevision !== snapshotRevision) return null;
     return {
       entries: page,
-      snapshotRevision: digest.digest("hex"),
+      snapshotRevision,
       hasMore,
       nextAfterId: hasMore ? page[page.length - 1].id : null,
       linearization: {
