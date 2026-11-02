@@ -3,9 +3,13 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { readAuthorizedTargetNoteBootstrapPage as read } from "../lib/target-note-sync-bootstrap.ts";
 
+const GENERATION_A = "00000000-0000-4000-8000-000000000001";
+const GENERATION_B = "00000000-0000-4000-8000-000000000002";
+
 function fixture() {
   const db = new DatabaseSync(":memory:");
   db.exec(`
+    CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE identities(id TEXT PRIMARY KEY);
     CREATE TABLE workspaces(id TEXT PRIMARY KEY, kind TEXT, owner_user_id TEXT);
     CREATE TABLE areas(id TEXT PRIMARY KEY, kind TEXT, workspace_id TEXT,
@@ -17,6 +21,7 @@ function fixture() {
     CREATE TABLE notes(id TEXT PRIMARY KEY, project_id TEXT, area_id TEXT,
       title TEXT, body TEXT, revision INTEGER NOT NULL);
   `);
+  db.prepare("INSERT INTO metadata VALUES (\'restore_generation\',?)").run(GENERATION_A);
   for (const id of ["alice", "bob", "carol", "erin", "outsider"])
     db.prepare("INSERT INTO identities VALUES (?)").run(id);
   for (const [id, kind, owner] of [
@@ -88,6 +93,52 @@ test("bounded keyset pages share one Area snapshot revision and never repeat IDs
     assert.match(first.snapshotRevision, /^[a-f0-9]{64}$/);
     assert.deepEqual(ids(page(db, "bob", "team-area", 1, "z", first.snapshotRevision)), []);
     assert.equal(page(db, "bob", "team-area", 1, first.nextAfterId), null);
+  } finally { db.close(); }
+});
+
+test("a new restore generation invalidates old continuation on identical Area and note data", () => {
+  const beforeRestore = fixture();
+  const afterRestore = fixture();
+  try {
+    const first = page(beforeRestore, "bob", "team-area", 1);
+    const same = page(afterRestore, "bob", "team-area", 1);
+    assert.deepEqual(first.entries, same.entries);
+    assert.equal(first.snapshotRevision, same.snapshotRevision);
+    assert.ok(first.nextAfterId, "two notes must require a second page");
+
+    // Model the new store generation after restore; all Area and note rows
+    // remain byte-for-byte equal, so only restore_generation may alter the digest.
+    afterRestore.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'")
+      .run(GENERATION_B);
+    const restored = page(afterRestore, "bob", "team-area", 1);
+    assert.deepEqual(restored.entries, first.entries);
+    assert.notEqual(restored.snapshotRevision, first.snapshotRevision);
+    assert.equal(page(afterRestore, "bob", "team-area", 1,
+      first.nextAfterId, first.snapshotRevision), null);
+    assert.deepEqual(ids(page(afterRestore, "bob", "team-area", 1,
+      restored.nextAfterId, restored.snapshotRevision)), ["direct"]);
+    assert.equal(page(beforeRestore, "bob", "team-area", 1,
+      first.nextAfterId, first.snapshotRevision)?.entries[0].id, "direct");
+  } finally {
+    beforeRestore.close();
+    afterRestore.close();
+  }
+});
+
+test("missing and malformed canonical restore generations fail closed", () => {
+  const db = fixture();
+  try {
+    for (const invalid of ["", "not-a-uuid", "0".repeat(36),
+      "00000000-0000-0000-0000-000000000000", 123]) {
+      db.prepare("UPDATE metadata SET value=? WHERE key='restore_generation'").run(invalid);
+      assert.equal(page(db, "bob", "team-area"), null);
+    }
+    db.prepare("DELETE FROM metadata WHERE key='restore_generation'").run();
+    assert.equal(page(db, "bob", "team-area"), null);
+    db.prepare("INSERT INTO metadata VALUES ('restore_generation',?)").run(GENERATION_B);
+    assert.ok(page(db, "bob", "team-area"));
+    db.exec("DROP TABLE metadata");
+    assert.equal(page(db, "bob", "team-area"), null);
   } finally { db.close(); }
 });
 
