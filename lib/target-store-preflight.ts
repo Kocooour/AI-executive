@@ -326,7 +326,14 @@ export function inspectIsolatedTargetStore(
             WHERE t.id IS NULL OR t.area_id<>a.area_id
               OR t.project_id IS NOT a.project_id
               OR t.revision<>a.tombstone_revision
-              OR t.deleted_at_ms<>a.committed_at_ms`) !== 0 ||
+              OR t.deleted_at_ms<>a.committed_at_ms
+              OR typeof(a.note_id)<>'text' OR a.note_id=''
+              OR typeof(a.actor_user_id)<>'text'
+              OR typeof(a.policy_revision)<>'integer' OR a.policy_revision<0
+              OR typeof(a.revision_before)<>'integer' OR a.revision_before<0
+              OR typeof(a.tombstone_revision)<>'integer'
+              OR a.tombstone_revision<>a.revision_before+1
+              OR typeof(a.committed_at_ms)<>'integer' OR a.committed_at_ms<=0`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_delete_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX.length,
