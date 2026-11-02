@@ -31,10 +31,11 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // deliberately NOT migrated; recreate a new isolated staging directory.
 // v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
 // monotonic revisions; old staging v12 stores are never migrated.
-// v14 (R2d.2c.2a) adds a content-free, bounded note write audit;
-// no automatic migration from isolated v13 and no production activation.
-export const TARGET_STORE_SCHEMA_VERSION = 14;
-/** Staging-only cap; no note deletion until a complete tombstone/audit protocol exists. */
+// v15 (R2d.2c.2f.1) reserves permanent note tombstones and prevents note ID
+// reuse. Deletion is still NOT exposed by any authenticated command or HTTP API.
+// Isolated v14 stores intentionally fail preflight; never migrate production.
+export const TARGET_STORE_SCHEMA_VERSION = 15;
+/** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
 /**
@@ -55,7 +56,7 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
 /** Actor/note/command-scoped staging note edit confirmations; never note content. */
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
-/** Per-table cap for task_tombstones and project_tombstones; fails closed. */
+/** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
 export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
@@ -560,10 +561,9 @@ BEGIN SELECT RAISE(ABORT, 'a shared Area needs at least one admin'); END;
 
 -- R2d.2b: canonical but NOT activated notes. A note is either standalone in
 -- one Area OR directly attached to a project and inherits its current Area.
--- Typed links/backlinks never confer parentage. No HTTP/sync interface
--- exists for notes; internal updates use a separate pinned writer; deletes
--- are prohibited until an auditable tombstone protocol
--- is implemented. This prevents ID recycling even via raw staging SQL.
+-- Typed links/backlinks never confer parentage. Only an internal trusted
+-- staging transaction can write a matching tombstone followed by DELETE;
+-- there is no authenticated note-delete command, HTTP route or note sync yet.
 CREATE TABLE notes (
   id TEXT PRIMARY KEY CHECK(typeof(id)='text' AND id <> '' AND id = trim(id)
     AND id NOT IN ('.', '..') AND length(CAST(id AS BLOB)) <= 512
@@ -581,17 +581,62 @@ CREATE TABLE notes (
 ) WITHOUT ROWID;
 CREATE INDEX notes_by_area ON notes(area_id);
 CREATE INDEX notes_by_project ON notes(project_id);
+-- R2d.2c.2f.1: content-free, permanent note deletion marker. The project ID
+-- is historical provenance, not a live FK (the parent may later be removed).
+-- An insert is accepted only against the exact live note, effective Area and
+-- next revision. The actual deletion MUST follow in the same trusted transaction;
+-- canonical preflight rejects a tombstone still paired with a live note.
+CREATE TABLE note_tombstones (
+  id TEXT PRIMARY KEY CHECK(typeof(id)='text' AND id<>'' AND id=trim(id)
+    AND id NOT IN ('.','..') AND length(CAST(id AS BLOB))<=512
+    AND instr(id,char(0))=0
+    AND id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  project_id TEXT,
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0 AND revision<9007199254740991),
+  deleted_at_ms INTEGER NOT NULL CHECK(typeof(deleted_at_ms)='integer' AND deleted_at_ms>0)
+) WITHOUT ROWID;
+CREATE TRIGGER note_tombstones_match BEFORE INSERT ON note_tombstones
+WHEN NOT EXISTS (
+  SELECT 1 FROM notes n LEFT JOIN projects p ON p.id=n.project_id
+  WHERE n.id=NEW.id AND NEW.revision=n.revision+1
+    AND NEW.project_id IS n.project_id
+    AND NEW.area_id=COALESCE(n.area_id,p.area_id)
+)
+BEGIN SELECT RAISE(ABORT, 'note tombstone must match live note and next revision'); END;
+CREATE TRIGGER note_tombstones_replace_guard BEFORE INSERT ON note_tombstones
+WHEN EXISTS(SELECT 1 FROM note_tombstones WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT, 'note tombstone replacement is forbidden'); END;
+CREATE TRIGGER note_tombstones_capacity BEFORE INSERT ON note_tombstones
+WHEN (SELECT COUNT(*) FROM note_tombstones)>=${TARGET_STAGING_MAX_TOMBSTONES}
+BEGIN SELECT RAISE(ABORT, 'note tombstone capacity reached'); END;
+CREATE TRIGGER note_tombstones_no_update BEFORE UPDATE ON note_tombstones
+BEGIN SELECT RAISE(ABORT, 'note tombstones are immutable'); END;
+CREATE TRIGGER note_tombstones_no_delete BEFORE DELETE ON note_tombstones
+BEGIN SELECT RAISE(ABORT, 'note tombstones are permanent'); END;
 CREATE TRIGGER note_capacity_guard BEFORE INSERT ON notes
 WHEN (SELECT COUNT(*) FROM notes) >= ${TARGET_STAGING_MAX_NOTES}
 BEGIN SELECT RAISE(ABORT, 'note capacity reached'); END;
 CREATE TRIGGER note_replacement_guard BEFORE INSERT ON notes
 WHEN EXISTS(SELECT 1 FROM notes WHERE id=NEW.id)
+  OR EXISTS(SELECT 1 FROM note_tombstones WHERE id=NEW.id)
 BEGIN SELECT RAISE(ABORT, 'note ID cannot be replaced'); END;
 CREATE TRIGGER note_id_guard BEFORE UPDATE OF id ON notes
 WHEN NEW.id IS NOT OLD.id
 BEGIN SELECT RAISE(ABORT, 'note ID is immutable'); END;
 CREATE TRIGGER note_delete_guard BEFORE DELETE ON notes
-BEGIN SELECT RAISE(ABORT, 'note delete protocol unavailable'); END;
+WHEN NOT EXISTS (
+  SELECT 1 FROM note_tombstones t
+  WHERE t.id=OLD.id AND t.revision=OLD.revision+1
+    AND t.project_id IS OLD.project_id
+    AND t.area_id=COALESCE(OLD.area_id,(SELECT area_id FROM projects WHERE id=OLD.project_id))
+)
+BEGIN SELECT RAISE(ABORT, 'note deletion requires matching tombstone'); END;
+-- A prepared tombstone cannot be followed by another edit/reparenting in the
+-- same transaction: a deletion must refer to the exact original revision.
+CREATE TRIGGER note_tombstone_pending_update BEFORE UPDATE ON notes
+WHEN EXISTS(SELECT 1 FROM note_tombstones WHERE id=OLD.id)
+BEGIN SELECT RAISE(ABORT, 'note with pending tombstone cannot be updated'); END;
 -- Fail on a mixed explicit revision/content change. Content-only updates bump
 -- automatically, direct revision-only increments remain monotonic.
 CREATE TRIGGER note_content_revision_guard BEFORE UPDATE OF title, body, project_id, area_id ON notes
@@ -615,7 +660,8 @@ CREATE TABLE note_edit_audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   receipt_key TEXT NOT NULL UNIQUE,
   actor_user_id TEXT NOT NULL REFERENCES identities(id),
-  note_id TEXT NOT NULL REFERENCES notes(id),
+  -- Edit history must survive deletion; do not FK it to the live notes table.
+  note_id TEXT NOT NULL,
   project_id TEXT,
   area_id TEXT NOT NULL REFERENCES areas(id),
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),

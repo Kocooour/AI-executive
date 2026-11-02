@@ -191,6 +191,26 @@ export function inspectIsolatedTargetStore(
                OR n.revision<0 OR n.revision>=9007199254740991`) !== 0)
         fail("note_invalid");
     } catch { fail("note_invalid"); }
+    // A tombstone cannot coexist with a live note. The marker keeps only
+    // immutable ID/Area/parent/revision/time, not deleted title or body.
+    // Recheck even when SQLite CHECK/FK enforcement was bypassed by a writer.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM note_tombstones") > TARGET_STAGING_MAX_TOMBSTONES ||
+          count(`SELECT COUNT(*) AS n FROM note_tombstones t
+            LEFT JOIN areas a ON a.id=t.area_id
+            LEFT JOIN notes n ON n.id=t.id
+            WHERE n.id IS NOT NULL OR a.id IS NULL
+              OR typeof(t.id)<>'text' OR t.id='' OR t.id<>trim(t.id)
+              OR t.id IN ('.','..') OR length(CAST(t.id AS BLOB))>512
+              OR instr(t.id,char(0))>0
+              OR t.id GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')
+              OR typeof(t.area_id)<>'text'
+              OR (t.project_id IS NOT NULL AND
+                (typeof(t.project_id)<>'text' OR t.project_id='' OR length(CAST(t.project_id AS BLOB))>512))
+              OR typeof(t.revision)<>'integer' OR t.revision<=0 OR t.revision>=9007199254740991
+              OR typeof(t.deleted_at_ms)<>'integer' OR t.deleted_at_ms<=0`) !== 0)
+        fail("tombstone_invalid");
+    } catch { fail("tombstone_invalid"); }
     try {
       const rows = all("SELECT key, value FROM metadata") as { key: unknown; value: unknown }[];
       const meta = new Map(rows.map(row => [row.key, row.value]));
@@ -274,6 +294,15 @@ export function inspectIsolatedTargetStore(
             !sha256Hex.test(row.receipt_key.slice(TARGET_STAGING_NOTE_RECEIPT_PREFIX.length)) ||
             typeof row.expected_revision !== "string" || !sha256Hex.test(row.expected_revision) ||
             !allowedGenerations.has(row.restore_generation) || !meta.has(row.receipt_key)) ||
+          // v15 audit history survives note deletion, but must still refer to
+          // a live note or immutable tombstone. An audit for a future revision
+          // would otherwise be accepted after removing the live-note FK.
+          count(`SELECT COUNT(*) AS n FROM note_edit_audit a
+            LEFT JOIN notes n ON n.id=a.note_id
+            LEFT JOIN note_tombstones t ON t.id=a.note_id
+            WHERE (n.id IS NULL AND t.id IS NULL)
+              OR (n.id IS NOT NULL AND a.revision_after>n.revision)
+              OR (t.id IS NOT NULL AND a.revision_after>=t.revision)`) !== 0 ||
           count(`SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=?
             AND NOT EXISTS(SELECT 1 FROM note_edit_audit a WHERE a.receipt_key=m.key)`,
             TARGET_STAGING_NOTE_RECEIPT_PREFIX.length, TARGET_STAGING_NOTE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");

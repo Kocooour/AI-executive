@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { TARGET_SCHEMA_SQL, TARGET_STORE_SCHEMA_VERSION, bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
+import { TARGET_SCHEMA_SQL, TARGET_STORE_SCHEMA_VERSION, TARGET_STAGING_NOTE_RECEIPT_PREFIX, bootstrapIsolatedTargetStore } from "../lib/target-store-bootstrap.ts";
 import { inspectIsolatedTargetStore } from "../lib/target-store-preflight.ts";
 import { readAuthorizedTargetNote } from "../lib/target-note-access.ts";
 
@@ -31,7 +31,7 @@ const rev = (db, id) => db.prepare("SELECT revision FROM notes WHERE id=?").get(
 test("R2d.2b canonical schema protects private/parent-inherited note reads", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 14);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION, 15);
     assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
     assert.equal(read(db, "bob", "n-private"), null);
     assert.equal(read(db, "bob", "n-shared")?.note.body, "Shared content");
@@ -84,6 +84,79 @@ test("note parent exclusivity, foreign keys, malformed IDs and size limits fail 
   } finally { db.close(); }
 });
 
+test("R2d.2c.2f.1 note tombstones preserve Area/parent and forbid ID reuse", () => {
+  const db = fixture();
+  try {
+    const insert = db.prepare(`INSERT INTO note_tombstones
+      (id,area_id,project_id,revision,deleted_at_ms) VALUES (?,?,?,?,?)`);
+    assert.throws(() => db.prepare("DELETE FROM notes WHERE id='n-private'").run());
+    for (const invalid of [
+      ["n-private", "a-shared", null, 1, Date.now()],
+      ["n-private", "a-private", "p-shared", 1, Date.now()],
+      ["n-private", "a-private", null, 2, Date.now()],
+      ["n-shared", "a-private", "p-shared", 1, Date.now()],
+      ["n-shared", "a-shared", null, 1, Date.now()],
+      ["not-here", "a-private", null, 1, Date.now()],
+    ]) assert.throws(() => insert.run(...invalid), String(invalid));
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      insert.run("n-shared", "a-shared", "p-shared", 1, Date.now());
+      assert.throws(() => db.prepare("UPDATE notes SET body='Changed' WHERE id='n-shared'").run());
+      assert.throws(() => insert.run("n-shared", "a-shared", "p-shared", 1, Date.now()));
+      db.prepare("DELETE FROM notes WHERE id='n-shared'").run();
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    assert.equal(read(db, "alice", "n-shared"), null);
+    assert.equal(read(db, "bob", "n-shared"), null);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notes WHERE id='n-shared'").get().n, 0);
+    assert.deepEqual({ ...db.prepare("SELECT id,area_id,project_id,revision FROM note_tombstones").get() },
+      { id: "n-shared", area_id: "a-shared", project_id: "p-shared", revision: 1 });
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM projects WHERE id='p-shared'").get().n, 1);
+    assert.throws(() => db.prepare("INSERT INTO notes(id,project_id,title,body) VALUES ('n-shared','p-shared','Resurrect','secret')").run());
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO notes(id,project_id,title,body) VALUES ('n-shared','p-shared','Resurrect','secret')").run());
+    assert.throws(() => db.prepare("UPDATE note_tombstones SET revision=2 WHERE id='n-shared'").run());
+    assert.throws(() => db.prepare("DELETE FROM note_tombstones WHERE id='n-shared'").run());
+    assert.throws(() => db.prepare("INSERT OR REPLACE INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES ('n-shared','a-shared','p-shared',2,1)").run());
+  } finally { db.close(); }
+});
+
+test("content-free note edit audit survives a tombstoned deletion", () => {
+  const db = fixture();
+  try {
+    db.prepare("UPDATE notes SET body='Edited' WHERE id='n-private'").run();
+    assert.equal(rev(db, "n-private"), 1);
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      "test-receipt", "alice", "n-private", null, "a-private", 0,
+      0, 1, "a".repeat(64), "test-generation", Date.now(),
+    );
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES ('n-private','a-private',NULL,2,?)").run(Date.now());
+      db.prepare("DELETE FROM notes WHERE id='n-private'").run();
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit WHERE note_id='n-private'").get().n, 1);
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally { db.close(); }
+});
+
+test("uncommitted tombstone + deletion rolls back atomically", () => {
+  const db = fixture();
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare("INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms) VALUES ('n-private','a-private',NULL,1,?)")
+      .run(Date.now());
+    db.prepare("DELETE FROM notes WHERE id='n-private'").run();
+    db.exec("ROLLBACK");
+    assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 0);
+  } finally { db.close(); }
+});
+
 test("note reparenting changes visibility and advances a non-ABA revision", () => {
   const db = fixture();
   try {
@@ -117,7 +190,7 @@ test("an attached note blocks a project deletion even with a valid project tombs
   } finally { db.close(); }
 });
 
-const root = mkdtempSync(path.join(os.tmpdir(), "lumi-notes-v14-"));
+const root = mkdtempSync(path.join(os.tmpdir(), "lumi-notes-v15-"));
 const legacy = path.join(root, "legacy");
 mkdirSync(legacy);
 const previousDataDir = process.env.AI_EXECUTIVE_DATA_DIR;
@@ -128,7 +201,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("fresh v14 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
+test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "staging"), ownerUserId: "alice",
   });
@@ -144,5 +217,100 @@ test("fresh v14 staging preflight accepts notes and rejects bypassed CHECK const
     const invalid = check();
     assert.equal(invalid.ok, false);
     assert.ok(invalid.issues.includes("note_invalid"), JSON.stringify(invalid));
+  } finally { db.close(); }
+});
+
+test("v15 preflight accepts an audited note after its tombstoned deletion", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "deleted-audited-note"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    const id = "edited-then-deleted";
+    const key = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "e".repeat(64);
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES (?,?,?,?)")
+      .run(id, stage.unassignedAreaId, "Title", "Body");
+    db.prepare("UPDATE notes SET body='New body' WHERE id=?").run(id);
+    assert.equal(db.prepare("SELECT revision FROM notes WHERE id=?").get(id).revision, 1);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      key, "alice", id, null, stage.unassignedAreaId, 0,
+      0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+    );
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(`INSERT INTO note_tombstones (id,area_id,project_id,revision,deleted_at_ms)
+        VALUES (?,?,NULL,2,?)`).run(id, stage.unassignedAreaId, Date.now());
+      db.prepare("DELETE FROM notes WHERE id=?").run(id);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+    assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
+      { ok: true, mode: "stage", issues: [] });
+  } finally { db.close(); }
+});
+
+test("v15 preflight rejects an orphaned pending note tombstone", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "pending-tombstone"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('pending',?,'Title','Body')").run(stage.unassignedAreaId);
+    db.prepare(`INSERT INTO note_tombstones(id,area_id,project_id,revision,deleted_at_ms)
+      VALUES ('pending',?,NULL,1,?)`).run(stage.unassignedAreaId, Date.now());
+    const result = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.includes("tombstone_invalid"), JSON.stringify(result));
+  } finally { db.close(); }
+});
+
+test("v15 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "orphan-edit-audit"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    const key = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "a".repeat(64);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      key, "alice", "never-existed", null, stage.unassignedAreaId, 0,
+      0, 1, "c".repeat(64), stage.restoreGeneration, Date.now(),
+    );
+    const result = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.includes("audit_invalid"), JSON.stringify(result));
+  } finally { db.close(); }
+});
+
+test("v15 preflight rejects audit revision beyond a live note", () => {
+  const stage = bootstrapIsolatedTargetStore({
+    stagingDirectory: path.join(root, "future-edit-audit"), ownerUserId: "alice",
+  });
+  const db = new DatabaseSync(stage.databasePath);
+  try {
+    db.exec("PRAGMA foreign_keys=ON");
+    db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('existing',?,'Title','Body')")
+      .run(stage.unassignedAreaId);
+    const key = TARGET_STAGING_NOTE_RECEIPT_PREFIX + "f".repeat(64);
+    db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key, "b".repeat(64));
+    db.prepare(`INSERT INTO note_edit_audit (
+      receipt_key,actor_user_id,note_id,project_id,area_id,policy_revision,
+      revision_before,revision_after,expected_revision,restore_generation,committed_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      key, "alice", "existing", null, stage.unassignedAreaId, 0,
+      3, 4, "c".repeat(64), stage.restoreGeneration, Date.now(),
+    );
+    const result = inspectIsolatedTargetStore({ stagingDirectory: stage.directory });
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.includes("audit_invalid"), JSON.stringify(result));
   } finally { db.close(); }
 });

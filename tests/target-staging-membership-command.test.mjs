@@ -105,8 +105,8 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("schema v14 passes preflight; a v5 store without the membership ledger is rejected", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 14);
+test("schema v15 passes preflight; a v5 store without the membership ledger is rejected", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 15);
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: stage.directory, mode: "r2-model" }).ok, true);
   const v5 = bootstrapIsolatedTargetStore({ stagingDirectory: path.join(root, "v5"), ownerUserId: "alice" });
   const old5 = new DatabaseSync(v5.databasePath);
