@@ -111,7 +111,9 @@ test("interleaved Areas retain independent dense journal sequences", () => {
        revision_before,revision_after,expected_revision,restore_generation,committed_at_ms)
       VALUES ('alice-2','alice','one',NULL,'private',0,1,2,?,
        '00000000-0000-4000-8000-000000000001',?)`).run("d".repeat(64), 1200);
-    assert.deepEqual(db.prepare("SELECT area_id,seq FROM note_change_journal ORDER BY area_id,seq").all(), [
+    const positions = db.prepare("SELECT area_id,seq FROM note_change_journal ORDER BY area_id,seq").all()
+      .map(({ area_id, seq }) => ({ area_id, seq }));
+    assert.deepEqual(positions, [
       { area_id:"bob-private", seq:1 }, { area_id:"private", seq:1 }, { area_id:"private", seq:2 },
     ]);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal WHERE area_id='private' AND seq=2").get().n, 1);
