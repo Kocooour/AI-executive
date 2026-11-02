@@ -31,7 +31,7 @@ const rev = (db, id) => db.prepare("SELECT revision FROM notes WHERE id=?").get(
 test("R2d.2b canonical schema protects private/parent-inherited note reads", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 15);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION, 16);
     assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
     assert.equal(read(db, "bob", "n-private"), null);
     assert.equal(read(db, "bob", "n-shared")?.note.body, "Shared content");
@@ -201,7 +201,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
+test("fresh v16 staging preflight accepts notes and rejects bypassed CHECK constraints", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "staging"), ownerUserId: "alice",
   });
@@ -220,7 +220,7 @@ test("fresh v15 staging preflight accepts notes and rejects bypassed CHECK const
   } finally { db.close(); }
 });
 
-test("v15 preflight accepts an audited note after its tombstoned deletion", () => {
+test("v16 preflight accepts an audited note after its tombstoned deletion", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "deleted-audited-note"), ownerUserId: "alice",
   });
@@ -253,7 +253,7 @@ test("v15 preflight accepts an audited note after its tombstoned deletion", () =
   } finally { db.close(); }
 });
 
-test("v15 preflight rejects an orphaned pending note tombstone", () => {
+test("v16 preflight rejects an orphaned pending note tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "pending-tombstone"), ownerUserId: "alice",
   });
@@ -269,7 +269,7 @@ test("v15 preflight rejects an orphaned pending note tombstone", () => {
   } finally { db.close(); }
 });
 
-test("v15 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
+test("v16 preflight refuses a forged edit audit referencing neither live note nor tombstone", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "orphan-edit-audit"), ownerUserId: "alice",
   });
@@ -291,7 +291,7 @@ test("v15 preflight refuses a forged edit audit referencing neither live note no
   } finally { db.close(); }
 });
 
-test("v15 preflight rejects audit revision beyond a live note", () => {
+test("v16 preflight rejects audit revision beyond a live note", () => {
   const stage = bootstrapIsolatedTargetStore({
     stagingDirectory: path.join(root, "future-edit-audit"), ownerUserId: "alice",
   });
