@@ -17,7 +17,7 @@ const scope = {
   areaId: "team-area", policyRevision: 6, access: "editor",
 };
 const bootstrap = { phase: "bootstrap", afterId: "note-7", snapshotRevision: "a".repeat(64) };
-const changes = { phase: "changes", afterSeq: 287 };
+const changes = { phase: "changes", afterSeq: 287, contentRevision: 300 };
 const NOW = 1_800_000_000;
 
 test("bootstrap and change cursors roundtrip; claims are encrypted, fixed-length and randomized", () => {
@@ -132,9 +132,11 @@ test("fail closed for extra keys, malformed actors, Areas, revisions and paginat
     { ...bootstrap, afterId: "x".repeat(513) },
     { ...bootstrap, snapshotRevision: "bad" },
     { phase: "bootstrap", afterId: null, snapshotRevision: "a".repeat(64) },
-    { phase: "changes", afterSeq: -1 }, { phase: "changes", afterSeq: 3.5 },
-    { phase: "changes", afterSeq: Number.MAX_SAFE_INTEGER },
-    { phase: "changes", afterSeq: 0, injected: 1 },
+    { phase: "changes", afterSeq: -1, contentRevision: 0 },
+    { phase: "changes", afterSeq: 0 },
+    { phase: "changes", afterSeq: 0, contentRevision: -1 }, { phase: "changes", afterSeq: 3.5, contentRevision: 0 },
+    { phase: "changes", afterSeq: Number.MAX_SAFE_INTEGER, contentRevision: 0 },
+    { phase: "changes", afterSeq: 0, contentRevision: 0, injected: 1 },
     { phase: "unknown", afterSeq: 2 },
   ]) {
     assert.equal(validPosition(invalid), false);

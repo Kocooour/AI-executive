@@ -117,3 +117,38 @@ visibility, ACL changes, revocation, sequence-floor rebootstrap, retention,
 and create/move behavior. Only then may bounded, live-checked note feed
 reads use the encrypted cursor. No HTTP, UI, client sync, activation, release
 or deployment is part of this iteration.
+
+## R2d.2c.2g.2b.2 — guarded internal Area journal pages (staging only)
+
+Schema v18 adds `areas.note_sync_revision`, a monotonic Area-local witness.
+SQLite triggers advance it on note creation, each note revision advance,
+deletion, movement out of an Area, and parent project revision or Area changes
+affecting child notes. The canonical preflight compares the complete schema,
+including these triggers, and checks each witness is at least the Area journal
+head. No older staging schema is migrated.
+
+`readAuthorizedTargetNoteSyncPage` reads only one currently authorized Area
+from a canonical, preflighted, pinned read-only snapshot. Its first page uses
+the whole-manifest bootstrap; continuation pages must match that manifest's
+snapshot digest. The final bootstrap page seals the **current** journal head
+and witness in the encrypted cursor. An added or re-added member therefore
+starts at the current state and cannot page through earlier note IDs or
+deletions. Current actor identity and revocation epoch, Area ACL and role,
+policy revision and restore generation are checked against the snapshot on
+every page. Any change to membership or policy invalidates the cursor and
+requires full Area rebootstrap.
+
+Change pages return at most 100 content-free `edit`/`delete` events from this
+Area, with dense sequence validation. Before reading events, the selector
+requires `current witness - cursor witness = current journal head - cursor
+sequence`. A raw creation, edit, move or parent change without a matching
+journal event makes this equality fail, and the reader returns no data: the
+consumer must do a full rebootstrap. The cursor advances the witness only by
+the **number of events consumed**, so a backlog remains safe across pages.
+The selector deliberately rehashes the bounded whole Area manifest on each
+page; it makes no constant-work claim. Staging caps bound this work.
+
+This remains an internal read model. Before any future HTTP response, the
+gateway must independently verify a live durable session, current Area ACL
+and policy, store generation and item/parent guards at release. There is no
+HTTP route, client sync, UI or production activation in this iteration.

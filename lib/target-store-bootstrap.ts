@@ -34,8 +34,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v16 (R2d.2c.2f.2) adds immutable, receipt-backed note-delete audit.
 // v17 (R2d.2c.2g.2b.1) adds immutable note-specific audit-triggered journal.
 // Old staging v16 stores are deliberately rejected, never auto-migrated.
+// v18 adds an Area-local monotonic note change witness for safe journal reads.
+// Older isolated staging stores are rejected, not migrated.
 // No HTTP, sync, production migration or activation is authorized.
-export const TARGET_STORE_SCHEMA_VERSION = 17;
+export const TARGET_STORE_SCHEMA_VERSION = 18;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -210,6 +212,7 @@ CREATE TABLE areas (
   policy_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(policy_revision)='integer' AND policy_revision >= 0 AND policy_revision < 9007199254740991),
   content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(content_revision)='integer' AND content_revision >= 0 AND content_revision < 9007199254740991),
   project_content_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(project_content_revision)='integer' AND project_content_revision >= 0 AND project_content_revision < 9007199254740991),
+  note_sync_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(note_sync_revision)='integer' AND note_sync_revision >= 0 AND note_sync_revision < 9007199254740991),
   workspace_kind TEXT GENERATED ALWAYS AS (
     CASE kind WHEN 'private' THEN 'personal' ELSE 'shared' END
   ) STORED,
@@ -658,6 +661,40 @@ WHEN NEW.title IS NOT OLD.title OR NEW.body IS NOT OLD.body
 BEGIN
   UPDATE notes SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;
+-- One witness tick per note mutation in its resulting Area. The nested
+-- revision-only UPDATE from note_revision_bump fires this trigger exactly once.
+-- An Area move additionally ticks the Area being left; no historical note ID
+-- needs to be enumerated to detect an unjournaled move.
+CREATE TRIGGER note_sync_insert AFTER INSERT ON notes BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1
+    WHERE id=COALESCE(NEW.area_id,(SELECT area_id FROM projects WHERE id=NEW.project_id));
+END;
+CREATE TRIGGER note_sync_revision AFTER UPDATE OF revision ON notes
+WHEN NEW.revision IS NOT OLD.revision BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1
+    WHERE id=COALESCE(NEW.area_id,(SELECT area_id FROM projects WHERE id=NEW.project_id));
+END;
+CREATE TRIGGER note_sync_move_old BEFORE UPDATE OF project_id,area_id ON notes
+WHEN COALESCE(OLD.area_id,(SELECT area_id FROM projects WHERE id=OLD.project_id))
+  IS NOT COALESCE(NEW.area_id,(SELECT area_id FROM projects WHERE id=NEW.project_id)) BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1
+    WHERE id=COALESCE(OLD.area_id,(SELECT area_id FROM projects WHERE id=OLD.project_id));
+END;
+CREATE TRIGGER note_sync_delete AFTER DELETE ON notes BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1
+    WHERE id=COALESCE(OLD.area_id,(SELECT area_id FROM projects WHERE id=OLD.project_id));
+END;
+-- A parent revision changes every child manifest entry. One Area tick is
+-- sufficient to force rebootstrap regardless of the number of children.
+CREATE TRIGGER note_sync_parent_revision AFTER UPDATE OF revision ON projects
+WHEN NEW.revision IS NOT OLD.revision AND EXISTS(SELECT 1 FROM notes WHERE project_id=NEW.id) BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1 WHERE id=NEW.area_id;
+END;
+CREATE TRIGGER note_sync_parent_move AFTER UPDATE OF area_id ON projects
+WHEN NEW.area_id IS NOT OLD.area_id AND EXISTS(SELECT 1 FROM notes WHERE project_id=NEW.id) BEGIN
+  UPDATE areas SET note_sync_revision=note_sync_revision+1 WHERE id=OLD.area_id;
+  UPDATE areas SET note_sync_revision=note_sync_revision+1 WHERE id=NEW.area_id;
+END;
 
 -- R2d.2c.2a: committed note content edits. Only content-free metadata
 -- is retained; title/body are never copied into this audit.
@@ -947,6 +984,9 @@ BEGIN SELECT RAISE(ABORT, 'Area content revision must increment by one'); END;
 CREATE TRIGGER area_project_content_revision_guard BEFORE UPDATE OF project_content_revision ON areas
 WHEN NEW.project_content_revision <> OLD.project_content_revision + 1
 BEGIN SELECT RAISE(ABORT, 'Area project content revision must increment by one'); END;
+CREATE TRIGGER area_note_sync_revision_guard BEFORE UPDATE OF note_sync_revision ON areas
+WHEN NEW.note_sync_revision <> OLD.note_sync_revision + 1
+BEGIN SELECT RAISE(ABORT, 'Area note sync revision must increment by one'); END;
 -- tasks stays a rowid table (the read model orders by rowid as a tie-break), so an
 -- explicit rowid which collides with a DIFFERENT task must be rejected as well.
 -- A tombstoned ID is never reusable: re-creating it would reset the revision

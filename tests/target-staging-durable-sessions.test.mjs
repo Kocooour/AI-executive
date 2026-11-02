@@ -115,8 +115,8 @@ after(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("schema v17 stores only a token hash and enforces issuance limits", () => {
-  assert.equal(TARGET_STORE_SCHEMA_VERSION, 17);
+test("schema v18 stores only a token hash and enforces issuance limits", () => {
+  assert.equal(TARGET_STORE_SCHEMA_VERSION, 18);
   assert.equal(inspectIsolatedTargetStore({ stagingDirectory: stage.directory, mode: "r2-model" }).ok, true);
   const issued = issueCli("alice");
   assert.equal(issued.ok, true);
