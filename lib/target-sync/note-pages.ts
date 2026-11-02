@@ -157,17 +157,19 @@ export function decodeNoteSyncCheckpoint(value: unknown): NoteSyncPageState | nu
       !Array.isArray(value.visible) || !Array.isArray(value.pending) ||
       value.visible.length > MAX_AREA_NOTES || value.pending.length > MAX_AREA_NOTES ||
       !value.visible.every(entry) || !value.pending.every(entry)) return null;
-  // Narrow this untrusted disk field once for both phases and the typed return.
-  if (value.cursor !== null && !validCursor(value.cursor)) return null;
+  // Capture a local variable: narrowing record[index] is not retained by TS
+  // across the indexed-record branches and array callbacks below.
+  const cursor = value.cursor;
+  if (cursor !== null && !validCursor(cursor)) return null;
   if (value.phase === "bootstrap") {
     if (value.visible.length !== 0 ||
-        (value.cursor === null ? value.pending.length !== 0 : value.pending.length === 0))
+        (cursor === null ? value.pending.length !== 0 : value.pending.length === 0))
       return null;
-  } else if (value.cursor === null || value.pending.length !== 0) return null;
+  } else if (cursor === null || value.pending.length !== 0) return null;
   const selected = value.phase === "bootstrap" ? value.pending : value.visible;
   if (new Set(selected.map((v: NoteMetadata) => v.id)).size !== selected.length) return null;
   return {
-    phase: value.phase, cursor: value.cursor,
+    phase: value.phase, cursor,
     visible: (value.visible as NoteMetadata[]).map(v => ({ ...v })),
     pending: (value.pending as NoteMetadata[]).map(v => ({ ...v })),
   };
