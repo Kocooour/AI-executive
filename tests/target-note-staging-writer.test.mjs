@@ -100,6 +100,13 @@ test("signed write session edits notes; audit and receipt contain no note conten
   assert.ok(!serialized.includes("Updated child content"));
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE ?")
     .get(TARGET_STAGING_NOTE_RECEIPT_PREFIX + "%").n, 2);
+  const changes = db.prepare("SELECT seq,kind,note_id,area_id,project_id,revision FROM note_change_journal ORDER BY seq").all();
+  assert.deepEqual(changes.map(x => [x.seq,x.kind,x.note_id,x.revision]), [
+    [1,"edit","own",1], [1,"edit","child",1],
+  ]);
+  assert.equal(changes[1].area_id,"team-area");
+  assert.equal(changes[1].project_id,"project");
+  assert.equal(JSON.stringify(changes).includes("Highly confidential body"),false);
 });
 
 test("idempotent replay survives note revision changes; changed payload conflicts", () => {
@@ -117,6 +124,8 @@ test("idempotent replay survives note revision changes; changed payload conflict
   assert.deepEqual(authority.updateNote(bob.sessionToken, { ...first, body: "Y" }),
     refused("idempotency_conflict"));
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_edit_audit").get().n, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal").get().n, 2,
+    "idempotent replay must not append a new event");
   assert.equal(db.prepare("SELECT revision FROM notes WHERE id='child'").get().revision, 2);
   assert.equal(db.prepare("SELECT body FROM notes WHERE id='child'").get().body, "Z");
   const key = targetNoteEditReceiptKey("bob", "child", first.commandId);
@@ -228,6 +237,12 @@ test("signed note deletion is atomic and content-free: private + inherited share
     { note_id: "child", project_id: "project", area_id: "team-area", revision_before: 0, tombstone_revision: 1 },
   ]);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 2);
+  assert.deepEqual(db.prepare("SELECT seq,kind,note_id,area_id,revision FROM note_change_journal ORDER BY seq").all()
+    .map(e => [e.seq,e.kind,e.note_id,e.revision]), [
+      [1,"delete","own",1], [1,"delete","child",1],
+    ]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal WHERE kind='delete'").get().n, 2);
+
   assert.equal(db.prepare("PRAGMA foreign_key_check").all().length, 0);
   assert.deepEqual(inspectIsolatedTargetStore({ stagingDirectory: stage.directory }),
     { ok: true, mode: "stage", issues: [] });

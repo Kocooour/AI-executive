@@ -92,3 +92,28 @@ into note edits and deletes (and future create/move operations), with
 visibility-history/retroactive permission rules, bounded retention and
 rebootstrap-on-gap behavior; only then expose bounded HTTP pages with live
 session/release guards and this encrypted cursor.
+
+## R2d.2c.2g.2b.1 — audit-triggered note journal (staging only)
+
+Schema v17 adds a dedicated, append-only note_change_journal table, with an
+Area-local monotonic sequence (`(area_id, seq)`) and no global client-visible position. Audit INSERT triggers
+append one content-free event for each authorized note edit or deletion
+(kind, receipt key, actor, note ID, effective Area, historical parent,
+Area policy revision, resulting note revision, timestamp). Audit and event
+are in the SAME pinned SQLite transaction: a rollback leaves neither event
+nor successful mutation. No note title/body or credentials are stored.
+
+Canonical preflight verifies a bijection of events to edit/delete audits and
+the matching fields. Events cannot be changed, deleted or replaced, and a
+referenced note-edit audit cannot be deleted. At the provisional aggregate
+8,192-event limit, mutations fail closed: there is no implicit compaction,
+truncation or retention exception. Previously created isolated v16 staging
+databases are rejected, not migrated. Production data is untouched.
+
+The table is NOT exposed to clients. A current Area membership is not enough
+to grant a newly added member access to historical note identifiers,
+especially historical deletions. The next step must define retrospective
+visibility, ACL changes, revocation, sequence-floor rebootstrap, retention,
+and create/move behavior. Only then may bounded, live-checked note feed
+reads use the encrypted cursor. No HTTP, UI, client sync, activation, release
+or deployment is part of this iteration.

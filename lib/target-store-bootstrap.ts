@@ -32,9 +32,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // v13 (R2d.2b) adds bounded, parent-exclusive notes with immutable IDs and
 // monotonic revisions; old staging v12 stores are never migrated.
 // v16 (R2d.2c.2f.2) adds immutable, receipt-backed note-delete audit.
-// Old staging v15 stores are deliberately rejected, never auto-migrated.
+// v17 (R2d.2c.2g.2b.1) adds immutable note-specific audit-triggered journal.
+// Old staging v16 stores are deliberately rejected, never auto-migrated.
 // No HTTP, sync, production migration or activation is authorized.
-export const TARGET_STORE_SCHEMA_VERSION = 16;
+export const TARGET_STORE_SCHEMA_VERSION = 17;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -62,6 +63,8 @@ export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
 export const TARGET_STAGING_AUDIT_MAX_EVENTS = 4096;
+/** Maximum authenticated note edit + delete events in the isolated staging journal. */
+export const TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS = 8192;
 export const TARGET_STAGING_AUDIT_RETENTION_DAYS = 90;
 /**
  * R2-ID.1 durable staging sessions. A session is a short-lived server-side
@@ -717,6 +720,62 @@ BEGIN SELECT RAISE(ABORT, 'note deletion audit replacement forbidden'); END;
 CREATE TRIGGER note_delete_audit_capacity BEFORE INSERT ON note_delete_audit
 WHEN (SELECT COUNT(*) FROM note_delete_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'note deletion audit capacity reached'); END;
+
+
+-- R2d.2c.2g.2b.1: staging-only note-specific immutable change history.
+-- Entries are appended by audit INSERT triggers IN THE SAME TRANSACTION as
+-- the authenticated write, never by a separate best-effort sync process.
+-- The journal is not a client feed: no HTTP or authorization to enumerate it.
+-- The bootstrap manifest must precede a future cursor-consuming client.
+CREATE TABLE note_change_journal (
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  seq INTEGER NOT NULL CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
+  kind TEXT NOT NULL CHECK(kind IN ('edit','delete')),
+  receipt_key TEXT NOT NULL UNIQUE,
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  note_id TEXT NOT NULL CHECK(typeof(note_id)='text' AND note_id<>''),
+  project_id TEXT,
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0 AND revision<9007199254740991),
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
+  PRIMARY KEY(area_id,seq)
+) WITHOUT ROWID;
+CREATE TRIGGER note_change_journal_capacity BEFORE INSERT ON note_change_journal
+WHEN (SELECT COUNT(*) FROM note_change_journal)>=${TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'note change journal capacity reached'); END;
+CREATE TRIGGER note_change_journal_no_update BEFORE UPDATE ON note_change_journal
+BEGIN SELECT RAISE(ABORT, 'note change journal immutable'); END;
+CREATE TRIGGER note_change_journal_no_delete BEFORE DELETE ON note_change_journal
+BEGIN SELECT RAISE(ABORT, 'note change journal permanent'); END;
+CREATE TRIGGER note_change_journal_no_replace BEFORE INSERT ON note_change_journal
+WHEN EXISTS(SELECT 1 FROM note_change_journal
+  WHERE (area_id=NEW.area_id AND seq=NEW.seq) OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'note change journal replacement forbidden'); END;
+CREATE TRIGGER note_change_journal_on_edit AFTER INSERT ON note_edit_audit
+BEGIN
+  INSERT INTO note_change_journal(
+    area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
+    revision,committed_at_ms)
+  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'edit',NEW.receipt_key,NEW.actor_user_id,
+    NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms
+  FROM note_change_journal WHERE area_id=NEW.area_id;
+END;
+CREATE TRIGGER note_change_journal_on_delete AFTER INSERT ON note_delete_audit
+BEGIN
+  INSERT INTO note_change_journal(
+    area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
+    revision,committed_at_ms)
+  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'delete',NEW.receipt_key,NEW.actor_user_id,
+    NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.tombstone_revision,NEW.committed_at_ms
+  FROM note_change_journal WHERE area_id=NEW.area_id;
+END;
+-- Retain audit provenance for every journal event. Existing note edit audit
+-- retention cannot silently remove the only authenticated source of an event.
+-- Until bounded compaction is designed, exhaustion fails the write closed.
+CREATE TRIGGER note_change_journal_edit_audit_no_delete
+BEFORE DELETE ON note_edit_audit
+WHEN EXISTS(SELECT 1 FROM note_change_journal WHERE receipt_key=OLD.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'journal-backed note audit is permanent'); END;
 
 CREATE VIEW task_effective_areas AS
   SELECT t.id AS task_id, COALESCE(t.area_id, p.area_id) AS effective_area_id,
