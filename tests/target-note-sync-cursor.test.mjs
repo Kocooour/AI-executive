@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createCipheriv, hkdfSync } from "node:crypto";
 import {
   NOTE_SYNC_CURSOR_LENGTH, NOTE_SYNC_CURSOR_MAX_AGE_SECONDS,
+  NOTE_SYNC_CURSOR_PLAINTEXT_BYTES,
   openTargetNoteSyncCursor as open, sealTargetNoteSyncCursor as seal,
   validNoteSyncCursorScope as validScope, validNoteSyncCursorPosition as validPosition,
 } from "../lib/target-note-sync-cursor.ts";
-import { openStagingFeedCursor } from "../lib/target-staging-feed-cursor.ts";
 
 const SECRET = "a-server-only-secret-with-at-least-thirty-two-bytes";
 const OTHER_SECRET = "another-server-only-secret-with-at-least-thirty-two-bytes";
@@ -30,12 +31,45 @@ test("bootstrap and change cursors roundtrip; claims are encrypted, fixed-length
     assert.deepEqual(open(SECRET, a, scope, NOW), {
       ok: true, position, issuedAt: NOW,
     });
-    for (const sensitive of ["team-area", "note-7", GEN]) {
-      assert.equal(a.includes(sensitive), false);
-    }
-    // Other encrypted cursor namespaces cannot open or accept this token.
-    assert.deepEqual(openStagingFeedCursor(SECRET, a), { ok: false });
+    // Deterministic envelope checks replace probabilistic substring searches
+    // over random ciphertext; the authenticated roundtrip checks its contents.
+    const raw = Buffer.from(a, "base64url");
+    assert.equal(raw[0], 1);
+    assert.equal(raw.length, 1 + 12 + NOTE_SYNC_CURSOR_PLAINTEXT_BYTES + 16);
   }
+});
+
+test("task-feed HKDF key cannot open a valid note-format cursor", () => {
+  // Produce a structurally valid NOTE cursor (same version, nonce size,
+  // authenticated NOTE AAD, padded payload and total token length), but encrypt
+  // it with the TASK-feed domain's HKDF key. Rejection must be cryptographic;
+  // the legacy feed decoder's different envelope length does not prove that.
+  const noteAAD = Buffer.from("lumi:r2d:note-sync-cursor:v1");
+  const taskFeedKey = Buffer.from(hkdfSync(
+    "sha256", SECRET, Buffer.from("lumi:r2c:feed-cursor:salt"),
+    "lumi:r2c:feed-cursor:v1", 32,
+  ));
+  const payload = Buffer.from(JSON.stringify({
+    version: 1, issuedAt: NOW, scope, position: bootstrap,
+  }), "utf8");
+  assert.ok(payload.length < NOTE_SYNC_CURSOR_PLAINTEXT_BYTES);
+  const padded = Buffer.concat([
+    payload, Buffer.alloc(NOTE_SYNC_CURSOR_PLAINTEXT_BYTES - payload.length, 0x20),
+  ]);
+  const nonce = Buffer.alloc(12, 0x3f); // fixed nonce only in this isolated test
+  const cipher = createCipheriv("aes-256-gcm", taskFeedKey, nonce, {
+    authTagLength: 16,
+  });
+  cipher.setAAD(noteAAD);
+  const ciphertext = Buffer.concat([cipher.update(padded), cipher.final()]);
+  const forged = Buffer.concat([
+    Buffer.from([1]), nonce, ciphertext, cipher.getAuthTag(),
+  ]).toString("base64url");
+  assert.equal(forged.length, NOTE_SYNC_CURSOR_LENGTH);
+  assert.equal(Buffer.from(forged, "base64url")[0], 1);
+  assert.deepEqual(open(SECRET, forged, scope, NOW), { ok: false },
+    "same-format token encrypted under the task-feed key must not authenticate");
+  assert.equal(open(SECRET, seal(SECRET, scope, bootstrap, NOW), scope, NOW).ok, true);
 });
 
 test("deny stale and foreign actor, Area, ACL, role, revocation epoch and restore generation", () => {
