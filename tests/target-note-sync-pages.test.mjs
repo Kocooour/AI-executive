@@ -94,7 +94,7 @@ test("malformed schema and content-bearing fields are rejected rather than persi
     bootstrap([note(".."), note("n")]), bootstrap([note("bad" + String.fromCharCode(10))]),
     bootstrap([note("n", -1)]), bootstrap([note("n", 1, "p", null)]),
     bootstrap([note("n", 1, null, 2)]), bootstrap([note("n", 1.5)]),
-    changes([edit("n", 2)], true), { ...changes([edit("n", 2)]), changes: [{ ...edit("n", 2), body: "secret" }] },
+    changes([], true), { ...changes([edit("n", 2)]), changes: [{ ...edit("n", 2), body: "secret" }] },
     { ...changes([]), entries: [note("n")] },
     null, [], 42,
   ]) {
