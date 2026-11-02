@@ -66,7 +66,21 @@ storage and credentials are unchanged.
 
 ## Next activation gates
 
-The writer is **internal only**. A later isolated HTTP DELETE/status must
+The internal writer is now exposed by **R2d.2c.2f.3** through an opt-in
+`DELETE /api/target-staging/notes/[noteId]` endpoint. It requires all four
+staging HTTP/notes/write flags, same-origin `Origin`, protocol v1 and a strict
+JSON command of `{commandId, expectedRevision, restoreGeneration, writeAreaId}`.
+The expected revision is obtained from the existing authorized
+`GET /api/target-staging/notes/[noteId]/edit` preview. The server supplies
+`noteId` from the path, never from the request body. The delete child uses
+stdin, checks live durable session and actor/Area policy within the pinned
+write, and returns content-free `ok` / `replayed` or refusal.
+The route does not expose tombstones, write credentials or actor receipts.
+
+An isolated HTTP **delete command-status** endpoint still needs to be built.
+For now, an uncertain DELETE response can be reconciled by retrying the
+original exact command ID and body (while still authorized), but this is not
+an offline sync/change feed contract. A later isolated HTTP status must
 enforce same-origin, exact command/session validation and live release checks,
 including safe reconciliation of an uncertain response. Notes still have no
 change-feed/cursor/sync semantics; their tombstones must not be interpreted as
