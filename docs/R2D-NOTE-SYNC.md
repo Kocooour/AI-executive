@@ -10,8 +10,11 @@ note synchronization, not an HTTP endpoint or an activated sync client.
   canonical, pinned, read-only staging SQLite snapshot (schema v16). Neither a
   route parameter nor an offline client is an identity authority.
 - One Area per request. Private notes are visible only to their owner.
-  Shared notes are visible to current viewers/editors/admins. A direct note
-  inherits the *parent project's* Area. Mentions/links confer no access.
+  Shared notes are visible to current viewers/editors/admins. **Standalone**
+  notes (`notes.project_id IS NULL`) use their own `notes.area_id`. **Project-child**
+  notes (`notes.project_id IS NOT NULL`) inherit the parent project's
+  `projects.area_id` and must have `notes.area_id IS NULL`.
+  Mentions/links confer no access.
 - Pages contain at most 100 metadata entries: `id`, monotonic note
   `revision`, `projectId` and parent project `revision`. They contain no
   note title, body, actor receipts or tombstones. For contents use the
