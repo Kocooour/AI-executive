@@ -100,15 +100,14 @@ export async function POST(
     if (released !== "ok") return stagingIdentityRefusal(released);
     if (!unchanged(base) || !result) return answer(503, "Staging unavailable");
 
-    // Recheck current Area access after the initial receipt read; a role
-    // change or restore between observations must fail closed.
-    if (result.ok) {
-      const rechecked = await readStagingNoteDeleteCommandStatusInChild(childConfig, command);
-      const liveAgain = verifyStagingIdentityBeforeRelease(request, identity, base);
-      if (liveAgain !== "ok") return stagingIdentityRefusal(liveAgain);
-      if (!unchanged(base) || !rechecked) return answer(503, "Staging unavailable");
-      if (!rechecked.ok || rechecked.status !== result.status) return answer(404, "Not found");
-    }
+    // Recheck CURRENT Area permission and exact receipt for EVERY outcome:
+    // even a 409 conflict/mismatch must not be released after role revocation.
+    const rechecked = await readStagingNoteDeleteCommandStatusInChild(childConfig, command);
+    const liveAgain = verifyStagingIdentityBeforeRelease(request, identity, base);
+    if (liveAgain !== "ok") return stagingIdentityRefusal(liveAgain);
+    if (!unchanged(base) || !rechecked) return answer(503, "Staging unavailable");
+    if (JSON.stringify(rechecked) !== JSON.stringify(result))
+      return answer(404, "Not found");
     if (result.ok === false && result.reason === "resync_required")
       return resyncRequiredResponse();
     if (result.ok === false && result.reason === "write_area_mismatch")
