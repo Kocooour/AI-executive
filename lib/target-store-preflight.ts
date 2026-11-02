@@ -360,7 +360,9 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN note_edit_audit e ON j.kind='edit' AND e.receipt_key=j.receipt_key
             LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key
             WHERE typeof(j.seq)<>'integer' OR j.seq<=0 OR j.seq>=9007199254740991
-              OR j.kind NOT IN ('edit','delete') OR j.revision<=0
+              OR j.kind NOT IN ('edit','delete')
+              OR (SELECT COUNT(*) FROM note_change_journal x
+                WHERE x.area_id=j.area_id AND x.seq<=j.seq)<>j.seq OR j.revision<=0
               OR typeof(j.committed_at_ms)<>'integer' OR j.committed_at_ms<=0
               OR (j.kind='edit' AND
                 (e.id IS NULL OR j.note_id IS NOT e.note_id
