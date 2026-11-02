@@ -728,19 +728,18 @@ BEGIN SELECT RAISE(ABORT, 'note deletion audit capacity reached'); END;
 -- The journal is not a client feed: no HTTP or authorization to enumerate it.
 -- The bootstrap manifest must precede a future cursor-consuming client.
 CREATE TABLE note_change_journal (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT
-    CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  seq INTEGER NOT NULL CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
   kind TEXT NOT NULL CHECK(kind IN ('edit','delete')),
   receipt_key TEXT NOT NULL UNIQUE,
   actor_user_id TEXT NOT NULL REFERENCES identities(id),
   note_id TEXT NOT NULL CHECK(typeof(note_id)='text' AND note_id<>''),
-  area_id TEXT NOT NULL REFERENCES areas(id),
   project_id TEXT,
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
   revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0 AND revision<9007199254740991),
-  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0)
-);
-CREATE INDEX note_change_journal_by_area_seq ON note_change_journal(area_id,seq);
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
+  PRIMARY KEY(area_id,seq)
+) WITHOUT ROWID;
 CREATE TRIGGER note_change_journal_capacity BEFORE INSERT ON note_change_journal
 WHEN (SELECT COUNT(*) FROM note_change_journal)>=${TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS}
 BEGIN SELECT RAISE(ABORT, 'note change journal capacity reached'); END;
@@ -755,18 +754,20 @@ BEGIN SELECT RAISE(ABORT, 'note change journal replacement forbidden'); END;
 CREATE TRIGGER note_change_journal_on_edit AFTER INSERT ON note_edit_audit
 BEGIN
   INSERT INTO note_change_journal(
-    kind,receipt_key,actor_user_id,note_id,area_id,project_id,policy_revision,
+    area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
     revision,committed_at_ms)
-  VALUES('edit',NEW.receipt_key,NEW.actor_user_id,NEW.note_id,NEW.area_id,
-    NEW.project_id,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms);
+  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'edit',NEW.receipt_key,NEW.actor_user_id,
+    NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms
+  FROM note_change_journal WHERE area_id=NEW.area_id;
 END;
 CREATE TRIGGER note_change_journal_on_delete AFTER INSERT ON note_delete_audit
 BEGIN
   INSERT INTO note_change_journal(
-    kind,receipt_key,actor_user_id,note_id,area_id,project_id,policy_revision,
+    area_id,seq,kind,receipt_key,actor_user_id,note_id,project_id,policy_revision,
     revision,committed_at_ms)
-  VALUES('delete',NEW.receipt_key,NEW.actor_user_id,NEW.note_id,NEW.area_id,
-    NEW.project_id,NEW.policy_revision,NEW.tombstone_revision,NEW.committed_at_ms);
+  SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'delete',NEW.receipt_key,NEW.actor_user_id,
+    NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.tombstone_revision,NEW.committed_at_ms
+  FROM note_change_journal WHERE area_id=NEW.area_id;
 END;
 -- Retain audit provenance for every journal event. Existing note edit audit
 -- retention cannot silently remove the only authenticated source of an event.
