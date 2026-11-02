@@ -144,3 +144,29 @@ export function applyNoteSyncPage(
     phase: "changes", cursor: page.cursor, pending: [], visible: [...visible.values()],
   } };
 }
+
+
+/**
+ * Validate a disk checkpoint before it may be used as a cursor source.
+ * Data loaded from IndexedDB is untrusted; reject unknown fields and note
+ * content as strictly as wire pages. Never publish an incomplete bootstrap.
+ */
+export function decodeNoteSyncCheckpoint(value: unknown): NoteSyncPageState | null {
+  if (!record(value) || !keys(value, "cursor,pending,phase,visible") ||
+      (value.phase !== "bootstrap" && value.phase !== "changes") ||
+      !Array.isArray(value.visible) || !Array.isArray(value.pending) ||
+      value.visible.length > MAX_AREA_NOTES || value.pending.length > MAX_AREA_NOTES ||
+      !value.visible.every(entry) || !value.pending.every(entry)) return null;
+  if (value.phase === "bootstrap") {
+    if (value.visible.length !== 0 ||
+        (value.cursor === null ? value.pending.length !== 0 : !validCursor(value.cursor) || value.pending.length === 0))
+      return null;
+  } else if (!validCursor(value.cursor) || value.pending.length !== 0) return null;
+  const selected = value.phase === "bootstrap" ? value.pending : value.visible;
+  if (new Set(selected.map((v: NoteMetadata) => v.id)).size !== selected.length) return null;
+  return {
+    phase: value.phase, cursor: value.cursor,
+    visible: (value.visible as NoteMetadata[]).map(v => ({ ...v })),
+    pending: (value.pending as NoteMetadata[]).map(v => ({ ...v })),
+  };
+}
