@@ -7,7 +7,7 @@ import {
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
-  TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_RESTORE_HISTORY_MAX,
+  TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
@@ -20,7 +20,7 @@ export type TargetPreflightCode =
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
-  | "restore_history_invalid" | "note_invalid";
+  | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -350,6 +350,41 @@ export function inspectIsolatedTargetStore(
         AND NOT EXISTS (SELECT 1 FROM task_delete_audit a WHERE a.receipt_key=m.key)`,
         TARGET_STAGING_DELETE_RECEIPT_PREFIX.length, TARGET_STAGING_DELETE_RECEIPT_PREFIX) !== 0) fail("audit_invalid");
     } catch { fail("metadata_invalid"); }
+
+    // R2d.2c.2g.2b.1: the note-only journal must have a bijection with
+    // signed audit-backed note mutations. Never trust a raw inserted event.
+    // There is deliberately no HTTP or client consumption of this table.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM note_change_journal") > TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS ||
+          count(`SELECT COUNT(*) AS n FROM note_change_journal j
+            LEFT JOIN note_edit_audit e ON j.kind='edit' AND e.receipt_key=j.receipt_key
+            LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key
+            WHERE typeof(j.seq)<>'integer' OR j.seq<=0 OR j.seq>=9007199254740991
+              OR j.kind NOT IN ('edit','delete') OR j.revision<=0
+              OR typeof(j.committed_at_ms)<>'integer' OR j.committed_at_ms<=0
+              OR (j.kind='edit' AND
+                (e.id IS NULL OR j.note_id IS NOT e.note_id
+                  OR j.area_id IS NOT e.area_id OR j.project_id IS NOT e.project_id
+                  OR j.actor_user_id IS NOT e.actor_user_id
+                  OR j.policy_revision IS NOT e.policy_revision
+                  OR j.revision IS NOT e.revision_after
+                  OR j.committed_at_ms IS NOT e.committed_at_ms))
+              OR (j.kind='delete' AND
+                (d.id IS NULL OR j.note_id IS NOT d.note_id
+                  OR j.area_id IS NOT d.area_id OR j.project_id IS NOT d.project_id
+                  OR j.actor_user_id IS NOT d.actor_user_id
+                  OR j.policy_revision IS NOT d.policy_revision
+                  OR j.revision IS NOT d.tombstone_revision
+                  OR j.committed_at_ms IS NOT d.committed_at_ms))`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM note_edit_audit e
+            LEFT JOIN note_change_journal j
+              ON j.receipt_key=e.receipt_key AND j.kind='edit'
+            WHERE j.seq IS NULL`) !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM note_delete_audit d
+            LEFT JOIN note_change_journal j
+              ON j.receipt_key=d.receipt_key AND j.kind='delete'
+            WHERE j.seq IS NULL`) !== 0) fail("note_sync_journal_invalid");
+    } catch { fail("note_sync_journal_invalid"); }
     try {
       // R2c.1 tombstones and change log. Every check is a primary-key or
       // partial-index lookup bounded by the staging tombstone cap, never a
