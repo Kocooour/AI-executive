@@ -35,6 +35,7 @@ const { GET: PREVIEW, PATCH: EDIT } = await import('../app/api/target-staging/no
 const { DELETE: DELETE_NOTE } = await import('../app/api/target-staging/notes/[noteId]/route.ts');
 const { readStagingNoteSyncInChild, parseStagingNoteSyncResult } = await import('../lib/target-staging-read-process.ts');
 const { verifyStagingReadBeforeRelease } = await import('../lib/target-staging-http-identity.ts');
+const { NOTE_SYNC_CURSOR_LENGTH } = await import('../lib/target-note-sync-cursor.ts');
 after(() => { for (const [k,v] of Object.entries(old)) v === undefined ? delete process.env[k] : process.env[k]=v;
   assert.equal(readFileSync(path.join(legacy,'keep'),'utf8'),'untouched');
   rmSync(root,{recursive:true,force:true}); });
@@ -143,11 +144,13 @@ test('uniform cursor denial, inaccessible Area, and live witness/epoch guards',a
   assert.equal((await page(bob)).body.code,'session_revoked');
 });
 test('strict child DTO rejects extra keys and repeated sequences',()=>{
-  const fx=fixture(); const fake={ok:true,epoch:0,stamp:{areaId:'team-area',contentRevision:2,head:2},
+  const fake={ok:true,epoch:0,stamp:{areaId:'team-area',contentRevision:2,head:2},
     page:{phase:'changes',entries:[],changes:[{seq:1,kind:'edit',noteId:'one',projectId:null,revision:1},
-      {seq:1,kind:'delete',noteId:'one',projectId:null,revision:2}],more:false,
-      cursor:'a'.repeat(4135),linearization:{actorUserId:'bob',areas:[{areaId:'team-area',areaKind:'shared',access:'editor',policyRevision:0}]}}};
-  assert.equal(parseStagingNoteSyncResult(fake,'team-area',100),null);
+      {seq:2,kind:'delete',noteId:'one',projectId:null,revision:2}],more:false,
+      cursor:'a'.repeat(NOTE_SYNC_CURSOR_LENGTH),linearization:{actorUserId:'bob',areas:[{areaId:'team-area',areaKind:'shared',access:'editor',policyRevision:0}]}}};
+  assert.equal(parseStagingNoteSyncResult(fake,'team-area',100)?.ok,true);
+  assert.equal(parseStagingNoteSyncResult({...fake,page:{...fake.page,changes:[fake.page.changes[0],
+    {...fake.page.changes[1],seq:1}]}},'team-area',100),null);
   assert.equal(parseStagingNoteSyncResult({...fake,unexpected:'secret'},'team-area',100),null);
 });
 
