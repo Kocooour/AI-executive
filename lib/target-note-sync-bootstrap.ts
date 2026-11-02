@@ -58,7 +58,8 @@ type AreaRow = {
 type NoteRow = NoteBootstrapEntry & { directAreaId: string | null; projectAreaId: string | null };
 
 /**
- * Does not expose note title/body, foreign IDs, counts or tombstones.
+ * Does not expose note title/body, unrelated/inaccessible IDs, counts or
+ * tombstones. A project-child note's authorized parent projectId is included.
  * Returns null for an unknown/unreadable Area, malformed state or SQL failure.
  * The full bounded Area manifest is hashed before keyset pagination so a
  * caller can reject page sequences whose snapshot revision changed.
