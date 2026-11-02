@@ -7,7 +7,7 @@
 import { IndexedDbTargetSyncStorage } from "./indexeddb";
 import { createStagingNoteHttpClient, type NoteHttpScope, type NoteHttpTransport,
   type NoteHttpPullResult } from "./note-http";
-import type { NoteMetadata } from "./note-pages";
+import { readableNoteMetadata, type NoteMetadata } from "./note-pages";
 import type { TargetSyncNamespace, TargetSyncStorage } from "./storage";
 
 const PREFIX = "lumi-note-metadata-v1|";
@@ -53,7 +53,9 @@ export function createStagingNotePersistentClient(
   const http = createStagingNoteHttpClient(options.transport);
   let token = 0;
   let active: Active | null = null;
-  let visible = false;
+  // The HTTP client advances its volatile state before IndexedDB commits.
+  // Readers may inspect ONLY this detached, last-committed manifest.
+  let committed: NoteMetadata[] | null = null;
   let busyToken: number | null = null;
   let tail: Promise<void> = Promise.resolve();
 
@@ -73,7 +75,7 @@ export function createStagingNotePersistentClient(
     const ticket = ++token;
     const scope = http.currentScope()!;
     const name = noteMetadataNamespace(scope);
-    visible = false;
+    committed = null;
     active = null;
     try {
       return await serial(async () => {
@@ -102,7 +104,7 @@ export function createStagingNotePersistentClient(
       if (ticket === token) {
         token++;
         active = null;
-        visible = false;
+        committed = null;
         http.clear();
       }
       throw new Error("note_cache_unavailable");
@@ -110,12 +112,13 @@ export function createStagingNotePersistentClient(
   };
   const clear = async (): Promise<void> => {
     ++token;
-    visible = false;
+    committed = null;
     active = null;
     http.clear(); // immediately abort and fence already-dispatched responses
     await serial(() => purge());
   };
-  const read = (): NoteMetadata[] => active && visible ? http.read() : [];
+  const read = (): NoteMetadata[] => active && committed !== null
+    ? committed.map(note => ({ ...note })) : [];
   const currentScope = (): NoteHttpScope | null => active ? http.currentScope() : null;
 
   const pull = async (): Promise<PersistentNotePullResult> => {
@@ -139,15 +142,16 @@ export function createStagingNotePersistentClient(
           await selected.handle.transaction([{ kind: "put", key: KEY, value: checkpoint }]);
         });
         if (ticket !== token) return { kind: "superseded" };
-        visible = true;
+        // Publish only the exact manifest whose cursor has been committed.
+        committed = readableNoteMetadata(snapshot);
       } else if (result.kind === "locked") {
         // The HTTP client already removed the scope on 401/404.
-        visible = false;
+        committed = null;
         active = null;
         ++token;
         await serial(() => purge());
       } else if (result.kind === "resync_required") {
-        visible = false;
+        committed = null;
         // The next call starts without a cursor, including after app restart.
         await serial(async () => {
           if (ticket === token) await selected.handle.transaction([{ kind: "delete", key: KEY }]);
@@ -157,7 +161,7 @@ export function createStagingNotePersistentClient(
     } catch {
       if (ticket === token) {
         ++token;
-        visible = false;
+        committed = null;
         active = null;
         http.clear();
       }
