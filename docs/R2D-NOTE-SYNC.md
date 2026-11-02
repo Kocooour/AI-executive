@@ -152,3 +152,33 @@ This remains an internal read model. Before any future HTTP response, the
 gateway must independently verify a live durable session, current Area ACL
 and policy, store generation and item/parent guards at release. There is no
 HTTP route, client sync, UI or production activation in this iteration.
+
+## R2d.2c.2g.2b.3 — staging HTTP note metadata feed
+
+`GET /api/target-staging/note-sync?areaId=<Area>&limit=1..100&cursor=<opaque>`
+requires the default-off `AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`,
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED`, and
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED` server flags. A verified
+owner cookie or durable staging session supplies the actor. The Area ID only
+selects one scope; it never supplies identity or grants access. The first call
+omits `cursor`. Each successful page returns `phase`, `entries`, `changes`,
+`more`, and the next encrypted `cursor`. Bootstrap entries contain only `id`,
+`revision`, `projectId` and `parentRevision`; edit/delete changes contain only
+`kind`, `noteId`, `projectId` and `revision`. Note contents require separately
+authorized exact-note GET. The cursor is opaque; internal sequence, Area
+witness, journal head, actor, policy and audit data are never response fields.
+
+Each child read uses a canonical, pinned, preflighted, read-only snapshot. The
+parent checks the current durable session, actor epoch, Area ACL, access role
+and policy revision, exact `note_sync_revision` and journal head together in
+one live transaction immediately before release. Any intervening Area note or
+parent mutation returns `409 {"code":"read_stale_reload"}` with no page data.
+Authorized invalid, expired or stale cursors and unjournaled gaps return the
+uniform `409 {"code":"resync_required"}`; clients must rebootstrap the whole
+Area. An unknown or inaccessible Area returns the same 404. Dead sessions
+return existing 401 codes, malformed query is 400, and store/child failure is
+503. All responses are `no-store`.
+
+Raw creates and moves still force rebootstrap. The journal remains immutable at
+its cap: this step adds no compaction or retention redesign. No offline client,
+UI, production activation, schema migration or deployment is included.

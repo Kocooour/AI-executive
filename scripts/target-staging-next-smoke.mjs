@@ -71,6 +71,8 @@ try {
   insertProject.run("alice second", stage.unassignedAreaId, "Alice second");
   insertProject.run("bob-project", "bob-private", "Bob project secret");
   insertProject.run("shared-project", "family-area", "Shared project secret");
+  db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('sync-note','family-area','Sync title','Sync body')").run();
+  db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES ('bob-note','bob-private','Hidden title','Hidden body')").run();
 
   const secret = randomBytes(32).toString("base64url");
   const hash = `scrypt:${Buffer.alloc(16, 1).toString("base64url")}:${Buffer.alloc(64, 2).toString("base64url")}`;
@@ -88,6 +90,8 @@ try {
       AI_EXECUTIVE_AUTH_ENABLED: "true", AI_EXECUTIVE_PASSWORD_HASH: hash,
       AI_EXECUTIVE_SESSION_SECRET: secret,
       AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTES_ENABLED: "true",
+      AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED: "true",
       AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED: "true",
       AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: stage.directory,
       AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: stage.restoreGeneration,
@@ -166,6 +170,32 @@ try {
   assert.equal((await fetch(`${origin}/api/target-staging/changes`)).status, 401);
   assert.equal((await fetch(`${origin}/api/target-staging/changes?cursor=garbage`, {
     headers: { cookie } })).status, 400);
+  const noteSyncUrl = `${origin}/api/target-staging/note-sync?areaId=family-area`;
+  const noteSyncFirst = await fetch(noteSyncUrl, { headers: { cookie }, signal: AbortSignal.timeout(10_000) });
+  assert.equal(noteSyncFirst.status, 200, "Next note-sync route failed");
+  assert.equal(noteSyncFirst.headers.get("cache-control"), "no-store");
+  const noteSyncPage = await noteSyncFirst.json();
+  assert.deepEqual(Object.keys(noteSyncPage).sort(), ["changes", "cursor", "entries", "more", "phase"]);
+  assert.equal(noteSyncPage.phase, "bootstrap");
+  assert.deepEqual(noteSyncPage.entries, [{
+    id: "sync-note", revision: 0, projectId: null, parentRevision: null,
+  }]);
+  assert.deepEqual(noteSyncPage.changes, []);
+  const noteSyncNext = await fetch(`${noteSyncUrl}&cursor=${encodeURIComponent(noteSyncPage.cursor)}`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(noteSyncNext.status, 200);
+  assert.deepEqual((await noteSyncNext.json()).changes, []);
+  const hiddenNoteSync = await fetch(`${origin}/api/target-staging/note-sync?areaId=bob-private`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(hiddenNoteSync.status, 404);
+  assert.deepEqual(await hiddenNoteSync.json(), { error: "Not found" });
+  const invalidNoteSync = await fetch(`${noteSyncUrl}&cursor=invalid`, {
+    headers: { cookie }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(invalidNoteSync.status, 409);
+  assert.deepEqual(await invalidNoteSync.json(), { code: "resync_required" });
   const unauthenticated = await fetch(`${origin}/api/target-staging/tasks/${encodeURIComponent(ids[0])}`);
   assert.equal(unauthenticated.status, 401);
   for (const id of ids) {
