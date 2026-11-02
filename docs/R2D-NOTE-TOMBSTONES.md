@@ -47,9 +47,15 @@ storage and credentials are unchanged.
 - An existing deletion may be replayed only by its original actor, with the
   exact request digest and **current** write permission in the tombstone's Area.
   Unknown IDs, other actors' tombstones and unpermitted Areas are indistinguishable.
-- Canonical preflight validates the new audit, receipt pairing, bounds, historical
-  restore generations, and exact tombstone Area/parent/revision/timestamp. A
-  corrupted or orphaned delete receipt cannot become a successful replay.
+- Canonical preflight validates both sides of the note-deletion ledger: every
+  tombstone must have exactly one delete audit, and each audit must have its
+  receipt and matching immutable tombstone (Area, parent, revision, timestamp).
+  Corrupted, orphaned or raw SQL-only deletions fail closed.
+- Restore from a backup taken **before any confirmed note deletion** is
+  refused with `backup_predates_note_delete`: journal entries are deliberately
+  content-free and cannot replay the erased ID. A backup taken after the last
+  note deletion can be restored when only the existing replayable operations
+  happened afterwards. This is fail-closed, not a full note restore protocol.
 - All staging schema v15 stores are intentionally refused rather than migrated
   to v16. No existing production data is touched.
 
