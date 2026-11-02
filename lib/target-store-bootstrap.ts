@@ -706,9 +706,11 @@ CREATE TABLE note_delete_audit (
 CREATE INDEX note_delete_audit_by_note ON note_delete_audit(note_id,id);
 CREATE TRIGGER note_delete_audit_no_update BEFORE UPDATE ON note_delete_audit
 BEGIN SELECT RAISE(ABORT, 'note deletion audit immutable'); END;
-CREATE TRIGGER note_delete_audit_retention BEFORE DELETE ON note_delete_audit
-WHEN strftime('%s','now') IS NULL OR OLD.committed_at_ms > (CAST(strftime('%s','now') AS INTEGER)*1000-${TARGET_STAGING_AUDIT_RETENTION_DAYS}*86400000)
-BEGIN SELECT RAISE(ABORT, 'note deletion audit retention active'); END;
+-- The corresponding tombstone and receipt are permanent. Allowing expiry
+-- would break canonical preflight's tombstone -> audit invariant, so this
+-- audit must also be immutable for the entire lifetime of the staging store.
+CREATE TRIGGER note_delete_audit_no_delete BEFORE DELETE ON note_delete_audit
+BEGIN SELECT RAISE(ABORT, 'note deletion audit is permanent'); END;
 CREATE TRIGGER note_delete_audit_replace_guard BEFORE INSERT ON note_delete_audit
 WHEN EXISTS(SELECT 1 FROM note_delete_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key OR note_id=NEW.note_id)
 BEGIN SELECT RAISE(ABORT, 'note deletion audit replacement forbidden'); END;
