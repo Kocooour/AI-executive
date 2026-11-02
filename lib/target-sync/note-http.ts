@@ -6,7 +6,7 @@
  * or an offline cache. No browser persistence, note content, UI or write queue.
  */
 import {
-  applyNoteSyncPage, emptyNoteSyncPageState, readableNoteMetadata,
+  applyNoteSyncPage, decodeNoteSyncCheckpoint, emptyNoteSyncPageState, readableNoteMetadata,
   type NoteMetadata, type NoteSyncPageState,
 } from "./note-pages";
 
@@ -87,6 +87,8 @@ export function createStagingNoteHttpClient(
   let generation = 0;
   let state: NoteSyncPageState = emptyNoteSyncPageState();
   let pendingFor: number | null = null;
+  // A disk-restored cursor is NEVER a proof of current session/Area access.
+  let verified = false;
   let abort: AbortController | null = null;
 
   const clear = () => {
@@ -96,6 +98,7 @@ export function createStagingNoteHttpClient(
     pendingFor = null;
     scope = null;
     state = emptyNoteSyncPageState();
+    verified = false;
   };
   const activate = (next: NoteHttpScope) => {
     if (!validScope(next)) throw new TypeError("Invalid authenticated note scope");
@@ -104,7 +107,20 @@ export function createStagingNoteHttpClient(
       areaId: next.areaId };
   };
   const currentScope = (): NoteHttpScope | null => scope ? { ...scope } : null;
-  const read = (): NoteMetadata[] => scope ? readableNoteMetadata(state) : [];
+  const read = (): NoteMetadata[] => scope && verified ? readableNoteMetadata(state) : [];
+  /** Only after activate() with trusted identity; restored metadata remain unreadable
+   * until a successful, freshly authorized HTTP response for this scope. */
+  const resumeUnverified = (raw: unknown): boolean => {
+    if (!scope || pendingFor !== null) return false;
+    const checked = decodeNoteSyncCheckpoint(raw);
+    if (!checked) return false;
+    state = checked;
+    verified = false;
+    return true;
+  };
+  /** A single immutable (manifest + cursor) checkpoint for one atomic write. */
+  const checkpoint = (): NoteSyncPageState | null =>
+    scope && verified && pendingFor === null ? decodeNoteSyncCheckpoint(state) : null;
 
   const pull = async (): Promise<NoteHttpPullResult> => {
     if (!scope) return { kind: "inactive" };
@@ -141,6 +157,7 @@ export function createStagingNoteHttpClient(
           if (!is409Code(body)) return { kind: "invalid_response" };
           if (body.code === "resync_required") {
             state = emptyNoteSyncPageState();
+            verified = false;
             return { kind: "resync_required" };
           }
           if (attempt === 0) continue;
@@ -153,11 +170,13 @@ export function createStagingNoteHttpClient(
         if (next.ok === false) {
           if (next.reason === "resync_required") {
             state = emptyNoteSyncPageState();
+            verified = false;
             return { kind: "resync_required" };
           }
           return { kind: "invalid_response" };
         }
         state = next.state;
+        verified = true;
         return { kind: "applied", phase: state.phase, more: (body as { more: boolean }).more };
       }
       return { kind: "stale" };
@@ -166,5 +185,5 @@ export function createStagingNoteHttpClient(
       if (abort === controller) abort = null;
     }
   };
-  return { activate, clear, currentScope, read, pull };
+  return { activate, clear, currentScope, read, pull, resumeUnverified, checkpoint };
 }
