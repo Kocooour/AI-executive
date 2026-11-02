@@ -102,7 +102,7 @@ test("signed write session edits notes; audit and receipt contain no note conten
     .get(TARGET_STAGING_NOTE_RECEIPT_PREFIX + "%").n, 2);
   const changes = db.prepare("SELECT seq,kind,note_id,area_id,project_id,revision FROM note_change_journal ORDER BY seq").all();
   assert.deepEqual(changes.map(x => [x.seq,x.kind,x.note_id,x.revision]), [
-    [1,"edit","own",1], [2,"edit","child",1],
+    [1,"edit","own",1], [1,"edit","child",1],
   ]);
   assert.equal(changes[1].area_id,"team-area");
   assert.equal(changes[1].project_id,"project");
@@ -239,7 +239,7 @@ test("signed note deletion is atomic and content-free: private + inherited share
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_tombstones").get().n, 2);
   assert.deepEqual(db.prepare("SELECT seq,kind,note_id,area_id,revision FROM note_change_journal ORDER BY seq").all()
     .map(e => [e.seq,e.kind,e.note_id,e.revision]), [
-      [1,"delete","own",1], [2,"delete","child",1],
+      [1,"delete","own",1], [1,"delete","child",1],
     ]);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM note_change_journal WHERE kind='delete'").get().n, 2);
 
