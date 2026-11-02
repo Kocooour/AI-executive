@@ -157,10 +157,14 @@ export function decodeNoteSyncCheckpoint(value: unknown): NoteSyncPageState | nu
       !Array.isArray(value.visible) || !Array.isArray(value.pending) ||
       value.visible.length > MAX_AREA_NOTES || value.pending.length > MAX_AREA_NOTES ||
       !value.visible.every(entry) || !value.pending.every(entry)) return null;
-  // Capture a local variable: narrowing record[index] is not retained by TS
-  // across the indexed-record branches and array callbacks below.
-  const cursor = value.cursor;
-  if (cursor !== null && !validCursor(cursor)) return null;
+  // Explicitly construct a typed variable from the untrusted IndexedDB
+  // field; narrowing an unknown index value in a compound expression is not
+  // sufficient for the TypeScript return type.
+  const rawCursor: unknown = value.cursor;
+  let cursor: string | null;
+  if (rawCursor === null) cursor = null;
+  else if (validCursor(rawCursor)) cursor = rawCursor;
+  else return null;
   if (value.phase === "bootstrap") {
     if (value.visible.length !== 0 ||
         (cursor === null ? value.pending.length !== 0 : value.pending.length === 0))
