@@ -22,7 +22,7 @@ note synchronization, not an HTTP endpoint or an activated sync client.
   After the first page, an internal `afterId` is accepted **only together**
   with the expected snapshot revision. A mismatch fails closed (null).
   ID order is SQLite binary UTF-8; the same order is used for keyset filtering.
-- The staging cap of 4096 live notes is enforced *before pagination*. Any
+- The 4096-note limit is enforced for **eligible notes in this Area** *before pagination*; the required canonical store preflight separately enforces the **global** staging cap. Any
   malformed eligible row, missing schema, excessive count or unauthorized
   Area fails closed with the same null result. The canonical store preflight
   remains a mandatory prerequisite and rejects structurally corrupt rows.
