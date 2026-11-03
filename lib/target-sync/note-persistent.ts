@@ -15,6 +15,13 @@ const KEY = "checkpoint";
 type Checkpoint = { version: 1; scope: NoteHttpScope; state: unknown };
 type Active = { name: string; handle: TargetSyncNamespace };
 export type PersistentNotePullResult = NoteHttpPullResult | { kind: "storage_error" };
+export type PersistentNoteClient = {
+  activate(next: NoteHttpScope): Promise<"fresh" | "restored_unverified">;
+  clear(): Promise<void>;
+  pull(): Promise<PersistentNotePullResult>;
+  read(): NoteMetadata[];
+  currentScope(): NoteHttpScope | null;
+};
 
 /** encodeURIComponent escapes the separator even inside arbitrary Area IDs. */
 export function noteMetadataNamespace(scope: NoteHttpScope): string {
@@ -48,7 +55,7 @@ function verifiedCheckpoint(value: unknown, scope: NoteHttpScope): unknown | nul
  */
 export function createStagingNotePersistentClient(
   options: { storage?: TargetSyncStorage; transport?: NoteHttpTransport; dbName?: string } = {},
-) {
+): PersistentNoteClient {
   // The browser default MUST use the global lease. Custom storage injection
   // is retained only for isolated memory/IndexedDB unit harnesses.
   if (!options.storage) return createStagingNoteLeasedClient({
@@ -193,7 +200,7 @@ export function createStagingNotePersistentClient(
  */
 export function createStagingNoteLeasedClient(
   options: { transport?: NoteHttpTransport; dbName?: string } = {},
-) {
+): PersistentNoteClient & { dispose(): Promise<void> } {
   const dbName = options.dbName ?? "lumi-note-metadata-v1";
   const storage = new IndexedDbLeasedNoteStorage(dbName);
   if (typeof BroadcastChannel === "undefined")
