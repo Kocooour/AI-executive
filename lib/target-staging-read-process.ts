@@ -6,7 +6,7 @@ import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-a
 import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
 } from "./target-task-read-model";
-import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage } from "./target-task-temporal-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
@@ -563,6 +563,60 @@ export async function readStagingTemporalPageInChild(
   const parsed = parseStagingTemporalPage(payload, scope, status, limit);
   if (payload !== null && !parsed) logStagingFailure("temporal_list", "invalid_child_dto");
   return parsed;
+}
+
+/** R2d.3g: exact detail child DTO; the guard/witness remain server-only. */
+export type StagingTemporalDetailResult =
+  | { ok: true; detail: TemporalTaskDetail }
+  | { ok: false; reason: "inaccessible" };
+
+export function parseStagingTemporalDetail(value: unknown, taskId: string): StagingTemporalDetailResult | null {
+  if (typeof taskId !== "string" || !value || typeof value !== "object" ||
+      Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (Object.keys(result).sort().join(",") === "ok,reason" &&
+      result.ok === false && result.reason === "inaccessible")
+    return { ok: false, reason: "inaccessible" };
+  if (Object.keys(result).sort().join(",") !== "guard,linearization,ok,task" ||
+      result.ok !== true || !result.task || typeof result.task !== "object" ||
+      Array.isArray(result.task) || !result.guard ||
+      typeof result.guard !== "object" || Array.isArray(result.guard)) return null;
+  const incoming = result.task as Record<string, unknown>;
+  if (incoming.id !== taskId) return null;
+  const scope: TemporalScope = incoming.areaKind === "private" ? "personal" : "shared";
+  // Reuse the list's complete task/status/date/Area allowlist, without
+  // forwarding the synthetic framing or any unvalidated child property.
+  const framed = parseStagingTemporalPage({
+    ok: true, tasks: [incoming], hasMore: false, revision: "0".repeat(64),
+    linearization: result.linearization,
+  },scope,"all",1);
+  if (!framed || framed.tasks.length !== 1 || framed.linearization.areas.length !== 1)
+    return null;
+  const t = framed.tasks[0];
+  const g = result.guard as Record<string, unknown>;
+  if (Object.keys(g).sort().join(",") !==
+      "areaId,parentRevision,projectId,taskId,taskRevision" ||
+      g.taskId !== t.id || g.projectId !== t.projectId || g.areaId !== t.areaId ||
+      !Number.isSafeInteger(g.taskRevision) || (g.taskRevision as number) < 0 ||
+      (t.projectId === null
+        ? g.parentRevision !== null
+        : !Number.isSafeInteger(g.parentRevision) ||
+          (g.parentRevision as number) < 0)) return null;
+  const guard: TargetTemporalTaskLiveGuard = {
+    taskId: t.id, projectId: t.projectId, areaId: t.areaId,
+    taskRevision: g.taskRevision as number,
+    parentRevision: g.parentRevision as number | null,
+  };
+  return { ok: true, detail: { task: t, guard, linearization: framed.linearization } };
+}
+
+export async function readStagingTemporalDetailInChild(
+  config: StagingPersonalReadConfig, taskId: string,
+): Promise<StagingTemporalDetailResult | null> {
+  const payload = await runChild(config, "target-staging-temporal-detail-child.mjs", [taskId]);
+  const result = parseStagingTemporalDetail(payload, taskId);
+  if (payload !== null && !result) logStagingFailure("temporal_detail", "invalid_child_dto");
+  return result;
 }
 
 export type StagingTaskDetailResult =

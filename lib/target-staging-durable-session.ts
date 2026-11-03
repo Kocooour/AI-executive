@@ -36,6 +36,7 @@ import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
+import type { TargetTemporalTaskLiveGuard } from "./target-task-temporal-read-model";
 import { eligibleMyPlanSummaryAreas, type HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
 import { eligibleScopedHomeSummaryAreas, type TargetHomeScope } from "./target-scoped-home-summary";
 
@@ -437,6 +438,7 @@ export function verifyTargetStagingReadLive(
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
   homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
+  temporalTaskGuard?: TargetTemporalTaskLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -512,6 +514,24 @@ export function verifyTargetStagingReadLive(
           (taskBacklinkGuard.parentRevision as number) < 0) ||
       observed.areas.length !== 1 ||
       observed.areas[0]?.areaId !== taskBacklinkGuard.areaId)) return unavailable;
+  // R2d.3g: raw SQLite TEXT task IDs are legal, including "" and Unicode.
+  // The server-generated guard binds the exact task and inherited Area,
+  // task revision (status/date/assignee/title ABA) and parent revision.
+  if (temporalTaskGuard && (
+      typeof temporalTaskGuard.taskId !== "string" ||
+      Buffer.byteLength(temporalTaskGuard.taskId,"utf8") > 4096 ||
+      temporalTaskGuard.taskId.includes("\0") ||
+      typeof temporalTaskGuard.areaId !== "string" || !temporalTaskGuard.areaId ||
+      (temporalTaskGuard.projectId !== null &&
+        typeof temporalTaskGuard.projectId !== "string") ||
+      !Number.isSafeInteger(temporalTaskGuard.taskRevision) ||
+      temporalTaskGuard.taskRevision < 0 ||
+      (temporalTaskGuard.projectId === null
+        ? temporalTaskGuard.parentRevision !== null
+        : !Number.isSafeInteger(temporalTaskGuard.parentRevision) ||
+          (temporalTaskGuard.parentRevision as number) < 0) ||
+      observed.areas.length !== 1 ||
+      observed.areas[0]?.areaId !== temporalTaskGuard.areaId)) return unavailable;
   if (noteSyncGuard && (observed.areas.length !== 1 ||
       observed.areas[0]?.areaId !== noteSyncGuard.areaId ||
       !validNoteGuardId(noteSyncGuard.areaId) ||
@@ -660,6 +680,26 @@ export function verifyTargetStagingReadLive(
               row.parentRevision !== noteGuard.parentRevision)) {
         return { ok: false, reason: "stale" };
       }
+    }
+    if (temporalTaskGuard) {
+      const current = db.prepare(`SELECT t.project_id AS projectId,
+        t.area_id AS directAreaId, t.revision AS taskRevision,
+        p.area_id AS parentAreaId, p.revision AS parentRevision
+        FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+        WHERE t.id=? LIMIT 1`).get(temporalTaskGuard.taskId) as {
+          projectId: string | null; directAreaId: string | null;
+          taskRevision: number; parentAreaId: string | null;
+          parentRevision: number | null;
+        } | undefined;
+      if (!current || current.projectId !== temporalTaskGuard.projectId ||
+          current.taskRevision !== temporalTaskGuard.taskRevision ||
+          (temporalTaskGuard.projectId === null
+            ? current.directAreaId !== temporalTaskGuard.areaId ||
+              current.parentAreaId !== null || current.parentRevision !== null
+            : current.directAreaId !== null ||
+              current.parentAreaId !== temporalTaskGuard.areaId ||
+              current.parentRevision !== temporalTaskGuard.parentRevision))
+        return { ok: false, reason: "stale" };
     }
     if (taskBacklinkGuard) {
       // Same LIVE transaction as session/Area ACL: a moved task or parent,
