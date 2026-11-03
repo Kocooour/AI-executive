@@ -138,15 +138,17 @@ export function changePreflightedTargetNoteLifecycle(
 
     let oldArea: string | null = null;
     let oldProject: string | null = null;
+    let oldPolicyRevision: number | null = null;
     let oldRevision: number | null = null;
     if (request.kind === "move") {
       const preview = previewTargetNoteWrite(db,actor,request.noteId);
       if (!preview.ok) return { ok:false, reason:"unavailable" };
       if (preview.writeAreaId !== request.writeAreaId)
         return { ok:false, reason:"write_area_mismatch" };
-      const source = db.prepare("SELECT kind FROM areas WHERE id=?")
-        .get(request.writeAreaId) as { kind: string } | undefined;
-      if (!source) return { ok:false, reason:"unavailable" };
+      const source = db.prepare("SELECT kind,policy_revision AS policyRevision FROM areas WHERE id=?")
+        .get(request.writeAreaId) as { kind: string; policyRevision: number } | undefined;
+      if (!source || !Number.isSafeInteger(source.policyRevision) ||
+          source.policyRevision < 0) return { ok:false, reason:"unavailable" };
       // Any cross-Area move into a shared audience may expose the note to
       // additional members, including shared-to-shared. Same-Area reparenting
       // leaves permissions unchanged and does not require this confirmation.
@@ -157,6 +159,7 @@ export function changePreflightedTargetNoteLifecycle(
       if (!note) return { ok:false, reason:"unavailable" };
       oldArea = note.guard.areaId;
       oldProject = note.guard.projectId;
+      oldPolicyRevision = source.policyRevision;
       oldRevision = note.note.revision;
     } else if (db.prepare("SELECT 1 FROM notes WHERE id=?").get(request.noteId) ||
         db.prepare("SELECT 1 FROM note_tombstones WHERE id=?").get(request.noteId))
@@ -197,10 +200,11 @@ export function changePreflightedTargetNoteLifecycle(
     db.prepare("INSERT INTO metadata(key,value) VALUES (?,?)").run(key,digest);
     db.prepare("INSERT INTO note_lifecycle_audit("+
       "receipt_key,kind,actor_user_id,note_id,old_area_id,area_id,old_project_id,project_id,"+
-      "parent_revision,policy_revision,revision_before,revision_after,restore_generation,committed_at_ms)"+
-      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "old_policy_revision,parent_revision,policy_revision,revision_before,revision_after,"+
+      "restore_generation,committed_at_ms)"+
+      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
         key,request.kind,actor,request.noteId,oldArea,request.areaId,oldProject,request.projectId,
-        dest.parentRevision,dest.policyRevision,oldRevision,expectedRevision,
+        oldPolicyRevision,dest.parentRevision,dest.policyRevision,oldRevision,expectedRevision,
         actualGeneration,now);
     if(!sessionLive())return{ok:false,reason:"session_revoked"};
     ctx.commit({kind:request.kind==="create"?"note_create":"note_move",payload:{}});
