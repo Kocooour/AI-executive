@@ -18,7 +18,7 @@ export type TargetPreflightCode =
   | "unsafe_path" | "missing_database" | "database_open_failed" | "database_query_failed"
   | "metadata_invalid" | "schema_invalid" | "expected_owner_mismatch" | "expected_generation_mismatch"
   | "quick_check_failed" | "integrity_check_failed" | "foreign_key_failed"
-  | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid" | "task_id_invalid"
+  | "personal_workspace_invalid" | "unassigned_area_invalid" | "task_area_invalid"
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
@@ -531,21 +531,6 @@ export function inspectIsolatedTargetStore(
           (a.system_key IS NOT NULL AND a.system_key<>'unassigned' OR NOT EXISTS
             (SELECT 1 FROM workspaces w WHERE w.id=a.workspace_id AND w.kind='personal'
               AND w.owner_user_id=a.owner_user_id))`) !== 0) fail("unassigned_area_invalid");
-    } catch { fail("database_query_failed"); }
-    // The v20 SQLite task PK predates the strict temporal DTO ID contract.
-    // Reject malformed live IDs during canonical preflight, before a scoped
-    // page can fail because only one of its otherwise readable rows is bad.
-    // Iterate rather than materializing all task IDs into memory. The checks
-    // mirror validTaskId in target-task-temporal-read-model.ts.
-    try {
-      for (const row of db.prepare("SELECT id FROM tasks").iterate() as IterableIterator<{ id: unknown }>) {
-        const id = row.id;
-        if (typeof id !== "string" || id.length === 0 || id.trim() !== id ||
-            Buffer.byteLength(id, "utf8") > 512 || /[\u0000-\u001f\u007f]/.test(id)) {
-          fail("task_id_invalid");
-          break;
-        }
-      }
     } catch { fail("database_query_failed"); }
     try {
       if (count(`SELECT COUNT(*) AS n FROM tasks t LEFT JOIN projects p ON p.id=t.project_id

@@ -39,9 +39,11 @@ type AreaRow = {
 
 const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
 const validActor = (id: unknown): id is string => typeof id === "string" && ACTOR.test(id);
-const validTaskId = (id: unknown): id is string =>
-  typeof id === "string" && id.length > 0 && id.trim() === id &&
-  Buffer.byteLength(id, "utf8") <= 512 && !/[\u0000-\u001f\u007f]/.test(id);
+// v20 task IDs are SQLite TEXT primary keys, not constrained to opaque slugs.
+// Previous R2 cursor/sync APIs already support leading/trailing whitespace,
+// arbitrary Unicode, empty strings and multi-kilobyte IDs. Do not impose a new
+// global store restriction through the temporal read path; SQL remains bound.
+const validTaskId = (id: unknown): id is string => typeof id === "string";
 const validGeneration = (g: unknown): g is string =>
   typeof g === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(g);
 const finiteEpoch = (n: number) => Number.isSafeInteger(n) && n >= 0;
