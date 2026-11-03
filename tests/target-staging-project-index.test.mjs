@@ -315,3 +315,120 @@ test("malformed requests, child metadata injection and feature-off fail closed",
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
   assert.equal(readFileSync(path.join(legacy, "sentinel"), "utf8"), "legacy unchanged");
 });
+
+test("my-plan projects include personal and only explicitly assigned shared projects", async () => {
+  const fx = fixture();
+  const [alice, bob, carol, dave, erin] = ["alice", "bob", "carol", "dave", "erin"]
+    .map(name => login(fx, name));
+  const a = await ok(get(fx, "?scope=my-plan", alice));
+  assert.deepEqual(a.projects.map(p => [p.id, p.areaKind]), [
+    ["alice-private-project", "private"], ["family-project", "shared"],
+  ]);
+  const b = await ok(get(fx, "?scope=my-plan", bob));
+  assert.deepEqual(b.projects.map(p => [p.id, p.areaKind]), [
+    ["bob-private-project", "private"], ["family-project", "shared"],
+  ]);
+  assert.deepEqual((await ok(get(fx, "?scope=my-plan", carol))).projects, [],
+    "shared viewer never inherits my-plan from other people's assignments");
+  assert.deepEqual((await ok(get(fx, "?scope=my-plan", dave))).projects, []);
+  assert.deepEqual((await ok(get(fx, "?scope=my-plan", erin))).projects, [],
+    "unassigned readable shared project belongs in shared, not in my-plan");
+  assert.deepEqual((await ok(get(fx, "?scope=my-plan", ownerCookie()))).projects, a.projects);
+  assert.equal(b.hasMore, false);
+  assert.equal(b.nextCursor, null);
+  for (const term of ["Unassigned", "Erin secret", "s-1", "assignee_user_id",
+    "member", "policyRevision", "areaEpochs", "guardProjects"]) {
+    assert.equal(JSON.stringify(b).includes(term), false, term);
+  }
+});
+
+test("my-plan project cursors bind scope and actor, and detect new assignments", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const alice = login(fx, "alice");
+  const first = await ok(get(fx, "?scope=my-plan&limit=1", bob));
+  assert.deepEqual(first.projects.map(p => p.id), ["bob-private-project"]);
+  assert.equal(first.hasMore, true);
+  assert.match(first.nextCursor, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  const second = await ok(get(fx, "?scope=my-plan&limit=1&cursor="+first.nextCursor, bob));
+  assert.deepEqual(second.projects.map(p => p.id), ["family-project"]);
+  assert.equal(second.nextCursor, null);
+  assert.equal((await get(fx, "?scope=shared&cursor="+first.nextCursor, bob)).status, 400);
+  assert.equal((await get(fx, "?scope=personal&cursor="+first.nextCursor, bob)).status, 400);
+  assert.equal((await get(fx, "?scope=my-plan&cursor="+first.nextCursor, alice)).status, 400);
+
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  // Neither a foreign project nor Bob's own private task-only mutation
+  // changes which projects are in his plan. The live guard and cursor agree.
+  db.prepare("UPDATE projects SET title='Other title' WHERE id='other-project'").run();
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('bob-new-task','bob-private','Local task')").run();
+  assert.equal((await get(fx, "?scope=my-plan&limit=1&cursor="+first.nextCursor, bob)).status, 200);
+  // The Area's assignment revision is part of the cursor, even when the
+  // newly assigned project is well beyond the original first page.
+  db.prepare("INSERT INTO tasks(id,project_id,title,assignee_user_id) VALUES ('s-new','family-second','Assigned to Bob','bob')").run();
+  assert.equal((await get(fx, "?scope=my-plan&limit=1&cursor="+first.nextCursor, bob)).status, 409);
+  const expanded = await ok(get(fx, "?scope=my-plan", bob));
+  assert.deepEqual(expanded.projects.map(p => p.id),
+    ["bob-private-project", "family-project", "family-second"]);
+  db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-2'").run();
+  db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-new'").run();
+  const reduced = await ok(get(fx, "?scope=my-plan", bob));
+  assert.deepEqual(reduced.projects.map(p => p.id), ["bob-private-project"]);
+  const fullShared = await ok(get(fx, "?scope=shared", bob));
+  assert.deepEqual(fullShared.projects.map(p=>p.id),["family-project","family-second"]);
+  db.close();
+});
+
+test("my-plan live release rejects assignment loss even when project stays shared", async () => {
+  const fx = fixture();
+  const bob = login(fx, "bob");
+  const tokenHash = durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const child = () => readProcess.readStagingAuthorizedProjectIndexInChild({
+    ...fx.store, ownerUserId: "alice", sessionTokenHash: tokenHash,
+  }, "my-plan", 1, 1);
+  const snapshot = await child();
+  assert.ok(snapshot);
+  assert.deepEqual(snapshot.projects.map(p => p.id), ["family-project"]);
+  assert.ok(snapshot.areaEpochs && snapshot.areaEpochs.length === 2);
+  const release = () => verifyStagingReadBeforeRelease(req(fx, "?scope=my-plan", bob),
+    { kind:"session", tokenHash }, fx.store, "alice", snapshot.linearization,
+    undefined, { projects: snapshot.guardProjects,
+      myPlan: { areas: snapshot.areaEpochs } });
+  assert.equal(release(), "ok");
+  const db = new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-2'").run();
+  assert.equal(release(), "stale",
+    "a shared project's removal from my-plan must fail live snapshot validation");
+  // Reassigned to Bob still advances the Area epoch (ABA), so old data is stale.
+  db.prepare("UPDATE tasks SET assignee_user_id='bob' WHERE id='s-2'").run();
+  assert.equal(release(), "stale");
+  db.close();
+});
+
+test("my-plan child DTO refuses forged viewer, mismatched project kind or Area epoch", async () => {
+  const fx = fixture(), bob = login(fx, "bob");
+  const good = await readProcess.readStagingAuthorizedProjectIndexInChild({
+    ...fx.store, ownerUserId: "alice",
+    sessionTokenHash: durable.hashTargetStagingSessionToken(bob.split("=")[1]),
+  }, "my-plan", 2, 0);
+  assert.ok(good && good.areaEpochs);
+  const parse = page => readProcess.parseStagingAuthorizedProjectIndex({
+    ok: true, ...page,
+  }, "my-plan");
+  assert.ok(parse(good));
+  assert.equal(parse({ ...good, areaEpochs: good.areaEpochs.slice(0,1) }), null);
+  assert.equal(parse({ ...good, areaEpochs: good.areaEpochs.map((x,i) =>
+    i===0?{...x,contentRevision:-1}:x) }), null);
+  assert.equal(parse({ ...good, projects: good.projects.map(p =>
+    p.areaKind === "private" ? {...p,areaKind:"shared"} : p) }), null);
+  assert.equal(parse({ ...good, linearization: {
+    ...good.linearization,
+    areas: good.linearization.areas.map(a => a.areaKind === "shared"
+      ? {...a,access:"viewer"} : a),
+  } }), null);
+  assert.equal(readProcess.parseStagingAuthorizedProjectIndex({
+    ok:true,...good,
+  }, "shared"), null);
+});

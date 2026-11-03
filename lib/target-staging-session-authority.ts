@@ -433,7 +433,7 @@ export class TargetStagingSessionAuthority {
   readAuthorizedProjectIndex(
     actorUserId: string, scope: TargetProjectIndexScope, limit: number, offset: number,
   ): TargetAuthorizedProjectIndexPage | null {
-    if (this.#closed || (scope !== "personal" && scope !== "shared") ||
+    if (this.#closed || (scope !== "personal" && scope !== "shared" && scope !== "my-plan") ||
         !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
         !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_STAGING_PAGE_OFFSET) return null;
     try {

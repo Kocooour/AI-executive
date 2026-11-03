@@ -861,16 +861,17 @@ export function parseStagingAuthorizedProjectIndex(
   value: unknown, scope: TargetProjectIndexScope,
 ): TargetAuthorizedProjectIndexPage | null {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
-      (scope !== "personal" && scope !== "shared")) return null;
+      (scope !== "personal" && scope !== "shared" && scope !== "my-plan")) return null;
   const data = value as Record<string, unknown>;
-  if (Object.keys(data).sort().join(",") !==
-        "guardProjects,hasMore,linearization,ok,projects,revision" ||
+  const keys = scope === "my-plan"
+    ? "areaEpochs,guardProjects,hasMore,linearization,ok,projects,revision"
+    : "guardProjects,hasMore,linearization,ok,projects,revision";
+  if (Object.keys(data).sort().join(",") !== keys ||
       data.ok !== true || !Array.isArray(data.projects) || data.projects.length > 100 ||
       !Array.isArray(data.guardProjects) || data.guardProjects.length > 101 ||
       data.guardProjects.length !== data.projects.length + (data.hasMore === true ? 1 : 0) ||
-      typeof data.hasMore !== "boolean" || typeof data.revision !== "string" ||
-      !REVISION.test(data.revision)) return null;
-  const kind = scope === "personal" ? "private" : "shared";
+      typeof data.hasMore !== "boolean" ||
+      typeof data.revision !== "string" || !REVISION.test(data.revision)) return null;
   const projects: TargetAuthorizedProjectIndexPage["projects"] = [];
   const seen = new Set<string>();
   for (const input of data.projects) {
@@ -879,9 +880,12 @@ export function parseStagingAuthorizedProjectIndex(
     if (Object.keys(row).sort().join(",") !== "areaId,areaKind,id,title" ||
         !isReadableStagingProjectId(row.id) || seen.has(row.id) ||
         typeof row.title !== "string" || typeof row.areaId !== "string" ||
-        !row.areaId || row.areaKind !== kind) return null;
+        !row.areaId || (row.areaKind !== "private" && row.areaKind !== "shared") ||
+        (scope === "personal" && row.areaKind !== "private") ||
+        (scope === "shared" && row.areaKind !== "shared")) return null;
     seen.add(row.id);
-    projects.push({ id: row.id, title: row.title, areaId: row.areaId, areaKind: kind });
+    projects.push({ id: row.id, title: row.title, areaId: row.areaId,
+      areaKind: row.areaKind });
   }
   const guards: TargetAuthorizedProjectIndexPage["guardProjects"] = [];
   for (const input of data.guardProjects) {
@@ -892,12 +896,37 @@ export function parseStagingAuthorizedProjectIndex(
         !row.areaId || guards.some(g => g.id === row.id)) return null;
     guards.push({ id: row.id, areaId: row.areaId });
   }
-  if (projects.some((p, i) => p.id !== guards[i]?.id || p.areaId !== guards[i]?.areaId)) return null;
+  if (projects.some((p, i) => p.id !== guards[i]?.id ||
+      p.areaId !== guards[i]?.areaId)) return null;
   const linearization = parseLinearization(data.linearization,
-    new Map(guards.map(g => [g.areaId, kind] as const)));
-  if (!linearization || linearization.areas.some(a => a.areaKind !== kind)) return null;
+    new Map(projects.map(p => [p.areaId, p.areaKind] as const)));
+  if (!linearization || linearization.areas.some(a =>
+      (scope === "personal" && a.areaKind !== "private") ||
+      (scope === "shared" && a.areaKind !== "shared") ||
+      (scope === "my-plan" && a.areaKind === "shared" &&
+        a.access !== "editor" && a.access !== "admin"))) return null;
+  const known = new Map(linearization.areas.map(a => [a.areaId, a.areaKind] as const));
+  if (projects.some(p => known.get(p.areaId) !== p.areaKind) ||
+      guards.some(g => !known.has(g.areaId))) return null;
+  if (scope !== "my-plan") return { projects, hasMore: data.hasMore,
+    revision: data.revision, linearization, guardProjects: guards };
+
+  if (!Array.isArray(data.areaEpochs) ||
+      data.areaEpochs.length !== linearization.areas.length) return null;
+  const areaEpochs: NonNullable<TargetAuthorizedProjectIndexPage["areaEpochs"]> = [];
+  for (const [i, raw] of data.areaEpochs.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const row = raw as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !==
+          "areaId,contentRevision,projectContentRevision" ||
+        row.areaId !== linearization.areas[i]?.areaId ||
+        !rev(row.projectContentRevision) || !rev(row.contentRevision)) return null;
+    areaEpochs.push({ areaId: row.areaId as string,
+      projectContentRevision: row.projectContentRevision,
+      contentRevision: row.contentRevision });
+  }
   return { projects, hasMore: data.hasMore, revision: data.revision,
-    linearization, guardProjects: guards };
+    linearization, guardProjects: guards, areaEpochs };
 }
 
 export async function readStagingAuthorizedProjectIndexInChild(

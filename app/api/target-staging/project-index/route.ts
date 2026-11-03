@@ -23,7 +23,7 @@ const answer = (status: number, error: string): Response =>
   Response.json({ error }, { status, headers });
 
 /** Reuse the hardened cursor primitive with a separate project-list/scope binding. */
-function indexBinding(binding: string, scope: "personal" | "shared"): string {
+function indexBinding(binding: string, scope: "personal" | "shared" | "my-plan"): string {
   return createHash("sha256").update("lumi:r2d:project-index-cursor:v1\0")
     .update(binding).update("\0").update(scope).digest("base64url");
 }
@@ -51,7 +51,7 @@ export async function GET(request: Request): Promise<Response> {
         params.getAll("limit").length > 1 || params.getAll("cursor").length > 1 ||
         params.getAll("scope").length > 1) return answer(400, "Invalid request");
     const scope = params.get("scope") ?? "personal";
-    if (scope !== "personal" && scope !== "shared") return answer(400, "Invalid request");
+    if (scope !== "personal" && scope !== "shared" && scope !== "my-plan") return answer(400, "Invalid request");
     const rawLimit = params.get("limit");
     if (rawLimit !== null && !/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit))
       return answer(400, "Invalid request");
@@ -81,7 +81,9 @@ export async function GET(request: Request): Promise<Response> {
     }, scope, limit, offset);
     const release = page
       ? verifyStagingReadBeforeRelease(request, identity, store, ownerUserId,
-        page.linearization, undefined, { projects: page.guardProjects })
+        page.linearization, undefined, { projects: page.guardProjects,
+          ...(scope === "my-plan" && page.areaEpochs ?
+            { myPlan: { areas: page.areaEpochs } } : {}) })
       : verifyStagingIdentityBeforeRelease(request, identity, store);
     if (release !== "ok" && release !== "stale") return stagingIdentityRefusal(release);
     if (process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED !== "true" ||
