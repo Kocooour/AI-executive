@@ -37,6 +37,7 @@ import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
 import { eligibleMyPlanSummaryAreas, type HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
+import { eligibleScopedHomeSummaryAreas, type TargetHomeScope } from "./target-scoped-home-summary";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -435,7 +436,7 @@ export function verifyTargetStagingReadLive(
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
-  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[] },
+  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -468,6 +469,10 @@ export function verifyTargetStagingReadLive(
           area.access !== "editor" && area.access !== "admin")
       )))) return unavailable;
   if (homeSummaryGuard && (
+      (homeSummaryGuard.scope !== undefined &&
+        homeSummaryGuard.scope !== "personal" &&
+        homeSummaryGuard.scope !== "shared" &&
+        homeSummaryGuard.scope !== "my-plan") ||
       !Array.isArray(homeSummaryGuard.areas) ||
       homeSummaryGuard.areas.length > MAX_SCOPED_READ_AREAS ||
       homeSummaryGuard.areas.length !== observed.areas.length ||
@@ -564,7 +569,9 @@ export function verifyTargetStagingReadLive(
       // Re-evaluate the FULL currently eligible Area set, not only Areas
       // contributing nonempty rows. This catches newly granted shared Areas
       // and first assignments between the snapshot and the HTTP release.
-      const current = eligibleMyPlanSummaryAreas(db, actorUserId);
+      const current = homeSummaryGuard.scope
+        ? eligibleScopedHomeSummaryAreas(db, actorUserId, homeSummaryGuard.scope)
+        : eligibleMyPlanSummaryAreas(db, actorUserId);
       if (!current || current.length !== homeSummaryGuard.areas.length)
         return { ok: false, reason: "stale" };
       for (let i = 0; i < current.length; i++) {
