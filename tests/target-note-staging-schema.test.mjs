@@ -31,7 +31,7 @@ const rev = (db, id) => db.prepare("SELECT revision FROM notes WHERE id=?").get(
 test("R2d.2b canonical schema protects private/parent-inherited note reads", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 18);
+    assert.equal(TARGET_STORE_SCHEMA_VERSION, 19);
     assert.equal(read(db, "alice", "n-private")?.note.body, "Secret");
     assert.equal(read(db, "bob", "n-private"), null);
     assert.equal(read(db, "bob", "n-shared")?.note.body, "Shared content");

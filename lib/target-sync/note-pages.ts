@@ -14,10 +14,12 @@ export type NoteMetadata = {
   parentRevision: number | null;
 };
 export type NoteMetadataChange = {
-  kind: "edit" | "delete";
+  kind: "edit" | "delete" | "upsert" | "leave";
   noteId: string;
   projectId: string | null;
   revision: number;
+  /** Required only for audited create/Area entry/reparent upserts. */
+  parentRevision?: number | null;
 };
 export type NoteSyncWirePage = {
   phase: "bootstrap" | "changes";
@@ -64,10 +66,18 @@ function entry(value: unknown): value is NoteMetadata {
     : validId(value.projectId) && safeRevision(value.parentRevision);
 }
 function change(value: unknown): value is NoteMetadataChange {
-  return record(value) && keys(value, "kind,noteId,projectId,revision") &&
-    (value.kind === "edit" || value.kind === "delete") &&
-    validId(value.noteId) && (value.projectId === null || validId(value.projectId)) &&
-    safeRevision(value.revision);
+  if (!record(value) ||
+      (value.kind !== "edit" && value.kind !== "delete" &&
+       value.kind !== "upsert" && value.kind !== "leave") ||
+      !validId(value.noteId) ||
+      !(value.projectId === null || validId(value.projectId)) ||
+      !safeRevision(value.revision)) return false;
+  if (value.kind === "upsert") {
+    return keys(value, "kind,noteId,parentRevision,projectId,revision") &&
+      (value.projectId === null ? value.parentRevision === null :
+        safeRevision(value.parentRevision));
+  }
+  return keys(value, "kind,noteId,projectId,revision") && value.revision > 0;
 }
 
 /** Strict response DTO allowlist: no content or internal server stamps. */
@@ -131,13 +141,27 @@ export function applyNoteSyncPage(
   const visible = new Map(state.visible.map(v => [v.id, { ...v }]));
   for (const event of page.changes) {
     const existing = visible.get(event.noteId);
-    // New IDs and skipped revisions indicate an unjournaled create/move or
-    // inconsistent feed. Rebootstrap instead of publishing a partial cache.
+    if (event.kind === "upsert") {
+      // The first event for a newly visible Area need not start at revision
+      // zero: it may have been created or edited in another private Area.
+      // Existing IDs may only advance by one, never regress or skip.
+      if (existing && event.revision !== existing.revision + 1) {
+        return { ok: false, reason: "resync_required" };
+      }
+      visible.set(event.noteId, {
+        id: event.noteId, revision: event.revision,
+        projectId: event.projectId, parentRevision: event.parentRevision!,
+      });
+      continue;
+    }
+    // A leave removes the old Area's copy without exposing the destination.
+    // Edit/delete still require the original parent, exact next revision and
+    // a known note, so unjournaled updates fail closed.
     if (!existing || event.revision !== existing.revision + 1 ||
-        event.projectId !== existing.projectId) {
+        (event.kind !== "leave" && event.projectId !== existing.projectId)) {
       return { ok: false, reason: "resync_required" };
     }
-    if (event.kind === "delete") visible.delete(event.noteId);
+    if (event.kind === "delete" || event.kind === "leave") visible.delete(event.noteId);
     else visible.set(event.noteId, { ...existing, revision: event.revision });
   }
   return { ok: true, state: {

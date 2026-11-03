@@ -113,6 +113,7 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ phase: result.page.phase, entries: result.page.entries,
       changes: result.page.changes.map(c => ({
         kind: c.kind, noteId: c.noteId, projectId: c.projectId, revision: c.revision,
+        ...(c.kind === "upsert" ? { parentRevision: c.parentRevision } : {}),
       })), more: result.page.more, cursor: result.page.cursor }, { headers });
   } catch (error) {
     logStagingFailure("target-staging/note-sync", "route_exception", error);

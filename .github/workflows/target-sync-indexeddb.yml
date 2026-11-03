@@ -5,6 +5,11 @@ on:
     paths:
       - ".github/workflows/target-sync-indexeddb.yml"
       - "lib/target-sync/**"
+      - "lib/target-note-lifecycle-*.ts"
+      - "lib/target-note-sync-read-model.ts"
+      - "lib/target-store-bootstrap.ts"
+      - "lib/target-store-preflight.ts"
+      - "tests/target-note-lifecycle-journal.test.mjs"
       - "e2e/target-sync-indexeddb.spec.ts"
       - "e2e/note-persistent-indexeddb.spec.ts"
       - "e2e/playwright.indexeddb.config.ts"
@@ -36,7 +41,7 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Focused note checkpoint and error classification unit tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-note-sync-persistent.test.mjs tests/server-errors.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-note-sync-persistent.test.mjs tests/server-errors.test.mjs tests/target-note-lifecycle-journal.test.mjs tests/target-note-sync-read-model.test.mjs tests/target-note-sync-pages.test.mjs
       - name: Install focused browser
         run: pnpm exec playwright install --with-deps chromium
       - name: Run isolated IndexedDB scenarios

@@ -4,10 +4,10 @@ import { readAuthorizedTargetNoteBootstrapPage, NOTE_BOOTSTRAP_PAGE_LIMIT } from
 import { openTargetNoteSyncCursor, sealTargetNoteSyncCursor, type NoteSyncCursorScope } from "./target-note-sync-cursor";
 import type { TargetReadLinearization } from "./target-task-read-model";
 
-type EventRow = { seq: number; kind: "edit" | "delete"; note_id: string;
-  project_id: string | null; revision: number };
-export type TargetNoteChange = { seq: number; kind: "edit" | "delete";
-  noteId: string; projectId: string | null; revision: number };
+type EventRow = { seq: number; kind: "edit" | "delete" | "upsert" | "leave"; note_id: string;
+  project_id: string | null; parent_revision: number | null; revision: number };
+export type TargetNoteChange = { seq: number; kind: "edit" | "delete" | "upsert" | "leave";
+  noteId: string; projectId: string | null; revision: number; parentRevision?: number | null };
 export type TargetNoteSyncPage = {
   phase: "bootstrap" | "changes";
   entries: { id: string; revision: number; projectId: string | null; parentRevision: number | null }[];
@@ -89,14 +89,18 @@ export function readAuthorizedTargetNoteSyncPage(
     }
     if (position.afterSeq > stamp.head || position.contentRevision > stamp.contentRevision ||
         stamp.contentRevision - position.contentRevision !== stamp.head - position.afterSeq) return null;
-    const rows = db.prepare(`SELECT seq,kind,note_id,project_id,revision
+    const rows = db.prepare(`SELECT seq,kind,note_id,project_id,parent_revision,revision
       FROM note_change_journal WHERE area_id=? AND seq>? ORDER BY seq LIMIT ?`)
       .all(request.areaId, position.afterSeq, request.limit + 1) as EventRow[];
     const chosen = rows.slice(0, request.limit);
     let expected = position.afterSeq;
     for (const row of rows) {
-      if (++expected !== row.seq || (row.kind !== "edit" && row.kind !== "delete") ||
-          typeof row.note_id !== "string" || !safeInt(row.revision)) return null;
+      if (++expected !== row.seq || !["edit", "delete", "upsert", "leave"].includes(row.kind) ||
+          typeof row.note_id !== "string" || !safeInt(row.revision) ||
+          (row.kind === "upsert"
+            ? (row.project_id === null ? row.parent_revision !== null
+              : !safeInt(row.parent_revision))
+            : row.parent_revision !== null || row.revision === 0)) return null;
     }
     const next = { phase: "changes" as const, afterSeq: position.afterSeq + chosen.length,
       contentRevision: position.contentRevision + chosen.length };
@@ -104,6 +108,7 @@ export function readAuthorizedTargetNoteSyncPage(
     return cursor ? { phase: "changes", entries: [], changes: chosen.map(row => ({
       seq: row.seq, kind: row.kind, noteId: row.note_id,
       projectId: row.project_id, revision: row.revision,
+      ...(row.kind === "upsert" ? { parentRevision: row.parent_revision } : {}),
     })), more: rows.length > chosen.length, cursor,
       linearization: first.linearization } : null;
   } catch {
