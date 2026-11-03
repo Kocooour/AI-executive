@@ -31,6 +31,7 @@ const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/project-index/route.ts");
 const { GET: GET_HOME } = await import("../app/api/target-staging/home/my-plan/route.ts");
+const { GET: GET_SCOPED_HOME } = await import("../app/api/target-staging/home/summary/route.ts");
 const { GET: GET_PROJECT_TASKS } = await import("../app/api/target-staging/projects/[projectId]/tasks/route.ts");
 const readProcess = await import("../lib/target-staging-read-process.ts");
 const { verifyStagingReadBeforeRelease } = await import("../lib/target-staging-http-identity.ts");
@@ -569,4 +570,150 @@ test("Home capped counts report lower bounds instead of unbounded totals",async(
   assert.equal(result.body.counts.privateTasks,1000);
   assert.equal(result.body.truncated.privateTasks,true);
   assert.equal(result.body.truncated.assignedSharedTasks,false);
+});
+
+
+async function scopedHome(cookie, query = "?scope=my-plan") {
+  const response = await GET_SCOPED_HOME(new Request(
+    "http://localhost:3001/api/target-staging/home/summary" + query,
+    { headers: cookie ? { cookie, "x-forwarded-for": "10.9.0.5" } :
+      { "x-forwarded-for": "10.9.0.5" } },
+  ));
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  return { status: response.status, body: await response.json() };
+}
+const scopedValues = (projects, tasks) => ({
+  counts: { projects, tasks }, truncated: { projects: false, tasks: false },
+});
+
+test("scoped Home inventories respect private, shared viewer and my-plan assignment", async () => {
+  const fx = fixture();
+  const [alice,bob,carol,dave,erin] =
+    ["alice","bob","carol","dave","erin"].map(id=>login(fx,id));
+  for (const [cookie,personal,shared,plan] of [
+    [alice,[1,0],[2,3],[2,1]],
+    [bob,[1,0],[2,3],[2,1]],
+    [carol,[0,0],[2,3],[0,0]],
+    [dave,[0,0],[0,0],[0,0]],
+    [erin,[0,0],[1,0],[0,0]],
+  ]) {
+    for (const [scope,totals] of [
+      ["personal",personal],["shared",shared],["my-plan",plan],
+    ]) {
+      const result=await scopedHome(cookie,"?scope="+scope);
+      assert.deepEqual(result,{status:200,body:{
+        scope,...scopedValues(...totals),
+      }},scope);
+      for (const needle of ["alice-private-project","bob-private-project",
+        "family-area","family-project","s-1","member","policyRevision",
+        "areaEpochs","linearization","actorUserId"]) {
+        assert.equal(JSON.stringify(result.body).includes(needle),false,needle);
+      }
+    }
+  }
+  assert.deepEqual((await scopedHome(ownerCookie(), "?scope=my-plan")).body,
+    {scope:"my-plan",...scopedValues(2,1)});
+  assert.deepEqual((await scopedHome(bob,"")).body,
+    {scope:"my-plan",...scopedValues(2,1)});
+  // A standalone private task belongs to Personal and My Plan, but not Shared.
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('bob-local','bob-private','Private')").run();
+  assert.deepEqual((await scopedHome(bob,"?scope=personal")).body.counts,{projects:1,tasks:1});
+  assert.deepEqual((await scopedHome(bob,"?scope=my-plan")).body.counts,{projects:2,tasks:2});
+  assert.deepEqual((await scopedHome(bob,"?scope=shared")).body.counts,{projects:2,tasks:3});
+  db.close();
+});
+
+test("scoped Home is flag-gated, refuses forged selectors and revoked sessions",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED="false";
+  assert.equal((await scopedHome(bob)).status,404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED="true";
+  assert.equal((await scopedHome(null)).status,401);
+  for (const query of ["?scope=other","?scope=personal&scope=shared",
+    "?actorUserId=alice","?scope=shared&areaId=family-area",
+    "?scope=shared&limit=100"]) {
+    assert.equal((await scopedHome(bob,query)).status,400,query);
+  }
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live=durable.verifyDurableTargetStagingSessionLive(fx.store,tokenHash);
+  assert.equal(live.ok,true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store,live.sessionId).ok,true);
+  assert.equal((await scopedHome(bob,"?scope=shared")).status,401);
+});
+
+test("scoped Home live guard covers newly granted Areas, ACL role and task epoch",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const config={...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const snapshot=await readProcess.readStagingScopedHomeSummaryInChild(config,"shared");
+  assert.ok(snapshot);
+  assert.deepEqual(snapshot.counts,{projects:2,tasks:3});
+  const request=new Request("http://localhost/api/target-staging/home/summary?scope=shared",
+    {headers:{cookie:bob}});
+  const live=(value)=>verifyStagingReadBeforeRelease(
+    request,{kind:"session",tokenHash},fx.store,"alice",value.linearization,
+    undefined,undefined,undefined,undefined,undefined,
+    {scope:"shared",areas:value.areaEpochs});
+  assert.equal(live(snapshot),"ok");
+  const db=new DatabaseSync(fx.stage.databasePath);db.exec("PRAGMA foreign_keys=ON");
+  // Assignments do not affect total Shared work, but content epochs must
+  // still fence a page assembled on a prior staging snapshot.
+  db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-2'").run();
+  assert.equal(live(snapshot),"stale");
+  const second=await readProcess.readStagingScopedHomeSummaryInChild(config,"shared");
+  assert.ok(second);assert.equal(live(second),"ok");
+  // Newly permitted Areas must invalidate the old aggregate even when empty.
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('new-shared','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('new-shared-area','New','shared','new-shared','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-shared-area','alice','admin')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-shared-area','bob','viewer')").run();
+  assert.equal(live(second),"stale");
+  const third=await readProcess.readStagingScopedHomeSummaryInChild(config,"shared");
+  assert.ok(third);assert.equal(live(third),"ok");
+  db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.equal(live(third),"stale");
+  db.close();
+});
+
+test("scoped Home child DTO rejects forged scope, viewer in My Plan, extra fields",async()=>{
+  const fx=fixture(),carol=login(fx,"carol");
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1])};
+  const good=await readProcess.readStagingScopedHomeSummaryInChild(config,"shared");
+  assert.ok(good && good.areaEpochs.some(a=>a.access==="viewer"));
+  const parse=(value,scope="shared")=>
+    readProcess.parseStagingScopedHomeSummary({ok:true,...value},scope);
+  assert.ok(parse(good));
+  assert.equal(parse(good,"my-plan"),null);
+  assert.equal(parse({...good,hidden:"private"}),null);
+  assert.equal(parse({...good,counts:{...good.counts,tasks:-1}}),null);
+  assert.equal(parse({...good,counts:{...good.counts,tasks:1001}}),null);
+  assert.equal(parse({...good,truncated:{...good.truncated,projects:true}}),null);
+  assert.equal(parse({...good,areaEpochs:[...good.areaEpochs,good.areaEpochs[0]]}),null);
+  assert.equal(parse({...good,areaEpochs:good.areaEpochs.map((a,i)=>
+    i===0?{...a,access:"private-owner"}:a)}),null);
+  assert.equal(parse({...good,linearization:{...good.linearization,areas:[]}}),null);
+});
+
+test("scoped Home caps large totals and marks truncated, existing Home remains usable",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const db=new DatabaseSync(fx.stage.databasePath);db.exec("PRAGMA foreign_keys=ON");
+  const insert=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,'bob-private','Synthetic')");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i=0;i<1002;i++)insert.run("scoped-cap-"+i);
+    db.exec("COMMIT");
+  }catch(e){db.exec("ROLLBACK");throw e;}
+  db.close();
+  const personal=await scopedHome(bob,"?scope=personal");
+  assert.equal(personal.status,200,JSON.stringify(personal.body));
+  assert.deepEqual(personal.body,{scope:"personal",
+    counts:{projects:1,tasks:1000},
+    truncated:{projects:false,tasks:true}});
+  const old=await getHome(bob);
+  assert.equal(old.status,200);
+  assert.equal(old.body.counts.privateTasks,1000);
+  assert.equal(old.body.truncated.privateTasks,true);
 });
