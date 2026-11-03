@@ -35,6 +35,7 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
+  readPreflightedTemporalStatusReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -54,7 +55,7 @@ import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scop
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
-import type { TargetStagingTaskTitleCommandStatusResult } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -765,6 +766,15 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedTemporalTaskStatus(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** Read-only current-write-ACL-bound receipt check, no mutation. */
+  temporalStatusReceipt(
+    sessionToken:string,command:TargetStagingTemporalStatusCommand,
+  ):TargetTemporalStatusReceiptResult {
+    const credential=this.#credential(sessionToken,true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    return readPreflightedTemporalStatusReceipt(this.#store,credential,command);
   }
 
   /**

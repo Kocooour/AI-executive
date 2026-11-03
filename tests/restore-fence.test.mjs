@@ -86,6 +86,8 @@ const exempt = {
   "POST /api/mail/gmail/callback": "OAuth completion page has no client generation; one-use state is tied to restore generation and checked before and after Google exchange",
   "POST /api/mail/gmail/messages": "read-only same-origin search with no persisted mutation; POST avoids search strings in URL logs",
   "PATCH /api/target-staging/tasks/[taskId]/title": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation and live ACL/revision atomically",
+  "PATCH /api/target-staging/task-temporal/status": "writes only to separately isolated staging SQLite outside the legacy backup scope; the pinned writer validates the isolated restore generation, current Area write ACL, durable session, task CAS and journal atomically",
+  "POST /api/target-staging/task-temporal/status/receipt": "read-only receipt reconciliation against isolated staging SQLite, with exact command and actor, current write ACL, staging generation and live task/Area/session guard; no legacy backup data is written",
   "POST /api/target-staging/areas/[areaId]/members": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation, live session, admin ACL and policy revision atomically",
   "POST /api/target-staging/tasks/[taskId]/delete": "writes only the separate isolated staging SQLite outside the legacy backup scope; the worker checks the staging restore generation, live session, ACL and revision atomically",
   "POST /api/target-staging/tasks/[taskId]/delete/status": "read-only receipt reconciliation in separate isolated staging SQLite; no persisted mutation",

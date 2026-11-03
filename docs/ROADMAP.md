@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-03 po sloučení R2d.3g (#213); rozpracováno R2d.3h.1 (server-only idempotentní změna stavu úkolu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-03 po sloučení R2d.3h.1 (#214); rozpracováno R2d.3h.2 (default-off HTTP dokončení úkolu a bezpečné ověření příkazu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -210,6 +210,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3e (#211):** interní autorizované a kanonicky preflightované čtení `status`, `completed_at_ms` a `due_on` úkolů v rozsazích Osobní/Sdílené/Můj plán. [Kontrakt](R2D-TASK-TEMPORAL-READ.md). Bez HTTP, UI a nasazení.
 - **Sloučeno R2d.3f (#212):** samostatně default-off HTTP seznam časových údajů úkolů s přísným DTO allowlistem, izolovaným procesem, podepsaným kurzorem a živým ověřením Area ACL. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md). Bez aktivace UI, zápisu a produkčního cutoveru.
 - **Sloučeno R2d.3g (#213):** izolované default-off HTTP čtení detailu úkolu se současným ověřením session, Area ACL, revize úkolu a případného rodiče; žádný zápis a UI. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md).
-- **R2d.3h.1 (probíhá):** server-only idempotentní complete/reopen s kontrolou write ACL, Area+restore generation, per-item CAS, potvrzením příkazu v metadatech a obsahově anonymním journal auditem. Bez HTTP nebo produkční aktivace. Následuje HTTP adaptér a změna termínu.
+- **Sloučeno R2d.3h.1 (#214):** server-only idempotentní complete/reopen s kontrolou write ACL, Area/generace, per-item CAS, potvrzením příkazu a anonymním journal auditem.
+- **R2d.3h.2 (probíhá):** staging-only a default-off HTTP preflight/PATCH pro dokončení a znovuotevření, samostatný read-only POST pro kontrolu potvrzení příkazu. Striktní autentizace, Origin/protokol, izolovaný child proces, live oprávnění a bezpečná odmítnutí. Bez produkčních zápisů. Následuje změna termínu.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
