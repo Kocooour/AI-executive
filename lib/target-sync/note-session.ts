@@ -126,7 +126,6 @@ export function createStagingNoteSessionBoundClient(
 
   const activate = async (requestedArea: string): Promise<NoteSessionActivation> => {
     const ticket = ++revision;
-    const previous = scope;
     readable = false;
     area = null;
     scope = null;
@@ -137,9 +136,9 @@ export function createStagingNoteSessionBoundClient(
     const check = await prove(requestedArea);
     if (ticket !== revision) return "superseded";
     if (check.kind !== "ok") {
-      // If another actor might have logged in, erase the previous scope and
-      // cache; an unavailable server must never resurrect a prior session.
-      if (previous) await invalidate();
+      // Even if a prior activation was still in flight, a failed new proof
+      // must fence and erase any checkpoint it could have written.
+      await invalidate();
       return check.kind === "denied" ? "locked" : "retry";
     }
     try {
@@ -206,7 +205,7 @@ export function createStagingNoteSessionBoundClient(
     activate, pull, invalidate,
     read: (): NoteMetadata[] => readable && !disposed ? core.read() : [],
     currentScope: (): NoteHttpScope | null =>
-      readable && !disposed && scope ? { ...scope } : null,
+      readable && !disposed && scope && core.currentScope() ? { ...scope } : null,
     dispose: async (): Promise<void> => {
       disposed = true;
       ++revision;
