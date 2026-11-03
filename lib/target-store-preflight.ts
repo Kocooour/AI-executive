@@ -1,5 +1,6 @@
 /** Explicit, read-only inspection of an existing R1 target staging database. */
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, statSync } from "node:fs";
+import { verifyTargetNoteLifecycleJournal } from "./target-note-lifecycle-preflight";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -368,6 +369,7 @@ export function inspectIsolatedTargetStore(
             OR a.note_sync_revision <
               (SELECT COUNT(*) FROM note_change_journal j WHERE j.area_id=a.id)`) !== 0 ||
           count("SELECT COUNT(*) AS n FROM note_change_journal") > TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS ||
+          !verifyTargetNoteLifecycleJournal(db) ||
           count(`SELECT COUNT(*) AS n FROM note_change_journal j
             LEFT JOIN note_edit_audit e ON j.kind='edit' AND e.receipt_key=j.receipt_key
             LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key
