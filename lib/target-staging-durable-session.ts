@@ -398,6 +398,10 @@ export type TargetProjectReadLiveGuard = {
 /** Project list guard also covers the lookahead row (which influences hasMore). */
 export type TargetProjectIndexLiveGuard = {
   projects: Array<{ id: string; areaId: string }>;
+  /** My-plan only: all contributing Area monotonic epochs, not a client selector. */
+  myPlan?: {
+    areas: Array<{ areaId: string; projectContentRevision: number; contentRevision: number }>;
+  };
 };
 
 /**
@@ -447,7 +451,20 @@ export function verifyTargetStagingReadLive(
         typeof project.areaId !== "string" || !project.areaId ||
         !observed.areas.some(area => area.areaId === project.areaId)) ||
       new Set(projectIndexGuard.projects.map(project => project.id)).size !==
-        projectIndexGuard.projects.length)) return unavailable;
+        projectIndexGuard.projects.length ||
+      (projectIndexGuard.myPlan !== undefined && (
+        !projectIndexGuard.myPlan ||
+        !Array.isArray(projectIndexGuard.myPlan.areas) ||
+        projectIndexGuard.myPlan.areas.length !== observed.areas.length ||
+        projectIndexGuard.myPlan.areas.some((row, i) =>
+          !row || row.areaId !== observed.areas[i]?.areaId ||
+          !Number.isSafeInteger(row.projectContentRevision) ||
+          row.projectContentRevision < 0 ||
+          !Number.isSafeInteger(row.contentRevision) ||
+          row.contentRevision < 0) ||
+        observed.areas.some(area => area.areaKind === "shared" &&
+          area.access !== "editor" && area.access !== "admin")
+      )))) return unavailable;
   if (noteGuard && (
       !validNoteGuardId(noteGuard.noteId) || !validNoteGuardId(noteGuard.areaId) ||
       (noteGuard.projectId !== null && !validNoteGuardId(noteGuard.projectId)) ||
@@ -538,6 +555,30 @@ export function verifyTargetStagingReadLive(
         WHERE id = ? AND project_id = ? AND area_id IS NULL`);
       for (const id of projectGuard.taskIds) {
         if (!child.get(id, projectGuard.projectId)) return { ok: false, reason: "stale" };
+      }
+    }
+    if (projectIndexGuard?.myPlan) {
+      // A newly assigned project or a withdrawn assignment can change the
+      // membership and order of this view without moving any project.
+      // Area content/project epochs are monotonic in the canonical staging
+      // schema, and checked with current session/ACL in ONE live transaction.
+      const epochs = db.prepare(`SELECT project_content_revision AS projectContentRevision,
+        content_revision AS contentRevision FROM areas WHERE id=?`);
+      for (const area of projectIndexGuard.myPlan.areas) {
+        const live = epochs.get(area.areaId) as {
+          projectContentRevision: number; contentRevision: number;
+        } | undefined;
+        if (!live || live.projectContentRevision !== area.projectContentRevision ||
+            live.contentRevision !== area.contentRevision)
+          return { ok: false, reason: "stale" };
+      }
+      const ownsTask = db.prepare(`SELECT 1 FROM tasks
+        WHERE project_id=? AND area_id IS NULL AND assignee_user_id=? LIMIT 1`);
+      for (const row of projectIndexGuard.projects) {
+        const area = observed.areas.find(a => a.areaId === row.areaId);
+        if (!area || (area.areaKind === "shared" &&
+            !ownsTask.get(row.id, actorUserId)))
+          return { ok: false, reason: "stale" };
       }
     }
     if (projectIndexGuard) {
