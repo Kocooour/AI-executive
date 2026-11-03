@@ -11,8 +11,11 @@ import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import type { TargetReadLinearization, TargetReadAreaAccess } from "./target-task-read-model";
 import type { TargetAuthorizedReadableProject } from "./target-project-task-read-model";
 
-export type TargetProjectIndexScope = "personal" | "shared";
+export type TargetProjectIndexScope = "personal" | "shared" | "my-plan";
 export type TargetProjectIndexGuardRow = { id: string; areaId: string };
+export type TargetProjectIndexAreaEpoch = {
+  areaId: string; projectContentRevision: number; contentRevision: number;
+};
 export type TargetAuthorizedProjectIndexPage = {
   projects: TargetAuthorizedReadableProject[];
   hasMore: boolean;
@@ -20,6 +23,8 @@ export type TargetAuthorizedProjectIndexPage = {
   linearization: TargetReadLinearization;
   /** Includes the lookahead row; checked against the LIVE store before HTTP release. */
   guardProjects: TargetProjectIndexGuardRow[];
+  /** My-plan only: monotonic Area epochs to re-check in the same LIVE ACL transaction. */
+  areaEpochs?: TargetProjectIndexAreaEpoch[];
 };
 
 const ACTOR = /^[A-Za-z0-9_.:@-]{1,120}$/;
@@ -35,7 +40,7 @@ const readableProjectIdSql = `p.id NOT IN ('', '.', '..')
 
 type AreaRow = {
   areaId: string; areaKind: "private" | "shared"; policyRevision: number;
-  projectContentRevision: number; role: string | null;
+  projectContentRevision: number; contentRevision: number; role: string | null;
 };
 type ProjectRow = TargetAuthorizedReadableProject;
 const accessOf = (area: AreaRow): TargetReadAreaAccess | null =>
@@ -49,15 +54,26 @@ export function readAuthorizedProjectIndexPage(
   },
 ): TargetAuthorizedProjectIndexPage | null {
   if (!request || !ACTOR.test(request.actorUserId) ||
-      (request.scope !== "personal" && request.scope !== "shared") ||
+      (request.scope !== "personal" && request.scope !== "shared" && request.scope !== "my-plan") ||
       !Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100 ||
       !Number.isSafeInteger(request.offset) || request.offset < 0 ||
       request.offset > MAX_STAGING_PAGE_OFFSET ||
       typeof request.restoreGeneration !== "string" || !request.restoreGeneration) return null;
   try {
-    const policy = request.scope === "personal"
-      ? "a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id AND w.owner_user_id = actor.id"
-      : "a.kind = 'shared' AND w.kind = 'shared' AND a.owner_user_id = w.owner_user_id AND member.role IN ('viewer', 'editor', 'admin')";
+    const privatePolicy = "a.kind = 'private' AND w.kind = 'personal' AND a.owner_user_id = actor.id AND w.owner_user_id = actor.id";
+    const sharedPolicy = "a.kind = 'shared' AND w.kind = 'shared' AND a.owner_user_id = w.owner_user_id AND member.role IN ('viewer', 'editor', 'admin')";
+    const planSharedPolicy = "a.kind = 'shared' AND w.kind = 'shared' AND a.owner_user_id = w.owner_user_id AND member.role IN ('editor', 'admin')";
+    const policy = request.scope === "personal" ? privatePolicy
+      : request.scope === "shared" ? sharedPolicy
+      : `((${privatePolicy}) OR (${planSharedPolicy}))`;
+    // 'Můj plán' includes every private project, plus shared projects only when
+    // an editor/admin has a task assigned to this actor in that very project.
+    // This matches the task my-plan predicate; viewers cannot enter it.
+    const projectScope = request.scope !== "my-plan" ? "1=1"
+      : `(a.kind = 'private' OR EXISTS (
+          SELECT 1 FROM tasks t INDEXED BY tasks_by_project_assignee
+          WHERE t.project_id = p.id AND t.area_id IS NULL
+            AND t.assignee_user_id = actor.id))`;
     const from = `FROM areas a
       JOIN workspaces w ON w.id = a.workspace_id
       JOIN identities actor ON actor.id = ?
@@ -68,26 +84,36 @@ export function readAuthorizedProjectIndexPage(
     // Area or private project is included in a cursor revision.
     const areas = db.prepare(`SELECT a.id AS areaId, a.kind AS areaKind,
       a.policy_revision AS policyRevision, a.project_content_revision AS projectContentRevision,
-      member.role AS role ${from}
+      a.content_revision AS contentRevision, member.role AS role ${from}
       AND EXISTS (SELECT 1 FROM projects p INDEXED BY projects_by_area
-        WHERE p.area_id = a.id AND ${readableProjectIdSql})
+        WHERE p.area_id = a.id AND ${readableProjectIdSql} AND ${projectScope})
       ORDER BY a.id COLLATE BINARY ASC
       LIMIT ?`).all(request.actorUserId, MAX_SCOPED_READ_AREAS + 1) as AreaRow[];
     if (areas.length > MAX_SCOPED_READ_AREAS) return null;
     const linearization: TargetReadLinearization = { actorUserId: request.actorUserId, areas: [] };
+    const areaEpochs: TargetProjectIndexAreaEpoch[] = [];
     const hash = createHash("sha256").update("lumi:r2d:authorized-project-index:v1\0")
       .update(request.scope).update("\0").update(request.restoreGeneration).update("\0");
     for (const a of areas) {
       const access = accessOf(a);
       if (!access || !a.areaId ||
-          a.areaKind !== (request.scope === "personal" ? "private" : "shared") ||
+          (request.scope !== "my-plan" &&
+            a.areaKind !== (request.scope === "personal" ? "private" : "shared")) ||
+          (request.scope === "my-plan" && a.areaKind === "shared" &&
+            access !== "editor" && access !== "admin") ||
           !Number.isSafeInteger(a.policyRevision) || a.policyRevision < 0 ||
-          !Number.isSafeInteger(a.projectContentRevision) || a.projectContentRevision < 0) return null;
+          !Number.isSafeInteger(a.projectContentRevision) || a.projectContentRevision < 0 ||
+          !Number.isSafeInteger(a.contentRevision) || a.contentRevision < 0) return null;
       linearization.areas.push({
         areaId: a.areaId, areaKind: a.areaKind, policyRevision: a.policyRevision, access,
       });
-      hash.update(JSON.stringify([a.areaId, a.areaKind, a.policyRevision, a.projectContentRevision, access]))
+      hash.update(JSON.stringify([a.areaId, a.areaKind, a.policyRevision, a.projectContentRevision,
+        ...(request.scope === "my-plan" && a.areaKind === "shared" ? [a.contentRevision] : []), access]))
         .update("\0");
+      if (request.scope === "my-plan") areaEpochs.push({
+        areaId: a.areaId, projectContentRevision: a.projectContentRevision,
+        contentRevision: a.contentRevision,
+      });
     }
     // Project mutation triggers bump each contributing Area's monotonic
     // project_content_revision. Cursor staleness is thus independent of the
@@ -99,7 +125,7 @@ export function readAuthorizedProjectIndexPage(
       JOIN workspaces w ON w.id = a.workspace_id
       JOIN identities actor ON actor.id = ?
       LEFT JOIN area_members member ON member.area_id = a.id AND member.user_id = actor.id
-      WHERE ${policy} AND ${readableProjectIdSql}
+      WHERE ${policy} AND ${readableProjectIdSql} AND ${projectScope}
       ORDER BY p.id COLLATE BINARY ASC LIMIT ? OFFSET ?`).all(request.actorUserId, request.limit + 1, request.offset) as ProjectRow[];
     const knownAreas = new Set(linearization.areas.map(a => a.areaId));
     if (page.some(row =>
@@ -111,6 +137,7 @@ export function readAuthorizedProjectIndexPage(
       })),
       hasMore: page.length > request.limit, revision: hash.digest("hex"), linearization,
       guardProjects: page.map(row => ({ id: row.id, areaId: row.areaId })),
+      ...(request.scope === "my-plan" ? { areaEpochs } : {}),
     };
   } catch {
     return null;
