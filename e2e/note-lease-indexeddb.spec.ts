@@ -202,3 +202,47 @@ test("deleted/recreated namespace and malformed/content-bearing checkpoints fail
   expect(result.note).toBe("a");
   expect(result.namespaces).toHaveLength(1);
 });
+
+test("checkpoint freezes metadata and lease token before the first async boundary", async ({ page }) => {
+  await harness(page);
+  const result = await page.evaluate(async () => {
+    const { IndexedDbNoteMetadataLease: Lease, IndexedDbTargetSyncStorage: Storage,
+      noteMetadataNamespace } = (globalThis as any).__noteLease;
+    const db = "lumi-note-lease-" + crypto.randomUUID();
+    const scope = { userId: "alice", areaId: "private",
+      restoreGeneration: "123e4567-e89b-42d3-a456-426614174000" };
+    const namespace = noteMetadataNamespace(scope);
+    const handle = await new Storage(db).openNamespace(namespace);
+    const lease = new Lease(db);
+    const claim = await lease.claim();
+    if (claim.kind !== "acquired") throw Error("claim");
+    const marker = await lease.marker(namespace);
+    const checkpoint = { version: 1, scope: { ...scope }, state: {
+      phase: "changes", cursor: "A".repeat(4135), pending: [],
+      visible: [{ id: "one", revision: 1, projectId: null, parentRevision: null }],
+    } };
+    const expected = structuredClone(checkpoint);
+    const write = lease.checkpoint(claim.lease, namespace, marker, checkpoint);
+    // Mutations happen immediately after dispatch but before its async DB work.
+    // The live source object was valid at call time; only the snapshot may
+    // be committed, with no later title/body or different actor scope.
+    (checkpoint.state.visible[0] as any).title = "secret-note-title";
+    (checkpoint.state as any).body = "secret-note-body";
+    checkpoint.state.visible[0].revision = 100;
+    checkpoint.scope.userId = "bob";
+    await write;
+    const saved = await handle.get("checkpoint");
+
+    // A caller mutating the returned lease token must not change the
+    // credentials already captured for a pending write.
+    const second = structuredClone(expected);
+    second.state.visible[0].revision = 2;
+    const anotherWrite = lease.checkpoint(claim.lease, namespace, marker, second);
+    claim.lease.epoch += 100;
+    await anotherWrite;
+    return { first: saved, expected, second: await handle.get("checkpoint"),
+      expectedSecond: second };
+  });
+  expect(result.first).toEqual(result.expected);
+  expect(result.second).toEqual(result.expectedSecond);
+});
