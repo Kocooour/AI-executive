@@ -147,7 +147,10 @@ export function changePreflightedTargetNoteLifecycle(
       const source = db.prepare("SELECT kind FROM areas WHERE id=?")
         .get(request.writeAreaId) as { kind: string } | undefined;
       if (!source) return { ok:false, reason:"unavailable" };
-      if (source.kind === "private" && dest.kind === "shared" &&
+      // Any cross-Area move into a shared audience may expose the note to
+      // additional members, including shared-to-shared. Same-Area reparenting
+      // leaves permissions unchanged and does not require this confirmation.
+      if (request.writeAreaId !== request.areaId && dest.kind === "shared" &&
           !request.confirmShare) return { ok:false, reason:"confirmation_required" };
       // Receipt replays are never allowed to bypass CURRENT source ACL.
       const note = readAuthorizedTargetNote(db,{actorUserId:actor,noteId:request.noteId});
