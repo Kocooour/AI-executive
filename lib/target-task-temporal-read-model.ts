@@ -43,7 +43,7 @@ const validTaskId = (id: unknown): id is string =>
   typeof id === "string" && id.length > 0 && id.trim() === id &&
   Buffer.byteLength(id, "utf8") <= 512 && !/[\u0000-\u001f\u007f]/.test(id);
 const validGeneration = (g: unknown): g is string =>
-  typeof g === "string" && /^[a-f0-9]{8}-[a-f0-9-]{27,}$/i.test(g);
+  typeof g === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(g);
 const finiteEpoch = (n: number) => Number.isSafeInteger(n) && n >= 0;
 
 const FROM = `FROM tasks t
@@ -80,7 +80,10 @@ function taskFrom(row: Row): TemporalTask {
   };
 }
 function validRow(row: Row): boolean {
-  return (row.areaKind === "private" || row.areaKind === "shared") &&
+  return validTaskId(row.id) && typeof row.title === "string" &&
+    (row.projectId === null || typeof row.projectId === "string") &&
+    typeof row.areaId === "string" && row.areaId.length > 0 &&
+    (row.areaKind === "private" || row.areaKind === "shared") &&
     (row.status === "open" || row.status === "completed") &&
     ((row.status === "open" && row.completedAtMs === null) ||
       (row.status === "completed" && typeof row.completedAtMs === "number" &&
