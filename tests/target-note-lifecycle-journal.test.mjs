@@ -148,7 +148,7 @@ test("same-Area reparent advances one journal sequence and changes the parent me
   const base=page(db,stage,"team-area");
   let state=apply(emptyNoteSyncPageState(),base);
   assert.deepEqual(state.visible.map(n=>n.projectId),[null]);
-  const request=move(db,stage,"team-area","project");
+  const request=move(db,stage,"team-area","project",false);
   assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,request),{ok:true});
   const updates=page(db,stage,"team-area",base.cursor);
   assert.deepEqual(updates.changes.map(c=>[c.kind,c.parentRevision]),[["upsert",0]]);
@@ -156,6 +156,30 @@ test("same-Area reparent advances one journal sequence and changes the parent me
   assert.deepEqual(state.visible.map(n=>[n.projectId,n.parentRevision,n.revision]),
     [["project",0,1]]);
   assert.deepEqual(details(db).map(x=>[x.seq,x.kind,x.revision]),[[1,"upsert",0],[2,"upsert",1]]);
+  assert.equal(verifyTargetNoteLifecycleJournal(db),true);
+  assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:stage.directory}),
+    {ok:true,mode:"stage",issues:[]});
+});
+
+test("shared-to-shared transfer requires explicit confirmation; same-Area reparent does not",()=>{
+  const {stage,db,authority}=fixture();
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('team2','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES('second-area','Second','shared','team2','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES('second-area','alice','admin')").run();
+  const signed=authority.issueWritable("alice");
+  assert.ok(signed);
+  assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
+    create(stage,"team-area")),{ok:true});
+  const original=page(db,stage,"team-area");
+  const toOther=move(db,stage,"second-area",null,false);
+  assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,toOther),
+    {ok:false,reason:"confirmation_required"});
+  assert.equal(db.prepare("SELECT revision FROM notes WHERE id='n1'").get().revision,0);
+  assert.deepEqual(page(db,stage,"team-area",original.cursor).changes,[]);
+  assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
+    {...toOther,confirmShare:true}),{ok:true});
+  assert.deepEqual(page(db,stage,"team-area",original.cursor).changes.map(c=>c.kind),["leave"]);
+  assert.deepEqual(page(db,stage,"second-area").entries.map(n=>n.id),["n1"]);
   assert.equal(verifyTargetNoteLifecycleJournal(db),true);
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:stage.directory}),
     {ok:true,mode:"stage",issues:[]});
