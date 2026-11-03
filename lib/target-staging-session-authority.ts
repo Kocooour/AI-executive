@@ -17,6 +17,7 @@ import {
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail } from "./target-task-temporal-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -33,6 +34,7 @@ import {
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
+  readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -358,6 +360,28 @@ export class TargetStagingSessionAuthority {
     } catch {
       return null;
     }
+  }
+
+  /** R2d.3e: no HTTP route; caller must perform live-release Area guard. */
+  readTemporalTaskPage(
+    actorUserId: string, scope: TemporalScope, status: TemporalStatus,
+    limit: number, offset: number,
+  ): TemporalTaskPage | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedTemporalTaskPage(this.#store, credential,
+        { scope, status, limit, offset }) : null;
+    } catch { return null; }
+  }
+
+  /** Actor-bound isolated temporal detail, not an authorization capability. */
+  readTemporalTaskDetail(actorUserId: string, taskId: string): TemporalTaskDetail | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedTemporalTaskDetail(this.#store, credential, taskId) : null;
+    } catch { return null; }
   }
 
   /** R2d.1a: project detail and children on one pinned ACL-checked snapshot. */
