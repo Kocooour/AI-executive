@@ -90,7 +90,9 @@ export function createStagingNoteSessionBoundClient(
   let scope: NoteHttpScope | null = null;
   let readable = false;
   let disposed = false;
-  let pulling = false;
+  // A suspended request from an older session must not block its successor.
+  // Each in-flight pull owns only the revision for which it was started.
+  let pullingFor: number | null = null;
 
   const prove = async (requestedArea: string): Promise<Proof> => {
     let response: Response;
@@ -118,6 +120,7 @@ export function createStagingNoteSessionBoundClient(
    * transition; no remote status call is needed to hide the old manifest. */
   const invalidate = async (): Promise<void> => {
     ++revision;
+    pullingFor = null;
     readable = false;
     area = null;
     scope = null;
@@ -126,6 +129,7 @@ export function createStagingNoteSessionBoundClient(
 
   const activate = async (requestedArea: string): Promise<NoteSessionActivation> => {
     const ticket = ++revision;
+    pullingFor = null;
     readable = false;
     area = null;
     scope = null;
@@ -159,9 +163,9 @@ export function createStagingNoteSessionBoundClient(
     const current = scope;
     const selectedArea = area;
     if (disposed || !current || !selectedArea) return { kind: "inactive" };
-    if (pulling) return { kind: "busy" };
-    pulling = true;
     const ticket = revision;
+    if (pullingFor === ticket) return { kind: "busy" };
+    pullingFor = ticket;
     readable = false;
     try {
       const before = await prove(selectedArea);
@@ -197,7 +201,9 @@ export function createStagingNoteSessionBoundClient(
       if (ticket === revision) await invalidate();
       return { kind: "storage_error" };
     } finally {
-      pulling = false;
+      // Old requests may settle after a newly authenticated session starts
+      // another pull; never release that newer session's busy guard.
+      if (pullingFor === ticket) pullingFor = null;
     }
   };
 
@@ -209,6 +215,7 @@ export function createStagingNoteSessionBoundClient(
     dispose: async (): Promise<void> => {
       disposed = true;
       ++revision;
+      pullingFor = null;
       readable = false;
       area = null;
       scope = null;
