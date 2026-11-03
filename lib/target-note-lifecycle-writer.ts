@@ -167,7 +167,7 @@ export function changePreflightedTargetNoteLifecycle(
         noteId:request.noteId, expectedRevision:request.expectedRevision,
         writeAreaId:request.writeAreaId,restoreGeneration:request.restoreGeneration,
       });
-      if (!cas.ok) return { ok:false, reason:cas.reason };
+      if (cas.ok === false) return { ok:false, reason:cas.reason };
       if (oldArea === request.areaId && oldProject === request.projectId)
         return { ok:false, reason:"unchanged" };
     }
