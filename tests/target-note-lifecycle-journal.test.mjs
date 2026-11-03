@@ -92,6 +92,10 @@ test("v19 authenticated note create and cross-Area move are audit-backed, atomic
     assert.ok(signed&&reader);
     const request=create(stage,stage.unassignedAreaId);
     assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,request),{ok:true});
+    assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,request),
+      {ok:true,replayed:true},"committed create must be idempotent");
+    assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
+      {...request,title:"different"}),{ok:false,reason:"idempotency_conflict"});
     assert.equal(db.prepare("SELECT revision FROM notes WHERE id='n1'").get().revision,0);
     const priv=page(db,stage,stage.unassignedAreaId);
     let state=apply(emptyNoteSyncPageState(),priv);
@@ -106,6 +110,10 @@ test("v19 authenticated note create and cross-Area move are audit-backed, atomic
       {ok:false,reason:"confirmation_required"});
     const transfer=move(db,stage,"team-area");
     assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,transfer),{ok:true});
+    assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,transfer),
+      {ok:true,replayed:true},"cross-Area move retry needs no stale source CAS");
+    assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
+      {...transfer,confirmShare:false}),{ok:false,reason:"idempotency_conflict"});
     assert.equal(db.prepare("SELECT revision FROM notes WHERE id='n1'").get().revision,1);
     const oldArea=page(db,stage,stage.unassignedAreaId,privateBefore);
     assert.deepEqual(oldArea.changes.map(c=>c.kind),["leave"]);
