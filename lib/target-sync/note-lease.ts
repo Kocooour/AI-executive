@@ -207,20 +207,31 @@ export class IndexedDbNoteMetadataLease {
     value: unknown | null,
   ): Promise<void> {
     if (!validToken(lease) || lease.owner !== this.owner ||
-        !namespace.startsWith(PREFIX) || !expectedMarker ||
-        (value !== null && !validCheckpoint(value, namespace)))
+        !namespace.startsWith(PREFIX) || !expectedMarker)
+      throw new Error("note_lease_invalid_checkpoint");
+    // Snapshot both caller-controlled objects before the first await. Checking
+    // the original value and cloning it only after IndexedDB I/O would allow
+    // the caller to mutate a previously valid metadata-only checkpoint.
+    const ticket: NoteLeaseToken = { owner: lease.owner, epoch: lease.epoch };
+    let snapshot: unknown | null;
+    try {
+      snapshot = value === null ? null : structuredClone(value);
+    } catch {
+      throw new Error("note_lease_invalid_checkpoint");
+    }
+    if (snapshot !== null && !validCheckpoint(snapshot, namespace))
       throw new Error("note_lease_invalid_checkpoint");
     const db = await this.db();
     await transact(db, [MARKERS, RECORDS], "readwrite", async tx => {
       const records = tx.objectStore(RECORDS);
       const current = row(await request(records.get(LEASE_KEY)));
-      if (!current || current.owner !== lease.owner ||
-          current.epoch !== lease.epoch || current.expiresAt <= this.clock())
+      if (!current || current.owner !== ticket.owner ||
+          current.epoch !== ticket.epoch || current.expiresAt <= this.clock())
         throw new Error("note_lease_lost");
       if (await request(tx.objectStore(MARKERS).get(namespace)) !== expectedMarker)
         throw new Error("note_lease_namespace_replaced");
-      if (value === null) records.delete([namespace, CHECKPOINT_KEY]);
-      else records.put(structuredClone(value), [namespace, CHECKPOINT_KEY]);
+      if (snapshot === null) records.delete([namespace, CHECKPOINT_KEY]);
+      else records.put(snapshot, [namespace, CHECKPOINT_KEY]);
     });
   }
 }
