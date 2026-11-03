@@ -562,14 +562,19 @@ export function verifyTargetStagingReadLive(
       // membership and order of this view without moving any project.
       // Area content/project epochs are monotonic in the canonical staging
       // schema, and checked with current session/ACL in ONE live transaction.
+      // Private project visibility does not depend on tasks: do not make a
+      // private task-only edit spuriously invalidate an unchanged project list.
       const epochs = db.prepare(`SELECT project_content_revision AS projectContentRevision,
         content_revision AS contentRevision FROM areas WHERE id=?`);
       for (const area of projectIndexGuard.myPlan.areas) {
         const live = epochs.get(area.areaId) as {
           projectContentRevision: number; contentRevision: number;
         } | undefined;
-        if (!live || live.projectContentRevision !== area.projectContentRevision ||
-            live.contentRevision !== area.contentRevision)
+        const scoped = observed.areas.find(a => a.areaId === area.areaId);
+        if (!live || !scoped ||
+            live.projectContentRevision !== area.projectContentRevision ||
+            (scoped.areaKind === "shared" &&
+              live.contentRevision !== area.contentRevision))
           return { ok: false, reason: "stale" };
       }
       const ownsTask = db.prepare(`SELECT 1 FROM tasks
