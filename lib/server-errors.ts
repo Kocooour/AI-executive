@@ -228,6 +228,8 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "invalid_note_namespace",
   "note_lease_invalid_checkpoint",
   "note_lease_lost",
+  "note_lease_busy",
+  "note_lease_broadcast_unavailable",
   "note_lease_namespace_replaced",
   "Invalid retention clock", // Programmer-only guard for a non-finite maintenance timestamp.
   "Invalid mail retention cutoff", // Programmer-only guard for a non-finite clock or corrupt consent retention.
