@@ -36,10 +36,10 @@ function deletion(db, timestamp = 2000) {
     .run("b".repeat(64), timestamp);
 }
 
-test("staging v19 retains monotonic content-free edit and delete events", () => {
+test("staging v19+ retains monotonic content-free edit and delete events", () => {
   const db = fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION, 19);
+    assert.ok(TARGET_STORE_SCHEMA_VERSION >= 19, "requires staging schema v19+");
     assert.equal(TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, 8192);
     edit(db);
     deletion(db);

@@ -36,10 +36,14 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // Old staging v16 stores are deliberately rejected, never auto-migrated.
 // v18 adds an Area-local monotonic note change witness for safe journal reads.
 // Older isolated staging stores are rejected, not migrated.
-// v19 adds audit-backed create/reparent/Area-move note journal entries; it does
-// not migrate prior stores and cannot be automatically enabled in production.
-// No HTTP, sync, production migration or activation is authorized.
-export const TARGET_STORE_SCHEMA_VERSION = 19;
+// v19 adds audit-backed create/reparent/Area-move note journal entries.
+// v20 (R2d.3d) adds checked task completion state, completion timestamp
+// and an ISO calendar due date. These are shared task fields, distinct from
+// actor-private today/when planning. Every metadata change bumps the existing
+// task revision, Area content epoch and change feed atomically.
+// v19 staging stores are rejected, never migrated; no HTTP/UI activation.
+// No production migration or activation is authorized.
+export const TARGET_STORE_SCHEMA_VERSION = 20;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -257,9 +261,25 @@ CREATE TABLE tasks (
   area_id TEXT REFERENCES areas(id),
   title TEXT NOT NULL CHECK(length(trim(title)) > 0),
   assignee_user_id TEXT REFERENCES identities(id),
+  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','completed')),
+  completed_at_ms INTEGER DEFAULT NULL CHECK (
+    completed_at_ms IS NULL OR
+    (typeof(completed_at_ms)='integer' AND completed_at_ms >= 0
+      AND completed_at_ms <= 9007199254740991)),
+  -- Shared calendar deadline only. Personal today/when is actor-scoped and
+  -- deliberately NOT stored on the shared task row.
+  due_on TEXT DEFAULT NULL CHECK (
+    due_on IS NULL OR
+    (typeof(due_on)='text' AND length(due_on)=10 AND
+      due_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND
+      COALESCE(date(due_on, '+0 days')=due_on, 0))),
   revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991),
-  CHECK ((project_id IS NULL AND area_id IS NOT NULL) OR (project_id IS NOT NULL AND area_id IS NULL))
+  CHECK ((project_id IS NULL AND area_id IS NOT NULL) OR (project_id IS NOT NULL AND area_id IS NULL)),
+  CHECK ((status='open' AND completed_at_ms IS NULL)
+    OR (status='completed' AND completed_at_ms IS NOT NULL))
 );
+CREATE INDEX tasks_by_due_on_status ON tasks(due_on,status,id)
+  WHERE due_on IS NOT NULL;
 CREATE INDEX tasks_by_project ON tasks(project_id);
 CREATE INDEX tasks_by_area ON tasks(area_id);
 -- Contributing-Area EXISTS checks must seek by Area/project, not rehash tasks.
@@ -905,9 +925,11 @@ CREATE VIEW task_effective_areas AS
 -- direct staging SQL changes. They make a reverted title/ACL policy (ABA)
 -- distinguishable from the original state. Unrelated task changes cannot
 -- invalidate a task's edit revision.
-CREATE TRIGGER task_revision_bump AFTER UPDATE OF title, project_id, area_id, assignee_user_id ON tasks
+CREATE TRIGGER task_revision_bump AFTER UPDATE OF title, project_id, area_id, assignee_user_id, status, completed_at_ms, due_on ON tasks
 WHEN NEW.title IS NOT OLD.title OR NEW.project_id IS NOT OLD.project_id
   OR NEW.area_id IS NOT OLD.area_id OR NEW.assignee_user_id IS NOT OLD.assignee_user_id
+  OR NEW.status IS NOT OLD.status OR NEW.completed_at_ms IS NOT OLD.completed_at_ms
+  OR NEW.due_on IS NOT OLD.due_on
 BEGIN
   UPDATE tasks SET revision = OLD.revision + 1 WHERE id = NEW.id;
 END;

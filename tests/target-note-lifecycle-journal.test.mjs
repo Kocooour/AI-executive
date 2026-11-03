@@ -83,10 +83,10 @@ function apply(state,p){
 }
 const details= db=> db.prepare("SELECT area_id,seq,kind,note_id,project_id,parent_revision,revision FROM note_change_journal ORDER BY area_id,seq").all().map(x=>({...x}));
 
-test("v19 authenticated note create and cross-Area move are audit-backed, atomic and content-free",()=>{
+test("v19+ authenticated note create and cross-Area move are audit-backed, atomic and content-free",()=>{
   const {stage,db,authority}=fixture();
   try {
-    assert.equal(TARGET_STORE_SCHEMA_VERSION,19);
+    assert.ok(TARGET_STORE_SCHEMA_VERSION >= 19, "lifecycle journal requires v19+");
     const signed=authority.issueWritable("alice");
     const reader=authority.issueWritable("bob");
     assert.ok(signed&&reader);
