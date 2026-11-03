@@ -160,11 +160,12 @@ test("raw create/move leaves a witness gap; failed journal/audit and rejected wr
   const first=page(db,stage,"team-area");
   db.prepare("INSERT INTO notes(id,area_id,title,body) VALUES('raw','team-area','Untrusted','Body')").run();
   assert.equal(page(db,stage,"team-area",first.cursor),null,"raw create forces restart");
-  // Invalid audit provenance cannot become a trusted cursor event.
-  assert.throws(()=>db.prepare("INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,note_id,policy_revision,revision,committed_at_ms) VALUES('team-area',1,'upsert','forged','alice','raw',1,0,1000)").run());
-  const unauthorized=authority.changeNoteLifecycle(signed.sessionToken,
+  const authorized=authority.changeNoteLifecycle(signed.sessionToken,
     create(stage,"team-area",null,"fresh"));
-  assert.deepEqual(unauthorized,{ok:true});
+  assert.deepEqual(authorized,{ok:true});
+  // A journal event forged at an existing Area sequence is refused even under
+  // INSERT OR REPLACE; provenance is never silently overwritten.
+  assert.throws(()=>db.prepare("INSERT OR REPLACE INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,note_id,policy_revision,revision,committed_at_ms) VALUES(\'team-area\',1,\'upsert\',\'forged\',\'alice\',\'raw\',1,0,1000)").run());
   assert.equal(verifyTargetNoteLifecycleJournal(db),true);
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:stage.directory}),
     {ok:true,mode:"stage",issues:[]});
