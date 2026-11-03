@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-02 po sloučení R2d.2c.2g.2b.2 (#194); rozpracováno R2d.2c.2g.2b.3 (staging HTTP čtení note metadat).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu stávajících dat. Tato roadmapa eviduje **skutečný stav implementace**, nikoli pouze existence knihoven nebo testovacích komponent.
+**Aktualizováno 2026-11-03 po sloučení R2d.3c (#209); rozpracováno R2d.3d (staging v20 pro stav a termín úkolů).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -198,3 +198,13 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Product contract: jen dva uživatelské prostory **Osobní / Sdílený**; tři čtecí rozsahy **Můj plán / Osobní / Sdílené**. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádný implicitní přechod do sdílení.
 
 **Nejbližší práce: R2d.2c.2f.1 (#185), R2d.2c.2f.2 (#186) a HTTP DELETE R2d.2c.2f.3 (#187) jsou sloučené. R2d.2c.2f.4 přidává izolovaný default-off HTTP delete command-status (přesné actor/UUID/Area/restore ověření, bez mutace); další práce je note sync a typované vztahy. UI ani produkční cutover tím nejsou aktivovány.**
+
+## Aktualizace R2d.3 (2026-11-03)
+
+- **Sloučeno #205–#206:** oprávněné strukturální vazby projekt → úkol/poznámka i zpětně (default-off staging, live ACL, revize rodiče, bez obecného grafu vztahů).
+- **Sloučeno #207:** projektový přehled `Můj plán` = vlastní soukromé projekty a projekty sdílené práce přidělené aktuálnímu editorovi/adminovi (podepsaný cursor a live ACL).
+- **Sloučeno #208:** základní omezené inventární počty Home / Můj plán, bez názvů nebo identifikátorů obsahu.
+- **Sloučeno #209:** tři autorizované rozsahy Home `Osobní / Sdílené / Můj plán`, včetně sdílené read-only role viewer; staging-only, produkční UI nezapnuto.
+- **Rozpracováno R2d.3d (#210):** nové izolované schéma v20 přidává `tasks.status`, `completed_at_ms`, `due_on`, jejich databázové kontroly a monotónní revize. Bez přímého HTTP zápisu nebo produkční migrace; pokračování rozlišuje sdílený deadline a per-user today/when, doplní autorizované čtení, idempotentní write příkazy a teprve poté Today/Upcoming.
+
+R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
