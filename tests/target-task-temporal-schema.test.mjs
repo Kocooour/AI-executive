@@ -22,6 +22,8 @@ const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION } =
   await import("../lib/target-store-bootstrap.ts");
 const { inspectIsolatedTargetStore } =
   await import("../lib/target-store-preflight.ts");
+const { TargetStagingSessionAuthority } =
+  await import("../lib/target-staging-session-authority.ts");
 let serial = 0;
 function fixture() {
   const result = bootstrapIsolatedTargetStore({
@@ -139,6 +141,35 @@ test("temporal changes bump task and Area epochs exactly once, including ABA", (
       /task revision must increment by one/);
   } finally {db.close();}
   assert.deepEqual(check(result),{ok:true,mode:"r2-model",issues:[]});
+});
+
+test("temporal pages preserve the existing v20 task-ID contract without blocking other readers", () => {
+  // Existing change-feed and signed-cursor clients support padded, empty,
+  // Unicode and multi-kilobyte TEXT IDs. A new temporal DTO must not turn a
+  // valid canonical staging store into an unavailable store.
+  for (const specialId of ["bad ", " ".repeat(2), "x".repeat(3000),
+    "\u00a0bad", "\u{1F600}x", "", "bad\u0001id"]) {
+    const {db,result}=fixture();
+    try {
+      db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+        .run("a-normal",result.unassignedAreaId,"Visible normal task");
+      db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+        .run(specialId,result.unassignedAreaId,"Visible unusual task");
+    } finally {db.close();}
+    assert.deepEqual(check(result),{ok:true,mode:"r2-model",issues:[]});
+    const authority=new TargetStagingSessionAuthority({
+      stagingDirectory:result.directory,expectedRestoreGeneration:result.restoreGeneration,
+    });
+    try {
+      const page=authority.readTemporalTaskPage("owner","personal","all",100,0);
+      assert.ok(page, "authorized temporal page should remain available");
+      assert.deepEqual(page.tasks.map(t=>t.id).sort(),["a-normal",specialId].sort());
+      assert.equal(authority.readTemporalTaskDetail("owner","a-normal")?.task.id,"a-normal");
+      assert.equal(authority.readTemporalTaskDetail("owner",specialId)?.task.id,specialId);
+      assert.equal(authority.readTemporalTaskDetail("unknown",specialId),null,
+        "allowing an existing ID format must not bypass actor authorization");
+    } finally {authority.close();}
+  }
 });
 
 test("v19 metadata cannot silently become v20 without a new isolated store", () => {
