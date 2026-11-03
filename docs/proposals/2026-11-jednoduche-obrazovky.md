@@ -28,7 +28,7 @@ Projekty
 Nastavení
 ```
 
-Menu je jedna rolovatelná obrazovka bez „Více“ a bez povinného rozbalení. Projekty nejsou omezené počtem sedm; rozsah filtruje přístupná data. Klepnutí na Dnes nebo projekt odsune menu doleva a přivede další celou stránku zprava; úkol či poznámka se otevře stejným směrem o úroveň hlouběji. Zpět pohyb obrátí. Tlačítko **Zpět** i Zpět prohlížeče vrací přesnou předchozí obrazovku, posun, rozepsaný obsah a fokus na původní ovladač (nebo bezpečný nadpis/seznam) v téže oprávněné identitě a rozsahu; přímý odkaz a návrat po změně oprávnění přístup znovu ověří. Přechod respektuje omezený pohyb; vše funguje i klávesnicí bez gesta.
+Menu je jedna rolovatelná obrazovka bez „Více“ a bez povinného rozbalení. Projekty nejsou omezené počtem sedm; rozsah filtruje přístupná data. Klepnutí na Dnes nebo projekt odsune menu doleva a přivede další celou stránku zprava; úkol či poznámka se otevře stejným směrem o úroveň hlouběji. Zpět pohyb obrátí. Tlačítko **Zpět** i Zpět prohlížeče vrací přesnou předchozí obrazovku, posun, rozepsaný obsah a fokus na původní ovladač (nebo bezpečný nadpis/seznam) v téže oprávněné identitě a rozsahu; přímý odkaz a návrat po změně oprávnění přístup znovu ověří. Přechod respektuje omezený pohyb; vše funguje i klávesnicí bez gesta. Odkaz na konkrétní projekt/úkol/poznámku nese jeho stabilní neprůhledný identifikátor; přímé otevření v nové relaci či obnovení stránky nezávisí na paměti navigačního zásobníku. Každé načtení znovu ověřuje serverová oprávnění k cílové Oblasti; bez přístupu se název ani náhled neukáže. Není-li historie v zásobníku, Zpět vede na bezpečný seznam.
 
 ## 1. Domů
 
@@ -121,7 +121,7 @@ Osobní
                               ＋
 ```
 
-Řádek projektu má název, průběh a nejvýše jeden další krok nebo aktuální problém. Projekt se otevře jako samostatná stránka se Zpět do skutečného původního pohledu (kořenové menu, seznam, hledání či Oblast): název a stav, hned poté úkoly; kontext „Proč“, cíle a „Hotovo, když“, poznámky a zdroje se otevírají na vyžádání. Zůstávají dostupné průběh, další krok, vysvětlená rizika, vztahy, historie a stav ukládání dle [specifikace projektu](../UX-UI.md). Prázdné volitelné části se nevnucují; přidání zůstává snadno dostupné. Detail úkolu je další celá stránka nad projektem; Zpět vrátí přesné předchozí místo.
+Řádek projektu má název, průběh a nejvýše jeden další krok nebo aktuální problém. Projekt se otevře jako samostatná stránka se Zpět do skutečného původního pohledu (kořenové menu, seznam, hledání či Oblast): název a stav, hned poté úkoly; kontext „Proč“, cíle a „Hotovo, když“, poznámky a zdroje se otevírají na vyžádání. Zůstávají dostupné průběh, další krok, vysvětlená rizika, vztahy, historie a stav ukládání dle [specifikace projektu](../UX-UI.md). Prázdné volitelné části se nevnucují; přidání zůstává snadno dostupné. Detail úkolu je další celá stránka nad projektem; Zpět vrátí přesné předchozí místo. Právo upravovat kontext projektu nezávisí na vybraném rozsahu Můj plán / Osobní / Sdílené: soukromý vlastník a oprávněný sdílený editor/admin mohou měnit povolená pole, viewer jen čte.
 
 ## 6. Detail úkolu a rychlé přidání
 
