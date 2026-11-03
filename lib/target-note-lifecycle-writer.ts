@@ -118,6 +118,24 @@ export function changePreflightedTargetNoteLifecycle(
     if (!dest || !canWriteIsolatedTargetArea(db,actor,request.areaId))
       return { ok:false, reason:"unavailable" };
 
+    // A completed command may have created the note or already moved it into
+    // its destination. Recheck CURRENT note visibility and destination write
+    // rights before acknowledging an actor-bound receipt; source CAS applies
+    // only to fresh commands, never a confirmed replay.
+    const key = receiptKey(actor,request.noteId,request.commandId);
+    const digest = receiptDigest(request);
+    const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
+      .get(key) as { value:string }|undefined;
+    if (prior) {
+      const existing = readAuthorizedTargetNote(db,{
+        actorUserId:actor,noteId:request.noteId,
+      });
+      if (!existing || existing.guard.areaId !== request.areaId)
+        return { ok:false, reason:"unavailable" };
+      return prior.value === digest
+        ? { ok:true,replayed:true } : {ok:false,reason:"idempotency_conflict"};
+    }
+
     let oldArea: string | null = null;
     let oldProject: string | null = null;
     let oldRevision: number | null = null;
@@ -141,12 +159,6 @@ export function changePreflightedTargetNoteLifecycle(
         db.prepare("SELECT 1 FROM note_tombstones WHERE id=?").get(request.noteId))
       return { ok:false, reason:"unavailable" };
 
-    const key = receiptKey(actor,request.noteId,request.commandId);
-    const digest = receiptDigest(request);
-    const prior = db.prepare("SELECT value FROM metadata WHERE key=?")
-      .get(key) as { value:string }|undefined;
-    if (prior) return prior.value===digest ?
-      { ok:true,replayed:true } : {ok:false,reason:"idempotency_conflict"};
     if (request.kind === "move") {
       const cas = checkTargetNoteWriteContract(db,actor,{
         noteId:request.noteId, expectedRevision:request.expectedRevision,
