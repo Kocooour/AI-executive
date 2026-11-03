@@ -359,8 +359,10 @@ test("my-plan project cursors bind scope and actor, and detect new assignments",
 
   const db = new DatabaseSync(fx.stage.databasePath);
   db.exec("PRAGMA foreign_keys=ON");
-  // An unrelated user's project/title must not affect Bob's continuation.
+  // Neither a foreign project nor Bob's own private task-only mutation
+  // changes which projects are in his plan. The live guard and cursor agree.
   db.prepare("UPDATE projects SET title='Other title' WHERE id='other-project'").run();
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('bob-new-task','bob-private','Local task')").run();
   assert.equal((await get(fx, "?scope=my-plan&limit=1&cursor="+first.nextCursor, bob)).status, 200);
   // The Area's assignment revision is part of the cursor, even when the
   // newly assigned project is well beyond the original first page.
