@@ -65,6 +65,8 @@ export const TARGET_STAGING_MAX_RECEIPTS = 4096;
 export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:";
 /** R2d.3h staging-only complete/reopen receipts; audited by the append-only anchor journal. */
 export const TARGET_STAGING_TEMPORAL_STATUS_RECEIPT_PREFIX = "r2:task-temporal-status-receipt-v1:";
+/** R2d.3i.1 isolated task dueOn mutation receipts; capped independently from status writes. */
+export const TARGET_STAGING_TEMPORAL_DUE_ON_RECEIPT_PREFIX = "r2:task-temporal-due-on-receipt-v1:";
 /** Actor/note/command-scoped staging note edit confirmations; never note content. */
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 /** Isolated actor/note/command receipts for the irreversible note deletion. */
