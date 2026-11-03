@@ -39,6 +39,10 @@ const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/status/r
 const {POST}=await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
 const {parseTemporalStatusWriteReply,parseTemporalStatusReceiptReply}=
   await import("../lib/target-staging-temporal-status-http-process.ts");
+const {readStagingTemporalDetailInChild}=
+  await import("../lib/target-staging-read-process.ts");
+const {verifyTemporalStatusTaskLive}=
+  await import("../lib/target-staging-temporal-status-http.ts");
 let counter=0;
 after(()=>{
   for(const [key,value] of Object.entries(before)) {
@@ -224,6 +228,77 @@ test("Unicode padded task IDs and dynamic durable-session revocation",async()=>{
   assert.equal((await call("POST",c,bob)).status,401);
   assert.equal((await call("PATCH",c,bob)).status,401);
   assert.equal((await query(id,bob)).status,401);
+});
+
+
+/** Construct the same verified durable-session identity consumed by receipt release. */
+async function capturedStatusDetail(fx,taskId,cookie) {
+  const tokenHash=durable.hashTargetStagingSessionToken(cookie.split("=")[1]);
+  const detail=await readStagingTemporalDetailInChild({
+    ...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash,
+  },taskId);
+  assert.equal(detail?.ok,true,JSON.stringify(detail));
+  const request=new Request(base+"/receipt",{
+    method:"POST",headers:{cookie,origin:"http://localhost:3001"},
+    body:"{}",
+  });
+  const identity={kind:"session",tokenHash};
+  assert.equal(verifyTemporalStatusTaskLive(request,identity,{
+    ...fx.store,ownerUserId:"alice",
+  },detail.detail),"ok","the initial snapshot must be valid");
+  return {detail:detail.detail,request,identity};
+}
+function liveStatusGuard(fx,captured) {
+  return verifyTemporalStatusTaskLive(captured.request,captured.identity,{
+    ...fx.store,ownerUserId:"alice",
+  },captured.detail);
+}
+
+test("R2d.3h.2 refuses a receipt snapshot when shared write membership changes before release",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  // First store a real committed receipt; its existence must not grant stale access.
+  const saved=await command("s-bob","completed",bob);
+  assert.equal((await call("PATCH",saved,bob)).status,200);
+  const captured=await capturedStatusDetail(fx,"s-bob",bob);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try {
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  } finally { db.close(); }
+  assert.equal(liveStatusGuard(fx,captured),"stale",
+    "a role downgrade between read and response must suppress an old receipt");
+  const response=await call("POST",saved,bob);
+  assert.equal(response.status,404,"now-viewer cannot reconcile a previously committed command");
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  assert.equal(JSON.stringify(await response.json()).includes("committed"),false);
+});
+
+test("R2d.3h.2 rejects a task Area move between receipt snapshot and release",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const captured=await capturedStatusDetail(fx,"s-bob",bob);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try {
+    // Bob remains a writer in the destination private Area; the important
+    // invariant is exact snapshot identity, not merely current readability.
+    db.prepare("UPDATE tasks SET area_id='bob-private' WHERE id='s-bob'").run();
+  } finally { db.close(); }
+  assert.equal(liveStatusGuard(fx,captured),"stale",
+    "a moved task cannot release results observed under its previous Area");
+});
+
+test("R2d.3h.2 rejects inherited parent revisions between receipt snapshot and release",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try {
+    db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('p-inherited','family-area','Parent')").run();
+    db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('t-inherited','p-inherited','Child')").run();
+  } finally { db.close(); }
+  const captured=await capturedStatusDetail(fx,"t-inherited",bob);
+  const edit=new DatabaseSync(fx.stage.databasePath);
+  try {
+    edit.prepare("UPDATE projects SET title='Renamed' WHERE id='p-inherited'").run();
+  } finally { edit.close(); }
+  assert.equal(liveStatusGuard(fx,captured),"stale",
+    "a changed parent revision invalidates the original child receipt witness");
 });
 
 test("strict child result parsers never accept injected fields or invalid status",()=>{
