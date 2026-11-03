@@ -4,7 +4,7 @@
  * The caller supplies trusted server-authenticated identity and generation.
  * No background I/O, note contents, credentials, UI or automatic publishing.
  */
-import { IndexedDbTargetSyncStorage } from "./indexeddb";
+import { IndexedDbLeasedNoteStorage } from "./note-leased";
 import { createStagingNoteHttpClient, type NoteHttpScope, type NoteHttpTransport,
   type NoteHttpPullResult } from "./note-http";
 import { readableNoteMetadata, type NoteMetadata } from "./note-pages";
@@ -15,6 +15,13 @@ const KEY = "checkpoint";
 type Checkpoint = { version: 1; scope: NoteHttpScope; state: unknown };
 type Active = { name: string; handle: TargetSyncNamespace };
 export type PersistentNotePullResult = NoteHttpPullResult | { kind: "storage_error" };
+export type PersistentNoteClient = {
+  activate(next: NoteHttpScope): Promise<"fresh" | "restored_unverified">;
+  clear(): Promise<void>;
+  pull(): Promise<PersistentNotePullResult>;
+  read(): NoteMetadata[];
+  currentScope(): NoteHttpScope | null;
+};
 
 /** encodeURIComponent escapes the separator even inside arbitrary Area IDs. */
 export function noteMetadataNamespace(scope: NoteHttpScope): string {
@@ -47,9 +54,14 @@ function verifiedCheckpoint(value: unknown, scope: NoteHttpScope): unknown | nul
  * This module has deliberately no offline note edit/write API.
  */
 export function createStagingNotePersistentClient(
-  options: { storage?: TargetSyncStorage; transport?: NoteHttpTransport } = {},
-) {
-  const storage = options.storage ?? new IndexedDbTargetSyncStorage("lumi-note-metadata-v1");
+  options: { storage?: TargetSyncStorage; transport?: NoteHttpTransport; dbName?: string } = {},
+): PersistentNoteClient {
+  // The browser default MUST use the global lease. Custom storage injection
+  // is retained only for isolated memory/IndexedDB unit harnesses.
+  if (!options.storage) return createStagingNoteLeasedClient({
+    dbName: options.dbName, transport: options.transport,
+  });
+  const storage = options.storage;
   const http = createStagingNoteHttpClient(options.transport);
   let token = 0;
   let active: Active | null = null;
@@ -173,4 +185,120 @@ export function createStagingNotePersistentClient(
     }
   };
   return { activate, clear, pull, read, currentScope };
+}
+
+
+/**
+ * Browser default-off note metadata client. Reuses the existing authenticated
+ * HTTP reconciler, but NEVER its unguarded IndexedDB adapter: every metadata
+ * read, namespace creation/purge and checkpoint commit is lease-checked inside
+ * the same IndexedDB transaction. An incoming cross-tab invalidation also
+ * fences the local HTTP client immediately; UI activation remains separate.
+ *
+ * Actor/generation/Area inputs must still come from the verified session
+ * controller; BroadcastChannel is only a cache-revocation hint, not auth.
+ */
+export function createStagingNoteLeasedClient(
+  options: { transport?: NoteHttpTransport; dbName?: string } = {},
+): PersistentNoteClient & { dispose(): Promise<void> } {
+  const dbName = options.dbName ?? "lumi-note-metadata-v1";
+  const storage = new IndexedDbLeasedNoteStorage(dbName);
+  if (typeof BroadcastChannel === "undefined")
+    throw new Error("note_lease_broadcast_unavailable");
+  const channel = new BroadcastChannel("lumi-note-metadata-lease-revoke|" + dbName);
+  const clientId = crypto.randomUUID();
+  const core = createStagingNotePersistentClient({ storage, transport: options.transport });
+  let generation = 0;
+  let tail: Promise<void> = Promise.resolve();
+  const serial = <T>(work: () => Promise<T>): Promise<T> => {
+    const pending = tail.then(work);
+    tail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+  const broadcast = () => channel.postMessage({ kind: "note-cache-revoke-v1", sender: clientId });
+
+  /** Clear the public snapshot before any asynchronous I/O. An expired tab
+   * cannot purge data now owned by a different tab. */
+  const revoke = (): Promise<void> => {
+    ++generation;
+    storage.blockReads();
+    const owned = storage.ownsTicket();
+    const clearing = core.clear();
+    return serial(async () => {
+      try {
+        await clearing;
+      } catch (error) {
+        if (owned) throw error;
+        // A non-owner cannot erase another tab's cache; its broadcast makes
+        // the actual owner revoke and securely purge its own partition.
+      } finally {
+        await storage.release();
+      }
+    });
+  };
+  channel.onmessage = event => {
+    const msg: unknown = event.data;
+    if (!msg || typeof msg !== "object") return;
+    const payload = msg as Record<string, unknown>;
+    if (payload.kind !== "note-cache-revoke-v1" || payload.sender === clientId) return;
+    void revoke().catch(() => undefined); // memory already hidden synchronously
+  };
+
+  const activate = (next: NoteHttpScope): Promise<"fresh" | "restored_unverified"> => {
+    // Do not touch the lease or cached actor on malformed scope.
+    const probe = createStagingNoteHttpClient();
+    probe.activate(next);
+    const scope = probe.currentScope()!;
+    const requested = ++generation;
+    storage.blockReads();
+    return serial(async () => {
+      if (requested !== generation) return "fresh";
+      try {
+        if (!await storage.acquire()) throw new Error("note_lease_busy");
+        if (requested !== generation) return "fresh";
+        // If a prior owner was suspended, its synchronous read projection
+        // becomes invisible when it receives this notification.
+        broadcast();
+        const result = await core.activate(scope);
+        if (requested !== generation) return "fresh";
+        storage.allowReads();
+        return result;
+      } catch {
+        storage.blockReads();
+        await core.clear().catch(() => undefined);
+        await storage.release().catch(() => undefined);
+        throw new Error("note_cache_unavailable");
+      }
+    });
+  };
+
+  const clear = async (): Promise<void> => {
+    // Sign-out/Area revocation from even a read-only/losing tab must notify
+    // the actual writer. Never try to delete another live owner's records.
+    broadcast();
+    await revoke();
+  };
+  const pull = async (): Promise<PersistentNotePullResult> => {
+    if (!storage.isReadable() || !await storage.renew()) {
+      void revoke().catch(() => undefined);
+      return { kind: "storage_error" };
+    }
+    const result = await core.pull();
+    if (result.kind === "locked" || result.kind === "storage_error") {
+      storage.blockReads();
+      broadcast();
+      await storage.release().catch(() => undefined);
+    }
+    return result;
+  };
+  return {
+    activate, clear, pull,
+    read: (): NoteMetadata[] => storage.isReadable() ? core.read() : [],
+    currentScope: (): NoteHttpScope | null => storage.isReadable() ? core.currentScope() : null,
+    /** Release a no-longer-used client and its BroadcastChannel listener. */
+    dispose: async (): Promise<void> => {
+      channel.close();
+      await revoke();
+    },
+  };
 }

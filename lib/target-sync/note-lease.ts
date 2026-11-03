@@ -181,6 +181,85 @@ export class IndexedDbNoteMetadataLease {
     });
   }
 
+  /** Only note-cache namespaces may be touched; the sentinel lease row and
+   * other database records are never part of a namespace purge. */
+  private namespace(name: string): void {
+    if (typeof name !== "string" || !name.startsWith(PREFIX) ||
+        name.length <= PREFIX.length)
+      throw new Error("invalid_note_namespace");
+  }
+
+  private async owned(records: IDBObjectStore, ticket: NoteLeaseToken): Promise<void> {
+    if (!validToken(ticket) || ticket.owner !== this.owner)
+      throw new Error("note_lease_lost");
+    const current = row(await request(records.get(LEASE_KEY)));
+    if (!current || current.owner !== ticket.owner ||
+        current.epoch !== ticket.epoch || current.expiresAt <= this.clock())
+      throw new Error("note_lease_lost");
+  }
+
+  /** A live fenced read is serialized with all competing claims and purges. */
+  async listNamespaces(ticket: NoteLeaseToken): Promise<string[]> {
+    const db = await this.db();
+    return transact(db, [MARKERS, RECORDS], "readonly", async tx => {
+      await this.owned(tx.objectStore(RECORDS), ticket);
+      const keys = await request(tx.objectStore(MARKERS).getAllKeys());
+      return keys.filter((key): key is string =>
+        typeof key === "string" && key.startsWith(PREFIX)).sort();
+    });
+  }
+
+  /** Create/reuse a marker under the *same* transaction as the live fence.
+   * A stale tab cannot recreate a namespace even if the last marker vanished. */
+  async openNamespace(ticket: NoteLeaseToken, name: string): Promise<string> {
+    this.namespace(name);
+    const db = await this.db();
+    return transact(db, [MARKERS, RECORDS], "readwrite", async tx => {
+      await this.owned(tx.objectStore(RECORDS), ticket);
+      const markers = tx.objectStore(MARKERS);
+      const raw = await request(markers.get(name));
+      if (raw !== undefined && (typeof raw !== "string" || !raw))
+        throw new Error("note_lease_namespace_replaced");
+      const marker = raw === undefined ? crypto.randomUUID() : raw as string;
+      if (raw === undefined) markers.put(marker, name);
+      return marker;
+    });
+  }
+
+  /** Namespace deletion is atomic with the lease fence, not guarded only by
+   * a separate preceding check. Any successor owner blocks stale purges. */
+  async deleteNamespaces(ticket: NoteLeaseToken, names: readonly string[]): Promise<void> {
+    // Capture and validate the exact deletion set before the first await:
+    // a caller must not replace checked names with another partition later.
+    const targets = [...new Set(names)];
+    for (const name of targets) this.namespace(name);
+    const db = await this.db();
+    await transact(db, [MARKERS, RECORDS], "readwrite", async tx => {
+      const records = tx.objectStore(RECORDS);
+      await this.owned(records, ticket);
+      const markers = tx.objectStore(MARKERS);
+      for (const name of targets) {
+        markers.delete(name);
+        records.delete(IDBKeyRange.bound([name], [name, []], false, true));
+      }
+    });
+  }
+
+  /** Even a read of unverified persisted data must obey the current lease
+   * and marker; the higher-level client remains responsible for HTTP auth. */
+  async readCheckpoint(ticket: NoteLeaseToken, name: string, marker: string): Promise<unknown> {
+    this.namespace(name);
+    if (!marker) throw new Error("note_lease_namespace_replaced");
+    const db = await this.db();
+    return transact(db, [MARKERS, RECORDS], "readonly", async tx => {
+      const records = tx.objectStore(RECORDS);
+      await this.owned(records, ticket);
+      if (await request(tx.objectStore(MARKERS).get(name)) !== marker)
+        throw new Error("note_lease_namespace_replaced");
+      return request(records.get([name, CHECKPOINT_KEY]));
+    });
+  }
+
   /** Read-only marker receipt. Callers open the namespace through the existing
    * storage adapter first. The marker token prevents a deleted/recreated
    * namespace handle from writing into the replacement's partition. */
