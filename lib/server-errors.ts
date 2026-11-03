@@ -217,6 +217,18 @@ export const developerOnly: ReadonlySet<string> = new Set([
   "note_cache_unavailable",
   "checkpoint_unavailable",
   "scope_changed",
+  // Private note-only IndexedDB lease failures are not surfaced as server errors.
+  "note_lease_request_failed",
+  "note_lease_transaction_aborted",
+  "note_lease_open_failed",
+  "note_lease_open_blocked",
+  "note_lease_bad_clock",
+  "note_lease_corrupt",
+  "note_lease_epoch_exhausted",
+  "invalid_note_namespace",
+  "note_lease_invalid_checkpoint",
+  "note_lease_lost",
+  "note_lease_namespace_replaced",
   "Invalid retention clock", // Programmer-only guard for a non-finite maintenance timestamp.
   "Invalid mail retention cutoff", // Programmer-only guard for a non-finite clock or corrupt consent retention.
 
