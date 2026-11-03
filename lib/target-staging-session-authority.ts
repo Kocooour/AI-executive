@@ -32,6 +32,7 @@ import {
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
   readPreflightedMyPlanHomeSummary,
+  readPreflightedScopedHomeSummary,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -47,6 +48,7 @@ import type { TargetAuthorizedNote } from "./target-note-access";
 import type { PreflightedNoteSyncResult } from "./target-task-staging-reader";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import type { AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
+import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scoped-home-summary";
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
@@ -426,6 +428,22 @@ export class TargetStagingSessionAuthority {
     try {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential ? readPreflightedAuthorizedNoteSync(this.#store, credential, request) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** R2d.3c: bounded Home inventory, actor derived from verified session. */
+  readScopedHomeSummary(
+    actorUserId: string, scope: TargetHomeScope,
+  ): AuthorizedScopedHomeSummary | null {
+    if (this.#closed ||
+        (scope !== "personal" && scope !== "shared" && scope !== "my-plan"))
+      return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedScopedHomeSummary(this.#store, credential, scope) : null;
     } catch {
       return null;
     }
