@@ -8,7 +8,7 @@ try {
   const stagingDirectory = process.env.AI_EXECUTIVE_TARGET_STAGING_DIRECTORY;
   const expectedRestoreGeneration = process.env.AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION;
   const ownerUserId = process.env.AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID;
-  if (extra !== undefined || (scope !== "personal" && scope !== "shared") ||
+  if (extra !== undefined || (scope !== "personal" && scope !== "shared" && scope !== "my-plan") ||
       !/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit || "") ||
       !/^(?:0|[1-9][0-9]{0,6})$/.test(rawOffset || "") ||
       Number(rawOffset) > 1_000_000 ||
