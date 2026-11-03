@@ -34,6 +34,7 @@ import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import { readAuthorizedProjectStructuralRelations, type TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
+import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
@@ -682,6 +683,23 @@ export function readPreflightedAuthorizedProjectStructuralRelations(
         return actorUserId ? readAuthorizedProjectStructuralRelations(db, {
           actorUserId, projectId, limit, offset,
           restoreGeneration: store.expectedRestoreGeneration,
+        }) : null;
+      }, () => null),
+  );
+}
+
+/** One actor-scoped canonical task/note parent backlink on a pinned snapshot. */
+export function readPreflightedAuthorizedTargetParentBacklink(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  kind: TargetBacklinkKind, id: string,
+): TargetAuthorizedBacklink | null {
+  return withPreflightedStore<TargetAuthorizedBacklink | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<TargetAuthorizedBacklink | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId ? readAuthorizedTargetParentBacklink(db, {
+          actorUserId, kind, id,
         }) : null;
       }, () => null),
   );

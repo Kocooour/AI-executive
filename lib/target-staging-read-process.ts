@@ -9,6 +9,7 @@ import type {
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
+import { validBacklinkId, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import { isReadableStagingProjectId } from "./target-project-id";
 import type { TargetReadableNote } from "./target-note-access";
@@ -777,6 +778,81 @@ export async function readStagingProjectStructuralRelationsInChild(
   const parsed = parseStagingStructuralRelations(payload, projectId, limit);
   if (payload !== null && !parsed)
     logStagingFailure("project_relations", "invalid_child_dto");
+  return parsed;
+}
+
+/** Strict content-free subprocess boundary for one canonical backlink. */
+export function parseStagingParentBacklink(
+  value: unknown, kind: TargetBacklinkKind, id: string,
+): { ok: true; result: TargetAuthorizedBacklink } |
+   { ok: false; reason: "unavailable" } | null {
+  if ((kind !== "task" && kind !== "note") || !validBacklinkId(id) ||
+      !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const keys = Object.keys(data).sort().join(",");
+  if (data.ok === false)
+    return keys === "ok,reason" && data.reason === "unavailable"
+      ? { ok: false, reason: "unavailable" } : null;
+  if (keys !== "linearization,noteGuard,ok,relations,taskGuard" ||
+      data.ok !== true || !Array.isArray(data.relations) ||
+      data.relations.length > 1) return null;
+  const linearization = parseLinearization(data.linearization, new Map());
+  if (!linearization || linearization.areas.length !== 1) return null;
+  const rawGuard = kind === "task" ? data.taskGuard : data.noteGuard;
+  const forbidden = kind === "task" ? data.noteGuard : data.taskGuard;
+  if (forbidden !== null || !rawGuard || typeof rawGuard !== "object" ||
+      Array.isArray(rawGuard)) return null;
+  const g = rawGuard as Record<string, unknown>;
+  const guardKeys = kind === "task"
+    ? "areaId,parentRevision,projectId,taskId,taskRevision"
+    : "areaId,noteId,noteRevision,parentRevision,projectId";
+  if (Object.keys(g).sort().join(",") !== guardKeys ||
+      g[kind === "task" ? "taskId" : "noteId"] !== id ||
+      !validBacklinkId(g.areaId) ||
+      linearization.areas[0].areaId !== g.areaId ||
+      (g.projectId !== null && !validBacklinkId(g.projectId)) ||
+      !rev(g[kind === "task" ? "taskRevision" : "noteRevision"]) ||
+      (g.projectId === null ? g.parentRevision !== null : !rev(g.parentRevision)))
+    return null;
+  const relations: TargetAuthorizedBacklink["relations"] = [];
+  if (data.relations.length === 1) {
+    const raw = data.relations[0];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const edge = raw as Record<string, unknown>;
+    if (Object.keys(edge).sort().join(",") !==
+          "predicate,projectId,sourceId,sourceKind" ||
+        edge.predicate !== "belongs_to_project" ||
+        edge.sourceKind !== kind || edge.sourceId !== id ||
+        g.projectId === null || edge.projectId !== g.projectId)
+      return null;
+    relations.push({ predicate: "belongs_to_project", sourceKind: kind,
+      sourceId: id, projectId: g.projectId as string });
+  } else if (g.projectId !== null) return null;
+  return { ok: true, result: {
+    relations, linearization,
+    taskGuard: kind === "task" ? {
+      taskId: id, projectId: g.projectId as string | null,
+      areaId: g.areaId as string,
+      taskRevision: g.taskRevision as number,
+      parentRevision: g.parentRevision as number | null,
+    } : null,
+    noteGuard: kind === "note" ? {
+      noteId: id, projectId: g.projectId as string | null,
+      areaId: g.areaId as string,
+      noteRevision: g.noteRevision as number,
+      parentRevision: g.parentRevision as number | null,
+    } : null,
+  } };
+}
+
+export async function readStagingParentBacklinkInChild(
+  config: StagingPersonalReadConfig, kind: TargetBacklinkKind, id: string,
+): Promise<{ ok: true; result: TargetAuthorizedBacklink } |
+  { ok: false; reason: "unavailable" } | null> {
+  const raw = await runChild(config, "target-staging-parent-backlink-child.mjs", [kind, id]);
+  const parsed = parseStagingParentBacklink(raw, kind, id);
+  if (raw !== null && !parsed)
+    logStagingFailure("parent_backlink", "invalid_child_dto");
   return parsed;
 }
 

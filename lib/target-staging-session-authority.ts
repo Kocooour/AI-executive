@@ -32,6 +32,7 @@ import {
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
   readPreflightedAuthorizedProjectStructuralRelations,
+  readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
   readPreflightedAuthorizedNoteSync,
 } from "./target-task-staging-reader";
@@ -40,6 +41,7 @@ import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, Tar
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
+import type { TargetAuthorizedBacklink, TargetBacklinkKind } from "./target-parent-backlinks";
 import type { TargetAuthorizedNote } from "./target-note-access";
 import type { PreflightedNoteSyncResult } from "./target-task-staging-reader";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
@@ -382,6 +384,21 @@ export class TargetStagingSessionAuthority {
       return credential
         ? readPreflightedAuthorizedProjectStructuralRelations(this.#store, credential,
             projectId, limit, offset)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Canonical task/note -> parent project backlink, no semantic relation grant. */
+  readAuthorizedTargetParentBacklink(
+    actorUserId: string, kind: TargetBacklinkKind, id: string,
+  ): TargetAuthorizedBacklink | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedAuthorizedTargetParentBacklink(this.#store, credential, kind, id)
         : null;
     } catch {
       return null;
