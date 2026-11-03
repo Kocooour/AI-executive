@@ -104,12 +104,12 @@ function validToken(lease: NoteLeaseToken): boolean {
 export class IndexedDbNoteMetadataLease {
   private readonly owner = crypto.randomUUID();
   private readonly dbPromise: Promise<IDBDatabase>;
+  private readonly now: () => number;
 
-  constructor(
-    name = "lumi-note-metadata-v1",
-    private readonly now: () => number = Date.now,
-  ) {
+  // Ordinary fields remain executable under Node 22's strip-only TS loader.
+  constructor(name = "lumi-note-metadata-v1", now: () => number = Date.now) {
     if (typeof indexedDB === "undefined") throw new Error("indexeddb_unavailable");
+    this.now = now;
     this.dbPromise = new Promise((resolve, reject) => {
       const r = indexedDB.open(name, DB_VERSION);
       r.onupgradeneeded = () => {
