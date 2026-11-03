@@ -12,6 +12,7 @@ import type { TargetAuthorizedStructuralRelationsResult } from "./target-project
 import { validBacklinkId, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import { HOME_SUMMARY_COUNT_CAP, HOME_SUMMARY_KEYS, type AuthorizedMyPlanHomeSummary, type HomeSummaryCounts, type HomeSummaryTruncated, type HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
+import { SCOPED_HOME_KEYS, type AuthorizedScopedHomeSummary, type TargetHomeScope, type ScopedHomeValues, type ScopedHomeTruncated } from "./target-scoped-home-summary";
 import { isReadableStagingProjectId } from "./target-project-id";
 import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
@@ -858,6 +859,84 @@ export async function readStagingParentBacklinkInChild(
 }
 
 /** R2d.1b strict child-to-HTTP boundary: no membership or account IDs in DTO. */
+/** Bounded strict DTO: Personal, Shared and My Plan may have different ACL roles. */
+export function parseStagingScopedHomeSummary(
+  value: unknown, scope: TargetHomeScope,
+): AuthorizedScopedHomeSummary | null {
+  if ((scope !== "personal" && scope !== "shared" && scope !== "my-plan") ||
+      !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !==
+      "areaEpochs,counts,linearization,ok,scope,truncated" ||
+      record.ok !== true || record.scope !== scope ||
+      !record.counts || typeof record.counts !== "object" ||
+      Array.isArray(record.counts) ||
+      !record.truncated || typeof record.truncated !== "object" ||
+      Array.isArray(record.truncated) ||
+      !Array.isArray(record.areaEpochs) ||
+      record.areaEpochs.length > MAX_SCOPED_READ_AREAS) return null;
+  const expected = [...SCOPED_HOME_KEYS].sort().join(",");
+  const c = record.counts as Record<string, unknown>;
+  const t = record.truncated as Record<string, unknown>;
+  if (Object.keys(c).sort().join(",") !== expected ||
+      Object.keys(t).sort().join(",") !== expected) return null;
+  const counts = {} as ScopedHomeValues;
+  const truncated = {} as ScopedHomeTruncated;
+  for (const key of SCOPED_HOME_KEYS) {
+    if (typeof c[key] !== "number" || !Number.isSafeInteger(c[key]) ||
+        c[key] < 0 || c[key] > HOME_SUMMARY_COUNT_CAP ||
+        typeof t[key] !== "boolean" ||
+        (t[key] === true && c[key] !== HOME_SUMMARY_COUNT_CAP)) return null;
+    counts[key] = c[key];
+    truncated[key] = t[key];
+  }
+  const areaKinds = new Map<string, "private" | "shared">();
+  const epochs: HomeSummaryAreaEpoch[] = [];
+  for (const raw of record.areaEpochs) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const a = raw as Record<string, unknown>;
+    if (Object.keys(a).sort().join(",") !==
+          "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision" ||
+        !validBacklinkId(a.areaId) || areaKinds.has(a.areaId) ||
+        (a.areaKind !== "private" && a.areaKind !== "shared") ||
+        (scope === "personal" && a.areaKind !== "private") ||
+        (scope === "shared" && a.areaKind !== "shared") ||
+        (a.areaKind === "private" && a.access !== "private-owner") ||
+        (a.areaKind === "shared" &&
+          (a.access !== "viewer" && a.access !== "editor" && a.access !== "admin")) ||
+        (scope === "my-plan" && a.access === "viewer") ||
+        !rev(a.policyRevision) || !rev(a.contentRevision) ||
+        !rev(a.projectContentRevision)) return null;
+    areaKinds.set(a.areaId, a.areaKind);
+    epochs.push({
+      areaId: a.areaId, areaKind: a.areaKind,
+      access: a.access as HomeSummaryAreaEpoch["access"],
+      policyRevision: a.policyRevision, contentRevision: a.contentRevision,
+      projectContentRevision: a.projectContentRevision,
+    });
+  }
+  const linearization = parseLinearization(record.linearization, areaKinds);
+  if (!linearization || linearization.areas.length !== epochs.length ||
+      epochs.some((a, i) =>
+        a.areaId !== linearization.areas[i]?.areaId ||
+        a.areaKind !== linearization.areas[i]?.areaKind ||
+        a.access !== linearization.areas[i]?.access ||
+        a.policyRevision !== linearization.areas[i]?.policyRevision))
+    return null;
+  return { scope, counts, truncated, linearization, areaEpochs: epochs };
+}
+
+export async function readStagingScopedHomeSummaryInChild(
+  config: StagingPersonalReadConfig, scope: TargetHomeScope,
+): Promise<AuthorizedScopedHomeSummary | null> {
+  if (scope !== "personal" && scope !== "shared" && scope !== "my-plan") return null;
+  const raw = await runChild(config, "target-staging-scoped-home-child.mjs", [scope]);
+  const parsed = parseStagingScopedHomeSummary(raw, scope);
+  if (raw !== null && !parsed)
+    logStagingFailure("scoped_home_summary", "invalid_child_dto");
+  return parsed;
+}
+
 /** Strict child -> HTTP gate: never accept extra fields, titles or member IDs. */
 export function parseStagingMyPlanHomeSummary(value: unknown): AuthorizedMyPlanHomeSummary | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
