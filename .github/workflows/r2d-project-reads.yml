@@ -11,6 +11,9 @@ on:
       - "lib/target-my-plan-home-summary.ts"
       - "lib/target-scoped-home-summary.ts"
       - "lib/target-task-temporal-read-model.ts"
+      - "lib/target-task-temporal-status-writer.ts"
+      - "lib/target-staging-anchor-journal.ts"
+      - "lib/target-store-preflight.ts"
       - "lib/target-project-id.ts"
       - "lib/target-task-read-model.ts"
       - "lib/target-staging-read-limits.ts"
@@ -42,6 +45,7 @@ on:
       - "tests/target-task-temporal-schema.test.mjs"
       - "tests/target-task-temporal-read.test.mjs"
       - "tests/target-staging-temporal-http.test.mjs"
+      - "tests/target-task-temporal-status-writer.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -68,4 +72,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-staging-temporal-http.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs

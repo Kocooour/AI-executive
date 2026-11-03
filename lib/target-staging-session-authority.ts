@@ -59,6 +59,10 @@ import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
 import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteRequest } from "./target-task-staging-writer";
+import {
+  writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
+  type TargetStagingTemporalStatusCommand, type TargetStagingTemporalStatusResult,
+} from "./target-task-temporal-status-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -744,6 +748,23 @@ export class TargetStagingSessionAuthority {
     return writePreflightedTargetTaskTitle(
       this.#store, credential, request, privateOnly, durableSessionTokenHash,
     );
+  }
+
+  /**
+   * R2d.3h.1: staging-only complete/reopen. Never derive an actor from input;
+   * require a live writable authority session, then recheck ACL and optional
+   * durable session inside the pinned write transaction. No HTTP/UI activation.
+   */
+  changeTemporalTaskStatus(
+    sessionToken: string, command: TargetStagingTemporalStatusCommand,
+    durableSessionTokenHash?: string,
+  ): TargetStagingTemporalStatusResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    if (!validTargetStagingTemporalStatusCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedTemporalTaskStatus(
+      this.#store,credential,command,durableSessionTokenHash);
   }
 
   /**

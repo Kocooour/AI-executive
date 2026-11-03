@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-03 po sloučení R2d.3f (#212); rozpracováno R2d.3g (default-off temporal HTTP detail).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-03 po sloučení R2d.3g (#213); rozpracováno R2d.3h.1 (server-only idempotentní změna stavu úkolu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -209,6 +209,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 
 - **Sloučeno R2d.3e (#211):** interní autorizované a kanonicky preflightované čtení `status`, `completed_at_ms` a `due_on` úkolů v rozsazích Osobní/Sdílené/Můj plán. [Kontrakt](R2D-TASK-TEMPORAL-READ.md). Bez HTTP, UI a nasazení.
 - **Sloučeno R2d.3f (#212):** samostatně default-off HTTP seznam časových údajů úkolů s přísným DTO allowlistem, izolovaným procesem, podepsaným kurzorem a živým ověřením Area ACL. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md). Bez aktivace UI, zápisu a produkčního cutoveru.
-- **R2d.3g (probíhá):** detail stavu a termínu úkolu přes oddělený staging-only HTTP endpoint s přesnou live kontrolou Area ACL, revize úkolu a revize rodičovského projektu v jedné transakci. Bez nového sdílení, bez write endpointu; navazuje idempotentní změna stavu a termínu.
+- **Sloučeno R2d.3g (#213):** izolované default-off HTTP čtení detailu úkolu se současným ověřením session, Area ACL, revize úkolu a případného rodiče; žádný zápis a UI. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md).
+- **R2d.3h.1 (probíhá):** server-only idempotentní complete/reopen s kontrolou write ACL, Area+restore generation, per-item CAS, potvrzením příkazu v metadatech a obsahově anonymním journal auditem. Bez HTTP nebo produkční aktivace. Následuje HTTP adaptér a změna termínu.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
