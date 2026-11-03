@@ -1,5 +1,7 @@
 # Návrh: zjednodušení UI a revize logiky Lumi
 
+> **Historický návrh pro mobilní navigaci (spodní lišta, Více a omezený seznam projektů), rozložení Today, projektu, detailu úkolu a schvalovací obrazovky.** Pro tyto části platí pozdější schválené uspořádání v [UX/UI](../UX-UI.md) a [návrhu jednoduchých obrazovek](2026-11-jednoduche-obrazovky.md); zdejší bezpečnostní a datové kontrakty zůstávají v platnosti.
+
 > **Stav: návrh k rozhodnutí vlastníka, nic z toho není implementováno.** Vychází ze stavu `main` k 22. 10. 2026 (po PR #91), z [PRODUCT.md](../PRODUCT.md), [UX-UI.md](../UX-UI.md), [ARCHITECTURE.md](../ARCHITECTURE.md) a [MAIL-CONNECTORS.md](../MAIL-CONNECTORS.md). Body označené **⚑ rozhodnutí** mění dosavadní kontrakt a před implementací vyžadují souhlas vlastníka (AGENTS.md → Scope control).
 
 Revize proběhla na produkčním buildu se syntetickými daty (3 projekty, 2 oblasti, 11 úkolů, 1 poznámka) na desktopu 1440 × 900 a na iPhonu 390 × 844.
