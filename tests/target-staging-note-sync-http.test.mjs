@@ -31,6 +31,7 @@ const { bootstrapIsolatedTargetStore } = await import('../lib/target-store-boots
 const durable = await import('../lib/target-staging-durable-session.ts');
 const { createSessionToken, sessionCookieName } = await import('../lib/auth.ts');
 const { GET } = await import('../app/api/target-staging/note-sync/route.ts');
+const { GET: NOTE_SESSION } = await import('../app/api/target-staging/note-sync-session/route.ts');
 const { GET: PREVIEW, PATCH: EDIT } = await import('../app/api/target-staging/notes/[noteId]/edit/route.ts');
 const { DELETE: DELETE_NOTE } = await import('../app/api/target-staging/notes/[noteId]/route.ts');
 const { readStagingNoteSyncInChild, parseStagingNoteSyncResult } = await import('../lib/target-staging-read-process.ts');
@@ -235,4 +236,40 @@ test('three default-off gates, authentication and strict query bounds',async()=>
     assert.equal(response.status,400,query);
   }
   assert.equal((await page(bob,'team-area',100,'bad')).status,409);
+});
+
+
+test('note session scope is derived from live authorized actor/Area/generation, never query identity', async () => {
+  const fx = fixture();
+  const bob = login(fx, 'bob'), carol = login(fx, 'carol'), dave = login(fx, 'dave');
+  const check = async (cookie, area = 'team-area', extra = '') => {
+    const response = await NOTE_SESSION(new Request('http://localhost:3001/api/target-staging/note-sync-session?areaId=' +
+      encodeURIComponent(area) + extra, {
+      headers: { cookie, 'x-forwarded-for': '10.22.33.44' },
+    }));
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    return { status: response.status, body: await response.json() };
+  };
+  const allowedBob = await check(bob);
+  assert.deepEqual(allowedBob, { status: 200, body: { version: 1, scope: {
+    userId: 'bob', areaId: 'team-area', restoreGeneration: fx.stage.restoreGeneration,
+  } } });
+  assert.deepEqual((await check(carol)).body.scope.userId, 'carol');
+  assert.deepEqual((await check(owner())).body.scope.userId, 'alice');
+  assert.deepEqual(await check(dave), { status: 404, body: { error: 'Not found' } });
+  assert.equal((await check(bob, 'private-alice')).status, 404);
+  for (const extra of ['&userId=alice', '&areaId=team-area', '&restoreGeneration=foo',
+    '&cursor=abc', '&limit=100']) {
+    assert.equal((await check(bob, 'team-area', extra)).status, 400, extra);
+  }
+  assert.equal((await NOTE_SESSION(new Request('http://localhost:3001/api/target-staging/note-sync-session?areaId=team-area'))).status, 401);
+
+  const hash = durable.hashTargetStagingSessionToken(bob.split('=')[1]);
+  const live = durable.verifyDurableTargetStagingSessionLive(fx.store, hash);
+  assert.equal(live.ok, true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store, live.sessionId).ok, true);
+  assert.equal((await check(bob)).body.code, 'session_revoked');
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED = 'false';
+  assert.equal((await check(carol)).status, 404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_NOTE_SYNC_ENABLED = 'true';
 });
