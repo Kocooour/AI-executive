@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-03 po sloučení R2d.3c (#209); rozpracováno R2d.3d (staging v20 pro stav a termín úkolů).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-03 po sloučení R2d.3d (#210); rozpracováno R2d.3e (autorizované read selektory temporal fields).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -205,6 +205,8 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno #207:** projektový přehled `Můj plán` = vlastní soukromé projekty a projekty sdílené práce přidělené aktuálnímu editorovi/adminovi (podepsaný cursor a live ACL).
 - **Sloučeno #208:** základní omezené inventární počty Home / Můj plán, bez názvů nebo identifikátorů obsahu.
 - **Sloučeno #209:** tři autorizované rozsahy Home `Osobní / Sdílené / Můj plán`, včetně sdílené read-only role viewer; staging-only, produkční UI nezapnuto.
-- **Rozpracováno R2d.3d (#210):** nové izolované schéma v20 přidává `tasks.status`, `completed_at_ms`, `due_on`, jejich databázové kontroly a monotónní revize. Bez přímého HTTP zápisu nebo produkční migrace; pokračování rozlišuje sdílený deadline a per-user today/when, doplní autorizované čtení, idempotentní write příkazy a teprve poté Today/Upcoming.
+- **Sloučeno R2d.3d (#210):** nové izolované schéma v20 přidává `tasks.status`, `completed_at_ms`, `due_on`, jejich databázové kontroly a monotónní revize. Bez přímého HTTP zápisu nebo produkční migrace; pokračování rozlišuje sdílený deadline a per-user today/when, doplní autorizované čtení, idempotentní write příkazy a teprve poté Today/Upcoming.
+
+- **R2d.3e (probíhá):** interní autorizované a kanonicky preflightované čtení stavu, času dokončení a sdíleného termínu v rozsazích Osobní/Sdílené/Můj plán, s live-release Area witness pro budoucí HTTP, bez aktivace HTTP/UI nebo zápisů. [Kontrakt](R2D-TASK-TEMPORAL-READ.md). Další bude izolované opt-in HTTP čtení s ověřením witness a přísným allowlistem, pak idempotentní write příkazy a osobní today/when.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
