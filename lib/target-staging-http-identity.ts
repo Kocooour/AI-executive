@@ -11,6 +11,7 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
 import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
 import { logStagingFailure } from "./target-staging-failure-log";
@@ -118,13 +119,15 @@ export function verifyStagingReadBeforeRelease(
   projectIndexGuard?: TargetProjectIndexLiveGuard,
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
+  taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
   if (identity.kind === "owner" && !auth.authenticated) return "unauthorized";
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash },
-    observed, Date.now(), projectGuard, projectIndexGuard, noteGuard, noteSyncGuard);
+    observed, Date.now(), projectGuard, projectIndexGuard, noteGuard, noteSyncGuard,
+    taskBacklinkGuard);
   if (live.ok === true) return "ok";
   if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
