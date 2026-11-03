@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
 import type { HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
+import type { TargetHomeScope } from "./target-scoped-home-summary";
 import { getAuthState, requestCookie } from "./auth";
 import { enforceRateLimit } from "./http-security";
 import { logStagingFailure } from "./target-staging-failure-log";
@@ -121,7 +122,7 @@ export function verifyStagingReadBeforeRelease(
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
-  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[] },
+  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
