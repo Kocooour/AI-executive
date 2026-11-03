@@ -35,6 +35,7 @@ import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetReadLinearization } from "./target-task-read-model";
+import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -428,6 +429,7 @@ export function verifyTargetStagingReadLive(
   projectIndexGuard?: TargetProjectIndexLiveGuard,
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
+  taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -455,6 +457,21 @@ export function verifyTargetStagingReadLive(
       observed.areas.length !== 1 || observed.areas[0]?.areaId !== noteGuard.areaId)) {
     return unavailable;
   }
+  // A task-backlink's existence and exact parent are authorization-sensitive.
+  // Validate the server-snapshot witness before opening the live read.
+  if (taskBacklinkGuard && (
+      !validNoteGuardId(taskBacklinkGuard.taskId) ||
+      !validNoteGuardId(taskBacklinkGuard.areaId) ||
+      (taskBacklinkGuard.projectId !== null &&
+        !validNoteGuardId(taskBacklinkGuard.projectId)) ||
+      !Number.isSafeInteger(taskBacklinkGuard.taskRevision) ||
+      taskBacklinkGuard.taskRevision < 0 ||
+      (taskBacklinkGuard.projectId === null
+        ? taskBacklinkGuard.parentRevision !== null
+        : !Number.isSafeInteger(taskBacklinkGuard.parentRevision) ||
+          (taskBacklinkGuard.parentRevision as number) < 0) ||
+      observed.areas.length !== 1 ||
+      observed.areas[0]?.areaId !== taskBacklinkGuard.areaId)) return unavailable;
   if (noteSyncGuard && (observed.areas.length !== 1 ||
       observed.areas[0]?.areaId !== noteSyncGuard.areaId ||
       !validNoteGuardId(noteSyncGuard.areaId) ||
@@ -554,6 +571,29 @@ export function verifyTargetStagingReadLive(
               row.parentRevision !== noteGuard.parentRevision)) {
         return { ok: false, reason: "stale" };
       }
+    }
+    if (taskBacklinkGuard) {
+      // Same LIVE transaction as session/Area ACL: a moved task or parent,
+      // or any revision change, makes the observed relation stale even
+      // when the final public response contains zero relations.
+      const row = db.prepare(`SELECT t.project_id AS projectId,
+        t.area_id AS directAreaId, t.revision AS taskRevision,
+        p.area_id AS parentAreaId, p.revision AS parentRevision
+        FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+        WHERE t.id=? LIMIT 1`).get(taskBacklinkGuard.taskId) as {
+          projectId: string | null; directAreaId: string | null;
+          taskRevision: number; parentAreaId: string | null;
+          parentRevision: number | null;
+        } | undefined;
+      if (!row || row.projectId !== taskBacklinkGuard.projectId ||
+          row.taskRevision !== taskBacklinkGuard.taskRevision ||
+          (taskBacklinkGuard.projectId === null
+            ? row.directAreaId !== taskBacklinkGuard.areaId ||
+              row.parentAreaId !== null || row.parentRevision !== null
+            : row.directAreaId !== null ||
+              row.parentAreaId !== taskBacklinkGuard.areaId ||
+              row.parentRevision !== taskBacklinkGuard.parentRevision))
+        return { ok: false, reason: "stale" };
     }
     return { ok: true };
   }, unavailable);
