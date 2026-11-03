@@ -22,7 +22,9 @@ production cutover or a UI feature.
 - The trusted writer rechecks the signed write-audience credential, current
   store generation, both source/destination write ACLs, the exact source CAS
   and optional live durable session under the pinned write lock. Moving a
-  private note into a shared Area needs `confirmShare: true`. Receipt keys
+  note from ANY other Area into a shared Area needs `confirmShare: true`
+  (including shared-to-shared, where the audience may expand). Same-Area
+  reparenting does not need additional sharing confirmation. Receipt keys
   are actor/note/command-bound SHA-256 and store only a digest, not title/body.
 - Canonical preflight strictly validates receipts, lifecycle audits, historical
   revisions and both forward/reverse journal provenance. The append-only tables
