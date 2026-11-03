@@ -778,15 +778,19 @@ CREATE TABLE note_lifecycle_audit (
   area_id TEXT NOT NULL REFERENCES areas(id),
   old_project_id TEXT,
   project_id TEXT,
+  -- Historical policy witness in the source Area; NULL only for create.
+  old_policy_revision INTEGER CHECK(old_policy_revision IS NULL OR
+    (typeof(old_policy_revision)='integer' AND old_policy_revision>=0 AND old_policy_revision<9007199254740991)),
   parent_revision INTEGER CHECK(parent_revision IS NULL OR (typeof(parent_revision)='integer' AND parent_revision>=0)),
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
   revision_before INTEGER CHECK(revision_before IS NULL OR (typeof(revision_before)='integer' AND revision_before>=0)),
   revision_after INTEGER NOT NULL CHECK(typeof(revision_after)='integer' AND revision_after>=0 AND revision_after<9007199254740991),
   restore_generation TEXT NOT NULL,
   committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
-  CHECK((kind='create' AND old_area_id IS NULL AND old_project_id IS NULL AND revision_before IS NULL AND revision_after=0)
-    OR (kind='move' AND old_area_id IS NOT NULL AND revision_before IS NOT NULL
-      AND revision_after=revision_before+1
+  CHECK((kind='create' AND old_area_id IS NULL AND old_project_id IS NULL AND
+      old_policy_revision IS NULL AND revision_before IS NULL AND revision_after=0)
+    OR (kind='move' AND old_area_id IS NOT NULL AND old_policy_revision IS NOT NULL AND
+      revision_before IS NOT NULL AND revision_after=revision_before+1
       AND (old_area_id<>area_id OR old_project_id IS NOT project_id)))
 );
 CREATE INDEX note_lifecycle_audit_by_note ON note_lifecycle_audit(note_id,id);
@@ -808,6 +812,10 @@ WHEN NOT EXISTS (
   JOIN areas a ON a.id=COALESCE(n.area_id,p.area_id)
   WHERE n.id=NEW.note_id AND n.revision=NEW.revision_after
     AND a.id=NEW.area_id AND a.policy_revision=NEW.policy_revision
+    AND (NEW.kind='create' OR EXISTS(
+      SELECT 1 FROM areas src WHERE src.id=NEW.old_area_id
+        AND src.policy_revision=NEW.old_policy_revision
+    ))
     AND n.project_id IS NEW.project_id
     AND p.revision IS NEW.parent_revision
 )
@@ -871,7 +879,7 @@ BEGIN
   SELECT NEW.old_area_id,
     COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.old_area_id),0)+1,
     'leave',NEW.receipt_key||':leave',NEW.actor_user_id,NEW.note_id,
-    NEW.old_project_id,NULL,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms
+    NEW.old_project_id,NULL,NEW.old_policy_revision,NEW.revision_after,NEW.committed_at_ms
   WHERE NEW.kind='move' AND NEW.old_area_id<>NEW.area_id;
   INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,
     note_id,project_id,parent_revision,policy_revision,revision,committed_at_ms)
