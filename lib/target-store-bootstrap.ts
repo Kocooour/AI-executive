@@ -36,8 +36,10 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // Old staging v16 stores are deliberately rejected, never auto-migrated.
 // v18 adds an Area-local monotonic note change witness for safe journal reads.
 // Older isolated staging stores are rejected, not migrated.
+// v19 adds audit-backed create/reparent/Area-move note journal entries; it does
+// not migrate prior stores and cannot be automatically enabled in production.
 // No HTTP, sync, production migration or activation is authorized.
-export const TARGET_STORE_SCHEMA_VERSION = 18;
+export const TARGET_STORE_SCHEMA_VERSION = 19;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -61,6 +63,8 @@ export const TARGET_STAGING_DELETE_RECEIPT_PREFIX = "r2:task-delete-receipt-v1:"
 export const TARGET_STAGING_NOTE_RECEIPT_PREFIX = "r2:note-edit-receipt-v1:";
 /** Isolated actor/note/command receipts for the irreversible note deletion. */
 export const TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX = "r2:note-delete-receipt-v1:";
+/** Staging-only create/move receipts; never note titles or bodies. */
+export const TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX = "r2:note-lifecycle-receipt-v1:";
 /** Per-table cap for task, project and note tombstones; fails closed. */
 export const TARGET_STAGING_MAX_TOMBSTONES = 4096;
 /** Provisional, isolated-staging audit policy; production retention is not approved. */
@@ -759,6 +763,56 @@ WHEN (SELECT COUNT(*) FROM note_delete_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS
 BEGIN SELECT RAISE(ABORT, 'note deletion audit capacity reached'); END;
 
 
+-- v19: One audit record for each authorized note creation or movement.
+-- The identity, receipt and destination policy are checked by the trusted
+-- pinned writer. Historical source IDs may not have live foreign keys.
+-- A raw note INSERT/UPDATE without its matching audit stays UNJOURNALED:
+-- the existing witness-gap rule then forces a full rebootstrap.
+CREATE TABLE note_lifecycle_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  receipt_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK(kind IN ('create','move')),
+  actor_user_id TEXT NOT NULL REFERENCES identities(id),
+  note_id TEXT NOT NULL,
+  old_area_id TEXT REFERENCES areas(id),
+  area_id TEXT NOT NULL REFERENCES areas(id),
+  old_project_id TEXT,
+  project_id TEXT,
+  parent_revision INTEGER CHECK(parent_revision IS NULL OR (typeof(parent_revision)='integer' AND parent_revision>=0)),
+  policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
+  revision_before INTEGER CHECK(revision_before IS NULL OR (typeof(revision_before)='integer' AND revision_before>=0)),
+  revision_after INTEGER NOT NULL CHECK(typeof(revision_after)='integer' AND revision_after>=0 AND revision_after<9007199254740991),
+  restore_generation TEXT NOT NULL,
+  committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
+  CHECK((kind='create' AND old_area_id IS NULL AND old_project_id IS NULL AND revision_before IS NULL AND revision_after=0)
+    OR (kind='move' AND old_area_id IS NOT NULL AND revision_before IS NOT NULL
+      AND revision_after=revision_before+1
+      AND (old_area_id<>area_id OR old_project_id IS NOT project_id)))
+);
+CREATE INDEX note_lifecycle_audit_by_note ON note_lifecycle_audit(note_id,id);
+CREATE TRIGGER note_lifecycle_audit_no_update BEFORE UPDATE ON note_lifecycle_audit
+BEGIN SELECT RAISE(ABORT, 'note lifecycle audit immutable'); END;
+CREATE TRIGGER note_lifecycle_audit_no_delete BEFORE DELETE ON note_lifecycle_audit
+BEGIN SELECT RAISE(ABORT, 'note lifecycle audit permanent'); END;
+CREATE TRIGGER note_lifecycle_audit_no_replace BEFORE INSERT ON note_lifecycle_audit
+WHEN EXISTS(SELECT 1 FROM note_lifecycle_audit WHERE id=NEW.id OR receipt_key=NEW.receipt_key)
+BEGIN SELECT RAISE(ABORT, 'note lifecycle audit replacement forbidden'); END;
+CREATE TRIGGER note_lifecycle_audit_capacity BEFORE INSERT ON note_lifecycle_audit
+WHEN (SELECT COUNT(*) FROM note_lifecycle_audit)>=${TARGET_STAGING_AUDIT_MAX_EVENTS}
+BEGIN SELECT RAISE(ABORT, 'note lifecycle audit capacity reached'); END;
+-- Audit must match the newly committed note's effective Area, direct parent,
+-- note revision and parent revision in this same SQLite transaction.
+CREATE TRIGGER note_lifecycle_audit_guard BEFORE INSERT ON note_lifecycle_audit
+WHEN NOT EXISTS (
+  SELECT 1 FROM notes n LEFT JOIN projects p ON p.id=n.project_id
+  JOIN areas a ON a.id=COALESCE(n.area_id,p.area_id)
+  WHERE n.id=NEW.note_id AND n.revision=NEW.revision_after
+    AND a.id=NEW.area_id AND a.policy_revision=NEW.policy_revision
+    AND n.project_id IS NEW.project_id
+    AND p.revision IS NEW.parent_revision
+)
+BEGIN SELECT RAISE(ABORT, 'note lifecycle audit does not match live note'); END;
+
 -- R2d.2c.2g.2b.1: staging-only note-specific immutable change history.
 -- Entries are appended by audit INSERT triggers IN THE SAME TRANSACTION as
 -- the authenticated write, never by a separate best-effort sync process.
@@ -767,13 +821,14 @@ BEGIN SELECT RAISE(ABORT, 'note deletion audit capacity reached'); END;
 CREATE TABLE note_change_journal (
   area_id TEXT NOT NULL REFERENCES areas(id),
   seq INTEGER NOT NULL CHECK(typeof(seq)='integer' AND seq>0 AND seq<9007199254740991),
-  kind TEXT NOT NULL CHECK(kind IN ('edit','delete')),
+  kind TEXT NOT NULL CHECK(kind IN ('edit','delete','upsert','leave')),
   receipt_key TEXT NOT NULL UNIQUE,
   actor_user_id TEXT NOT NULL REFERENCES identities(id),
   note_id TEXT NOT NULL CHECK(typeof(note_id)='text' AND note_id<>''),
   project_id TEXT,
+  parent_revision INTEGER CHECK(parent_revision IS NULL OR (typeof(parent_revision)='integer' AND parent_revision>=0)),
   policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision)='integer' AND policy_revision>=0),
-  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0 AND revision<9007199254740991),
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>=0 AND revision<9007199254740991),
   committed_at_ms INTEGER NOT NULL CHECK(typeof(committed_at_ms)='integer' AND committed_at_ms>0),
   PRIMARY KEY(area_id,seq)
 ) WITHOUT ROWID;
@@ -805,6 +860,25 @@ BEGIN
   SELECT NEW.area_id,COALESCE(MAX(seq),0)+1,'delete',NEW.receipt_key,NEW.actor_user_id,
     NEW.note_id,NEW.project_id,NEW.policy_revision,NEW.tombstone_revision,NEW.committed_at_ms
   FROM note_change_journal WHERE area_id=NEW.area_id;
+END;
+-- Audit-backed lifecycle creates one upsert in the destination Area and, on
+-- a cross-Area move, one leave in the old Area. Sequence/witness increments
+-- match exactly: create +1, same-Area move +1, cross-Area move +1 per Area.
+CREATE TRIGGER note_change_journal_on_lifecycle AFTER INSERT ON note_lifecycle_audit
+BEGIN
+  INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,
+    note_id,project_id,parent_revision,policy_revision,revision,committed_at_ms)
+  SELECT NEW.old_area_id,
+    COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.old_area_id),0)+1,
+    'leave',NEW.receipt_key||':leave',NEW.actor_user_id,NEW.note_id,
+    NEW.old_project_id,NULL,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms
+  WHERE NEW.kind='move' AND NEW.old_area_id<>NEW.area_id;
+  INSERT INTO note_change_journal(area_id,seq,kind,receipt_key,actor_user_id,
+    note_id,project_id,parent_revision,policy_revision,revision,committed_at_ms)
+  VALUES (NEW.area_id,
+    COALESCE((SELECT MAX(seq) FROM note_change_journal WHERE area_id=NEW.area_id),0)+1,
+    'upsert',NEW.receipt_key,NEW.actor_user_id,NEW.note_id,
+    NEW.project_id,NEW.parent_revision,NEW.policy_revision,NEW.revision_after,NEW.committed_at_ms);
 END;
 -- Retain audit provenance for every journal event. Existing note edit audit
 -- retention cannot silently remove the only authenticated source of an event.
