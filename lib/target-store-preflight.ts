@@ -7,6 +7,7 @@ import {
   TARGET_STAGING_AUDIT_MAX_EVENTS, TARGET_STAGING_MAX_RECEIPTS, TARGET_STAGING_SESSION_MAX_ROWS,
   TARGET_STAGING_RECEIPT_PREFIX, TARGET_STAGING_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
+  TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
   TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
@@ -222,6 +223,8 @@ export function inspectIsolatedTargetStore(
         row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX));
       const noteDeleteReceipts = rows.filter(row => typeof row.key === "string" &&
         row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX));
+      const lifecycleReceipts = rows.filter(row => typeof row.key === "string" &&
+        row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX));
       // The only extra metadata entries allowed are strictly validated,
       // content-free, staging-only receipt hashes (title, delete and note
       // namespaces, each capped separately). Reject unknown metadata,
@@ -230,22 +233,26 @@ export function inspectIsolatedTargetStore(
         typeof row.key === "string" &&
         sha256Hex.test(row.key.slice(prefix.length)) &&
         typeof row.value === "string" && sha256Hex.test(row.value));
-      if (rows.length !== 6 + receipts.length + deleteReceipts.length + noteReceipts.length + noteDeleteReceipts.length ||
+      if (rows.length !== 6 + receipts.length + deleteReceipts.length + noteReceipts.length +
+            noteDeleteReceipts.length + lifecycleReceipts.length ||
           receipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           deleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           noteDeleteReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
+          lifecycleReceipts.length > TARGET_STAGING_MAX_RECEIPTS ||
           !receiptValid(receipts, TARGET_STAGING_RECEIPT_PREFIX) ||
           !receiptValid(deleteReceipts, TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
           !receiptValid(noteReceipts, TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
           !receiptValid(noteDeleteReceipts, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
+          !receiptValid(lifecycleReceipts, TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) ||
           meta.size !== rows.length ||
           !rows.every(row => typeof row.key === "string" &&
             (CONTROL_METADATA_KEYS.has(row.key) ||
               row.key.startsWith(TARGET_STAGING_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_DELETE_RECEIPT_PREFIX) ||
               row.key.startsWith(TARGET_STAGING_NOTE_RECEIPT_PREFIX) ||
-              row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX))) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX) ||
+              row.key.startsWith(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX))) ||
           meta.get("schema_version") !== String(TARGET_STORE_SCHEMA_VERSION) ||
           meta.get("activated") !== "false" || meta.get("write_protocol") !== "per-item-only" ||
           typeof meta.get("anchor_seq") !== "string" ||
@@ -365,9 +372,9 @@ export function inspectIsolatedTargetStore(
             LEFT JOIN note_edit_audit e ON j.kind='edit' AND e.receipt_key=j.receipt_key
             LEFT JOIN note_delete_audit d ON j.kind='delete' AND d.receipt_key=j.receipt_key
             WHERE typeof(j.seq)<>'integer' OR j.seq<=0 OR j.seq>=9007199254740991
-              OR j.kind NOT IN ('edit','delete')
+              OR j.kind NOT IN ('edit','delete','upsert','leave')
               OR (SELECT COUNT(*) FROM note_change_journal x
-                WHERE x.area_id=j.area_id AND x.seq<=j.seq)<>j.seq OR j.revision<=0
+                WHERE x.area_id=j.area_id AND x.seq<=j.seq)<>j.seq OR j.revision<0
               OR typeof(j.committed_at_ms)<>'integer' OR j.committed_at_ms<=0
               OR (j.kind='edit' AND
                 (e.id IS NULL OR j.note_id IS NOT e.note_id
