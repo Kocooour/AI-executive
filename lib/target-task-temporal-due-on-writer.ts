@@ -109,7 +109,7 @@ export function writePreflightedTemporalDueOn(
       // Authorization and explicit task/Area contract precede *all* receipt
       // lookups, including UUID replays after role revocation or task move.
       const contract=checkTargetTaskWriteContract(db,actor,command);
-      if (!contract.ok) return {ok:false,reason:contract.reason};
+      if (contract.ok === false) return {ok:false,reason:contract.reason};
       const receipt=temporalDueOnReceiptKey(actor,command.taskId,command.commandId);
       const digest=temporalDueOnReceiptDigest(command);
       const prior=db.prepare("SELECT value FROM metadata WHERE key=?")
