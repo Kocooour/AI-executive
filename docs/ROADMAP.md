@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-03 po sloučení R2d.3e (#211); rozpracováno R2d.3f (default-off temporal HTTP list).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-03 po sloučení R2d.3f (#212); rozpracováno R2d.3g (default-off temporal HTTP detail).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -208,6 +208,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3d (#210):** nové izolované schéma v20 přidává `tasks.status`, `completed_at_ms`, `due_on`, jejich databázové kontroly a monotónní revize. Bez přímého HTTP zápisu nebo produkční migrace; pokračování rozlišuje sdílený deadline a per-user today/when, doplní autorizované čtení, idempotentní write příkazy a teprve poté Today/Upcoming.
 
 - **Sloučeno R2d.3e (#211):** interní autorizované a kanonicky preflightované čtení `status`, `completed_at_ms` a `due_on` úkolů v rozsazích Osobní/Sdílené/Můj plán. [Kontrakt](R2D-TASK-TEMPORAL-READ.md). Bez HTTP, UI a nasazení.
-- **R2d.3f (probíhá):** samostatně default-off HTTP seznam časových údajů úkolů (`/api/target-staging/task-temporal`) s přísným DTO allowlistem, izolovaným child procesem, podepsaným cursorem vázaným na actor/scope/status a živým ověřením Area witness. Staging-only. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md). Další: obdobně chráněný detail a auditované idempotentní write příkazy, následně per-user today/when.
+- **Sloučeno R2d.3f (#212):** samostatně default-off HTTP seznam časových údajů úkolů s přísným DTO allowlistem, izolovaným procesem, podepsaným kurzorem a živým ověřením Area ACL. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md). Bez aktivace UI, zápisu a produkčního cutoveru.
+- **R2d.3g (probíhá):** detail stavu a termínu úkolu přes oddělený staging-only HTTP endpoint s přesnou live kontrolou Area ACL, revize úkolu a revize rodičovského projektu v jedné transakci. Bez nového sdílení, bez write endpointu; navazuje idempotentní změna stavu a termínu.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.

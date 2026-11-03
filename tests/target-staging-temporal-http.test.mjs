@@ -30,7 +30,9 @@ const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-boots
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/task-temporal/route.ts");
-const { readStagingTemporalPageInChild, parseStagingTemporalPage } =
+const { GET: GET_DETAIL } = await import("../app/api/target-staging/task-temporal/detail/route.ts");
+const { readStagingTemporalPageInChild, parseStagingTemporalPage,
+  readStagingTemporalDetailInChild, parseStagingTemporalDetail } =
   await import("../lib/target-staging-read-process.ts");
 const { verifyStagingReadBeforeRelease } =
   await import("../lib/target-staging-http-identity.ts");
@@ -174,4 +176,132 @@ test("child-to-HTTP boundary rejects injected task fields and mismatched Area wi
   assert.equal(parseStagingTemporalPage({...page,tasks:[{...task,status:"completed",completedAtMs:null}]},"personal","all",1),null);
   assert.equal(parseStagingTemporalPage({...page,tasks:[{...task,dueOn:"2026-02-30"}]},"personal","all",1),null);
   assert.equal(parseStagingTemporalPage({...page,hasMore:true},"personal","all",2),null);
+});
+
+const detailBase=base+"/detail";
+const detailRequest=(taskId,cookie=owner())=>new Request(
+  detailBase+"?taskId="+encodeURIComponent(taskId),{
+    headers:{cookie,"x-forwarded-for":"10.9.24.1"},
+  });
+const detailGet=(taskId,cookie=owner())=>GET_DETAIL(detailRequest(taskId,cookie));
+async function okDetail(responsePromise) {
+  const res=await responsePromise;const body=await res.json();
+  assert.equal(res.status,200,JSON.stringify(body));
+  assert.equal(res.headers.get("cache-control"),"no-store");
+  assert.equal(Object.keys(body).sort().join(","),"task");
+  return body.task;
+}
+
+test("R2d.3g detail has independent default-off gate, auth and strict query",async()=>{
+  fixture();
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED="false";
+  assert.equal((await detailGet("p-alice")).status,404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED="true";
+  assert.equal((await GET_DETAIL(new Request(detailBase+"?taskId=p-alice"))).status,401);
+  for(const query of ["","?foo=bar","?taskId=p-alice&taskId=p-bob",
+    "?taskId=p-alice&scope=shared","?taskId=%00","?taskId=x&limit=1"]) {
+    assert.equal((await GET_DETAIL(new Request(detailBase+query,{
+      headers:{cookie:owner(),"x-forwarded-for":"10.9.24.1"},
+    }))).status,400,query);
+  }
+});
+
+test("R2d.3g temporal detail preserves private/shared viewer ACL and no member IDs",async()=>{
+  const fx=fixture();const bob=login(fx,"bob"),carol=login(fx,"carol");
+  const aliceTask=await okDetail(detailGet("p-alice"));
+  assert.equal(aliceTask.title,"Alice personal");
+  assert.equal("assignedToMe" in aliceTask,false);
+  assert.equal((await okDetail(detailGet("p-bob",bob))).id,"p-bob");
+  const completed=await okDetail(detailGet("s-complete",carol));
+  assert.equal(completed.status,"completed");
+  assert.equal(completed.completedAtMs,1793700000000);
+  assert.equal(completed.dueOn,"2026-11-03");
+  assert.equal(completed.assignedToMe,false);
+  assert.equal((await okDetail(detailGet("s-bob",bob))).assignedToMe,true);
+  assert.equal((await detailGet("p-alice",bob)).status,404);
+  assert.equal((await detailGet("p-bob",carol)).status,404);
+  assert.equal((await detailGet("missing",bob)).status,404);
+  assert.equal(JSON.stringify(completed).includes("bob"),false);
+});
+
+test("R2d.3g accepts legacy TEXT task IDs including empty, padded, Unicode and long",async()=>{
+  const fx=fixture();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  const insert=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)");
+  const ids=["","  padded  ","\u{1f600}-item","x".repeat(3000)];
+  for(const id of ids) insert.run(id,fx.stage.unassignedAreaId,"Unusual task ID");
+  db.close();
+  for(const id of ids) {
+    const t=await okDetail(detailGet(id));
+    assert.equal(t.id,id);
+    assert.equal(t.title,"Unusual task ID");
+  }
+});
+
+test("R2d.3g detail guard validates exact task and inherited parent revisions on LIVE store",async()=>{
+  const fx=fixture();const bob=login(fx,"bob");
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const read=async(taskId)=>readStagingTemporalDetailInChild({
+    stagingDirectory:fx.stage.directory,expectedRestoreGeneration:fx.stage.restoreGeneration,
+    ownerUserId:"alice",sessionTokenHash:tokenHash,
+  },taskId);
+  const verify=detail=>verifyStagingReadBeforeRelease(detailRequest(detail.task.id,bob),
+    {kind:"session",tokenHash},fx.store,"alice",detail.linearization,
+    undefined,undefined,undefined,undefined,undefined,undefined,detail.guard);
+  const first=await read("s-bob");
+  assert.ok(first?.ok);
+  assert.equal(verify(first.detail),"ok");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  // Task edit bumps revision; membership remains, so an Area-only witness would miss it.
+  db.prepare("UPDATE tasks SET due_on='2026-11-07' WHERE id='s-bob'").run();
+  assert.equal(verify(first.detail),"stale");
+  const second=await read("s-bob");
+  assert.ok(second?.ok);
+  // Moving a task out of its original Area also invalidates release.
+  db.prepare("UPDATE tasks SET area_id='bob-area',assignee_user_id=NULL WHERE id='s-bob'").run();
+  assert.equal(verify(second.detail),"stale");
+  assert.equal((await detailGet("s-bob",bob)).status,200);
+  db.close();
+});
+
+test("R2d.3g inherited project revision, membership revocation and session revocation fail closed",async()=>{
+  const fx=fixture();const carol=login(fx,"carol");
+  const tokenHash=durable.hashTargetStagingSessionToken(carol.split("=")[1]);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.prepare("INSERT INTO projects(id,area_id,title) VALUES ('family-project','family-area','Family project')").run();
+  db.prepare("INSERT INTO tasks(id,project_id,title) VALUES ('child','family-project','Task child')").run();
+  const config={stagingDirectory:fx.stage.directory,expectedRestoreGeneration:fx.stage.restoreGeneration,
+    ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const first=await readStagingTemporalDetailInChild(config,"child");
+  assert.ok(first?.ok);
+  const verify=(r)=>verifyStagingReadBeforeRelease(detailRequest("child",carol),
+    {kind:"session",tokenHash},fx.store,"alice",r.detail.linearization,
+    undefined,undefined,undefined,undefined,undefined,undefined,r.detail.guard);
+  assert.equal(verify(first),"ok");
+  db.prepare("UPDATE projects SET title='New title' WHERE id='family-project'").run();
+  assert.equal(verify(first),"stale");
+  const second=await readStagingTemporalDetailInChild(config,"child");
+  assert.ok(second?.ok);
+  db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='carol'").run();
+  assert.equal(verify(second),"stale");
+  assert.equal((await detailGet("child",carol)).status,404);
+  db.close();
+  // Session invalidation takes precedence over a stale Area check.
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(fx.store,"carol").ok,true);
+  assert.notEqual(verify(second),"ok");
+});
+
+test("R2d.3g strict child allowlist never leaks guard or foreign fields",()=>{
+  const task={id:"",title:"Blank",projectId:null,areaId:"a",areaKind:"private",
+    status:"open",completedAtMs:null,dueOn:null};
+  const linearization={actorUserId:"alice",areas:[
+    {areaId:"a",areaKind:"private",access:"private-owner",policyRevision:0}]};
+  const guard={taskId:"",projectId:null,areaId:"a",taskRevision:0,parentRevision:null};
+  const payload={ok:true,task,linearization,guard};
+  assert.deepEqual(parseStagingTemporalDetail(payload,"")?.detail.task,task);
+  assert.equal(parseStagingTemporalDetail({...payload,task:{...task,assigneeUserId:"alice"}},""),null);
+  assert.equal(parseStagingTemporalDetail({...payload,guard:{...guard,areaId:"foreign"}},""),null);
+  assert.equal(parseStagingTemporalDetail({...payload,guard:{...guard,parentRevision:0}},""),null);
+  assert.equal(parseStagingTemporalDetail({...payload,linearization:{...linearization,areas:[]}},""),null);
+  assert.equal(parseStagingTemporalDetail({...payload,extra:"bad"},""),null);
 });

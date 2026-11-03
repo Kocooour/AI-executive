@@ -23,13 +23,22 @@ export type TemporalTaskPage = {
   tasks: TemporalTask[]; hasMore: boolean; revision: string;
   linearization: TargetReadLinearization;
 };
-export type TemporalTaskDetail = { task: TemporalTask; linearization: TargetReadLinearization };
+/** Internal snapshot-only witness, never returned to HTTP clients. */
+export type TargetTemporalTaskLiveGuard = {
+  taskId: string; projectId: string | null; areaId: string;
+  taskRevision: number; parentRevision: number | null;
+};
+export type TemporalTaskDetail = {
+  task: TemporalTask; linearization: TargetReadLinearization;
+  guard: TargetTemporalTaskLiveGuard;
+};
 
 type Row = {
   id: string; title: string; projectId: string | null;
   areaId: string; areaKind: "private" | "shared";
   status: "open" | "completed"; completedAtMs: number | null; dueOn: string | null;
   assignedToMe: number; role: string | null; policyRevision: number;
+  taskRevision: number; parentRevision: number | null;
 };
 type AreaRow = {
   areaId: string; areaKind: "private" | "shared";
@@ -65,7 +74,8 @@ const SELECT = `SELECT t.id AS id,t.title AS title,t.project_id AS projectId,
     a.id AS areaId,a.kind AS areaKind,t.status AS status,
     t.completed_at_ms AS completedAtMs,t.due_on AS dueOn,
     CASE WHEN t.assignee_user_id = actor.id THEN 1 ELSE 0 END AS assignedToMe,
-    member.role AS role,a.policy_revision AS policyRevision ${FROM}`;
+    member.role AS role,a.policy_revision AS policyRevision,
+    t.revision AS taskRevision,p.revision AS parentRevision ${FROM}`;
 
 const SCOPE = `AND ((? = 'personal' AND a.kind = 'private')
   OR (? = 'shared' AND a.kind = 'shared')
@@ -91,7 +101,10 @@ function validRow(row: Row): boolean {
       (row.status === "completed" && typeof row.completedAtMs === "number" &&
         finiteEpoch(row.completedAtMs))) &&
     (row.dueOn === null || (typeof row.dueOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.dueOn))) &&
-    (row.assignedToMe === 0 || row.assignedToMe === 1) && finiteEpoch(row.policyRevision);
+    (row.assignedToMe === 0 || row.assignedToMe === 1) && finiteEpoch(row.policyRevision) &&
+    finiteEpoch(row.taskRevision) && (row.projectId === null
+      ? row.parentRevision === null : typeof row.parentRevision === "number" &&
+        finiteEpoch(row.parentRevision));
 }
 
 /** Broad, conservative Area witness: includes empty authorized Areas.
@@ -174,6 +187,9 @@ export function readAuthorizedTemporalTaskDetail(
       actorUserId,areas:[{
         areaId:row.areaId,areaKind:row.areaKind,policyRevision:row.policyRevision,access,
       }],
+    }, guard: {
+      taskId:row.id,projectId:row.projectId,areaId:row.areaId,
+      taskRevision:row.taskRevision,parentRevision:row.parentRevision,
     } };
   } catch { return null; }
 }

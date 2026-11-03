@@ -26,6 +26,7 @@ on:
       - "scripts/target-staging-parent-backlink-child.mjs"
       - "scripts/target-staging-project-index-child.mjs"
       - "scripts/target-staging-temporal-read-child.mjs"
+      - "scripts/target-staging-temporal-detail-child.mjs"
       - "scripts/target-staging-my-plan-home-child.mjs"
       - "scripts/target-staging-scoped-home-child.mjs"
       - "scripts/target-staging-child-actor.mjs"

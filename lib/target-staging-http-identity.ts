@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
+import type { TargetTemporalTaskLiveGuard } from "./target-task-temporal-read-model";
 import type { HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
 import type { TargetHomeScope } from "./target-scoped-home-summary";
 import { getAuthState, requestCookie } from "./auth";
@@ -123,6 +124,7 @@ export function verifyStagingReadBeforeRelease(
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
   homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
+  temporalTaskGuard?: TargetTemporalTaskLiveGuard,
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
@@ -130,7 +132,7 @@ export function verifyStagingReadBeforeRelease(
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash },
     observed, Date.now(), projectGuard, projectIndexGuard, noteGuard, noteSyncGuard,
-    taskBacklinkGuard, homeSummaryGuard);
+    taskBacklinkGuard, homeSummaryGuard, temporalTaskGuard);
   if (live.ok === true) return "ok";
   if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";
