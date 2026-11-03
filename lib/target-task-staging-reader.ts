@@ -37,6 +37,7 @@ import { readAuthorizedProjectStructuralRelations, type TargetAuthorizedStructur
 import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
+import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
@@ -702,6 +703,22 @@ export function readPreflightedAuthorizedTargetParentBacklink(
         return actorUserId ? readAuthorizedTargetParentBacklink(db, {
           actorUserId, kind, id,
         }) : null;
+      }, () => null),
+  );
+}
+
+/** R2d.3c: authenticated Personal/Shared/My Plan Home inventory. */
+export function readPreflightedScopedHomeSummary(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  scope: TargetHomeScope,
+): AuthorizedScopedHomeSummary | null {
+  return withPreflightedStore<AuthorizedScopedHomeSummary | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<AuthorizedScopedHomeSummary | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId
+          ? readAuthorizedScopedHomeSummary(db, actorUserId, scope) : null;
       }, () => null),
   );
 }
