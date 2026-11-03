@@ -22,6 +22,8 @@ const { bootstrapIsolatedTargetStore, TARGET_STORE_SCHEMA_VERSION } =
   await import("../lib/target-store-bootstrap.ts");
 const { inspectIsolatedTargetStore } =
   await import("../lib/target-store-preflight.ts");
+const { TargetStagingSessionAuthority } =
+  await import("../lib/target-staging-session-authority.ts");
 let serial = 0;
 function fixture() {
   const result = bootstrapIsolatedTargetStore({
@@ -139,6 +141,32 @@ test("temporal changes bump task and Area epochs exactly once, including ABA", (
       /task revision must increment by one/);
   } finally {db.close();}
   assert.deepEqual(check(result),{ok:true,mode:"r2-model",issues:[]});
+});
+
+test("canonical preflight denies temporal reads for a mixed page with malformed task IDs", () => {
+  // The v20 SQLite task PK itself accepts these values, but the canonical
+  // read boundary must not accept them while the temporal DTO rejects them.
+  for (const invalidId of ["bad ", "x".repeat(513), "\u00a0bad", "bad\u0001id"]) {
+    const {db,result}=fixture();
+    try {
+      db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+        .run("a-normal",result.unassignedAreaId,"Visible valid task");
+      db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,?,?)")
+        .run(invalidId,result.unassignedAreaId,"Malformed task ID");
+    } finally {db.close();}
+    const preflight=check(result);
+    assert.equal(preflight.ok,false,invalidId);
+    assert.ok(preflight.issues.includes("task_id_invalid"),JSON.stringify(preflight));
+    const authority=new TargetStagingSessionAuthority({
+      stagingDirectory:result.directory,expectedRestoreGeneration:result.restoreGeneration,
+    });
+    try {
+      assert.equal(authority.readTemporalTaskPage("owner","personal","all",100,0),null,
+        "a valid row must not be emitted alongside an ID outside the DTO contract");
+      assert.equal(authority.readTemporalTaskDetail("owner","a-normal"),null,
+        "the canonical preflight must deny even standalone detail reads");
+    } finally {authority.close();}
+  }
 });
 
 test("v19 metadata cannot silently become v20 without a new isolated store", () => {
