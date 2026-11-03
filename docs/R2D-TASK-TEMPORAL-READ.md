@@ -19,8 +19,8 @@ stagingu. Nejde o produkční endpoint, UI ani implementaci Today/Upcoming.
 - Člen `viewer` smí číst sdílenou Oblast, ale `my-plan` zahrnuje ze sdíleného
   jen vlastní přiřazené úkoly v aktuální roli editor/admin. Samotné historické
   přiřazení po odebrání člena **nikdy neuděluje přístup**.
-- Rozsah je vyhodnocen jedním SQL průchodem pod aktuálním actor/Area ACL,
-  rodičovské úkoly dědí Oblast projektu.
+- Rozsah používá dvě omezená SQL čtení v jednom připnutém snapshotu
+  (Area witness a stránka úkolů); rodičovské úkoly dědí Oblast projektu.
 - `readPreflightedTemporalTaskPage/Detail` vyžadují read-only připnutý
   snapshot, kanonický preflight, ověřený actor ze signed read tokenu a
   kontrolu obnovovací generace. `TargetStagingSessionAuthority` zpřístupňuje
