@@ -11,6 +11,7 @@ import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-rea
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
 import { validBacklinkId, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
+import { HOME_SUMMARY_COUNT_CAP, HOME_SUMMARY_KEYS, type AuthorizedMyPlanHomeSummary, type HomeSummaryCounts, type HomeSummaryTruncated, type HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
 import { isReadableStagingProjectId } from "./target-project-id";
 import type { TargetReadableNote } from "./target-note-access";
 import type { TargetNoteReadLiveGuard } from "./target-staging-durable-session";
@@ -857,6 +858,70 @@ export async function readStagingParentBacklinkInChild(
 }
 
 /** R2d.1b strict child-to-HTTP boundary: no membership or account IDs in DTO. */
+/** Strict child -> HTTP gate: never accept extra fields, titles or member IDs. */
+export function parseStagingMyPlanHomeSummary(value: unknown): AuthorizedMyPlanHomeSummary | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  if (data.ok !== true || Object.keys(data).sort().join(",") !==
+        "areaEpochs,counts,linearization,ok,truncated" ||
+      !data.counts || typeof data.counts !== "object" || Array.isArray(data.counts) ||
+      !data.truncated || typeof data.truncated !== "object" || Array.isArray(data.truncated) ||
+      !Array.isArray(data.areaEpochs) || data.areaEpochs.length > MAX_SCOPED_READ_AREAS)
+    return null;
+  const keys = [...HOME_SUMMARY_KEYS].sort().join(",");
+  const c = data.counts as Record<string, unknown>;
+  const t = data.truncated as Record<string, unknown>;
+  if (Object.keys(c).sort().join(",") !== keys ||
+      Object.keys(t).sort().join(",") !== keys) return null;
+  const counts = {} as HomeSummaryCounts;
+  const truncated = {} as HomeSummaryTruncated;
+  for (const key of HOME_SUMMARY_KEYS) {
+    if (typeof c[key] !== "number" || !Number.isSafeInteger(c[key]) ||
+        c[key] < 0 || c[key] > HOME_SUMMARY_COUNT_CAP ||
+        typeof t[key] !== "boolean" ||
+        (t[key] === true && c[key] !== HOME_SUMMARY_COUNT_CAP)) return null;
+    counts[key] = c[key];
+    truncated[key] = t[key];
+  }
+  const epochs: HomeSummaryAreaEpoch[] = [];
+  const areaKinds = new Map<string, "private" | "shared">();
+  for (const raw of data.areaEpochs) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const row = raw as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !==
+          "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision" ||
+        !validBacklinkId(row.areaId) || areaKinds.has(row.areaId) ||
+        (row.areaKind !== "private" && row.areaKind !== "shared") ||
+        (row.areaKind === "private" ? row.access !== "private-owner" :
+          row.access !== "editor" && row.access !== "admin") ||
+        !rev(row.policyRevision) || !rev(row.contentRevision) ||
+        !rev(row.projectContentRevision)) return null;
+    areaKinds.set(row.areaId, row.areaKind);
+    epochs.push({ areaId: row.areaId, areaKind: row.areaKind,
+      policyRevision: row.policyRevision, contentRevision: row.contentRevision,
+      projectContentRevision: row.projectContentRevision,
+      access: row.access as HomeSummaryAreaEpoch["access"] });
+  }
+  const linearization = parseLinearization(data.linearization, areaKinds);
+  if (!linearization || linearization.areas.length !== epochs.length ||
+      epochs.some((a, i) => a.areaId !== linearization.areas[i]?.areaId ||
+        a.areaKind !== linearization.areas[i]?.areaKind ||
+        a.access !== linearization.areas[i]?.access ||
+        a.policyRevision !== linearization.areas[i]?.policyRevision))
+    return null;
+  return { counts, truncated, areaEpochs: epochs, linearization };
+}
+
+export async function readStagingMyPlanHomeSummaryInChild(
+  config: StagingPersonalReadConfig,
+): Promise<AuthorizedMyPlanHomeSummary | null> {
+  const data = await runChild(config, "target-staging-my-plan-home-child.mjs", []);
+  const parsed = parseStagingMyPlanHomeSummary(data);
+  if (data !== null && !parsed)
+    logStagingFailure("my_plan_home_summary", "invalid_child_dto");
+  return parsed;
+}
+
 export function parseStagingAuthorizedProjectIndex(
   value: unknown, scope: TargetProjectIndexScope,
 ): TargetAuthorizedProjectIndexPage | null {
