@@ -8,7 +8,7 @@
 - **PACT** znamená Projects, Agents, Context a Tools; **Context Resolver** filtruje minimální oprávněný kontext a typovaný **Tool Registry** omezuje akce.
 - **Attention Engine** vyhodnocuje stabilní signály a jejich stav; produktová pravidla, meze a deduplikaci definuje [produktový kontrakt](PRODUCT.md#attention-contract--target-requirement).
 - **Planning Engine** pracuje s ověřenou čerstvostí kalendáře a nepovažuje neznámé časové bloky za volné.
-- **Action Engine** dodržuje `intent → context → allowlisted tool → proposal → approval → execution → audit → guarded Undo`; API a storage vynucují revize, idempotenci a hranice workspace.
+- **Action Engine** pro návrhy Lumi dodržuje `intent → context → allowlisted tool → proposal → approval → execution → audit → guarded Undo`. Přímé nízkorizikové ruční změny mohou být provedeny hned s bezpečným Undo; server u obou cest vynucuje autorizaci, revize, idempotenci, audit a hranice workspace. Změny přístupu, nevratné/externí účinky a potvrzení při překročení termínu mají vlastní kontrolní brány.
 - **Privacy-first:** cílové Osobní a Sdílené jsou oddělené hranicí oprávnění odvozenou z Oblasti, `Můj plán` je jen osobní agregovaný čtecí rozsah; citlivé či neověřené claims nejsou automatickým důkazem ani povoleným kontextem pro agenty.
 - Stav implementace je důsledně oddělen od **target specification** v níže uvedených oddílech. Při rozporu UI návrhu s oprávněními a integritou dat platí přísnější bezpečnostní kontrakt.
 

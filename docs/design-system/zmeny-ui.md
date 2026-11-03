@@ -1,5 +1,7 @@
 # Změny UI
 
+> **Historický záznam navigace v1 a starších náhledů Home.** Pro cílové Home platí přístupné Proč? a pro cílovou navigaci jedno rolovatelné menu podle [UX/UI](../UX-UI.md); dřívější věty o druhém řádku s časem u každé karty a sheetu Více už nejsou normativní.
+
 Porovnání cílových obrazovek LUMI-UX-001 až 015 (`docs/UX-UI.md`) se současnou aplikací (`main@d7d8cca`). Aplikace byla spuštěna lokálně s ukázkovými daty a prošla na desktopu (1440 × 900) i iPhonu (390 × 844). Každý návrh níže odkazuje na obrazovku ze specifikace a na komponentu tohoto systému, která cílový stav ukazuje.
 
 **Celkově:** základ odpovídá – sidebar má správné pořadí, Home začíná pozorností a ukazuje zdroj i čas vyhodnocení, mobil má spodní navigaci a Quick Capture. Největší mezery jsou ve třech věcech: **(1)** chybí jednotná obrazovka návrhu a schválení, **(2)** detail se otevírá jako modální překryv místo 3-panelového inspektoru, **(3)** návrh a potvrzený stav nejsou vizuálně odlišené.
