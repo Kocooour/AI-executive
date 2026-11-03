@@ -6,6 +6,7 @@ import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-a
 import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
 } from "./target-task-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
@@ -488,6 +489,80 @@ export async function readStagingScopedPageInChild(
   const payload = await runChild(config, "target-staging-scoped-read-child.mjs",
     [scope, String(limit), String(offset)]);
   return parseStagingScopedPage(payload, scope);
+}
+
+/**
+ * R2d.3f strict child-to-HTTP allowlist. All 100 task rows and the Area witness
+ * must match a single scoped page. Never forward child-supplied unknown fields.
+ * TEXT task IDs intentionally retain the v20 SQLite contract (including "").
+ */
+export function parseStagingTemporalPage(
+  value: unknown, scope: TemporalScope, status: TemporalStatus, limit: number,
+): TemporalTaskPage | null {
+  if (!["personal","shared","my-plan"].includes(scope) ||
+      !["all","open","completed"].includes(status) ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      !value || typeof value !== "object" || Array.isArray(value)) return null;
+  const page = value as Record<string, unknown>;
+  if (Object.keys(page).sort().join(",") !== "hasMore,linearization,ok,revision,tasks" ||
+      page.ok !== true || !Array.isArray(page.tasks) || page.tasks.length > limit ||
+      typeof page.hasMore !== "boolean" ||
+      (page.hasMore && page.tasks.length !== limit) ||
+      typeof page.revision !== "string" || !REVISION.test(page.revision)) return null;
+  const tasks: TemporalTask[] = [];
+  const areas = new Map<string, "private" | "shared">();
+  for (const value of page.tasks) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const t = value as Record<string, unknown>;
+    const shared = t.areaKind === "shared";
+    if (Object.keys(t).sort().join(",") !==
+        (shared
+          ? "areaId,areaKind,assignedToMe,completedAtMs,dueOn,id,projectId,status,title"
+          : "areaId,areaKind,completedAtMs,dueOn,id,projectId,status,title") ||
+        typeof t.id !== "string" || typeof t.title !== "string" ||
+        (t.projectId !== null && typeof t.projectId !== "string") ||
+        typeof t.areaId !== "string" || !t.areaId ||
+        (t.areaKind !== "private" && t.areaKind !== "shared") ||
+        (scope === "personal" && shared) || (scope === "shared" && !shared) ||
+        (shared && typeof t.assignedToMe !== "boolean") ||
+        (scope === "my-plan" && shared && t.assignedToMe !== true) ||
+        (t.status !== "open" && t.status !== "completed") ||
+        (status !== "all" && status !== t.status) ||
+        (t.status === "open" && t.completedAtMs !== null) ||
+        (t.status === "completed" && (!Number.isSafeInteger(t.completedAtMs) ||
+           (t.completedAtMs as number) < 0)) ||
+        (t.dueOn !== null && (typeof t.dueOn !== "string" ||
+           !/^\d{4}-\d{2}-\d{2}$/.test(t.dueOn) ||
+           !Number.isFinite(Date.parse(t.dueOn)) ||
+           new Date(t.dueOn).toISOString().slice(0,10) !== t.dueOn))) return null;
+    if (areas.has(t.areaId) && areas.get(t.areaId) !== t.areaKind) return null;
+    if (tasks.length > 0 && Buffer.compare(
+      Buffer.from(tasks[tasks.length - 1].id), Buffer.from(t.id)) >= 0) return null;
+    areas.set(t.areaId, t.areaKind);
+    tasks.push({
+      id: t.id, title: t.title, projectId: t.projectId as string | null,
+      areaId: t.areaId, areaKind: t.areaKind, status: t.status,
+      completedAtMs: t.completedAtMs as number | null, dueOn: t.dueOn as string | null,
+      ...(shared ? { assignedToMe: t.assignedToMe as boolean } : {}),
+    });
+  }
+  const linearization = parseLinearization(page.linearization, areas);
+  if (!linearization || linearization.areas.some(a =>
+    (scope === "personal" && a.areaKind !== "private") ||
+    (scope === "shared" && a.areaKind !== "shared") ||
+    (scope === "my-plan" && a.areaKind === "shared" && a.access === "viewer"))) return null;
+  return { tasks, hasMore: page.hasMore, revision: page.revision, linearization };
+}
+
+export async function readStagingTemporalPageInChild(
+  config: StagingPersonalReadConfig, scope: TemporalScope, status: TemporalStatus,
+  limit: number, offset: number,
+): Promise<TemporalTaskPage | null> {
+  const payload = await runChild(config, "target-staging-temporal-read-child.mjs",
+    [scope, status, String(limit), String(offset)]);
+  const parsed = parseStagingTemporalPage(payload, scope, status, limit);
+  if (payload !== null && !parsed) logStagingFailure("temporal_list", "invalid_child_dto");
+  return parsed;
 }
 
 export type StagingTaskDetailResult =
