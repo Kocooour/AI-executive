@@ -246,3 +246,31 @@ test("checkpoint freezes metadata and lease token before the first async boundar
   expect(result.first).toEqual(result.expected);
   expect(result.second).toEqual(result.expectedSecond);
 });
+
+test("lease purge validates a fixed namespace set before asynchronous IndexedDB work", async ({ page }) => {
+  await harness(page);
+  const result = await page.evaluate(async () => {
+    const { IndexedDbNoteMetadataLease: Lease, IndexedDbTargetSyncStorage: Storage,
+      noteMetadataNamespace } = (globalThis as any).__noteLease;
+    const db = "lumi-note-lease-" + crypto.randomUUID();
+    const storage = new Storage(db);
+    const base = { areaId: "private",
+      restoreGeneration: "123e4567-e89b-42d3-a456-426614174000" };
+    const alice = noteMetadataNamespace({ ...base, userId: "alice" });
+    const bob = noteMetadataNamespace({ ...base, userId: "bob" });
+    await storage.openNamespace(alice);
+    await storage.openNamespace(bob);
+    const lease = new Lease(db);
+    const claim = await lease.claim();
+    if (claim.kind !== "acquired") throw Error("claim");
+    const targets = [alice];
+    const pending = lease.deleteNamespaces(claim.lease, targets);
+    targets[0] = bob;
+    targets.push(bob);
+    await pending;
+    return storage.listNamespaces();
+  });
+  expect(result).toHaveLength(1);
+  expect(result[0]).toContain("bob");
+  expect(result[0]).not.toContain("alice");
+});
