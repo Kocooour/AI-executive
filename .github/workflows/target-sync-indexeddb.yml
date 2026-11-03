@@ -13,6 +13,7 @@ on:
       - "e2e/target-sync-indexeddb.spec.ts"
       - "e2e/note-persistent-indexeddb.spec.ts"
       - "e2e/note-lease-indexeddb.spec.ts"
+      - "e2e/note-leased-client-indexeddb.spec.ts"
       - "e2e/playwright.indexeddb.config.ts"
   workflow_dispatch:
 
