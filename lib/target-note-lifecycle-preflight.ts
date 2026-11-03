@@ -39,10 +39,16 @@ export function verifyTargetNoteLifecycleJournal(db: DatabaseSync): boolean {
       "LEFT JOIN areas source ON source.id=a.old_area_id",
       "WHERE (n.id IS NULL AND t.id IS NULL) OR dest.id IS NULL",
       "OR (a.kind='move' AND source.id IS NULL) OR a.kind NOT IN ('create','move')",
+      // Policy epochs may advance after an immutable event, never regress.
+      "OR typeof(a.policy_revision)<>'integer' OR a.policy_revision<0",
+      "OR dest.policy_revision<a.policy_revision",
       "OR typeof(a.revision_after)<>'integer' OR a.revision_after<0",
       "OR (a.kind='create' AND (a.old_area_id IS NOT NULL OR a.old_project_id IS NOT NULL",
+      " OR a.old_policy_revision IS NOT NULL",
       " OR a.revision_before IS NOT NULL OR a.revision_after<>0))",
       "OR (a.kind='move' AND (a.old_area_id IS NULL OR a.revision_before IS NULL",
+      " OR typeof(a.old_policy_revision)<>'integer' OR a.old_policy_revision<0",
+      " OR source.policy_revision<a.old_policy_revision",
       " OR a.revision_after<>a.revision_before+1",
       " OR (a.old_area_id=a.area_id AND a.old_project_id IS a.project_id)))",
       "OR (n.id IS NOT NULL AND n.revision<a.revision_after)",
@@ -71,7 +77,8 @@ export function verifyTargetNoteLifecycleJournal(db: DatabaseSync): boolean {
       " OR j.policy_revision IS NOT a.policy_revision))",
       "OR (j.kind='leave' AND (a.kind<>'move'",
       " OR a.old_area_id=a.area_id OR j.area_id IS NOT a.old_area_id",
-      " OR j.project_id IS NOT a.old_project_id OR j.parent_revision IS NOT NULL)))",
+      " OR j.project_id IS NOT a.old_project_id OR j.parent_revision IS NOT NULL",
+      " OR j.policy_revision IS NOT a.old_policy_revision)))",
     ].join(" ");
     const missingJournal = [
       "SELECT COUNT(*) AS n FROM note_lifecycle_audit a",
