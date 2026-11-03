@@ -36,6 +36,7 @@ import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model
 import { readAuthorizedProjectStructuralRelations, type TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
 import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type TargetBacklinkKind } from "./target-parent-backlinks";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
+import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
@@ -701,6 +702,20 @@ export function readPreflightedAuthorizedTargetParentBacklink(
         return actorUserId ? readAuthorizedTargetParentBacklink(db, {
           actorUserId, kind, id,
         }) : null;
+      }, () => null),
+  );
+}
+
+/** R2d.3b: one pinned read of bounded Home summary and all contributing Areas. */
+export function readPreflightedMyPlanHomeSummary(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+): AuthorizedMyPlanHomeSummary | null {
+  return withPreflightedStore<AuthorizedMyPlanHomeSummary | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<AuthorizedMyPlanHomeSummary | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId ? readAuthorizedMyPlanHomeSummary(db, actorUserId) : null;
       }, () => null),
   );
 }
