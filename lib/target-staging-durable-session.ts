@@ -36,6 +36,7 @@ import { MAX_SCOPED_READ_AREAS } from "./target-staging-read-limits";
 import { logStagingFailure } from "./target-staging-failure-log";
 import type { TargetReadLinearization } from "./target-task-read-model";
 import type { TargetTaskBacklinkLiveGuard } from "./target-parent-backlinks";
+import { eligibleMyPlanSummaryAreas, type HomeSummaryAreaEpoch } from "./target-my-plan-home-summary";
 
 export const TARGET_STAGING_SESSION_COOKIE = "lumi_target_staging_session";
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -434,6 +435,7 @@ export function verifyTargetStagingReadLive(
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
+  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[] },
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
@@ -465,6 +467,22 @@ export function verifyTargetStagingReadLive(
         observed.areas.some(area => area.areaKind === "shared" &&
           area.access !== "editor" && area.access !== "admin")
       )))) return unavailable;
+  if (homeSummaryGuard && (
+      !Array.isArray(homeSummaryGuard.areas) ||
+      homeSummaryGuard.areas.length > MAX_SCOPED_READ_AREAS ||
+      homeSummaryGuard.areas.length !== observed.areas.length ||
+      homeSummaryGuard.areas.some((row, i) =>
+        !row || !validNoteGuardId(row.areaId) ||
+        row.areaId !== observed.areas[i]?.areaId ||
+        row.areaKind !== observed.areas[i]?.areaKind ||
+        row.access !== observed.areas[i]?.access ||
+        row.policyRevision !== observed.areas[i]?.policyRevision ||
+        !Number.isSafeInteger(row.contentRevision) || row.contentRevision < 0 ||
+        !Number.isSafeInteger(row.projectContentRevision) ||
+          row.projectContentRevision < 0) ||
+      new Set(homeSummaryGuard.areas.map(a => a.areaId)).size !==
+        homeSummaryGuard.areas.length
+    )) return unavailable;
   if (noteGuard && (
       !validNoteGuardId(noteGuard.noteId) || !validNoteGuardId(noteGuard.areaId) ||
       (noteGuard.projectId !== null && !validNoteGuardId(noteGuard.projectId)) ||
@@ -540,6 +558,24 @@ export function verifyTargetStagingReadLive(
       const access = current.kind === "private" ? "private-owner" : current.role;
       if (access !== area.access || current.policy_revision !== area.policyRevision) {
         return { ok: false, reason: "stale" };
+      }
+    }
+    if (homeSummaryGuard) {
+      // Re-evaluate the FULL currently eligible Area set, not only Areas
+      // contributing nonempty rows. This catches newly granted shared Areas
+      // and first assignments between the snapshot and the HTTP release.
+      const current = eligibleMyPlanSummaryAreas(db, actorUserId);
+      if (!current || current.length !== homeSummaryGuard.areas.length)
+        return { ok: false, reason: "stale" };
+      for (let i = 0; i < current.length; i++) {
+        const before = homeSummaryGuard.areas[i];
+        const after = current[i];
+        if (!before || !after || before.areaId !== after.areaId ||
+            before.areaKind !== after.areaKind || before.access !== after.access ||
+            before.policyRevision !== after.policyRevision ||
+            before.contentRevision !== after.contentRevision ||
+            before.projectContentRevision !== after.projectContentRevision)
+          return { ok: false, reason: "stale" };
       }
     }
     if (projectGuard) {
