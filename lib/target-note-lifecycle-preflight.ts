@@ -49,13 +49,13 @@ export function verifyTargetNoteLifecycleJournal(db: DatabaseSync): boolean {
       "OR (t.id IS NOT NULL AND t.revision<=a.revision_after)",
       "OR typeof(a.committed_at_ms)<>'integer' OR a.committed_at_ms<=0",
     ].join(" ");
-    const missingReceipts = [
-      "SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,",
-      String(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX.length), ")=",
-      "'", TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX, "'",
+    // Bound parameters: never concatenate a receipt prefix into SQL literals.
+    const orphan = db.prepare(
+      "SELECT COUNT(*) AS n FROM metadata m WHERE substr(m.key,1,?)=? " +
       "AND NOT EXISTS(SELECT 1 FROM note_lifecycle_audit a WHERE a.receipt_key=m.key)",
-    ].join(" ");
-    if (counts(invalidAudit) !== 0 || counts(missingReceipts) !== 0) return false;
+    ).get(TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX.length,
+      TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX) as { n: number };
+    if (counts(invalidAudit) !== 0 || orphan.n !== 0) return false;
     const invalidJournal = [
       "SELECT COUNT(*) AS n FROM note_change_journal j",
       "LEFT JOIN note_lifecycle_audit a ON",
