@@ -31,10 +31,12 @@ const MAX_LINE_BYTES = 2048;
 export type TargetStagingJournalType = "genesis" | "intent" | "confirm" | "abort";
 export type TargetStagingJournalKind =
   | "title" | "delete" | "membership" | "session_issue" | "session_revoke"
-  | "session_revoke_all" | "compaction" | "restore" | "note_edit" | "note_delete";
+  | "session_revoke_all" | "compaction" | "restore" | "note_edit" | "note_delete"
+  | "note_create" | "note_move";
 const KINDS = new Set<string>([
   "title", "delete", "membership", "session_issue", "session_revoke",
   "session_revoke_all", "compaction", "restore", "note_edit", "note_delete",
+  "note_create", "note_move",
 ]);
 export type TargetStagingJournalValue = string | number | null | readonly number[] | readonly (readonly string[])[];
 export type TargetStagingJournalPayload = { readonly [key: string]: TargetStagingJournalValue };
