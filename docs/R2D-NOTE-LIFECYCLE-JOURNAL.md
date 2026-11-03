@@ -17,8 +17,12 @@ production cutover or a UI feature.
   monotonically advanced note revision. Moving across Areas appends **one
   `leave` event in the source Area and one `upsert` in the destination
   Area**. The source event reveals no destination, and the destination event
-  reveals no source. The old Area and new Area each advance their separate
-  witness by exactly one. Same-Area moves advance once.
+  reveals no source. The audit records BOTH Area policy revisions under the
+  pinned write lock: `leave` witnesses the source policy and `upsert` the
+  destination policy. Canonical preflight checks both historical revisions
+  and the immutable journal's exact audit correspondence. The old Area and
+  new Area each advance their separate witness by exactly one. Same-Area
+  moves advance once.
 - The trusted writer rechecks the signed write-audience credential, current
   store generation, both source/destination write ACLs, the exact source CAS
   and optional live durable session under the pinned write lock. Moving a
