@@ -46,6 +46,11 @@ import { evaluateTargetAreaPolicy } from "./target-area-policy";
 import { readTargetNoteEditCommandStatus, type TargetNoteEditCommandStatus } from "./target-note-command-status";
 import { readTargetNoteDeleteCommandStatus, type TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetStagingNoteDeleteRequest, type TargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
+import {
+  temporalStatusReceiptKey,temporalStatusReceiptDigest,
+  validTargetStagingTemporalStatusCommand,
+  type TargetStagingTemporalStatusCommand,
+} from "./target-task-temporal-status-writer";
 import { validTargetStagingNoteEditRequest, type TargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetAuthorizedNote } from "./target-note-access";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
@@ -478,6 +483,37 @@ export function readPreflightedTargetTaskTitleCommandStatus(
   );
 }
 
+
+/** Isolated pinned receipt reconciliation: current write ACL is checked before
+ * querying an opaque actor/task-scoped receipt. Never a retry capability. */
+export type TargetTemporalStatusReceiptResult =
+  | { ok:true; status:"committed" | "not_recorded" }
+  | { ok:false; reason:"invalid_request" | "unauthorized" | "unavailable" |
+      "idempotency_conflict" | "resync_required" | "write_area_mismatch" };
+
+export function readPreflightedTemporalStatusReceipt(
+  store:TargetStagingReadStore, access:TargetStagingReadCredential,
+  request:TargetStagingTemporalStatusCommand,
+):TargetTemporalStatusReceiptResult {
+  if (!validTargetStagingTemporalStatusCommand(request))
+    return {ok:false,reason:"invalid_request"};
+  const denied=():TargetTemporalStatusReceiptResult=>({ok:false,reason:"unauthorized"});
+  return withPreflightedStore<TargetTemporalStatusReceiptResult>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if (!preflight(db)) return denied();
+      const actor=verifiedActor(db,access,true);
+      if (!actor) return denied();
+      const check=checkTargetTaskWriteContract(db,actor,request);
+      if (check.ok===false) return {ok:false,reason:check.reason};
+      const receipt=db.prepare("SELECT value FROM metadata WHERE key=?")
+        .get(temporalStatusReceiptKey(actor,request.taskId,request.commandId)) as
+        {value:string}|undefined;
+      if (!receipt) return {ok:true,status:"not_recorded"};
+      return receipt.value===temporalStatusReceiptDigest(request)
+        ? {ok:true,status:"committed"}
+        : {ok:false,reason:"idempotency_conflict"};
+    },denied));
+}
 
 /**
  * R2d.2c.2e: a canonical pinned snapshot checks the actor's current WRITE

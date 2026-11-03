@@ -1,4 +1,4 @@
-# R2d.3h.1 — staging-only idempotent task completion and reopening
+# R2d.3h.1–2 — staging-only idempotent task completion and reopening
 
 **Scope:** internal authenticated writer only; not HTTP, UI, production
 database mutation or permission to activate staging writes. The isolated
@@ -50,3 +50,39 @@ per-user today/when and the product UI are not enabled. Browser E2E remains
 the preproduction release gate.
 
 Focused test: `tests/target-task-temporal-status-writer.test.mjs`.
+
+## R2d.3h.2 — explicitly opt-in HTTP command and reconciliation
+
+The **four** independent default-off switches must all equal true:
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`,
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED`,
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED`, and the NEW
+`AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED`. None of the
+switches are enabled as part of this PR.
+
+- `GET /api/target-staging/task-temporal/status?taskId=...` provides only
+  `{expectedRevision,writeAreaId,restoreGeneration}` for a currently
+  authorized writer, after a child read, title-CAS preview and live
+  task/parent/Area guard recheck. No task content or credentials.
+- `PATCH /api/target-staging/task-temporal/status` accepts exactly the six
+  server-independent command fields above. Actor is always derived from the
+  real owner cookie or durable staging-session cookie. CSRF Origin, protocol
+  version 1, strict UTF-8 bounded JSON, per-route rate limits and preflight
+  are mandatory. The writer rechecks durable-session, task ACL and CAS
+  under BEGIN IMMEDIATE and writes an opaque receipt and journal intent.
+- `POST /api/target-staging/task-temporal/status/receipt` accepts the SAME
+  exact six-field command and returns `{status:"committed"|"not_recorded"}`
+  without mutation. A canonical pinned snapshot must prove the CURRENT
+  write right before reading the actor/task/command receipt; a separate
+  temporal detail witness is rechecked against the live task/parent/Area
+  before the response is released. Non-authorized, missing or moved tasks
+  never reveal receipts. `not_recorded` is NOT permission to bypass CAS.
+- Query-form task IDs preserve Unicode and padding, while the status writer
+  intentionally inherits the prior non-empty R2 task write contract; HTTP
+  rejects NUL, invalid UTF-16 and IDs over 4 KiB in subprocess transport.
+- All responses are `no-store`. 401 means no valid identity, 404 means
+  missing/foreign/inaccessible, 409 means CAS/idempotency conflict (or
+  explicit resync/Area mismatch), 503 means staging unavailable.
+  Child credentials never cross stdout; only strict response DTOs do.
+
+No production cutover, due-date mutation, new persistent schema or user UI.
