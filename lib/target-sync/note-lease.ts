@@ -229,13 +229,16 @@ export class IndexedDbNoteMetadataLease {
   /** Namespace deletion is atomic with the lease fence, not guarded only by
    * a separate preceding check. Any successor owner blocks stale purges. */
   async deleteNamespaces(ticket: NoteLeaseToken, names: readonly string[]): Promise<void> {
-    for (const name of names) this.namespace(name);
+    // Capture and validate the exact deletion set before the first await:
+    // a caller must not replace checked names with another partition later.
+    const targets = [...new Set(names)];
+    for (const name of targets) this.namespace(name);
     const db = await this.db();
     await transact(db, [MARKERS, RECORDS], "readwrite", async tx => {
       const records = tx.objectStore(RECORDS);
       await this.owned(records, ticket);
       const markers = tx.objectStore(MARKERS);
-      for (const name of new Set(names)) {
+      for (const name of targets) {
         markers.delete(name);
         records.delete(IDBKeyRange.bound([name], [name, []], false, true));
       }
