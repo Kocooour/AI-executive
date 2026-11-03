@@ -52,6 +52,10 @@ import { writePreflightedTargetTaskTitle, validTargetStagingTaskTitleWriteReques
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
+import {
+  changePreflightedTargetNoteLifecycle, validTargetStagingNoteLifecycleRequest,
+  type TargetStagingNoteLifecycleRequest, type TargetStagingNoteLifecycleResult,
+} from "./target-note-lifecycle-writer";
 import type { TargetStagingNoteDeleteRequest, TargetStagingNoteDeleteResult } from "./target-note-delete-writer";
 import type { TargetStagingTaskTitleWriteRequest, TargetStagingTaskTitleWriteResult } from "./target-task-staging-writer";
 import { deletePreflightedTargetTask, validTargetStagingTaskDeleteRequest } from "./target-task-delete-writer";
@@ -684,6 +688,23 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     }
     return deletePreflightedTargetNote(this.#store, credential, request, durableSessionTokenHash);
+  }
+
+  /** v19 staging-only authenticated note creation or movement.
+   * No HTTP route exists for this method. All ACL and session checks are
+   * independently repeated under the pinned BEGIN IMMEDIATE writer lock.
+   */
+  changeNoteLifecycle(
+    sessionToken: string,
+    request: TargetStagingNoteLifecycleRequest,
+    durableSessionTokenHash?: string,
+  ): TargetStagingNoteLifecycleResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok:false, reason:"unauthorized" };
+    if (!validTargetStagingNoteLifecycleRequest(request))
+      return {ok:false, reason:"invalid_request"};
+    return changePreflightedTargetNoteLifecycle(
+      this.#store,credential,request,durableSessionTokenHash);
   }
 
   /** Read-only status of the exact note edit for its current authorized writer. */
