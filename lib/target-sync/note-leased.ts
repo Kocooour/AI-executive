@@ -96,10 +96,11 @@ export class IndexedDbLeasedNoteStorage implements TargetSyncStorage {
         throw new Error("note_lease_invalid_checkpoint");
       },
       transaction: async (ops: readonly StorageOp[]): Promise<void> => {
-        if (ops.length !== 1 || ops[0].key !== CHECKPOINT ||
-            (ops[0].kind !== "put" && ops[0].kind !== "delete"))
-          throw new Error("note_lease_invalid_checkpoint");
         const op = ops[0];
+        if (ops.length !== 1 || !op ||
+            (op.kind !== "put" && op.kind !== "delete") ||
+            op.key !== CHECKPOINT)
+          throw new Error("note_lease_invalid_checkpoint");
         await this.lease.checkpoint(this.current(), name, marker,
           op.kind === "put" ? op.value : null);
       },
