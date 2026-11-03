@@ -168,3 +168,115 @@ test("malformed or content-bearing session scope cannot authorize cached note re
   });
   expect(result).toEqual({ rejects: true, activated: "retry", read: [], currentScope: null });
 });
+
+
+test("suspended previous session cannot block new session, nor unlock its concurrent pull", async ({ page }) => {
+  await harness(page);
+  const result = await page.evaluate(async () => {
+    const { createStagingNoteSessionBoundClient: create,
+      IndexedDbTargetSyncStorage: Storage } = (globalThis as any).__noteSession;
+    const db = "lumi-note-session-" + crypto.randomUUID();
+    const generation = "123e4567-e89b-42d3-a456-426614174000";
+    let userId = "alice";
+    let aliceCalls = 0;
+    let bobCalls = 0;
+    let releaseOld: () => void = () => {};
+    let releaseBob: () => void = () => {};
+    let oldReached: () => void = () => {};
+    let bobReached: () => void = () => {};
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+    const bobGate = new Promise<void>(resolve => { releaseBob = resolve; });
+    const oldHolding = new Promise<void>(resolve => { oldReached = resolve; });
+    const bobHolding = new Promise<void>(resolve => { bobReached = resolve; });
+    const note = (id: string, revision: number) =>
+      ({ id, revision, projectId: null, parentRevision: null });
+    const client = create({
+      dbName: db,
+      scopeTransport: async () => Response.json({ version: 1, scope: {
+        userId, areaId: "private", restoreGeneration: generation,
+      } }),
+      // Both delayed transports deliberately IGNORE the abort signal.
+      // Old A must not hold B's busy slot, nor release B's slot on settlement.
+      transport: async () => {
+        if (userId === "alice") {
+          aliceCalls++;
+          if (aliceCalls === 2) {
+            oldReached();
+            await oldGate;
+            return Response.json({
+              phase: "changes", cursor: "B".repeat(4135), more: false,
+              entries: [], changes: [{
+                kind: "edit", noteId: "alice-note", revision: 2, projectId: null,
+              }],
+            });
+          }
+          return Response.json({
+            phase: "bootstrap", cursor: "A".repeat(4135), more: false,
+            entries: [note("alice-note", 1)], changes: [],
+          });
+        }
+        bobCalls++;
+        if (bobCalls === 2) {
+          bobReached();
+          await bobGate;
+          return Response.json({
+            phase: "changes", cursor: "D".repeat(4135), more: false,
+            entries: [], changes: [{
+              kind: "edit", noteId: "bob-note", revision: 2, projectId: null,
+            }],
+          });
+        }
+        return Response.json({
+          phase: "bootstrap", cursor: "C".repeat(4135), more: false,
+          entries: [note("bob-note", 1)], changes: [],
+        });
+      },
+    });
+    await client.activate("private");
+    const a = await client.pull();
+    if (a.kind !== "applied") throw Error("A bootstrap failed");
+    const oldPending = client.pull();
+    await oldHolding;
+
+    userId = "bob";
+    const activatedB = await client.activate("private");
+    // This used to remain busy until oldGate settled (potentially forever).
+    const bobFirst = await client.pull();
+    const firstVisible = client.read();
+    const bobPending = client.pull();
+    await bobHolding;
+    const bobAlreadyBusy = await client.pull();
+
+    releaseOld();
+    const oldResult = await oldPending;
+    // Old finally must NOT free Bob's still-pending request.
+    const stillBusy = await client.pull();
+    const hiddenMidBobPull = client.read();
+
+    releaseBob();
+    const bobSecond = await bobPending;
+    const finalVisible = client.read();
+    const names = await new Storage(db).listNamespaces();
+    await client.dispose();
+    return { activatedB, bobFirst: bobFirst.kind, firstVisible,
+      bobAlreadyBusy: bobAlreadyBusy.kind, oldResult: oldResult.kind,
+      stillBusy: stillBusy.kind, hiddenMidBobPull,
+      bobSecond: bobSecond.kind, finalVisible, names };
+  });
+  expect(result.activatedB).toBe("fresh");
+  expect(result.bobFirst).toBe("applied");
+  expect(result.firstVisible).toEqual([
+    { id: "bob-note", revision: 1, projectId: null, parentRevision: null },
+  ]);
+  expect(result.bobAlreadyBusy).toBe("busy");
+  expect(result.oldResult).toBe("superseded");
+  expect(result.stillBusy).toBe("busy");
+  expect(result.hiddenMidBobPull).toEqual([]);
+  expect(result.bobSecond).toBe("applied");
+  expect(result.finalVisible).toEqual([
+    { id: "bob-note", revision: 2, projectId: null, parentRevision: null },
+  ]);
+  expect(result.names).toHaveLength(1);
+  expect(result.names[0]).toContain("bob");
+  expect(result.names[0]).not.toContain("alice");
+});
