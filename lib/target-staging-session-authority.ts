@@ -31,6 +31,7 @@ import {
   readPreflightedPrivateTaskTitleAudit,
   readPreflightedScopedTaskPage, readPreflightedSharedTargetTask, readPreflightedChangeFeedPage,
   readPreflightedAuthorizedProjectTasks, readPreflightedAuthorizedProjectIndex,
+  readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetNote,
   readPreflightedAuthorizedNoteSync,
 } from "./target-task-staging-reader";
@@ -38,6 +39,7 @@ import type { TargetStagingReadStore, TargetPreflightedPrivateProjectDetail, Tar
   TargetPreflightedPersonalTaskDetail } from "./target-task-staging-reader";
 import type { TargetPrivateProjectPage } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksResult } from "./target-project-task-read-model";
+import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
 import type { TargetAuthorizedNote } from "./target-note-access";
 import type { PreflightedNoteSyncResult } from "./target-task-staging-reader";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
@@ -362,6 +364,24 @@ export class TargetStagingSessionAuthority {
       const credential = this.#oneShotReadCredential(actorUserId);
       return credential
         ? readPreflightedAuthorizedProjectTasks(this.#store, credential, projectId, limit, offset)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Content-free project -> task/note structural links for an authorized actor. */
+  readAuthorizedProjectStructuralRelations(
+    actorUserId: string, projectId: string, limit: number, offset: number,
+  ): TargetAuthorizedStructuralRelationsResult | null {
+    if (this.#closed || !Number.isSafeInteger(limit) || limit < 1 || limit > 50 ||
+        !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_STAGING_PAGE_OFFSET)
+      return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedAuthorizedProjectStructuralRelations(this.#store, credential,
+            projectId, limit, offset)
         : null;
     } catch {
       return null;
