@@ -6,6 +6,7 @@ on:
       - ".github/workflows/r2d-project-reads.yml"
       - "lib/target-project-task-read-model.ts"
       - "lib/target-project-structural-relations.ts"
+      - "lib/target-parent-backlinks.ts"
       - "lib/target-authorized-project-index.ts"
       - "lib/target-project-id.ts"
       - "lib/target-task-read-model.ts"
@@ -17,14 +18,17 @@ on:
       - "lib/target-task-staging-reader.ts"
       - "lib/target-staging-session-authority.ts"
       - "lib/target-staging-read-process.ts"
+      - "lib/target-staging-http-identity.ts"
       - "scripts/target-staging-project-tasks-child.mjs"
       - "scripts/target-staging-project-relations-child.mjs"
+      - "scripts/target-staging-parent-backlink-child.mjs"
       - "scripts/target-staging-project-index-child.mjs"
       - "scripts/target-staging-child-actor.mjs"
       - "app/api/target-staging/projects/**"
       - "app/api/target-staging/project-index/**"
       - "tests/target-staging-project-tasks.test.mjs"
       - "tests/target-staging-project-relations-http.test.mjs"
+      - "tests/target-staging-parent-backlinks-http.test.mjs"
       - "tests/target-staging-project-index.test.mjs"
   workflow_dispatch:
 
@@ -52,4 +56,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs
