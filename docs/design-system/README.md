@@ -18,16 +18,16 @@ Jedno pravidlo pro všechny komponenty:
 | Prvek | Povoleno | Kde |
 |---|---|---|
 | Záhlaví sekce | Jen tučný nadpis `card-title` („Pozornost“, „Plán“). Žádné verzálky, tečky ani podtitulek. | Home, Dnes, Kalendář |
-| Štítek | Jen dva stavové štítky „Návrh“ a „Provedeno“, malými písmeny se základní velkou počáteční (`caption`), výplň `accent-soft` / `success-soft` s textem `on-accent-soft` / `on-success-soft` (≥4.5:1). Jiné štítky se nepoužívají. | ProposalCard, PlanBlock |
-| Údaj v řádku | Nejvýše jeden, vpravo, styl `meta`: datum (`danger` po termínu), odhad, nebo počet. | TaskRow, PlanBlock, NavItem |
-| Druhý řádek | Jen u doporučení na Home (AttentionItem): krátký důvod · zdroj · čas vyhodnocení stylem `meta` (požadavek `docs/UX-UI.md` na každou kartu). Jinde žádný. | AttentionItem |
-| Metadata (zdroj, workspace, čas vyhodnocení, revize) | V seznamu ne, s výjimkou zdroje a času vyhodnocení ve druhém řádku AttentionItem. Revize, ID zdrojů a časová zóna jen v detailu. Nikdy jen v nápovědě (`title`) – ta není dostupná na dotyku ani z klávesnice. Výjimka: hlavička ProposalCard ukazuje cílový prostor a platnost, protože bez nich nejde schválit. | Detail, ProposalCard |
+| Štítek | Střídmě, jen když sděluje významný stav, například „Návrh“, „Provedeno“, „Skryto“ nebo „Konflikt“. Stav je čitelný i bez barvy; text a pozadí mají kontrast alespoň 4,5 : 1. | ProposalCard, PlanBlock, kalendář |
+| Údaj vpravo | Střídmě jeden hlavní údaj vpravo (`meta`); důležitý termín a časová rezervace mohou být srozumitelně v dalším kompaktním řádku téhož úkolu, bez druhé akční položky. | TaskRow, PlanBlock, NavItem |
+| Doplňující řádek | U doporučení na Home jen krátký důvod; přístupné Proč? rozbalí lidsky čitelný zdroj a přesný čas vyhodnocení. Jinde jen když je potřebný pro pochopení položky nebo stavu, například typ vstupu či další krok projektu. Na úzkém displeji se text může zalomit. | AttentionItem, Inbox, projekty |
+| Kontext a technické údaje | Původ a přesný čas vyhodnocení doporučení jsou v přístupném Proč? běžnou řečí; zastaralost, nejistota a konflikt jsou vidět okamžitě. Oprávněný zdroj lze otevřít. Interní ID, revize, názvy pravidel, diagnostika a technické názvy časových zón nepatří na hlavní obrazovky ani do detailu úkolu, ani do rozbalených částí. Cílový prostor, platnost a dopad návrhu zůstávají před schválením viditelné. Významné stavy nesmí být dostupné jen v nápovědě (`title`). | Home, detail úkolu, ProposalCard |
 
 ## Méně slov
 
 - Štítky, údaje v řádku a druhý řádek se řídí tabulkou výše.
 - Důvod doporučení má jednu krátkou větu: „Po termínu od 13. 10.“, ne „Termín 13. 10. již uplynul po konci místního dne.“
-- Stav se ukazuje jen tehdy, když je problém. „Synchronizováno“ se neukazuje, „Offline · 3 změny čekají“ ano.
+- Trvalý synchronizační stav se ukazuje, když ovlivňuje práci: „Synchronizováno“ se běžně neukazuje, „Offline · 3 změny čekají“ ano. Při editaci zůstává viditelné ukládání, potvrzení uložení i případná chyba; návrh, schválení a výsledek mají vždy srozumitelný stav.
 - Pozdravy, podtitulky typu „Takhle vypadá váš dnešní den.“ a prázdné karty („Žádný úkol právě neběží.“) se nepoužívají.
 - Akce u položky se ukáží po najetí nebo fokusu (desktop) a v detailu (mobil). Na klávesnici jsou vždy dosažitelné.
 - Česky, vykáním, bez emoji a vykřičníků. Návrh mluví jako návrh („Přesunout na zítra?“), hotová věc jako hotová („Přesunuto · Zpět“).
@@ -55,12 +55,13 @@ Jedno pravidlo pro všechny komponenty:
 
 ## Rozvržení
 
-- **Desktop:** sidebar 226 px s prostorem nahoře a navigací Home, Inbox, Today, Upcoming, Projects, Areas, Notes, Calendar, Search. Obsah max. ~720 px. Inbox, Today, Projects, Notes a Search mají detail jako pravý panel vedle seznamu.
-- **iPhone:** spodní navigace Domů, Doručené, Dnes, Kalendář, Více; Quick Capture jedním klepnutím. Detail, návrh a chat jako sheet. Okraj `space-4`, cíle 44 px.
+- **Desktop:** trvalý přímo rolovatelný sidebar s rozsahem Můj plán / Osobní / Sdílené, Home, Inbox, Today, Upcoming, Projects, Calendar, Notes, Areas, uloženými filtry a všemi oprávněnými projekty v právě zvoleném rozsahu bez brány „Více“. Search, Chat a Quick Capture jsou globální v kompaktní liště. Úkol se může otevřít v pravém panelu; projekt má vlastní stránku.
+- **Dnes / úkoly / projekty:** výchozí Dnes ukazuje kompaktní události a jeden seznam úkolů, rezervaci na úkolu; úměrná osa je v Kalendáři nebo po výslovném zapnutí Dnes. Řádky rostou podle obsahu, ne odhadu. Detail úkolu má jeden ovladač dokončení a jedno přístupné rozbalení sekundárních vlastností. Projektový řádek má název, průběh a nejvýše jeden další krok nebo problém; stránka začíná úkoly. Starší statické náhledy těchto obrazovek jsou historické a neukazují aktuální cíl.
+- **iPhone:** první je jediné rolovatelné kořenové menu se všemi běžnými cíli a oprávněnými projekty; bez spodní lišty, „Více“ či povinného rozbalení. Today/projekt/úkol/poznámka jsou navazující celé stránky se Zpět, který obnoví předchozí posun a rozepsaný text. Capture, filtr a approval mohou být sheets. Search, Chat a Quick Capture jsou v kompaktní liště. Okraj `space-4`, cíle alespoň 44 × 44 px, podpora omezeného pohybu a klávesnice.
 - Rádiusy: řádky bez rámečku v jedné ploše `radius-xl`, pole a tlačítka `radius-md`.
 
 ## Ikonografie
 
 - Logo `public/icons/lumi-icon-v3-512.png`; maskovatelná verze `lumi-icon-v3-maskable-512.png` jen pro PWA.
-- Ikony navigace ve stylu Things, 16 px (mobil 18 px), stejné v sidebaru i na iPhonu: domeček `icon-home` (SVG), ↓ `icon-inbox` (modrá), ★ plná hvězda `icon-today` (žlutá), → `icon-upcoming` (červená), archivní krabice `icon-projects` (fialová), ◎ `icon-areas` (tyrkysová), list se zahnutým rohem `icon-notes` (oranžová), kalendářový list s kroužky `icon-calendar` (zelená), lupa `icon-search` (neutrální, tah 1.8), Více jako tři SVG tečky.
+- Ikony navigace ve stylu Things, 16 px (mobil 18 px), stejné v sidebaru i na iPhonu: domeček `icon-home` (SVG), ↓ `icon-inbox` (modrá), ★ plná hvězda `icon-today` (žlutá), → `icon-upcoming` (červená), archivní krabice `icon-projects` (fialová), ◎ `icon-areas` (tyrkysová), list se zahnutým rohem `icon-notes` (oranžová), kalendářový list s kroužky `icon-calendar` (zelená), lupa `icon-search` (neutrální, tah 1.8), starší ikona Více je historická pro navigaci v1.
 - Kroužek dokončení ○ má `aria-label` „Dokončit …“ a dotykový cíl 44 px.

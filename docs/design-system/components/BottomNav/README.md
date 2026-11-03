@@ -1,5 +1,7 @@
 # BottomNav
 
+> Historická dokumentace navigace v1. Rozhodnutí vlastníka 2026-11-03 ji pro cílový telefon nahrazuje jediným rolovatelným kořenovým menu bez spodních záložek a bez „Více“. Cílovou navigaci určuje [UX/UI](../../../UX-UI.md). Níže je popis dřívější komponenty, nikoli nová implementace.
+
 Hlavička a spodní navigace na iPhonu (Domů, Doručené, Dnes, Kalendář, Více) a sheet Více (LUMI-UX-009, 012).
 
 **Co dodává volající:** aktivní pohled, aktivní prostor, obsah sheetu Více.
