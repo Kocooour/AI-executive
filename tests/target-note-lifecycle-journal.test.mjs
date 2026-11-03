@@ -166,6 +166,11 @@ test("shared-to-shared transfer requires explicit confirmation; same-Area repare
   db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES('team2','shared','alice')").run();
   db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES('second-area','Second','shared','team2','alice')").run();
   db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES('second-area','alice','admin')").run();
+  // The source already has both Alice/Bob members; the destination only Alice.
+  // Their independent policy revisions are intentionally different.
+  const sourcePolicy = db.prepare("SELECT policy_revision AS n FROM areas WHERE id='team-area'").get().n;
+  const destinationPolicy = db.prepare("SELECT policy_revision AS n FROM areas WHERE id='second-area'").get().n;
+  assert.notEqual(sourcePolicy,destinationPolicy);
   const signed=authority.issueWritable("alice");
   assert.ok(signed);
   assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
@@ -178,6 +183,16 @@ test("shared-to-shared transfer requires explicit confirmation; same-Area repare
   assert.deepEqual(page(db,stage,"team-area",original.cursor).changes,[]);
   assert.deepEqual(authority.changeNoteLifecycle(signed.sessionToken,
     {...toOther,confirmShare:true}),{ok:true});
+  const recorded = db.prepare("SELECT old_policy_revision AS previous, policy_revision AS destination FROM note_lifecycle_audit WHERE kind='move'").get();
+  assert.deepEqual([recorded.previous,recorded.destination],[sourcePolicy,destinationPolicy],
+    "audit captures BOTH policy revisions under the pinned write lock");
+  const rows = db.prepare("SELECT area_id AS area, kind, policy_revision AS policy FROM note_change_journal ORDER BY area_id,seq").all();
+  const leave = rows.find(x=>x.kind==="leave");
+  const arrived = rows.find(x=>x.kind==="upsert"&&x.area==="second-area");
+  assert.deepEqual([leave.area,leave.policy],["team-area",sourcePolicy],
+    "leave must name and witness the source Area, never the destination policy");
+  assert.deepEqual([arrived.area,arrived.policy],["second-area",destinationPolicy],
+    "upsert must name and witness the destination Area");
   assert.deepEqual(page(db,stage,"team-area",original.cursor).changes.map(c=>c.kind),["leave"]);
   assert.deepEqual(page(db,stage,"second-area").entries.map(n=>n.id),["n1"]);
   assert.equal(verifyTargetNoteLifecycleJournal(db),true);
