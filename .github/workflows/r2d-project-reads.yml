@@ -25,11 +25,13 @@ on:
       - "scripts/target-staging-project-relations-child.mjs"
       - "scripts/target-staging-parent-backlink-child.mjs"
       - "scripts/target-staging-project-index-child.mjs"
+      - "scripts/target-staging-temporal-read-child.mjs"
       - "scripts/target-staging-my-plan-home-child.mjs"
       - "scripts/target-staging-scoped-home-child.mjs"
       - "scripts/target-staging-child-actor.mjs"
       - "app/api/target-staging/projects/**"
       - "app/api/target-staging/project-index/**"
+      - "app/api/target-staging/task-temporal/**"
       - "app/api/target-staging/home/**"
       - "app/api/target-staging/relations/**"
       - "tests/target-staging-project-tasks.test.mjs"
@@ -38,6 +40,7 @@ on:
       - "tests/target-staging-project-index.test.mjs"
       - "tests/target-task-temporal-schema.test.mjs"
       - "tests/target-task-temporal-read.test.mjs"
+      - "tests/target-staging-temporal-http.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -64,4 +67,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-staging-temporal-http.test.mjs
