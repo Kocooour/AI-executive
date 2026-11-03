@@ -8,6 +8,7 @@ import type {
 } from "./target-task-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
+import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
 import type { TargetAuthorizedProjectIndexPage, TargetProjectIndexScope } from "./target-authorized-project-index";
 import { isReadableStagingProjectId } from "./target-project-id";
 import type { TargetReadableNote } from "./target-note-access";
@@ -696,6 +697,87 @@ export async function readStagingAuthorizedProjectTasksInChild(
   const result = parseStagingProjectTasks(payload, projectId);
   if (payload !== null && !result) logStagingFailure("project_tasks", "invalid_child_dto");
   return result;
+}
+
+/** Staging relation child DTO: explicit allowlist prevents linked data leaks. */
+export function parseStagingStructuralRelations(
+  value: unknown, projectId: string, limit: number,
+): TargetAuthorizedStructuralRelationsResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !isReadableStagingProjectId(projectId) ||
+      !Number.isInteger(limit) || limit < 1 || limit > 50) return null;
+  const data = value as Record<string, unknown>;
+  const keys = Object.keys(data).sort().join(",");
+  if (data.ok === false) {
+    return keys === "ok,reason" &&
+      (data.reason === "inaccessible" || data.reason === "unavailable")
+      ? { ok: false, reason: data.reason } : null;
+  }
+  if (data.ok !== true || keys !==
+        "hasMore,linearization,ok,relations,revision,stamp,taskGuardIds" ||
+      !Array.isArray(data.relations) || data.relations.length > limit ||
+      typeof data.hasMore !== "boolean" ||
+      (data.hasMore && data.relations.length !== limit) ||
+      typeof data.revision !== "string" || !REVISION.test(data.revision) ||
+      !Array.isArray(data.taskGuardIds) || data.taskGuardIds.length > limit + 1 ||
+      !data.stamp || typeof data.stamp !== "object" || Array.isArray(data.stamp))
+    return null;
+  const stamp = data.stamp as Record<string, unknown>;
+  if (Object.keys(stamp).sort().join(",") !==
+        "areaId,contentRevision,epoch,head" ||
+      typeof stamp.areaId !== "string" || !stamp.areaId ||
+      !rev(stamp.contentRevision) || !rev(stamp.epoch) || !rev(stamp.head) ||
+      (stamp.head as number) > (stamp.contentRevision as number))
+    return null;
+  const areaId = stamp.areaId as string;
+  const linearization = parseLinearization(data.linearization, new Map());
+  if (!linearization || linearization.areas.length !== 1 ||
+      linearization.areas[0]?.areaId !== areaId) return null;
+  const relations: Array<{ predicate: "contains_task" | "contains_note";
+    projectId: string; targetId: string }> = [];
+  for (const raw of data.relations) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const row = raw as Record<string, unknown>;
+    if (Object.keys(row).sort().join(",") !== "predicate,projectId,targetId" ||
+        (row.predicate !== "contains_task" && row.predicate !== "contains_note") ||
+        row.projectId !== projectId ||
+        typeof row.targetId !== "string" || !row.targetId ||
+        Buffer.byteLength(row.targetId, "utf8") > 512) return null;
+    const previous = relations.at(-1);
+    if (previous &&
+        (previous.predicate > row.predicate ||
+        (previous.predicate === row.predicate &&
+          Buffer.compare(Buffer.from(previous.targetId), Buffer.from(row.targetId)) >= 0)))
+      return null;
+    relations.push({ predicate: row.predicate, projectId, targetId: row.targetId });
+  }
+  const ids = data.taskGuardIds as unknown[];
+  if (ids.some(id => typeof id !== "string" || !id ||
+      Buffer.byteLength(id, "utf8") > 512) ||
+      new Set(ids).size !== ids.length) return null;
+  const visibleTasks = relations.filter(r => r.predicate === "contains_task")
+    .map(r => r.targetId);
+  if (visibleTasks.some((id, i) => ids[i] !== id) ||
+      (!data.hasMore && ids.length !== visibleTasks.length) ||
+      ids.length > visibleTasks.length + (data.hasMore ? 1 : 0))
+    return null;
+  return { ok: true, page: {
+    relations, hasMore: data.hasMore, revision: data.revision,
+    linearization, taskGuardIds: ids as string[],
+    stamp: { areaId, epoch: stamp.epoch as number,
+      head: stamp.head as number, contentRevision: stamp.contentRevision as number },
+  } };
+}
+
+export async function readStagingProjectStructuralRelationsInChild(
+  config: StagingPersonalReadConfig, projectId: string, limit: number, offset: number,
+): Promise<TargetAuthorizedStructuralRelationsResult | null> {
+  const payload = await runChild(config, "target-staging-project-relations-child.mjs",
+    [projectId, String(limit), String(offset)]);
+  const parsed = parseStagingStructuralRelations(payload, projectId, limit);
+  if (payload !== null && !parsed)
+    logStagingFailure("project_relations", "invalid_child_dto");
+  return parsed;
 }
 
 /** R2d.1b strict child-to-HTTP boundary: no membership or account IDs in DTO. */

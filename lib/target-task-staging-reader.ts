@@ -33,6 +33,7 @@ import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import { readPrivateProjectsAtOffset, readPrivateProjectById } from "./target-project-read-model";
 import { readAuthorizedProjectTasksPage } from "./target-project-task-read-model";
+import { readAuthorizedProjectStructuralRelations, type TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
@@ -664,6 +665,24 @@ export function readPreflightedAuthorizedProjectTasks(
           actorUserId, projectId, limit, offset,
           restoreGeneration: store.expectedRestoreGeneration,
         });
+      }, () => null),
+  );
+}
+
+/** R2d structural project links on ONE authorized, preflighted snapshot. */
+export function readPreflightedAuthorizedProjectStructuralRelations(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential,
+  projectId: string, limit: number, offset: number,
+): TargetAuthorizedStructuralRelationsResult | null {
+  return withPreflightedStore<TargetAuthorizedStructuralRelationsResult | null>(
+    store, () => null, (db, preflight) =>
+      inReadSnapshot<TargetAuthorizedStructuralRelationsResult | null>(db, () => {
+        if (!preflight(db)) return null;
+        const actorUserId = verifiedActor(db, access);
+        return actorUserId ? readAuthorizedProjectStructuralRelations(db, {
+          actorUserId, projectId, limit, offset,
+          restoreGeneration: store.expectedRestoreGeneration,
+        }) : null;
       }, () => null),
   );
 }
