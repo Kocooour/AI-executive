@@ -541,7 +541,7 @@ export function inspectIsolatedTargetStore(
       for (const row of db.prepare("SELECT id FROM tasks").iterate() as IterableIterator<{ id: unknown }>) {
         const id = row.id;
         if (typeof id !== "string" || id.length === 0 || id.trim() !== id ||
-            Buffer.byteLength(id, "utf8") > 512 || /[\\u0000-\\u001f\\u007f]/.test(id)) {
+            Buffer.byteLength(id, "utf8") > 512 || /[\u0000-\u001f\u007f]/.test(id)) {
           fail("task_id_invalid");
           break;
         }
