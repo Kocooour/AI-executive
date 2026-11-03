@@ -177,6 +177,13 @@ test("raw create/move leaves a witness gap; failed journal/audit and rejected wr
   assert.equal(verifyTargetNoteLifecycleJournal(db),true);
   assert.deepEqual(inspectIsolatedTargetStore({stagingDirectory:stage.directory}),
     {ok:true,mode:"stage",issues:[]});
+  const orphan=TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX+"f".repeat(64);
+  db.prepare("INSERT INTO metadata(key,value) VALUES(?,?)").run(orphan,"f".repeat(64));
+  assert.equal(verifyTargetNoteLifecycleJournal(db),false,
+    "orphan lifecycle receipt must invalidate the canonical store");
+  assert.equal(inspectIsolatedTargetStore({stagingDirectory:stage.directory}).ok,false);
+  db.prepare("DELETE FROM metadata WHERE key=?").run(orphan);
+  assert.equal(verifyTargetNoteLifecycleJournal(db),true);
   assert.throws(()=>db.prepare("UPDATE note_lifecycle_audit SET note_id='tampered'").run(),
     /immutable/);
   assert.throws(()=>db.prepare("DELETE FROM note_lifecycle_audit").run(),/permanent/);
