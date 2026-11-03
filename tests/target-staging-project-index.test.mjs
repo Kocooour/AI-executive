@@ -8,7 +8,8 @@ import { after, test } from "node:test";
 const envNames = [
   "NODE_ENV", "AI_EXECUTIVE_DATA_DIR", "AI_EXECUTIVE_AUTH_ENABLED",
   "AI_EXECUTIVE_PASSWORD_HASH", "AI_EXECUTIVE_SESSION_SECRET",
-  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED", "AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION", "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
 ];
 const prior = Object.fromEntries(envNames.map(key => [key, process.env[key]]));
@@ -23,11 +24,13 @@ process.env.AI_EXECUTIVE_PASSWORD_HASH = "scrypt:" + Buffer.alloc(16, 1).toStrin
   ":" + Buffer.alloc(64, 2).toString("base64url");
 process.env.AI_EXECUTIVE_SESSION_SECRET = "isolated-r2d1-project-index-secret-must-be-long";
 process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED = "true";
+process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED = "true";
 
 const { bootstrapIsolatedTargetStore } = await import("../lib/target-store-bootstrap.ts");
 const durable = await import("../lib/target-staging-durable-session.ts");
 const { createSessionToken, sessionCookieName } = await import("../lib/auth.ts");
 const { GET } = await import("../app/api/target-staging/project-index/route.ts");
+const { GET: GET_HOME } = await import("../app/api/target-staging/home/my-plan/route.ts");
 const { GET: GET_PROJECT_TASKS } = await import("../app/api/target-staging/projects/[projectId]/tasks/route.ts");
 const readProcess = await import("../lib/target-staging-read-process.ts");
 const { verifyStagingReadBeforeRelease } = await import("../lib/target-staging-http-identity.ts");
@@ -431,4 +434,139 @@ test("my-plan child DTO refuses forged viewer, mismatched project kind or Area e
   assert.equal(readProcess.parseStagingAuthorizedProjectIndex({
     ok:true,...good,
   }, "shared"), null);
+});
+
+async function getHome(cookie) {
+  const response = await GET_HOME(new Request(
+    "http://localhost:3001/api/target-staging/home/my-plan",
+    { headers: cookie ? { cookie, "x-forwarded-for":"10.9.0.4" } :
+      { "x-forwarded-for":"10.9.0.4" } },
+  ));
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  return { status: response.status, body: await response.json() };
+}
+const zeros = () => ({ privateProjects: 0, assignedSharedProjects: 0,
+  privateTasks: 0, assignedSharedTasks: 0 });
+const flags = () => Object.fromEntries(Object.keys(zeros()).map(k=>[k,false]));
+
+test("Home My Plan inventory counts isolate current owner, editor and viewer", async () => {
+  const fx = fixture();
+  const [alice,bob,carol,dave,erin] =
+    ["alice","bob","carol","dave","erin"].map(id=>login(fx,id));
+  const owner = await getHome(ownerCookie());
+  assert.equal(owner.status,200,JSON.stringify(owner.body));
+  assert.deepEqual(owner.body,{ counts: {...zeros(),privateProjects:1,
+    assignedSharedProjects:1,assignedSharedTasks:1},truncated:flags() });
+  const b = await getHome(bob);
+  assert.deepEqual(b.body, { counts: {...zeros(),privateProjects:1,
+    assignedSharedProjects:1,assignedSharedTasks:1},truncated:flags() });
+  for(const token of [carol,dave,erin]) {
+    assert.deepEqual(await getHome(token),{status:200,body:{
+      counts: zeros(),truncated:flags(),
+    }});
+  }
+  assert.deepEqual(await getHome(alice),owner);
+  for(const term of ["Family project","alice","bob","family-area","member",
+    "areaEpochs","linearization","policyRevision","actorUserId","taskId"]) {
+    assert.equal(JSON.stringify(owner.body).includes(term),false,term);
+  }
+  assert.deepEqual(Object.keys(owner.body).sort(),["counts","truncated"]);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("INSERT INTO tasks(id,area_id,title) VALUES ('local-bob','bob-private','Personal Bob task')").run();
+  db.prepare("INSERT INTO tasks(id,area_id,title,assignee_user_id) VALUES ('standalone-assigned','family-area','Assigned shared','bob')").run();
+  const now=await getHome(bob);
+  assert.deepEqual(now.body.counts,{...zeros(),privateProjects:1,
+    assignedSharedProjects:1,privateTasks:1,assignedSharedTasks:2});
+  db.close();
+});
+
+test("Home summary is default-off, refuses forged params and revoked sessions",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED="false";
+  assert.equal((await getHome(bob)).status,404);
+  process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_HOME_ENABLED="true";
+  assert.equal((await getHome(null)).status,401);
+  const request=new Request("http://localhost:3001/api/target-staging/home/my-plan?actor=alice",
+    {headers:{cookie:bob}});
+  const bad=await GET_HOME(request);
+  assert.equal(bad.status,400);
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const live=durable.verifyDurableTargetStagingSessionLive(fx.store,tokenHash);
+  assert.equal(live.ok,true);
+  assert.equal(durable.revokeDurableTargetStagingSession(fx.store,live.sessionId).ok,true);
+  assert.equal((await getHome(bob)).status,401);
+});
+
+test("Home summary live release invalidates assignment, new Area and revocation",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const config={...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const read=()=>readProcess.readStagingMyPlanHomeSummaryInChild(config);
+  const snapshot=await read();
+  assert.ok(snapshot && snapshot.areaEpochs.length>0);
+  const identity={kind:"session",tokenHash};
+  const req=new Request("http://localhost/api/target-staging/home/my-plan",
+    {headers:{cookie:bob}});
+  const release=(s)=>verifyStagingReadBeforeRelease(req,identity,fx.store,"alice",
+    s.linearization,undefined,undefined,undefined,undefined,undefined,
+    {areas:s.areaEpochs});
+  assert.equal(release(snapshot),"ok");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-2'").run();
+  assert.equal(release(snapshot),"stale","removed assignment must stale old counter");
+  const second=await read();
+  assert.ok(second);
+  assert.equal(release(second),"ok");
+  // Newly authorized Area was absent in second's snapshot, including when
+  // it has not yet contributed a task to My Plan.
+  db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('new-team','shared','alice')").run();
+  db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('new-team-area','New team','shared','new-team','alice')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-team-area','alice','admin')").run();
+  db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-team-area','bob','editor')").run();
+  assert.equal(release(second),"stale","newly accessible Area must stale old summary");
+  const third=await read();
+  assert.ok(third);
+  assert.equal(release(third),"ok");
+  db.prepare("DELETE FROM area_members WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.equal(release(third),"stale","revoked ACL must suppress summary");
+  db.close();
+});
+
+test("Home summary strictly parses child envelope and count bounds",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const good=await readProcess.readStagingMyPlanHomeSummaryInChild({
+    ...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1]),
+  });
+  assert.ok(good);
+  const parse=(data)=>readProcess.parseStagingMyPlanHomeSummary({ok:true,...data});
+  assert.ok(parse(good));
+  assert.equal(parse({...good,secret:"private"}),null);
+  assert.equal(parse({...good,counts:{...good.counts,privateTasks:-1}}),null);
+  assert.equal(parse({...good,counts:{...good.counts,privateTasks:1001}}),null);
+  assert.equal(parse({...good,truncated:{...good.truncated,privateTasks:true}}),null);
+  assert.equal(parse({...good,areaEpochs:[...good.areaEpochs,good.areaEpochs[0]]}),null);
+  assert.equal(parse({...good,areaEpochs:good.areaEpochs.map((a,i)=>
+    i===0?{...a,contentRevision:-1}:a)}),null);
+  assert.equal(parse({...good,linearization:{...good.linearization,areas:[]}}),null);
+});
+
+test("Home capped counts report lower bounds instead of unbounded totals",async()=>{
+  const fx=fixture(),bob=login(fx,"bob");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  db.exec("PRAGMA foreign_keys=ON");
+  const stmt=db.prepare("INSERT INTO tasks(id,area_id,title) VALUES (?,'bob-private','Task')");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for(let i=0;i<1002;i++)stmt.run("cap-task-"+i);
+    db.exec("COMMIT");
+  } catch (e) { db.exec("ROLLBACK");throw e; }
+  db.close();
+  const result=await getHome(bob);
+  assert.equal(result.status,200,JSON.stringify(result.body));
+  assert.equal(result.body.counts.privateTasks,1000);
+  assert.equal(result.body.truncated.privateTasks,true);
+  assert.equal(result.body.truncated.assignedSharedTasks,false);
 });
