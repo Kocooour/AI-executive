@@ -55,7 +55,7 @@ test("two tabs cannot simultaneously own a note database; stale owner cannot pub
     } });
     await lease.checkpoint(claim.lease, namespace, marker, checkpoint(1));
     (globalThis as any).__old = { lease, ticket: claim.lease, namespace, marker, checkpoint };
-    return { kind: claim.kind, revision: (await handle.get<any>("checkpoint")).state.visible[0].revision };
+    return { kind: claim.kind, revision: (await handle.get("checkpoint")).state.visible[0].revision };
   }, dbName);
   expect(first).toEqual({ kind: "acquired", revision: 1 });
 
@@ -103,7 +103,7 @@ test("two tabs cannot simultaneously own a note database; stale owner cannot pub
     } };
     await lease.checkpoint(ticket, namespace, marker, checkpoint);
     const handle = await new Storage(name).openNamespace(namespace);
-    const saved = await handle.get<any>("checkpoint");
+    const saved = await handle.get("checkpoint");
     return { version: saved.version, revision: saved.state.visible[0].revision,
       cursor: saved.state.cursor[0], released: await lease.release(ticket) };
   }, dbName);
@@ -141,7 +141,7 @@ test("expired owner loses write fence even without another claimant; successor a
       visible: [{ id: "only", revision: 0, projectId: null, parentRevision: null }],
     } };
     await second.checkpoint(newClaim.lease, namespace, marker, checkpoint);
-    const saved = await handle.get<any>("checkpoint");
+    const saved = await handle.get("checkpoint");
     return { renewed, expiredRenew, expiredWrite, staleRelease,
       epochs: [initial.lease.epoch, newClaim.lease.epoch],
       note: saved.state.visible[0].id };
@@ -189,7 +189,7 @@ test("deleted/recreated namespace and malformed/content-bearing checkpoints fail
     catch (e) { foreignRejected = String(e).includes("note_lease_invalid_checkpoint"); }
     const before = await replacement.get("checkpoint");
     await lease.checkpoint(token.lease, name, freshMarker, checkpoint);
-    const after = await replacement.get<any>("checkpoint");
+    const after = await replacement.get("checkpoint");
     return { markersChanged: oldMarker !== freshMarker, oldRejected, titleRejected,
       foreignRejected, before: before ?? null, note: after.state.visible[0].id,
       namespaces: await storage.listNamespaces() };
