@@ -22,8 +22,8 @@ const script = "(function(){\n" + common +
   "\n const IndexedDbNoteMetadataLease=(function(){\n" + compile("note-lease.ts") +
   "\n return IndexedDbNoteMetadataLease;\n})();\n" +
   compile("note-leased.ts") + "\n" + compile("note-persistent.ts") +
-  "\n" + compile("note-session.ts") +
-  "\n globalThis.__noteSession={createStagingNoteSessionBoundClient,IndexedDbTargetSyncStorage,decodeVerifiedNoteScope};\n})();";
+  "\n globalThis.__noteSession=(function(){\n" + compile("note-session.ts") +
+  "\n return {createStagingNoteSessionBoundClient,IndexedDbTargetSyncStorage,decodeVerifiedNoteScope};\n})();\n})();";
 async function harness(page: Page) {
   const url = "http://localhost:3101/note-session-integration";
   await page.route(url, route => route.fulfill({
