@@ -52,13 +52,13 @@ Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec
 
 ## Kalendář: na mobilu vždy jeden den a datové bublinky
 
-Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** („Po“ nad „3“, „Út“ nad „4“ atd.). Zvolený den je výrazně fialově zvýrazněný, ostatní dny jsou neutrální; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
+Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** („Po“ nad „3“, „Út“ nad „4“ atd.). **Zvolený den je výrazně fialově zvýrazněný i v minulosti. Nevybrané uplynulé dny jsou tlumeně šedé včetně zkratky dne, čísla data i jemného podkladu**, podobně jako dokončené úkoly, ale **neoznačuje to jejich události za dokončené**. Dnešek a budoucí dny mají výraznější neutrální kontrast; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
 
 ~~~text
 Kalendář                            Dnes   ⋯
    Po     Út     St     Čt     Pá     So     Ne
    (3)     4      5      6      7      8      9
-    ↑ fialově vybraný den
+    ↑ minulý zvolený den = fialový, ostatní minulé = šedé
 
 09:00 ────────────────────────────────
 10:00  [Standup – Lumi · 10:00–10:30]
@@ -95,6 +95,6 @@ Projekt otevře samostatnou stránku: název, stav a případný postup **v deta
 - Můj plán má jen pastelové **nepojmenované** skupiny Oblastí, žádné per-task štítky, čitelné tmavé názvy; čtečka oznamuje Oblast.
 - V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost pouze červenou/oranžovou **konturou bez výplně a bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
 - Projekty mají stejné jemné skupinové podbarvení podle Oblastí jako Můj plán, **bez nadpisů prostoru/Oblasti**, počtů či barevných štítků; typografie shodná s úkolem.
-- Mobilní kalendář vždy **jeden den**, navigace **řadou bublin se zkratkou dne nad číslem data**, bez 1/3/7 přepínače; správná dostupnost, přístupnost a výběr dne. Kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
+- Mobilní kalendář vždy **jeden den**, navigace **řadou bublin se zkratkou dne nad číslem data**, bez 1/3/7 přepínače; **uplynulé nevybrané dny jsou šedé, vybraný den fialový i v minulosti**, bez spojování šedé s dokončením událostí; správná dostupnost, přístupnost a výběr dne. Kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
 - Přístupnost a bezpečnost: kontrast, světlo/tma, zvětšení textu, dotyk/klávesnice/VoiceOver, Back/Forward, deep link, offline a revokace bez úniku obsahu.
 - Jde o **cílovou specifikaci**; aktualizace dokumentace neaktivuje serverové Area ACL, nepovoluje produkční reset/cutover a neslouží jako výjimka pro plný Browser E2E během PR.
