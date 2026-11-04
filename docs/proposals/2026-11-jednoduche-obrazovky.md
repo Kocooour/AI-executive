@@ -50,9 +50,26 @@ Můj plán            Kalendář             Projekty            Více
 
 Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec. Převod události na kanonický úkol vytvoří **jediný akční úkol**; rezervovaný čas či návrh bloku patří do jeho řádku, nic se dvakrát nesčítá ani nedokončuje. Pro pozornost úkolu má **prázdný čtverec jen oranžovou/červenou konturu bez fajfky**, nezávisle na zeleném/modrém/růžovém pozadí skupiny. Návrhy Lumi mohou vizuálně vyčnívat, běžný seznam zůstává klidný.
 
-## Kalendář: Den / 3 dny / 7 dní
+## Kalendář: na mobilu vždy jeden den a datové bublinky
 
-Jeden kalendář s trvale dostupným **segmentovým přepínačem Den · 3 dny · 7 dní**, tlačítkem návratu na dnešek a změnou data. **Den** zobrazuje svislou časovou osu; **3 dny** sdílenou časovou osu a tři sloupce; **7 dní** celý týden s čitelnými popisky i při 390 px (podle potřeby horizontální rolování uvnitř časové mřížky, nikoli celé stránky). Přepnutí zachová orientaci, datum a oprávněné položky.
+Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** („Po“ nad „3“, „Út“ nad „4“ atd.). Zvolený den je výrazně fialově zvýrazněný, ostatní dny jsou neutrální; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
+
+~~~text
+Kalendář                            Dnes   ⋯
+   Po     Út     St     Čt     Pá     So     Ne
+   (3)     4      5      6      7      8      9
+    ↑ fialově vybraný den
+
+09:00 ────────────────────────────────
+10:00  [Standup – Lumi · 10:00–10:30]
+11:00 ────────────────────────────────
+13:00  [Oběd · 13:00–14:00]
+15:30  [Vyzvednout děti · 15:30]
+──────────────────────────────────────
+Můj plán     Kalendář     Projekty     Více
+~~~
+
+Na šířce 390 px jsou názvy a data bublinek čitelné, dotykové cíle alespoň 44 px, řádek lze horizontálně posunout **bez horizontálního posunu celé stránky**; čtečka oznámí celý den, datum a stav vybráno/dnes. Desktopový Kalendář může mít širší vícedenní zobrazení, toto rozhodnutí se týká jen mobilu.
 
 Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace je výslovně „Rezervováno“; návrh Lumi má hvězdu, jiný akcent a výzvu k posouzení. Skrytá událost zůstává pouze v Kalendáři jako „Skryto“, lze ji obnovit, a její vliv na kapacitu se řídí kalendářovým kontraktem. Odpojený nebo zastaralý kalendář nikdy nepředstírá přesnou kapacitu; nabízí Připojit či Obnovit a uvádí stáří dostupných dat.
 
@@ -78,6 +95,6 @@ Projekt otevře samostatnou stránku: název, stav a případný postup **v deta
 - Můj plán má jen pastelové **nepojmenované** skupiny Oblastí, žádné per-task štítky, čitelné tmavé názvy; čtečka oznamuje Oblast.
 - V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost pouze červenou/oranžovou **konturou bez výplně a bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
 - Projekty mají stejné jemné skupinové podbarvení podle Oblastí jako Můj plán, **bez nadpisů prostoru/Oblasti**, počtů či barevných štítků; typografie shodná s úkolem.
-- Kalendář Den / 3 dny / 7 dní, kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
+- Mobilní kalendář vždy **jeden den**, navigace **řadou bublin se zkratkou dne nad číslem data**, bez 1/3/7 přepínače; správná dostupnost, přístupnost a výběr dne. Kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
 - Přístupnost a bezpečnost: kontrast, světlo/tma, zvětšení textu, dotyk/klávesnice/VoiceOver, Back/Forward, deep link, offline a revokace bez úniku obsahu.
 - Jde o **cílovou specifikaci**; aktualizace dokumentace neaktivuje serverové Area ACL, nepovoluje produkční reset/cutover a neslouží jako výjimka pro plný Browser E2E během PR.
