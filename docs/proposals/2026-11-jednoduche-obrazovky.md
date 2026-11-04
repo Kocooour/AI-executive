@@ -7,7 +7,7 @@
 - Bílé plochy, jemná pastelová výplň skupin, střídmé zaoblení a stíny, minimum rámů. Výrazné tmavé názvy úkolů a projektů, sekundární text stále čitelný. Písmo SF Pro / systémové, H1 přibližně 32 px, sekce 20 px, **úkol i projekt 16–17 px se shodnou tučností 650**, podrobnosti 13–14 px. Dotykové cíle nejméně 44 × 44 px.
 - **Rozsahy v navigaci:** Můj plán fialová **#8B5CF6**, Osobní zelená **#16A34A**, Sdílené modrá **#2563EB**. Můj plán není třetí prostor ani cíl zápisu; autorizace se nemění volbou barvy.
 - **Oblasti ve skupinách:** osobní jemná zelená **#DCFCE7**, práce jemná modrá **#DBEAFE**, rodina jemná růžová **#FCE7F3**. Jiné Oblasti mají konzistentně jemné pozadí. Barva Oblasti **nikdy** nerozhoduje o barvě dokončovací ikony.
-- **Nedokončená běžná položka:** neutrální **prázdný obrys bez fajfky**. Priorita / vyžaduje pozornost: **celá červená #EF4444 nebo oranžová #F59E0B výplň ikony, bez fajfky**, se srozumitelným důvodem v dostupném textu. Hotovo: **šedá #94A3B8 s fajfkou**, text i ikona tlumené a případně přeškrtnuté, ale stále dostatečně kontrastní. **Žádný stav „úkol v akci“ či „rozpracováno“.**
+- **Nedokončená běžná položka:** neutrální **prázdný obrys bez fajfky**. Priorita / vyžaduje pozornost: **pouze červená #EF4444 nebo oranžová #F59E0B kontura prázdné ikony, bez výplně a bez fajfky**, se srozumitelným důvodem v dostupném textu. Hotovo: **šedá #94A3B8 s fajfkou**, text i ikona tlumené a případně přeškrtnuté, ale stále dostatečně kontrastní. **Žádný stav „úkol v akci“ či „rozpracováno“.**
 - **Úkol = vždy čtverec. Projekt = vždy kruh.** Platí pro otevřený, urgentní i hotový stav a pro všechny obrazovky. Dokončený projekt je **šedý kruh s fajfkou**, ne čtverec; nedokončený projekt nikdy nemá fajfku. Kruh projektu umožňuje explicitní dokončení projektu, nikoli automatické skryté dokončení všech jeho úkolů.
 - **Návrh Lumi:** výrazná fialová/fialovorůžová plocha, původní ikona hvězdy, popis **„Návrh Lumi“** a dostupné **„Posoudit“**. Návrh je jiný než potvrzená rezervace a nikdy se netváří jako provedená změna.
 - Zachovat ostatní dosavadní sémantické ikony Lumi (kalendář, hledání, spodní navigace), měnit jen definované stavové ikony. Zde uvedené barvy jsou **cílové hodnoty designu**; současné CSS a design tokeny se neprohlašují za již upravené. Ověřit kontrast světlého i tmavého režimu.
@@ -48,7 +48,7 @@ Zítra · Út 4. 11.
 Můj plán            Kalendář             Projekty            Více
 ~~~
 
-Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec. Převod události na kanonický úkol vytvoří **jediný akční úkol**; rezervovaný čas či návrh bloku patří do jeho řádku, nic se dvakrát nesčítá ani nedokončuje. Pro pozornost úkolu se celý **čtverec vyplní oranžově/červeně bez fajfky**, nezávisle na zeleném/modrém/růžovém pozadí skupiny. Návrhy Lumi mohou vizuálně vyčnívat, běžný seznam zůstává klidný.
+Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec. Převod události na kanonický úkol vytvoří **jediný akční úkol**; rezervovaný čas či návrh bloku patří do jeho řádku, nic se dvakrát nesčítá ani nedokončuje. Pro pozornost úkolu má **prázdný čtverec jen oranžovou/červenou konturu bez fajfky**, nezávisle na zeleném/modrém/růžovém pozadí skupiny. Návrhy Lumi mohou vizuálně vyčnívat, běžný seznam zůstává klidný.
 
 ## Kalendář: Den / 3 dny / 7 dní
 
@@ -56,11 +56,11 @@ Jeden kalendář s trvale dostupným **segmentovým přepínačem Den · 3 dny �
 
 Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace je výslovně „Rezervováno“; návrh Lumi má hvězdu, jiný akcent a výzvu k posouzení. Skrytá událost zůstává pouze v Kalendáři jako „Skryto“, lze ji obnovit, a její vliv na kapacitu se řídí kalendářovým kontraktem. Odpojený nebo zastaralý kalendář nikdy nepředstírá přesnou kapacitu; nabízí Připojit či Obnovit a uvádí stáří dostupných dat.
 
-## Projekty: prostory, stejné písmo, kruhové stavy
+## Projekty: pastelové skupiny bez nadpisů, stejné písmo, kruhové stavy
 
-Projekty mohou mít filtr **Vše / Osobní / Sdílené**. „Vše“ znamená **všechny skutečně oprávněné projekty**, nikoli automaticky datový rozsah **Můj plán** (který ve sdíleném prostoru zahrnuje jen projekty relevantní díky řešitelství uživatele). Seskládat je lze podle osobního a sdíleného prostoru, s jemnými barvami sekcí, ale bez opakovaných štítků Oblastí.
+Projekty mohou mít filtr **Vše / Osobní / Sdílené**. „Vše“ znamená **všechny skutečně oprávněné projekty**, nikoli automaticky datový rozsah **Můj plán** (který ve sdíleném prostoru zahrnuje jen projekty relevantní díky řešitelství uživatele). Stejně jako Můj plán se projekty vizuálně seskupují **podle Oblastí do jemně pastelových bloků bez viditelných nadpisů prostoru či Oblasti**. Oblast i typ prostoru musí být přístupné v detailu, pro čtečku a před citlivým zápisem, i když jsou vizuální štítky skryty.
 
-Základní projektový řádek: **kruh + název + kontextové menu**. Název používá přesně stejnou **velikost i tučnost** jako úkol v Mém plánu; **počty úkolů, poměry dokončení a štítky Oblastí nejsou v přehledu vidět**. Nanejvýš jedna stručná věta o aktuálním problému / dalším kroku, je-li věcně užitečná. Kruh je bez vazby na prostor: neutrální prázdný, urgentní plně oranžový/červený bez fajfky, hotový šedý s fajfkou. Dokončený název je rovněž tlumený. Pozornost má srozumitelný text i pro screen reader.
+Základní projektový řádek: **kruh + název + kontextové menu**. Název používá přesně stejnou **velikost i tučnost** jako úkol v Mém plánu; **počty úkolů, poměry dokončení a štítky Oblastí nejsou v přehledu vidět**. Nanejvýš jedna stručná věta o aktuálním problému / dalším kroku, je-li věcně užitečná. Kruh je bez vazby na prostor: neutrální prázdný, urgentní pouze oranžově/červeně konturovaný prázdný kruh bez výplně a bez fajfky, hotový šedý s fajfkou. Dokončený název je rovněž tlumený. Pozornost má srozumitelný text i pro screen reader.
 
 Projekt otevře samostatnou stránku: název, stav a případný postup **v detailu**, ihned poté jeho úkoly, až pak volitelné Kontext, Poznámky/Zdroje, Podrobnosti, Historie. Ovladač dokončení projektu vyžaduje serverové oprávnění a **nesmí potichu dokončit otevřené podřízené úkoly**.
 
@@ -76,8 +76,8 @@ Projekt otevře samostatnou stránku: název, stav a případný postup **v deta
 
 - 390 px, spodní **čtyři záložky**, žádná spodní záložka Hledat, výchozí **Můj plán**.
 - Můj plán má jen pastelové **nepojmenované** skupiny Oblastí, žádné per-task štítky, čitelné tmavé názvy; čtečka oznamuje Oblast.
-- V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost plně červená/oranžová **bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
-- Projekty nemají v seznamu počty, barevné štítky či menší/slabší názvy; typografie shodná s úkolem.
+- V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost pouze červenou/oranžovou **konturou bez výplně a bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
+- Projekty mají stejné jemné skupinové podbarvení podle Oblastí jako Můj plán, **bez nadpisů prostoru/Oblasti**, počtů či barevných štítků; typografie shodná s úkolem.
 - Kalendář Den / 3 dny / 7 dní, kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
 - Přístupnost a bezpečnost: kontrast, světlo/tma, zvětšení textu, dotyk/klávesnice/VoiceOver, Back/Forward, deep link, offline a revokace bez úniku obsahu.
 - Jde o **cílovou specifikaci**; aktualizace dokumentace neaktivuje serverové Area ACL, nepovoluje produkční reset/cutover a neslouží jako výjimka pro plný Browser E2E během PR.
