@@ -284,8 +284,6 @@ export function useLumiApp() {
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
-  const viewRef = useRef(view);
-  viewRef.current = view;
   const openProjectIdRef = useRef(openProjectId);
   openProjectIdRef.current = openProjectId;
   // History markers may restore only a project that is still visible in the authorized active scope.
