@@ -67,3 +67,15 @@ export function searchForTarget(target: NavigationTarget, startView: string): st
   }
   return "?" + params.toString();
 }
+
+
+// Compatibility for old in-tab project history. An invalid URL never gains
+// access to a record merely because history.state contains an ID.
+export function projectIdFromAddress(
+  search: string, historyProjectId: unknown, knownViews: readonly string[], startView: string,
+): string | null {
+  const target = targetFromSearch(search, knownViews, startView);
+  if (target?.kind === "project") return target.id;
+  return target?.kind === "view" && target.view === "Projects" &&
+    typeof historyProjectId === "string" && isOpaqueId(historyProjectId) ? historyProjectId : null;
+}
