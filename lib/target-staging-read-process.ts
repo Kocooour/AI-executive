@@ -780,6 +780,9 @@ export function parseStagingMyPlanDayPage(
       (t.attentionOn===prev.attentionOn&&
        Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0)))return null;
     seen.add(t.taskId);
+    // A malicious child must not relabel one Area across rows and let the
+    // rowAreas map erase the earlier, conflicting Area kind.
+    if(rowAreas.has(t.areaId)&&rowAreas.get(t.areaId)!==t.areaKind)return null;
     rowAreas.set(t.areaId,t.areaKind as "private"|"shared");
     tasks.push({taskId:t.taskId,title:t.title,projectId:t.projectId as string|null,
       areaId:t.areaId,areaKind:t.areaKind as "private"|"shared",
