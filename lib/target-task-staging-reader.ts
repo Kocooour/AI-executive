@@ -40,6 +40,9 @@ import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } fro
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
 import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
+import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
+import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter}
+  from "./target-my-plan-day-task-read-model";
 import {readAuthorizedPersonalWhenCommandPreview,
   type PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import {personalWhenReceiptKey,personalWhenReceiptDigest,
@@ -418,6 +421,24 @@ export function readPreflightedPersonalWhenPage(
       if(!preflight(db))return null;
       const actorUserId=verifiedActor(db,access);
       return actorUserId?readAuthorizedPersonalWhenPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
+}
+
+/** Staging-only task composition for the current actor's day.
+ * Canonical pinned preflight + signed actor credential + one read snapshot;
+ * a future HTTP adapter MUST verify the Area witness and private epoch live. */
+export function readPreflightedMyPlanDayTaskPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{window:MyPlanTaskDayWindow;areaFilter:MyPlanTaskAreaFilter;
+    evaluationDate:string;throughDate:string|null;limit:number;offset:number},
+):MyPlanDayTaskPage|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedMyPlanDayTaskPage(db,{
         ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
       }):null;
     },()=>null));

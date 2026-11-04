@@ -19,6 +19,7 @@ import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
+import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -40,6 +41,7 @@ import {
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
   readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
+  readPreflightedMyPlanDayTaskPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -417,6 +419,20 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.3l.1: task-only My Plan day buckets, never an HTTP response. */
+  readMyPlanDayTaskPage(
+    actorUserId:string,areaFilter:MyPlanTaskAreaFilter,window:MyPlanTaskDayWindow,
+    evaluationDate:string,throughDate:string|null,limit:number,offset:number,
+  ):MyPlanDayTaskPage|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedMyPlanDayTaskPage(this.#store,credential,{
+        areaFilter,window,evaluationDate,throughDate,limit,offset,
       }):null;
     }catch{return null;}
   }
