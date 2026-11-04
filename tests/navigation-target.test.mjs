@@ -18,6 +18,8 @@ test("view, project, task and note targets encode to stable typed URLs", () => {
   }
   assert.equal(searchForTarget({ kind: "view", view: "Home" }, "Home", views), "");
   assert.equal(searchForTarget({ kind: "project", id: "p" }, "Home", views), "?view=Projects&projectId=p");
+  assert.equal(searchForTarget({ kind: "task", id: "t", view: "Projects", projectId: "p" }, "Home", views), "?view=Projects&projectId=p&taskId=t");
+  assert.equal(searchForTarget({ kind: "note", id: "n", view: "Projects", projectId: "p" }, "Home", views), "?view=Projects&projectId=p&noteId=n");
 });
 
 test("direct project links retain target independent of history.state or session", () => {
