@@ -8,7 +8,7 @@
     <div class="diff"><span>Kdy</span><span>Dnes → Zítra</span></div>
     <div class="diff"><span>Čas</span><span>Bez rezervace → 10:00</span></div>
     <p class="impact">Dopad: změní plánovaný den úkolu v Lumi. Žádný e-mail ani externí kalendář se automaticky neodešle.</p>
-    <footer><span class="btn solid">Schválit</span><span class="btn line">Odmítnout</span><span class="btn text">Proč?</span></footer>
+    <footer><button class="btn solid" type="button">Schválit</button><button class="btn line" type="button">Odmítnout</button><button class="btn text" type="button">Proč?</button></footer>
   </section>
   <section class="done" aria-label="Ukázka potvrzeného výsledku"><strong>✓ Provedeno</strong><span>Změna je potvrzená, audit dostupný · Zpět (je-li možné)</span></section>
 </div>
@@ -20,7 +20,7 @@
 .lv1prop .diff{display:flex;justify-content:space-between;border-bottom:1px solid #DDD6FE;padding:10px 0;font-size:14px}
 .lv1prop .diff span:first-child{color:#475569}.lv1prop .impact{font-size:13px;color:#475569;line-height:1.5}
 .lv1prop footer{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
-.lv1prop .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:700}
-.lv1prop .solid{background:#7C3AED;color:white}.lv1prop .line{border:1px solid #6D28D9;color:#6D28D9}.lv1prop .text{color:#6D28D9}
+.lv1prop .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:700;cursor:default;font-family:inherit;border:0}
+.lv1prop .solid{background:#7C3AED;color:white}.lv1prop .line{background:transparent;border:1px solid #6D28D9;color:#6D28D9}.lv1prop .text{color:#6D28D9;background:transparent}
 .lv1prop .done{padding:12px 15px;background:#F1F5F9;border-radius:12px;display:grid;gap:5px;color:#64748B;font-size:13px}.lv1prop .done strong{font-size:15px}
 </style>
