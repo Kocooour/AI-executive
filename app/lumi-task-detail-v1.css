@@ -98,9 +98,9 @@
 }
 
 
-/* UI-06b: one opt-in disclosure for secondary task controls. The wrappers
-   are display: contents outside mobile preview so desktop/default-off keeps
-   the legacy visual order and every input keeps its DOM identity on resize. */
+/* UI-06b: one opt-in disclosure for secondary task controls. Keyed React
+   sections follow actual DOM/tab order at each viewport; CSS must never
+   reorder focusable groups. Keep wrapper nodes stable for pending edits. */
 .inspectorDetail .taskDetailFields > .taskDetailEssentials,
 .inspectorDetail .taskDetailFields > .taskDetailNotes,
 .inspectorDetail .taskDetailFields > .taskDetailMoreGroup {
@@ -124,12 +124,8 @@
     gap: 16px;
     min-width: 0;
   }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailEssentials { order: 0; }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailNotes { order: 1; }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailWorkFinish { order: 2; }
   .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreToggle {
     display: flex;
-    order: 3;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
@@ -149,9 +145,6 @@
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
   }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreList { order: 4; }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreOptions { order: 5; }
-  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreActions { order: 6; }
   .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields[data-task-more-open="false"] > .taskDetailMoreGroup {
     display: none;
   }
