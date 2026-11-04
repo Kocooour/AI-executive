@@ -448,9 +448,10 @@ export function useLumiApp() {
     if (activeWorkspaceRef.current !== "all" && activeWorkspaceRef.current !== e.workspaceId && options.navigate !== false) return;
     if (options.navigate !== false && (e.type === "task" || e.type === "note")) {
       const parent = view === "Projects" && openProjectIdRef.current &&
-        latestRelationsRef.current.some((r) => r.sourceEntityId === e.id &&
-          r.targetEntityId === openProjectIdRef.current && r.workspaceId === e.workspaceId &&
-          r.relationType === "belongs_to_project")
+        (e.properties.projectId === openProjectIdRef.current ||
+          latestRelationsRef.current.some((r) => r.sourceEntityId === e.id &&
+            r.targetEntityId === openProjectIdRef.current && r.workspaceId === e.workspaceId &&
+            r.relationType === "belongs_to_project"))
         ? openProjectIdRef.current : null;
       try {
         const target = { kind: e.type, id: e.id, view, ...(parent ? { projectId: parent } : {}) };
@@ -2668,15 +2669,16 @@ export function useLumiApp() {
   useEffect(() => {
     if (!selected) return;
     const fresh = items.find((item) => item.id === selected.id);
-    if (!fresh || (activeWorkspaceId !== "all" && fresh.workspaceId !== activeWorkspaceId)) {
-      closeDetail(); // Deleted, removed from the owner store or no longer in this legacy scope.
+    if (!fresh || fresh.type !== selected.type ||
+        (activeWorkspaceId !== "all" && fresh.workspaceId !== activeWorkspaceId)) {
+      closeDetail(); // Deleted, wrong type or no longer in the selected legacy scope.
       return;
     }
     // Compared by content: a merged record can keep the timestamp it had.
     const shown = { ...fresh, title: titleEdited.current ? selected.title : fresh.title };
     if (JSON.stringify(shown) === JSON.stringify(selected)) return;
     setSelected((open) => (open && open.id === fresh.id ? { ...fresh, title: titleEdited.current ? open.title : fresh.title } : open));
-  }, [items, activeWorkspaceId]);
+  }, [items, activeWorkspaceId, selected?.id, selected?.type]);
   // The add row is shared by every list; its message belongs to the list it was shown under.
   useEffect(() => setRowError(false), [view]);
   // The add row under a list: a refused item keeps its text and says so instead of failing silently.
