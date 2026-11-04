@@ -38,8 +38,8 @@ import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
-import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail } from "./target-task-temporal-read-model";
-import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail } from "./target-task-temporal-read-model";
+import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
 import { evaluateTargetAreaPolicy } from "./target-area-policy";
@@ -373,6 +373,27 @@ export function readPreflightedTemporalTaskPage(
       const actorUserId = verifiedActor(db, access);
       if (!actorUserId) return null;
       return readAuthorizedTemporalTaskPage(db, {
+        ...request, actorUserId, restoreGeneration: store.expectedRestoreGeneration,
+      });
+    }, () => null));
+}
+
+/** Staging-only due-date window; live Area witness must be verified by the
+ * future HTTP layer before release. No personal planned-day interpretation. */
+export function readPreflightedTemporalDueWindowPage(
+  store: TargetStagingReadStore,
+  access: TargetStagingReadCredential,
+  request: {
+    scope: TemporalScope; window: TemporalDueWindow; evaluationDate: string;
+    throughDate: string | null; limit: number; offset: number;
+  },
+): TemporalDueWindowPage | null {
+  return withPreflightedStore(store, () => null, (db, preflight) =>
+    inReadSnapshot(db, () => {
+      if (!preflight(db)) return null;
+      const actorUserId = verifiedActor(db, access);
+      if (!actorUserId) return null;
+      return readAuthorizedTemporalDueWindowPage(db, {
         ...request, actorUserId, restoreGeneration: store.expectedRestoreGeneration,
       });
     }, () => null));

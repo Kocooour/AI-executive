@@ -193,3 +193,93 @@ export function readAuthorizedTemporalTaskDetail(
     } };
   } catch { return null; }
 }
+
+/**
+ * R2d.3j.1 — due-date-only deadline buckets. These are NOT the full product
+ * Today/Upcoming views: personal user-private "when"/planned-day and calendar
+ * commitments are intentionally absent. Caller supplies an explicit local
+ * calendar date chosen in the actor's timezone; no server UTC clock or
+ * untrusted timezone conversion occurs in this reader.
+ */
+export type TemporalDueWindow = "overdue" | "due-today" | "upcoming";
+export type TemporalDueWindowPage = TemporalTaskPage & {
+  window: TemporalDueWindow; evaluationDate: string; throughDate: string | null;
+};
+
+/** Gregorian calendar ordinal. Strict YYYY-MM-DD; no Date.parse rollovers. */
+export function temporalCalendarOrdinal(value: unknown): number | null {
+  if (typeof value !== "string" || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value))
+    return null;
+  const year=Number(value.slice(0,4)), month=Number(value.slice(5,7));
+  const day=Number(value.slice(8,10));
+  if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1)
+    return null;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+  if (day > monthDays[month-1]) return null;
+  const y=year-1;
+  return y*365 + Math.floor(y/4)-Math.floor(y/100)+Math.floor(y/400)
+    + monthDays.slice(0,month-1).reduce((a,b)=>a+b,0) + day;
+}
+
+/**
+ * A fully SQL-filtered, canonical bounded page of OPEN tasks with deadlines.
+ * Overdue: due_on < evaluationDate; due-today: equal;
+ * upcoming: evaluationDate < due_on <= throughDate (1–90 days ahead).
+ * No post-pagination filtering, which could silently omit matching tasks.
+ * Uses identical live Area witnesses and my-plan assignment gates as R2d.3e.
+ */
+export function readAuthorizedTemporalDueWindowPage(db: DatabaseSync, request: {
+  actorUserId: string; scope: TemporalScope; window: TemporalDueWindow;
+  evaluationDate: string; throughDate: string | null;
+  limit: number; offset: number; restoreGeneration: string;
+}): TemporalDueWindowPage | null {
+  if (!request || !validActor(request.actorUserId) ||
+      !["personal","shared","my-plan"].includes(request.scope) ||
+      !["overdue","due-today","upcoming"].includes(request.window) ||
+      !Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100 ||
+      !Number.isSafeInteger(request.offset) || request.offset < 0 || request.offset > 1_000_000 ||
+      !validGeneration(request.restoreGeneration)) return null;
+  const todayOrdinal=temporalCalendarOrdinal(request.evaluationDate);
+  if (todayOrdinal===null) return null;
+  const throughOrdinal=request.throughDate===null ? null :
+    temporalCalendarOrdinal(request.throughDate);
+  if (request.window==="upcoming"
+      ? throughOrdinal===null || throughOrdinal-todayOrdinal<1 ||
+        throughOrdinal-todayOrdinal>90
+      : request.throughDate!==null) return null;
+  try {
+    const observed=witness(db,request.actorUserId,request.scope);
+    if (!observed) return null;
+    // Lexical comparison is correct for validated, zero-padded ISO dates.
+    const predicate=request.window==="overdue" ? "t.due_on < ?" :
+      request.window==="due-today" ? "t.due_on = ?" :
+        "t.due_on > ? AND t.due_on <= ?";
+    const parameters=request.window==="upcoming"
+      ? [request.evaluationDate,request.throughDate]
+      : [request.evaluationDate];
+    const rows=db.prepare(SELECT+" "+SCOPE+
+      " AND t.status='open' AND t.due_on IS NOT NULL AND "+predicate+
+      " ORDER BY t.due_on COLLATE BINARY ASC,t.id COLLATE BINARY ASC,t.rowid ASC"+
+      " LIMIT ? OFFSET ?").all(
+        request.actorUserId,request.scope,request.scope,request.scope,
+        ...parameters,request.limit+1,request.offset) as Row[];
+    if (rows.some(row=>!validRow(row) || row.status!=="open" ||
+        row.dueOn===null)) return null;
+    const authorized=new Set(observed.areas.map(a=>a.areaId));
+    if (rows.some(row=>!authorized.has(row.areaId))) return null;
+    const hash=createHash("sha256").update("lumi:r2d:due-window-page:v1\0")
+      .update(JSON.stringify([request.restoreGeneration,request.scope,request.window,
+        request.evaluationDate,request.throughDate]));
+    for (const a of observed.areas) hash.update("\0").update(JSON.stringify([
+      a.areaId,a.areaKind,a.access,a.policyRevision,a.contentRevision,
+    ]));
+    return {
+      tasks:rows.slice(0,request.limit).map(taskFrom),
+      hasMore:rows.length>request.limit,
+      revision:hash.digest("hex"),linearization:observed.linearization,
+      window:request.window,evaluationDate:request.evaluationDate,
+      throughDate:request.throughDate,
+    };
+  } catch { return null; }
+}
