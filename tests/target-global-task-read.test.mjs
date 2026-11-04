@@ -170,6 +170,20 @@ test("revision uses full Area content epochs, not another actor's private plan",
   assert.deepEqual(ids(page(f,"bob","personal")),["b-bob"]);
 });
 
+test("global Vše retains shared work after reassignment but invalidates old revision",()=>{
+  const f=fixture(),before=page(f);
+  assert.equal(before.tasks.find(t=>t.id==="s-bob").assignedToMe,true);
+  const next=f.db.prepare("UPDATE tasks SET assignee_user_id='alice' WHERE id='s-bob'").run();
+  assert.equal(next.changes,1);
+  const after=page(f);
+  assert.ok(ids(after).includes("s-bob"),"accessible shared tasks remain in Vše");
+  assert.equal(after.tasks.find(t=>t.id==="s-bob").assignedToMe,false);
+  assert.notEqual(after.revision,before.revision);
+  assert.equal(f.db.prepare(
+    "SELECT COUNT(*) AS n FROM personal_task_plans WHERE task_id='s-bob' AND user_id='bob'"
+  ).get().n,0,"staging cleanup removed Bob's private planned day");
+});
+
 test("authenticated preflight authority and full LIVE guard catch role, content and new Area",()=>{
   const f=fixture();
   const authorityPage=f.authority.readGlobalTaskPage("carol","all",100,0);
@@ -190,6 +204,8 @@ test("authenticated preflight authority and full LIVE guard catch role, content 
   // Empty grant must also invalidate old page even if no new task appears.
   f.db.prepare("INSERT INTO workspaces(id,kind,owner_user_id) VALUES ('new-family','shared','alice')").run();
   f.db.prepare("INSERT INTO areas(id,title,kind,workspace_id,owner_user_id) VALUES ('new-family-area','New','shared','new-family','alice')").run();
+  // Shared Area must retain an admin to pass strict R2 model integrity as well.
+  f.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-family-area','alice','admin')").run();
   f.db.prepare("INSERT INTO area_members(area_id,user_id,role) VALUES ('new-family-area','carol','viewer')").run();
   assert.equal(check(fresh).reason,"stale");
   const granted=f.authority.readGlobalTaskPage("carol","all",100,0);
