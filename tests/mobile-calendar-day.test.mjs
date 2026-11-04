@@ -74,5 +74,5 @@ test("VALUE=DATE events are filtered by civil date after UTC-overlap API reads e
     ["selected", "three-days"]);
   // Exclusive midnight bounds must not turn two adjacent all-day dates into one.
   assert.deepEqual(mobileCalendarEventsForDay(events, "2026-11-03", "Europe/Prague").map((event) => event.id),
-    ["previous", "three-days", "evening"]);
+    ["previous", "three-days"]);
 });
