@@ -19,6 +19,8 @@ const available = [
   "tests/task-row-value.test.mjs",
   "tests/work-scope-navigation.test.mjs",
   "tests/example.test.mjs",
+  "tests/calendar-overview.test.mjs",
+  "tests/target-staging-notes-http.test.mjs",
 ];
 
 test("documentation-only changes skip expensive code validation", () => {
@@ -44,10 +46,42 @@ test("security-sensitive change always selects authorization regressions", () =>
   assert.ok(out.selected.includes("tests/context-evidence-leaks.test.mjs"));
 });
 
-test("API routes trigger security regressions, not unrelated UI tests", () => {
-  const out = chooseTests(["app/api/calendar/route.ts"], available);
+test("P1: changing an API route selects its exact HTTP regression test", () => {
+  const route = "app/api/target-staging/notes/[noteId]/route.ts";
+  const out = chooseTests([route], available, {
+    "tests/target-staging-notes-http.test.mjs":
+      'const { GET } = await import("../app/api/target-staging/notes/[noteId]/route.ts");',
+  });
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/target-staging-notes-http.test.mjs"));
   assert.ok(out.selected.includes("tests/target-note-access.test.mjs"));
   assert.equal(out.selected.includes("tests/mobile-navigation-v1.test.mjs"), false);
+});
+
+test("P1: untraceable API endpoints trigger all unit tests instead of green smoke only", () => {
+  const out = chooseTests(["app/api/untested/route.ts"], available);
+  assert.equal(out.full, true);
+  assert.equal(out.selected.length, available.length);
+});
+
+test("P2: local-dates changes run transitively dependent calendar overview tests", () => {
+  const out = chooseTests(["lib/local-dates.ts"], available, {
+    "lib/calendar-overview.ts":
+      'import { zonedDateTimeToIso } from "./local-dates";',
+    "tests/calendar-overview.test.mjs":
+      'import { calendarOverviewIntersects } from "../lib/calendar-overview.ts";',
+  });
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/calendar-overview.test.mjs"));
+});
+
+test("reverse import traversal handles cycles, extensionless imports and alias imports", () => {
+  const out = chooseTests(["lib/shared.ts"], available, {
+    "lib/a.ts": 'import "./b"; import "@/lib/shared";',
+    "lib/b.ts": 'import "./a";',
+    "tests/example.test.mjs": 'import "../lib/b.ts";',
+  });
+  assert.ok(out.selected.includes("tests/example.test.mjs"));
 });
 
 test("UI changes select focused mobile/navigation checks", () => {
