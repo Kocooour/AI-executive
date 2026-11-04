@@ -1178,8 +1178,7 @@ export function useLumiApp() {
     // activate the target My Plan read scope or overwrite an explicit link.
     const previewMobileStart = mobileDesignV1Preview &&
       window.matchMedia("(max-width: 700px)").matches &&
-      !new URLSearchParams(window.location.search).has("view") &&
-      !new URLSearchParams(window.location.search).has("task");
+      window.location.search === ""; // An explicit record or view link always wins.
     if (previewMobileStart) {
       setStartupView("Today");
       setViewState("Today");
