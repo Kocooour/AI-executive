@@ -127,7 +127,7 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
       :[request.evaluationDate,request.throughDate];
     const rows=db.prepare(q).all(request.actorUserId,
       request.areaFilter,request.areaFilter,request.areaFilter,
-      ...dates,request.limit+1,request.offset) as Row[];
+      ...dates,request.limit+1,request.offset) as unknown as Row[];
     const available=new Set(areas.map(a=>a.areaId));
     if(rows.some(row=>
       typeof row.taskId!=="string"||typeof row.title!=="string"||
