@@ -41,8 +41,8 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
     const count = summary.open;
     const openNote = !completed && count > 0
       ? cs
-        ? `Projekt obsahuje ${count} ${count === 1 ? "nedokončený úkol" : count < 5 ? "nedokončené úkoly" : "nedokončených úkolů"}. Jeho dokončení tyto úkoly nezmění.`
-        : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing the project will not complete those tasks.`
+        ? `Projekt obsahuje ${count} ${count === 1 ? "nedokončený úkol" : count < 5 ? "nedokončené úkoly" : "nedokončených úkolů"}. Dokončení projektu stav podřízených úkolů nezmění.`
+        : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing the project will not change the status of its tasks.`
       : "";
     const confirmed = await askConfirm({
       title: completed ? (cs ? "Znovu otevřít projekt?" : "Reopen project?")
