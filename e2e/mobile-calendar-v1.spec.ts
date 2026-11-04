@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { waitUntilSynced } from "./helpers";
+import { removeTasks, seedTasks, waitUntilSynced } from "./helpers";
 import { addCalendarDays, calendarLocalDayRange } from "../lib/calendar-event-display";
 import { zonedDateTimeToIso } from "../lib/local-dates";
 
@@ -169,4 +169,51 @@ test("selected day excludes adjacent all-day VALUE=DATE entries even when SQL UT
   await expect(page.locator('[data-timeline-item="event:timed-overnight"]')).toBeVisible();
   await expect(page.locator('[data-timeline-item="event:all-day-previous"]')).toHaveCount(0);
   await expect(page.locator('[data-timeline-item="event:all-day-next"]')).toHaveCount(0);
+});
+
+test("Today's skipped-plan chip stays on Today and never appears on another selected calendar day", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Mobile design preview disabled");
+  const base = today(), tomorrow = addCalendarDays(base, 1);
+  const stamp = Date.now().toString(36);
+  const nowTask = { id: `e2e-ui04a-skip-now-${stamp}`, title: `Today's skipped plan ${stamp}`,
+    properties: { today: true, planningFeedback: { date: base, decision: "dismissed" } } };
+  const laterTask = { id: `e2e-ui04a-skip-next-${stamp}`, title: `Future task with today's feedback ${stamp}`,
+    properties: { when: tomorrow, planningFeedback: { date: base, decision: "dismissed" } } };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockDays(page, [base, tomorrow]);
+  await page.goto("/?view=Calendar");
+  await waitUntilSynced(page);
+  try {
+    await seedTasks(page, [nowTask, laterTask]);
+    // Supply a known-valid Today's plan. Without it TodayTimeCell would
+    // return null even in the buggy code, yielding a false positive.
+    await page.route("**/api/day-plan?**", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const date = query.get("date") || base;
+      const workspaceId = query.get("workspaceId") || "personal";
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        revision: 1, date, workspaceId, timezone: zone,
+        calendar: "ready", freeMinutes: 480, requiredMinutes: 0, overloaded: false,
+        existingBlocks: [], planBlocks: [], unscheduled: [],
+      }) });
+    });
+    await page.reload();
+    await waitUntilSynced(page);
+    const todayRow = page.locator(`[data-untimed-task="${nowTask.id}"]`);
+    await expect(todayRow).toBeVisible();
+    await expect(todayRow.locator("[data-time-cell]")).toHaveAttribute("data-time-kind", "skipped");
+
+    await page.locator(`[data-date="${tomorrow}"]`).click();
+    await expect(page.locator('[data-mobile-calendar-day]')).toHaveAttribute("data-mobile-calendar-day", tomorrow);
+    const futureRow = page.locator(`[data-untimed-task="${laterTask.id}"]`);
+    await expect(futureRow).toBeVisible();
+    await expect(futureRow.locator("[data-time-cell]")).toHaveCount(0);
+    await expect(futureRow).not.toContainText(/Dnes neplánov|Not planned today/i);
+
+    await page.locator(".mobileCalendarTodayJump").click();
+    await expect(todayRow.locator("[data-time-cell]")).toHaveAttribute("data-time-kind", "skipped");
+  } finally {
+    await page.unroute("**/api/day-plan?**");
+    await removeTasks(page, [nowTask.id, laterTask.id]);
+  }
 });
