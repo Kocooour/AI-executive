@@ -769,7 +769,7 @@ export function parseStagingMyPlanDayPage(
       (areaFilter==="shared"&&!shared)||
       (t.dueOn!==null&&temporalCalendarOrdinal(t.dueOn)===null)||
       (t.whenOn!==null&&temporalCalendarOrdinal(t.whenOn)===null)||
-      temporalCalendarOrdinal(t.attentionOn)===null||
+      typeof t.attentionOn!=="string"||temporalCalendarOrdinal(t.attentionOn)===null||
       t.attentionOn!==[t.dueOn,t.whenOn].filter((d):d is string=>
         typeof d==="string").sort()[0]||
       (window==="today"?!(t.attentionOn<=evaluationDate):
