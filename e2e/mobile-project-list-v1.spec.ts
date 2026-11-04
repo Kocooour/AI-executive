@@ -87,6 +87,9 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await expect(empty.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(245, 158, 11)");
     const circle = urgent.locator(`[data-project-status-control="${ids.overdue}"]`);
     expect((await circle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    const drag = urgent.locator(".dragHandle");
+    expect((await drag.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    expect((await drag.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await circle.click();
     const confirm = page.locator("dialog.confirmDialog");
     await expect(confirm).toBeVisible();
