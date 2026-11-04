@@ -189,8 +189,18 @@ test("due date ABA, membership and assignment changes invalidate revisions",()=>
   assert.deepEqual(ids(page(fx)),["a-today","s-today"]);
   assert.notEqual(page(fx).revision,rev);
   const beforeRole=page(fx).revision;
+  // The canonical schema forbids downgrading an editor while shared tasks
+  // remain assigned to them. Verify the guard and unassign first.
+  assert.throws(()=>
+    fx.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run(),
+    /unassign tasks before downgrading membership/);
+  fx.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE assignee_user_id='bob'").run();
+  assert.deepEqual(ids(page(fx)),["a-today"]);
+  assert.notEqual(page(fx).revision,beforeRole);
+  const beforeDowngrade=page(fx).revision;
   fx.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
   assert.deepEqual(ids(page(fx)),["a-today"]);
+  assert.notEqual(page(fx).revision,beforeDowngrade);
   assert.deepEqual(ids(page(fx,"bob","shared","due-today")),
     ["s-other","s-today","s-unassigned"]);
   assert.notEqual(page(fx).revision,beforeRole);
