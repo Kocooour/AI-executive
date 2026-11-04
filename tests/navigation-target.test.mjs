@@ -91,3 +91,20 @@ test("an explicit view choice from a project pushes a new step, Back restores th
     currentSearch: projectUrl, currentProjectId: "someone-else", nextView: "Home", knownViews: views, startView: "Home",
   }), null);
 });
+
+test("serializer never emits an invalid project parent context or opaque ID", () => {
+  const invalidTargets = [
+    { kind: "task", id: "t", view: "Today", projectId: "p" },
+    { kind: "note", id: "n", view: "Notes", projectId: "p" },
+    { kind: "task", id: "t", view: "Projects", projectId: "" },
+    { kind: "note", id: "n", view: "Projects", projectId: "\\u0000" },
+    { kind: "project", id: "" },
+    { kind: "project", id: "x".repeat(257) },
+    { kind: "task", id: "bad\\n", view: "Today" },
+  ];
+  for (const target of invalidTargets) {
+    assert.throws(() => searchForTarget(target, "Home"), TypeError, JSON.stringify(target));
+  }
+  const valid = { kind: "task", id: "t", view: "Projects", projectId: "p" };
+  assert.deepEqual(targetFromSearch(searchForTarget(valid, "Home"), views, "Home"), valid);
+});
