@@ -71,7 +71,12 @@ export default function App() {
               </p>
             )}
             <div className="pageTitleRow">
-              <h1>{tr(view)}</h1>
+              <h1>{mobileDesignV1Preview && view === "Today" ? (
+                <>
+                  <span className="mobileV1DesktopTitle">{tr(view)}</span>
+                  <span className="mobileV1PhoneTitle">{language === "cs" ? "Můj plán" : "My Plan"}</span>
+                </>
+              ) : tr(view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
               {view === "Today" && <TodayHeaderMeta app={app} />}
             </div>
