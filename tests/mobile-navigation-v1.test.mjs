@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { mobileViews, mobileMoreGroups, mobileV1Tabs, mobileV1MoreGroups,
-  mobileV1MoreViews, mobileV1Destination } = await import("../app/ui/navigation.ts");
+  mobileV1MoreViews, mobileV1Destination, mobileV1IsPlanPreviewRoute } = await import("../app/ui/navigation.ts");
 
 test("approved v1 preview has exactly four mobile tabs in the agreed order", () => {
   assert.deepEqual([...mobileV1Tabs], ["MyPlanPreview", "Calendar", "Projects", "More"]);
@@ -25,4 +25,13 @@ test("secondary destinations are accessible in More; search stays topbar-only", 
 test("existing production navigation remains unchanged when preview is not enabled", () => {
   assert.deepEqual(mobileViews, ["Home", "Inbox", "Today", "Projects", "More"]);
   assert.equal(mobileMoreGroups.flatMap((group) => group.views).includes("Calendar"), true);
+});
+
+test("the preview-only route cannot be confused with Today or record URLs", () => {
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview"), true);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=Today"), false);
+  assert.equal(mobileV1IsPlanPreviewRoute(""), false);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&taskId=id"), false);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&view=Today"), false);
+  assert.equal(mobileV1IsPlanPreviewRoute("?view=MyPlanPreview&other=1"), false);
 });
