@@ -132,7 +132,9 @@ test("new due-window HTTP gates fail closed without enabling existing temporal A
   }
   assert.equal((await GET(new Request(base+params()))).status,401);
   const body=await ok(get(params()));
-  assert.deepEqual(ids(body),["p-alice"]);
+  // My Plan combines the owner\u0027s private tasks with assigned shared work.
+  assert.deepEqual(ids(body),["p-alice","s-other"]);
+  assert.deepEqual(ids(await ok(get(params("personal")))),["p-alice"]);
   assert.equal(body.window,"due-today");
   assert.equal(body.evaluationDate,"2026-11-04");
   assert.equal(body.throughDate,null);
