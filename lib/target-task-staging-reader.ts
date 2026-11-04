@@ -43,6 +43,8 @@ import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-mode
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
+import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
+import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter}
   from "./target-my-plan-day-task-read-model";
 import {readAuthorizedPersonalWhenCommandPreview,
@@ -773,6 +775,22 @@ export function readPreflightedPrivateProjectDetail(
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
   );
+}
+
+/** R2d.3m.3: one canonical pinned, actor-bound global project index.
+ * A future HTTP adapter MUST recheck all Area epochs with the live guard. */
+export function readPreflightedGlobalProjectPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{scope:TargetGlobalTaskScope;limit:number;offset:number},
+):TargetGlobalProjectPage|null{
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedGlobalProjectPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
 }
 
 /** R2d.3m.1: authenticated canonical task-only global scope.
