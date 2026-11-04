@@ -71,12 +71,13 @@ export function searchForTarget(target: NavigationTarget, startView: string, kno
     params.set("view", "Projects");
     params.set("projectId", target.id);
   } else {
-    if (target.projectId !== undefined) {
-      if (target.view !== "Projects" || !isOpaqueId(target.projectId))
-        throw new TypeError("Project context requires the Projects view and a valid project ID");
-      params.set("projectId", target.projectId);
-    }
+    if (target.projectId !== undefined &&
+        (target.view !== "Projects" || !isOpaqueId(target.projectId)))
+      throw new TypeError("Project context requires the Projects view and a valid project ID");
+    // Keep the canonical order stable for copyable URLs and browser history:
+    // view first, optional project parent, then the selected record.
     params.set("view", target.view);
+    if (target.projectId !== undefined) params.set("projectId", target.projectId);
     params.set(target.kind === "task" ? "taskId" : "noteId", target.id);
   }
   return "?" + params.toString();
