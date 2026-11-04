@@ -3,13 +3,13 @@
 <section class="lv1cal" aria-label="Kalendář – středa 4. listopadu 2026">
   <header><strong>Kalendář</strong><span>Listopad 2026 · Dnes</span></header>
   <div class="dateBar" aria-label="Výběr dne">
-    <div class="date old"><span>Po</span><b>2</b></div>
-    <div class="date old"><span>Út</span><b>3</b></div>
-    <div class="date chosen"><span>St</span><b>4</b></div>
-    <div class="date"><span>Čt</span><b>5</b></div>
-    <div class="date"><span>Pá</span><b>6</b></div>
-    <div class="date"><span>So</span><b>7</b></div>
-    <div class="date"><span>Ne</span><b>8</b></div>
+    <button type="button" class="date old" aria-pressed="false" aria-label="Po 2. listopadu 2026"><span>Po</span><b>2</b></button>
+    <button type="button" class="date old" aria-pressed="false" aria-label="Út 3. listopadu 2026"><span>Út</span><b>3</b></button>
+    <button type="button" class="date chosen" aria-pressed="true" aria-label="St 4. listopadu 2026"><span>St</span><b>4</b></button>
+    <button type="button" class="date" aria-pressed="false" aria-label="Čt 5. listopadu 2026"><span>Čt</span><b>5</b></button>
+    <button type="button" class="date" aria-pressed="false" aria-label="Pá 6. listopadu 2026"><span>Pá</span><b>6</b></button>
+    <button type="button" class="date" aria-pressed="false" aria-label="So 7. listopadu 2026"><span>So</span><b>7</b></button>
+    <button type="button" class="date" aria-pressed="false" aria-label="Ne 8. listopadu 2026"><span>Ne</span><b>8</b></button>
   </div>
   <div class="when"><time>10:00</time><div class="event"><strong>Standup Lumi</strong><small>10:00–10:30 · Událost</small></div></div>
   <div class="when"><time>13:00</time><div class="reserved"><strong>Rezervováno: příprava vydání</strong><small>13:00–14:00 · Přijatý blok u úkolu</small></div></div>
@@ -18,10 +18,10 @@
 <style>
 .lv1cal{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:#0F172A;width:380px;max-width:100%;padding:15px;border:1px solid #E2E8F0;border-radius:16px;background:white;display:grid;gap:12px}
 .lv1cal header{display:flex;justify-content:space-between;align-items:center}.lv1cal header strong{font-size:23px}.lv1cal header span{font-size:12px;color:#475569}
-.lv1cal .dateBar{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin:7px 0}.lv1cal .date{display:grid;justify-items:center;gap:7px;font-size:12px;font-weight:650;color:#475569}
-.lv1cal .date b{display:grid;place-items:center;border-radius:50%;width:35px;height:35px;background:#F1F5F9;color:#334155;font-size:14px}
+.lv1cal .dateBar{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin:7px 0}.lv1cal .date{display:grid;justify-items:center;gap:7px;font-size:12px;font-weight:650;color:#475569;font-family:inherit;background:transparent;border:0;padding:0;min-height:60px;cursor:default}
+.lv1cal .date b{display:grid;place-items:center;border-radius:50%;width:44px;height:44px;background:#F1F5F9;color:#334155;font-size:14px}
 .lv1cal .date.old{color:#94A3B8}.lv1cal .date.old b{background:#E9EBEF;color:#64748B}
-.lv1cal .date.chosen{color:#6D28D9}.lv1cal .date.chosen b{background:#8B5CF6;color:white}
+.lv1cal .date:focus-visible{outline:2px solid #6D28D9;outline-offset:2px;border-radius:9px}.lv1cal .date.chosen{color:#6D28D9}.lv1cal .date.chosen b{background:#8B5CF6;color:white}
 .lv1cal .when{display:grid;grid-template-columns:40px 1fr;gap:8px;align-items:start}.lv1cal time{font-size:12px;color:#64748B;padding-top:8px}
 .lv1cal .when>div{border-radius:12px;padding:10px 12px;display:grid;gap:3px}.lv1cal .event{background:#DBEAFE}.lv1cal .reserved{background:#DCFCE7}
 .lv1cal small{font-size:11px;color:#475569}.lv1cal .proposal{background:#F3E8FF;color:#6D28D9;border:1px solid #8B5CF6;position:relative}.lv1cal .proposal p{margin:0;color:#0F172A;font-size:13px}.lv1cal .proposal small{color:#6D28D9}.lv1cal .proposal span{font-size:12px;text-align:right;font-weight:700}
