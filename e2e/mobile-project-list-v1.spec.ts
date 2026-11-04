@@ -75,6 +75,7 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await expect(urgent.locator(".projectRowWhy, .projectRowNext, .taskRowMeta")).toHaveCount(0);
     await expect(urgent.locator(".v1ProjectCircle")).toHaveText("");
     await expect(urgent.locator(".v1ProjectCircle")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(urgent.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(239, 68, 68)");
     await expect(urgent.locator(".v1ProjectName")).toHaveCSS("font-weight", "650");
     const completed = group.locator(`[data-project-preview-row="${ids.finished}"]`);
     await expect(completed).toHaveAttribute("data-project-tone", "complete");
