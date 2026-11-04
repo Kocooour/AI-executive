@@ -29,9 +29,8 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
   const cs = language === "cs";
   // The current legacy store has no target Area role enforcement here.
   // Never silently mutate a project selected through the aggregated All view.
-  const canToggle = activeWorkspaceId === project.workspaceId &&
-    (project.status === "active" || completed) &&
-    !unsent.has(project.id) && !heldReasons.has(project.id) && !busy;
+  const canToggle = projectPreviewCanToggle(project, activeWorkspaceId,
+    unsent.has(project.id) || heldReasons.has(project.id) || busy);
   const changeLabel = `${completed ? tr("reopen") : tr("complete")} ${name}`;
   const writeHint = cs ? "Pro změnu zvolte konkrétní prostor a vyčkejte na synchronizaci." :
     "Select a specific workspace and finish pending synchronization before changing status.";
