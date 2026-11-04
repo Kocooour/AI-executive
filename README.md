@@ -11,6 +11,7 @@
 | [Produktové zadání](docs/PRODUCT.md) | Vizi, uživatelské přínosy, funkční požadavky, proaktivitu, bezpečné akce, priority a produktovou roadmapu. |
 | [Aktuální roadmapa](docs/ROADMAP.md) | Schválené pořadí dalších implementačních milníků R0–R5, clean-start přechod a bezpečnostní brány. |
 | [UX/UI specifikace](docs/UX-UI.md) | Cílových 15 obrazovek, desktop/iPhone navigaci, hlavní interakce, přístupnost a akceptační kritéria. |
+| [Lumi Design v1.0](docs/design-system/README.md) | Schválené cílové barvy, komponentové stavy a ukázky; současné generované runtime tokeny jsou zatím legacy a nesmí být bez samostatného UI PR vydávány za nový vzhled. |
 | [Technická architektura](docs/ARCHITECTURE.md) | Aktuální implementaci i cílové kontrakty: PACT, Context Graph, bezpečnost, integrace, provoz, zálohy a implementační plán. |
 
 **Hierarchie:** produktové chování a priority určuje PRODUCT.md, interakce a obrazovky UX-UI.md, implementační a datové kontrakty ARCHITECTURE.md. Technický stav **není** důkazem dodání cílových funkcí. Pro konflikty či změny požadavků je nutné explicitní produktové rozhodnutí, nikoli tichá úprava implementace.
