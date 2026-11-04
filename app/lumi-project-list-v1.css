@@ -162,6 +162,12 @@
     min-width: 44px;
     opacity: .45;
   }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectDrag .dragHandle {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex-basis: 44px;
+  }
   .appShell .taskRowList .v1ProjectRow:focus-within .v1ProjectDrag { opacity: 1; }
   .appShell .taskRowList .v1ProjectStatusButton:focus-visible,
   .appShell .taskRowList .v1ProjectName .taskRowOpen:focus-visible {
