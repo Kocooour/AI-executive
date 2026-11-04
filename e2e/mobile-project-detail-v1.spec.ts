@@ -68,7 +68,11 @@ test("gated mobile detail puts tasks before collapsible context, preserving edit
       }
       return nodes.every((node) => node !== null);
     })).toBe(true);
-    await context.locator("summary").click();
+    // Native details must also work with keyboard only, not require a touch gesture.
+    const contextSummary = context.locator("summary");
+    await contextSummary.focus();
+    await expect(contextSummary).toBeFocused();
+    await contextSummary.press("Enter");
     await expect(context).toHaveAttribute("open", "");
     const why = context.getByRole("textbox", { name: "Proč je důležitý" });
     await why.fill(`Rozepsaný důvod UI05b ${stamp}`);
