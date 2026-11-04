@@ -56,7 +56,7 @@ function fixture(){
     ["s-bob","family-area",null,"Assigned to Bob","bob",null],
     ["s-alice","family-area",null,"Assigned to Alice","alice","2026-11-06"],
     ["s-unassigned","family-area",null,"Nobody assigned",null,null],
-    ["s-carol","family-area",null,"Assigned to viewer","carol",null],
+    ["s-carol","family-area",null,"Another assigned shared task","bob",null],
     ["s-completed","family-area",null,"Done","bob","2026-11-03"],
     ["s-child",null,"family-project","Inherited Area","alice",null],
     ["hidden","hidden-area",null,"Hidden to Bob","erin",null],
@@ -166,8 +166,8 @@ test("revision uses full Area content epochs, not another actor's private plan",
   assert.equal(page(f).revision,token);
   f.db.prepare("UPDATE tasks SET title='Shared changed' WHERE id='s-alice'").run();
   assert.notEqual(page(f).revision,token);
-  assert.equal(page(f,"bob","personal").revision,
-    page(f,"bob","personal").revision);
+  assert.notEqual(page(f,"bob","shared").revision,token);
+  assert.deepEqual(ids(page(f,"bob","personal")),["b-bob"]);
 });
 
 test("authenticated preflight authority and full LIVE guard catch role, content and new Area",()=>{
