@@ -2,7 +2,7 @@
 // Conservative, dependency-free PR test selection. Main and releases run the full suite.
 // Operates on the PR's base/head commits, not GitHub's temporary merge checkout.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 
 const BASE = process.env.BASE_SHA;
 const HEAD = process.env.HEAD_SHA;
@@ -44,7 +44,7 @@ const UI = [
   "tests/work-scope-navigation.test.mjs",
 ];
 const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs)$/;
-const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|area-|target-|context-|work-read-scope\.ts)|app\/api\/(?:auth|target-staging|context|backups|store|mail)\/)/;
+const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
 export function chooseTests(paths, available, sources = {}) {
   if (paths.some((path) => TOOLCHAIN.test(path))) {
@@ -56,7 +56,7 @@ export function chooseTests(paths, available, sources = {}) {
   if (paths.some((path) => SENSITIVE.test(path))) {
     for (const path of SECURITY) selected.add(path);
   }
-  if (paths.some((path) => path.startsWith("app/") || path.startsWith("e2e/") ||
+  if (paths.some((path) => (path.startsWith("app/") && !path.startsWith("app/api/")) || path.startsWith("e2e/") ||
     path.startsWith("public/") || path.startsWith("lib/work-scope-"))) {
     for (const path of UI) selected.add(path);
   }
@@ -76,7 +76,6 @@ function main() {
   const code = needsCodeChecks(paths);
   if (process.argv.includes("--scope")) {
     if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT missing");
-    const { appendFileSync } = awaitImportFs();
     appendFileSync(process.env.GITHUB_OUTPUT, `code=${code}\n`);
     console.log(`Changed files: ${paths.length}; code checks: ${code}`);
     return;
@@ -102,6 +101,4 @@ function main() {
 }
 
 // Keep the pure selection functions importable by unit tests.
-import { appendFileSync } from "node:fs";
-function awaitImportFs() { return { appendFileSync }; }
 if (process.argv[1]?.endsWith("/ci-pr-tests.mjs")) main();
