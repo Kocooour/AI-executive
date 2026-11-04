@@ -71,7 +71,7 @@ export async function GET(request:Request):Promise<Response> {
       restoreGeneration:base.expectedRestoreGeneration,
     },{headers});
   } catch(error) {
-    logStagingFailure("target-staging/task-temporal/status-preview","route_exception",error);
+    logStagingFailure("target-staging/task-temporal/due-on-preview","route_exception",error);
     return refuse(503,"Staging unavailable");
   }
 }
@@ -133,7 +133,7 @@ export async function PATCH(request:Request):Promise<Response> {
     return Response.json(result.replayed?{ok:true,replayed:true}:{ok:true},{headers});
   } catch(error) {
     if (error instanceof HttpInputError) return refuse(error.status,error.message);
-    logStagingFailure("target-staging/task-temporal/status-write","route_exception",error);
+    logStagingFailure("target-staging/task-temporal/due-on-write","route_exception",error);
     return refuse(503,"Staging unavailable");
   }
 }

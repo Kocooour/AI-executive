@@ -80,7 +80,7 @@ export async function POST(request:Request):Promise<Response> {
     return Response.json({status:result.status},{headers});
   } catch(error) {
     if (error instanceof HttpInputError) return refuse(error.status,error.message);
-    logStagingFailure("target-staging/task-temporal/status-receipt","route_exception",error);
+    logStagingFailure("target-staging/task-temporal/due-on-receipt","route_exception",error);
     return refuse(503,"Staging unavailable");
   }
 }

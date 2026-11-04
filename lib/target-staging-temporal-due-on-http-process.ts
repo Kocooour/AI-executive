@@ -1,4 +1,4 @@
-/** Bounded subprocess serializers for opt-in R2d.3h dueOn command/receipt. */
+/** Bounded subprocess serializers for opt-in R2d.3i.2 dueOn command/receipt. */
 import type {StagingPersonalReadConfig} from "./target-staging-read-process";
 import type {TargetStagingTemporalDueOnCommand} from "./target-task-temporal-due-on-writer";
 import {runStagingWriteChild} from "./target-staging-title-http-process";
