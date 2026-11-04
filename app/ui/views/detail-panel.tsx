@@ -81,8 +81,8 @@ function gmailSource(value: unknown): { accountId: string; messageId: string } |
   return { accountId: item.accountId, messageId: item.messageId };
 }
 
-function TaskPreviewTitle({ compact, children }: { compact: boolean; children: ReactNode }) {
-  return compact ? <div className="taskPreviewTitleRow">{children}</div> : <>{children}</>;
+function TaskPreviewTitle({ children }: { children: ReactNode }) {
+  return <div className="taskPreviewTitleRow">{children}</div>;
 }
 
 export function DetailPanel({ app }: { app: LumiApp }) {
@@ -186,7 +186,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
-            <TaskPreviewTitle compact={mobileTaskPreview}>
+            <TaskPreviewTitle>
               {mobileTaskPreview && selectedTask && (
                 <button type="button" className="taskPreviewCheck" data-task-preview-check={selectedTask.id}
                   role="checkbox" aria-checked={selectedTask.status === "completed"}
