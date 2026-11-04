@@ -53,9 +53,14 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
   const shownDay = mode === "calendar" && day ? day : calendarToday;
   const isCurrentDay = shownDay === calendarToday;
   const selectedDayEvents = useMemo(() =>
-    dayEvents ?? (mode === "calendar" && !isCurrentDay
-      ? mobileCalendarEventsForDay(calendarEvents, shownDay, calendarTimezone)
-      : calendarDayEventsAll),
+    dayEvents
+      // The server filters UTC timestamp intersections, not VALUE=DATE civil
+      // days: an adjacent all-day event can overlap the queried local midnight
+      // in either direction. Apply the shared civil-date predicate here too.
+      ? mobileCalendarEventsForDay(dayEvents, shownDay, calendarTimezone)
+      : mode === "calendar" && !isCurrentDay
+        ? mobileCalendarEventsForDay(calendarEvents, shownDay, calendarTimezone)
+        : calendarDayEventsAll,
     [dayEvents, mode, isCurrentDay, calendarEvents, calendarDayEventsAll, shownDay, calendarTimezone]);
   const calendarWorkspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   // Day-specific API results are separate from Today's global event feed.
