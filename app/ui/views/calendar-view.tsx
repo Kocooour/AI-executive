@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
-import { mobileCalendarDateParts } from "../../../lib/mobile-calendar-day";
+import { mobileCalendarDateParts, mobileCalendarReadWindow } from "../../../lib/mobile-calendar-day";
 import { MobileCalendarDateStrip } from "./mobile-calendar-date-strip";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import type { CalendarEvent } from "../types";
@@ -13,7 +13,7 @@ const fill = (text: string, values: Record<string, string>) => text.replace(/\{(
 
 export function CalendarView({ app }: { app: LumiApp }) {
   const { calendarEventTasks, calendarFresh, createCalendarEventTask, isCalendarEventHidden, nearbyCalendarEventsAll, unhideCalendarEvent, calendarSources, calendarStatus, calendarTimezone, dayPlanStatus, freeHours, freeWindows,
-    calendarToday, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
+    activeWorkspaceId, writeWorkspaceId, calendarToday, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [mobileViewport, setMobileViewport] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<string | null>(null);
@@ -27,6 +27,50 @@ export function CalendarView({ app }: { app: LumiApp }) {
   const mobileDayMode = mobileDesignV1Preview && mobileViewport;
   // No pinned day follows calendarToday across midnight and timezone changes.
   const shownDay = selectedCalendarDay ?? calendarToday;
+  const [dayReload, setDayReload] = useState(0);
+  const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  const remoteDay = mobileDayMode && view === "Calendar" && shownDay !== calendarToday;
+  const dayRange = remoteDay ? mobileCalendarReadWindow(shownDay, calendarToday, calendarTimezone) : null;
+  // A source refresh or workspace switch invalidates an earlier loaded day.
+  const sourceVersion = calendarSources.map((source) => `${source.id}:${source.revision}:${source.lastSuccessAt}`).join("|");
+  const dayKey = remoteDay && dayRange
+    ? `${workspaceId}:${shownDay}:${calendarTimezone}:${sourceVersion}:${dayReload}`
+    : null;
+  const [dayRead, setDayRead] = useState<{
+    key: string; status: "loading" | "ready" | "error"; events: CalendarEvent[];
+  } | null>(null);
+  useEffect(() => {
+    if (!dayKey || !dayRange) return;
+    const controller = new AbortController();
+    setDayRead({ key: dayKey, status: "loading", events: [] });
+    // The API and the calendar source cache are workspace-scoped. A separate
+    // read avoids replacing the main Today/near-term event feed and its capacity.
+    void (async () => {
+      try {
+        const url = `/api/calendar?workspaceId=${encodeURIComponent(workspaceId)}&from=${dayRange.from}&to=${dayRange.to}`;
+        const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("Calendar day read failed");
+        const body: unknown = await response.json();
+        if (!body || typeof body !== "object" || !Array.isArray((body as { events?: unknown }).events)) {
+          throw new Error("Invalid calendar day response");
+        }
+        // Never accept a late response or events belonging to a previous
+        // workspace. The effect cleanup also cancels obsolete requests.
+        if (!controller.signal.aborted) {
+          setDayRead({ key: dayKey, status: "ready",
+            events: (body as { events: CalendarEvent[] }).events.filter((event) => event.workspaceId === workspaceId) });
+        }
+      } catch {
+        if (!controller.signal.aborted) setDayRead({ key: dayKey, status: "error", events: [] });
+      }
+    })();
+    return () => controller.abort();
+  }, [dayKey, dayRange?.from, dayRange?.to, workspaceId]);
+  const selectedDayRead = dayRead?.key === dayKey ? dayRead : null;
+  const refreshCalendar = () => {
+    if (remoteDay) setDayReload((value) => value + 1);
+    void loadCalendar().catch(() => setCalendarStatus(tr("calendarCouldNotBe")));
+  };
   const eventCard = (event: CalendarEvent, includeDate = false) => {
     const isOpen = openEventId === event.id;
     const display = calendarEventDisplay(event, { language, timezone: calendarTimezone, day: includeDate ? undefined : calendarToday });
@@ -62,7 +106,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
     </article>;
   };
   return view === "Calendar" ? <section className="calendarView homeSection" aria-labelledby="calendar-view-title">
-    <div className="homeSectionHead"><span id="calendar-view-title"><span className="sectionDot todayDot" />{tr("todaySCalendar")}</span><button type="button" onClick={() => void loadCalendar().catch(() => setCalendarStatus(tr("calendarCouldNotBe")))}>{tr("refresh")}</button></div>
+    <div className="homeSectionHead"><span id="calendar-view-title"><span className="sectionDot todayDot" />{tr("todaySCalendar")}</span><button type="button" onClick={refreshCalendar}>{tr("refresh")}</button></div>
     <p className="attentionMeta">{tr("sourceConnectedReadOnly")} · {calendarTimezone}</p>
     <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
     {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty" role="status">{tr("calendarStale")} {tr("freeWindowsAreHidden")}</p>}
@@ -78,10 +122,28 @@ export function CalendarView({ app }: { app: LumiApp }) {
             ? "Jiný než dnešní den: zobrazeny pouze načtené položky, úplnost kalendáře ani volná kapacita nejsou ověřeny."
             : "Outside today: only loaded items are shown; calendar completeness and free capacity are unverified."}
         </p>}
-        <DayTimeline key={shownDay} app={app} mode="calendar" day={shownDay}
-          empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") :
-            shownDay !== calendarToday ? (language === "cs" ? "Pro tento den nejsou načtené položky; nemusí jít o volný den." : "No loaded items for this day; this does not imply availability.") :
-            calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
+        {remoteDay && !dayRange ? (
+          <p role="status" className="attentionEmpty" data-calendar-day-state="outside-range">
+            {language === "cs"
+              ? "Den je mimo období načtené ze zdrojových kalendářů (přibližně 13 dní zpět a 89 dní dopředu)."
+              : "This date is outside the calendar source cache (approximately 13 days back and 89 days ahead)."}
+          </p>
+        ) : remoteDay && selectedDayRead?.status !== "ready" ? (
+          selectedDayRead?.status === "error" ? (
+            <div role="alert" data-calendar-day-state="error">
+              <p>{language === "cs" ? "Události pro vybraný den se nepodařilo načíst." : "Could not load events for the selected day."}</p>
+              <button type="button" onClick={() => setDayReload((value) => value + 1)}>{tr("retry")}</button>
+            </div>
+          ) : <p role="status" data-calendar-day-state="loading">
+            {language === "cs" ? "Načítám události vybraného dne…" : "Loading selected day's events…"}
+          </p>
+        ) : (
+          <DayTimeline key={`${workspaceId}:${shownDay}`} app={app} mode="calendar" day={shownDay}
+            dayEvents={remoteDay ? selectedDayRead?.events : undefined}
+            empty={<p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") :
+              shownDay !== calendarToday ? (language === "cs" ? "Žádné události v dostupných datech pro vybraný den; úplnost není zaručena." : "No events in available data for this day; completeness is not guaranteed.") :
+              calendarFresh ? tr("noBlockingEvent") : tr("calendarStale")}</p>} />
+        )}
         {shownDay === calendarToday && calendarFresh && freeWindows.length > 0 &&
           <p>{tr("nearestFree")} {freeWindows.slice(0, 3).map((window) =>
             `${new Date(window[0]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}–${new Date(window[1]).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone: calendarTimezone })}`).join(", ")}</p>}
