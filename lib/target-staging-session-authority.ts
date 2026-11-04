@@ -19,6 +19,8 @@ import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
+import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
+import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -38,6 +40,7 @@ import {
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
   readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
+  readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
@@ -821,6 +824,26 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     return writePreflightedTemporalDueOn(
       this.#store, credential, command, durableSessionTokenHash);
+  }
+
+  /** One authenticated pinned snapshot for the actor's own whenOn command. */
+  previewPersonalWhen(actorUserId:string,taskId:string):PersonalWhenCommandPreview|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedPersonalWhenCommandPreview(
+        this.#store,credential,taskId):null;
+    }catch{return null;}
+  }
+
+  /** Read-only outcome reconciliation requires a WRITE credential and current
+   * task/Area/assignee authorization before the receipt lookup. */
+  personalWhenReceipt(
+    sessionToken:string,command:TargetStagingPersonalWhenCommand,
+  ):TargetPersonalWhenReceiptResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    return readPreflightedPersonalWhenReceipt(this.#store,credential,command);
   }
 
   /** R2d.3k.4a: actor-private plan CAS, isolated staging only. */

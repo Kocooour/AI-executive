@@ -48,10 +48,44 @@ task/Area content epoch. Commit je doprovázen append-only
 auditním intentem `personal_when`, který obsahuje jen hash receipt,
 novou epochu a informaci set/clear — nikoli datum, identitu či ID.
 
-## Následující navazující část
+## R2d.3k.4b — default-off staging HTTP
 
-R2d.3k.4b přidá odděleně default-off HTTP preview, PATCH a receipt
-reconciliation. Musí zachovat stejný actor/session binding,
-CSRF ochranu, live-release kontrolu a minimální výstupní DTO.
-Také vyžaduje další negativní HTTP testy a plně zelené CI.
-Browser E2E až v samostatné produkční release bráně.
+`GET /api/target-staging/task-temporal/personal-when/command?taskId=...`
+vrací pouze `expectedRevision`, `expectedPrivateEpoch`,
+`expectedPlanRevision`, `whenOn`, `writeAreaId` a
+`restoreGeneration`. Jediný izolovaný child načte všechny
+hodnoty ze stejného preflightovaného snapshotu aktuálního
+oprávněného aktéra. Název úkolu, cizí plán ani interní
+`linearization`/`guard` nikdy nejsou ve veřejné odpovědi.
+Bezprostředně před odpovědí se ověří aktuální session,
+Area/policy, task/parent revision a soukromá epocha.
+
+`PATCH /api/target-staging/task-temporal/personal-when/command`
+přijímá výhradně osm polí interního CAS příkazu; kontroluje
+stejný Origin, protokol, velikost, limiter, přístup a aktuální
+konfiguraci. Rozhodnutí o commit a opakování příkazu provádí
+pouze krátkodobý child v jedné `BEGIN IMMEDIATE` transakci.
+Pro durable staging sessions je *hash aktuální session* předán
+dítěti a znovu ověřen pod zámkem před commit. Nevrací task
+data, osobní den ani actor ID, pouze `{ok:true}` nebo
+`{ok:true,replayed:true}`, případně bezpečné chyby.
+
+`POST /api/target-staging/task-temporal/personal-when/command/receipt`
+je read-only ověření nejasného výsledku příkazu, přijímá
+přesně stejný příkaz (včetně ID a původních revizí). Receipt
+lze vyhledat **jen s aktuálním právem zapisovat daný úkol
+a aktuálním vlastním přiřazením**; HTTP release opět ověří
+zabezpečený snapshot. Vrací pouze
+`{status:"committed"|"not_recorded"}`; konflikt nevrací
+obsah receipt.
+
+**Všechny čtyři flagy musí být explicitně `true`:**
+
+- `AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`
+- `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED`
+- `AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED`
+- `AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED`
+
+Výchozí stav je vypnuto; žádné produkční přepnutí, UI, migrace
+nebo napojení na legacy databázi. Browser E2E zůstává samostatnou
+bránou před produkčním releasem.

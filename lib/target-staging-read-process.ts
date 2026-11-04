@@ -8,6 +8,7 @@ import type {
 } from "./target-task-read-model";
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
+import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
@@ -65,10 +66,14 @@ export function createStagingReadRunner(
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
@@ -716,6 +721,68 @@ export async function readStagingPersonalWhenInChild(
   const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
   if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
   return parsed;
+}
+
+/** A private when command preview transports no task title or another
+ * actor's plan. Its Area+task+epoch witnesses remain internal to the server. */
+export type StagingPersonalWhenPreviewResult=
+  | {ok:true;preview:PersonalWhenCommandPreview}
+  | {ok:false;reason:"inaccessible"};
+export function parseStagingPersonalWhenPreview(
+  value:unknown,taskId:string,
+):StagingPersonalWhenPreviewResult|null {
+  if(typeof taskId!=="string"||!value||typeof value!=="object"||Array.isArray(value))
+    return null;
+  const v=value as Record<string,unknown>;
+  if(Object.keys(v).sort().join(",")==="ok,reason"&&v.ok===false&&v.reason==="inaccessible")
+    return {ok:false,reason:"inaccessible"};
+  if(v.ok!==true||Object.keys(v).sort().join(",")!==
+    "expectedPlanRevision,expectedPrivateEpoch,expectedRevision,guard,linearization,ok,whenOn,writeAreaId"||
+    typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
+    !Number.isSafeInteger(v.expectedPrivateEpoch)||(v.expectedPrivateEpoch as number)<0||
+    !(v.expectedPlanRevision===null||
+      (Number.isSafeInteger(v.expectedPlanRevision)&&(v.expectedPlanRevision as number)>=0))||
+    !(v.whenOn===null||temporalCalendarOrdinal(v.whenOn)!==null)||
+    (v.expectedPlanRevision===null)!==(v.whenOn===null)||
+    typeof v.writeAreaId!=="string"||!v.writeAreaId||!v.guard||
+    typeof v.guard!=="object"||Array.isArray(v.guard)||!v.linearization||
+    typeof v.linearization!=="object"||Array.isArray(v.linearization))return null;
+  const lin=v.linearization as Record<string,unknown>;
+  if(!Array.isArray(lin.areas)||lin.areas.length!==1)return null;
+  const a=lin.areas[0] as Record<string,unknown>|null;
+  if(!a||typeof a!=="object"||a.areaId!==v.writeAreaId||
+      (a.areaKind!=="private"&&a.areaKind!=="shared"))return null;
+  const linearization=parseLinearization(v.linearization,
+    new Map([[v.writeAreaId,a.areaKind]]));
+  if(!linearization||linearization.areas.length!==1)return null;
+  const access=linearization.areas[0].access;
+  if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
+  const g=v.guard as Record<string,unknown>;
+  if(Object.keys(g).sort().join(",")!=="areaId,parentRevision,projectId,taskId,taskRevision"||
+    g.taskId!==taskId||g.areaId!==v.writeAreaId||
+    (g.projectId!==null&&typeof g.projectId!=="string")||
+    !Number.isSafeInteger(g.taskRevision)||(g.taskRevision as number)<0||
+    (g.projectId===null?g.parentRevision!==null:
+      !Number.isSafeInteger(g.parentRevision)||(g.parentRevision as number)<0))return null;
+  return {ok:true,preview:{
+    expectedRevision:v.expectedRevision,
+    expectedPrivateEpoch:v.expectedPrivateEpoch as number,
+    expectedPlanRevision:v.expectedPlanRevision as number|null,
+    whenOn:v.whenOn as string|null,writeAreaId:v.writeAreaId,
+    linearization,guard:{
+      taskId,projectId:g.projectId as string|null,areaId:v.writeAreaId,
+      taskRevision:g.taskRevision as number,
+      parentRevision:g.parentRevision as number|null,
+    },
+  }};
+}
+export async function readStagingPersonalWhenPreviewInChild(
+  config:StagingPersonalReadConfig,taskId:string,
+):Promise<StagingPersonalWhenPreviewResult|null> {
+  const payload=await runChild(config,"target-staging-personal-when-preview-child.mjs",[taskId]);
+  const result=parseStagingPersonalWhenPreview(payload,taskId);
+  if(payload!==null&&!result)logStagingFailure("personal_when_preview","invalid_child_dto");
+  return result;
 }
 
 /** R2d.3g: exact detail child DTO; the guard/witness remain server-only. */
