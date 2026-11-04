@@ -118,6 +118,60 @@ test("BINARY pagination crosses Area boundaries without duplicate or omitted row
   assert.deepEqual(ids(page(f,"carol","shared",{offset:1,limit:1})),["s-family"]);
 });
 
+test("malformed project IDs are filtered before BINARY LIMIT/OFFSET in all scopes",()=>{
+  const f=fixture();
+  const scopes=[
+    {who:"bob",scope:"all",expected:["b-bob","s-empty","s-family"]},
+    {who:"bob",scope:"personal",expected:["b-bob"]},
+    {who:"bob",scope:"shared",expected:["s-empty","s-family"]},
+    {who:"carol",scope:"all",expected:["c-carol","s-empty","s-family"]},
+    {who:"carol",scope:"shared",expected:["s-empty","s-family"]},
+  ];
+  const before=scopes.map(({who,scope,expected})=>{
+    const rows=ids(page(f,who,scope));
+    assert.deepEqual(rows,expected);
+    return page(f,who,scope).revision;
+  });
+  // Mix malformed IDs into BOTH the private and shared Areas. Dot segments
+  // normalize in URL routers; NUL/control/DEL and oversized IDs must never
+  // take pagination positions, even when SQLite stores them successfully.
+  const badIds=[
+    ".", "..", "a"+String.fromCharCode(0)+"nul",
+    "b"+String.fromCharCode(1)+"control",
+    "s"+String.fromCharCode(31)+"control",
+    "s"+String.fromCharCode(127)+"del",
+    "v".repeat(513),
+  ];
+  const insert=f.db.prepare(
+    "INSERT INTO projects(id,area_id,title) VALUES (?,?,?)"
+  );
+  for(const [i,id] of badIds.entries())
+    insert.run(id,i%2===0?"family-area":"bob-private","UNADDRESSABLE PROJECT");
+
+  for(const [i,{who,scope,expected}] of scopes.entries()){
+    const all=page(f,who,scope);
+    assert.deepEqual(ids(all),expected,
+      "invalid stored IDs must not enter "+who+"/"+scope);
+    assert.equal(all.hasMore,false);
+    assert.notEqual(all.revision,before[i],
+      "Area project epochs must still track writes to their scope");
+    for(const limit of [1,2]){
+      const paged=[];
+      for(let offset=0;offset<=expected.length;offset+=limit){
+        const result=page(f,who,scope,{limit,offset});
+        assert.ok(result,who+"/"+scope+"/"+offset);
+        assert.deepEqual(ids(result),expected.slice(offset,offset+limit));
+        assert.equal(result.hasMore,offset+limit<expected.length);
+        paged.push(...ids(result));
+        assert.ok(result.projects.every(p=>p.title!=="UNADDRESSABLE PROJECT"));
+      }
+      assert.deepEqual(paged,expected,"filtered pagination must not skip rows");
+    }
+  }
+  assert.equal(page(f,"bob","shared").projects.length,2);
+  assert.equal(page(f,"bob","personal").projects.length,1);
+});
+
 test("malformed actor, scope, generation, limit and offset fail closed",()=>{
   const f=fixture();
   for(const invalid of [
