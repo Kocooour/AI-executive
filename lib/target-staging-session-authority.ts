@@ -71,6 +71,9 @@ import {
   writePreflightedTemporalDueOn, validTargetStagingTemporalDueOnCommand,
   type TargetStagingTemporalDueOnCommand, type TargetStagingTemporalDueOnResult,
 } from "./target-task-temporal-due-on-writer";
+import {writePreflightedPersonalWhen,validTargetStagingPersonalWhenCommand,
+  type TargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenResult,
+} from "./target-personal-when-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -818,6 +821,19 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     return writePreflightedTemporalDueOn(
       this.#store, credential, command, durableSessionTokenHash);
+  }
+
+  /** R2d.3k.4a: actor-private plan CAS, isolated staging only. */
+  changePersonalWhen(
+    sessionToken:string,command:TargetStagingPersonalWhenCommand,
+    durableSessionTokenHash?:string,
+  ):TargetStagingPersonalWhenResult {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"unauthorized"};
+    if(!validTargetStagingPersonalWhenCommand(command))
+      return {ok:false,reason:"invalid_request"};
+    return writePreflightedPersonalWhen(
+      this.#store,credential,command,durableSessionTokenHash);
   }
 
   /** R2d.3i.2: read-only command reconciliation with current live write ACL. */
