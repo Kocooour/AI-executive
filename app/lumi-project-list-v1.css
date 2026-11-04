@@ -88,10 +88,12 @@
     font-weight: 750;
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="warning"] .v1ProjectCircle {
-    border-color: #b45309;
+    border-color: #f59e0b;
+    box-shadow: inset 0 0 0 1px #92400e;
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="danger"] .v1ProjectCircle {
-    border-color: #dc2626;
+    border-color: #ef4444;
+    box-shadow: inset 0 0 0 1px #991b1b;
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="complete"] .v1ProjectCircle {
     border-color: #94a3b8;
