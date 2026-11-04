@@ -93,3 +93,53 @@ test("focused title draft survives mobile/desktop resize in both directions and 
     await removeTasks(page, [id]);
   }
 });
+
+test("mobile task notes and checklist stay primary; one disclosure holds other controls", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Lumi v1 preview disabled");
+  const stamp = Date.now().toString(36);
+  const id = `ui06b-task-${stamp}`, title = `Připravit výlet UI06b ${stamp}`;
+  const when = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  const note = `Seznam věcí UI06b ${stamp}`;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Upcoming");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ id, title, properties: {
+    when, priority: "high", notes: note, checklist: [{ id: "bag", title: "Zabalit batoh", done: false }],
+  } }]);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator(".taskRow", { hasText: title }).first().getByRole("button", { name: title, exact: true }).click();
+    const detail = page.locator("aside.inspectorDetail");
+    const fields = detail.locator(".taskDetailFields");
+    const toggle = fields.locator(".taskDetailMoreToggle");
+    await expect(detail).toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(fields.locator(".taskDetailEssentials .scheduleField")).toBeVisible();
+    await expect(fields.locator(".taskDetailNotes textarea")).toHaveValue(note);
+    await expect(fields.locator(".taskDetailNotes .checklistItem")).toContainText("Zabalit batoh");
+    await expect(fields.locator(".taskDetailMoreList")).toBeHidden();
+    await expect(fields.locator(".taskDetailMoreOptions")).toBeHidden();
+    await expect(fields.locator(".taskDetailMoreActions")).toBeHidden();
+    // The only disclosure reveals the unchanged legacy controls.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const priority = fields.locator(".taskDetailMoreOptions select").first();
+    await expect(priority).toHaveValue("high");
+    await expect(fields.locator(".taskDetailMoreList")).toBeVisible();
+    await expect(fields.locator(".taskDetailMoreActions")).toBeVisible();
+    await priority.focus();
+    await expect(priority).toBeFocused();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(detail).not.toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toBeHidden();
+    await expect(priority).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(detail).toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(priority).toBeFocused();
+  } finally {
+    await removeTasks(page, [id]);
+  }
+});
