@@ -3788,3 +3788,26 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 .inboxTriageField button { flex: 0 0 auto; }
 .inboxTriage .inboxDiscard { justify-self: start; color: var(--danger); }
 .inboxTriage p[role="alert"] { color: var(--danger); margin: 0; }
+
+
+/* UI-02a preview: four tabs in the approved Lumi Design v1.0 arrangement.
+   Only available with NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1; legacy nav is unchanged. */
+.mobileV1PreviewNotice { display: none; }
+@media (max-width: 700px) {
+  .mobileNav[data-design-preview="lumi-v1"] { justify-content: space-between; }
+  .mobileNav[data-design-preview="lumi-v1"] button {
+    flex: 1 1 25%;
+    min-width: 0;
+    min-height: 48px;
+  }
+  .mobileV1PreviewNotice {
+    display: block;
+    margin: 10px 16px 0;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted);
+  }
+}
