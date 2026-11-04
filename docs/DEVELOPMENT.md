@@ -91,7 +91,7 @@ During PR development run focused checks in the affected worktree; the `PR Check
 
 ```bash
 pnpm typecheck
-node --experimental-loader ./tests/ts-loader.mjs --test tests/<relevant-feature>.test.mjs
+node --experimental-loader ./tests/ts-loader.mjs --test tests/context-search.test.mjs  # example focused test
 pnpm build
 ```
 
