@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { mobileDesignV1Preview } from "../navigation";
+import { entityConflicts } from "../../../lib/field-merge";
 import { byManualOrder } from "../../../lib/task-views";
 import { projectAcceptsNewItems, projectTasks, summarizeProject } from "../../../lib/project-summary";
 import type { Entity } from "../../../lib/db";
@@ -16,7 +18,7 @@ type RenderRow = (entity: Entity, index: number, rows: Entity[], dragScope?: str
 // the tasks and the notes of the project, and the collapsed details. A task or note opened from here uses the inspector
 // on the right. Rows are the ordinary list rows of the app (`renderRow` of the entity list), so every row action works here.
 export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project: Entity; renderRow: RenderRow }) {
-  const { areas, askConfirm, closeProjectPage, contextClaims, contextPredicateLabel, heldBack, items, language,
+  const { activeWorkspaceId, areas, askConfirm, closeProjectPage, contextClaims, contextPredicateLabel, heldBack, items, language,
     openCapture, patch, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
   const t = labelsFor(language);
   const { tasks, notes } = projectTasks(project, items, scopedRelations);
@@ -42,9 +44,63 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
   const deadline = typeof project.properties.deadline === "string" ? project.properties.deadline : "";
   const isHeld = heldBack.some((entity) => entity.id === project.id);
   const statusText = project.status === "active" ? t.statusActive : project.status === "completed" ? t.statusCompleted : project.status;
+  const [mobileViewport, setMobileViewport] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  useEffect(() => {
+    if (!mobileDesignV1Preview) return;
+    const query = window.matchMedia("(max-width: 700px)");
+    const update = () => setMobileViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  const mobileDetailPreview = mobileDesignV1Preview && mobileViewport;
+  const canChangeStatus = activeWorkspaceId === project.workspaceId &&
+    !isHeld && !unsent.has(project.id) && entityConflicts(project).length === 0 &&
+    (project.status === "active" || project.status === "completed") && !actionBusy;
+  async function mobileToggleStatus() {
+    if (!canChangeStatus) return;
+    const completed = project.status === "completed";
+    const count = openTasks.length;
+    const notice = !completed && count > 0
+      ? language === "cs"
+        ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
+        : `This project has ${count} open ${count === 1 ? "task" : "tasks"}. Completing it will leave those tasks open.`
+      : "";
+    const confirmed = await askConfirm({
+      title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
+        : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
+      message: `${project.title}${notice ? `\n\n${notice}` : ""}`,
+      confirmLabel: tr(completed ? "reopen" : "complete"),
+    });
+    if (!confirmed) return;
+    setActionBusy(true); setActionError("");
+    try { await setProjectStatus(project, completed ? "active" : "completed"); }
+    catch { setActionError(language === "cs" ? "Změnu se nepodařilo synchronizovat. Zkontrolujte stav projektu." :
+      "Could not synchronize this change. Check the project status."); }
+    finally { setActionBusy(false); }
+  }
+  const projectActions = <div className="projectActions" data-project-actions>
+    <button type="button" disabled={mobileDetailPreview && !canChangeStatus}
+      onClick={() => mobileDetailPreview
+        ? void mobileToggleStatus()
+        : void setProjectStatus(project, project.status === "completed" ? "active" : "completed")}>
+      {tr(project.status === "completed" ? "reopen" : "complete")}
+    </button>
+    <button type="button" className="danger"
+      disabled={mobileDetailPreview && !canChangeStatus}
+      onClick={async () => {
+        if (await askConfirm({ title: tr("projectDeleteTitle"),
+          message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
+          confirmLabel: tr("delete"), danger: true })) void remove(project);
+      }}>{tr("delete")}</button>
+    {actionError && <p className="projectActionError" role="alert">{actionError}</p>}
+  </div>;
 
   return (
-    <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}>
+    <article className="projectPage" aria-label={`${t.page}: ${project.title}`} data-project-page={project.id}
+      data-project-detail-preview={mobileDetailPreview ? "lumi-v1" : undefined}>
       <button type="button" className="projectBack" aria-label={t.backAria} onClick={closeProjectPage}>{t.back}</button>
 
       <div className="projectHeader">
@@ -81,15 +137,8 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
         {isHeld && <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, project))}</p>}
         {!isHeld && unsent.has(project.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
         <SyncConflicts app={app} entity={project} />
-        <ProjectContext key={project.id} app={app} project={project} />
-        <div className="projectActions">
-          <button type="button" onClick={() => void setProjectStatus(project, project.status === "completed" ? "active" : "completed")}>
-            {tr(project.status === "completed" ? "reopen" : "complete")}
-          </button>
-          <button type="button" className="danger" onClick={async () => {
-            if (await askConfirm({ title: tr("projectDeleteTitle"), message: tr("projectDeleteConfirm").replace("{title}", () => project.title), confirmLabel: tr("delete"), danger: true })) void remove(project);
-          }}>{tr("delete")}</button>
-        </div>
+        {!mobileDetailPreview && <ProjectContext key={project.id} app={app} project={project} />}
+        {!mobileDetailPreview && projectActions}
       </div>
 
       <section className="projectSection" aria-labelledby="project-tasks-heading">
@@ -100,6 +149,13 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
         </div>
         {projectAcceptsNewItems(project) && <button type="button" className="projectAdd" onClick={() => openCapture("task", project.id)}>＋ {tr("addTask")}</button>}
       </section>
+
+      {mobileDetailPreview && (
+        <details key={project.id} className="projectContextFold" data-project-context-fold>
+          <summary>{t.contextTitle}</summary>
+          <ProjectContext key={project.id} app={app} project={project} />
+        </details>
+      )}
 
       <section className="projectSection" aria-labelledby="project-notes-heading">
         <h2 id="project-notes-heading" className="projectSectionHeading">{t.notes}</h2>
@@ -113,6 +169,7 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
       <details className="projectDetails" data-project-details>
         <summary>{t.details}</summary>
         <div className="projectDetailsBody">
+          {mobileDetailPreview && projectActions}
           <label className="projectDetailsField">
             <span>{t.area}</span>
             <select
