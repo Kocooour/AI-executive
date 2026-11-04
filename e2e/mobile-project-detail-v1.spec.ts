@@ -61,8 +61,12 @@ test("gated mobile detail puts tasks before collapsible context, preserving edit
     expect(await project.evaluate((element) => {
       const order = [".projectHeader", ".projectTaskList", "[data-project-context-fold]", ".projectNoteList", "[data-project-details]"];
       const nodes = order.map((selector) => element.querySelector(selector));
-      return nodes.every(Boolean) && nodes.every((node, i) =>
-        i === 0 || Boolean(nodes[i - 1]?.compareDocumentPosition(node!) & Node.DOCUMENT_POSITION_FOLLOWING));
+      for (let i = 1; i < nodes.length; i += 1) {
+        const previous = nodes[i - 1];
+        const next = nodes[i];
+        if (!previous || !next || !(previous.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+      }
+      return nodes.every((node) => node !== null);
     })).toBe(true);
     await context.locator("summary").click();
     await expect(context).toHaveAttribute("open", "");
