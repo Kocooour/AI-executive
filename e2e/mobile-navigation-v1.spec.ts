@@ -27,6 +27,36 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   for (const view of ["Home", "Inbox", "Today", "Upcoming", "Notes", "Areas", "Settings"])
     await expect(page.locator(`.mobileMore button[data-nav-view="${view}"]`)).toHaveCount(1);
   await expect(page.locator('.mobileNav button[data-nav-view="Search"]')).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(page.locator('.mobileMore[role="dialog"]')).toHaveCount(0);
+  // More → Today is distinct from the first tab, including after reload.
+  await page.locator('.mobileMore button[data-nav-view="Today"]').click();
+  await expect(page).toHaveURL(/[?]view=Today$/);
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
+  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator('[data-plan-source="legacy-today"]')).toHaveCount(0);
+  await page.reload();
+  await waitUntilSynced(page);
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
+  await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
+
+  // The first tab uses a separately restorable, clearly preview-only route.
+  await page.locator('[data-nav-tab="my-plan-preview"]').click();
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(page.locator('[data-plan-source="legacy-today"]')).toBeVisible();
+  await page.reload();
+  await waitUntilSynced(page);
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Můj plán|My Plan/);
+});
+
+test("an explicit Today URL never becomes the My Plan preview on initial load", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview is disabled by default");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Today");
+  await waitUntilSynced(page);
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
+  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).not.toHaveAttribute("aria-current", "page");
+  await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
+  await expect(page).toHaveURL(/[?]view=Today$/);
 });
