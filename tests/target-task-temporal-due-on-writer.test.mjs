@@ -106,7 +106,7 @@ test("set and clear dueOn atomically, preserve status and timestamp, separate re
   assert.equal(state(fx,"private").revision,after.revision);
   const clear=command(fx,token,"private",null);
   assert.deepEqual(fx.authority.changeTemporalDueOn(token,clear),{ok:true});
-  assert.deepEqual(state(fx,"private"),{
+  assert.deepEqual({...state(fx,"private")},{
     dueOn:null,status:before.status,completedAtMs:before.completedAtMs,
     revision:before.revision+2,
   });
