@@ -20,6 +20,7 @@ import type { TargetScopedOffsetPage } from "./target-task-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
+import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -42,6 +43,7 @@ import {
   readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
+  readPreflightedGlobalTaskPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -419,6 +421,19 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.3m.1: global authorized task scope (not My Plan). Internal only. */
+  readGlobalTaskPage(
+    actorUserId:string,scope:TargetGlobalTaskScope,limit:number,offset:number,
+  ):TargetGlobalTaskPage|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedGlobalTaskPage(this.#store,credential,{
+        scope,limit,offset,
       }):null;
     }catch{return null;}
   }
