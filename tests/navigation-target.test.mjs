@@ -97,10 +97,10 @@ test("serializer never emits an invalid project parent context or opaque ID", ()
     { kind: "task", id: "t", view: "Today", projectId: "p" },
     { kind: "note", id: "n", view: "Notes", projectId: "p" },
     { kind: "task", id: "t", view: "Projects", projectId: "" },
-    { kind: "note", id: "n", view: "Projects", projectId: "\\u0000" },
+    { kind: "note", id: "n", view: "Projects", projectId: String.fromCharCode(0) },
     { kind: "project", id: "" },
     { kind: "project", id: "x".repeat(257) },
-    { kind: "task", id: "bad\\n", view: "Today" },
+    { kind: "task", id: "bad" + String.fromCharCode(10), view: "Today" },
   ];
   for (const target of invalidTargets) {
     assert.throws(() => searchForTarget(target, "Home"), TypeError, JSON.stringify(target));
