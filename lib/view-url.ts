@@ -1,5 +1,5 @@
-// The address carries the open view and nothing else: never a workspace, a record id or a search
-// text. The view the app starts on is left out, so the plain address keeps meaning "start".
+// A view-only address contains no record ID or search text. UI-01 adds typed
+// opaque record targets below; neither view nor record IDs grant data access.
 
 const parameter = "view";
 
@@ -18,4 +18,80 @@ export function addressUpdate(input: { currentSearch: string; view: string; star
   const search = searchForView(input.view, input.startView);
   if (search === input.currentSearch) return null;
   return { search, mode: input.navigated ? "push" : "replace" };
+}
+
+
+// UI-01: a navigation URL identifies the *requested* target, never its permissions.
+// A URL is not an authority: consumers must resolve every record in the active,
+// authenticated scope and recheck server access when the target adapter is enabled.
+export type NavigationTarget =
+  | { kind: "view"; view: string }
+  | { kind: "project"; id: string }
+  | { kind: "task"; id: string; view: string; projectId?: string }
+  | { kind: "note"; id: string; view: string; projectId?: string };
+
+function isOpaqueId(value: string | null): value is string {
+  return value !== null && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(value);
+}
+
+export function targetFromSearch(search: string, knownViews: readonly string[], startView: string): NavigationTarget | null {
+  const params = new URLSearchParams(search);
+  const keys = [...params.keys()];
+  const allowed = new Set(["view", "projectId", "taskId", "noteId"]);
+  // Unknown/duplicate keys and ambiguous targets must not silently select another record.
+  if (keys.some((key) => !allowed.has(key)) || new Set(keys).size !== keys.length) return null;
+  const view = params.get("view") ?? startView;
+  if (!knownViews.includes(view)) return null;
+  const projectId = params.get("projectId");
+  const taskId = params.get("taskId");
+  const noteId = params.get("noteId");
+  if ([projectId, taskId, noteId].filter((id) => id !== null).length > 1 && !(projectId && (taskId || noteId) && !(taskId && noteId))) return null;
+  if ([projectId, taskId, noteId].some((id) => id !== null && !isOpaqueId(id))) return null;
+  if (projectId !== null && view !== "Projects") return null;
+  if (taskId !== null) return { kind: "task", id: taskId!, view, ...(projectId === null ? {} : { projectId }) };
+  if (noteId !== null) return { kind: "note", id: noteId!, view, ...(projectId === null ? {} : { projectId }) };
+  if (projectId !== null) return { kind: "project", id: projectId! };
+  return { kind: "view", view };
+}
+
+export function searchForTarget(target: NavigationTarget, startView: string, knownViews: readonly string[]): string {
+  // The serializer and parser must use the same route vocabulary. Unknown
+  // views, malformed IDs and impossible parent/view combinations are errors,
+  // not links that silently fail when later opened.
+  if (!knownViews.includes(startView)) throw new TypeError("Invalid startup view");
+  if (target.kind === "view") {
+    if (!knownViews.includes(target.view)) throw new TypeError("Unknown navigation view");
+    return searchForView(target.view, startView);
+  }
+  if (!isOpaqueId(target.id)) throw new TypeError("Invalid navigation target ID");
+  if (target.kind === "project" && !knownViews.includes("Projects")) throw new TypeError("Unknown Projects view");
+  if (target.kind !== "project" && !knownViews.includes(target.view)) throw new TypeError("Unknown navigation view");
+  const params = new URLSearchParams();
+  if (target.kind === "project") {
+    params.set("view", "Projects");
+    params.set("projectId", target.id);
+  } else {
+    if (target.projectId !== undefined) {
+      if (target.view !== "Projects" || !isOpaqueId(target.projectId))
+        throw new TypeError("Project context requires the Projects view and a valid project ID");
+      params.set("projectId", target.projectId);
+    }
+    params.set("view", target.view);
+    params.set(target.kind === "task" ? "taskId" : "noteId", target.id);
+  }
+  return "?" + params.toString();
+}
+
+
+// An explicit view choice while viewing a project must be a *new* history entry.
+// It is not a Back action: Back must return to the actual project the user left.
+// Only call this for a visible project, never as an authorization decision.
+export function viewExitFromProject(input: {
+  currentSearch: string; currentProjectId: string | null; nextView: string;
+  knownViews: readonly string[]; startView: string;
+}): { search: string; mode: "push" } | null {
+  if (!input.currentProjectId || !input.knownViews.includes(input.nextView)) return null;
+  const current = targetFromSearch(input.currentSearch, input.knownViews, input.startView);
+  if (current?.kind !== "project" || current.id !== input.currentProjectId) return null;
+  return { search: searchForView(input.nextView, input.startView), mode: "push" };
 }

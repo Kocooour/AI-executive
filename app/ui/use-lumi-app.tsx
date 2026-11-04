@@ -6,7 +6,8 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, searchForView, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
+import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -51,11 +52,11 @@ export function useLumiApp() {
   // In-memory only: tasks can navigate to a Gmail source without putting
   // message IDs into URLs, localStorage or persisted navigation state.
   const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
-  // The Inbox shows its tasks or the mail of the connected Gmail accounts. UI state only: the address
-  // carries the view and nothing else (lib/view-url.ts), so a mail message is never put into it.
+  // The Inbox shows tasks or connected Gmail. Its active tab and message IDs are
+  // in-memory only; navigation URLs never expose a mail message ID.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
   const [view, setViewState] = useState("Home"),
-    // The project whose page is the main pane of Projects (B1). In-memory like the open record: the address carries the view only.
+    // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
     [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
@@ -284,11 +285,13 @@ export function useLumiApp() {
   // Every newly opened or closed inspector invalidates a context request that is still running.
   // This prevents a slow request for A from replacing the context after the user opened B.
   const inspectionVersion = useRef(0);
-  const viewRef = useRef(view);
-  viewRef.current = view;
   const openProjectIdRef = useRef(openProjectId);
   openProjectIdRef.current = openProjectId;
-  // History markers may restore only a project that is still visible in the authorized active scope.
+  // popstate is registered once; always resolve its target against the latest
+  // authenticated local snapshot and active legacy scope, not mount-time state.
+  const latestItemsRef = useRef(items);
+  latestItemsRef.current = items;
+  const selectWorkspaceRef = useRef<(workspaceId: string) => void>(() => undefined);
   const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
@@ -386,39 +389,48 @@ export function useLumiApp() {
     if (authState !== "ready") answerConfirm(false);
   }, [authState]);
   const sessionChannel = "ai-executive-session";
-  // Any change of view leaves the project page: Projects then shows its list.
-  // A page that pushed a history step is left by going back one step first (no duplicate list entry stays behind); the view
-  // chosen meanwhile is applied when that step has been taken (see followAddress).
-  const pendingView = useRef<string | null>(null);
+  // Explicit navigation away from a project creates its own history step.
+  // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string) {
-    if (openProjectIdRef.current && window.history.state?.lumiProject) {
-      pendingView.current = next;
-      window.history.back();
-      return;
+    const exit = viewExitFromProject({
+      currentSearch: window.location.search, currentProjectId: openProjectIdRef.current,
+      nextView: next, knownViews: addressableViews, startView: startupView,
+    });
+    if (exit) {
+      try {
+        window.history.pushState(null, "", `${window.location.pathname}${exit.search}`);
+        addressedView.current = next; // The URL was updated here; do not push again in the effect.
+      } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
     setOpenProjectId(null);
   }
-  // The project page has its own history entry, preceded by a Projects LIST entry even when
-  // opened from Home/Today sidebar. Its ID stays in history.state, never in URLs.
+  // A project address is durable across reloads and devices. History state is only
+  // a hint that a Back step was created in this tab, never an access grant.
   function openProjectPage(project: Entity) {
+    // A stale sidebar/search result must not open a project outside the current scope.
+    if (!visibleProjectsRef.current.some((visible) => visible.id === project.id && visible.workspaceId === project.workspaceId)) return;
     closeDetail();
     try {
-      if (viewRef.current !== "Projects") {
-        const listAddress = `${window.location.pathname}${searchForView("Projects", startupView)}`;
-        window.history.pushState(null, "", listAddress);
-        addressedView.current = "Projects"; // Prevent the view effect from pushing a second list entry.
-      }
       const marker = { lumiProject: project.id };
-      if (window.history.state?.lumiProject) window.history.replaceState(marker, "", window.location.href);
-      else window.history.pushState(marker, "", window.location.href);
+      const projectAddress = `${window.location.pathname}${searchForTarget({ kind: "project", id: project.id }, startupView, addressableViews)}`;
+      const current = targetFromSearch(window.location.search, addressableViews, startupView);
+      if (current?.kind === "project" && current.id === project.id) window.history.replaceState(marker, "", projectAddress);
+      else window.history.pushState(marker, "", projectAddress);
     } catch { /* Navigation still works in memory when History API is unavailable. */ }
+    // One history step returns to the actual origin (Home/Today/list/other project),
+    // never to a synthetic Projects entry that the user did not visit.
     setViewState("Projects");
     setOpenProjectId(project.id);
   }
   function closeProjectPage() {
     if (window.history.state?.lumiProject) window.history.back();
-    else setOpenProjectId(null);
+    else {
+      setOpenProjectId(null);
+      // A direct link may have no in-app history. Close to the safe Projects list.
+      try { window.history.replaceState(null, "", `${window.location.pathname}${searchForView("Projects", startupView)}`); }
+      catch { /* The in-memory list remains available. */ }
+    }
   }
   async function inspect(e: Entity) {
     if (e.type === "project") { openProjectPage(e); return; }
@@ -1481,34 +1493,54 @@ export function useLumiApp() {
     return () => channel.close();
   }, []);
 
-  // A notification link names a task (?task=<id>). It is opened as soon as the task is known
-  // locally. If it is not, the link waits for the first synchronization and is given up only
-  // when the server copy does not contain the task either.
+  // Resolve requested project IDs only from locally available records within the
+  // selected legacy scope. Target Area ACL/server authorization arrives separately in R3.
+  // Notification ?task= links keep their historical compatibility behavior.
   useEffect(() => {
-    if (deepLinkHandled.current || !items.length) return;
+    if (deepLinkHandled.current || (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
+    const route = targetFromSearch(window.location.search, addressableViews, startupView);
+    if (route?.kind === "project") {
+      const destination = resolveLegacyProjectLink(items, route.id, activeWorkspaceId);
+      if (destination) {
+        // Direct links name a project, not a workspace. Within the owner's legacy
+        // store select its known workspace, but preserve "all" if already selected.
+        if (destination.selectWorkspaceId) selectWorkspace(destination.selectWorkspaceId);
+        setViewState("Projects");
+        setOpenProjectId(destination.projectId);
+      } else if (syncStatus !== "synced" && syncStatus !== "offline") {
+        return; // Do not mistake an incomplete initial load for a missing project.
+      }
+    }
     const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
       if (task && task.type !== "workspace") {
         selectWorkspace(task.workspaceId);
-        inspect(task);
+        void inspect(task);
       } else if (authState !== "ready" || syncStatus !== "synced") {
         return;
       }
     }
     deepLinkHandled.current = true;
     setDeepLinkDone(true);
-  }, [items, authState, syncStatus]);
+  }, [items, authState, syncStatus, activeWorkspaceId, startupView]);
 
-  // The address follows the view: a change of view adds a history step, so Back and Forward move
-  // between views and a reload stays where the user was. A record id from a notification link is
-  // dropped from the address once the link has been handled. Nothing is recorded while signed out;
+  // The address follows the view except while a project URL is active. Back/Forward and
+  // reload preserve the requested target. A legacy notification ?task= ID is dropped
+  // after handling. Nothing is recorded while signed out;
   // the offline view (started without a connection) shows the app, so it is recorded there too.
   const addressedView = useRef<string | null>(null);
   useEffect(() => {
     if (!addressReady || (authState !== "ready" && !offlineViewRef.current)) return;
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
     if (hasRecordLink && !deepLinkDone) return;
+    const route = targetFromSearch(window.location.search, addressableViews, startupView);
+    // A direct project link must survive while local records/sync are still loading.
+    if (route?.kind === "project" && !deepLinkDone) return;
+    if (route?.kind === "project" && view === "Projects" && route.id === openProjectId) {
+      addressedView.current = view;
+      return;
+    }
     const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
       navigated: addressedView.current !== null && addressedView.current !== view });
     addressedView.current = view;
@@ -1518,21 +1550,25 @@ export function useLumiApp() {
       if (update.mode === "push") window.history.pushState(null, "", address);
       else window.history.replaceState(null, "", address);
     } catch { /* browsers limit how often history may change; the view itself is unaffected */ }
-  }, [addressReady, authState, deepLinkDone, view, startupView]);
+  }, [addressReady, authState, deepLinkDone, view, startupView, openProjectId]);
   useEffect(() => {
     const followAddress = () => {
       const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       addressedView.current = next;
-      const chosen = pendingView.current;
-      pendingView.current = null;
-      const nextView = chosen ?? (views.includes(next) || next === "Settings" ? next : "Home");
+      const nextView = views.includes(next) || next === "Settings" ? next : "Home";
       setViewState(nextView);
-      // Never trust a history marker as authorization or restore a project in another workspace.
-      const candidate = !chosen && nextView === "Projects" ? window.history.state?.lumiProject : null;
-      setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
-        ? candidate : null);
+      // Canonical list URLs always show the list: stale history.state is ignored.
+      // Reuse startup's legacy scope resolver so a Back/Forward destination in
+      // a different, still-known workspace can be restored safely. URL IDs
+      // never grant access; UI-09 replaces this with server-authorized reads.
+      const target = targetFromSearch(window.location.search, addressableViews, nextView);
+      const destination = nextView === "Projects" && target?.kind === "project"
+        ? resolveLegacyProjectLink(latestItemsRef.current, target.id, activeWorkspaceRef.current)
+        : null;
+      if (destination?.selectWorkspaceId) selectWorkspaceRef.current(destination.selectWorkspaceId);
+      setOpenProjectId(destination?.projectId ?? null);
       // Nothing that belongs to the view being left may stay open over the next one.
       answerConfirm(false);
       setCapture(false);
@@ -1868,6 +1904,9 @@ export function useLumiApp() {
     setWorkspaceMenuOpen(false);
     closeDetail();
   }
+  // The browser history handler must use today's selection callback rather
+  // than one closed over by its mount-only listener.
+  selectWorkspaceRef.current = selectWorkspace;
 
   function selectWriteWorkspace(workspaceId: string) {
     if (workspaceId !== writeWorkspaceId) {
