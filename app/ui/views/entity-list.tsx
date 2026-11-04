@@ -189,7 +189,7 @@ export function EntityList({ app }: { app: LumiApp }) {
   // The Calendar page shows its own planned work; it does not repeat every open task as a list.
   if (view === "Calendar") return null;
   // A project opened from the list or the sidebar is the main view of Projects (B1); its rows are these same rows.
-  if (view === "Projects" && app.openProject) return <ProjectPage app={app} project={app.openProject} renderRow={renderRow} />;
+  if (view === "Projects" && app.openProject) return <ProjectPage key={app.openProject.id} app={app} project={app.openProject} renderRow={renderRow} />;
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
