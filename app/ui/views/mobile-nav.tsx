@@ -8,6 +8,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
   const {
     closeDetail,
     language,
+    mobilePlanPreviewActive,
     moreDialogRef,
     moreOpen,
     moreTriggerRef,
@@ -20,15 +21,16 @@ export function MobileNav({ app }: { app: LumiApp }) {
   } = app;
   const tabs: readonly string[] = mobileDesignV1Preview ? mobileV1Tabs : mobileViews;
   const groups = mobileDesignV1Preview ? mobileV1MoreGroups : mobileMoreGroups;
-  const secondary = mobileDesignV1Preview ? mobileV1MoreViews.filter((x) => x !== "Today") : moreViews;
+  const secondary = mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
   return (
     <>
       <nav className="mobileNav" data-design-preview={mobileDesignV1Preview ? "lumi-v1" : undefined}>
         {tabs.map((x) => {
           const planPreview = mobileDesignV1Preview && x === "MyPlanPreview";
           const label = planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x);
-          const current = planPreview ? view === "Today"
-            : x === "More" ? secondary.includes(view) : view === x;
+          const current = planPreview ? view === "Today" && mobilePlanPreviewActive
+            : x === "More" ? secondary.includes(view) && !(view === "Today" && mobilePlanPreviewActive)
+            : view === x;
           return (
           <button
             key={x}
@@ -46,7 +48,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setMoreOpen(false);
               closeDetail();
               if (x === "Inbox") setInboxTab("tasks");
-              setView(planPreview ? "Today" : x);
+              setView(planPreview ? "Today" : x, planPreview ? { previewMyPlan: true } : undefined);
             }}
           >
             <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "Today" : x} /></span><span>{label}</span>
