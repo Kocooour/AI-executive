@@ -48,3 +48,31 @@ test("calendar source cache horizon is bounded and does not claim unavailable da
   assert.equal(mobileCalendarReadWindow("2027-02-02", today, "Europe/Prague"), null);
   assert.equal(mobileCalendarReadWindow("not-a-day", today, "Europe/Prague"), null);
 });
+
+test("VALUE=DATE events are filtered by civil date after UTC-overlap API reads east and west of UTC", () => {
+  const day = "2026-11-04";
+  const events = [
+    { id: "previous", allDay: true, start: "2026-11-03T00:00:00.000Z", end: "2026-11-04T00:00:00.000Z" },
+    { id: "selected", allDay: true, start: "2026-11-04T00:00:00.000Z", end: "2026-11-05T00:00:00.000Z" },
+    { id: "next", allDay: true, start: "2026-11-05T00:00:00.000Z", end: "2026-11-06T00:00:00.000Z" },
+    { id: "three-days", allDay: true, start: "2026-11-03T00:00:00.000Z", end: "2026-11-06T00:00:00.000Z" },
+    { id: "evening", allDay: false, start: "2026-11-03T23:30:00.000Z", end: "2026-11-04T02:00:00.000Z" },
+  ];
+  // Exactly the backend SQL: UTC half-open overlap, not a calendar-date query.
+  const sqlOverlap = (timezone) => {
+    const range = mobileCalendarReadWindow(day, day, timezone);
+    assert.ok(range);
+    return events.filter((event) => Date.parse(event.end) > range.from && Date.parse(event.start) < range.to);
+  };
+  const east = sqlOverlap("Europe/Prague");
+  assert.ok(east.some((event) => event.id === "previous"), "server returns yesterday's all-day VALUE=DATE east of UTC");
+  assert.deepEqual(mobileCalendarEventsForDay(east, day, "Europe/Prague").map((event) => event.id),
+    ["selected", "three-days", "evening"]);
+  const west = sqlOverlap("America/Los_Angeles");
+  assert.ok(west.some((event) => event.id === "next"), "server returns tomorrow's all-day VALUE=DATE west of UTC");
+  assert.deepEqual(mobileCalendarEventsForDay(west, day, "America/Los_Angeles").map((event) => event.id),
+    ["selected", "three-days"]);
+  // Exclusive midnight bounds must not turn two adjacent all-day dates into one.
+  assert.deepEqual(mobileCalendarEventsForDay(events, "2026-11-03", "Europe/Prague").map((event) => event.id),
+    ["previous", "three-days", "evening"]);
+});
