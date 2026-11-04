@@ -280,7 +280,8 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
                     <button type="button" className="taskRowOpen" onClick={() => void inspect(task)}>{task.title || tr("untitledItem")}</button>
                     <small data-timeline-estimate>{estimate ? minutesText(estimate) : tr("timelineNoEstimate")}</small>
                   </span>
-                  <TodayTimeCell app={app} task={task} slot={planSlots.get(task.id)} />
+                  {/* Today's plan feedback must not appear on a different selected day. */}
+                  {isCurrentDay && <TodayTimeCell app={app} task={task} slot={planSlots.get(task.id)} />}
                   {app.activeWorkspaceId !== "all" && <DeferChip app={app} task={task} />}
                 </li>
               );
