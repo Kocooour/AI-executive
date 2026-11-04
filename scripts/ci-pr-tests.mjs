@@ -3,6 +3,7 @@
 // Operates on the PR's base/head commits, not GitHub's temporary merge checkout.
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 
 const BASE = process.env.BASE_SHA;
 const HEAD = process.env.HEAD_SHA;
@@ -43,32 +44,106 @@ const UI = [
   "tests/task-row-value.test.mjs",
   "tests/work-scope-navigation.test.mjs",
 ];
-const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs)$/;
+const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs|tests\/(?:fixtures|support)\/|scripts\/ci-pr-tests\.mjs|\.github\/workflows\/pr-checks\.yml)/;
 const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
+// Build a reverse dependency graph from relative imports. Scanning the tracked
+// source tree rather than only tests covers API route imports and transitive
+// library dependencies (including extensionless TypeScript imports).
+const extensions = [".ts", ".tsx", ".mjs", ".js", ".jsx", ".cjs", ".json"];
+
+function resolveImport(importer, specifier, known) {
+  if (!(specifier.startsWith("./") || specifier.startsWith("../") || specifier.startsWith("@/"))) {
+    return null;
+  }
+  const candidate = specifier.startsWith("@/")
+    ? specifier.slice(2)
+    : path.posix.join(path.posix.dirname(importer), specifier);
+  const base = path.posix.normalize(candidate);
+  if (base.startsWith("../") || base.startsWith("/")) return null;
+  for (const value of [base, ...extensions.map((ext) => base + ext),
+    ...extensions.map((ext) => base + "/index" + ext)]) {
+    if (known.has(value)) return value;
+  }
+  return null;
+}
+
+function dependencyGraph(sources, paths, available) {
+  const known = new Set([...Object.keys(sources), ...paths, ...available]);
+  const reverse = new Map();
+  for (const [filename, body] of Object.entries(sources)) {
+    // Handles import/export ... from, import "side-effect", import("dynamic"), require().
+    // Only literal local specifiers count; tests with non-literal loading need a fallback.
+    const pattern = /\b(?:from\s+|import\s*(?:\(\s*)?|require\s*\(\s*)["']([^"'\r\n]+)["']/g;
+    for (const match of body.matchAll(pattern)) {
+      const imported = resolveImport(filename, match[1], known);
+      if (!imported) continue;
+      if (!reverse.has(imported)) reverse.set(imported, new Set());
+      reverse.get(imported).add(filename);
+    }
+  }
+  return reverse;
+}
+
+function testsDependingOn(changed, reverse, available) {
+  const tests = new Set(available);
+  const found = new Set();
+  const visited = new Set([changed]);
+  const pending = [changed];
+  for (let index = 0; index < pending.length; index += 1) {
+    for (const dependent of reverse.get(pending[index]) ?? []) {
+      if (visited.has(dependent)) continue;
+      visited.add(dependent);
+      if (tests.has(dependent)) found.add(dependent);
+      pending.push(dependent);
+    }
+  }
+  return found;
+}
+
 export function chooseTests(paths, available, sources = {}) {
-  if (paths.some((path) => TOOLCHAIN.test(path))) {
+  if (paths.some((filename) => TOOLCHAIN.test(filename))) {
     return { full: true, selected: [...available].sort() };
   }
   const selected = new Set(CORE);
-  const testPaths = paths.filter((path) => path.startsWith("tests/") && path.endsWith(".test.mjs"));
-  for (const path of testPaths) selected.add(path);
-  if (paths.some((path) => SENSITIVE.test(path))) {
-    for (const path of SECURITY) selected.add(path);
+  for (const filename of paths) {
+    if (available.includes(filename)) selected.add(filename);
   }
-  if (paths.some((path) => (path.startsWith("app/") && !path.startsWith("app/api/")) || path.startsWith("e2e/") ||
-    path.startsWith("public/") || path.startsWith("lib/work-scope-"))) {
-    for (const path of UI) selected.add(path);
+  if (paths.some((filename) => SENSITIVE.test(filename))) {
+    for (const filename of SECURITY) selected.add(filename);
   }
-  // Match changed implementation modules against test imports / references.
-  // This also catches tests invoking scripts indirectly, even when filenames differ.
-  const needles = paths.filter((path) => /^(lib|scripts)\//.test(path))
-    .map((path) => path.replace(/\.(?:tsx?|mjs|js)$/, ""));
+  if (paths.some((filename) => (filename.startsWith("app/") && !filename.startsWith("app/api/")) ||
+    filename.startsWith("e2e/") || filename.startsWith("public/") ||
+    filename.startsWith("lib/work-scope-"))) {
+    for (const filename of UI) selected.add(filename);
+  }
+
+  const reverse = dependencyGraph(sources, paths, available);
+  const referenced = paths.filter((filename) =>
+    /^(?:lib|scripts|app\/api)\//.test(filename));
+  const fallbackSearch = referenced.map((filename) =>
+    filename.replace(/\.(?:tsx?|mjs|cjs|jsx?)$/, ""));
+  for (const filename of referenced) {
+    const consumers = testsDependingOn(filename, reverse, available);
+    // Dynamic path construction or indirect HTTP test routing may not be
+    // statically visible. For an API change with no reachable tests, fail safe
+    // by running the complete unit suite instead of silently skipping coverage.
+    if (filename.startsWith("app/api/") && consumers.size === 0 &&
+      !available.some((test) => (sources[test] ?? "").includes(filename))) {
+      return { full: true, selected: [...available].sort() };
+    }
+    for (const test of consumers) selected.add(test);
+  }
+  // Some tests invoke scripts via process spawning or read paths as strings,
+  // rather than importing them. Preserve these direct references too.
   for (const test of available) {
     const source = sources[test] ?? "";
-    if (needles.some((needle) => source.includes(needle))) selected.add(test);
+    if (fallbackSearch.some((needle) => source.includes(needle))) selected.add(test);
   }
-  return { full: false, selected: [...selected].filter((path) => available.includes(path)).sort() };
+  return {
+    full: false,
+    selected: [...selected].filter((filename) => available.includes(filename)).sort(),
+  };
 }
 
 function main() {
@@ -86,7 +161,11 @@ function main() {
   }
   const available = readdirSync("tests").filter((name) => name.endsWith(".test.mjs"))
     .map((name) => `tests/${name}`);
-  const sources = Object.fromEntries(available.map((path) => [path, readFileSync(path, "utf8")]));
+  const files = execFileSync("git", ["ls-files", "--cached", "-z"], { encoding: "utf8" })
+    .split("\0").filter((filename) =>
+      /^(?:app|lib|scripts|tests)\//.test(filename) &&
+      /\.(?:tsx?|mjs|cjs|jsx?)$/.test(filename) && existsSync(filename));
+  const sources = Object.fromEntries(files.map((filename) => [filename, readFileSync(filename, "utf8")]));
   const { full, selected } = chooseTests(paths, available, sources);
   if (!selected.length || !selected.every((path) => existsSync(path))) {
     throw new Error("Selected PR test list is empty or invalid");
