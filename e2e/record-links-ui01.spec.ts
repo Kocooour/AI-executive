@@ -110,3 +110,69 @@ test("note direct link reloads independently; direct Close is a safe list fallba
     expect(await updateStore(page, data.records, data.links, true)).toBe(200);
   }
 });
+
+test("note URL and browser Back reload related context after switching legacy workspaces", async ({ page }) => {
+  await page.goto("/?view=Notes");
+  await waitUntilSynced(page);
+  const data = scenario();
+  const otherWorkspaceId = `ui01b-shared-${Date.now()}`;
+  const sharedWorkspace = {
+    id: `workspace-${otherWorkspaceId}`, type: "workspace",
+    title: "UI01b shared fixture", status: "active", workspaceId: otherWorkspaceId,
+    properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] },
+    createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  expect(await updateStore(page, [...data.records, sharedWorkspace], data.links)).toBe(200);
+  try {
+    // A saved, different workspace is selected before the direct-link startup.
+    await page.evaluate((id) => localStorage.setItem("ai-executive-active-workspace", id), otherWorkspaceId);
+    await page.goto(`/?view=Notes&noteId=${data.noteId}`);
+    await waitUntilSynced(page);
+    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail .contextStrip")).toContainText(data.projectTitle);
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
+
+    await page.locator('aside > nav [data-nav-view="Today"]').click();
+    await expect(page.locator(".inspectorDetail")).toHaveCount(0);
+    await page.locator("aside .workspaceButton").click();
+    await page.locator(`aside .workspaceMenu button[data-workspace-id="${otherWorkspaceId}"]`).click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "work");
+    // Back must restore *both* the record and its related Context after
+    // switching scope, not just the selected record's title.
+    await page.goBack();
+    await expect(page.locator(".inspectorDetail")).toContainText(data.noteTitle);
+    await expect(page.locator(".inspectorDetail .contextStrip")).toContainText(data.projectTitle);
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
+  } finally {
+    expect(await updateStore(page, [...data.records, sharedWorkspace], data.links, true)).toBe(200);
+    await page.evaluate(() => localStorage.setItem("ai-executive-active-workspace", "personal"));
+  }
+});
+
+test("current project relation rejects a stale legacy parent in a typed task URL", async ({ page }) => {
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const data = scenario();
+  const actualProjectId = `ui01b-actual-project-${Date.now()}`;
+  const now = Date.now();
+  const actualProject = { id: actualProjectId, type: "project", title: "Current project",
+    status: "active", workspaceId: "personal", properties: {}, createdAt: now, updatedAt: now };
+  const records = [...data.records.map((row) => row.id === data.taskId
+    ? { ...row, properties: { projectId: data.projectId } } : row), actualProject];
+  const links = data.links.map((link) => link.sourceEntityId === data.taskId
+    ? { ...link, targetEntityId: actualProjectId } : link);
+  expect(await updateStore(page, records, links)).toBe(200);
+  try {
+    await page.goto(`/?view=Projects&projectId=${data.projectId}&taskId=${data.taskId}`);
+    await waitUntilSynced(page);
+    await expect(page.locator(".inspectorDetail")).toHaveCount(0);
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+
+    await page.goto(`/?view=Projects&projectId=${actualProjectId}&taskId=${data.taskId}`);
+    await waitUntilSynced(page);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", actualProjectId);
+    await expect(page.locator(".inspectorDetail")).toContainText(data.taskTitle);
+  } finally {
+    expect(await updateStore(page, records, links, true)).toBe(200);
+  }
+});
