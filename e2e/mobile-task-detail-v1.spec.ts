@@ -143,3 +143,70 @@ test("mobile task notes and checklist stay primary; one disclosure holds other c
     await removeTasks(page, [id]);
   }
 });
+
+test("keyboard tab follows the actual task disclosure DOM order across responsive resize", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Lumi v1 preview disabled");
+  const stamp = Date.now().toString(36);
+  const id = `ui06b-keyboard-${stamp}`;
+  const title = `Ovládání klávesnicí UI06b ${stamp}`;
+  const when = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Upcoming");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ id, title, properties: { when, priority: "high" } }]);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    // Activate the task with the keyboard and traverse its actual tab stops.
+    await page.locator(".taskRow", { hasText: title }).first()
+      .getByRole("button", { name: title, exact: true }).press("Enter");
+    const detail = page.locator("aside.inspectorDetail");
+    const fields = detail.locator(".taskDetailFields");
+    const toggle = fields.locator(".taskDetailMoreToggle");
+    await expect(detail).toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const list = fields.locator(".taskDetailMoreList select");
+    const priority = fields.locator(".taskDetailMoreOptions select").first();
+    // No .focus() or pointer clicks: this must be the browser's native Tab order.
+    let onToggle = false;
+    for (let step = 0; step < 40; step++) {
+      if (await toggle.evaluate((node) => document.activeElement === node)) {
+        onToggle = true;
+        break;
+      }
+      await page.keyboard.press("Tab");
+    }
+    expect(onToggle).toBe(true);
+    await page.keyboard.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Tab");
+    await expect(list).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(priority).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(list).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(priority).toBeFocused();
+    // The same keyed select must survive React moving groups into desktop order.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(detail).not.toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toBeHidden();
+    await expect(priority).toBeFocused();
+    await expect(list).toBeVisible();
+    // Desktop's legacy order (list, planning, options, notes) is retained.
+    const order = await fields.locator(":scope > div").evaluateAll((nodes) =>
+      nodes.map((node) => node.classList.contains("taskDetailMoreList") ? "list"
+        : node.classList.contains("taskDetailEssentials") ? "essentials"
+          : node.classList.contains("taskDetailMoreOptions") ? "options"
+            : node.classList.contains("taskDetailNotes") ? "notes" : "actions"));
+    expect(order).toEqual(["list", "essentials", "options", "notes", "actions"]);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(detail).toHaveAttribute("data-task-detail-preview", "lumi-v1");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(priority).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(list).toBeFocused();
+  } finally {
+    await removeTasks(page, [id]);
+  }
+});
