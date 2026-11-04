@@ -54,11 +54,18 @@ export function targetFromSearch(search: string, knownViews: readonly string[], 
   return { kind: "view", view };
 }
 
-export function searchForTarget(target: NavigationTarget, startView: string): string {
-  if (target.kind === "view") return searchForView(target.view, startView);
-  // The serializer must not emit an address the parser would reject. In
-  // particular, project parent IDs are legal only in the Projects view.
+export function searchForTarget(target: NavigationTarget, startView: string, knownViews: readonly string[]): string {
+  // The serializer and parser must use the same route vocabulary. Unknown
+  // views, malformed IDs and impossible parent/view combinations are errors,
+  // not links that silently fail when later opened.
+  if (!knownViews.includes(startView)) throw new TypeError("Invalid startup view");
+  if (target.kind === "view") {
+    if (!knownViews.includes(target.view)) throw new TypeError("Unknown navigation view");
+    return searchForView(target.view, startView);
+  }
   if (!isOpaqueId(target.id)) throw new TypeError("Invalid navigation target ID");
+  if (target.kind === "project" && !knownViews.includes("Projects")) throw new TypeError("Unknown Projects view");
+  if (target.kind !== "project" && !knownViews.includes(target.view)) throw new TypeError("Unknown navigation view");
   const params = new URLSearchParams();
   if (target.kind === "project") {
     params.set("view", "Projects");
