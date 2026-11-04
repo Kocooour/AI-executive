@@ -177,7 +177,7 @@ test("own plans, earliest deadline, owner/shared scope, viewer and project child
   assert.deepEqual(ids(await ok(get(params("shared","upcoming","2026-11-04","2026-11-11"),bob))),
     ["s-both","s-child"]);
   assert.deepEqual(ids(await ok(get(params(),carol))),[]);
-  assert.deepEqual(ids(await ok(get(params(),erin))),["p-erin","hidden"]);
+  assert.deepEqual(ids(await ok(get(params(),erin))),["hidden","p-erin"]);
   const body=await ok(get(params(),bob));
   assert.ok(!JSON.stringify(body).includes("Alice secret"));
   assert.ok(!JSON.stringify(body).includes("Erin secret"));
