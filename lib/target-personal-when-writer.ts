@@ -53,6 +53,7 @@ export function validTargetStagingPersonalWhenCommand(
   return Object.keys(x).sort().join(",")===
       "commandId,expectedPlanRevision,expectedPrivateEpoch,expectedRevision,restoreGeneration,taskId,whenOn,writeAreaId" &&
     typeof x.commandId==="string"&&UUID.test(x.commandId)&&
+    typeof x.expectedRevision==="string"&&/^[a-f0-9]{64}$/.test(x.expectedRevision)&&
     validTargetDueOn(x.whenOn)&&epoch(x.expectedPrivateEpoch)&&
     (x.expectedPlanRevision===null||epoch(x.expectedPlanRevision))&&
     typeof x.writeAreaId==="string"&&AREA.test(x.writeAreaId)&&
