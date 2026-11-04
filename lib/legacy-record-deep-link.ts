@@ -15,6 +15,27 @@ export type LegacyRecordRelation = {
   workspaceId: string;
 };
 
+/**
+ * Current belongs_to_project edges are authoritative for project ancestry.
+ * Only legacy records with *no* project edge can use their old projectId field.
+ * Conflicting/foreign edges never grant a stale parent, including multi-parent
+ * corruptions; links cannot transfer access across legacy workspaces.
+ */
+export function legacyRecordBelongsToProject(
+  record: LegacyRecordRow,
+  projectId: string,
+  relations: readonly LegacyRecordRelation[],
+): boolean {
+  const projectEdges = relations.filter((link) =>
+    link.sourceEntityId === record.id && link.relationType === "belongs_to_project");
+  if (projectEdges.length > 0) {
+    return projectEdges.length === 1 &&
+      projectEdges[0].workspaceId === record.workspaceId &&
+      projectEdges[0].targetEntityId === projectId;
+  }
+  return record.properties?.projectId === projectId;
+}
+
 export function resolveLegacyRecordLink<T extends LegacyRecordRow>(
   records: readonly T[],
   relations: readonly LegacyRecordRelation[],
@@ -32,12 +53,7 @@ export function resolveLegacyRecordLink<T extends LegacyRecordRow>(
     const project = records.find((item) => item.type === "project" && item.id === target.projectId &&
       item.workspaceId === record.workspaceId);
     if (!project) return null;
-    const parentRelation = relations.some((link) =>
-      link.sourceEntityId === record.id && link.targetEntityId === project.id &&
-      link.workspaceId === record.workspaceId && link.relationType === "belongs_to_project");
-    // Legacy tasks may also have a direct projectId property. Neither that
-    // property nor a relation can carry access across two different scopes.
-    if (!parentRelation && record.properties?.projectId !== project.id) return null;
+    if (!legacyRecordBelongsToProject(record, project.id, relations)) return null;
     projectId = project.id;
   }
 
