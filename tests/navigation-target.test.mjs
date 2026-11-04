@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { targetFromSearch, searchForTarget, projectIdFromAddress } = await import("../lib/view-url.ts");
+const { targetFromSearch, searchForTarget, viewExitFromProject } = await import("../lib/view-url.ts");
 const views = ["Home", "Inbox", "Today", "Upcoming", "Projects", "Notes", "Settings"];
 
 test("view, project, task and note targets encode to stable typed URLs", () => {
@@ -55,10 +55,39 @@ test("task/notes cannot claim a parent project outside the Projects view", () =>
 });
 
 
-test("legacy history marker is accepted only on a valid Projects list address", () => {
-  assert.equal(projectIdFromAddress("?view=Projects", "prior-project", views, "Home"), "prior-project");
-  assert.equal(projectIdFromAddress("?view=Projects&projectId=linked", "prior-project", views, "Home"), "linked");
-  assert.equal(projectIdFromAddress("?view=Today", "prior-project", views, "Home"), null);
-  assert.equal(projectIdFromAddress("?view=Projects&projectId=x&unknown=1", "prior-project", views, "Home"), null);
-  assert.equal(projectIdFromAddress("?view=Projects", "\u0000invalid", views, "Home"), null);
+
+test("the Projects list URL is always the list, regardless of stale history state", () => {
+  const priorHistoryState = { lumiProject: "prior-project" };
+  assert.equal(priorHistoryState.lumiProject, "prior-project");
+  assert.deepEqual(targetFromSearch("?view=Projects", views, "Home"), { kind: "view", view: "Projects" });
+  assert.equal(targetFromSearch("?view=Projects&projectId=linked", views, "Home")?.kind, "project");
+  assert.equal(targetFromSearch("?view=Projects&projectId=x&unknown=1", views, "Home"), null);
+});
+
+test("an explicit view choice from a project pushes a new step, Back restores the project", () => {
+  const projectUrl = searchForTarget({ kind: "project", id: "p" }, "Home");
+  const homeUrl = searchForTarget({ kind: "view", view: "Home" }, "Home");
+  const history = [homeUrl, projectUrl];
+  let index = history.length - 1;
+  for (const destination of ["Home", "Projects"]) {
+    const transition = viewExitFromProject({
+      currentSearch: history[index],
+      currentProjectId: "p",
+      nextView: destination,
+      knownViews: views,
+      startView: "Home",
+    });
+    assert.deepEqual(transition, { search: destination === "Home" ? "" : "?view=Projects", mode: "push" });
+    history.splice(index + 1, Infinity, transition.search);
+    index++;
+    assert.equal(history[--index], projectUrl, "browser Back still reaches the project");
+    assert.equal(history[++index], transition.search, "browser Forward reaches the chosen view");
+    index--; // Return to the project before trying another choice.
+  }
+  assert.equal(viewExitFromProject({
+    currentSearch: "?view=Projects", currentProjectId: "p", nextView: "Home", knownViews: views, startView: "Home",
+  }), null);
+  assert.equal(viewExitFromProject({
+    currentSearch: projectUrl, currentProjectId: "someone-else", nextView: "Home", knownViews: views, startView: "Home",
+  }), null);
 });
