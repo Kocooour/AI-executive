@@ -1,24 +1,24 @@
 /** R2d.3k.4b: read-only confirmation of an uncertain private whenOn command. */
 import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
-  from "../../../../../../lib/http-security";
-import {logStagingFailure} from "../../../../../../lib/target-staging-failure-log";
+  from "../../../../../../../lib/http-security";
+import {logStagingFailure} from "../../../../../../../lib/target-staging-failure-log";
 import {
   resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
   stagingChildSessionConfig,admitStagingIdentity,stagingIdentityRefusal,
   verifyStagingIdentityBeforeRelease,
-} from "../../../../../../lib/target-staging-http-identity";
+} from "../../../../../../../lib/target-staging-http-identity";
 import {
   personalWhenHttpEnabled,personalWhenHttpConfig,personalWhenHttpUnchanged,
   personalWhenHttpAnswer,personalWhenHttpCommand,verifyPersonalWhenPreviewLive,
-} from "../../../../../../lib/target-staging-personal-when-http";
+} from "../../../../../../../lib/target-staging-personal-when-http";
 import {readStagingPersonalWhenPreviewInChild}
-  from "../../../../../../lib/target-staging-read-process";
+  from "../../../../../../../lib/target-staging-read-process";
 import {readPersonalWhenReceiptInChild}
-  from "../../../../../../lib/target-staging-personal-when-http-process";
+  from "../../../../../../../lib/target-staging-personal-when-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
   writeAreaMismatchResponse,
-} from "../../../../../../lib/target-staging-write-contract";
+} from "../../../../../../../lib/target-staging-write-contract";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
