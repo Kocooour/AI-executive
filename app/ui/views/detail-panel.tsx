@@ -143,6 +143,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   const selectedTask = selected?.type === "task" ? selected : null;
   const activeTaskSession = Boolean(selectedTask && workSession?.taskId === selectedTask.id);
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
+  const taskPreviewDueTone = selectedTask ? taskDueTone(selectedTask, today) : "";
   const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
     Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
       unsent.has(selectedTask.id) || heldBack.some((item) => item.id === selectedTask.id) ||
@@ -173,7 +174,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
         <div className="backdrop inspectorBackdrop" onClick={closeInspector}>
           <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`}
             data-task-detail-preview={mobileTaskPreview ? "lumi-v1" : undefined}
-            data-task-due-tone={mobileTaskPreview && selectedTask ? taskDueTone(selectedTask, today) : undefined}
+            data-task-due-tone={mobileTaskPreview ? taskPreviewDueTone : undefined}
             data-task-completed={mobileTaskPreview && selectedTask ? selectedTask.status === "completed" : undefined}
             onClick={(e) => e.stopPropagation()}>
             <button
@@ -193,7 +194,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     ? `${language === "cs" ? "Nejdřív ukončete pracovní blok" : "Finish the work session first"}: ${selectedTask.title}`
                     : selectedTask.status === "completed"
                       ? `${tr("reopen")}: ${selectedTask.title}`
-                      : `${tr("complete")}: ${selectedTask.title}`}
+                      : `${tr("complete")}: ${selectedTask.title}${taskPreviewDueTone === "dueOverdue"
+                        ? language === "cs" ? " · Po termínu" : " · Overdue"
+                        : taskPreviewDueTone === "dueSoon"
+                          ? language === "cs" ? " · Blíží se termín" : " · Due soon"
+                          : ""}`}
                   disabled={!taskPreviewMayToggle}
                   onClick={() => {
                     if (!taskPreviewMayToggle) return;
