@@ -141,11 +141,12 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     return () => media.removeEventListener("change", sync);
   }, []);
   const selectedTask = selected?.type === "task" ? selected : null;
+  const activeTaskSession = Boolean(selectedTask && workSession?.taskId === selectedTask.id);
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
   const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
     Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
       unsent.has(selectedTask.id) || heldBack.some((item) => item.id === selectedTask.id) ||
-      entityConflicts(selectedTask).length > 0)));
+      entityConflicts(selectedTask).length > 0 || activeTaskSession)));
   const taskProjectId = selectedTask ? targets(selectedTask.id, "belongs_to_project")[0] : null;
   const taskProject = selectedTask && taskProjectId
     ? projects.find((project) => project.id === taskProjectId && project.workspaceId === selectedTask.workspaceId)
@@ -188,9 +189,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               {mobileTaskPreview && selectedTask && (
                 <button type="button" className="taskPreviewCheck" data-task-preview-check={selectedTask.id}
                   role="checkbox" aria-checked={selectedTask.status === "completed"}
-                  aria-label={selectedTask.status === "completed"
-                    ? `${tr("reopen")}: ${selectedTask.title}`
-                    : `${tr("complete")}: ${selectedTask.title}`}
+                  aria-label={activeTaskSession
+                    ? `${language === "cs" ? "Nejdřív ukončete pracovní blok" : "Finish the work session first"}: ${selectedTask.title}`
+                    : selectedTask.status === "completed"
+                      ? `${tr("reopen")}: ${selectedTask.title}`
+                      : `${tr("complete")}: ${selectedTask.title}`}
                   disabled={!taskPreviewMayToggle}
                   onClick={() => {
                     if (!taskPreviewMayToggle) return;
@@ -764,7 +767,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {!mobileTaskPreview && (selected.status === "completed" ? (
+                {(!mobileTaskPreview || activeTaskSession) && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
