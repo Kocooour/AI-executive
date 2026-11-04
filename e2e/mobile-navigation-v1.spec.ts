@@ -12,6 +12,7 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await expect(tabs).toHaveCount(4);
   await expect(tabs).toHaveText([/Můj plán|My Plan/, /Kalendář|Calendar/, /Projekty|Projects/, /Více|More/]);
   await expect(page.locator('[data-plan-source="legacy-today"]')).toBeVisible();
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Můj plán|My Plan/);
   await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
 
   await page.locator('.mobileNav button[data-nav-view="Calendar"]').click();
