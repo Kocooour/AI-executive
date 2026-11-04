@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectAreaPreviewTone, projectPreviewSummary, projectPreviewTone } from "../lib/project-list-preview.ts";
+import { projectAreaPreviewTone, projectPreviewCanToggle, projectPreviewSummary, projectPreviewTone } from "../lib/project-list-preview.ts";
 
 const project = (status = "active") => ({ status });
 const summary = (overrides = {}) => ({
