@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { entityConflicts } from "../../../lib/field-merge";
+import { projectPreviewCanToggle } from "../../../lib/project-list-preview";
 import { byManualOrder } from "../../../lib/task-views";
 import { projectAcceptsNewItems, projectTasks, summarizeProject } from "../../../lib/project-summary";
 import type { Entity } from "../../../lib/db";
@@ -56,9 +57,8 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
     return () => query.removeEventListener("change", update);
   }, []);
   const mobileDetailPreview = mobileDesignV1Preview && mobileViewport;
-  const canChangeStatus = activeWorkspaceId === project.workspaceId &&
-    !isHeld && !unsent.has(project.id) && entityConflicts(project).length === 0 &&
-    (project.status === "active" || project.status === "completed") && !actionBusy;
+  const canChangeStatus = projectPreviewCanToggle(project, activeWorkspaceId,
+    isHeld || unsent.has(project.id) || entityConflicts(project).length > 0 || actionBusy);
   async function mobileToggleStatus() {
     if (!canChangeStatus) return;
     const completed = project.status === "completed";
