@@ -8,6 +8,8 @@ import type {
 } from "./target-task-read-model";
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
+import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
+import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -72,6 +74,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
@@ -720,6 +724,106 @@ export async function readStagingPersonalWhenInChild(
   ]);
   const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
   if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.3l.2: strict, bounded My Plan day DTO. All Area/content epochs and
+ * the actor's private epoch remain server-side and must be live checked. */
+export function parseStagingMyPlanDayPage(
+  value:unknown,areaFilter:MyPlanTaskAreaFilter,window:MyPlanTaskDayWindow,
+  evaluationDate:string,throughDate:string|null,limit:number,
+):MyPlanDayTaskPage|null {
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(areaFilter)||
+    !["today","upcoming"].includes(window)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const day=temporalCalendarOrdinal(evaluationDate);
+  const through=throughDate===null?null:temporalCalendarOrdinal(throughDate);
+  if(day===null||(window==="today"?throughDate!==null:
+    through===null||through-day<1||through-day>90))return null;
+  const data=value as Record<string,unknown>;
+  if(Object.keys(data).sort().join(",")!==
+    "areaEpochs,areaFilter,evaluationDate,hasMore,linearization,ok,privateEpoch,revision,tasks,throughDate,window"||
+    data.ok!==true||data.areaFilter!==areaFilter||data.window!==window||
+    data.evaluationDate!==evaluationDate||data.throughDate!==throughDate||
+    typeof data.revision!=="string"||!REVISION.test(data.revision)||
+    !Number.isSafeInteger(data.privateEpoch)||(data.privateEpoch as number)<0||
+    typeof data.hasMore!=="boolean"||!Array.isArray(data.tasks)||
+    data.tasks.length>limit||(data.hasMore&&data.tasks.length!==limit)||
+    !Array.isArray(data.areaEpochs))return null;
+  const rowAreas=new Map<string,"private"|"shared">();
+  const tasks:MyPlanDayTask[]=[];
+  const seen=new Set<string>();
+  for(const incoming of data.tasks){
+    if(!incoming||typeof incoming!=="object"||Array.isArray(incoming))return null;
+    const t=incoming as Record<string,unknown>;
+    const shared=t.areaKind==="shared";
+    const keys="areaId,areaKind,attentionOn,dueOn,projectId,taskId,title,whenOn"+
+      (shared?",assignedToMe":"");
+    if(Object.keys(t).sort().join(",")!==keys.split(",").sort().join(",")||
+      typeof t.taskId!=="string"||typeof t.title!=="string"||
+      typeof t.areaId!=="string"||!t.areaId||
+      (t.projectId!==null&&typeof t.projectId!=="string")||
+      (t.areaKind!=="private"&&t.areaKind!=="shared")||
+      (shared&&t.assignedToMe!==true)||
+      (areaFilter==="personal"&&shared)||
+      (areaFilter==="shared"&&!shared)||
+      (t.dueOn!==null&&temporalCalendarOrdinal(t.dueOn)===null)||
+      (t.whenOn!==null&&temporalCalendarOrdinal(t.whenOn)===null)||
+      temporalCalendarOrdinal(t.attentionOn)===null||
+      t.attentionOn!==[t.dueOn,t.whenOn].filter((d):d is string=>
+        typeof d==="string").sort()[0]||
+      (window==="today"?!(t.attentionOn<=evaluationDate):
+        !(t.attentionOn>evaluationDate&&t.attentionOn<=(throughDate as string)))||
+      seen.has(t.taskId))return null;
+    const prev=tasks[tasks.length-1];
+    if(prev&&(t.attentionOn<prev.attentionOn||
+      (t.attentionOn===prev.attentionOn&&
+       Buffer.compare(Buffer.from(t.taskId),Buffer.from(prev.taskId))<=0)))return null;
+    seen.add(t.taskId);
+    rowAreas.set(t.areaId,t.areaKind as "private"|"shared");
+    tasks.push({taskId:t.taskId,title:t.title,projectId:t.projectId as string|null,
+      areaId:t.areaId,areaKind:t.areaKind as "private"|"shared",
+      dueOn:t.dueOn as string|null,whenOn:t.whenOn as string|null,
+      attentionOn:t.attentionOn as string,
+      ...(shared?{assignedToMe:true as const}:{})});
+  }
+  const linearization=parseLinearization(data.linearization,rowAreas);
+  if(!linearization||linearization.areas.some(a=>
+      a.areaKind==="shared"&&a.access!=="editor"&&a.access!=="admin")||
+    data.areaEpochs.length!==linearization.areas.length)return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  for(let i=0;i<data.areaEpochs.length;i++){
+    const v=data.areaEpochs[i];
+    if(!v||typeof v!=="object"||Array.isArray(v))return null;
+    const a=v as Record<string,unknown>,w=linearization.areas[i];
+    if(Object.keys(a).sort().join(",")!==
+      "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+      a.areaId!==w?.areaId||a.areaKind!==w.areaKind||
+      a.access!==w.access||a.policyRevision!==w.policyRevision||
+      !Number.isSafeInteger(a.contentRevision)||(a.contentRevision as number)<0||
+      !Number.isSafeInteger(a.projectContentRevision)||
+        (a.projectContentRevision as number)<0)return null;
+    areaEpochs.push({areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,
+      contentRevision:a.contentRevision as number,
+      projectContentRevision:a.projectContentRevision as number});
+  }
+  return {tasks,hasMore:data.hasMore as boolean,revision:data.revision,
+    areaFilter,window,evaluationDate,throughDate,linearization,areaEpochs,
+    privateEpoch:data.privateEpoch as number};
+}
+export async function readStagingMyPlanDayInChild(
+  config:StagingPersonalReadConfig,areaFilter:MyPlanTaskAreaFilter,
+  window:MyPlanTaskDayWindow,evaluationDate:string,throughDate:string|null,
+  limit:number,offset:number,
+):Promise<MyPlanDayTaskPage|null>{
+  const payload=await runChild(config,"target-staging-my-plan-day-child.mjs",[
+    areaFilter,window,evaluationDate,throughDate??"-",String(limit),String(offset),
+  ]);
+  const parsed=parseStagingMyPlanDayPage(payload,areaFilter,window,
+    evaluationDate,throughDate,limit);
+  if(payload!==null&&!parsed)logStagingFailure("my_plan_day","invalid_child_dto");
   return parsed;
 }
 
