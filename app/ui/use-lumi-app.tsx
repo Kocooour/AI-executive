@@ -8,6 +8,7 @@ import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
+import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -291,6 +292,12 @@ export function useLumiApp() {
   // authenticated local snapshot and active legacy scope, not mount-time state.
   const latestItemsRef = useRef(items);
   latestItemsRef.current = items;
+  const latestRelationsRef = useRef(relations);
+  latestRelationsRef.current = relations;
+  const inspectRef = useRef<(item: Entity, options?: { navigate?: boolean }) => Promise<void>>(async () => undefined);
+  // Cross-workspace URL inspection starts only after React commits the new
+  // workspace. An eager inspect would lose context at the scope-change guard.
+  const pendingRecordRef = useRef<{ kind: "task" | "note"; id: string; view: string; projectId?: string; workspaceId: string } | null>(null);
   const selectWorkspaceRef = useRef<(workspaceId: string) => void>(() => undefined);
   const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
@@ -302,6 +309,24 @@ export function useLumiApp() {
     inspectionVersion.current += 1;
     setContext(null);
   }, [activeWorkspaceId]);
+  useEffect(() => {
+    const pending = pendingRecordRef.current;
+    if (!pending || pending.workspaceId !== activeWorkspaceId) return;
+    // Keep the pending URL marker until the selection has actually committed.
+    // Otherwise the URL-sync effect in this render still sees selected=null
+    // and replaces the deep link with a view-only address.
+    const target = targetFromSearch(window.location.search, addressableViews, startupView);
+    if ((target?.kind !== "task" && target?.kind !== "note") ||
+        target.id !== pending.id || target.kind !== pending.kind || target.view !== pending.view ||
+        target.projectId !== pending.projectId) {
+      pendingRecordRef.current = null;
+      return;
+    }
+    const destination = resolveLegacyRecordLink(items, relations, target, activeWorkspaceId);
+    if (destination && !destination.selectWorkspaceId)
+      void inspectRef.current(destination.record, { navigate: false });
+    else pendingRecordRef.current = null;
+  }, [activeWorkspaceId, items, relations, startupView]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
@@ -392,14 +417,20 @@ export function useLumiApp() {
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string) {
+    pendingRecordRef.current = null;
     const exit = viewExitFromProject({
       currentSearch: window.location.search, currentProjectId: openProjectIdRef.current,
       nextView: next, knownViews: addressableViews, startView: startupView,
     });
-    if (exit) {
+    const route = targetFromSearch(window.location.search, addressableViews, startupView);
+    // Choosing the active list while its record inspector is open is a real
+    // navigation step. It must remain possible to go Back to that record.
+    const leaveRecordSameView = !exit && (route?.kind === "task" || route?.kind === "note") &&
+      next === view && route.id === inspectorSelectionRef.current?.id;
+    if (exit || leaveRecordSameView) {
       try {
-        window.history.pushState(null, "", `${window.location.pathname}${exit.search}`);
-        addressedView.current = next; // The URL was updated here; do not push again in the effect.
+        window.history.pushState(null, "", `${window.location.pathname}${exit?.search ?? searchForView(next, startupView)}`);
+        addressedView.current = next;
       } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
@@ -432,8 +463,27 @@ export function useLumiApp() {
       catch { /* The in-memory list remains available. */ }
     }
   }
-  async function inspect(e: Entity) {
+  async function inspect(e: Entity, options: { navigate?: boolean } = {}) {
+    if (options.navigate !== false) pendingRecordRef.current = null;
     if (e.type === "project") { openProjectPage(e); return; }
+    // The legacy owner store and selected workspace are the only local read
+    // boundaries here; the target model's server authorization arrives in UI-09.
+    if (activeWorkspaceRef.current !== "all" && activeWorkspaceRef.current !== e.workspaceId && options.navigate !== false) return;
+    if (options.navigate !== false && (e.type === "task" || e.type === "note")) {
+      const parent = view === "Projects" && openProjectIdRef.current &&
+        legacyRecordBelongsToProject(e, openProjectIdRef.current, latestRelationsRef.current)
+        ? openProjectIdRef.current : null;
+      try {
+        const target = { kind: e.type, id: e.id, view, ...(parent ? { projectId: parent } : {}) };
+        const address = `${window.location.pathname}${searchForTarget(target, startupView, addressableViews)}`;
+        const prior = targetFromSearch(window.location.search, addressableViews, startupView);
+        const same = prior?.kind === e.type && prior.id === e.id &&
+          prior.view === view && (prior.projectId ?? null) === parent;
+        if (!same) window.history.pushState({ lumiRecord: e.id }, "", address);
+        addressedView.current = view;
+      } catch { /* In-memory inspector remains usable if the History API fails. */ }
+      if (!parent && openProjectIdRef.current) setOpenProjectId(null);
+    }
     const version = ++inspectionVersion.current;
     const workspaceAtRequest = activeWorkspaceRef.current;
     setSelected(e);
@@ -448,10 +498,33 @@ export function useLumiApp() {
         !stillOpen || stillOpen.id !== e.id || stillOpen.workspaceId !== e.workspaceId) return;
     setContext(next);
   }
+  inspectRef.current = inspect;
   function closeDetail() {
     inspectionVersion.current += 1;
     setSelected(null);
     setContext(null);
+  }
+  // User-driven Close/Back follows the actual in-tab origin. A pasted URL has
+  // no known in-app predecessor, so it replaces itself with the safe parent
+  // project or view list rather than escaping to a different site.
+  function closeInspector() {
+    const target = targetFromSearch(window.location.search, addressableViews, startupView);
+    const isLinked = (target?.kind === "task" || target?.kind === "note") &&
+      inspectorSelectionRef.current?.id === target.id;
+    if (!isLinked) { closeDetail(); return; }
+    if (window.history.state?.lumiRecord === target.id) {
+      window.history.back();
+      return;
+    }
+    closeDetail();
+    const search = target.projectId
+      ? searchForTarget({ kind: "project", id: target.projectId }, startupView, addressableViews)
+      : searchForView(target.view, startupView);
+    setOpenProjectId(target.projectId ?? null);
+    try {
+      window.history.replaceState(null, "", `${window.location.pathname}${search}`);
+      addressedView.current = target.view;
+    } catch { /* The address synchronization effect handles the fallback. */ }
   }
   async function askAI(promptOverride?: string) {
     const prompt = typeof promptOverride === "string" ? promptOverride.trim() : aiText.trim();
@@ -1502,8 +1575,6 @@ export function useLumiApp() {
     if (route?.kind === "project") {
       const destination = resolveLegacyProjectLink(items, route.id, activeWorkspaceId);
       if (destination) {
-        // Direct links name a project, not a workspace. Within the owner's legacy
-        // store select its known workspace, but preserve "all" if already selected.
         if (destination.selectWorkspaceId) selectWorkspace(destination.selectWorkspaceId);
         setViewState("Projects");
         setOpenProjectId(destination.projectId);
@@ -1511,19 +1582,34 @@ export function useLumiApp() {
         return; // Do not mistake an incomplete initial load for a missing project.
       }
     }
+    if (route?.kind === "task" || route?.kind === "note") {
+      const destination = resolveLegacyRecordLink(items, relations, route, activeWorkspaceId);
+      if (destination) {
+        if (destination.selectWorkspaceId) {
+          selectWorkspace(destination.selectWorkspaceId);
+          pendingRecordRef.current = { ...route, workspaceId: destination.record.workspaceId };
+        } else {
+          void inspect(destination.record, { navigate: false });
+        }
+        setViewState(route.view);
+        setOpenProjectId(destination.projectId);
+      } else if (syncStatus !== "synced" && syncStatus !== "offline") {
+        return;
+      }
+    }
     const taskId = new URLSearchParams(window.location.search).get("task");
     if (taskId) {
       const task = items.find((item) => item.id === taskId);
       if (task && task.type !== "workspace") {
         selectWorkspace(task.workspaceId);
-        void inspect(task);
+        void inspect(task, { navigate: false });
       } else if (authState !== "ready" || syncStatus !== "synced") {
         return;
       }
     }
     deepLinkHandled.current = true;
     setDeepLinkDone(true);
-  }, [items, authState, syncStatus, activeWorkspaceId, startupView]);
+  }, [items, relations, authState, syncStatus, activeWorkspaceId, startupView]);
 
   // The address follows the view except while a project URL is active. Back/Forward and
   // reload preserve the requested target. A legacy notification ?task= ID is dropped
@@ -1535,9 +1621,32 @@ export function useLumiApp() {
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
     if (hasRecordLink && !deepLinkDone) return;
     const route = targetFromSearch(window.location.search, addressableViews, startupView);
-    // A direct project link must survive while local records/sync are still loading.
-    if (route?.kind === "project" && !deepLinkDone) return;
+    // Preserve a direct record URL while local records and the first server
+    // synchronization are still loading. Do not publish a transient empty list.
+    if (route && route.kind !== "view" && !deepLinkDone) return;
     if (route?.kind === "project" && view === "Projects" && route.id === openProjectId) {
+      addressedView.current = view;
+      return;
+    }
+    if ((route?.kind === "task" || route?.kind === "note") && route.view === view &&
+        route.id === selected?.id && route.kind === selected.type &&
+        (route.projectId ?? null) === openProjectId) {
+      // The inspector has committed. It is now safe to release the pending
+      // navigation marker without changing this copyable record URL.
+      if (pendingRecordRef.current?.id === route.id &&
+          pendingRecordRef.current.kind === route.kind) pendingRecordRef.current = null;
+      addressedView.current = view;
+      return;
+    }
+    const pending = pendingRecordRef.current;
+    if ((route?.kind === "task" || route?.kind === "note") &&
+        pending?.kind === route.kind && pending.id === route.id &&
+        pending.view === route.view && pending.projectId === route.projectId &&
+        pending.workspaceId === activeWorkspaceId && route.view === view &&
+        (route.projectId ?? null) === openProjectId) {
+      // The workspace is committed but inspect() has only scheduled setSelected.
+      // Retain the typed URL during this render; the next render above confirms
+      // the actual selection, including after browser Back across workspaces.
       addressedView.current = view;
       return;
     }
@@ -1550,7 +1659,7 @@ export function useLumiApp() {
       if (update.mode === "push") window.history.pushState(null, "", address);
       else window.history.replaceState(null, "", address);
     } catch { /* browsers limit how often history may change; the view itself is unaffected */ }
-  }, [addressReady, authState, deepLinkDone, view, startupView, openProjectId]);
+  }, [addressReady, authState, deepLinkDone, view, startupView, openProjectId, selected?.id]);
   useEffect(() => {
     const followAddress = () => {
       const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
@@ -1564,17 +1673,28 @@ export function useLumiApp() {
       // a different, still-known workspace can be restored safely. URL IDs
       // never grant access; UI-09 replaces this with server-authorized reads.
       const target = targetFromSearch(window.location.search, addressableViews, nextView);
-      const destination = nextView === "Projects" && target?.kind === "project"
+      const project = nextView === "Projects" && target?.kind === "project"
         ? resolveLegacyProjectLink(latestItemsRef.current, target.id, activeWorkspaceRef.current)
         : null;
-      if (destination?.selectWorkspaceId) selectWorkspaceRef.current(destination.selectWorkspaceId);
-      setOpenProjectId(destination?.projectId ?? null);
-      // Nothing that belongs to the view being left may stay open over the next one.
+      const record = resolveLegacyRecordLink(latestItemsRef.current, latestRelationsRef.current,
+        target, activeWorkspaceRef.current);
+      const destination = record ?? project;
+      // Nothing from the previous inspector should stay open while Back/Forward
+      // resolves a new record; stale async context requests are invalidated.
+      closeDetail();
+      pendingRecordRef.current = null;
+      if (destination?.selectWorkspaceId) {
+        selectWorkspaceRef.current(destination.selectWorkspaceId);
+        if (record && (target?.kind === "task" || target?.kind === "note"))
+          pendingRecordRef.current = { ...target, workspaceId: record.record.workspaceId };
+      }
+      setOpenProjectId(record?.projectId ?? project?.projectId ?? null);
+      if (record && !destination?.selectWorkspaceId)
+        void inspectRef.current(record.record, { navigate: false });
       answerConfirm(false);
       setCapture(false);
       setAssistantOpen(false);
       setMoreOpen(false);
-      closeDetail();
     };
     window.addEventListener("popstate", followAddress);
     return () => window.removeEventListener("popstate", followAddress);
@@ -1894,6 +2014,7 @@ export function useLumiApp() {
   }
 
   function selectWorkspace(workspaceId: string) {
+    pendingRecordRef.current = null;
     assistantRequestVersion.current += 1;
     setActiveWorkspaceId(workspaceId);
     if (workspaceId !== "all") selectWriteWorkspace(workspaceId);
@@ -2398,7 +2519,7 @@ export function useLumiApp() {
       await load();
       if (selected && inspectorSelectionRef.current?.id === selected.id) {
         const refreshed = await db.entities.get(selected.id);
-        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
+        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed, { navigate: false });
       }
     } catch {
       setSyncStatus("offline");
@@ -2595,12 +2716,16 @@ export function useLumiApp() {
   useEffect(() => {
     if (!selected) return;
     const fresh = items.find((item) => item.id === selected.id);
-    if (!fresh) return;
+    if (!fresh || fresh.type !== selected.type ||
+        (activeWorkspaceId !== "all" && fresh.workspaceId !== activeWorkspaceId)) {
+      closeDetail(); // Deleted, wrong type or no longer in the selected legacy scope.
+      return;
+    }
     // Compared by content: a merged record can keep the timestamp it had.
     const shown = { ...fresh, title: titleEdited.current ? selected.title : fresh.title };
     if (JSON.stringify(shown) === JSON.stringify(selected)) return;
     setSelected((open) => (open && open.id === fresh.id ? { ...fresh, title: titleEdited.current ? open.title : fresh.title } : open));
-  }, [items]);
+  }, [items, activeWorkspaceId, selected?.id, selected?.type]);
   // The add row is shared by every list; its message belongs to the list it was shown under.
   useEffect(() => setRowError(false), [view]);
   // The add row under a list: a refused item keeps its text and says so instead of failing silently.
@@ -2707,7 +2832,7 @@ export function useLumiApp() {
     // to another record or been closed. inspect() also guards delayed context results.
     if (selected && inspectorSelectionRef.current?.id === selected.id) {
       const refreshed = await db.entities.get(selected.id);
-      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
+      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed, { navigate: false });
     }
   }
   // Inbox decisions are single-use. Every branch, including Discard, validates the latest
@@ -2825,7 +2950,7 @@ export function useLumiApp() {
       if (discarded.record) closeDetail();
       else {
         const refreshed = await db.entities.get(task.id);
-        if (refreshed && inspectorSelectionRef.current?.id === task.id) await inspect(refreshed);
+        if (refreshed && inspectorSelectionRef.current?.id === task.id) await inspect(refreshed, { navigate: false });
       }
     }
   }
@@ -4053,6 +4178,7 @@ export function useLumiApp() {
     claimValueMode,
     claimValueType,
     closeDetail,
+    closeInspector,
     closeProjectPage,
     openProject,
     collection,

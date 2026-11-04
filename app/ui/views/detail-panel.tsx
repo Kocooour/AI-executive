@@ -90,6 +90,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     calendarToday,
     checklistDraft,
     closeDetail,
+    closeInspector,
     editNotes,
     notesDraft,
     saveNotes,
@@ -142,12 +143,12 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   return (
     <>
       {selected && (
-        <div className="backdrop inspectorBackdrop" onClick={closeDetail}>
+        <div className="backdrop inspectorBackdrop" onClick={closeInspector}>
           <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
             <button
               className="close inspectorClose"
               type="button"
-              onClick={closeDetail}
+              onClick={closeInspector}
             >
               <span className="inspectorCloseIcon"><span aria-hidden="true">×</span><span className="inspectorCloseAccessible">{tr("close")}</span></span>
               <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
