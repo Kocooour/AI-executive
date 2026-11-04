@@ -21,12 +21,20 @@ const available = [
   "tests/example.test.mjs",
   "tests/calendar-overview.test.mjs",
   "tests/target-staging-notes-http.test.mjs",
+  "tests/workspace-tone.test.mjs",
+  "tests/work-scope-switcher.test.mjs",
+  "tests/design-tokens.test.mjs",
+  "tests/browser-e2e-workflow.test.mjs",
+  "tests/deploy-safe.test.mjs",
 ];
 
 test("documentation-only changes skip expensive code validation", () => {
   assert.equal(needsCodeChecks(["AGENTS.md", "docs/DEVELOPMENT.md"]), false);
   assert.equal(needsCodeChecks(["docs/README.md", "lib/auth.ts"]), true);
   assert.equal(needsCodeChecks([".github/workflows/pr-checks.yml"]), true);
+  assert.equal(needsCodeChecks(["docs/design-system/tokens.json"]), true);
+  assert.equal(needsCodeChecks(["docs/design-system/components/button/preview.html"]), true);
+  assert.equal(needsCodeChecks(["docs/PRODUCT.md"]), false);
 });
 
 test("ordinary PR selects smoke, changed tests and direct consumers", () => {
@@ -88,6 +96,55 @@ test("UI changes select focused mobile/navigation checks", () => {
   const out = chooseTests(["app/page.tsx"], available);
   assert.ok(out.selected.includes("tests/mobile-navigation-v1.test.mjs"));
   assert.ok(out.selected.includes("tests/task-row-value.test.mjs"));
+});
+
+test("P1: changing UI modules includes direct component tests", () => {
+  const out = chooseTests(["app/ui/workspace-tone.ts"], available, {
+    "tests/workspace-tone.test.mjs": 'import "../app/ui/workspace-tone.ts";',
+  });
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/workspace-tone.test.mjs"));
+});
+
+test("P1: changing UI components includes transitive tests", () => {
+  const out = chooseTests(["app/ui/views/work-scope-switcher-controls.ts"], available, {
+    "app/ui/views/work-scope-switcher.ts":
+      'export { WorkScopeSwitcherControls } from "./work-scope-switcher-controls";',
+    "tests/work-scope-switcher.test.mjs":
+      'import "../app/ui/views/work-scope-switcher.ts";',
+  });
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/work-scope-switcher.test.mjs"));
+});
+
+test("P2: editing design assets triggers file-reading design checks", () => {
+  for (const filename of [
+    "docs/design-system/tokens.json",
+    "docs/design-system/tokens.css",
+    "docs/design-system/components/button/preview.html",
+  ]) {
+    assert.ok(needsCodeChecks([filename]), filename);
+    const out = chooseTests([filename], available);
+    assert.equal(out.full, false);
+    assert.ok(out.selected.includes("tests/design-tokens.test.mjs"), filename);
+  }
+});
+
+test("P2: editing Browser E2E workflow selects its dedicated regression", () => {
+  const out = chooseTests([".github/workflows/browser-e2e.yml"], available);
+  assert.equal(out.full, false);
+  assert.ok(out.selected.includes("tests/browser-e2e-workflow.test.mjs"));
+});
+
+test("P2: unknown workflow changes conservatively run the full unit suite", () => {
+  const out = chooseTests([".github/workflows/new-job.yml"], available);
+  assert.equal(out.full, true);
+  assert.equal(out.selected.length, available.length);
+});
+
+test("deployment script changes select the full deployment safety regressions", () => {
+  const out = chooseTests(["deployment/deploy-safe.sh"], available);
+  assert.ok(out.selected.includes("tests/deploy-safe.test.mjs"));
 });
 
 test("toolchain changes force the complete unit suite even on PRs", () => {
