@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-04 po sloučení R2d.3i.2 (#217); rozpracováno R2d.3j.1 (staging-only čtení prošlých, dnešních a nadcházejících deadline).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-04 po sloučení R2d.3j.1 (#218); rozpracováno R2d.3j.2 (default-off HTTP read deadline-only oken).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -214,6 +214,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3h.2 (#215):** staging-only a default-off HTTP preflight/PATCH complete/reopen a read-only potvrzení příkazu; aktuální write ACL, samostatné procesy, ochrana session a Area. Produkční zápis stále vypnutý.
 - **Sloučeno R2d.3i.1 (#216):** interní staging-only idempotentní datumové příkazy `dueOn` se samostatnými potvrzeními, aktuální Area write ACL, CAS a anonymním antirollback auditem. Bez HTTP a produkčních zápisů.
 - **Sloučeno R2d.3i.2 (#217):** samostatný default-off HTTP GET/PATCH `dueOn` a read-only POST ověření příkazu; striktní identita, Origin/protokol, child procesy a live task/parent/Area guard. Bez UI a produkčního nasazení.
-- **R2d.3j.1 (probíhá):** interní a kanonicky autorizované čtení *pouze společných deadline* v oknech overdue/due-today/upcoming, s explicitním lokálním kalendářním dnem, limitovaným horizontem 90 dní, Area ACL a Můj plán přiřazením, stabilní revizí a stránkováním. Je to základ budoucích pohledů, **ne plnohodnotné Today/Upcoming**: osobní `when`, časové bloky a kalendář se modelují odděleně. Bez HTTP/UI, migrace či aktivace.
+- **Sloučeno R2d.3j.1 (#218):** interní kanonicky autorizované deadline-only `overdue / due-today / upcoming` výběry ve stagingu, 90denní limit, Area ACL, přiřazení Můj plán, stabilní revize a stránkování. Bez HTTP/UI a osobního `when`.
+- **R2d.3j.2 (probíhá):** nezávisle default-off HTTP `GET /api/target-staging/task-temporal/due-window` s explicitním datumovým filtrem, podepsaným identitně a filtrům vázaným cursorem, přísným DTO allowlistem, izolovaným child procesem a LIVE Area+session release guardem. Stále pouze společné termíny `dueOn`, nikoli kompletní Today/Upcoming nebo uživatelské `when`; bez UI, produkčního přepnutí či zápisu.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
