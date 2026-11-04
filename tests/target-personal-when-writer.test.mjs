@@ -95,7 +95,7 @@ test("strict command: no actor or timezone; Gregorian date or null only",()=>{
     {timezone:"Europe/Prague"}]){
     assert.equal(validTargetStagingPersonalWhenCommand({...c,...extra}),false);
   }
-  for(const wrong of [{expectedPrivateEpoch:-1},{expectedPrivateEpoch:1.2},
+  for(const wrong of [{expectedRevision:undefined},{expectedPrivateEpoch:-1},{expectedPrivateEpoch:1.2},
     {expectedPlanRevision:-1},{expectedPlanRevision:"0"},{commandId:"x"}]){
     assert.equal(validTargetStagingPersonalWhenCommand({...c,...wrong}),false);
   }
@@ -105,13 +105,13 @@ test("private set/update/clear is atomic, per-user and does not modify shared du
   const before=fx.db.prepare("SELECT revision,due_on AS dueOn FROM tasks WHERE id='p-alice'").get();
   const set=command(fx,token,"alice","p-alice","2026-11-04");
   assert.deepEqual(fx.authority.changePersonalWhen(token,set),{ok:true});
-  assert.deepEqual(state(fx,"alice","p-alice"),{whenOn:"2026-11-04",revision:0});
+  assert.deepEqual({...state(fx,"alice","p-alice")},{whenOn:"2026-11-04",revision:0});
   assert.equal(epoch(fx,"alice"),1);
   assert.deepEqual(fx.authority.changePersonalWhen(token,set),{ok:true,replayed:true});
   assert.equal(epoch(fx,"alice"),1);
   const next=command(fx,token,"alice","p-alice","2026-11-05");
   assert.deepEqual(fx.authority.changePersonalWhen(token,next),{ok:true});
-  assert.deepEqual(state(fx,"alice","p-alice"),{whenOn:"2026-11-05",revision:1});
+  assert.deepEqual({...state(fx,"alice","p-alice")},{whenOn:"2026-11-05",revision:1});
   assert.equal(epoch(fx,"alice"),2);
   const clear=command(fx,token,"alice","p-alice",null);
   assert.deepEqual(fx.authority.changePersonalWhen(token,clear),{ok:true});
