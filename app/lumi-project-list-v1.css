@@ -156,10 +156,10 @@
     overflow-wrap: anywhere;
   }
   .appShell .taskRowList .v1ProjectRow .v1ProjectDrag {
-    flex: 0 0 28px;
+    flex: 0 0 44px;
     display: grid;
     place-items: center;
-    min-width: 28px;
+    min-width: 44px;
     opacity: .45;
   }
   .appShell .taskRowList .v1ProjectRow:focus-within .v1ProjectDrag { opacity: 1; }
