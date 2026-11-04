@@ -287,7 +287,11 @@ export function useLumiApp() {
   const inspectionVersion = useRef(0);
   const openProjectIdRef = useRef(openProjectId);
   openProjectIdRef.current = openProjectId;
-  // History markers may restore only a project that is still visible in the authorized active scope.
+  // popstate is registered once; always resolve its target against the latest
+  // authenticated local snapshot and active legacy scope, not mount-time state.
+  const latestItemsRef = useRef(items);
+  latestItemsRef.current = items;
+  const selectWorkspaceRef = useRef<(workspaceId: string) => void>(() => undefined);
   const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
   inspectorSelectionRef.current = selected;
@@ -1556,11 +1560,15 @@ export function useLumiApp() {
       const nextView = views.includes(next) || next === "Settings" ? next : "Home";
       setViewState(nextView);
       // Canonical list URLs always show the list: stale history.state is ignored.
-      // An opaque URL ID is a locator, not an authorization token.
+      // Reuse startup's legacy scope resolver so a Back/Forward destination in
+      // a different, still-known workspace can be restored safely. URL IDs
+      // never grant access; UI-09 replaces this with server-authorized reads.
       const target = targetFromSearch(window.location.search, addressableViews, nextView);
-      const candidate = nextView === "Projects" && target?.kind === "project" ? target.id : null;
-      setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
-        ? candidate : null);
+      const destination = nextView === "Projects" && target?.kind === "project"
+        ? resolveLegacyProjectLink(latestItemsRef.current, target.id, activeWorkspaceRef.current)
+        : null;
+      if (destination?.selectWorkspaceId) selectWorkspaceRef.current(destination.selectWorkspaceId);
+      setOpenProjectId(destination?.projectId ?? null);
       // Nothing that belongs to the view being left may stay open over the next one.
       answerConfirm(false);
       setCapture(false);
@@ -1896,6 +1904,9 @@ export function useLumiApp() {
     setWorkspaceMenuOpen(false);
     closeDetail();
   }
+  // The browser history handler must use today's selection callback rather
+  // than one closed over by its mount-only listener.
+  selectWorkspaceRef.current = selectWorkspace;
 
   function selectWriteWorkspace(workspaceId: string) {
     if (workspaceId !== writeWorkspaceId) {
