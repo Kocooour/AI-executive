@@ -6,7 +6,8 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, projectIdFromAddress, searchForTarget, searchForView, targetFromSearch, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
+import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -384,15 +385,18 @@ export function useLumiApp() {
     if (authState !== "ready") answerConfirm(false);
   }, [authState]);
   const sessionChannel = "ai-executive-session";
-  // Any change of view leaves the project page: Projects then shows its list.
-  // A page that pushed a history step is left by going back one step first (no duplicate list entry stays behind); the view
-  // chosen meanwhile is applied when that step has been taken (see followAddress).
-  const pendingView = useRef<string | null>(null);
+  // Explicit navigation away from a project creates its own history step.
+  // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string) {
-    if (openProjectIdRef.current && window.history.state?.lumiProject) {
-      pendingView.current = next;
-      window.history.back();
-      return;
+    const exit = viewExitFromProject({
+      currentSearch: window.location.search, currentProjectId: openProjectIdRef.current,
+      nextView: next, knownViews: addressableViews, startView: startupView,
+    });
+    if (exit) {
+      try {
+        window.history.pushState(null, "", `${window.location.pathname}${exit.search}`);
+        addressedView.current = next; // The URL was updated here; do not push again in the effect.
+      } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
     setOpenProjectId(null);
@@ -1492,11 +1496,13 @@ export function useLumiApp() {
     if (deepLinkHandled.current || (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
     const route = targetFromSearch(window.location.search, addressableViews, startupView);
     if (route?.kind === "project") {
-      const project = items.find((item) => item.type === "project" && item.id === route.id &&
-        item.workspaceId === activeWorkspaceId);
-      if (project) {
+      const destination = resolveLegacyProjectLink(items, route.id, activeWorkspaceId);
+      if (destination) {
+        // Direct links name a project, not a workspace. Within the owner's legacy
+        // store select its known workspace, but preserve "all" if already selected.
+        if (destination.selectWorkspaceId) selectWorkspace(destination.selectWorkspaceId);
         setViewState("Projects");
-        setOpenProjectId(project.id);
+        setOpenProjectId(destination.projectId);
       } else if (syncStatus !== "synced" && syncStatus !== "offline") {
         return; // Do not mistake an incomplete initial load for a missing project.
       }
@@ -1547,14 +1553,12 @@ export function useLumiApp() {
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
       addressedView.current = next;
-      const chosen = pendingView.current;
-      pendingView.current = null;
-      const nextView = chosen ?? (views.includes(next) || next === "Settings" ? next : "Home");
+      const nextView = views.includes(next) || next === "Settings" ? next : "Home";
       setViewState(nextView);
-      // The address survives reload; neither the URL nor old history.state authorizes access.
-      const candidate = !chosen && nextView === "Projects"
-        ? projectIdFromAddress(window.location.search, window.history.state?.lumiProject, addressableViews, nextView)
-        : null;
+      // Canonical list URLs always show the list: stale history.state is ignored.
+      // An opaque URL ID is a locator, not an authorization token.
+      const target = targetFromSearch(window.location.search, addressableViews, nextView);
+      const candidate = nextView === "Projects" && target?.kind === "project" ? target.id : null;
       setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
         ? candidate : null);
       // Nothing that belongs to the view being left may stay open over the next one.
