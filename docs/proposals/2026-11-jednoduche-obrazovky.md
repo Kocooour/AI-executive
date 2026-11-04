@@ -26,7 +26,7 @@ Přímý odkaz na projekt, úkol či poznámku obsahuje neprůhledný identifik�
 
 ~~~text
 Můj plán                    [Vše ▾]           Hledat  ✦  ＋
-Dnes · Po 3. 11.
+Dnes · St 4. 11. 2026
 
   [jemně zelený blok – bez viditelného názvu Oblasti]
   □  Zajistit nabíjení v Nových Hamrech
@@ -42,7 +42,7 @@ Dnes · Po 3. 11.
 
   ✦  Návrh Lumi – Přesunout nabídku?            Posoudit ›
 
-Zítra · Út 4. 11.
+Zítra · Čt 5. 11. 2026
   ...
 ────────────────────────────────────────────────────────
 Můj plán            Kalendář             Projekty            Více
@@ -52,13 +52,13 @@ Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec
 
 ## Kalendář: na mobilu vždy jeden den a datové bublinky
 
-Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** („Po“ nad „3“, „Út“ nad „4“ atd.). **Zvolený den je výrazně fialově zvýrazněný i v minulosti. Nevybrané uplynulé dny jsou tlumeně šedé včetně zkratky dne, čísla data i jemného podkladu**, podobně jako dokončené úkoly, ale **neoznačuje to jejich události za dokončené**. Dnešek a budoucí dny mají výraznější neutrální kontrast; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
+Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** (např. v listopadu 2026 „Po“ nad „2“, „Út“ nad „3“ a „St“ nad „4“). **Zvolený den je výrazně fialově zvýrazněný i v minulosti. Nevybrané uplynulé dny jsou tlumeně šedé včetně zkratky dne, čísla data i jemného podkladu**, podobně jako dokončené úkoly, ale **neoznačuje to jejich události za dokončené**. Dnešek a budoucí dny mají výraznější neutrální kontrast; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
 
 ~~~text
 Kalendář                            Dnes   ⋯
    Po     Út     St     Čt     Pá     So     Ne
-   (3)     4      5      6      7      8      9
-    ↑ minulý zvolený den = fialový, ostatní minulé = šedé
+    2      3     (4)     5      6      7      8
+                 ↑ St 4. 11. 2026 = vybraný fialový den; Po 2. a Út 3. = šedé
 
 09:00 ────────────────────────────────
 10:00  [Standup – Lumi · 10:00–10:30]
