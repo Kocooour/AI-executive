@@ -1,0 +1,130 @@
+{
+  "name": "Lumi Design v1.0",
+  "version": "1.0.0",
+  "approvedOn": "2026-11-04",
+  "status": "approved-target-not-runtime",
+  "authority": [
+    "../UX-UI.md",
+    "../PRODUCT.md"
+  ],
+  "implementationNote": "Reference palette and component state semantics only. The existing tokens.json and generated tokens.css reflect legacy runtime. Promote these targets into runtime tokens through a separately reviewed UI implementation PR and accessibility tests; do not manually edit generated CSS.",
+  "color": {
+    "surface": {
+      "background": "#FFFFFF",
+      "textPrimary": "#0F172A",
+      "textSecondary": "#475569",
+      "neutralSurface": "#F8FAFC"
+    },
+    "readScope": {
+      "all": {
+        "label": "Vše",
+        "base": "#8B5CF6",
+        "accessibleTextOnWhite": "#6D28D9"
+      },
+      "personal": {
+        "label": "Osobní",
+        "base": "#16A34A",
+        "accessibleTextOnWhite": "#166534"
+      },
+      "shared": {
+        "label": "Sdílené",
+        "base": "#2563EB",
+        "accessibleTextOnWhite": "#1D4ED8"
+      }
+    },
+    "areaGroupLight": {
+      "personal": "#DCFCE7",
+      "work": "#DBEAFE",
+      "family": "#FCE7F3"
+    },
+    "attention": {
+      "referenceRed": "#EF4444",
+      "referenceOrange": "#F59E0B",
+      "contrastSafeStrokeRedOnLight": "#B91C1C",
+      "contrastSafeStrokeOrangeOnLight": "#B45309",
+      "neutralStroke": "#64748B",
+      "meaning": "outline only; empty, never checkmark"
+    },
+    "completed": {
+      "referenceMutedGray": "#94A3B8",
+      "accessibleFillOnLight": "#64748B",
+      "checkmark": "#FFFFFF",
+      "text": "#475569",
+      "meaning": "gray filled control with checkmark and subdued title"
+    },
+    "proposal": {
+      "accent": "#8B5CF6",
+      "surface": "#F3E8FF",
+      "label": "Návrh Lumi",
+      "icon": "star",
+      "requiresApproval": true
+    }
+  },
+  "shape": {
+    "taskCompletion": "square",
+    "projectCompletion": "circle",
+    "incomplete": "outline-no-check",
+    "attention": "colored-outline-no-fill-no-check",
+    "completed": "gray-fill-with-check"
+  },
+  "typography": {
+    "fontStack": "-apple-system, BlinkMacSystemFont, SF Pro Text, SF Pro Display, system-ui, sans-serif",
+    "taskAndProjectTitle": {
+      "sizePx": 17,
+      "weight": 650
+    },
+    "sectionTitle": {
+      "sizePx": 20,
+      "weight": 700
+    },
+    "bodyDetail": {
+      "sizePx": 14,
+      "weight": 500
+    }
+  },
+  "mobile": {
+    "bottomNavigation": [
+      "Můj plán",
+      "Kalendář",
+      "Projekty",
+      "Více"
+    ],
+    "globalScope": [
+      "Vše",
+      "Osobní",
+      "Sdílené"
+    ],
+    "defaultLanding": "Můj plán",
+    "searchPlacement": "header",
+    "calendar": {
+      "layout": "single-day-only",
+      "dateStrip": "weekday-abbreviation-above-date-bubble",
+      "pastUnselected": "muted-gray",
+      "selected": "purple-even-if-past",
+      "pastDateDoesNotMeanEventCompleted": true
+    }
+  },
+  "projects": {
+    "areaGroupHeadingsVisible": false,
+    "areaGroupSoftBackground": true,
+    "progressInList": false,
+    "taskCountInList": false,
+    "areaBadgeInList": false,
+    "titleMatchesTask": true
+  },
+  "myPlan": {
+    "areaGroupHeadingsVisible": false,
+    "areaGroupSoftBackground": true,
+    "perTaskAreaBadgeVisible": false,
+    "personalAssignedTasksOnly": true
+  },
+  "accessibility": {
+    "minTouchTargetPx": 44,
+    "normalTextContrast": 4.5,
+    "nonTextContrast": 3,
+    "doNotConveyMeaningOnlyByColor": true,
+    "accessibleGroupNamesRequired": true,
+    "scopeNeverGrantsWrite": true,
+    "darkModeNeedsVerifiedTokensBeforeShip": true
+  }
+}

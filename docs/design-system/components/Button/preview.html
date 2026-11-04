@@ -1,21 +1,18 @@
-<!-- @dsCard group="Akce" height=150 subtitle="Primární · Sekundární · Textové · Destruktivní" -->
+<!-- @dsCard group="Akce" height=170 subtitle="Lumi v1: fialová primární akce · sekundární · destruktivní" -->
 <link rel="stylesheet" href="../../tokens.css">
-<div class="row">
+<div class="lv1buttons" aria-label="Ukázky typů tlačítek">
   <button class="primary">Přidat úkol</button>
   <button class="secondary">Otevřít</button>
-  <button class="text">Odložit</button>
+  <button class="text">Posoudit návrh Lumi</button>
   <button class="danger">Smazat</button>
   <button class="primary" disabled>Schválit</button>
-  <button class="secondary focus">Fokus</button>
 </div>
 <style>
-body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
-.row{display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center}
-button{font:inherit;font-size:13px;font-weight:650;min-height:36px;padding:0 14px;border-radius:var(--radius-md);cursor:pointer}
-button:focus-visible,.focus{outline:2px solid var(--focus-ring);outline-offset:2px}
-.primary{background:var(--accent);color:var(--on-accent);border:0}
-.primary:disabled{opacity:.45;cursor:not-allowed}
-.secondary{background:var(--surface);color:var(--text);border:1px solid var(--control-border)}
-.text{background:none;border:0;color:var(--accent)}
-.danger{background:var(--surface);color:var(--danger);border:1px solid var(--danger)}
+.lv1buttons{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:14px}
+.lv1buttons button{font:inherit;font-size:14px;font-weight:650;min-height:44px;padding:8px 14px;border-radius:10px;cursor:default}
+.lv1buttons .primary{background:#7C3AED;color:white;border:1px solid #6D28D9}
+.lv1buttons .secondary{background:white;color:#0F172A;border:1px solid #94A3B8}
+.lv1buttons .text{background:transparent;color:#6D28D9;border:0}
+.lv1buttons .danger{background:white;color:#B91C1C;border:1px solid #B91C1C}
+.lv1buttons button:disabled{background:#E2E8F0;border-color:#CBD5E1;color:#64748B}
 </style>

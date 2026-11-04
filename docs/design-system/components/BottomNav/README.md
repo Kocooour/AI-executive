@@ -1,14 +1,9 @@
-# BottomNav
+# BottomNav — Lumi Design v1.0 (cílová komponenta)
 
-> Historická dokumentace navigace v1. Rozhodnutí vlastníka 2026-11-03 ji pro cílový telefon nahrazuje jediným rolovatelným kořenovým menu bez spodních záložek a bez „Více“. Cílovou navigaci určuje [UX/UI](../../../UX-UI.md). Níže je popis dřívější komponenty, nikoli nová implementace.
+**Aktuální cílové rozhodnutí 2026-11-04** nahrazuje dřívější krátkodobý návrh kořenového mobilního menu z 3. 11. a historickou pětici Domů / Doručené / Dnes / Kalendář / Více.
 
-Hlavička a spodní navigace na iPhonu (Domů, Doručené, Dnes, Kalendář, Více) a sheet Více (LUMI-UX-009, 012).
-
-**Co dodává volající:** aktivní pohled, aktivní prostor, obsah sheetu Více.
-
-**Pravidla**
-- Ikony a barvy jsou totožné se sidebarem (NavItem): domeček `icon-home`, ↓ `icon-inbox`, ★ `icon-today`, kalendář `icon-calendar`, tři tečky (SVG, vycentrované) neutrální; v sheetu Více také → `icon-upcoming`, krabice `icon-projects`, ◎ `icon-areas`, list `icon-notes`, lupa `icon-search`. Ikony 18 px.
-- Aktivní položka: pozadí `ws-*-soft` aktivního prostoru a tučný popisek. Aktivní je vždy jen jedna; při otevřeném sheetu Více.
-- Prostor: 3px proužek `ws-*` nahoře a dlaždice s názvem v hlavičce (cíl 44 px).
-- Nadpis Dnes nese žlutou hvězdu jako v Things.
-- Sheet Více: úchyt + ✕, dlaždice 44 px s barevnou ikonou. FAB se při otevřeném sheetu skryje. Respektovat `safe-area-inset-bottom`.
+- Na iPhonu je **pevná spodní lišta se čtyřmi cíli**: **Můj plán / Kalendář / Projekty / Více**. Při startu je aktivní Můj plán; Hledat je pouze z horní lišty. Ikony zachovat ze stávajícího Lumi podle významu, ne nahrazovat nahodilými emoji.
+- **Více** otevírá dostupné sekundární pohledy: Domů / Denní brief, Doručené, Dnes, Nadcházející, Poznámky, Oblasti, uložené filtry, integrace, nastavení a nápovědu. Projekty mají vlastní tab a úplný autorizovaný seznam, nikoli umělý limit nebo skrytí v menu Více.
+- Globální filtr **Vše / Osobní / Sdílené** je jiná komponenta než spodní navigace; volba Vše může zahrnovat všechny oprávněné projekty, Můj plán však zůstává osobním seznamem mých závazků.
+- Dotykové cíle nejméně 44 × 44 px, aktivní stav čitelný i bez barvy, fokus/VoiceOver, safe-area inset, klávesnice a reduced motion. Při otevřeném Více zůstává jen jeden aktuální navigační stav; po návratu se obnoví kontext a fokus jen při platných oprávněních.
+- **Stav:** cílový design, nikoli tvrzení o již nasazené komponentě. Věrnost [UX/UI](../../../UX-UI.md) a [design systému](../../README.md); [preview.html](preview.html) ilustruje nový cíl.

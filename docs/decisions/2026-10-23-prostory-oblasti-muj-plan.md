@@ -30,3 +30,13 @@ Výše uvedený **funkční koncept byl vlastníkem schválen**. To samo o sobě
 ## Dodatek 2026-10-26 — změna postupu implementace
 
 Vlastník následně rozhodl, že současná data jsou převážně testovací a **zachování jejich historie nepodmiňuje další vývoj**. Preferuje [čistý start cílového modelu](2026-10-26-cisty-start-d3.md) podle [aktuální roadmapy](../ROADMAP.md) namísto komplikovaných legacy migrací 2a–2c. **Cílové funkční a bezpečnostní požadavky tohoto rozhodnutí zůstávají nezměněné**. Přechod na novou DB není autorizací k odstranění stávajících dat; vyžaduje novou explicitní autorizaci a zálohu. Původní požadavky na historickou migraci jsou nyní podmíněnou cestou pouze při zvolení zachování starých dat.
+
+## Dodatek 2026-11-04 — globální rozsah Vše versus osobní Můj plán
+
+Novější rozhodnutí vlastníka zpřesňuje dřívější slova „Můj plán jako výchozí rozsah“ bez změny dvou datových prostorů, příslušnosti k Oblastem a serverové autorizace:
+
+- **Jediný globální přepínač celé aplikace** má hodnoty **Vše / Osobní / Sdílené**. **Vše** opravdu znamená všechna data, k nimž má přihlášený uživatel platné čtecí oprávnění: jeho soukromé položky a všechny oprávněné sdílené, včetně práce ostatních členů a nepřidělené práce. Neznamená třetí prostor ani neuděluje právo k zápisu.
+- **Můj plán** je **samostatná výchozí mobilní obrazovka**, nikoli hodnota globálního filtru. Přehled dne i při zvoleném Vše obsahuje jen moje soukromé úkoly a mně přidělené aktivní sdílené úkoly; volba Osobní/Sdílené může tuto osobní podmnožinu pouze zúžit. Můj plán tedy neznamená totéž co globální Vše.
+- **Projekty** a ostatní běžné pracovní seznamy používají jeden sdílený globální filtr, nikoli další lokální přepínač Vše. V Projektech zobrazuje **Vše všechny oprávněné projekty**, také ty sdílené, v nichž nemám přidělený úkol; Osobní pouze vlastní soukromé a Sdílené všechny oprávněné sdílené projekty.
+- Zachovány jsou dvě uživatelské datové oblasti/prostory **Osobní** a **Sdílený**, právě jedna Oblast na projekt či samostatný úkol, dědění Oblasti v projektu, bezpečné soukromé Nezařazeno, explicitní souhlas se sdílením a skutečné serverové ACL. Filtr jednotlivé Oblasti vždy jen zužuje vybraný globální rozsah.
+- Schválená mobilní navigace **Můj plán / Kalendář / Projekty / Více** a jednoduchý vizuální návrh Lumi Design v1.0 zůstávají nedotčené. Původní body tohoto dokumentu z 23. 10. jsou historickým rozhodnutím; **při interpretaci globálního výchozího rozsahu a mobilní úvodní obrazovky má tento novější dodatek přednost**. Realizace stále podléhá bezpečnostním a release branám.

@@ -1,15 +1,9 @@
-# NavItem
+# NavItem — Lumi Design v1.0
 
-Položka levého sidebaru na desktopu, ikony a barvy ve stylu Things.
+Položka desktopového sidebaru či přímého navigačního cíle. Zachovat existující významové ikony Lumi a dobrý kontrast/fokus.
 
-**Co dodává volající:** pohled, ikona, popisek, počet, aktivní stav a aktivní prostor.
-
-**Pravidla**
-- Pořadí přímých cílů: Domů, Doručené, Dnes, Nadcházející, Projekty, Kalendář, Poznámky, Oblasti, uložené filtry a všechny oprávněné projekty v právě zvoleném rozsahu ve viditelných rolovatelných skupinách. Hledání je globální v kompaktní liště; technické Agents mohou zůstat v Nastavení. Žádná brána „Více“ ani povinné „Další pohledy“.
-- Ikony 16 px v rámečku 18 px: domeček (SVG, tah 1.6) `icon-home`, ↓ `icon-inbox`, ★ plná hvězda `icon-today`, → `icon-upcoming`, archivní krabice `icon-projects`, ◎ `icon-areas`, list se zahnutým rohem `icon-notes`, kalendářový list s kroužky a dny (SVG) `icon-calendar`, lupa (SVG, tah 1.8) `icon-search`. Stejné ikony a barvy používá mobilní kořenové menu; BottomNav je historická navigace v1.
-- Ikona Poznámek je list papíru – tvarem i barvou (oranžová) se liší od kalendářového listu (zelená).
-- Barvu přiřazovat třídou pohledu, ne `nth-child`.
-- Aktivní položka: výrazné pozadí `ws-*-soft` aktivního prostoru, text `selected-text` tučně (700), počet tmavý. Ikona si ponechává barvu.
-- Text položek `text` (ne `muted`), 14 px – jako v Things.
-
-Cílový desktopový sidebar je přímo rolovatelný a obsahuje všechny oprávněné projekty v právě zvoleném rozsahu i běžné cíle bez brány „Více“. Na telefonu se stejné přístupné položky zobrazují v jednom rolovatelném kořenovém menu; otevřený pohled má Zpět na původní pozici.
+- **Desktop:** přímo rolovatelný sidebar s hlavními a sekundárními cíli, všemi oprávněnými projekty v aktivním globálním **Vše / Osobní / Sdílené**, bez pevného limitu, bez brány „More views“. Globální Search, Lumi Chat a Quick Capture jsou v hlavičce. Projekty mají samostatnou stránku.
+- **Mobil:** neklonovat desktop jako rolovatelné *kořenové* menu. Cíle **Můj plán / Kalendář / Projekty / Více** jsou ve spodní liště; sekundární cesty jsou pod Více, Search nahoře. Při návratu bezpečně obnovovat fokus/scroll/draft.
+- Uživatelské názvy Oblastí a práva nelze bezpečně nahradit barvou rozsahu. Scope barvy = Vše fialová, Osobní zelená, Sdílené modrá; ikony dokončení úkolů/projektů mají oddělenou stavovou sémantiku.
+- Aktivní položka má srozumitelný název a stav `aria-current`, zřetelný fokus, min. 44 px dotykový cíl. Projektové názvy stejné písmo jako úkolové; v projektovém přehledu neukazovat počty/progres.
+- [Statický náhled](preview.html) odpovídá cílovému desktop sidebaru, ne aktuálnímu legacy rozložení ani serverovým právům.

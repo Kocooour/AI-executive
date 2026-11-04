@@ -1,4 +1,7 @@
-# Změny UI
+# Změny UI — historický plán před Lumi Design v1.0
+
+> **Historický audit a návrh 10/2026, nikoli současný cílový kontrakt.** Staré pracovní/rodinné prostory, přepínače, mobilní menu a modrá paleta v tomto dokumentu jsou nahrazeny [Lumi Design v1.0](README.md), [UX/UI](../UX-UI.md) a [produktovým rozhodnutím](../decisions/2026-10-23-prostory-oblasti-muj-plan.md#dodatek-2026-11-04--globální-rozsah-vše-versus-osobní-můj-plán). Záznam pozorování a tehdejšího stavu implementace zůstává kvůli auditovatelnosti; nepřebírat jeho staré akceptační požadavky do nových UI PR.
+
 
 > **Historický záznam navigace v1 a starších náhledů Home.** Pro cílové Home platí přístupné Proč? a pro cílovou navigaci jedno rolovatelné menu podle [UX/UI](../UX-UI.md); dřívější věty o druhém řádku s časem u každé karty a sheetu Více už nejsou normativní.
 
