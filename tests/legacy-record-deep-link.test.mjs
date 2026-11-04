@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { resolveLegacyRecordLink } = await import("../lib/legacy-record-deep-link.ts");
+const { resolveLegacyRecordLink, legacyRecordBelongsToProject } = await import("../lib/legacy-record-deep-link.ts");
 
 const records = [
   { id: "workspace:personal", type: "workspace", workspaceId: "personal" },
@@ -12,10 +12,13 @@ const records = [
   { id: "n", type: "note", workspaceId: "personal" },
   { id: "s", type: "note", workspaceId: "shared", properties: { projectId: "q" } },
   { id: "orphan", type: "task", workspaceId: "deleted" },
+  { id: "p2", type: "project", workspaceId: "personal" },
+  { id: "moved", type: "task", workspaceId: "personal", properties: { projectId: "p" } },
 ];
 const relations = [
   { sourceEntityId: "t", targetEntityId: "p", workspaceId: "personal", relationType: "belongs_to_project" },
   { sourceEntityId: "n", targetEntityId: "p", workspaceId: "personal", relationType: "belongs_to_project" },
+  { sourceEntityId: "moved", targetEntityId: "p2", workspaceId: "personal", relationType: "belongs_to_project" },
 ];
 const task = (id, view = "Today", projectId) =>
   ({ kind: "task", id, view, ...(projectId === undefined ? {} : { projectId }) });
@@ -67,4 +70,26 @@ test("a forged relation from a different workspace never satisfies project ances
   const forged = [{ sourceEntityId: "t", targetEntityId: "p",
     workspaceId: "shared", relationType: "belongs_to_project" }];
   assert.equal(resolveLegacyRecordLink(records, forged, task("t", "Projects", "p"), "personal"), null);
+});
+
+test("current project edges beat stale legacy projectId in both URL and inspector navigation", () => {
+  const moved = records.find((row) => row.id === "moved");
+  assert.ok(moved);
+  assert.equal(legacyRecordBelongsToProject(moved, "p", relations), false);
+  assert.equal(legacyRecordBelongsToProject(moved, "p2", relations), true);
+  assert.equal(resolveLegacyRecordLink(records, relations, task("moved", "Projects", "p"), "personal"), null);
+  assert.deepEqual(resolveLegacyRecordLink(records, relations, task("moved", "Projects", "p2"), "personal"), {
+    record: moved, projectId: "p2", selectWorkspaceId: null,
+  });
+});
+
+test("legacy property-only parent is accepted only with no project edges", () => {
+  const note = records.find((row) => row.id === "s");
+  assert.ok(note);
+  assert.equal(legacyRecordBelongsToProject(note, "q", relations), true);
+  const conflict = [{ sourceEntityId: "s", targetEntityId: "q", workspaceId: "personal", relationType: "belongs_to_project" }];
+  assert.equal(legacyRecordBelongsToProject(note, "q", conflict), false);
+  assert.equal(resolveLegacyRecordLink(records, conflict, { kind: "note", id: "s", view: "Projects", projectId: "q" }, "shared"), null);
+  const duplicate = [relations[0], { ...relations[0] }];
+  assert.equal(legacyRecordBelongsToProject(records[4], "p", duplicate), false);
 });
