@@ -14,10 +14,10 @@ test("view, project, task and note targets encode to stable typed URLs", () => {
     { kind: "note", id: "note-17", view: "Projects", projectId: "project:α" },
   ];
   for (const target of targets) {
-    assert.deepEqual(targetFromSearch(searchForTarget(target, "Home"), views, "Home"), target);
+    assert.deepEqual(targetFromSearch(searchForTarget(target, "Home", views), views, "Home"), target);
   }
-  assert.equal(searchForTarget({ kind: "view", view: "Home" }, "Home"), "");
-  assert.equal(searchForTarget({ kind: "project", id: "p" }, "Home"), "?view=Projects&projectId=p");
+  assert.equal(searchForTarget({ kind: "view", view: "Home" }, "Home", views), "");
+  assert.equal(searchForTarget({ kind: "project", id: "p" }, "Home", views), "?view=Projects&projectId=p");
 });
 
 test("direct project links retain target independent of history.state or session", () => {
@@ -65,8 +65,8 @@ test("the Projects list URL is always the list, regardless of stale history stat
 });
 
 test("an explicit view choice from a project pushes a new step, Back restores the project", () => {
-  const projectUrl = searchForTarget({ kind: "project", id: "p" }, "Home");
-  const homeUrl = searchForTarget({ kind: "view", view: "Home" }, "Home");
+  const projectUrl = searchForTarget({ kind: "project", id: "p" }, "Home", views);
+  const homeUrl = searchForTarget({ kind: "view", view: "Home" }, "Home", views);
   const history = [homeUrl, projectUrl];
   let index = history.length - 1;
   for (const destination of ["Home", "Projects"]) {
@@ -95,6 +95,8 @@ test("an explicit view choice from a project pushes a new step, Back restores th
 test("serializer never emits an invalid project parent context or opaque ID", () => {
   const invalidTargets = [
     { kind: "task", id: "t", view: "Today", projectId: "p" },
+    { kind: "task", id: "t", view: "Unknown" },
+    { kind: "view", view: "Unknown" },
     { kind: "note", id: "n", view: "Notes", projectId: "p" },
     { kind: "task", id: "t", view: "Projects", projectId: "" },
     { kind: "note", id: "n", view: "Projects", projectId: String.fromCharCode(0) },
@@ -103,8 +105,9 @@ test("serializer never emits an invalid project parent context or opaque ID", ()
     { kind: "task", id: "bad" + String.fromCharCode(10), view: "Today" },
   ];
   for (const target of invalidTargets) {
-    assert.throws(() => searchForTarget(target, "Home"), TypeError, JSON.stringify(target));
+    assert.throws(() => searchForTarget(target, "Home", views), TypeError, JSON.stringify(target));
   }
+  assert.throws(() => searchForTarget({ kind: "view", view: "Home" }, "Missing", views), TypeError);
   const valid = { kind: "task", id: "t", view: "Projects", projectId: "p" };
-  assert.deepEqual(targetFromSearch(searchForTarget(valid, "Home"), views, "Home"), valid);
+  assert.deepEqual(targetFromSearch(searchForTarget(valid, "Home", views), views, "Home"), valid);
 });
