@@ -76,7 +76,6 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
       onClick={() => { void inspect(project); }}>
-      <span className="v1ProjectDrag">{dragHandle(project, dragScope)}</span>
       <button type="button" className="v1ProjectStatusButton" data-project-status-control={project.id}
         disabled={!canToggle} aria-pressed={completed} aria-label={canToggle ? changeLabel : `${state}. ${writeHint}`}
         title={canToggle ? changeLabel : writeHint}
@@ -94,6 +93,7 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
         <RecordMarks app={app} entity={project} />
         {error && <span className="v1ProjectError" role="alert">{error}</span>}
       </div>
+      <span className="v1ProjectDrag">{dragHandle(project, dragScope)}</span>
     </article>
   );
 }
