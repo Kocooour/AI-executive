@@ -262,6 +262,7 @@ test("strict child DTO rejects injected metadata, forgery, unsorted or stale dat
         frame.linearization.areas[1]]}},
     {...frame,tasks:[two,one]},
     {...frame,tasks:[one,{...two,taskId:"a"}]},
+    {...frame,tasks:[{...one,areaId:"family-area"},two]},
     {...frame,tasks:[one,{...two,dueOn:"2026-11-05"}]},
     {...frame,tasks:[one,{...two,assignedToMe:false}]},
     {...frame,tasks:[one,{...two,assigneeUserId:"bob"}]},
