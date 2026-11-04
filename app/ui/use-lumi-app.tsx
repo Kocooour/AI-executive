@@ -2471,7 +2471,7 @@ export function useLumiApp() {
       await load();
       if (selected && inspectorSelectionRef.current?.id === selected.id) {
         const refreshed = await db.entities.get(selected.id);
-        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
+        if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed, { navigate: false });
       }
     } catch {
       setSyncStatus("offline");
@@ -2783,7 +2783,7 @@ export function useLumiApp() {
     // to another record or been closed. inspect() also guards delayed context results.
     if (selected && inspectorSelectionRef.current?.id === selected.id) {
       const refreshed = await db.entities.get(selected.id);
-      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed);
+      if (refreshed && inspectorSelectionRef.current?.id === selected.id) await inspect(refreshed, { navigate: false });
     }
   }
   // Inbox decisions are single-use. Every branch, including Discard, validates the latest
@@ -2901,7 +2901,7 @@ export function useLumiApp() {
       if (discarded.record) closeDetail();
       else {
         const refreshed = await db.entities.get(task.id);
-        if (refreshed && inspectorSelectionRef.current?.id === task.id) await inspect(refreshed);
+        if (refreshed && inspectorSelectionRef.current?.id === task.id) await inspect(refreshed, { navigate: false });
       }
     }
   }
