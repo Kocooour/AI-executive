@@ -413,7 +413,7 @@ export function useLumiApp() {
     closeDetail();
     try {
       const marker = { lumiProject: project.id };
-      const projectAddress = `${window.location.pathname}${searchForTarget({ kind: "project", id: project.id }, startupView)}`;
+      const projectAddress = `${window.location.pathname}${searchForTarget({ kind: "project", id: project.id }, startupView, addressableViews)}`;
       const current = targetFromSearch(window.location.search, addressableViews, startupView);
       if (current?.kind === "project" && current.id === project.id) window.history.replaceState(marker, "", projectAddress);
       else window.history.pushState(marker, "", projectAddress);
