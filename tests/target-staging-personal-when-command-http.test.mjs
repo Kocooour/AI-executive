@@ -163,8 +163,8 @@ test("all four flags independently default off, auth and malformed selectors fai
 
 test("private set/update/clear, replay and receipt preserve shared dueOn/task revision",async()=>{
   const fx=fixture(),cookie=owner();
-  const initial=read(fx,
-    "SELECT due_on AS dueOn,revision,status FROM tasks WHERE id='p-alice'");
+  const initial={...read(fx,
+    "SELECT due_on AS dueOn,revision,status FROM tasks WHERE id='p-alice'")};
   const first=await command("p-alice","2028-02-29",cookie);
   assert.deepEqual(await (await call("POST",first,cookie)).json(),{status:"not_recorded"});
   assert.deepEqual(await (await call("PATCH",first,cookie)).json(),{ok:true});
