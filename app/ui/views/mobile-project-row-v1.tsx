@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Entity } from "../../../lib/db";
 import type { ProjectSummary } from "../../../lib/project-summary";
-import { projectPreviewSummary, projectPreviewTone } from "../../../lib/project-list-preview";
+import { projectPreviewCanToggle, projectPreviewSummary, projectPreviewTone } from "../../../lib/project-list-preview";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
 
