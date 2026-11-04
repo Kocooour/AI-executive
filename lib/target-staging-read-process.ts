@@ -9,6 +9,7 @@ import type {
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
 import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
+import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -75,6 +76,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
@@ -723,6 +726,99 @@ export async function readStagingPersonalWhenInChild(
   ]);
   const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
   if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.3m.2: exact private-safe child DTO for global task Vše.
+ * Validate the full Area witness, including Areas with no returned tasks.
+ * The witness is never part of the public HTTP response. */
+export function parseStagingGlobalTaskPage(
+  value:unknown,scope:TargetGlobalTaskScope,limit:number,
+):TargetGlobalTaskPage|null{
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(scope)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const p=value as Record<string,unknown>;
+  if(Object.keys(p).sort().join(",")!==
+      "areaEpochs,hasMore,linearization,ok,revision,scope,tasks"||
+    p.ok!==true||p.scope!==scope||
+    typeof p.revision!=="string"||!REVISION.test(p.revision)||
+    typeof p.hasMore!=="boolean"||!Array.isArray(p.tasks)||
+    p.tasks.length>limit||(p.hasMore&&p.tasks.length!==limit)||
+    !Array.isArray(p.areaEpochs))return null;
+  const tasks:TargetGlobalTask[]=[];
+  const rowAreas=new Map<string,"private"|"shared">();
+  const seen=new Set<string>();
+  for(const raw of p.tasks){
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const t=raw as Record<string,unknown>;
+    const shared=t.areaKind==="shared";
+    const keys="areaId,areaKind,dueOn,id,projectId,status,title"+
+      (shared?",assignedToMe":"");
+    if(Object.keys(t).sort().join(",")!==keys.split(",").sort().join(",")||
+      typeof t.id!=="string"||typeof t.title!=="string"||
+      (t.projectId!==null&&typeof t.projectId!=="string")||
+      typeof t.areaId!=="string"||!t.areaId||
+      (t.areaKind!=="private"&&t.areaKind!=="shared")||
+      (t.status!=="open"&&t.status!=="completed")||
+      (shared&&typeof t.assignedToMe!=="boolean")||
+      (scope==="personal"&&shared)||(scope==="shared"&&!shared)||
+      (t.dueOn!==null&&
+        (typeof t.dueOn!=="string"||temporalCalendarOrdinal(t.dueOn)===null))||
+      seen.has(t.id)||
+      (rowAreas.has(t.areaId)&&rowAreas.get(t.areaId)!==t.areaKind))
+      return null;
+    const prev=tasks[tasks.length-1];
+    if(prev&&Buffer.compare(Buffer.from(prev.id),Buffer.from(t.id))>=0)
+      return null;
+    seen.add(t.id);
+    rowAreas.set(t.areaId,t.areaKind as "private"|"shared");
+    tasks.push({
+      id:t.id,title:t.title,projectId:t.projectId as string|null,
+      areaId:t.areaId,areaKind:t.areaKind as "private"|"shared",
+      status:t.status as "open"|"completed",dueOn:t.dueOn as string|null,
+      ...(shared?{assignedToMe:t.assignedToMe as boolean}:{})
+    });
+  }
+  const linearization=parseLinearization(p.linearization,rowAreas);
+  if(!linearization||!Array.isArray(p.areaEpochs)||
+    p.areaEpochs.length!==linearization.areas.length)return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  for(let i=0;i<p.areaEpochs.length;i++){
+    const raw=p.areaEpochs[i];
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const a=raw as Record<string,unknown>,w=linearization.areas[i];
+    if(Object.keys(a).sort().join(",")!==
+       "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+       a.areaId!==w?.areaId||a.areaKind!==w.areaKind||
+       a.access!==w.access||a.policyRevision!==w.policyRevision||
+       !Number.isSafeInteger(a.contentRevision)||(a.contentRevision as number)<0||
+       !Number.isSafeInteger(a.projectContentRevision)||(a.projectContentRevision as number)<0||
+       (scope==="personal"&&w.areaKind!=="private")||
+       (scope==="shared"&&w.areaKind!=="shared"))return null;
+    if(i>0&&Buffer.compare(
+      Buffer.from(linearization.areas[i-1].areaId),Buffer.from(w.areaId))>=0)
+      return null;
+    areaEpochs.push({
+      areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,
+      contentRevision:a.contentRevision as number,
+      projectContentRevision:a.projectContentRevision as number
+    });
+  }
+  return {scope,tasks,hasMore:p.hasMore as boolean,revision:p.revision,
+    linearization,areaEpochs};
+}
+
+export async function readStagingGlobalTaskPageInChild(
+  config:StagingPersonalReadConfig,scope:TargetGlobalTaskScope,
+  limit:number,offset:number,
+):Promise<TargetGlobalTaskPage|null>{
+  const payload=await runChild(config,"target-staging-global-task-child.mjs",[
+    scope,String(limit),String(offset),
+  ]);
+  const parsed=parseStagingGlobalTaskPage(payload,scope,limit);
+  if(payload!==null&&!parsed)logStagingFailure("global_tasks","invalid_child_dto");
   return parsed;
 }
 
