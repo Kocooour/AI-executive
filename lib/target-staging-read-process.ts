@@ -7,6 +7,7 @@ import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
 } from "./target-task-read-model";
 import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
+import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
@@ -66,6 +67,8 @@ export function createStagingReadRunner(
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
@@ -641,6 +644,77 @@ export async function readStagingTemporalDueWindowInChild(
     payload,scope,window,evaluationDate,throughDate,limit);
   if (payload !== null && !parsed)
     logStagingFailure("temporal_due_window","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.3k.3: strict minimal private planned-day child DTO.
+ * Does not forward privateEpoch / Area witness into the public response. */
+export function parseStagingPersonalWhenPage(
+  value:unknown,window:PersonalWhenWindow,evaluationDate:string|null,
+  throughDate:string|null,limit:number,
+):PersonalWhenPage|null {
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","on-day","upcoming"].includes(window)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const day=evaluationDate===null?null:temporalCalendarOrdinal(evaluationDate);
+  const end=throughDate===null?null:temporalCalendarOrdinal(throughDate);
+  if(window==="all"?(evaluationDate!==null||throughDate!==null):
+     window==="on-day"?(day===null||throughDate!==null):
+       day===null||end===null||end-day<1||end-day>90)return null;
+  const frame=value as Record<string,unknown>;
+  if(Object.keys(frame).sort().join(",")!==
+       "evaluationDate,hasMore,linearization,ok,plans,privateEpoch,revision,throughDate,window"||
+     frame.ok!==true||frame.window!==window||
+     frame.evaluationDate!==evaluationDate||frame.throughDate!==throughDate||
+     typeof frame.revision!=="string"||!REVISION.test(frame.revision)||
+     !Number.isSafeInteger(frame.privateEpoch)||(frame.privateEpoch as number)<0||
+     !Array.isArray(frame.plans)||frame.plans.length>limit||
+     typeof frame.hasMore!=="boolean"||
+     (frame.hasMore&&frame.plans.length!==limit))return null;
+  const linearization=parseLinearization(frame.linearization,new Map());
+  if(!linearization||linearization.areas.length===0||
+    linearization.areas.some(a=>a.areaKind==="shared"&&
+      a.access!=="editor"&&a.access!=="admin"))return null;
+  const plans:PersonalWhenItem[]=[];
+  const taskIds=new Set<string>();
+  for(const input of frame.plans){
+    if(!input||typeof input!=="object"||Array.isArray(input))return null;
+    const p=input as Record<string,unknown>;
+    if(Object.keys(p).sort().join(",")!=="revision,taskId,whenOn"||
+      typeof p.taskId!=="string"||typeof p.whenOn!=="string"||
+      temporalCalendarOrdinal(p.whenOn)===null||
+      !Number.isSafeInteger(p.revision)||(p.revision as number)<0||
+      (window==="on-day"&&p.whenOn!==evaluationDate)||
+      (window==="upcoming"&&
+         !(p.whenOn>(evaluationDate as string)&&p.whenOn<=(throughDate as string))))return null;
+    if(taskIds.has(p.taskId as string))return null;
+    taskIds.add(p.taskId as string);
+    const prev=plans[plans.length-1];
+    if(prev&&(prev.whenOn>p.whenOn||
+       (prev.whenOn===p.whenOn&&
+         Buffer.compare(Buffer.from(prev.taskId),Buffer.from(p.taskId as string))>=0)))
+       return null;
+    plans.push({
+      taskId:p.taskId,whenOn:p.whenOn,revision:p.revision as number,
+    });
+  }
+  return {
+    plans,hasMore:frame.hasMore as boolean,revision:frame.revision,
+    privateEpoch:frame.privateEpoch as number,linearization,
+    window,evaluationDate,throughDate,
+  };
+}
+
+export async function readStagingPersonalWhenInChild(
+  config:StagingPersonalReadConfig,window:PersonalWhenWindow,
+  evaluationDate:string|null,throughDate:string|null,
+  limit:number,offset:number,
+):Promise<PersonalWhenPage|null>{
+  const payload=await runChild(config,"target-staging-personal-when-child.mjs",[
+    window,evaluationDate??"-",throughDate??"-",String(limit),String(offset),
+  ]);
+  const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
+  if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
   return parsed;
 }
 

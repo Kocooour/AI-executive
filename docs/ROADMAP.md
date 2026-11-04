@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-04 po sloučení R2d.3k.1 (#222); rozpracováno R2d.3k.2 (autorizované interní čtení soukromého `when`).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-04 po sloučení R2d.3k.2 (#224); rozpracováno R2d.3k.3 (default-off HTTP čtení soukromého `when` s podepsaným kurzorem).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -217,6 +217,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3j.1 (#218):** interní kanonicky autorizované deadline-only `overdue / due-today / upcoming` výběry ve stagingu, 90denní limit, Area ACL, přiřazení Můj plán, stabilní revize a stránkování. Bez HTTP/UI a osobního `when`.
 - **Sloučeno R2d.3j.2 (#220):** default-off HTTP čtení společných `dueOn` oken s podepsaným kurzorem, child procesem, přísným DTO a live ACL. Bez UI a produkční aktivace.
 - **Sloučeno R2d.3k.1 (#222):** čisté staging schéma v21 pro soukromé `when` per-user, oddělené od `dueOn`, vlastní epochy/ACL, čištění po ztrátě přiřazení. Bez HTTP/UI, migrace a produkční aktivace.
-- **R2d.3k.2 (probíhá):** kanonicky preflightované a actor-authenticated **interní** čtení soukromého plánovacího dne; otevřené vlastní či přiřazené úkoly, plánovací okna all/on-day/upcoming, omezený offset/limit, soukromé revize, přísné ID/when-only DTO a live release ověření soukromé epochy společně se session a Area ACL. Bez veřejného HTTP, přímého zápisu, UI či produkční aktivace. Následuje HTTP čtení s podepsaným cursorem a pak CAS/idempotentní `when` writer.
+- **Sloučeno R2d.3k.2 (#224):** kanonicky preflightované a actor-authenticated interní čtení soukromého `when`; okna all/on-day/upcoming, omezený offset/limit, soukromé revize, přesné ID/when-only DTO a live release ověření soukromé epochy společně se session a Area ACL. Bez HTTP/UI a produkční aktivace.
+- **R2d.3k.3 (probíhá):** samostatně default-off HTTP GET soukromých `when` s explicitním datovým oknem, podepsaným actor/session/filtry vázaným cursorem, přísně validovaným dětským DTO, izolovaným child procesem a live kontrolou soukromé epochy+Area/session. Žádné cizí plánovací údaje, zadání actorId nebo syrového offsetu; bez zápisů, UI nebo produkční aktivace. Další je idempotentní CAS set/clear writer.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
