@@ -1,5 +1,5 @@
 "use client";
-import { eventTaskSpan } from "../../../lib/calendar-decisions";
+import { eventTaskSpan, linkedEventTasks } from "../../../lib/calendar-decisions";
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { calendarOverviewIntersects } from "../../../lib/calendar-overview";
 import { mobileCalendarEventsForDay } from "../../../lib/mobile-calendar-day";
@@ -43,18 +43,28 @@ interface Entry extends TimelineSource {
   minutes?: number;
 }
 
-export function DayTimeline({ app, mode, empty, day }: { app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode; day?: string }) {
-  const { applyDayPlanAction, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEvents, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
-    dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, scopedItems, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion, effectiveBusyCalendarEvents } = app;
+export function DayTimeline({ app, mode, empty, day, dayEvents }: {
+  app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode; day?: string; dayEvents?: CalendarEvent[];
+}) {
+  const { applyDayPlanAction, activeWorkspaceId, writeWorkspaceId, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEvents, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
+    dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion, effectiveBusyCalendarEvents } = app;
   // Today retains its existing semantics. The new mobile-only Calendar prop
   // selects one civil day from the same connected legacy feed.
   const shownDay = mode === "calendar" && day ? day : calendarToday;
   const isCurrentDay = shownDay === calendarToday;
   const selectedDayEvents = useMemo(() =>
-    mode === "calendar" && !isCurrentDay
+    dayEvents ?? (mode === "calendar" && !isCurrentDay
       ? mobileCalendarEventsForDay(calendarEvents, shownDay, calendarTimezone)
-      : calendarDayEventsAll,
-    [mode, isCurrentDay, calendarEvents, calendarDayEventsAll, shownDay, calendarTimezone]);
+      : calendarDayEventsAll),
+    [dayEvents, mode, isCurrentDay, calendarEvents, calendarDayEventsAll, shownDay, calendarTimezone]);
+  const calendarWorkspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // Day-specific API results are separate from Today's global event feed.
+  // Re-resolve converted tasks against their current workspace, or the same
+  // event would reappear as a second standalone event in the selected day.
+  const fetchedLinkedTasks = useMemo(() => dayEvents
+    ? linkedEventTasks(items, calendarWorkspaceId, selectedDayEvents)
+    : null, [dayEvents, items, calendarWorkspaceId, selectedDayEvents]);
+  const dayLinkedTasks = fetchedLinkedTasks ?? calendarEventTasks;
   const selectedBusyEvents = useMemo(() =>
     mode === "calendar" && !isCurrentDay ? effectiveBusyCalendarEvents(selectedDayEvents) : busyCalendarDayEvents,
     [mode, isCurrentDay, effectiveBusyCalendarEvents, selectedDayEvents, busyCalendarDayEvents]);
@@ -76,7 +86,7 @@ export function DayTimeline({ app, mode, empty, day }: { app: LumiApp; mode: "to
     const result: Entry[] = [];
     const taskIds = new Set<string>();
     for (const event of selectedDayEvents) {
-      const task = calendarEventTasks.get(event.id);
+      const task = dayLinkedTasks.get(event.id);
       if (task) {
         // Today shows the task only where it is a Today task (same predicate as the list leaving it out).
         if (mode === "today" && !todayTimelineTaskIds.has(task.id)) continue;
@@ -115,7 +125,7 @@ export function DayTimeline({ app, mode, empty, day }: { app: LumiApp; mode: "to
       }
     }
     return result;
-  }, [mode, todayTimelineTaskIds, calendarDayEvents, selectedDayEvents, calendarEventTasks, calendarTimezone, selectedBusyEvents, isCalendarEventHidden, items, visibleDayPlan, isCurrentDay]);
+  }, [mode, todayTimelineTaskIds, calendarDayEvents, selectedDayEvents, dayLinkedTasks, calendarTimezone, selectedBusyEvents, isCalendarEventHidden, items, visibleDayPlan, isCurrentDay]);
 
   const allDay = useMemo(() => entries.filter((entry) => entry.allDay), [entries]);
   const timed = useMemo(() => entries.filter((entry) => !entry.allDay), [entries]);
@@ -128,8 +138,8 @@ export function DayTimeline({ app, mode, empty, day }: { app: LumiApp; mode: "to
   // Calendar only: today's open tasks that have no time on the axis, each as tall as its estimate.
   // (Today lists them right below, in the working list.)
   const placedTaskIds = new Set(entries.flatMap((entry) => entry.task ? [entry.task.id] : []));
-  const scheduledTasks = isCurrentDay ? todayTasks : scopedItems.filter((item) =>
-    item.type === "task" && item.properties.when === shownDay);
+  const scheduledTasks = isCurrentDay ? todayTasks : items.filter((item) =>
+    item.type === "task" && item.workspaceId === calendarWorkspaceId && item.properties.when === shownDay);
   const untimed = mode === "calendar" ? scheduledTasks.filter((task) =>
     task.type === "task" && task.status === "open" && !placedTaskIds.has(task.id)) : [];
   const planSlots = isCurrentDay ? planSlotsByTask(visibleDayPlan) : new Map();
@@ -163,13 +173,15 @@ export function DayTimeline({ app, mode, empty, day }: { app: LumiApp; mode: "to
         ) : (
           <>
             <p className="dayTimelineNote">{event.allDay ? `${tr("allDay")} · ${display?.detail}` : display?.detail} · {tr("calendarReadOnlyEvent")}</p>
-            <CalendarEventActions app={app} event={event} />
+            <CalendarEventActions app={app} event={event}
+              linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />
             {!calendarEventNeedsQuestion(event) && (
               <button type="button" data-event-create-task={event.id} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>
             )}
           </>
         ))}
-        {entry.kind === "task" && event && <CalendarEventActions app={app} event={event} />}
+        {entry.kind === "task" && event && <CalendarEventActions app={app} event={event}
+          linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />}
         {entry.kind === "task" && entry.task?.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={entry.task} />}
         {entry.kind === "plan" && (
           <div className="timeMenuActions">
