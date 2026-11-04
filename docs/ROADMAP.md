@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-04: paralelní plán UI-01 až UI-10 po revizi stávající aplikace a schváleném UI kontraktu [#204](https://github.com/Kocooour/AI-executive/pull/204); backendově sloučeno R2d.3i.1 (#216), rozpracováno R2d.3i.2 (default-off HTTP změna termínu `dueOn` a ověření příkazu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-04: paralelní plán UI-01 až UI-10 po revizi stávající aplikace a schváleném UI kontraktu [#204](https://github.com/Kocooour/AI-executive/pull/204); backendově sloučeno R2d.3i.2 (#217), rozpracováno R2d.3j.1 (#218, izolovaný selektor deadline oken pro budoucí Today/Upcoming).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | **R0 — Změna strategie** | **Dokumentační rozhodnutí hotové** (#126) | Legacy migrace 2a–2c nejsou blokátorem čistého startu. Inventura skutečných dat, zařízení a integrací zůstává povinnou částí **R4 před cutoverem**. |
 | **R1 — Izolovaný cílový datový model** | **Staging základ implementován** (#127–130) | Nový SQLite bootstrap, read-only kontrola konzistence, Area policy a `my-plan/personal/shared` task read model. Je to testovací vrstva, nikoli dokončená produkční integrace. |
-| **R2 — Identity, ACL, zápisy a sync** | **R2c dokončeno, R2d pokračuje** | Izolovaný staging má identity, Area ACL, revokaci, sync a navazující autorizované čtení/zápisy; **R2d.3i.1 (#216) je sloučeno, R2d.3i.2 probíhá** (viz [aktuální R2d.3](#aktualizace-r2d3-2026-11-03)). Nadále nejde o aktivní produkční API ani UI. R2d musí bezpečně dokončit navazující odvozená data, search/AI a attention/push před integrací R3. |
+| **R2 — Identity, ACL, zápisy a sync** | **R2c dokončeno, R2d pokračuje** | Izolovaný staging má identity, Area ACL, revokaci, sync a navazující autorizované čtení/zápisy; **R2d.3i.2 (#217) je sloučeno, R2d.3j.1 (#218) probíhá** (viz [aktuální R2d.3](#aktualizace-r2d3-2026-11-03)). Nadále nejde o aktivní produkční API ani UI. R2d musí bezpečně dokončit navazující odvozená data, search/AI a attention/push před integrací R3. |
 | **R3 — Integrace cílových rozsahů s UI** | **Neaktivováno; připravovat UI souběžně s R2d** | Čtecí selektor #103 a přepínač #108 existují, ale nejsou bezpečně propojené s běžnou aplikací. UI-01 až UI-08 se mohou vyvíjet odděleně nad legacy/mock adaptérem; teprve UI-09/R3 smí po splnění R2d bariér aktivovat serverově ověřené Můj plán / Osobní / Sdílené. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
@@ -238,6 +238,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3h.1 (#214):** server-only idempotentní complete/reopen s kontrolou write ACL, Area/generace, per-item CAS, potvrzením příkazu a anonymním journal auditem.
 - **Sloučeno R2d.3h.2 (#215):** staging-only a default-off HTTP preflight/PATCH complete/reopen a read-only potvrzení příkazu; aktuální write ACL, samostatné procesy, ochrana session a Area. Produkční zápis stále vypnutý.
 - **Sloučeno R2d.3i.1 (#216):** interní staging-only idempotentní datumové příkazy `dueOn` se samostatnými potvrzeními, aktuální Area write ACL, CAS a anonymním antirollback auditem. Bez HTTP a produkčních zápisů.
-- **R2d.3i.2 (probíhá):** samostatný default-off HTTP GET/PATCH `dueOn` a read-only POST pro potvrzení příkazu; striktní autentizace, Origin/protokol, child procesy a live task/parent/Area guard. Bez UI, osobního `today/when` a produkčního nasazení.
+- **Sloučeno R2d.3i.2 (#217):** samostatný default-off HTTP GET/PATCH `dueOn` a read-only POST pro potvrzení příkazu; striktní autentizace, Origin/protokol, child procesy a live task/parent/Area guard. Bez UI, osobního `today/when` a produkčního nasazení.
+- **R2d.3j.1 (#218, otevřené PR):** staging-only serverový selektor oken sdílených termínů (`overdue`, `due-today`, `upcoming`) s Area/actor ACL a omezeným stránkováním; **nejde** o kompletní Today/Upcoming ani o osobní plánování `when`, HTTP či produkční aktivaci. Následuje samostatný default-off HTTP adaptér a oddělené soukromé plánování.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. **UI-01 až UI-08 lze rozvíjet paralelně s R2d**, ale UI-09/R3 aktivace cílových rozsahů a UI-10/R4 produkční cutover zůstávají blokované příslušnými bezpečnostními a release branami. Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
