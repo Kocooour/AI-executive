@@ -91,7 +91,7 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     const confirm = page.locator("dialog.confirmDialog");
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText("1 nedokončený úkol");
-    await expect(confirm).toContainText("tyto úkoly nezmění");
+    await expect(confirm).toContainText("stav podřízených úkolů nezmění");
     await confirm.getByRole("button", { name: "Zrušit" }).click();
     await expect(urgent).toHaveAttribute("data-project-tone", "danger");
     await circle.click();
