@@ -1,5 +1,10 @@
 /* UI-06a: an opt-in, mobile-only task heading. Legacy inspector remains
    identical on desktop and with NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW off. */
+/* Always retain the title input's DOM parent when the viewport changes.
+   display: contents keeps the legacy title layout outside the mobile preview. */
+.inspectorDetail .taskPreviewTitleRow {
+  display: contents;
+}
 @media (max-width: 700px) {
   .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewTitleRow {
     display: grid;
