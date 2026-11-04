@@ -5,7 +5,7 @@
 ## Společná grafika
 
 - Bílé plochy, jemná pastelová výplň skupin, střídmé zaoblení a stíny, minimum rámů. Výrazné tmavé názvy úkolů a projektů, sekundární text stále čitelný. Písmo SF Pro / systémové, H1 přibližně 32 px, sekce 20 px, **úkol i projekt 16–17 px se shodnou tučností 650**, podrobnosti 13–14 px. Dotykové cíle nejméně 44 × 44 px.
-- **Rozsahy v navigaci:** Můj plán fialová **#8B5CF6**, Osobní zelená **#16A34A**, Sdílené modrá **#2563EB**. Můj plán není třetí prostor ani cíl zápisu; autorizace se nemění volbou barvy.
+- **Rozsahy v navigaci:** **Vše** fialová **#8B5CF6**, **Osobní** zelená **#16A34A**, **Sdílené** modrá **#2563EB**. Vše znamená opravdu **veškerý obsah s platným oprávněním ke čtení** napříč Osobním a Sdíleným, nikoli jen přidělené úkoly. **Můj plán** zůstává úvodní osobní pracovní obrazovkou (vlastní soukromé + mně přidělené sdílené úkoly) s identitou Lumi, **není další hodnotou globálního filtru** ani třetím prostorem či zápisovým cílem; barva nikdy nepřidává práva.
 - **Oblasti ve skupinách:** osobní jemná zelená **#DCFCE7**, práce jemná modrá **#DBEAFE**, rodina jemná růžová **#FCE7F3**. Jiné Oblasti mají konzistentně jemné pozadí. Barva Oblasti **nikdy** nerozhoduje o barvě dokončovací ikony.
 - **Nedokončená běžná položka:** neutrální **prázdný obrys bez fajfky**. Priorita / vyžaduje pozornost: **pouze červená #EF4444 nebo oranžová #F59E0B kontura prázdné ikony, bez výplně a bez fajfky**, se srozumitelným důvodem v dostupném textu. Hotovo: **šedá #94A3B8 s fajfkou**, text i ikona tlumené a případně přeškrtnuté, ale stále dostatečně kontrastní. **Žádný stav „úkol v akci“ či „rozpracováno“.**
 - **Úkol = vždy čtverec. Projekt = vždy kruh.** Platí pro otevřený, urgentní i hotový stav a pro všechny obrazovky. Dokončený projekt je **šedý kruh s fajfkou**, ne čtverec; nedokončený projekt nikdy nemá fajfku. Kruh projektu umožňuje explicitní dokončení projektu, nikoli automatické skryté dokončení všech jeho úkolů.
@@ -14,7 +14,7 @@
 
 ## Navigace
 
-Mobil začíná obrazovkou **Můj plán**, pevné spodní menu má právě čtyři položky: **Můj plán · Kalendář · Projekty · Více**. **Hledání není pátou záložkou**, je dostupné v horní liště. Horní volba rozsahu umožní **Můj plán / Osobní / Sdílené**. Quick Capture, Lumi Chat a oznámení zůstávají snadno dosažitelné.
+Mobil začíná obrazovkou **Můj plán**, pevné spodní menu má právě čtyři položky: **Můj plán · Kalendář · Projekty · Více**. **Hledání není pátou záložkou**, je dostupné v horní liště. Horní **globální přepínač rozsahu má volby `Vše / Osobní / Sdílené`**, stav je stejný v Projektech a dalších pracovních pohledech. Můj plán má jako úvodní pohled vlastní osobní výběr položek; volby Osobní/Sdílené ho pouze zužují, při Vše zůstává souhrnem **mých** úkolů. Quick Capture, Lumi Chat a oznámení zůstávají snadno dosažitelné.
 
 **Více** je rolovatelný seznam sekundárních cílů: Domů / Denní brief, Doručené, Dnes, Nadcházející, Poznámky, Oblasti, uložené filtry, e-maily, integrace, nastavení a pomoc. **Projekty** mají vlastní záložku a úplný autorizovaný seznam bez umělého limitu. Desktop zachová trvalý levý sidebar, horní hledání a chat, samostatnou stránku projektu a pravý inspektor úkolu/poznámky; mobilní spodní lišta se na desktop nepřenáší.
 
@@ -25,7 +25,7 @@ Přímý odkaz na projekt, úkol či poznámku obsahuje neprůhledný identifik�
 **Dnes** a **Zítra** jsou jasně oddělené časové části. Úkoly jsou uvnitř rozdělené podle Oblastí do **jemně podbarvených bloků, bez jejich viditelných názvů a bez štítků Oblasti u úkolů**. Oblast lze otevřít v detailu a čtečka ji oznamuje jako název skupiny; sdílení či cílový zápis vždy zobrazuje textově plné oprávnění, protože barva sama nestačí.
 
 ~~~text
-Můj plán ▾                                     Hledat  ✦  ＋
+Můj plán                    [Vše ▾]           Hledat  ✦  ＋
 Dnes · Po 3. 11.
 
   [jemně zelený blok – bez viditelného názvu Oblasti]
@@ -75,7 +75,7 @@ Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace j
 
 ## Projekty: pastelové skupiny bez nadpisů, stejné písmo, kruhové stavy
 
-V Projektech je **tentýž globální přepínač rozsahu Můj plán / Osobní / Sdílené**, nikoli vlastní další filtr **Vše / Osobní / Sdílené**. Při vstupu do Projektů se zachová volba z ostatních pracovních pohledů; přepnutí zde aktualizuje globální rozsah a po návratu zůstane zvolený rozsah aktivní. **Můj plán** obsahuje všechny moje soukromé projekty a jen sdílené projekty, v nichž mám alespoň jeden přiřazený aktivní úkol; **Osobní** všechny vlastní soukromé projekty; **Sdílené** všechny projekty ze sdílených Oblastí, kam mám platný přístup (včetně projektů bez mé přidělené práce). Případný filtr konkrétní Oblasti se s tímto rozsahem protíná a nesmí zobrazit více dat, než dovoluje aktuální rozsah a serverové ACL. Stejně jako Můj plán se projekty vizuálně seskupují **podle Oblastí do jemně pastelových bloků bez viditelných nadpisů prostoru či Oblasti**. Oblast i typ prostoru musí být přístupné v detailu, pro čtečku a před citlivým zápisem, i když jsou vizuální štítky skryty.
+V Projektech je **tentýž globální přepínač rozsahu `Vše / Osobní / Sdílené`**, nikoli vlastní druhý filtr. Při vstupu se zachová volba z ostatních pracovních pohledů; přepnutí zde změní globální rozsah a po návratu zůstane aktivní. **Vše** zobrazuje **všechny projekty, k nimž mám platné oprávnění ke čtení**, tedy všechny vlastní soukromé a všechny autorizované sdílené (včetně projektů bez mých přidělených úkolů). **Osobní** zobrazí pouze mé soukromé projekty, **Sdílené** pouze všechny autorizované projekty ve sdílených Oblastech. **Můj plán** je zvláštní úvodní obrazovka s mými soukromými a mně přidělenými sdílenými úkoly, nikoli synonymum `Vše` v Projektech. Případný filtr konkrétní Oblasti se s rozsahem protíná a nesmí zobrazit více dat, než dovoluje globální rozsah a serverové ACL. Stejně jako Můj plán se projekty seskupují do jemně pastelových bloků podle Oblastí bez viditelných nadpisů prostoru nebo Oblasti. Oblast i typ prostoru jsou přístupné v detailu, pro čtečku a před citlivým zápisem, i když jsou vizuální štítky skryté.
 
 Základní projektový řádek: **kruh + název + kontextové menu**. Název používá přesně stejnou **velikost i tučnost** jako úkol v Mém plánu; **počty úkolů, poměry dokončení a štítky Oblastí nejsou v přehledu vidět**. Nanejvýš jedna stručná věta o aktuálním problému / dalším kroku, je-li věcně užitečná. Kruh je bez vazby na prostor: neutrální prázdný, urgentní pouze oranžově/červeně konturovaný prázdný kruh bez výplně a bez fajfky, hotový šedý s fajfkou. Dokončený název je rovněž tlumený. Pozornost má srozumitelný text i pro screen reader.
 
@@ -91,7 +91,7 @@ Projekt otevře samostatnou stránku: název, stav a případný postup **v deta
 
 ## Akceptační kontrola designu
 
-- 390 px, spodní **čtyři záložky**, žádná spodní záložka Hledat, výchozí **Můj plán**.
+- 390 px, spodní **čtyři záložky**, žádná spodní záložka Hledat, výchozí obrazovka **Můj plán**, ale jediný globální filtr **Vše / Osobní / Sdílené**. `Vše` v Projektech zobrazuje všechny skutečně autorizované projekty, zatímco Můj plán i při Vše zachovává osobní pracovní výběr.
 - Můj plán má jen pastelové **nepojmenované** skupiny Oblastí, žádné per-task štítky, čitelné tmavé názvy; čtečka oznamuje Oblast.
 - V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost pouze červenou/oranžovou **konturou bez výplně a bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
 - Projekty mají stejné jemné skupinové podbarvení podle Oblastí jako Můj plán, **bez nadpisů prostoru/Oblasti**, počtů či barevných štítků; typografie shodná s úkolem.
