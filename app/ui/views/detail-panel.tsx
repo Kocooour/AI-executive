@@ -10,7 +10,10 @@ import { NoteEditor } from "./note-editor";
 import { DeferChip } from "./defer-popover";
 import { InboxTriage } from "./inbox-triage";
 import { heldBackReason } from "./held-back";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { mobileDesignV1Preview } from "../navigation";
+import { entityConflicts } from "../../../lib/field-merge";
+import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
 // they start: comparing a new value with the stored one would skip a change back to it (A → B →
@@ -78,6 +81,10 @@ function gmailSource(value: unknown): { accountId: string; messageId: string } |
   return { accountId: item.accountId, messageId: item.messageId };
 }
 
+function TaskPreviewTitle({ children }: { children: ReactNode }) {
+  return <div className="taskPreviewTitleRow">{children}</div>;
+}
+
 export function DetailPanel({ app }: { app: LumiApp }) {
   const {
     titleEdited,
@@ -124,6 +131,27 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     workSession,
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
+  const [mobileViewport, setMobileViewport] = useState(false);
+  useEffect(() => {
+    if (!mobileDesignV1Preview) return;
+    const media = window.matchMedia("(max-width: 700px)");
+    const sync = () => setMobileViewport(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  const selectedTask = selected?.type === "task" ? selected : null;
+  const activeTaskSession = Boolean(selectedTask && workSession?.taskId === selectedTask.id);
+  const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
+  const taskPreviewDueTone = selectedTask ? taskDueTone(selectedTask, today) : "";
+  const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
+    Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
+      unsent.has(selectedTask.id) || heldBack.some((item) => item.id === selectedTask.id) ||
+      entityConflicts(selectedTask).length > 0 || activeTaskSession)));
+  const taskProjectId = selectedTask ? targets(selectedTask.id, "belongs_to_project")[0] : null;
+  const taskProject = selectedTask && taskProjectId
+    ? projects.find((project) => project.id === taskProjectId && project.workspaceId === selectedTask.workspaceId)
+    : null;
   const inspectorRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   // Opening with the keyboard moves focus into the inspector; closing returns it to the
@@ -144,7 +172,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     <>
       {selected && (
         <div className="backdrop inspectorBackdrop" onClick={closeInspector}>
-          <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`} onClick={(e) => e.stopPropagation()}>
+          <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`}
+            data-task-detail-preview={mobileTaskPreview ? "lumi-v1" : undefined}
+            data-task-due-tone={mobileTaskPreview ? taskPreviewDueTone : undefined}
+            data-task-completed={mobileTaskPreview && selectedTask ? selectedTask.status === "completed" : undefined}
+            onClick={(e) => e.stopPropagation()}>
             <button
               className="close inspectorClose"
               type="button"
@@ -154,6 +186,28 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               <span className="inspectorBackLabel">{language === "cs" ? "← Zpět" : "← Back"}</span>
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
+            <TaskPreviewTitle>
+              {mobileTaskPreview && selectedTask && (
+                <button type="button" className="taskPreviewCheck" data-task-preview-check={selectedTask.id}
+                  role="checkbox" aria-checked={selectedTask.status === "completed"}
+                  aria-label={activeTaskSession
+                    ? `${language === "cs" ? "Nejdřív ukončete pracovní blok" : "Finish the work session first"}: ${selectedTask.title}`
+                    : selectedTask.status === "completed"
+                      ? `${tr("reopen")}: ${selectedTask.title}`
+                      : `${tr("complete")}: ${selectedTask.title}${taskPreviewDueTone === "dueOverdue"
+                        ? language === "cs" ? " · Po termínu" : " · Overdue"
+                        : taskPreviewDueTone === "dueSoon"
+                          ? language === "cs" ? " · Blíží se termín" : " · Due soon"
+                          : ""}`}
+                  disabled={!taskPreviewMayToggle}
+                  onClick={() => {
+                    if (!taskPreviewMayToggle) return;
+                    if (selectedTask.status === "completed") void reopenTask(selectedTask);
+                    else void done(selectedTask.id);
+                  }}>
+                  {selectedTask.status === "completed" ? <span aria-hidden="true">✓</span> : null}
+                </button>
+              )}
             <input
               className="titleEdit"
               readOnly={isFallbackArea(selected, app.items)}
@@ -177,6 +231,17 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 }, () => undefined);
               }}
             />
+            </TaskPreviewTitle>
+            {mobileTaskPreview && selectedTask && (
+              <div className="taskPreviewFacts" data-task-preview-facts aria-label={language === "cs" ? "Základní údaje o úkolu" : "Task essentials"}>
+                {typeof selectedTask.properties.when === "string" && selectedTask.properties.when &&
+                  <span>{tr("when")}: <strong>{selectedTask.properties.when}</strong></span>}
+                {typeof selectedTask.properties.deadline === "string" && selectedTask.properties.deadline &&
+                  <span>{tr("deadline")}: <strong>{selectedTask.properties.deadline}</strong></span>}
+                {taskProject &&
+                  <span>{tr("project")}: <strong>{taskProject.title}</strong></span>}
+              </div>
+            )}
             {heldBack.some((entity) => entity.id === selected.id)
               ? <p className="recordState recordHeldBack" role="status">{tr("heldBackDetail").replace("{reason}", () => heldBackReason(app, selected))}</p>
               : unsent.has(selected.id) && <p className="recordState" role="status">{tr("unsentDetail")}</p>}
@@ -707,13 +772,11 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {selected.status === "completed" ? (
+                {(!mobileTaskPreview || activeTaskSession) && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
-                  <>
-                    <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
-                  </>
-                )}
+                  <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
+                ))}
                 <button className="danger" disabled={isFallbackArea(selected, app.items)} onClick={() => remove(selected)}>
                   {tr("delete")}
                 </button>

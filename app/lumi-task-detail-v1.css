@@ -1,0 +1,98 @@
+/* UI-06a: an opt-in, mobile-only task heading. Legacy inspector remains
+   identical on desktop and with NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW off. */
+/* Always retain the title input's DOM parent when the viewport changes.
+   display: contents keeps the legacy title layout outside the mobile preview. */
+.inspectorDetail .taskPreviewTitleRow {
+  display: contents;
+}
+@media (max-width: 700px) {
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewTitleRow {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    color: transparent;
+    font: inherit;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck::before {
+    content: "";
+    grid-area: 1 / 1;
+    width: 23px;
+    height: 23px;
+    border: 2px solid #64748b;
+    border-radius: 5px;
+    background: transparent;
+    box-sizing: border-box;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"][data-task-due-tone="dueOverdue"] .taskPreviewCheck[aria-checked="false"]::before {
+    border-color: #ef4444;
+    box-shadow: inset 0 0 0 1px #991b1b;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"][data-task-due-tone="dueSoon"] .taskPreviewCheck[aria-checked="false"]::before {
+    border-color: #f59e0b;
+    box-shadow: inset 0 0 0 1px #92400e;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck[aria-checked="true"]::before {
+    background: #94a3b8;
+    border-color: #94a3b8;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck > span {
+    grid-area: 1 / 1;
+    z-index: 1;
+    font-size: 16px;
+    font-weight: 750;
+    line-height: 1;
+    color: #172033;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck:disabled {
+    cursor: default;
+    opacity: .65;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewCheck:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewTitleRow .titleEdit {
+    width: 100%;
+    min-width: 0;
+    font-size: 23px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"][data-task-completed="true"] .taskPreviewTitleRow .titleEdit {
+    color: var(--muted);
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewFacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-top: 8px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewFacts strong {
+    font-weight: 600;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskPreviewFacts > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
