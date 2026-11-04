@@ -1,11 +1,9 @@
-# PlanBlock
+# PlanBlock — Lumi Design v1.0
 
-Řádek plánu dne nebo kalendáře, který odliší událost, přijatý blok a návrh (LUMI-UX-001, 004, 012, 013).
+Jedna časová položka v jednodenním mobilním Kalendáři nebo Mém plánu: skutečná událost, potvrzená rezervace či neprovedený návrh Lumi.
 
-**Co dodává volající:** čas, druh `event | confirmed | proposed`, název, trvání; u návrhu `onAccept` a v detailu Jiný čas / Zítra / Neplánovat.
-
-**Pravidla**
-- Událost: výplň `surface-subtle`. Přijatý blok: plný okraj `accent`. Návrh: přerušovaný okraj `proposal` + štítek „Návrh“ (`caption`, text `on-accent-soft` na `accent-soft`).
-- Jeden řádek: čas, název a jediný údaj vpravo (trvání). Důvod („Proč právě teď“) a zdroj dostupnosti v detailu.
-- Kapacita jedním údajem v nadpisu („3 h volno“); bez čerstvého kalendáře se nezobrazí a návrhy nemají čas.
-- Přijetí jde přes stejné schválení jako ProposalCard.
+- **Kalendář na mobilu vždy pouze jeden vybraný den.** Nad osou vodorovné datové bublinky, zkratka dne týdne nad číslem; minulé **nevybrané** šedé, vybraný den fialový i když je minulý; možnost návratu na Dnes. **Bez přepínače 1/3/7.**
+- Událost má ikonu kalendáře a čas, **ne task checkbox**. Úkol převedený z události existuje jako **jeden** čtvercový úkol s vazbou na zdroj; ne jako dva dokončovací řádky. Časové rezervace patří k úkolu.
+- Potvrzená rezervace musí explicitně říkat „Rezervováno“, zatímco navrhovaný blok je viditelně **„Návrh Lumi“**, fialový/hvězda, s možností **Posoudit**. Žádná neodsouhlasená změna se neprezentuje jako provedená.
+- Bez čerstvého zdrojového kalendáře nikdy netvrdit přesné volné hodiny; konflikty, offline, stale a neplatný zdroj mají srozumitelný stav. Skryté události zůstávají dostupné v kalendáři podle osobního rozhodnutí a pravidel busy-time.
+- Tiché pastelové bloky, kontrast, klávesnice, VoiceOver, min. 44px akce. [Preview](preview.html) je referenční statická ukázka bez připojených událostí.
