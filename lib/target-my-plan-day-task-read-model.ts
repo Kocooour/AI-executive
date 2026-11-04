@@ -11,6 +11,7 @@ import type {DatabaseSync} from "node:sqlite";
 import {MAX_SCOPED_READ_AREAS} from "./target-staging-read-limits";
 import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
 import type {TargetReadLinearization} from "./target-task-read-model";
+import type {HomeSummaryAreaEpoch} from "./target-my-plan-home-summary";
 
 export type MyPlanTaskDayWindow="today"|"upcoming";
 export type MyPlanTaskAreaFilter="all"|"personal"|"shared";
@@ -29,10 +30,12 @@ export type MyPlanDayTaskPage={
   evaluationDate:string;throughDate:string|null;
   /** Internal-only: requires a LIVE session+Area+private-epoch check before HTTP. */
   privateEpoch:number;linearization:TargetReadLinearization;
+  /** Full eligible My Plan Area content/policy epochs, for atomic live-release guard. */
+  areaEpochs:HomeSummaryAreaEpoch[];
 };
 type Area={areaId:string;areaKind:"private"|"shared";
   access:"private-owner"|"editor"|"admin";
-  policyRevision:number;contentRevision:number};
+  policyRevision:number;contentRevision:number;projectContentRevision:number};
 type Row=MyPlanDayTask & {plannedRevision:number|null};
 const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -74,7 +77,8 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
     // would lose a revocation/reassignment during pagination.
     const areas=db.prepare(`SELECT a.id AS areaId,a.kind AS areaKind,
         CASE WHEN a.kind='private' THEN 'private-owner' ELSE m.role END AS access,
-        a.policy_revision AS policyRevision,a.content_revision AS contentRevision
+        a.policy_revision AS policyRevision,a.content_revision AS contentRevision,
+        a.project_content_revision AS projectContentRevision
       FROM areas a JOIN workspaces w ON w.id=a.workspace_id
       JOIN identities actor ON actor.id=?
       LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=actor.id
@@ -82,14 +86,12 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
         ((a.kind='private' AND w.kind='personal' AND a.owner_user_id=actor.id)
          OR (a.kind='shared' AND w.kind='shared'
              AND m.role IN ('editor','admin')))
-      AND (?='all' OR (?='personal' AND a.kind='private')
-           OR (?='shared' AND a.kind='shared'))
       ORDER BY a.id COLLATE BINARY LIMIT ?`)
-      .all(request.actorUserId,request.areaFilter,request.areaFilter,
-        request.areaFilter,MAX_SCOPED_READ_AREAS+1) as Area[];
+      .all(request.actorUserId,MAX_SCOPED_READ_AREAS+1) as Area[];
     if(areas.length>MAX_SCOPED_READ_AREAS||
       areas.some(a=>typeof a.areaId!=="string"||!a.areaId||
         !safeInt(a.policyRevision)||!safeInt(a.contentRevision)||
+        !safeInt(a.projectContentRevision)||
         (a.areaKind==="private"&&a.access!=="private-owner")||
         (a.areaKind==="shared"&&!["editor","admin"].includes(a.access))))
       return null;
@@ -165,6 +167,9 @@ export function readAuthorizedMyPlanDayTaskPage(db:DatabaseSync,request:{
       linearization:{actorUserId:request.actorUserId,
         areas:areas.map(a=>({areaId:a.areaId,areaKind:a.areaKind,
           access:a.access,policyRevision:a.policyRevision}))},
+      areaEpochs:areas.map(a=>({areaId:a.areaId,areaKind:a.areaKind,
+        access:a.access,policyRevision:a.policyRevision,
+        contentRevision:a.contentRevision,projectContentRevision:a.projectContentRevision})),
     };
   }catch{return null;}
 }
