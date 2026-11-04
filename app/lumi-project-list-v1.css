@@ -1,0 +1,177 @@
+/* UI-05a: opt-in Projects list for Lumi Design v1.0.
+   The legacy/desktop list and the target Area ACL remain unchanged. */
+.v1ProjectA11yOnly {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 700px) {
+  .projectGroups[data-projects-preview="lumi-v1"] {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+  }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    --v1-area-color: #f1f5f9;
+    display: grid;
+    gap: 0;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--v1-area-color) 72%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--v1-area-color) 42%, var(--line));
+  }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: #dcfce7; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="work"] { --v1-area-color: #dbeafe; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="family"] { --v1-area-color: #fce7f3; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: #f3e8ff; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: #fef3c7; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: #cffafe; }
+  html[data-theme="dark"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    background: color-mix(in srgb, var(--v1-area-color) 16%, var(--surface));
+    border-color: color-mix(in srgb, var(--v1-area-color) 22%, var(--line));
+  }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup > .taskRowList {
+    display: grid;
+    gap: 0;
+    min-width: 0;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-entity-type="project"] {
+    display: flex;
+    align-items: center;
+    min-height: 60px;
+    min-width: 0;
+    padding: 6px 0;
+    margin: 0;
+    gap: 5px;
+    border-radius: 10px;
+    background: transparent !important;
+  }
+  .appShell .taskRowList .v1ProjectRow + .v1ProjectRow {
+    border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectStatusButton {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectStatusButton:disabled {
+    cursor: default;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectCircle {
+    display: grid;
+    place-items: center;
+    width: 23px;
+    height: 23px;
+    border: 2px solid #64748b;
+    border-radius: 50%;
+    background: transparent;
+    color: transparent;
+    font-size: 17px;
+    line-height: 1;
+    font-weight: 750;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-project-tone="warning"] .v1ProjectCircle {
+    border-color: #f59e0b;
+    box-shadow: inset 0 0 0 1px #92400e;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-project-tone="danger"] .v1ProjectCircle {
+    border-color: #ef4444;
+    box-shadow: inset 0 0 0 1px #991b1b;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-project-tone="complete"] .v1ProjectCircle {
+    border-color: #94a3b8;
+    background: #94a3b8;
+    color: #172033;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectMain {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectName {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    font-size: 16.5px;
+    line-height: 1.32;
+    font-weight: 650;
+    color: var(--text) !important;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectName .taskRowOpen {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectSecondary {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-project-tone="danger"] .v1ProjectSecondary {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .appShell .taskRowList .v1ProjectRow[data-project-tone="complete"] .v1ProjectName {
+    color: var(--muted) !important;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectError {
+    font-size: 12px;
+    color: var(--danger);
+    overflow-wrap: anywhere;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectDrag {
+    flex: 0 0 44px;
+    display: grid;
+    place-items: center;
+    min-width: 44px;
+    opacity: .45;
+  }
+  .appShell .taskRowList .v1ProjectRow .v1ProjectDrag .dragHandle {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex-basis: 44px;
+  }
+  .appShell .taskRowList .v1ProjectRow:focus-within .v1ProjectDrag { opacity: 1; }
+  .appShell .taskRowList .v1ProjectStatusButton:focus-visible,
+  .appShell .taskRowList .v1ProjectName .taskRowOpen:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+}

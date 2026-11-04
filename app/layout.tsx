@@ -9,6 +9,7 @@ import "./lumi-task-row.css";
 import "./lumi-mobile-more.css";
 import "./lumi-inspector.css";
 import "./lumi-project-overview.css";
+import "./lumi-project-list-v1.css";
 import "./lumi-capture-b3.css";
 import "./lumi-today.css";
 import "./lumi-day-timeline.css";
