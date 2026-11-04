@@ -8,7 +8,7 @@ import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
 import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewExitFromProject, viewFromSearch } from "../../lib/view-url";
 import { resolveLegacyProjectLink } from "../../lib/legacy-project-deep-link";
-import { resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
+import { legacyRecordBelongsToProject, resolveLegacyRecordLink } from "../../lib/legacy-record-deep-link";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -295,6 +295,9 @@ export function useLumiApp() {
   const latestRelationsRef = useRef(relations);
   latestRelationsRef.current = relations;
   const inspectRef = useRef<(item: Entity, options?: { navigate?: boolean }) => Promise<void>>(async () => undefined);
+  // Cross-workspace URL inspection starts only after React commits the new
+  // workspace. An eager inspect would lose context at the scope-change guard.
+  const pendingRecordRef = useRef<{ kind: "task" | "note"; id: string; view: string; projectId?: string; workspaceId: string } | null>(null);
   const selectWorkspaceRef = useRef<(workspaceId: string) => void>(() => undefined);
   const visibleProjectsRef = useRef<Entity[]>([]);
   const inspectorSelectionRef = useRef(selected);
@@ -306,6 +309,21 @@ export function useLumiApp() {
     inspectionVersion.current += 1;
     setContext(null);
   }, [activeWorkspaceId]);
+  useEffect(() => {
+    const pending = pendingRecordRef.current;
+    if (!pending || pending.workspaceId !== activeWorkspaceId) return;
+    pendingRecordRef.current = null;
+    // A queued URL is only a locator. Resolve again using the committed
+    // workspace and latest records; navigation, deletion or a changed parent
+    // must never revive a stale inspector.
+    const target = targetFromSearch(window.location.search, addressableViews, startupView);
+    if ((target?.kind !== "task" && target?.kind !== "note") ||
+        target.id !== pending.id || target.kind !== pending.kind || target.view !== pending.view ||
+        target.projectId !== pending.projectId) return;
+    const destination = resolveLegacyRecordLink(items, relations, target, activeWorkspaceId);
+    if (destination && !destination.selectWorkspaceId)
+      void inspectRef.current(destination.record, { navigate: false });
+  }, [activeWorkspaceId, items, relations, startupView]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
   const contextClaimLoadVersion = useRef(0);
@@ -396,6 +414,7 @@ export function useLumiApp() {
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
   function setView(next: string) {
+    pendingRecordRef.current = null;
     const exit = viewExitFromProject({
       currentSearch: window.location.search, currentProjectId: openProjectIdRef.current,
       nextView: next, knownViews: addressableViews, startView: startupView,
@@ -442,16 +461,14 @@ export function useLumiApp() {
     }
   }
   async function inspect(e: Entity, options: { navigate?: boolean } = {}) {
+    if (options.navigate !== false) pendingRecordRef.current = null;
     if (e.type === "project") { openProjectPage(e); return; }
     // The legacy owner store and selected workspace are the only local read
     // boundaries here; the target model's server authorization arrives in UI-09.
     if (activeWorkspaceRef.current !== "all" && activeWorkspaceRef.current !== e.workspaceId && options.navigate !== false) return;
     if (options.navigate !== false && (e.type === "task" || e.type === "note")) {
       const parent = view === "Projects" && openProjectIdRef.current &&
-        (e.properties.projectId === openProjectIdRef.current ||
-          latestRelationsRef.current.some((r) => r.sourceEntityId === e.id &&
-            r.targetEntityId === openProjectIdRef.current && r.workspaceId === e.workspaceId &&
-            r.relationType === "belongs_to_project"))
+        legacyRecordBelongsToProject(e, openProjectIdRef.current, latestRelationsRef.current)
         ? openProjectIdRef.current : null;
       try {
         const target = { kind: e.type, id: e.id, view, ...(parent ? { projectId: parent } : {}) };
@@ -1565,10 +1582,14 @@ export function useLumiApp() {
     if (route?.kind === "task" || route?.kind === "note") {
       const destination = resolveLegacyRecordLink(items, relations, route, activeWorkspaceId);
       if (destination) {
-        if (destination.selectWorkspaceId) selectWorkspace(destination.selectWorkspaceId);
+        if (destination.selectWorkspaceId) {
+          selectWorkspace(destination.selectWorkspaceId);
+          pendingRecordRef.current = { ...route, workspaceId: destination.record.workspaceId };
+        } else {
+          void inspect(destination.record, { navigate: false });
+        }
         setViewState(route.view);
         setOpenProjectId(destination.projectId);
-        void inspect(destination.record, { navigate: false });
       } else if (syncStatus !== "synced" && syncStatus !== "offline") {
         return;
       }
@@ -1642,9 +1663,15 @@ export function useLumiApp() {
       // Nothing from the previous inspector should stay open while Back/Forward
       // resolves a new record; stale async context requests are invalidated.
       closeDetail();
-      if (destination?.selectWorkspaceId) selectWorkspaceRef.current(destination.selectWorkspaceId);
+      pendingRecordRef.current = null;
+      if (destination?.selectWorkspaceId) {
+        selectWorkspaceRef.current(destination.selectWorkspaceId);
+        if (record && (target?.kind === "task" || target?.kind === "note"))
+          pendingRecordRef.current = { ...target, workspaceId: record.record.workspaceId };
+      }
       setOpenProjectId(record?.projectId ?? project?.projectId ?? null);
-      if (record) void inspectRef.current(record.record, { navigate: false });
+      if (record && !destination?.selectWorkspaceId)
+        void inspectRef.current(record.record, { navigate: false });
       answerConfirm(false);
       setCapture(false);
       setAssistantOpen(false);
@@ -1968,6 +1995,7 @@ export function useLumiApp() {
   }
 
   function selectWorkspace(workspaceId: string) {
+    pendingRecordRef.current = null;
     assistantRequestVersion.current += 1;
     setActiveWorkspaceId(workspaceId);
     if (workspaceId !== "all") selectWriteWorkspace(workspaceId);
