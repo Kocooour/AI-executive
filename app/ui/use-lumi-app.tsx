@@ -51,8 +51,8 @@ export function useLumiApp() {
   // In-memory only: tasks can navigate to a Gmail source without putting
   // message IDs into URLs, localStorage or persisted navigation state.
   const [mailSourceToOpen, setMailSourceToOpen] = useState<{ workspaceId: string; accountId: string; messageId: string } | null>(null);
-  // The Inbox shows its tasks or the mail of the connected Gmail accounts. UI state only: the address
-  // carries the view and nothing else (lib/view-url.ts), so a mail message is never put into it.
+  // The Inbox shows tasks or connected Gmail. Its active tab and message IDs are
+  // in-memory only; navigation URLs never expose a mail message ID.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
   const [view, setViewState] = useState("Home"),
     // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
@@ -1515,9 +1515,9 @@ export function useLumiApp() {
     setDeepLinkDone(true);
   }, [items, authState, syncStatus, activeWorkspaceId, startupView]);
 
-  // The address follows the view: a change of view adds a history step, so Back and Forward move
-  // between views and a reload stays where the user was. A record id from a notification link is
-  // dropped from the address once the link has been handled. Nothing is recorded while signed out;
+  // The address follows the view except while a project URL is active. Back/Forward and
+  // reload preserve the requested target. A legacy notification ?task= ID is dropped
+  // after handling. Nothing is recorded while signed out;
   // the offline view (started without a connection) shows the app, so it is recorded there too.
   const addressedView = useRef<string | null>(null);
   useEffect(() => {
