@@ -56,13 +56,20 @@ export function targetFromSearch(search: string, knownViews: readonly string[], 
 
 export function searchForTarget(target: NavigationTarget, startView: string): string {
   if (target.kind === "view") return searchForView(target.view, startView);
+  // The serializer must not emit an address the parser would reject. In
+  // particular, project parent IDs are legal only in the Projects view.
+  if (!isOpaqueId(target.id)) throw new TypeError("Invalid navigation target ID");
   const params = new URLSearchParams();
   if (target.kind === "project") {
     params.set("view", "Projects");
     params.set("projectId", target.id);
   } else {
+    if (target.projectId !== undefined) {
+      if (target.view !== "Projects" || !isOpaqueId(target.projectId))
+        throw new TypeError("Project context requires the Projects view and a valid project ID");
+      params.set("projectId", target.projectId);
+    }
     params.set("view", target.view);
-    if (target.projectId) params.set("projectId", target.projectId);
     params.set(target.kind === "task" ? "taskId" : "noteId", target.id);
   }
   return "?" + params.toString();
