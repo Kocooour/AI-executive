@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-04 po sloučení R2d.3k.4a (#228); rozpracováno R2d.3k.4b (default-off HTTP CAS zápis a receipt soukromého `whenOn`).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-04 po sloučení R2d.3k.4b (#229); rozpracováno R2d.3l.1 (autorizované task-only denní množiny Mého plánu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -220,6 +220,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3k.2 (#224):** kanonicky preflightované a actor-authenticated interní čtení soukromého `when`; okna all/on-day/upcoming, omezený offset/limit, soukromé revize, přesné ID/when-only DTO a live release ověření soukromé epochy společně se session a Area ACL. Bez HTTP/UI a produkční aktivace.
 - **Sloučeno R2d.3k.3 (#226):** samostatně default-off HTTP GET osobního `whenOn`, podepsané kurzory, přísný child DTO a live ověření aktéra, Area a soukromé epochy. Bez UI a produkční aktivace.
 - **Sloučeno R2d.3k.4a (#228):** izolovaný interní set/clear zápis osobního `whenOn` se současným task/Area/assignment ACL, kontrolou tří revizí, idempotentními receipts a bezobsahovým journalem. Bez produkční aktivace.
-- **R2d.3k.4b (probíhá):** samostatně default-off staging HTTP GET CAS preview, PATCH set/clear a POST read-only receipt. Jediný autorizovaný snapshot pro náhled a live session/Area/task/plan guard, oddělené příznaky, child procesy a negativní HTTP regrese. Bez UI či produkční aktivace.
+- **Sloučeno R2d.3k.4b (#229):** samostatně default-off staging HTTP GET CAS preview, PATCH osobního set/clear a POST actor-bound read-only receipt; na stejném snapshotu task+Area+actor plán, živé session/task/Area/private epoch guardy, child procesy, negativní HTTP regrese. Bez UI či produkční aktivace.
+- **R2d.3l.1 (probíhá):** task-only Můj plán denní množiny: sloučení soukromého plánovaného dne `whenOn` a společného `dueOn` v *jednom* kanonicky ověřeném SQLite snapshotu a SQL výběru; `today/upcoming`, dřívější datum jako pozornost, bez duplicit, filtr `all/personal/shared` uvnitř vlastní práce, přesná ACL a assignment, session/Area/private epoch witnesses. [Kontrakt](R2D-MY-PLAN-DAY-TASKS.md). Bez HTTP/UI/kalendářové kompozice a produkční aktivace.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
