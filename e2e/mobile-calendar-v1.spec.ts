@@ -125,3 +125,48 @@ test("day fetch errors never masquerade as an empty day; retry re-requests its e
   const range = calendarLocalDayRange(target, 1, zone);
   await expect.poll(() => reads.filter((r) => r.from === range.start && r.to === range.end).length).toBeGreaterThanOrEqual(2);
 });
+
+test("selected day excludes adjacent all-day VALUE=DATE entries even when SQL UTC-overlap includes them", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Mobile design preview disabled");
+  const selected = addCalendarDays(today(), 1);
+  const previous = addCalendarDays(selected, -1);
+  const next = addCalendarDays(selected, 1);
+  const afterNext = addCalendarDays(selected, 2);
+  const fixtures = [
+    { id: "all-day-previous", start: `${previous}T00:00:00.000Z`, end: `${selected}T00:00:00.000Z`, allDay: true },
+    { id: "all-day-selected", start: `${selected}T00:00:00.000Z`, end: `${next}T00:00:00.000Z`, allDay: true },
+    { id: "all-day-next", start: `${next}T00:00:00.000Z`, end: `${afterNext}T00:00:00.000Z`, allDay: true },
+    { id: "timed-overnight", start: zonedDateTimeToIso(previous, "23:30", zone),
+      end: zonedDateTimeToIso(selected, "01:30", zone), allDay: false },
+  ].map((item) => ({
+    ...item, uid: item.id, title: item.id, sourceId: "ui04a-source", workspaceId: "personal",
+    occurrenceKey: item.id, recurring: false, timezone: zone, status: "confirmed", busy: true, private: false,
+  }));
+  const reads: Array<{ from: number; to: number; ids: string[] }> = [];
+  await page.route("**/api/calendar?**", async (route) => {
+    if (route.request().method() !== "GET") { await route.continue(); return; }
+    const query = new URL(route.request().url()).searchParams;
+    const from = Number(query.get("from")), to = Number(query.get("to"));
+    const events = fixtures.filter((item) =>
+      Date.parse(item.end) > from && Date.parse(item.start) < to);
+    reads.push({ from, to, ids: events.map((item) => item.id) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      sources: [{ id: "ui04a-source", workspaceId: "personal", provider: "ics",
+        label: "E2E", status: "ready", configured: true, lastSyncAt: Date.now(),
+        lastSuccessAt: Date.now(), lastError: "", eventCount: fixtures.length, revision: 1 }],
+      events,
+    }) });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Calendar");
+  await waitUntilSynced(page);
+  await page.locator(`[data-date="${selected}"]`).click();
+  await expect(page.locator('[data-mobile-calendar-day]')).toHaveAttribute("data-mobile-calendar-day", selected);
+  const range = calendarLocalDayRange(selected, 1, zone);
+  await expect.poll(() => reads.some((read) =>
+    read.from === range.start && read.to === range.end && read.ids.includes("all-day-previous"))).toBe(true);
+  await expect(page.locator('[data-timeline-item="event:all-day-selected"]')).toBeVisible();
+  await expect(page.locator('[data-timeline-item="event:timed-overnight"]')).toBeVisible();
+  await expect(page.locator('[data-timeline-item="event:all-day-previous"]')).toHaveCount(0);
+  await expect(page.locator('[data-timeline-item="event:all-day-next"]')).toHaveCount(0);
+});
