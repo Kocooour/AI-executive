@@ -219,13 +219,13 @@ test("Home sidebar project: direct URL, actual Back/Forward origin and explicit 
     await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${id}$`));
     await page.goBack();
     await expect(page.locator(".projectPage")).toHaveCount(0);
-    await expect(page).toHaveURL(/\?view=Home$/);
+    await expect(page.locator(".appShell")).toHaveClass(/view-home/);
     await page.goForward();
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
 
     // A chosen view is a new history entry, never a disguised Back.
     await page.locator('aside > nav [data-nav-view="Home"]').click();
-    await expect(page).toHaveURL(/\?view=Home$/);
+    await expect(page.locator(".appShell")).toHaveClass(/view-home/);
     await page.goBack();
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
     await page.goForward();
