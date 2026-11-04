@@ -1,167 +1,100 @@
-# Lumi — jednoduché hlavní obrazovky
+# Lumi — hlavní obrazovky, Design v1.0
 
-**Schválený návrh cílového uspořádání, 3. 11. 2026.** Schémata ukazují pořadí a obsah, nikoli konečné rozměry či implementovaný stav. Závazná pravidla obsahuje [UX/UI specifikace](../UX-UI.md), včetně pravidel pro rozsahy, Oblasti, Today a akce. Starší statické náhledy design systému zachycují dřívější rozložení a pro tyto části jsou historické. Příkladová data jsou smyšlená. Některé funkce jsou dosud cílové.
+**Schválený směr 4. 11. 2026.** Tento vizuální kontrakt nahrazuje starší mobilní kořenové menu z 3. 11. a vychází z uživatelem vybraného a iterativně upraveného mockupu. Neznamená dodanou implementaci. Závazná bezpečnostní, datová a akceptační pravidla zůstávají v [UX-UI.md](../UX-UI.md), [PRODUCT.md](../PRODUCT.md) a [ARCHITECTURE.md](../ARCHITECTURE.md). Obrázkové mockupy jsou ilustrační, přednost mají níže uvedené výslovné invariance.
 
-## Společný rámec
+## Společná grafika
 
-- Bílé nebo jemně tónované pozadí, systémové písmo, jeden výrazný nadpis. Barva pomáhá orientaci, význam ale vždy nese i text. Neobalovat každý řádek kartou.
-- Nahoře přepínač **Můj plán / Osobní / Sdílené** a dostupné hledání; rozsah je čitelný a není novým prostorem. Globální Lumi Chat a rychlé přidání zůstávají dostupné. Na telefonu je první celé rolovatelné menu s přímými cíli včetně všech oprávněných projektů v právě zvoleném rozsahu; Today, projekt a detail se otevírají jako další celé stránky se Zpět. Tlačítko `＋` otevře zachycení jedním klepnutím.
-- Stav ukázat, když ovlivňuje práci: „Čeká na synchronizaci“, „Kalendář není aktuální“, „Konflikt“. Stavy návrhu a potvrzeného bloku se rozlišují textem. Žádná interní ID, revize, technické názvy pravidel ani diagnostika na těchto obrazovkách nebo v detailu úkolu, ani po rozbalení.
-- Schémata nejsou úplný seznam možností: sekundární akce se zobrazí v nabídce nebo detailu, musí však být dosažitelné dotykem i klávesnicí. Dotykové cíle alespoň 44 × 44 px, viditelný focus, čtečka obrazovky, větší text a bezpečné okraje telefonu.
+- Bílé plochy, jemná pastelová výplň skupin, střídmé zaoblení a stíny, minimum rámů. Výrazné tmavé názvy úkolů a projektů, sekundární text stále čitelný. Písmo SF Pro / systémové, H1 přibližně 32 px, sekce 20 px, **úkol i projekt 16–17 px se shodnou tučností 650**, podrobnosti 13–14 px. Dotykové cíle nejméně 44 × 44 px.
+- **Rozsahy v navigaci:** **Vše** fialová **#8B5CF6**, **Osobní** zelená **#16A34A**, **Sdílené** modrá **#2563EB**. Vše znamená opravdu **veškerý obsah s platným oprávněním ke čtení** napříč Osobním a Sdíleným, nikoli jen přidělené úkoly. **Můj plán** zůstává úvodní osobní pracovní obrazovkou (vlastní soukromé + mně přidělené sdílené úkoly) s identitou Lumi, **není další hodnotou globálního filtru** ani třetím prostorem či zápisovým cílem; barva nikdy nepřidává práva.
+- **Oblasti ve skupinách:** osobní jemná zelená **#DCFCE7**, práce jemná modrá **#DBEAFE**, rodina jemná růžová **#FCE7F3**. Jiné Oblasti mají konzistentně jemné pozadí. Barva Oblasti **nikdy** nerozhoduje o barvě dokončovací ikony.
+- **Nedokončená běžná položka:** neutrální **prázdný obrys bez fajfky**. Priorita / vyžaduje pozornost: **pouze červená #EF4444 nebo oranžová #F59E0B kontura prázdné ikony, bez výplně a bez fajfky**, se srozumitelným důvodem v dostupném textu. Hotovo: **šedá #94A3B8 s fajfkou**, text i ikona tlumené a případně přeškrtnuté, ale stále dostatečně kontrastní. **Žádný stav „úkol v akci“ či „rozpracováno“.**
+- **Úkol = vždy čtverec. Projekt = vždy kruh.** Platí pro otevřený, urgentní i hotový stav a pro všechny obrazovky. Dokončený projekt je **šedý kruh s fajfkou**, ne čtverec; nedokončený projekt nikdy nemá fajfku. Kruh projektu umožňuje explicitní dokončení projektu, nikoli automatické skryté dokončení všech jeho úkolů.
+- **Návrh Lumi:** výrazná fialová/fialovorůžová plocha, původní ikona hvězdy, popis **„Návrh Lumi“** a dostupné **„Posoudit“**. Návrh je jiný než potvrzená rezervace a nikdy se netváří jako provedená změna.
+- Zachovat ostatní dosavadní sémantické ikony Lumi (kalendář, hledání, spodní navigace), měnit jen definované stavové ikony. Zde uvedené barvy jsou **cílové hodnoty designu**; současné CSS a design tokeny se neprohlašují za již upravené. Ověřit kontrast světlého i tmavého režimu.
 
-## 0. Kořenové menu telefonu
+## Navigace
 
-```text
-Můj plán ▾                     Hledat  ＋  Lumi
-Home / Denní brief
-Doručené
-Dnes
-Nadcházející
-Kalendář
-Poznámky
-Oblasti
-Uložené filtry
-Projekty
-  Nový web
-  Dovolená
-  … všechny další oprávněné projekty ↓
-Nastavení
-```
+Mobil začíná obrazovkou **Můj plán**, pevné spodní menu má právě čtyři položky: **Můj plán · Kalendář · Projekty · Více**. **Hledání není pátou záložkou**, je dostupné v horní liště. Horní **globální přepínač rozsahu má volby `Vše / Osobní / Sdílené`**, stav je stejný v Projektech a dalších pracovních pohledech. Můj plán má jako úvodní pohled vlastní osobní výběr položek; volby Osobní/Sdílené ho pouze zužují, při Vše zůstává souhrnem **mých** úkolů. Quick Capture, Lumi Chat a oznámení zůstávají snadno dosažitelné.
 
-Menu je jedna rolovatelná obrazovka bez „Více“ a bez povinného rozbalení. Projekty nejsou omezené počtem sedm; rozsah filtruje přístupná data. Klepnutí na Dnes nebo projekt odsune menu doleva a přivede další celou stránku zprava; úkol či poznámka se otevře stejným směrem o úroveň hlouběji. Zpět pohyb obrátí. Tlačítko **Zpět** i Zpět prohlížeče vrací přesnou předchozí obrazovku, posun, rozepsaný obsah a fokus na původní ovladač (nebo bezpečný nadpis/seznam) v téže oprávněné identitě a rozsahu; přímý odkaz a návrat po změně oprávnění přístup znovu ověří. Přechod respektuje omezený pohyb; vše funguje i klávesnicí bez gesta. Odkaz na konkrétní projekt/úkol/poznámku nese jeho stabilní neprůhledný identifikátor; přímé otevření v nové relaci či obnovení stránky nezávisí na paměti navigačního zásobníku. Online každé načtení znovu serverově ověřuje oprávnění k cílové Oblasti; bez přístupu se název ani náhled neukáže. Offline lze zobrazit jen již synchronizovaná kanonická data téže identity a místně povoleného rozsahu, označená jako offline/neaktuální; známé odhlášení či odebrání rozsahu je místně odstraní ihned. Vzdálená revokace se na odpojeném zařízení neprojeví okamžitě; po připojení server oprávnění znovu ověří a nepovolená cache se odstraní. Není-li historie v zásobníku, Zpět vede na bezpečný seznam.
+**Více** je rolovatelný seznam sekundárních cílů: Domů / Denní brief, Doručené, Dnes, Nadcházející, Poznámky, Oblasti, uložené filtry, e-maily, integrace, nastavení a pomoc. **Projekty** mají vlastní záložku a úplný autorizovaný seznam bez umělého limitu. Desktop zachová trvalý levý sidebar, horní hledání a chat, samostatnou stránku projektu a pravý inspektor úkolu/poznámky; mobilní spodní lišta se na desktop nepřenáší.
 
-## 1. Domů
+Přímý odkaz na projekt, úkol či poznámku obsahuje neprůhledný identifikátor; reload / nová relace a Back/Forward fungují bez závislosti na pouze lokální historii. Zpět vrací předchozí seznam, posun, draft a fokus jen pro stále oprávněnou identitu a rozsah. Serverové ACL se kontroluje po otevření, změně identity a revokaci; neautorizovaná data ani náhledy se neukazují. Offline cache je identity-scoped a vzdálená revokace se ověří po znovupřipojení. Klávesnice, VoiceOver a reduced motion fungují bez povinného gesta.
 
-```text
-‹ Menu  Můj plán ▾               Domů
+## Můj plán: jednoduchý přehled dne a nejbližší práce
 
-Pozornost
-  Odevzdat podklady                    ›
-  Termín je zítra                   Proč? ▾
+**Dnes** a **Zítra** jsou jasně oddělené časové části. Úkoly jsou uvnitř rozdělené podle Oblastí do **jemně podbarvených bloků, bez jejich viditelných názvů a bez štítků Oblasti u úkolů**. Oblast lze otevřít v detailu a čtečka ji oznamuje jako název skupiny; sdílení či cílový zápis vždy zobrazuje textově plné oprávnění, protože barva sama nestačí.
 
-Dnes                              Vše ›
-  10:00  Porada                     30 min
-  ○ Připravit nabídku               45 min
+~~~text
+Můj plán                    [Vše ▾]           Hledat  ✦  ＋
+Dnes · St 4. 11. 2026
 
-                              ＋
-```
+  [jemně zelený blok – bez viditelného názvu Oblasti]
+  □  Zajistit nabíjení v Nových Hamrech
+  ☑  Plán další iterace              (hotový – šedá ikona i text)
 
-Pozornost má nejvýše pět doporučení, další na vyžádání. Přístupné **Proč?** ukáže například „Podle termínu úkolu · vyhodnoceno 3. 11. v 9:42“ a dovolí otevřít oprávněný zdroj. Zastaralost, nejistota či konflikt jsou vidět ihned bez rozbalení; neznámý čas zůstává neznámý. Klepnutí otevře související položku a její zdroj; odložení a skrytí jsou dostupné v detailu nebo nabídce položky. Dnešní přehled je stručný a vede do Dnes. Je-li doporučení prázdné, zobrazí klidný text „Teď nic nepotřebuje pozornost.“ Kapacita se uvádí jen z čerstvého kalendáře. Při zastaralém zdroji se místo ní ukáže příslušný stav; návrh a potvrzená položka se nezaměňují.
+  [jemně modrý blok – bez viditelného názvu Oblasti]
+  □  Dokončit review PR
+  [kalendář] Standup – Lumi                    10:00–10:30
 
-## 2. Doručené
+  [jemně růžový blok – bez viditelného názvu Oblasti]
+  □  Objednat rolety do ložnice
+  [kalendář] Vyzvednout děti                   15:30
 
-```text
-‹ Menu  Můj plán ▾           Doručené
-Filtry
+  ✦  Návrh Lumi – Přesunout nabídku?            Posoudit ›
 
-○ Zavolat účetní                      ›
-  Úkol
-  Poznámky ze schůzky                 ›
-  Vložený text · čeká na kontrolu
-  Z pošty                             ›
+Zítra · Čt 5. 11. 2026
+  ...
+────────────────────────────────────────────────────────
+Můj plán            Kalendář             Projekty            Více
+~~~
 
-                              ＋
-```
+Kalendářová událost má **ikonu kalendáře**, nikoli dokončovací čtverec. Převod události na kanonický úkol vytvoří **jediný akční úkol**; rezervovaný čas či návrh bloku patří do jeho řádku, nic se dvakrát nesčítá ani nedokončuje. Pro pozornost úkolu má **prázdný čtverec jen oranžovou/červenou konturu bez fajfky**, nezávisle na zeleném/modrém/růžovém pozadí skupiny. Návrhy Lumi mohou vizuálně vyčnívat, běžný seznam zůstává klidný.
 
-Filtry se otevřou v sheetu; aktivní filtr je viditelný i po zavření. Typ se uvádí tam, kde pomáhá rozlišit vstup. Otevřený vstup zachová originál a dovolí upravit návrhy, naplánovat, přiřadit, označit čekání, odložit nebo zahodit. Výtažek se nepotvrdí sám. „Z pošty“ vede k připojeným zprávám; jejich dostupnost a oprávnění zůstávají zachována. Prázdný stav: „Doručené jsou prázdné“ a možnost přidat položku.
+## Kalendář: na mobilu vždy jeden den a datové bublinky
 
-## 3. Dnes
+Mobilní Kalendář nemá přepínač **Den / 3 dny / 7 dní**. **Vždy zobrazuje jediný zvolený den**, ve svislé časové ose; nad ní je jako v původním oblíbeném mockupu **vodorovný proužek datových bublinek**. Každá má **zkratku dne v týdnu nad číslem data** (např. v listopadu 2026 „Po“ nad „2“, „Út“ nad „3“ a „St“ nad „4“). **Zvolený den je výrazně fialově zvýrazněný i v minulosti. Nevybrané uplynulé dny jsou tlumeně šedé včetně zkratky dne, čísla data i jemného podkladu**, podobně jako dokončené úkoly, ale **neoznačuje to jejich události za dokončené**. Dnešek a budoucí dny mají výraznější neutrální kontrast; dnešek je srozumitelně odlišen i mimo výběr. Klepnutí na další bublinku přepne jediný den osy, posun proužku umožní další dny a samostatné „Dnes“ rychle vrátí aktuální datum. V žádném mobilním režimu se nezobrazují tři ani sedm paralelních sloupců. Výběr dne zůstává zachovaný při bezpečném návratu na obrazovku, bez přenosu dat mezi identitami.
 
-```text
-‹ Menu  Můj plán ▾               Dnes
+~~~text
+Kalendář                            Dnes   ⋯
+   Po     Út     St     Čt     Pá     So     Ne
+    2      3     (4)     5      6      7      8
+                 ↑ St 4. 11. 2026 = vybraný fialový den; Po 2. a Út 3. = šedé
 
-Události
-  09:00  Porada                         30 min
+09:00 ────────────────────────────────
+10:00  [Standup – Lumi · 10:00–10:30]
+11:00 ────────────────────────────────
+13:00  [Oběd · 13:00–14:00]
+15:30  [Vyzvednout děti · 15:30]
+──────────────────────────────────────
+Můj plán     Kalendář     Projekty     Více
+~~~
 
-Úkoly
-  ○ Připravit nabídku                45 min
-    Rezervováno 10:00–10:45 · Kdy ▾
-  ○ Odeslat podklady                 Kdy ▾
-    Lumi navrhuje blok 11:00 · Schválit návrh
-  ○ Zavolat účetní                  15 min
-                              ＋
-```
+Na šířce 390 px jsou názvy a data bublinek čitelné, dotykové cíle alespoň 44 px, řádek lze horizontálně posunout **bez horizontálního posunu celé stránky**; čtečka oznámí celý den, datum a stav vybráno/dnes. Desktopový Kalendář může mít širší vícedenní zobrazení, toto rozhodnutí se týká jen mobilu.
 
-Výchozí Dnes má kompaktní události a jediný seznam úkolů. Rezervovaný čas i návrh bloku se ukazuje přímo u úkolu; akční úkol se neduplikuje. Úkol převedený z události je jen jedním úkolem v seznamu a v souhrnu/kapacitě se počítá jednou. Plná časová osa je v Kalendáři nebo se v Dnes výslovně zapne. Běžné řádky rostou podle obsahu, ne podle odhadu; dotykový cíl má nejméně 44 px. Přímé ruční „Kdy → zítra“ v bezpečném rozsahu se uloží hned s Undo a nemění termín; návrh bloku od Lumi vyžaduje schválení. Offline změna má viditelný stav.
+Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace je výslovně „Rezervováno“; návrh Lumi má hvězdu, jiný akcent a výzvu k posouzení. Skrytá událost zůstává pouze v Kalendáři jako „Skryto“, lze ji obnovit, a její vliv na kapacitu se řídí kalendářovým kontraktem. Odpojený nebo zastaralý kalendář nikdy nepředstírá přesnou kapacitu; nabízí Připojit či Obnovit a uvádí stáří dostupných dat.
 
-## 4. Kalendář
+## Projekty: pastelové skupiny bez nadpisů, stejné písmo, kruhové stavy
 
-```text
-‹ Menu  Můj plán ▾          Kalendář
-Dnes                         Obnovit
+V Projektech je **tentýž globální přepínač rozsahu `Vše / Osobní / Sdílené`**, nikoli vlastní druhý filtr. Při vstupu se zachová volba z ostatních pracovních pohledů; přepnutí zde změní globální rozsah a po návratu zůstane aktivní. **Vše** zobrazuje **všechny projekty, k nimž mám platné oprávnění ke čtení**, tedy všechny vlastní soukromé a všechny autorizované sdílené (včetně projektů bez mých přidělených úkolů). **Osobní** zobrazí pouze mé soukromé projekty, **Sdílené** pouze všechny autorizované projekty ve sdílených Oblastech. **Můj plán** je zvláštní úvodní obrazovka s mými soukromými a mně přidělenými sdílenými úkoly, nikoli synonymum `Vše` v Projektech. Případný filtr konkrétní Oblasti se s rozsahem protíná a nesmí zobrazit více dat, než dovoluje globální rozsah a serverové ACL. Stejně jako Můj plán se projekty seskupují do jemně pastelových bloků podle Oblastí bez viditelných nadpisů prostoru nebo Oblasti. Oblast i typ prostoru jsou přístupné v detailu, pro čtečku a před citlivým zápisem, i když jsou vizuální štítky skryté.
 
-  09:00 ┌ Porada · 30 min ┐
-        └─────────────────┘
-  10:00 ┌ Nabídka           ┐
-        │ Potvrzený blok    │
-        └───────────────────┘
-  11:00 ┌ Podklady          ┐
-        └ Návrh · 30 min ──┘
+Základní projektový řádek: **kruh + název + kontextové menu**. Název používá přesně stejnou **velikost i tučnost** jako úkol v Mém plánu; **počty úkolů, poměry dokončení a štítky Oblastí nejsou v přehledu vidět**. Nanejvýš jedna stručná věta o aktuálním problému / dalším kroku, je-li věcně užitečná. Kruh je bez vazby na prostor: neutrální prázdný, urgentní pouze oranžově/červeně konturovaný prázdný kruh bez výplně a bez fajfky, hotový šedý s fajfkou. Dokončený název je rovněž tlumený. Pozornost má srozumitelný text i pro screen reader.
 
-Bez času
-  ○ Zavolat účetní         15 min  Kdy ▾
-Příštích 7 dní                      ›
-Otevřít Dnes
-```
+Projekt otevře samostatnou stránku: název, stav a případný postup **v detailu**, ihned poté jeho úkoly, až pak volitelné Kontext, Poznámky/Zdroje, Podrobnosti, Historie. Ovladač dokončení projektu vyžaduje serverové oprávnění a **nesmí potichu dokončit otevřené podřízené úkoly**.
 
-Po otevření položky se ukáže její čas, typ, případný konflikt a dostupná akce. Skrytá událost je jen v Kalendáři označená „Skryto“ a lze ji znovu zobrazit; pravidla pro obsazenost a události převedené na úkol zůstávají podle specifikace. U nepřipojeného kalendáře místo tvrzení o kapacitě zobrazit „Kalendář není připojen“ a **Připojit**; u zastaralého „Kalendář není aktuální“ a **Obnovit**, spolu s dostupnými uloženými událostmi bez tvrzení o volném čase.
+## Detail úkolu, Home, Doručené a schvalování
 
-## 5. Projekty a detail projektu
+**Úkol:** jediný **čtvercový** checkbox vedle výrazného názvu, kompaktní Kdy / termín / projekt, poznámka nebo checklist a jedno rozbalení sekundárních údajů. Oblast se **v detailu může a při sdíleném zápisu musí** zobrazit textem; v Mém plánu se štítek skrývá jen na řádku. Hotová položka má šedou ikonu i název. Oprávnění, konflikt a selhání uložení mají zřetelný stav.
 
-```text
-‹ Menu  Můj plán ▾           Projekty
+**Domů / Denní brief** (přístupný z Více či desktopového sidebaru) uvádí nejvýše pět relevantních doporučení, jejich lidský důvod a přístupné „Proč?“ s oprávněným zdrojem a skutečným časem. Kapacita se tvrzením nezpřesňuje, je-li kalendář stale/offline. Výběr doporučení vede na oprávněný detail.
 
-Práce
-  Nový web                         3/7 kroků
-  Další krok: Připravit nabídku       ›
+**Doručené** z Více přijímá úkol, poznámku, schůzku, odkaz i vstup z pošty; filtry a originál návrhů zůstávají dostupné, nic se nepotvrzuje samo. **Quick Capture** ukazuje před uložením výchozí **soukromou Nezařazeno** (nebo zděděnou Oblast projektu), sdílení vyžaduje explicitní seznam členů a souhlas. Ruční nízkorizikové „Kdy → zítra“ se provede s Undo, ale **návrh Lumi** vyžaduje explicitní Schválit/Odmítnout, dopad a hodnoty před/po. Při konfliktu a po revokaci nedochází k zakázané změně.
 
-Osobní
-  Dovolená                         1/4 kroků
-  Další krok: Vybrat termín          ›
-                              ＋
-```
+## Akceptační kontrola designu
 
-Řádek projektu má název, průběh a nejvýše jeden další krok nebo aktuální problém. Projekt se otevře jako samostatná stránka se Zpět do skutečného původního pohledu (kořenové menu, seznam, hledání či Oblast): název a stav, hned poté úkoly; kontext „Proč“, cíle a „Hotovo, když“, poznámky a zdroje se otevírají na vyžádání. Zůstávají dostupné průběh, další krok, vysvětlená rizika, vztahy, historie a stav ukládání dle [specifikace projektu](../UX-UI.md). Prázdné volitelné části se nevnucují; přidání zůstává snadno dostupné. Detail úkolu je další celá stránka nad projektem; Zpět vrátí přesné předchozí místo. Právo upravovat kontext projektu nezávisí na vybraném rozsahu Můj plán / Osobní / Sdílené: soukromý vlastník a oprávněný sdílený editor/admin mohou měnit povolená pole, viewer jen čte.
-
-## 6. Detail úkolu a rychlé přidání
-
-```text
-‹ Zpět na projekt · Můj plán
-
-○ Připravit nabídku
-  Kdy: Dnes ▾ · Termín 12. listopadu
-  Projekt: Nový web
-
-Poznámka
-  Připravit podklady pro klienta.
-
-Podrobnosti ▾  Odhad, opakování nastaveny
-⋯
-```
-
-Výchozí detail ukazuje název a jediný kroužek dokončení, poznámku či kontrolní seznam a kompaktní Kdy, termín a projekt. I vyplněný odhad, opakování a jiné sekundární údaje jsou v jediném přístupném rozbalení, které naznačuje, co je nastavené, a umožní další vlastnosti přidat. Oprávnění, sdílení, konflikt a chyba zůstávají viditelné hned. Další akce včetně smazání jsou v nabídce; smazání umožní bezpečné vrácení. V případě problému se objeví stav a další krok, např. „Změna čeká na synchronizaci“. Na telefonu se celostránkový detail vrací jediným **Zpět** na původní stránku; na desktopu se inspektor zavírá tlačítkem **Zavřít**. Rozepsaný obsah se zachová jen v téže oprávněné identitě a rozsahu.
-
-`＋` otevře jednoduché pole „Co chcete zachytit?“ s viditelnou cílovou Oblastí a tlačítkem **Uložit**. Cílová Oblast určuje soukromý nebo sdílený prostor; sdílená volba ukáže členy a vyžádá výslovný souhlas, u položky v projektu je Oblast zděděná. Volitelné návrhy jsou upravitelné, jsou označeny jako návrhy a nic samy nepotvrzují. Při nedostupné síti zůstane rozepsaný text a zobrazí se stav uložení.
-
-## 7. Schválení změny
-
-```text
-Návrh Lumi z denního plánu          Zavřít
-
-Přesunout „Připravit nabídku“?
-Prostor: Osobní
-Oblast: Nezařazeno · soukromá
-Před: dnes
-Po: zítra
-Termín 12. listopadu se nemění.
-
-[Odmítnout]                 [Schválit]
-```
-
-Příklad je návrh **Lumi** spuštěný z Plánu dne, a proto vyžaduje výslovné schválení. Přímá ruční změna „Kdy → zítra“ v nízkorizikovém rozsahu tento panel neotvírá: uloží se hned s bezpečným Undo. Při posunu za termín zůstává potřebné potvrzení. U sdílené Oblasti musí být vidět i oprávnění členové. Skutečný návrh musí uvést všechny relevantní související položky, dopady na kalendář a jiné systémy, nevratné účinky a konflikty. Po úspěchu ukáže výsledek a umožní prohlédnout historii; **Zpět** nabídne jen tehdy, kdy je bezpečné. Zastaralý či konfliktní návrh nelze schválit a nabízí nové posouzení. Detail nelze zkrácením připravit o informace nutné k rozhodnutí.
-
-## Desktop a ověření
-
-Desktop má trvalý rolovatelný sidebar s přímými cíli **Domů, Doručené, Dnes, Nadcházející, Projekty, Kalendář, Poznámky, Oblasti, uložené filtry** a všemi oprávněnými projekty v právě zvoleném rozsahu, nahoře rozsah a globální hledání. V pracovních seznamech se detail otevře v pravém panelu; projekt má vlastní stránku. Home a Kalendář využijí širší obsah. Na telefonu jsou projekt, úkol a poznámka plné navazující stránky; Zpět obnoví předchozí stránku, posun i rozepsaný obsah.
-
-Při následné realizaci ověřit mobil a desktop, dotyk/klávesnici/čtečku, velký text, prázdné a chybové stavy, odpojený a zastaralý kalendář, čekající synchronizaci, konfliktní schválení a přepnutí rozsahu bez úniku dat. Časová osa, schválení a sdílené rozsahy zůstávají omezené skutečně dodanými schopnostmi aplikace.
+- 390 px, spodní **čtyři záložky**, žádná spodní záložka Hledat, výchozí obrazovka **Můj plán**, ale jediný globální filtr **Vše / Osobní / Sdílené**. `Vše` v Projektech zobrazuje všechny skutečně autorizované projekty, zatímco Můj plán i při Vše zachovává osobní pracovní výběr.
+- Můj plán má jen pastelové **nepojmenované** skupiny Oblastí, žádné per-task štítky, čitelné tmavé názvy; čtečka oznamuje Oblast.
+- V každém pohledu je **úkol čtverec**, **projekt kruh**, otevřené bez fajfky, pozornost pouze červenou/oranžovou **konturou bez výplně a bez fajfky**, hotové šedé **s fajfkou**, tlumený název; **žádný „rozpracovaný“ stav**.
+- Projekty mají stejné jemné skupinové podbarvení podle Oblastí jako Můj plán, **bez nadpisů prostoru/Oblasti**, počtů či barevných štítků; typografie shodná s úkolem.
+- Mobilní kalendář vždy **jeden den**, navigace **řadou bublin se zkratkou dne nad číslem data**, bez 1/3/7 přepínače; **uplynulé nevybrané dny jsou šedé, vybraný den fialový i v minulosti**, bez spojování šedé s dokončením událostí; správná dostupnost, přístupnost a výběr dne. Kalendářová událost není úkol, návrh není potvrzený blok; žádná duplicita v akčním plánu.
+- Přístupnost a bezpečnost: kontrast, světlo/tma, zvětšení textu, dotyk/klávesnice/VoiceOver, Back/Forward, deep link, offline a revokace bez úniku obsahu.
+- Jde o **cílovou specifikaci**; aktualizace dokumentace neaktivuje serverové Area ACL, nepovoluje produkční reset/cutover a neslouží jako výjimka pro plný Browser E2E během PR.

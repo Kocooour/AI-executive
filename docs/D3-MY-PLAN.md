@@ -1,6 +1,6 @@
 # D3 — příprava datového rozsahu „Můj plán“
 
-Stav: **přípravná implementace, bez aktivace v UI**. Navazuje na schválený kontrakt [LUMI-FR-013](PRODUCT.md#lumi-fr-013) a aktuální [clean-start roadmapu](ROADMAP.md) s povinnými bezpečnostními branami v [ARCHITECTURE.md](ARCHITECTURE.md). Historický migrační plán platí pouze při schváleném převodu legacy dat.
+Stav: **přípravná implementace, bez aktivace v UI**. **Aktualizace pro cílové UI 2026-11-04:** Současná interní funkce `selectScopedWork(scope='my-plan'|'personal'|'shared')` je nadále podkladem **osobního pohledu Můj plán**, není implementací nové globální volby `Vše`. Podle [PRODUCT](PRODUCT.md#lumi-fr-013) je uživatelský globální přepínač **Vše / Osobní / Sdílené**; `Vše` musí být v R3 bezpečně serverově autorizovanou sjednocenou množinou obou prostorů. Mobil začíná Mým plánem, nikoli Home. Cílové bezpečnostní agregační kritérium je v [ARCHITECTURE.md](ARCHITECTURE.md#autoritativní-read-model-vše-a-integrační-brána-r3-lumi-design-v10-2026-11-04). Navazuje na schválený kontrakt [LUMI-FR-013](PRODUCT.md#lumi-fr-013) a aktuální [clean-start roadmapu](ROADMAP.md) s povinnými bezpečnostními branami v [ARCHITECTURE.md](ARCHITECTURE.md). Historický migrační plán platí pouze při schváleném převodu legacy dat.
 
 ## Implementační checkpoint 2026-10-27
 
@@ -25,7 +25,7 @@ Aktuální [roadmapa](ROADMAP.md) zvolila pro převážně testovací data **či
 1. Nedestruktivně vytvořit cílový **oddělený store** s platnými Oblastmi, děděním a `assigneeUserId` pro nové sdílené úkoly. Staré 2a normalizace/2b partition/2c owner-backfill nejsou nutné, **pokud stará data nepřenášíme**.
 2. Skutečná identita na serveru, příslušnost Oblastí a členství, filtrované autorizované čtení na Home/Inbox/Today/Upcoming/Projects/search/counts/attention/AI; `selectScopedWork` není autorizační vrstva.
 3. Nový bezpečný protokol zápisů do explicitní Oblasti, zneplatnění starých full-snapshot klientů, revokační a offline pravidla; ochrana osobních dat v cache a při změně identity.
-4. Teprve potom připojit desktopový a mobilní scope switcher; Home zůstane úvodní obrazovka a `Můj plán` agregovaným čtecím rozsahem, nikoli právem zápisu.
+4. Teprve potom zapojit do desktopu a mobilu **jeden globální filtr Vše / Osobní / Sdílené**, jehož Vše je nové autoritativní čtení osobních i sdílených Oblastí. **Můj plán** je výchozí mobilní osobní obrazovka a interní `my-plan` selektor může zůstat jejím dílčím podkladem; není synonymem Vše ani zápisovým oprávněním. Domů/Denní brief je sekundární pohled. Bez splněné R3 autorizační brány nesmí nová volba zpřístupnit data.
 5. Testovat izolaci více identit, nepřidělené vs. přidělené sdílené úkoly, prázdné stavy, konzistenci ID/revizí, detail oprávněného projektu, klávesnici/VoiceOver/úzký mobil, ztrátu práv, offline klienty a konflikty. Pozvánky pro další identity zůstávají vypnuté, dokud nejsou splněny všechny bezpečnostní brány.
 6. Produkční přepnutí do nového store **není tímto rozhodnutím povoleno**. Vyžaduje inventuru, ověřenou archivní zálohu + obnovu, plán pro staré klienty a samostatný výslovný souhlas vlastníka s přesným rozsahem změn.
 

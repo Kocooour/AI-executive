@@ -23,6 +23,8 @@ Pokud se při inventuře ukáže důležitý obsah nebo závislost, nesmí být 
 
 ## Co se nemění
 
+**Dodatek 2026-11-04 — cílové UI:** Následující věta o výchozí Home a Mém plánu jako globálním čtecím rozsahu dokumentuje původní stav rozhodnutí 26. 10.; **pro dnešní cílové UI byla nahrazena** [novějším rozhodnutím](2026-10-23-prostory-oblasti-muj-plan.md#dodatek-2026-11-04--globální-rozsah-vše-versus-osobní-můj-plán): globální **Vše / Osobní / Sdílené**, samostatná mobilní úvodní obrazovka **Můj plán**, nikoli Home. Dva skutečné prostory, Area ACL a veškeré bezpečnostní a produkční resetové brány se tím nemění.
+
 Produktový kontrakt [LUMI-FR-013](../PRODUCT.md#lumi-fr-013) zůstává: dva prostory **Osobní / Sdílený**, **Můj plán** je výchozí čtecí agregace (Home zůstává vstupní obrazovka), a **Oblast** je zároveň organizace i hranice oprávnění. Víceuživatelské pozvánky a sdílení se nespouštějí před ověřením identity, serverových oprávnění, per-item zápisů, revokace, individuálních stavů a obnovy.
 
 Dřívější detailní plán zachování legacy dat 2a–2c v [ARCHITECTURE.md](../ARCHITECTURE.md) platí **jen při samostatně schválené cestě zachování dat**; není blokujícím předpokladem čistého startu.

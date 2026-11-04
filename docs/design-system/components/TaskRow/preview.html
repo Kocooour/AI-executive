@@ -1,19 +1,16 @@
-<!-- @dsCard group="Seznamy" height=220 subtitle="Jeden řádek, vpravo nejvýše jeden údaj" -->
+<!-- @dsCard group="Seznamy" height=440 subtitle="Lumi v1: čtverec úkolu, kruh projektu, kontura pozornosti" -->
 <link rel="stylesheet" href="../../tokens.css">
-<ul class="list">
-  <li><button class="check" aria-label="Dokončit Zaplatit fakturu za hosting"></button><strong>Zaplatit fakturu za hosting</strong><span class="r danger">13. 10.</span></li>
-  <li><button class="check" aria-label="Dokončit Odeslat smlouvu k podpisu"></button><strong>Odeslat smlouvu k podpisu</strong><span class="r">zítra</span></li>
-  <li class="sel"><button class="check" aria-label="Dokončit Připravit podklady pro investory"></button><strong>Připravit podklady pro investory</strong><span class="r">90 min</span></li>
-  <li><button class="check" aria-label="Dokončit Zavolat instalatérovi"></button><strong>Zavolat instalatérovi</strong><span class="r pending"><span aria-hidden="true">↻ </span>čeká na odeslání</span></li>
-</ul>
-<style>
-body{margin:0;background:var(--app-bg);font-family:var(--font-sans);color:var(--text);padding:var(--space-4)}
-.list{list-style:none;margin:0;padding:0;max-width:560px}
-li{display:flex;gap:var(--space-3);align-items:center;min-height:36px;padding:0 8px;border-radius:var(--radius-md)}
-li:hover{background:var(--hover)} li.sel{background:var(--selected)}
-.check{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--control-border);background:none;flex:none;cursor:pointer;position:relative}
-.check::after{content:"";position:absolute;inset:-13px}
-.check:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
-strong{font-size:14px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.r{font-size:12px;color:var(--muted)} .danger{color:var(--danger)} .pending{color:var(--warning)}
-</style>
+<div class="lv1 lv1-taskrows" style="display:grid;gap:14px;max-width:550px">
+  <div class="group personal" aria-label="Oblast: osobní">
+    <div class="item"><button type="button" class="target" aria-label="Úkol nedokončen"><span class="state" aria-hidden="true"></span></button><span class="taskName">Objednat rolety</span></div>
+    <div class="item"><button type="button" class="target" aria-label="Úkol vyžaduje pozornost: blíží se termín"><span class="state amber" aria-hidden="true"></span></button><span class="taskName">Potvrdit termín</span></div>
+    <div class="item"><button type="button" class="target" aria-label="Úkol dokončen"><span class="state done" aria-hidden="true">✓</span></button><span class="mutedName">Zaplatit fakturu</span></div>
+  </div>
+  <div class="group work" aria-label="Oblast: práce">
+    <div class="item"><button type="button" class="target" aria-label="Projekt vyžaduje pozornost: blokující problém"><span class="state project red" aria-hidden="true"></span></button><span class="taskName">Release Lumi</span></div>
+    <div class="item"><button type="button" class="target" aria-label="Projekt nedokončen"><span class="state project" aria-hidden="true"></span></button><span class="taskName">Vývoj klienta</span></div>
+    <div class="item"><button type="button" class="target" aria-label="Projekt dokončen"><span class="state project done" aria-hidden="true">✓</span></button><span class="mutedName">Příprava zadání</span></div>
+  </div>
+  <p style="margin:0;color:#475569;font-size:12px">Barevné pozadí = Oblast; barva prázdné kontury = pozornost, ne dokončení. V přehledu nejsou nadpisy ani počty.</p>
+</div>
+<style>.lv1{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:#0F172A;font-size:14px}.lv1 *{box-sizing:border-box}.lv1 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.lv1 .scope{display:flex;align-items:center;gap:7px;color:#6D28D9;font-weight:650}.lv1 .taskName{font-size:17px;font-weight:650;color:#0F172A}.lv1 .mutedName{font-size:17px;font-weight:650;color:#475569}.lv1 .group{padding:12px;border-radius:14px;display:grid;gap:9px}.lv1 .personal{background:#DCFCE7}.lv1 .work{background:#DBEAFE}.lv1 .family{background:#FCE7F3}.lv1 .item{display:flex;align-items:center;gap:12px;min-height:44px}.lv1 .target{display:grid;place-items:center;flex:none;width:44px;height:44px;border:0;background:transparent;padding:0;cursor:default}.lv1 .target:focus-visible{outline:2px solid #6D28D9;outline-offset:2px;border-radius:8px}.lv1 .state{width:23px;height:23px;flex:none;display:grid;place-items:center;border:2px solid #64748B;background:transparent;border-radius:5px}.lv1 .state.project{border-radius:50%}.lv1 .state.red{border-color:#B91C1C}.lv1 .state.amber{border-color:#B45309}.lv1 .state.done{background:#64748B;border-color:#64748B;color:#FFF;font-weight:800;font-size:16px}</style>
