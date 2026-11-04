@@ -37,6 +37,7 @@ on:
       - "scripts/target-staging-project-index-child.mjs"
       - "scripts/target-staging-temporal-read-child.mjs"
       - "scripts/target-staging-temporal-due-window-child.mjs"
+      - "scripts/target-staging-personal-when-child.mjs"
       - "scripts/target-staging-temporal-detail-child.mjs"
       - "scripts/target-staging-temporal-status-write-child.mjs"
       - "scripts/target-staging-temporal-status-receipt-child.mjs"
@@ -59,6 +60,7 @@ on:
       - "tests/target-task-due-window-read.test.mjs"
       - "tests/target-task-personal-when-schema.test.mjs"
       - "tests/target-personal-when-read.test.mjs"
+      - "tests/target-staging-personal-when-http.test.mjs"
       - "tests/target-staging-temporal-due-window-http.test.mjs"
       - "tests/target-staging-temporal-http.test.mjs"
       - "tests/target-task-temporal-status-writer.test.mjs"
@@ -91,4 +93,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-task-due-window-read.test.mjs tests/target-task-personal-when-schema.test.mjs tests/target-personal-when-read.test.mjs tests/target-staging-temporal-due-window-http.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs tests/target-staging-temporal-due-on-http.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-task-due-window-read.test.mjs tests/target-task-personal-when-schema.test.mjs tests/target-personal-when-read.test.mjs tests/target-staging-personal-when-http.test.mjs tests/target-staging-temporal-due-window-http.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs tests/target-staging-temporal-due-on-http.test.mjs
