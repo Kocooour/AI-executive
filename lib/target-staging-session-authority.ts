@@ -35,7 +35,7 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
-  readPreflightedTemporalStatusReceipt,
+  readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -55,7 +55,7 @@ import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scop
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
-import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalDueOnReceiptResult } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -787,6 +787,15 @@ export class TargetStagingSessionAuthority {
       return { ok: false, reason: "invalid_request" };
     return writePreflightedTemporalDueOn(
       this.#store, credential, command, durableSessionTokenHash);
+  }
+
+  /** R2d.3i.2: read-only command reconciliation with current live write ACL. */
+  temporalDueOnReceipt(
+    sessionToken:string,command:TargetStagingTemporalDueOnCommand,
+  ):TargetTemporalDueOnReceiptResult {
+    const credential=this.#credential(sessionToken,true);
+    if (!credential) return {ok:false,reason:"unauthorized"};
+    return readPreflightedTemporalDueOnReceipt(this.#store,credential,command);
   }
 
   /** Read-only current-write-ACL-bound receipt check, no mutation. */

@@ -15,6 +15,8 @@ on:
       - "lib/target-task-temporal-due-on-writer.ts"
       - "lib/target-staging-temporal-status-http-process.ts"
       - "lib/target-staging-temporal-status-http.ts"
+      - "lib/target-staging-temporal-due-on-http.ts"
+      - "lib/target-staging-temporal-due-on-http-process.ts"
       - "lib/target-staging-title-http-process.ts"
       - "lib/target-staging-anchor-journal.ts"
       - "lib/target-store-preflight.ts"
@@ -36,6 +38,8 @@ on:
       - "scripts/target-staging-temporal-detail-child.mjs"
       - "scripts/target-staging-temporal-status-write-child.mjs"
       - "scripts/target-staging-temporal-status-receipt-child.mjs"
+      - "scripts/target-staging-temporal-due-on-write-child.mjs"
+      - "scripts/target-staging-temporal-due-on-receipt-child.mjs"
       - "scripts/target-staging-my-plan-home-child.mjs"
       - "scripts/target-staging-scoped-home-child.mjs"
       - "scripts/target-staging-child-actor.mjs"
@@ -54,6 +58,7 @@ on:
       - "tests/target-task-temporal-status-writer.test.mjs"
       - "tests/target-task-temporal-due-on-writer.test.mjs"
       - "tests/target-staging-temporal-status-http.test.mjs"
+      - "tests/target-staging-temporal-due-on-http.test.mjs"
   workflow_dispatch:
 
 permissions:
@@ -80,4 +85,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Targeted ACL and project pagination tests
-        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs
+        run: node --experimental-loader ./tests/ts-loader.mjs --test tests/target-staging-project-tasks.test.mjs tests/target-staging-project-index.test.mjs tests/target-staging-project-relations-http.test.mjs tests/target-staging-parent-backlinks-http.test.mjs tests/target-task-temporal-schema.test.mjs tests/target-task-temporal-read.test.mjs tests/target-staging-temporal-http.test.mjs tests/target-task-temporal-status-writer.test.mjs tests/target-task-temporal-due-on-writer.test.mjs tests/target-staging-temporal-status-http.test.mjs tests/target-staging-temporal-due-on-http.test.mjs
