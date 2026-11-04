@@ -40,6 +40,11 @@ import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } fro
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
 import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
+import {readAuthorizedPersonalWhenCommandPreview,
+  type PersonalWhenCommandPreview} from "./target-personal-when-command-read";
+import {personalWhenReceiptKey,personalWhenReceiptDigest,
+  validTargetStagingPersonalWhenCommand,type TargetStagingPersonalWhenCommand,
+} from "./target-personal-when-writer";
 import type { PersonalWhenPage, PersonalWhenWindow } from "./target-personal-when-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
@@ -416,6 +421,55 @@ export function readPreflightedPersonalWhenPage(
         ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
       }):null;
     },()=>null));
+}
+
+/** Actor-bound private plan preview. One pinned snapshot contains the task
+ * policy witness, private epoch, per-item revision and existing value. */
+export function readPreflightedPersonalWhenCommandPreview(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,taskId:string,
+):PersonalWhenCommandPreview|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actor=verifiedActor(db,access);
+      return actor?readAuthorizedPersonalWhenCommandPreview(
+        db,actor,taskId,store.expectedRestoreGeneration):null;
+    },()=>null));
+}
+
+/** Current-assignee/write-ACL-bound receipt check after uncertain HTTP commit.
+ * The previous command's expected CAS is included in the receipt digest but
+ * must not be rechecked against live revisions after the write. */
+export type TargetPersonalWhenReceiptResult=
+  | {ok:true;status:"committed"|"not_recorded"}
+  | {ok:false;reason:"invalid_request"|"unauthorized"|"unavailable"|
+      "idempotency_conflict"|"resync_required"|"write_area_mismatch"};
+export function readPreflightedPersonalWhenReceipt(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  command:TargetStagingPersonalWhenCommand,
+):TargetPersonalWhenReceiptResult {
+  if(!validTargetStagingPersonalWhenCommand(command))
+    return {ok:false,reason:"invalid_request"};
+  const denied=():TargetPersonalWhenReceiptResult=>({ok:false,reason:"unauthorized"});
+  return withPreflightedStore<TargetPersonalWhenReceiptResult>(store,denied,
+    (db,preflight)=>inReadSnapshot(db,()=>{
+      if(!preflight(db))return denied();
+      const actor=verifiedActor(db,access,true);
+      if(!actor)return denied();
+      const check=checkTargetTaskWriteContract(db,actor,command);
+      if(check.ok===false)return {ok:false,reason:check.reason};
+      // Shared Area editors cannot inspect another assignee's receipts.
+      if(!readAuthorizedPersonalWhenCommandPreview(
+          db,actor,command.taskId,store.expectedRestoreGeneration))
+        return {ok:false,reason:"unavailable"};
+      const prior=db.prepare("SELECT value FROM metadata WHERE key=?")
+        .get(personalWhenReceiptKey(actor,command.taskId,command.commandId)) as
+          {value:string}|undefined;
+      if(!prior)return {ok:true,status:"not_recorded"};
+      return prior.value===personalWhenReceiptDigest(command)
+        ? {ok:true,status:"committed"}
+        : {ok:false,reason:"idempotency_conflict"};
+    },denied));
 }
 
 /** v20 temporal detail with the same actor/ACL/preflight boundary. */
