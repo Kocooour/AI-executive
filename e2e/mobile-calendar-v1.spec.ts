@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import { waitUntilSynced } from "./helpers";
-import { addCalendarDays } from "../lib/calendar-event-display";
+import { addCalendarDays, calendarLocalDayRange } from "../lib/calendar-event-display";
 import { zonedDateTimeToIso } from "../lib/local-dates";
 
 const zone = "Europe/Prague";
@@ -12,6 +12,7 @@ const today = () => {
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
 async function mockDays(page: Page, dates: string[]) {
+  const reads: Array<{ from: number; to: number; workspaceId: string }> = [];
   const now = Date.now();
   const events = dates.map((day, i) => ({
     id: `ui04a-${i}`, uid: `ui04a-${i}`, title: `Událost dne ${i}`,
@@ -22,20 +23,30 @@ async function mockDays(page: Page, dates: string[]) {
   }));
   await page.route("**/api/calendar?**", async (route) => {
     if (route.request().method() !== "GET") { await route.continue(); return; }
+    const query = new URL(route.request().url()).searchParams;
+    const from = Number(query.get("from")), to = Number(query.get("to"));
+    const workspaceId = query.get("workspaceId") || "";
+    reads.push({ from, to, workspaceId });
+    // Match the real server's half-open time window. Unrelated days are NOT
+    // returned just because the test fixture knows those events.
+    const filtered = events.filter((event) =>
+      event.workspaceId === workspaceId && Date.parse(event.end) > from && Date.parse(event.start) < to);
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       sources: [{ id: "ui04a-source", workspaceId: "personal", provider: "ics", accountId: null,
         label: "E2E", status: "ready", configured: true, lastSyncAt: now, lastSuccessAt: now,
         lastError: "", eventCount: events.length, revision: 1 }],
-      events,
+      events: filtered,
     }) });
   });
+  return reads;
 }
 
 test("phone day bubbles select one civil day, mute earlier dates and never reuse today's capacity", async ({ page }) => {
   test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Mobile design preview disabled");
-  const base = today(), past = addCalendarDays(base, -1), next = addCalendarDays(base, 1);
+  const base = today(), past = addCalendarDays(base, -2), next = addCalendarDays(base, 1);
+  const far = addCalendarDays(base, 21);
   await page.setViewportSize({ width: 390, height: 844 });
-  await mockDays(page, [past, base, next]);
+  const reads = await mockDays(page, [past, base, next, far]);
   await page.goto("/?view=Calendar");
   await waitUntilSynced(page);
   const picker = page.locator(".mobileCalendarPicker");
@@ -61,10 +72,22 @@ test("phone day bubbles select one civil day, mute earlier dates and never reuse
   expect(await selectedPast.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe("rgb(139, 92, 246)");
   await expect(page.locator('[data-timeline-item="event:ui04a-0"]')).toBeVisible();
   await expect(page.locator('[data-timeline-item="event:ui04a-2"]')).toHaveCount(0);
+  const pastRange = calendarLocalDayRange(past, 1, zone);
+  await expect.poll(() => reads.some((r) =>
+    r.workspaceId === "personal" && r.from <= pastRange.start && r.to >= pastRange.end)).toBe(true);
 
   await picker.getByRole("button", { name: /Dnes|Today/ }).click();
   await expect(page.locator('[data-mobile-calendar-day]')).toHaveAttribute("data-mobile-calendar-day", base);
   await expect(page.locator('[data-timeline-item="event:ui04a-1"]')).toBeVisible();
+  // +21 days is outside the default initial +14-day fetch but inside the
+  // server's recurrence cache. Each week jump requests a real selected day.
+  for (let week = 0; week < 3; week += 1)
+    await picker.getByRole("button", { name: /Následující týden|Next week/ }).click();
+  await expect(page.locator('[data-mobile-calendar-day]')).toHaveAttribute("data-mobile-calendar-day", far);
+  await expect(page.locator('[data-timeline-item="event:ui04a-3"]')).toBeVisible();
+  const farRange = calendarLocalDayRange(far, 1, zone);
+  await expect.poll(() => reads.some((r) =>
+    r.workspaceId === "personal" && r.from === farRange.start && r.to === farRange.end)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });
 
