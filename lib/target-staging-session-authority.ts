@@ -21,6 +21,7 @@ import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetai
 import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
+import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -44,6 +45,7 @@ import {
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedGlobalTaskPage,
+  readPreflightedGlobalProjectPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -421,6 +423,19 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.3m.3: task-independent global project list (not My Plan). */
+  readGlobalProjectPage(
+    actorUserId:string,scope:TargetGlobalTaskScope,limit:number,offset:number,
+  ):TargetGlobalProjectPage|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedGlobalProjectPage(this.#store,credential,{
+        scope,limit,offset,
       }):null;
     }catch{return null;}
   }
