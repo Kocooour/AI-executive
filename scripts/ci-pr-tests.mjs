@@ -20,7 +20,7 @@ export function changedPaths(base = BASE, head = HEAD) {
 
 export function needsCodeChecks(paths) {
   // Documentation-only PRs retain a required green status without spending a build.
-  return paths.some((path) => !path.startsWith("docs/") && !path.endsWith(".md"));
+  return paths.some((filename) => !filename.endsWith(".md"));
 }
 
 const CORE = [
@@ -45,6 +45,14 @@ const UI = [
   "tests/work-scope-navigation.test.mjs",
 ];
 const TOOLCHAIN = /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tests\/ts-loader\.mjs|tests\/(?:fixtures|support)\/|scripts\/ci-pr-tests\.mjs|\.github\/workflows\/pr-checks\.yml)/;
+// File-reading tests cannot be discovered from imports. Keep these explicit.
+const FILE_INPUT_TESTS = [
+  { path: /^docs\/design-system\//, tests: ["tests/design-tokens.test.mjs"] },
+  { path: /^\.github\/workflows\/browser-e2e\.yml$/, tests: ["tests/browser-e2e-workflow.test.mjs"] },
+  { path: /^deployment\/deploy-safe\.sh$/, tests: ["tests/deploy-safe.test.mjs"] },
+];
+// Fail closed for other changed workflow definitions, which can affect any check.
+const OTHER_WORKFLOWS = /^\.github\/workflows\/(?!browser-e2e\.yml$)/;
 const SENSITIVE = /^(?:lib\/(?:auth\.ts|passkeys\.ts|http-security\.ts|security-|server-store\.ts|server-sync\.ts|db\.ts|data-dir\.ts|schema-migrations\.ts|backup-|mail-gmail\.ts|area-|target-|context(?:-|\.ts)|work-read-scope\.ts)|app\/api\/)/;
 
 // Build a reverse dependency graph from relative imports. Scanning the tracked
@@ -102,12 +110,19 @@ function testsDependingOn(changed, reverse, available) {
 }
 
 export function chooseTests(paths, available, sources = {}) {
-  if (paths.some((filename) => TOOLCHAIN.test(filename))) {
+  if (paths.some((filename) => TOOLCHAIN.test(filename) || OTHER_WORKFLOWS.test(filename))) {
     return { full: true, selected: [...available].sort() };
   }
   const selected = new Set(CORE);
   for (const filename of paths) {
     if (available.includes(filename)) selected.add(filename);
+  }
+  for (const filename of paths) {
+    for (const rule of FILE_INPUT_TESTS) {
+      if (rule.path.test(filename)) {
+        for (const test of rule.tests) selected.add(test);
+      }
+    }
   }
   if (paths.some((filename) => SENSITIVE.test(filename))) {
     for (const filename of SECURITY) selected.add(filename);
@@ -120,7 +135,7 @@ export function chooseTests(paths, available, sources = {}) {
 
   const reverse = dependencyGraph(sources, paths, available);
   const referenced = paths.filter((filename) =>
-    /^(?:lib|scripts|app\/api)\//.test(filename));
+    /^(?:lib|scripts|app)\//.test(filename));
   const fallbackSearch = referenced.map((filename) =>
     filename.replace(/\.(?:tsx?|mjs|cjs|jsx?)$/, ""));
   for (const filename of referenced) {
@@ -134,7 +149,7 @@ export function chooseTests(paths, available, sources = {}) {
     }
     for (const test of consumers) selected.add(test);
   }
-  // Some tests invoke scripts via process spawning or read paths as strings,
+  // Some tests invoke modules via process spawning or read paths as strings,
   // rather than importing them. Preserve these direct references too.
   for (const test of available) {
     const source = sources[test] ?? "";
