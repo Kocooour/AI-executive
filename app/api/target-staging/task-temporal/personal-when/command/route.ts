@@ -1,25 +1,25 @@
 /** R2d.3k.4b: default-off staging-only private whenOn CAS preview and set/clear. */
 import {HttpInputError,enforceRateLimit,readJsonBody,requireSameOrigin}
-  from "../../../../../lib/http-security";
-import {logStagingFailure} from "../../../../../lib/target-staging-failure-log";
+  from "../../../../../../lib/http-security";
+import {logStagingFailure} from "../../../../../../lib/target-staging-failure-log";
 import {
   resolveStagingHttpIdentity,stagingAnchorRefusal,stagingUnauthenticatedRefusal,
   stagingUnauthorizedRefusal,stagingChildSessionConfig,admitStagingIdentity,
   stagingIdentityRefusal,verifyStagingIdentityBeforeRelease,
-} from "../../../../../lib/target-staging-http-identity";
+} from "../../../../../../lib/target-staging-http-identity";
 import {
   personalWhenHttpEnabled,personalWhenHttpConfig,personalWhenHttpUnchanged,
   personalWhenHttpAnswer,personalWhenHttpTaskId,personalWhenHttpCommand,
   verifyPersonalWhenPreviewLive,
-} from "../../../../../lib/target-staging-personal-when-http";
+} from "../../../../../../lib/target-staging-personal-when-http";
 import {readStagingPersonalWhenPreviewInChild}
-  from "../../../../../lib/target-staging-read-process";
+  from "../../../../../../lib/target-staging-read-process";
 import {writePersonalWhenInChild}
-  from "../../../../../lib/target-staging-personal-when-http-process";
+  from "../../../../../../lib/target-staging-personal-when-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
   writeAreaMismatchResponse,
-} from "../../../../../lib/target-staging-write-contract";
+} from "../../../../../../lib/target-staging-write-contract";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
