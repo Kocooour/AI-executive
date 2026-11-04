@@ -96,3 +96,63 @@
     overflow-wrap: anywhere;
   }
 }
+
+
+/* UI-06b: one opt-in disclosure for secondary task controls. The wrappers
+   are display: contents outside mobile preview so desktop/default-off keeps
+   the legacy visual order and every input keeps its DOM identity on resize. */
+.inspectorDetail .taskDetailFields > .taskDetailEssentials,
+.inspectorDetail .taskDetailFields > .taskDetailNotes,
+.inspectorDetail .taskDetailFields > .taskDetailMoreGroup {
+  display: contents;
+}
+.inspectorDetail .taskDetailFields > .taskDetailMoreToggle {
+  display: none;
+}
+@media (max-width: 700px) {
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailEssentials,
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailNotes,
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreGroup {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailEssentials { order: 0; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailNotes { order: 1; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailWorkFinish { order: 2; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreToggle {
+    display: flex;
+    order: 3;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+    background: var(--surface-subtle);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailMoreToggle:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreList { order: 4; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreOptions { order: 5; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreActions { order: 6; }
+  .inspectorDetail[data-task-detail-preview="lumi-v1"] .taskDetailFields[data-task-more-open="false"] > .taskDetailMoreGroup {
+    display: none;
+  }
+}
