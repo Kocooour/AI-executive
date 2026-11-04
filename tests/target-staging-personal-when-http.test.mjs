@@ -170,7 +170,7 @@ test("owner, editor, viewer and private user only read own plans; date before ID
     ["s-z-first","s-a-later","s-child"]);
   assert.deepEqual(ids(await ok(get(params(),carol))),[]);
   assert.deepEqual(ids(await ok(get(params(),erin))),["p-erin"]);
-  assert.deepEqual(ids(await ok(get(params("upcoming","2026-11-04","2026-11-05"))),
+  assert.deepEqual(ids(await ok(get(params("upcoming","2026-11-04","2026-11-05")))),
     ["s-alice"]);
 });
 
