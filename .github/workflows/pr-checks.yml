@@ -6,19 +6,80 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# No production secrets or write permissions are needed for PR validation.
+# CI validates synthetic/local code only; it never needs deployment credentials.
 permissions:
   contents: read
 
 concurrency:
-  group: pr-checks-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Superseded pushes to the same PR should not consume runners.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pr-checks:
+    # Stable required status name for PR merge gates.
     name: PR Checks
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout PR integrated code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check changed-line whitespace
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+      - name: Determine PR test scope
+        id: scope
+        run: node scripts/ci-pr-tests.mjs --scope
+
+      - name: Install pnpm
+        if: steps.scope.outputs.code == 'true'
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.20.0
+
+      - name: Set up Node.js
+        if: steps.scope.outputs.code == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install locked dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Deployment script syntax
+        if: steps.scope.outputs.code == 'true'
+        run: bash -n deployment/deploy-safe.sh
+
+      - name: Typecheck
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm typecheck
+
+      - name: Focused PR unit tests (including ACL/security when affected)
+        if: steps.scope.outputs.code == 'true'
+        run: node scripts/ci-pr-tests.mjs --test
+
+      - name: Production build
+        if: steps.scope.outputs.code == 'true'
+        run: pnpm build
+
+  main-regression:
+    name: Main Regression
+    # Run the broad unit and HTTP integration suite once changes reach main,
+    # or on an explicit manual dispatch. Not a required PR status.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       CI: "true"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -46,11 +107,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit tests
+      - name: Full unit and regression suite
         run: pnpm test
 
       - name: Production build
         run: pnpm build
 
-      - name: Focused Next router HTTP smoke
+      - name: Next router HTTP integration smoke
         run: node --experimental-loader ./tests/ts-loader.mjs scripts/target-staging-next-smoke.mjs
