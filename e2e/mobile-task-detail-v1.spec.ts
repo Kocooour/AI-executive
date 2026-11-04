@@ -20,6 +20,7 @@ test("opted-in phone task detail uses one square checkbox, preserves legacy desk
     await expect(detail).toHaveAttribute("data-task-due-tone", "dueOverdue");
     const checkbox = detail.getByRole("checkbox", { name: `Dokončit: ${title}` });
     await expect(checkbox).toHaveAttribute("aria-checked", "false");
+    await expect(checkbox).toHaveAttribute("aria-label", /Po termínu/);
     await expect(checkbox).toBeEnabled();
     await expect(checkbox).toHaveCSS("width", "44px");
     await expect(detail.locator(".taskPreviewCheck")).toHaveCount(1);
