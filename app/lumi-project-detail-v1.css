@@ -1,0 +1,71 @@
+/* UI-05b: Mobile project details follow tasks in the opt-in v1 shell.
+   Desktop and default-off legacy project-page layout are unaffected. */
+@media (max-width: 700px) {
+  .projectPage[data-project-detail-preview="lumi-v1"] {
+    gap: 16px;
+    padding-bottom: 132px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectHeader { gap: 10px; }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectHeading { margin: 0; }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectTitleInput { font-size: 23px; font-weight: 700; }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectStatusLine { gap: 6px 12px; }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectSection {
+    min-width: 0;
+    gap: 10px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectSectionHeading {
+    font-size: 13px;
+    letter-spacing: .02em;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold {
+    min-width: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary {
+    cursor: pointer;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 650;
+    list-style: none;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::-webkit-details-marker { display: none; }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::before {
+    content: "›";
+    font-size: 20px;
+    color: var(--muted);
+    transition: transform .15s ease;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold[open] > summary::before { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) {
+    .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::before { transition: none; }
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold .projectContext {
+    margin: 0 0 14px;
+    padding: 12px;
+    min-width: 0;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectDetailsBody .projectActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectActionError {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: var(--danger);
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectActions button:disabled {
+    opacity: .45;
+    cursor: default;
+  }
+}
