@@ -84,6 +84,7 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     const empty = group.locator(`[data-project-preview-row="${ids.empty}"]`);
     await expect(empty).toHaveAttribute("data-project-tone", "warning");
     await expect(empty.locator("[data-project-summary]")).toHaveText("Chybí další krok");
+    await expect(empty.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(245, 158, 11)");
     const circle = urgent.locator(`[data-project-status-control="${ids.overdue}"]`);
     expect((await circle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await circle.click();
