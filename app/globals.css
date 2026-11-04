@@ -3792,8 +3792,10 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
 
 /* UI-02a preview: four tabs in the approved Lumi Design v1.0 arrangement.
    Only available with NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1; legacy nav is unchanged. */
-.mobileV1PreviewNotice { display: none; }
+.mobileV1PreviewNotice, .mobileV1PhoneTitle { display: none; }
 @media (max-width: 700px) {
+  .mobileV1DesktopTitle { display: none; }
+  .mobileV1PhoneTitle { display: inline; }
   .mobileNav[data-design-preview="lumi-v1"] { justify-content: space-between; }
   .mobileNav[data-design-preview="lumi-v1"] button {
     flex: 1 1 25%;
