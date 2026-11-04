@@ -161,12 +161,18 @@ test("revision uses full Area content epochs, not another actor's private plan",
   const f=fixture(),p=page(f);
   assert.ok(p.areaEpochs.some(a=>a.areaId==="family-area"&&a.access==="editor"));
   assert.ok(p.areaEpochs.some(a=>a.areaId==="bob-private"&&a.access==="private-owner"));
-  const token=p.revision;
+  const beforeAll=p.revision;
+  const beforeShared=page(f,"bob","shared").revision;
+  const beforePersonal=page(f,"bob","personal").revision;
   f.db.prepare("UPDATE personal_task_plans SET when_on='2026-11-09' WHERE user_id='alice' AND task_id='a-alice'").run();
-  assert.equal(page(f).revision,token);
+  assert.equal(page(f).revision,beforeAll);
+  assert.equal(page(f,"bob","shared").revision,beforeShared);
+  assert.equal(page(f,"bob","personal").revision,beforePersonal);
   f.db.prepare("UPDATE tasks SET title='Shared changed' WHERE id='s-alice'").run();
-  assert.notEqual(page(f).revision,token);
-  assert.notEqual(page(f,"bob","shared").revision,token);
+  assert.notEqual(page(f).revision,beforeAll);
+  assert.notEqual(page(f,"bob","shared").revision,beforeShared);
+  assert.equal(page(f,"bob","personal").revision,beforePersonal,
+    "shared task edits must not invalidate the private-only page");
   assert.deepEqual(ids(page(f,"bob","personal")),["b-bob"]);
 });
 
