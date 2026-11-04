@@ -1,5 +1,6 @@
 "use client";
 import { useLumiApp } from "./ui/use-lumi-app";
+import { mobileDesignV1Preview } from "./ui/navigation";
 import { AuthScreen } from "./ui/views/auth-screen";
 import { Sidebar } from "./ui/views/sidebar";
 import { Topbar } from "./ui/views/topbar";
@@ -55,6 +56,13 @@ export default function App() {
           </div>
         )}
         <Topbar app={app} />
+        {mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
+          <p className="mobileV1PreviewNotice" role="status" data-plan-source="legacy-today">
+            {language === "cs"
+              ? "Vývojový náhled Mého plánu: nyní zobrazuje dosavadní seznam Dnes v aktivním prostoru, nikoli cílový autorizovaný Můj plán."
+              : "My Plan development preview: this is the existing Today list in the current workspace, not the authorized target My Plan."}
+          </p>
+        )}
         <div className="content">
           <div className="pageIntro">
             {view !== "Home" && (
@@ -63,7 +71,12 @@ export default function App() {
               </p>
             )}
             <div className="pageTitleRow">
-              <h1>{tr(view)}</h1>
+              <h1>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? (
+                <>
+                  <span className="mobileV1DesktopTitle">{tr(view)}</span>
+                  <span className="mobileV1PhoneTitle">{language === "cs" ? "Můj plán" : "My Plan"}</span>
+                </>
+              ) : tr(view)}</h1>
               {(view === "Today" || view === "Home") && <time>{new Intl.DateTimeFormat(language === "cs" ? "cs-CZ" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</time>}
               {view === "Today" && <TodayHeaderMeta app={app} />}
             </div>

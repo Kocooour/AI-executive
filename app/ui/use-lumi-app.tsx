@@ -31,7 +31,7 @@ import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
-import { views } from "./navigation";
+import { mobileDesignV1Preview, mobileV1IsPlanPreviewRoute, views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
 import { eventTaskSpan } from "../../lib/calendar-decisions";
 import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
@@ -56,6 +56,9 @@ export function useLumiApp() {
   // The Inbox shows tasks or connected Gmail. Its active tab and message IDs are
   // in-memory only; navigation URLs never expose a mail message ID.
   const [inboxTab, setInboxTab] = useState<"tasks" | "mail">("tasks");
+  // UI-02a opt-in preview: distinguish the presentation-only plan tab
+  // from the existing Today list without claiming target-model permissions.
+  const [mobilePlanPreviewActive, setMobilePlanPreviewActive] = useState(false);
   const [view, setViewState] = useState("Home"),
     // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
     [openProjectId, setOpenProjectId] = useState<string | null>(null),
@@ -416,8 +419,10 @@ export function useLumiApp() {
   const sessionChannel = "ai-executive-session";
   // Explicit navigation away from a project creates its own history step.
   // Back then returns to the project, including when the next view is Projects (list).
-  function setView(next: string) {
+  function setView(next: string, options?: { previewMyPlan?: boolean }) {
     pendingRecordRef.current = null;
+    const planPreview = mobileDesignV1Preview && next === "Today" && options?.previewMyPlan === true;
+    setMobilePlanPreviewActive(planPreview);
     const exit = viewExitFromProject({
       currentSearch: window.location.search, currentProjectId: openProjectIdRef.current,
       nextView: next, knownViews: addressableViews, startView: startupView,
@@ -429,8 +434,11 @@ export function useLumiApp() {
       next === view && route.id === inspectorSelectionRef.current?.id;
     if (exit || leaveRecordSameView) {
       try {
-        window.history.pushState(null, "", `${window.location.pathname}${exit?.search ?? searchForView(next, startupView)}`);
-        addressedView.current = next;
+        // A project/record → My Plan click must remain exactly one history step.
+        const nextSearch = planPreview ? "?view=MyPlanPreview" :
+          exit?.search ?? searchForView(next, startupView);
+        window.history.pushState(null, "", `${window.location.pathname}${nextSearch}`);
+        addressedView.current = planPreview ? "MyPlanPreview" : next;
       } catch { /* The normal view effect handles unavailable History API. */ }
     }
     setViewState(next);
@@ -1246,11 +1254,18 @@ export function useLumiApp() {
     const savedWriteWorkspace = localStorage.getItem(
       "ai-executive-write-workspace",
     );
-    if (savedView && views.includes(savedView)) {
+    const isPreviewPhone = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches;
+    const previewMobileStart = isPreviewPhone && window.location.search === "";
+    const previewDirectLink = isPreviewPhone && mobileV1IsPlanPreviewRoute(window.location.search);
+    if (previewMobileStart || previewDirectLink) {
+      setMobilePlanPreviewActive(true);
+      if (previewMobileStart) setStartupView("Today");
+      setViewState("Today");
+    } else if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
       setView(savedView);
     }
-    // A view named in the address wins over the start view.
+    // An explicit ordinary view (including ?view=Today) wins over the preview.
     const addressedView = viewFromSearch(window.location.search, addressableViews);
     if (addressedView) setView(addressedView);
     setAddressReady(true);
@@ -1650,22 +1665,32 @@ export function useLumiApp() {
       addressedView.current = view;
       return;
     }
-    const update = addressUpdate({ currentSearch: window.location.search, view, startView: startupView,
-      navigated: addressedView.current !== null && addressedView.current !== view });
-    addressedView.current = view;
+    const navigationView = mobileDesignV1Preview && mobilePlanPreviewActive && view === "Today"
+      ? "MyPlanPreview" : view;
+    // Even if the preview uses Today as its local initial data view,
+    // explicit ?view=Today must remain distinct and reloadable.
+    const navigationStart = mobileDesignV1Preview && view === "Today" ? "Home" : startupView;
+    const update = addressUpdate({ currentSearch: window.location.search,
+      view: navigationView, startView: navigationStart,
+      navigated: addressedView.current !== null && addressedView.current !== navigationView });
+    addressedView.current = navigationView;
     if (!update) return;
     const address = `${window.location.pathname}${update.search}`;
     try {
       if (update.mode === "push") window.history.pushState(null, "", address);
       else window.history.replaceState(null, "", address);
     } catch { /* browsers limit how often history may change; the view itself is unaffected */ }
-  }, [addressReady, authState, deepLinkDone, view, startupView, openProjectId, selected?.id]);
+  }, [addressReady, authState, deepLinkDone, view, startupView, openProjectId, selected?.id, mobilePlanPreviewActive]);
   useEffect(() => {
     const followAddress = () => {
-      const next = viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
+      const previewRoute = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches &&
+        mobileV1IsPlanPreviewRoute(window.location.search);
+      const next = previewRoute ? "Today" :
+        viewFromSearch(window.location.search, addressableViews) || localStorage.getItem("ai-executive-startup-view") || "Home";
       // Leaving a field commits what was typed in it, as closing the panel by hand would.
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-      addressedView.current = next;
+      setMobilePlanPreviewActive(previewRoute);
+      addressedView.current = previewRoute ? "MyPlanPreview" : next;
       const nextView = views.includes(next) || next === "Settings" ? next : "Home";
       setViewState(nextView);
       // Canonical list URLs always show the list: stale history.state is ignored.
@@ -4390,6 +4415,7 @@ export function useLumiApp() {
     setText,
     setUseCaptureSuggestion,
     setView,
+    mobilePlanPreviewActive,
     setWorkspaceDraft,
     setWorkspaceMenuOpen,
     settingsSaved,
