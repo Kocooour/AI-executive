@@ -48,6 +48,14 @@ test("Lumi Design v1 preview shows four phone tabs, a visible source notice and 
   await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
   await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".pageTitleRow h1")).toHaveText(/Můj plán|My Plan/);
+  // Browser history also preserves which of the two Today-backed views was chosen.
+  await page.goBack();
+  await expect(page).toHaveURL(/[?]view=Today$/);
+  await expect(page.locator('.mobileNav button[data-nav-view="More"]')).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".pageTitleRow h1")).toHaveText(/Dnes|Today/);
+  await page.goForward();
+  await expect(page).toHaveURL(/[?]view=MyPlanPreview$/);
+  await expect(page.locator('[data-nav-tab="my-plan-preview"]')).toHaveAttribute("aria-current", "page");
 });
 
 test("an explicit Today URL never becomes the My Plan preview on initial load", async ({ page }) => {
