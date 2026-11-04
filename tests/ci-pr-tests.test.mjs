@@ -44,6 +44,12 @@ test("security-sensitive change always selects authorization regressions", () =>
   assert.ok(out.selected.includes("tests/context-evidence-leaks.test.mjs"));
 });
 
+test("API routes trigger security regressions, not unrelated UI tests", () => {
+  const out = chooseTests(["app/api/calendar/route.ts"], available);
+  assert.ok(out.selected.includes("tests/target-note-access.test.mjs"));
+  assert.equal(out.selected.includes("tests/mobile-navigation-v1.test.mjs"), false);
+});
+
 test("UI changes select focused mobile/navigation checks", () => {
   const out = chooseTests(["app/page.tsx"], available);
   assert.ok(out.selected.includes("tests/mobile-navigation-v1.test.mjs"));
