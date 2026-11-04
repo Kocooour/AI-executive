@@ -125,6 +125,8 @@ export function verifyStagingReadBeforeRelease(
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
   homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
   temporalTaskGuard?: TargetTemporalTaskLiveGuard,
+  /** Server-derived actor-private epoch; never accept it from HTTP input. */
+  personalPlanGuard?: {privateEpoch:number},
 ): StagingReadCheck {
   const auth = getAuthState(request);
   if (!auth.enabled || !auth.configured) return "unauthorized";
@@ -132,7 +134,7 @@ export function verifyStagingReadBeforeRelease(
   const live = verifyTargetStagingReadLive(store,
     identity.kind === "owner" ? { ownerUserId } : { tokenHash: identity.tokenHash },
     observed, Date.now(), projectGuard, projectIndexGuard, noteGuard, noteSyncGuard,
-    taskBacklinkGuard, homeSummaryGuard, temporalTaskGuard);
+    taskBacklinkGuard, homeSummaryGuard, temporalTaskGuard, personalPlanGuard);
   if (live.ok === true) return "ok";
   if (live.reason === "unavailable") logStagingFailure("scoped_release", "live_read_unavailable");
   return live.reason === "invalid" ? live.code : live.reason === "stale" ? "stale" : "unavailable";

@@ -39,6 +39,8 @@ import { readAuthorizedProjectIndexPage } from "./target-authorized-project-inde
 import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
 import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
+import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
+import type { PersonalWhenPage, PersonalWhenWindow } from "./target-personal-when-read-model";
 import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import { readAuthorizedTargetNote } from "./target-note-access";
 import { readAuthorizedTargetNoteSyncPage, type TargetNoteSyncPage } from "./target-note-sync-read-model";
@@ -397,6 +399,23 @@ export function readPreflightedTemporalDueWindowPage(
         ...request, actorUserId, restoreGeneration: store.expectedRestoreGeneration,
       });
     }, () => null));
+}
+
+/** R2d.3k.2: actor-only private planned-day read in one pinned snapshot.
+ * Not an HTTP endpoint: private epoch and Area witness require a LIVE guard. */
+export function readPreflightedPersonalWhenPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{window:PersonalWhenWindow;evaluationDate:string|null;
+    throughDate:string|null;limit:number;offset:number},
+):PersonalWhenPage|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedPersonalWhenPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
 }
 
 /** v20 temporal detail with the same actor/ACL/preflight boundary. */
