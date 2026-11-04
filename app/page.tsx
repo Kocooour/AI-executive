@@ -56,7 +56,7 @@ export default function App() {
           </div>
         )}
         <Topbar app={app} />
-        {mobileDesignV1Preview && view === "Today" && (
+        {mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
           <p className="mobileV1PreviewNotice" role="status" data-plan-source="legacy-today">
             {language === "cs"
               ? "Vývojový náhled Mého plánu: nyní zobrazuje dosavadní seznam Dnes v aktivním prostoru, nikoli cílový autorizovaný Můj plán."
@@ -71,7 +71,7 @@ export default function App() {
               </p>
             )}
             <div className="pageTitleRow">
-              <h1>{mobileDesignV1Preview && view === "Today" ? (
+              <h1>{mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" ? (
                 <>
                   <span className="mobileV1DesktopTitle">{tr(view)}</span>
                   <span className="mobileV1PhoneTitle">{language === "cs" ? "Můj plán" : "My Plan"}</span>
