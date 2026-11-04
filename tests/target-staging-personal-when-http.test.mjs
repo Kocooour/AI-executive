@@ -194,11 +194,16 @@ test("signed continuation isolated by actor/session and all private query dimens
   assert.equal((await get(q+token,owner())).status,400);
   f.db.prepare("UPDATE personal_task_plans SET when_on='2026-11-06' WHERE user_id='bob' AND task_id='s-a-later'").run();
   assert.equal((await get(q+token,bob)).status,409);
-  // Alice's cursor is independent from Bob's planning mutations.
+  // Alice's cursor survives Bob's mutations but remains bound to the
+  // exact authenticated owner cookie, not just the owner identity.
   const aliceQuery=params("all",null,null,1);
-  const aliceFirst=await ok(get(aliceQuery));
-  assert.deepEqual(ids(await ok(get(aliceQuery+"&cursor="+encodeURIComponent(aliceFirst.nextCursor)))),
-    ["s-alice"]);
+  const aliceCookie=owner();
+  const aliceFirst=await ok(get(aliceQuery,aliceCookie));
+  assert.ok(aliceFirst.nextCursor);
+  const aliceNext=aliceQuery+"&cursor="+encodeURIComponent(aliceFirst.nextCursor);
+  assert.deepEqual(ids(await ok(get(aliceNext,aliceCookie))),["s-alice"]);
+  assert.equal((await get(aliceNext,owner())).status,400,
+    "rotated owner cookie must not reuse an earlier signed cursor");
 });
 
 test("revoked durable session cannot replay private cursor",async()=>{
