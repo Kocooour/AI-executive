@@ -42,3 +42,54 @@ test("opted-in phone task detail uses one square checkbox, preserves legacy desk
     await removeTasks(page, [id]);
   }
 });
+
+test("focused title draft survives mobile/desktop resize in both directions and persists after Back", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Lumi v1 preview disabled");
+  const stamp = Date.now().toString(36);
+  const id = `ui06a-resize-${stamp}`;
+  const original = `Přejmenovat UI06a ${stamp}`;
+  const when = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?view=Upcoming");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ id, title: original, properties: { when } }]);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    const detail = page.locator("aside.inspectorDetail");
+    let currentTitle = original;
+    // First rotate mobile -> desktop, then desktop -> mobile. Neither
+    // transition may unmount the focused title input before its blur/save.
+    for (const [index, width] of [1280, 390].entries()) {
+      await page.locator(".taskRow", { hasText: currentTitle }).first()
+        .getByRole("button", { name: currentTitle, exact: true }).click();
+      const titleInput = detail.locator("input.titleEdit");
+      const nextTitle = `${original} verze ${index + 1}`;
+      await titleInput.fill(nextTitle);
+      await expect(titleInput).toBeFocused();
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      if (width === 390) {
+        await expect(detail).toHaveAttribute("data-task-detail-preview", "lumi-v1");
+      } else {
+        await expect(detail).not.toHaveAttribute("data-task-detail-preview", "lumi-v1");
+      }
+      await expect(titleInput).toBeFocused();
+      await expect(titleInput).toHaveValue(nextTitle);
+      // No explicit input blur or refocus after the responsive transition:
+      // Back must trigger the existing onBlur persistence path.
+      await detail.locator(".inspectorClose").click();
+      await expect(detail).toHaveCount(0);
+      await expectOnServer(page, (task) => task.id === id && task.title === nextTitle, true);
+      // Reopening after a reload proves this was a server write, not only
+      // an in-memory selected title in the previous inspector instance.
+      await page.reload();
+      await waitUntilSynced(page);
+      currentTitle = nextTitle;
+    }
+    await page.locator(".taskRow", { hasText: currentTitle }).first()
+      .getByRole("button", { name: currentTitle, exact: true }).click();
+    await expect(detail.locator("input.titleEdit")).toHaveValue(currentTitle);
+  } finally {
+    await removeTasks(page, [id]);
+  }
+});
