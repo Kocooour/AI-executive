@@ -1,6 +1,7 @@
 "use client";
 import { inSentenceDate } from "../format";
 import type { CalendarEvent } from "../types";
+import type { Entity } from "../../../lib/db";
 import type { LumiApp } from "../use-lumi-app";
 import { PopoverMenu } from "./popover-menu";
 
@@ -8,9 +9,9 @@ const fill = (text: string, values: Record<string, string>) => text.replace(/\{(
 
 // The owner's controls for one calendar event: "Is it a task?" (Yes / No), the task it became, and
 // Hide. A recurring event asks whether to hide this occurrence or the whole series.
-export function CalendarEventActions({ app, event }: { app: LumiApp; event: CalendarEvent }) {
+export function CalendarEventActions({ app, event, linkedTask }: { app: LumiApp; event: CalendarEvent; linkedTask?: Entity | null }) {
   const { calendarEventNeedsQuestion, calendarEventTasks, createCalendarEventTask, hideCalendarEvent, done, inspect, isCalendarEventRecurring, markCalendarEventNotTask, tr } = app;
-  const task = calendarEventTasks.get(event.id);
+  const task = linkedTask === undefined ? calendarEventTasks.get(event.id) : linkedTask ?? undefined;
   const asking = !task && calendarEventNeedsQuestion(event);
   const title = { title: event.title };
   const hideLabel = fill(tr("calEventHideLabel"), title);

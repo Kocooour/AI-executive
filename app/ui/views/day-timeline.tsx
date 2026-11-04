@@ -1,7 +1,8 @@
 "use client";
-import { eventTaskSpan } from "../../../lib/calendar-decisions";
+import { eventTaskSpan, linkedEventTasks } from "../../../lib/calendar-decisions";
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { calendarOverviewIntersects } from "../../../lib/calendar-overview";
+import { mobileCalendarEventsForDay } from "../../../lib/mobile-calendar-day";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import {
   layoutDayTimeline, timelineNowOffset, TIMELINE_PX_PER_MINUTE, TIMELINE_PX_PER_MINUTE_NARROW, untimedRowHeight, type OverflowGroup, type PlacedTimelineItem, type TimelineSource,
@@ -42,9 +43,36 @@ interface Entry extends TimelineSource {
   minutes?: number;
 }
 
-export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode }) {
-  const { applyDayPlanAction, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
-    dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion } = app;
+export function DayTimeline({ app, mode, empty, day, dayEvents }: {
+  app: LumiApp; mode: "today" | "calendar"; empty?: ReactNode; day?: string; dayEvents?: CalendarEvent[];
+}) {
+  const { applyDayPlanAction, activeWorkspaceId, writeWorkspaceId, busyCalendarDayEvents, calendarDayEvents, calendarDayEventsAll, calendarEvents, calendarEventTasks, calendarTimezone, calendarToday, createCalendarEventTask,
+    dayPlanBusy, dayPlanNow, todayTimelineTaskIds, inspect, isCalendarEventHidden, items, language, notificationState, todayTasks, tr, unhideCalendarEvent, visibleDayPlan, calendarEventNeedsQuestion, effectiveBusyCalendarEvents } = app;
+  // Today retains its existing semantics. The new mobile-only Calendar prop
+  // selects one civil day from the same connected legacy feed.
+  const shownDay = mode === "calendar" && day ? day : calendarToday;
+  const isCurrentDay = shownDay === calendarToday;
+  const selectedDayEvents = useMemo(() =>
+    dayEvents
+      // The server filters UTC timestamp intersections, not VALUE=DATE civil
+      // days: an adjacent all-day event can overlap the queried local midnight
+      // in either direction. Apply the shared civil-date predicate here too.
+      ? mobileCalendarEventsForDay(dayEvents, shownDay, calendarTimezone)
+      : mode === "calendar" && !isCurrentDay
+        ? mobileCalendarEventsForDay(calendarEvents, shownDay, calendarTimezone)
+        : calendarDayEventsAll,
+    [dayEvents, mode, isCurrentDay, calendarEvents, calendarDayEventsAll, shownDay, calendarTimezone]);
+  const calendarWorkspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // Day-specific API results are separate from Today's global event feed.
+  // Re-resolve converted tasks against their current workspace, or the same
+  // event would reappear as a second standalone event in the selected day.
+  const fetchedLinkedTasks = useMemo(() => dayEvents
+    ? linkedEventTasks(items, calendarWorkspaceId, selectedDayEvents)
+    : null, [dayEvents, items, calendarWorkspaceId, selectedDayEvents]);
+  const dayLinkedTasks = fetchedLinkedTasks ?? calendarEventTasks;
+  const selectedBusyEvents = useMemo(() =>
+    mode === "calendar" && !isCurrentDay ? effectiveBusyCalendarEvents(selectedDayEvents) : busyCalendarDayEvents,
+    [mode, isCurrentDay, effectiveBusyCalendarEvents, selectedDayEvents, busyCalendarDayEvents]);
   const [narrow, setNarrow] = useState(false);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 560px)");
@@ -62,8 +90,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
     const agendaIds = new Set(calendarDayEvents.map((event) => event.id));
     const result: Entry[] = [];
     const taskIds = new Set<string>();
-    for (const event of calendarDayEventsAll) {
-      const task = calendarEventTasks.get(event.id);
+    for (const event of selectedDayEvents) {
+      const task = dayLinkedTasks.get(event.id);
       if (task) {
         // Today shows the task only where it is a Today task (same predicate as the list leaving it out).
         if (mode === "today" && !todayTimelineTaskIds.has(task.id)) continue;
@@ -78,7 +106,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       if (mode === "today" ? !agendaIds.has(event.id) : false) continue;
       result.push({ id: `event:${event.id}`, kind: "event", title: event.title, start: event.start, end: event.end, event, hidden, busy: event.busy, allDay: event.allDay, underlay: hidden });
     }
-    if (visibleDayPlan) {
+    if (visibleDayPlan && isCurrentDay) {
       const blocks = [
         ...visibleDayPlan.existingBlocks.map((block) => ({ block, proposal: false })),
         ...visibleDayPlan.planBlocks.map((block) => ({ block, proposal: true })),
@@ -90,7 +118,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       }
     }
     // A conflict is a plan block over a busy event or over another plan block (events beside each other are normal).
-    const busyIds = new Set(busyCalendarDayEvents.map((event) => event.id));
+    const busyIds = new Set(selectedBusyEvents.map((event) => event.id));
     const occupying = result.filter((entry) => !entry.allDay && (entry.kind === "plan" || (entry.kind === "event" && entry.event && busyIds.has(entry.event.id))));
     for (let left = 0; left < occupying.length; left += 1) {
       for (let right = left + 1; right < occupying.length; right += 1) {
@@ -102,21 +130,24 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
       }
     }
     return result;
-  }, [mode, todayTimelineTaskIds, calendarDayEvents, calendarDayEventsAll, calendarEventTasks, calendarTimezone, busyCalendarDayEvents, isCalendarEventHidden, items, visibleDayPlan]);
+  }, [mode, todayTimelineTaskIds, calendarDayEvents, selectedDayEvents, dayLinkedTasks, calendarTimezone, selectedBusyEvents, isCalendarEventHidden, items, visibleDayPlan, isCurrentDay]);
 
   const allDay = useMemo(() => entries.filter((entry) => entry.allDay), [entries]);
   const timed = useMemo(() => entries.filter((entry) => !entry.allDay), [entries]);
   const layout = useMemo(() => layoutDayTimeline(timed, {
-    day: calendarToday, timezone: calendarTimezone, pxPerMinute, fitToItems: mode === "today", maxColumns: narrow ? 3 : 4,
+    day: shownDay, timezone: calendarTimezone, pxPerMinute, fitToItems: mode === "today", maxColumns: narrow ? 3 : 4,
     workdayStart: notificationState?.preferences.workdayStart, workdayEnd: notificationState?.preferences.workdayEnd,
-  }), [timed, mode, narrow, calendarToday, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
-  const nowTop = timelineNowOffset(layout, dayPlanNow);
+  }), [timed, mode, narrow, shownDay, calendarTimezone, pxPerMinute, notificationState?.preferences.workdayStart, notificationState?.preferences.workdayEnd]);
+  const nowTop = isCurrentDay ? timelineNowOffset(layout, dayPlanNow) : null;
 
   // Calendar only: today's open tasks that have no time on the axis, each as tall as its estimate.
   // (Today lists them right below, in the working list.)
   const placedTaskIds = new Set(entries.flatMap((entry) => entry.task ? [entry.task.id] : []));
-  const untimed = mode === "calendar" ? todayTasks.filter((task) => task.type === "task" && task.status === "open" && !placedTaskIds.has(task.id)) : [];
-  const planSlots = planSlotsByTask(visibleDayPlan);
+  const scheduledTasks = isCurrentDay ? todayTasks : items.filter((item) =>
+    item.type === "task" && item.workspaceId === calendarWorkspaceId && item.properties.when === shownDay);
+  const untimed = mode === "calendar" ? scheduledTasks.filter((task) =>
+    task.type === "task" && task.status === "open" && !placedTaskIds.has(task.id)) : [];
+  const planSlots = isCurrentDay ? planSlotsByTask(visibleDayPlan) : new Map();
 
   if (entries.length === 0 && untimed.length === 0) return <>{empty}</>;
 
@@ -134,7 +165,7 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
 
   const panel = (entry: Entry, when: string, close: (returnFocus?: boolean) => void) => {
     const event = entry.event;
-    const display = event ? calendarEventDisplay(event, { language, timezone: calendarTimezone, day: calendarToday }) : null;
+    const display = event ? calendarEventDisplay(event, { language, timezone: calendarTimezone, day: shownDay }) : null;
     const continuation = display ? [display.continuesFromPreviousDay && tr("calendarContinuesFromPreviousDay"), display.continuesIntoNextDay && tr("calendarContinuesIntoNextDay")].filter(Boolean).join(" · ") : "";
     return (
       <div className="dayTimelinePanel" data-timeline-panel={entry.id}
@@ -147,13 +178,15 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
         ) : (
           <>
             <p className="dayTimelineNote">{event.allDay ? `${tr("allDay")} · ${display?.detail}` : display?.detail} · {tr("calendarReadOnlyEvent")}</p>
-            <CalendarEventActions app={app} event={event} />
+            <CalendarEventActions app={app} event={event}
+              linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />
             {!calendarEventNeedsQuestion(event) && (
               <button type="button" data-event-create-task={event.id} onClick={() => void createCalendarEventTask(event)}>{tr("calEventCreateTask")}</button>
             )}
           </>
         ))}
-        {entry.kind === "task" && event && <CalendarEventActions app={app} event={event} />}
+        {entry.kind === "task" && event && <CalendarEventActions app={app} event={event}
+          linkedTask={fetchedLinkedTasks ? dayLinkedTasks.get(event.id) ?? null : undefined} />}
         {entry.kind === "task" && entry.task?.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={entry.task} />}
         {entry.kind === "plan" && (
           <div className="timeMenuActions">
@@ -247,7 +280,8 @@ export function DayTimeline({ app, mode, empty }: { app: LumiApp; mode: "today" 
                     <button type="button" className="taskRowOpen" onClick={() => void inspect(task)}>{task.title || tr("untitledItem")}</button>
                     <small data-timeline-estimate>{estimate ? minutesText(estimate) : tr("timelineNoEstimate")}</small>
                   </span>
-                  <TodayTimeCell app={app} task={task} slot={planSlots.get(task.id)} />
+                  {/* Today's plan feedback must not appear on a different selected day. */}
+                  {isCurrentDay && <TodayTimeCell app={app} task={task} slot={planSlots.get(task.id)} />}
                   {app.activeWorkspaceId !== "all" && <DeferChip app={app} task={task} />}
                 </li>
               );

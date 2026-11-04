@@ -3813,3 +3813,72 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
     color: var(--muted);
   }
 }
+
+
+/* UI-04a: mobile Calendar v1, opt-in alongside the four-tab mobile shell. */
+@media (max-width: 700px) {
+  .mobileCalendarDay { display: grid; gap: 12px; min-width: 0; }
+  .mobileCalendarDay > h3 { margin: 2px 0 0; font-size: 15px; font-weight: 650; }
+  .mobileCalendarPicker { display: grid; gap: 8px; min-width: 0; }
+  .mobileCalendarPickerHead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .mobileCalendarPickerHead button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .mobileCalendarTodayJump { font-weight: 650 !important; }
+  .mobileCalendarWeekJump { font-size: 24px !important; line-height: 1 !important; }
+  .mobileCalendarDateStrip {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 7px;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+    padding: 3px 1px 9px;
+  }
+  .mobileCalendarDateBubble {
+    display: flex;
+    flex: 0 0 53px;
+    min-width: 53px;
+    min-height: 62px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    scroll-snap-align: center;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .mobileCalendarWeekday { font-size: 11px; font-weight: 600; line-height: 1.2; }
+  .mobileCalendarDateNumber { font-size: 17px; font-weight: 700; line-height: 1.2; }
+  .mobileCalendarDateBubble[data-past="true"] {
+    color: var(--muted);
+    background: var(--surface-subtle);
+    border-color: var(--line);
+  }
+  /* Selection wins over past-day muting even after DST/week changes. */
+  .mobileCalendarDateBubble[data-selected="true"] {
+    color: #fff;
+    background: #8b5cf6;
+    border-color: #8b5cf6;
+  }
+  .mobileCalendarDateBubble:focus-visible,
+  .mobileCalendarPickerHead button:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}

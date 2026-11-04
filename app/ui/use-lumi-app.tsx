@@ -4277,6 +4277,9 @@ export function useLumiApp() {
     enableNotifications,
     freeHours,
     freeWindows,
+    // Raw calendar events feed the opt-in mobile day selector. It is the same
+    // already-connected, legacy-scoped feed as Calendar's existing timeline.
+    calendarEvents,
     calendarDayEventsAll,
     nearbyCalendarEventsAll,
     busyCalendarDayEvents,
