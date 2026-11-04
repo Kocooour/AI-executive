@@ -87,7 +87,7 @@ test("global Vše includes private and all readable shared projects, even empty 
   assert.deepEqual(ids(readAuthorizedProjectIndexPage(f.reader,{
     actorUserId:"bob",scope:"my-plan",restoreGeneration:f.stage.restoreGeneration,
     limit:100,offset:0,
-  })),[]);
+  })),["b-bob"]);
 });
 
 test("global project DTO contains only project and effective Area fields",()=>{
