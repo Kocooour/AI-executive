@@ -312,17 +312,20 @@ export function useLumiApp() {
   useEffect(() => {
     const pending = pendingRecordRef.current;
     if (!pending || pending.workspaceId !== activeWorkspaceId) return;
-    pendingRecordRef.current = null;
-    // A queued URL is only a locator. Resolve again using the committed
-    // workspace and latest records; navigation, deletion or a changed parent
-    // must never revive a stale inspector.
+    // Keep the pending URL marker until the selection has actually committed.
+    // Otherwise the URL-sync effect in this render still sees selected=null
+    // and replaces the deep link with a view-only address.
     const target = targetFromSearch(window.location.search, addressableViews, startupView);
     if ((target?.kind !== "task" && target?.kind !== "note") ||
         target.id !== pending.id || target.kind !== pending.kind || target.view !== pending.view ||
-        target.projectId !== pending.projectId) return;
+        target.projectId !== pending.projectId) {
+      pendingRecordRef.current = null;
+      return;
+    }
     const destination = resolveLegacyRecordLink(items, relations, target, activeWorkspaceId);
     if (destination && !destination.selectWorkspaceId)
       void inspectRef.current(destination.record, { navigate: false });
+    else pendingRecordRef.current = null;
   }, [activeWorkspaceId, items, relations, startupView]);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const moreDialogRef = useRef<HTMLDivElement>(null);
@@ -1628,6 +1631,22 @@ export function useLumiApp() {
     if ((route?.kind === "task" || route?.kind === "note") && route.view === view &&
         route.id === selected?.id && route.kind === selected.type &&
         (route.projectId ?? null) === openProjectId) {
+      // The inspector has committed. It is now safe to release the pending
+      // navigation marker without changing this copyable record URL.
+      if (pendingRecordRef.current?.id === route.id &&
+          pendingRecordRef.current.kind === route.kind) pendingRecordRef.current = null;
+      addressedView.current = view;
+      return;
+    }
+    const pending = pendingRecordRef.current;
+    if ((route?.kind === "task" || route?.kind === "note") &&
+        pending?.kind === route.kind && pending.id === route.id &&
+        pending.view === route.view && pending.projectId === route.projectId &&
+        pending.workspaceId === activeWorkspaceId && route.view === view &&
+        (route.projectId ?? null) === openProjectId) {
+      // The workspace is committed but inspect() has only scheduled setSelected.
+      // Retain the typed URL during this render; the next render above confirms
+      // the actual selection, including after browser Back across workspaces.
       addressedView.current = view;
       return;
     }
