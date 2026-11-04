@@ -6,7 +6,7 @@ import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspace
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
 import { failedSignOutNeedsReload, incompleteSignOutNoticeKey, runSignOut } from "../../lib/sign-out";
 import { dropNotesDraft, keepNotesDraft, keptNotesDrafts, leftoverDraftAction, settleNotesDraft, type KeptNotesDraft } from "../../lib/notes-drafts";
-import { addressUpdate, searchForTarget, searchForView, targetFromSearch, viewFromSearch } from "../../lib/view-url";
+import { addressUpdate, projectIdFromAddress, searchForTarget, searchForView, targetFromSearch, viewFromSearch } from "../../lib/view-url";
 import { buildContext, type ContextBundle } from "../../lib/context";
 import { mergeSnapshots, type ServerSnapshot } from "../../lib/server-sync";
 import { isAdopting, takeAfterRestoreFlag } from "../../lib/adoption";
@@ -402,18 +402,18 @@ export function useLumiApp() {
   // A project address is durable across reloads and devices. History state is only
   // a hint that a Back step was created in this tab, never an access grant.
   function openProjectPage(project: Entity) {
+    // A stale sidebar/search result must not open a project outside the current scope.
+    if (!visibleProjectsRef.current.some((visible) => visible.id === project.id && visible.workspaceId === project.workspaceId)) return;
     closeDetail();
     try {
-      if (viewRef.current !== "Projects") {
-        const listAddress = `${window.location.pathname}${searchForView("Projects", startupView)}`;
-        window.history.pushState(null, "", listAddress);
-        addressedView.current = "Projects"; // Prevent a duplicate list entry from the view effect.
-      }
       const marker = { lumiProject: project.id };
       const projectAddress = `${window.location.pathname}${searchForTarget({ kind: "project", id: project.id }, startupView)}`;
-      if (window.history.state?.lumiProject) window.history.replaceState(marker, "", projectAddress);
+      const current = targetFromSearch(window.location.search, addressableViews, startupView);
+      if (current?.kind === "project" && current.id === project.id) window.history.replaceState(marker, "", projectAddress);
       else window.history.pushState(marker, "", projectAddress);
     } catch { /* Navigation still works in memory when History API is unavailable. */ }
+    // One history step returns to the actual origin (Home/Today/list/other project),
+    // never to a synthetic Projects entry that the user did not visit.
     setViewState("Projects");
     setOpenProjectId(project.id);
   }
@@ -1491,7 +1491,7 @@ export function useLumiApp() {
   // selected legacy scope. Target Area ACL/server authorization arrives separately in R3.
   // Notification ?task= links keep their historical compatibility behavior.
   useEffect(() => {
-    if (deepLinkHandled.current || !items.length) return;
+    if (deepLinkHandled.current || (!items.length && syncStatus !== "synced" && syncStatus !== "offline")) return;
     const route = targetFromSearch(window.location.search, addressableViews, startupView);
     if (route?.kind === "project") {
       const project = items.find((item) => item.type === "project" && item.id === route.id &&
@@ -1554,9 +1554,8 @@ export function useLumiApp() {
       const nextView = chosen ?? (views.includes(next) || next === "Settings" ? next : "Home");
       setViewState(nextView);
       // The address survives reload; neither the URL nor old history.state authorizes access.
-      const target = targetFromSearch(window.location.search, addressableViews, nextView);
       const candidate = !chosen && nextView === "Projects"
-        ? target?.kind === "project" ? target.id : window.history.state?.lumiProject
+        ? projectIdFromAddress(window.location.search, window.history.state?.lumiProject, addressableViews, nextView)
         : null;
       setOpenProjectId(typeof candidate === "string" && visibleProjectsRef.current.some((project) => project.id === candidate)
         ? candidate : null);
