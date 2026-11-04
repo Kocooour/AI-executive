@@ -1,5 +1,5 @@
-// The address carries the open view and nothing else: never a workspace, a record id or a search
-// text. The view the app starts on is left out, so the plain address keeps meaning "start".
+// A view-only address contains no record ID or search text. UI-01 adds typed
+// opaque record targets below; neither view nor record IDs grant data access.
 
 const parameter = "view";
 
@@ -69,13 +69,15 @@ export function searchForTarget(target: NavigationTarget, startView: string): st
 }
 
 
-// Compatibility for old in-tab project history. An invalid URL never gains
-// access to a record merely because history.state contains an ID.
-export function projectIdFromAddress(
-  search: string, historyProjectId: unknown, knownViews: readonly string[], startView: string,
-): string | null {
-  const target = targetFromSearch(search, knownViews, startView);
-  if (target?.kind === "project") return target.id;
-  return target?.kind === "view" && target.view === "Projects" &&
-    typeof historyProjectId === "string" && isOpaqueId(historyProjectId) ? historyProjectId : null;
+// An explicit view choice while viewing a project must be a *new* history entry.
+// It is not a Back action: Back must return to the actual project the user left.
+// Only call this for a visible project, never as an authorization decision.
+export function viewExitFromProject(input: {
+  currentSearch: string; currentProjectId: string | null; nextView: string;
+  knownViews: readonly string[]; startView: string;
+}): { search: string; mode: "push" } | null {
+  if (!input.currentProjectId || !input.knownViews.includes(input.nextView)) return null;
+  const current = targetFromSearch(input.currentSearch, input.knownViews, input.startView);
+  if (current?.kind !== "project" || current.id !== input.currentProjectId) return null;
+  return { search: searchForView(input.nextView, input.startView), mode: "push" };
 }
