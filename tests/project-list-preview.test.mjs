@@ -40,3 +40,14 @@ test("project row shows only one issue or next action, never progress or counts"
   assert.equal(projectPreviewSummary(active, summary(), "cs"), null);
   assert.equal(projectPreviewSummary(project("completed"), summary({ attention: { kind: "overdue", count: 2 } }), "cs"), null);
 });
+ 
+test("preview quick status writes require a concrete current workspace and clean project", () => {
+  const p = { type: "project", status: "active", workspaceId: "personal" };
+  assert.equal(projectPreviewCanToggle(p, "personal", false), true);
+  assert.equal(projectPreviewCanToggle(p, "all", false), false);
+  assert.equal(projectPreviewCanToggle(p, "shared", false), false);
+  assert.equal(projectPreviewCanToggle(p, "personal", true), false);
+  assert.equal(projectPreviewCanToggle({ ...p, status: "completed" }, "personal", false), true);
+  assert.equal(projectPreviewCanToggle({ ...p, status: "archived" }, "personal", false), false);
+  assert.equal(projectPreviewCanToggle({ ...p, type: "task" }, "personal", false), false);
+});
