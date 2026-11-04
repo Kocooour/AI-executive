@@ -47,3 +47,19 @@ export const viewIcons: Record<string, string> = {
 };
 // Owner decision 2026-10-22: the mobile bar swaps Calendar for Projects; Calendar moves to the "More" sheet.
 export const mobileViews = ["Home", "Inbox", "Today", "Projects", "More"];
+
+// UI-02a: opt-in visual/navigation preview of the approved 2026-11-04
+// four-tab mobile shell. This is NOT the authorized My Plan data scope:
+// until UI-09/R3 the first tab explicitly previews the legacy Today list.
+// Production stays on the existing navigation when the flag is absent.
+export const mobileDesignV1Preview = process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW === "1";
+export const mobileV1Tabs = ["MyPlanPreview", "Calendar", "Projects", "More"] as const;
+export const mobileV1MoreGroups: { title: string; views: string[] }[] = [
+  { title: "mobileMorePlanning", views: ["Home", "Inbox", "Today", "Upcoming", "Notes", "Areas"] },
+  { title: "mobileMoreFilters", views: ["Overdue", "Anytime", "Someday", "Completed"] },
+  { title: "mobileMoreSystem", views: ["Context", "Agents", "Settings"] },
+];
+export const mobileV1MoreViews = mobileV1MoreGroups.flatMap((group) => group.views);
+export function mobileV1Destination(tab: (typeof mobileV1Tabs)[number]): string | null {
+  return tab === "More" ? null : tab === "MyPlanPreview" ? "Today" : tab;
+}
