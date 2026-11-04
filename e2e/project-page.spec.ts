@@ -149,7 +149,7 @@ test("opening a project shows its page as the main view; a task opens the inspec
     const projectPage = page.locator(".projectPage");
     await expect(projectPage).toBeVisible();
     await expect(page.locator("aside.inspectorDetail")).toHaveCount(0);
-    await expect(page).toHaveURL(/\?view=Projects$/);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${id.rich}$`));
     // Header: title, status, progress and the context.
     await expect(projectPage.getByRole("textbox", { name: "Název projektu" })).toHaveValue(`Projekt B1${R} s kontextem`);
     await expect(page.getByTestId("project-status")).toHaveText("Aktivní");
@@ -202,12 +202,11 @@ test("opening a project shows its page as the main view; a task opens the inspec
   }
 });
 
-test("Home sidebar project creates list→page history, Back/Forward restore each step", async ({ page }) => {
+test("Home sidebar project: direct URL, actual Back/Forward origin and explicit view changes", async ({ page }) => {
   await page.goto("/?view=Home");
   await waitUntilSynced(page);
   const id = `e2e-b1-side-${now()}`;
   const title = `Projekt B1${R} v navigaci`;
-  // Pin the test project to the top of the sidebar: other focused tests may have left more projects.
   expect(await seed(page, { entities: [entity(id, "project", title,
     { manualOrders: { "personal:project:all": -1_000_000 } })] })).toBe(200);
   try {
@@ -217,17 +216,112 @@ test("Home sidebar project creates list→page history, Back/Forward restore eac
     await expect(sidebar).toBeVisible();
     await sidebar.click();
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
-    await expect(page).toHaveURL(/\?view=Projects$/);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${id}$`));
     await page.goBack();
     await expect(page.locator(".projectPage")).toHaveCount(0);
-    await expect(page.locator(".taskRow", { hasText: title })).toBeVisible();
-    await page.goBack();
-    await expect(page.locator(".projectPage")).toHaveCount(0);
-    await expect(page).not.toHaveURL(/\?view=Projects$/);
-    await page.goForward();
-    await expect(page.locator(".taskRow", { hasText: title })).toBeVisible();
+    await expect(page.locator(".appShell")).toHaveClass(/view-home/);
     await page.goForward();
     await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+
+    // A chosen view is a new history entry, never a disguised Back.
+    await page.locator('aside > nav [data-nav-view="Home"]').click();
+    await expect(page.locator(".appShell")).toHaveClass(/view-home/);
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+    await page.goForward();
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+
+    // Choosing Projects creates a list entry; Back restores the project.
+    await page.locator('aside > nav [data-nav-view="Projects"]').click();
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+    await expect(page).toHaveURL(/\?view=Projects$/);
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+    await page.reload();
+    await waitUntilSynced(page);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+  } finally {
+    await cleanup(page, [id]);
+  }
+});
+
+test("browser Back restores a project across a shared workspace switch", async ({ page }) => {
+  await page.goto("/?view=Home");
+  await waitUntilSynced(page);
+  const stamp = now();
+  const projectId = `e2e-b1-history-project-${stamp}`;
+  const otherWorkspaceId = `e2e-b1-history-shared-${stamp}`;
+  const workspaceEntityId = `workspace-${otherWorkspaceId}`;
+  const title = `Projekt B1${R} history scope`;
+  expect(await seed(page, { entities: [
+    entity(projectId, "project", title, { manualOrders: { "personal:project:all": -1_000_000 } }),
+    { id: workspaceEntityId, type: "workspace", title: "B1 temporary shared",
+      status: "active", workspaceId: otherWorkspaceId,
+      properties: { kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }] },
+      createdAt: stamp, updatedAt: stamp },
+  ] })).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    const sidebarProject = page.locator("aside .sidebarProjects button", { hasText: title });
+    await expect(sidebarProject).toBeVisible();
+    await sidebarProject.click();
+    const projectUrl = `/?view=Projects&projectId=${projectId}`;
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", projectId);
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${projectId}$`));
+
+    await page.locator('aside > nav [data-nav-view="Today"]').click();
+    await expect(page.locator(".projectPage")).toHaveCount(0);
+    await page.locator("aside .workspaceButton").click();
+    await page.locator(`aside .workspaceMenu button[data-workspace-id="${otherWorkspaceId}"]`).click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "work");
+
+    // The mount-only popstate handler uses live records and restores the former scope.
+    await page.goBack();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", projectId);
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
+    await expect(page).toHaveURL(new RegExp(`[?]view=Projects&projectId=${projectId}$`));
+
+    // The same target resolves on a fresh page load from a different saved scope.
+    await page.goForward();
+    await page.locator("aside .workspaceButton").click();
+    await page.locator(`aside .workspaceMenu button[data-workspace-id="${otherWorkspaceId}"]`).click();
+    await page.goto(projectUrl);
+    await waitUntilSynced(page);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", projectId);
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "personal");
+  } finally {
+    await cleanup(page, [projectId, workspaceEntityId]);
+  }
+});
+
+test("aggregate project deep links survive reload and stale list markers cannot reopen a record", async ({ page }) => {
+  await page.goto("/?view=Projects");
+  await waitUntilSynced(page);
+  const id = `e2e-b1-aggregate-${now()}`;
+  const title = `Projekt B1${R} agregovaný odkaz`;
+  expect(await seed(page, { entities: [entity(id, "project", title)] })).toBe(200);
+  try {
+    await page.reload();
+    await waitUntilSynced(page);
+    await page.locator("aside .workspaceButton").click();
+    await page.locator('aside .workspaceMenu button[data-workspace-id="all"]').click();
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "all");
+    await page.locator(".taskRow", { hasText: title }).getByRole("button", { name: title, exact: true }).click();
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+    await page.reload();
+    await waitUntilSynced(page);
+    await expect(page.locator(".projectPage")).toHaveAttribute("data-project-page", id);
+    await expect(page.locator(".appShell")).toHaveAttribute("data-workspace-tone", "all");
+    await page.evaluate((projectId) => {
+      history.pushState({ lumiProject: projectId }, "", "/?view=Projects");
+      history.pushState(null, "", "/?view=Home");
+    }, id);
+    await page.goBack();
+    await expect(page).toHaveURL(/\?view=Projects$/);
+    await expect(page.locator(".projectPage")).toHaveCount(0);
   } finally {
     await cleanup(page, [id]);
   }

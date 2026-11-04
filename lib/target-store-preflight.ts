@@ -11,7 +11,8 @@ import {
   TARGET_STAGING_NOTE_RECEIPT_PREFIX, TARGET_STAGING_NOTE_DELETE_RECEIPT_PREFIX,
   TARGET_STAGING_NOTE_LIFECYCLE_RECEIPT_PREFIX,
   TARGET_STAGING_MAX_TOMBSTONES, TARGET_STAGING_NOTE_CHANGE_MAX_EVENTS, TARGET_STAGING_RESTORE_HISTORY_MAX,
-  TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES, verifyExistingTargetStagingPath,
+  TARGET_STAGING_SUPERSEDED_SESSIONS_MAX, TARGET_STAGING_MAX_NOTES,
+  TARGET_STAGING_MAX_PERSONAL_PLANS, verifyExistingTargetStagingPath,
 } from "./target-store-bootstrap";
 
 export type TargetPreflightMode = "stage" | "r2-model";
@@ -23,7 +24,8 @@ export type TargetPreflightCode =
   | "audit_invalid" | "session_invalid" | "tombstone_invalid"
   | "change_log_invalid" | "membership_log_invalid" | "change_log_floor_invalid"
   | "assignee_invalid" | "shared_mapping_invalid" | "shared_admin_missing"
-  | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid";
+  | "restore_history_invalid" | "note_invalid" | "note_sync_journal_invalid"
+  | "personal_plan_invalid";
 
 export interface TargetPreflightOptions {
   stagingDirectory: string;
@@ -557,6 +559,27 @@ export function inspectIsolatedTargetStore(
           NOT EXISTS (SELECT 1 FROM area_members m WHERE m.area_id=a.id
             AND m.user_id=t.assignee_user_id AND m.role IN ('editor','admin')))` ) !== 0) fail("assignee_invalid");
     } catch { fail("database_query_failed"); }
+
+    // v21: personal plans must never leak to foreign private tasks, shared
+    // viewers, unassigned work, completed tasks or former assignees.
+    // The per-user epoch rows are independent of shared Area/content revisions.
+    try {
+      if (count("SELECT COUNT(*) AS n FROM personal_task_plans") >
+            TARGET_STAGING_MAX_PERSONAL_PLANS ||
+          count("SELECT COUNT(*) AS n FROM identities i LEFT JOIN personal_plan_epochs e ON e.user_id=i.id WHERE e.user_id IS NULL") !== 0 ||
+          count("SELECT COUNT(*) AS n FROM personal_plan_epochs e LEFT JOIN identities i ON i.id=e.user_id WHERE i.id IS NULL") !== 0 ||
+          count(`SELECT COUNT(*) AS n FROM personal_task_plans plan
+            LEFT JOIN tasks t ON t.id=plan.task_id
+            LEFT JOIN projects p ON p.id=t.project_id
+            LEFT JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+            LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=plan.user_id
+            WHERE t.id IS NULL OR t.status<>'open' OR a.id IS NULL OR
+              NOT ((a.kind='private' AND a.owner_user_id=plan.user_id) OR
+                (a.kind='shared' AND t.assignee_user_id=plan.user_id
+                  AND m.role IN ('editor','admin')))`) !== 0)
+        fail("personal_plan_invalid");
+    } catch { fail("personal_plan_invalid"); }
+
     if (mode === "r2-model") {
       try {
         if (count(`SELECT COUNT(*) AS n FROM workspaces w WHERE w.kind='shared' AND

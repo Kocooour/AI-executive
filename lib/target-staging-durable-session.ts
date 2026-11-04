@@ -439,8 +439,12 @@ export function verifyTargetStagingReadLive(
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
   homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope },
   temporalTaskGuard?: TargetTemporalTaskLiveGuard,
+  /** R2d.3k.2: server-only actor-private planned-day epoch. */
+  personalPlanGuard?: { privateEpoch: number },
 ): TargetStagingReadLive {
   const unavailable: TargetStagingReadLive = { ok: false, reason: "unavailable" };
+  if (personalPlanGuard && (!Number.isSafeInteger(personalPlanGuard.privateEpoch) ||
+      personalPlanGuard.privateEpoch < 0)) return unavailable;
   if (!observed || typeof observed.actorUserId !== "string" || !USER_ID.test(observed.actorUserId) ||
       !Array.isArray(observed.areas) || observed.areas.length > MAX_SCOPED_READ_AREAS) return unavailable;
   if (projectGuard && (typeof projectGuard.projectId !== "string" || !projectGuard.projectId ||
@@ -556,6 +560,15 @@ export function verifyTargetStagingReadLive(
     }
     // The snapshot must have been read for this very actor.
     if (actorUserId !== observed.actorUserId) return unavailable;
+    // Private day changes are intentionally NOT in shared Area content epochs.
+    // This must share the same LIVE session/ACL read transaction: a revoked
+    // assignment purges the private row and increments precisely this epoch.
+    if (personalPlanGuard) {
+      const row = db.prepare("SELECT revision FROM personal_plan_epochs WHERE user_id=?")
+        .get(actorUserId) as {revision:number}|undefined;
+      if (!row || row.revision !== personalPlanGuard.privateEpoch)
+        return {ok:false,reason:"stale"};
+    }
     if (noteSyncGuard) {
       const row = db.prepare(`SELECT i.revocation_epoch AS epoch,
         a.note_sync_revision AS contentRevision,

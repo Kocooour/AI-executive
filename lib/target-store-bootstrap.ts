@@ -42,8 +42,12 @@ import { bootstrapTargetStagingWitness } from "./target-staging-anchor-witness";
 // actor-private today/when planning. Every metadata change bumps the existing
 // task revision, Area content epoch and change feed atomically.
 // v19 staging stores are rejected, never migrated; no HTTP/UI activation.
-// No production migration or activation is authorized.
-export const TARGET_STORE_SCHEMA_VERSION = 20;
+// v21 (R2d.3k.1) adds actor-private when_on plan rows, bounded independently
+// and versioned by user-specific epochs, never through the shared task/Area log.
+// Older staging stores are rejected, not silently migrated; no activation.
+export const TARGET_STORE_SCHEMA_VERSION = 21;
+/** Maximum active actor-private planned-day rows in a fresh isolated store. */
+export const TARGET_STAGING_MAX_PERSONAL_PLANS = 4096;
 /** Staging-only cap on live notes. */
 export const TARGET_STAGING_MAX_NOTES = 4096;
 export const TARGET_STORE_FILENAME = "lumi-target.sqlite";
@@ -284,6 +288,127 @@ CREATE TABLE tasks (
 );
 CREATE INDEX tasks_by_due_on_status ON tasks(due_on,status,id)
   WHERE due_on IS NOT NULL;
+
+-- v21: actor-private planned day. Not a task column, shared Area epoch or
+-- change-feed event. One monotonic cursor epoch for each identity.
+CREATE TABLE personal_plan_epochs (
+  user_id TEXT PRIMARY KEY REFERENCES identities(id),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991)
+) WITHOUT ROWID;
+CREATE TRIGGER personal_plan_epoch_on_identity AFTER INSERT ON identities BEGIN
+  INSERT INTO personal_plan_epochs(user_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER personal_plan_epoch_immutable BEFORE UPDATE OF user_id ON personal_plan_epochs
+BEGIN SELECT RAISE(ABORT,'plan epoch user immutable'); END;
+CREATE TRIGGER personal_plan_epoch_monotonic BEFORE UPDATE OF revision ON personal_plan_epochs
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'plan epoch must increment by one'); END;
+CREATE TRIGGER personal_plan_epoch_no_replace BEFORE INSERT ON personal_plan_epochs
+WHEN EXISTS(SELECT 1 FROM personal_plan_epochs WHERE user_id=NEW.user_id)
+BEGIN SELECT RAISE(ABORT,'plan epoch replacement forbidden'); END;
+CREATE TRIGGER personal_plan_epoch_no_delete BEFORE DELETE ON personal_plan_epochs
+BEGIN SELECT RAISE(ABORT,'plan epoch deletion forbidden'); END;
+
+CREATE TABLE personal_task_plans (
+  user_id TEXT NOT NULL REFERENCES identities(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  when_on TEXT NOT NULL CHECK(
+    typeof(when_on)='text' AND length(when_on)=10 AND
+    when_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND
+    CAST(substr(when_on,1,4) AS INTEGER) BETWEEN 1 AND 9999 AND
+    COALESCE(date(when_on,'+0 days')=when_on,0)),
+  revision INTEGER NOT NULL DEFAULT 0
+    CHECK(typeof(revision)='integer' AND revision >= 0 AND revision < 9007199254740991),
+  PRIMARY KEY(user_id,task_id)
+) WITHOUT ROWID;
+CREATE INDEX personal_task_plans_by_day ON personal_task_plans(user_id,when_on,task_id);
+CREATE TRIGGER personal_task_plan_insert_guard BEFORE INSERT ON personal_task_plans
+WHEN NOT EXISTS (
+  SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+    JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+    LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
+   WHERE t.id=NEW.task_id AND t.status='open' AND
+    ((a.kind='private' AND a.owner_user_id=NEW.user_id) OR
+     (a.kind='shared' AND t.assignee_user_id=NEW.user_id AND m.role IN ('editor','admin')))
+)
+BEGIN SELECT RAISE(ABORT,'plan requires owned or assigned editable task'); END;
+CREATE TRIGGER personal_task_plan_update_guard BEFORE UPDATE ON personal_task_plans
+WHEN NEW.user_id IS NOT OLD.user_id OR NEW.task_id IS NOT OLD.task_id OR
+  NOT EXISTS (
+    SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
+      JOIN areas a ON a.id=COALESCE(t.area_id,p.area_id)
+      LEFT JOIN area_members m ON m.area_id=a.id AND m.user_id=NEW.user_id
+     WHERE t.id=NEW.task_id AND t.status='open' AND
+       ((a.kind='private' AND a.owner_user_id=NEW.user_id) OR
+        (a.kind='shared' AND t.assignee_user_id=NEW.user_id AND m.role IN ('editor','admin')))
+  )
+BEGIN SELECT RAISE(ABORT,'plan owner or task ACL invalid'); END;
+CREATE TRIGGER personal_task_plan_revision_guard BEFORE UPDATE OF revision ON personal_task_plans
+WHEN NEW.revision <> OLD.revision+1
+BEGIN SELECT RAISE(ABORT,'plan revision must increment by one'); END;
+CREATE TRIGGER personal_task_plan_no_replace BEFORE INSERT ON personal_task_plans
+WHEN EXISTS(SELECT 1 FROM personal_task_plans WHERE user_id=NEW.user_id AND task_id=NEW.task_id)
+BEGIN SELECT RAISE(ABORT,'plan replacement forbidden'); END;
+CREATE TRIGGER personal_task_plan_capacity BEFORE INSERT ON personal_task_plans
+WHEN (SELECT COUNT(*) FROM personal_task_plans) >= 4096
+BEGIN SELECT RAISE(ABORT,'plan capacity reached'); END;
+CREATE TRIGGER personal_task_plan_insert_epoch AFTER INSERT ON personal_task_plans BEGIN
+  UPDATE personal_plan_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+CREATE TRIGGER personal_task_plan_update_epoch AFTER UPDATE OF when_on ON personal_task_plans
+WHEN NEW.when_on IS NOT OLD.when_on
+BEGIN
+  UPDATE personal_task_plans SET revision=OLD.revision+1
+    WHERE user_id=NEW.user_id AND task_id=NEW.task_id;
+  UPDATE personal_plan_epochs SET revision=revision+1 WHERE user_id=NEW.user_id;
+END;
+CREATE TRIGGER personal_task_plan_delete_epoch AFTER DELETE ON personal_task_plans BEGIN
+  UPDATE personal_plan_epochs SET revision=revision+1 WHERE user_id=OLD.user_id;
+END;
+-- Revoked assignment or completed task must not resurrect stale personal plan.
+CREATE TRIGGER personal_task_plan_task_reconcile AFTER UPDATE OF
+  assignee_user_id,status,project_id,area_id ON tasks
+BEGIN
+  DELETE FROM personal_task_plans WHERE task_id=NEW.id AND
+    (NEW.status<>'open' OR NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_task_plans.user_id
+       WHERE a.id=COALESCE(NEW.area_id,
+         (SELECT area_id FROM projects WHERE id=NEW.project_id))
+         AND ((a.kind='private' AND a.owner_user_id=personal_task_plans.user_id)
+           OR (a.kind='shared' AND NEW.assignee_user_id=personal_task_plans.user_id
+               AND m.role IN ('editor','admin')))
+    ));
+END;
+CREATE TRIGGER personal_task_plan_membership_delete AFTER DELETE ON area_members BEGIN
+  DELETE FROM personal_task_plans WHERE user_id=OLD.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=OLD.area_id);
+END;
+CREATE TRIGGER personal_task_plan_membership_downgrade AFTER UPDATE OF role ON area_members
+WHEN NEW.role='viewer' AND OLD.role IN ('editor','admin')
+BEGIN
+  DELETE FROM personal_task_plans WHERE user_id=NEW.user_id
+    AND task_id IN (SELECT task_id FROM task_effective_areas
+      WHERE effective_area_id=NEW.area_id);
+END;
+-- Project moves remain forbidden, but future code must not retain plans after
+-- an authorized change to inherited Area.
+CREATE TRIGGER personal_task_plan_project_move AFTER UPDATE OF area_id ON projects
+WHEN NEW.area_id IS NOT OLD.area_id
+BEGIN
+  DELETE FROM personal_task_plans WHERE task_id IN (
+    SELECT t.id FROM tasks t WHERE t.project_id=NEW.id AND NOT EXISTS (
+      SELECT 1 FROM areas a LEFT JOIN area_members m
+        ON m.area_id=a.id AND m.user_id=personal_task_plans.user_id
+       WHERE a.id=NEW.area_id AND
+         ((a.kind='private' AND a.owner_user_id=personal_task_plans.user_id)
+         OR (a.kind='shared' AND t.assignee_user_id=personal_task_plans.user_id
+             AND m.role IN ('editor','admin')))
+    ));
+END;
+
 CREATE INDEX tasks_by_project ON tasks(project_id);
 CREATE INDEX tasks_by_area ON tasks(area_id);
 -- Contributing-Area EXISTS checks must seek by Area/project, not rehash tasks.

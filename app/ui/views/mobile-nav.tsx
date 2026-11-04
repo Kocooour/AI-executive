@@ -1,6 +1,6 @@
 "use client";
 import { handleOverlayKeys } from "../focus";
-import { mobileMoreGroups, mobileViews, moreViews } from "../navigation";
+import { mobileDesignV1Preview, mobileMoreGroups, mobileV1MoreGroups, mobileV1MoreViews, mobileV1Tabs, mobileViews, moreViews } from "../navigation";
 import type { LumiApp } from "../use-lumi-app";
 import { ViewIcon } from "./project-icon";
 
@@ -8,6 +8,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
   const {
     closeDetail,
     language,
+    mobilePlanPreviewActive,
     moreDialogRef,
     moreOpen,
     moreTriggerRef,
@@ -18,17 +19,27 @@ export function MobileNav({ app }: { app: LumiApp }) {
     tr,
     view,
   } = app;
+  const tabs: readonly string[] = mobileDesignV1Preview ? mobileV1Tabs : mobileViews;
+  const groups = mobileDesignV1Preview ? mobileV1MoreGroups : mobileMoreGroups;
+  const secondary = mobileDesignV1Preview ? mobileV1MoreViews : moreViews;
   return (
     <>
-      <nav className="mobileNav">
-        {mobileViews.map((x) => (
+      <nav className="mobileNav" data-design-preview={mobileDesignV1Preview ? "lumi-v1" : undefined}>
+        {tabs.map((x) => {
+          const planPreview = mobileDesignV1Preview && x === "MyPlanPreview";
+          const label = planPreview ? (language === "cs" ? "Můj plán" : "My Plan") : tr(x);
+          const current = planPreview ? view === "Today" && mobilePlanPreviewActive
+            : x === "More" ? secondary.includes(view) && !(view === "Today" && mobilePlanPreviewActive)
+            : view === x;
+          return (
           <button
             key={x}
             ref={x === "More" ? moreTriggerRef : undefined}
-            className={x === "More" ? (moreOpen || moreViews.includes(view) ? "active" : "") : (!moreOpen && view === x ? "active" : "")}
-            aria-label={tr(x)}
-            data-nav-view={x}
-            aria-current={!moreOpen && (view === x || (x === "More" && moreViews.includes(view))) ? "page" : undefined}
+            className={(x === "More" && moreOpen) || (!moreOpen && current) ? "active" : ""}
+            aria-label={planPreview ? (language === "cs" ? "Můj plán – vývojový náhled nad stávajícími daty" : "My Plan – development preview with legacy data") : label}
+            data-nav-view={planPreview ? "Today" : x}
+            data-nav-tab={planPreview ? "my-plan-preview" : x}
+            aria-current={!moreOpen && current ? "page" : undefined}
             aria-expanded={x === "More" ? moreOpen : undefined}
             aria-controls={x === "More" ? "mobile-more-dialog" : undefined}
             aria-haspopup={x === "More" ? "dialog" : undefined}
@@ -37,12 +48,12 @@ export function MobileNav({ app }: { app: LumiApp }) {
               setMoreOpen(false);
               closeDetail();
               if (x === "Inbox") setInboxTab("tasks");
-              setView(x);
+              setView(planPreview ? "Today" : x, planPreview ? { previewMyPlan: true } : undefined);
             }}
           >
-            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={x} /></span><span>{tr(x)}</span>
+            <span className="mobileNavIcon" aria-hidden="true"><ViewIcon name={planPreview ? "Today" : x} /></span><span>{label}</span>
           </button>
-        ))}
+        );})}
       </nav>
       {!moreOpen && <button className="mobileCaptureButton" type="button" onClick={() => openCapture()} aria-label={tr("quickCapture")} title={tr("quickCapture")}>＋</button>}
       {moreOpen && (
@@ -53,7 +64,7 @@ export function MobileNav({ app }: { app: LumiApp }) {
               <h2 id="mobile-more-title">{tr("More")}</h2>
               <button type="button" className="mobileMoreClose" aria-label={tr("closeMenu")} title={tr("closeMenu")} onClick={() => setMoreOpen(false)}><span aria-hidden="true">×</span></button>
             </div>
-            {mobileMoreGroups.map((group) => (
+            {groups.map((group) => (
               <section className="mobileMoreGroup" key={group.title} aria-labelledby={`mobile-more-${group.title}`}>
                 <h3 id={`mobile-more-${group.title}`}>{tr(group.title)}</h3>
                 {group.views.map((item) => (

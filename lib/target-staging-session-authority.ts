@@ -17,7 +17,8 @@ import {
 } from "./target-task-authenticated-read";
 import { MAX_STAGING_PAGE_OFFSET } from "./target-task-read-model";
 import type { TargetScopedOffsetPage } from "./target-task-read-model";
-import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail } from "./target-task-temporal-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTaskPage, TemporalTaskDetail, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
+import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-when-read-model";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -35,6 +36,8 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
+  readPreflightedTemporalDueWindowPage,
+  readPreflightedPersonalWhenPage,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
@@ -382,6 +385,34 @@ export class TargetStagingSessionAuthority {
       return credential ? readPreflightedTemporalTaskPage(this.#store, credential,
         { scope, status, limit, offset }) : null;
     } catch { return null; }
+  }
+
+  /** R2d.3j.1: pinned dueOn-only deadline window; not full Today/Upcoming. */
+  readTemporalDueWindowPage(
+    actorUserId: string, scope: TemporalScope, window: TemporalDueWindow,
+    evaluationDate: string, throughDate: string | null, limit: number, offset: number,
+  ): TemporalDueWindowPage | null {
+    if (this.#closed) return null;
+    try {
+      const credential = this.#oneShotReadCredential(actorUserId);
+      return credential ? readPreflightedTemporalDueWindowPage(this.#store, credential,
+        { scope, window, evaluationDate, throughDate, limit, offset }) : null;
+    } catch { return null; }
+  }
+
+  /** R2d.3k.2: private actor-bound planned-day page, not a public API. */
+  readPersonalWhenPage(
+    actorUserId:string,window:PersonalWhenWindow,
+    evaluationDate:string|null,throughDate:string|null,
+    limit:number,offset:number,
+  ):PersonalWhenPage|null {
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
+        window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
   }
 
   /** Actor-bound isolated temporal detail, not an authorization capability. */

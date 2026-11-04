@@ -6,7 +6,9 @@ import type { TargetStagingPersonalOffsetPage } from "./target-staging-session-a
 import type {
   TargetReadableTask, TargetReadLinearization, TargetScopedReadableTask,
 } from "./target-task-read-model";
-import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard } from "./target-task-temporal-read-model";
+import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
+import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
+import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
 import type { TargetAuthorizedProjectTasksPage } from "./target-project-task-read-model";
 import type { TargetAuthorizedStructuralRelationsResult } from "./target-project-structural-relations";
@@ -63,6 +65,10 @@ export function createStagingReadRunner(
         NODE_ENV: process.env.NODE_ENV || "production",
         AI_EXECUTIVE_DATA_DIR: process.env.AI_EXECUTIVE_DATA_DIR || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED: "true",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
         AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION: config.expectedRestoreGeneration,
         AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID: config.ownerUserId,
@@ -562,6 +568,153 @@ export async function readStagingTemporalPageInChild(
     [scope, status, String(limit), String(offset)]);
   const parsed = parseStagingTemporalPage(payload, scope, status, limit);
   if (payload !== null && !parsed) logStagingFailure("temporal_list", "invalid_child_dto");
+  return parsed;
+}
+
+
+/**
+ * R2d.3j.2: strict child DTO boundary for deadline-only windows. Reuse the
+ * existing temporal task/Area allowlist, but validate the ORIGINAL ordering
+ * by due_on then binary ID before releasing any fields to the HTTP route.
+ * The generic temporal parser sorts by ID; these pages must not.
+ */
+export function parseStagingTemporalDueWindowPage(
+  value: unknown, scope: TemporalScope, window: TemporalDueWindow,
+  evaluationDate: string, throughDate: string | null, limit: number,
+): TemporalDueWindowPage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !["personal","shared","my-plan"].includes(scope) ||
+      !["overdue","due-today","upcoming"].includes(window) ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return null;
+  const today = temporalCalendarOrdinal(evaluationDate);
+  const through = throughDate === null ? null : temporalCalendarOrdinal(throughDate);
+  if (today === null || (window === "upcoming"
+        ? through === null || through - today < 1 || through - today > 90
+        : throughDate !== null)) return null;
+  const page = value as Record<string, unknown>;
+  if (Object.keys(page).sort().join(",") !==
+      "evaluationDate,hasMore,linearization,ok,revision,tasks,throughDate,window" ||
+      page.window !== window || page.evaluationDate !== evaluationDate ||
+      page.throughDate !== throughDate || !Array.isArray(page.tasks)) return null;
+  const original = page.tasks;
+  if (original.some(item => !item || typeof item !== "object" ||
+      Array.isArray(item) || typeof (item as Record<string, unknown>).id !== "string"))
+    return null;
+  // Use existing exact task keys, Area witness, scope/assignment permissions
+  // and status checks. Sorting a COPY is only for that parser's ID invariant.
+  const byId = [...original].sort((a,b) => Buffer.compare(
+    Buffer.from((a as {id:string}).id),Buffer.from((b as {id:string}).id)));
+  const sanitized = parseStagingTemporalPage({
+    ok:true, tasks:byId, hasMore:page.hasMore, revision:page.revision,
+    linearization:page.linearization,
+  },scope,"open",limit);
+  if (!sanitized) return null;
+  const known = new Map(sanitized.tasks.map(task => [task.id,task]));
+  const tasks: TemporalTask[] = [];
+  for (const input of original) {
+    const task = known.get((input as {id:string}).id);
+    if (!task || task.dueOn === null) return null;
+    const ordinal = temporalCalendarOrdinal(task.dueOn);
+    if (ordinal === null ||
+        (window === "overdue" && !(ordinal < today)) ||
+        (window === "due-today" && ordinal !== today) ||
+        (window === "upcoming" && !(ordinal > today && ordinal <= (through as number))))
+      return null;
+    const last = tasks[tasks.length-1];
+    if (last && (task.dueOn < (last.dueOn as string) ||
+        (task.dueOn === last.dueOn &&
+          Buffer.compare(Buffer.from(last.id),Buffer.from(task.id)) >= 0)))
+      return null;
+    tasks.push(task);
+  }
+  return {
+    tasks, hasMore:sanitized.hasMore, revision:sanitized.revision,
+    linearization:sanitized.linearization, window,evaluationDate,throughDate,
+  };
+}
+
+export async function readStagingTemporalDueWindowInChild(
+  config: StagingPersonalReadConfig, scope: TemporalScope, window: TemporalDueWindow,
+  evaluationDate: string, throughDate: string | null, limit: number, offset: number,
+): Promise<TemporalDueWindowPage | null> {
+  const payload = await runChild(config,"target-staging-temporal-due-window-child.mjs",[
+    scope,window,evaluationDate,throughDate ?? "-",String(limit),String(offset),
+  ]);
+  const parsed = parseStagingTemporalDueWindowPage(
+    payload,scope,window,evaluationDate,throughDate,limit);
+  if (payload !== null && !parsed)
+    logStagingFailure("temporal_due_window","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.3k.3: strict minimal private planned-day child DTO.
+ * Does not forward privateEpoch / Area witness into the public response. */
+export function parseStagingPersonalWhenPage(
+  value:unknown,window:PersonalWhenWindow,evaluationDate:string|null,
+  throughDate:string|null,limit:number,
+):PersonalWhenPage|null {
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","on-day","upcoming"].includes(window)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const day=evaluationDate===null?null:temporalCalendarOrdinal(evaluationDate);
+  const end=throughDate===null?null:temporalCalendarOrdinal(throughDate);
+  if(window==="all"?(evaluationDate!==null||throughDate!==null):
+     window==="on-day"?(day===null||throughDate!==null):
+       day===null||end===null||end-day<1||end-day>90)return null;
+  const frame=value as Record<string,unknown>;
+  if(Object.keys(frame).sort().join(",")!==
+       "evaluationDate,hasMore,linearization,ok,plans,privateEpoch,revision,throughDate,window"||
+     frame.ok!==true||frame.window!==window||
+     frame.evaluationDate!==evaluationDate||frame.throughDate!==throughDate||
+     typeof frame.revision!=="string"||!REVISION.test(frame.revision)||
+     !Number.isSafeInteger(frame.privateEpoch)||(frame.privateEpoch as number)<0||
+     !Array.isArray(frame.plans)||frame.plans.length>limit||
+     typeof frame.hasMore!=="boolean"||
+     (frame.hasMore&&frame.plans.length!==limit))return null;
+  const linearization=parseLinearization(frame.linearization,new Map());
+  if(!linearization||linearization.areas.length===0||
+    linearization.areas.some(a=>a.areaKind==="shared"&&
+      a.access!=="editor"&&a.access!=="admin"))return null;
+  const plans:PersonalWhenItem[]=[];
+  const taskIds=new Set<string>();
+  for(const input of frame.plans){
+    if(!input||typeof input!=="object"||Array.isArray(input))return null;
+    const p=input as Record<string,unknown>;
+    if(Object.keys(p).sort().join(",")!=="revision,taskId,whenOn"||
+      typeof p.taskId!=="string"||typeof p.whenOn!=="string"||
+      temporalCalendarOrdinal(p.whenOn)===null||
+      !Number.isSafeInteger(p.revision)||(p.revision as number)<0||
+      (window==="on-day"&&p.whenOn!==evaluationDate)||
+      (window==="upcoming"&&
+         !(p.whenOn>(evaluationDate as string)&&p.whenOn<=(throughDate as string))))return null;
+    if(taskIds.has(p.taskId as string))return null;
+    taskIds.add(p.taskId as string);
+    const prev=plans[plans.length-1];
+    if(prev&&(prev.whenOn>p.whenOn||
+       (prev.whenOn===p.whenOn&&
+         Buffer.compare(Buffer.from(prev.taskId),Buffer.from(p.taskId as string))>=0)))
+       return null;
+    plans.push({
+      taskId:p.taskId,whenOn:p.whenOn,revision:p.revision as number,
+    });
+  }
+  return {
+    plans,hasMore:frame.hasMore as boolean,revision:frame.revision,
+    privateEpoch:frame.privateEpoch as number,linearization,
+    window,evaluationDate,throughDate,
+  };
+}
+
+export async function readStagingPersonalWhenInChild(
+  config:StagingPersonalReadConfig,window:PersonalWhenWindow,
+  evaluationDate:string|null,throughDate:string|null,
+  limit:number,offset:number,
+):Promise<PersonalWhenPage|null>{
+  const payload=await runChild(config,"target-staging-personal-when-child.mjs",[
+    window,evaluationDate??"-",throughDate??"-",String(limit),String(offset),
+  ]);
+  const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
+  if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
   return parsed;
 }
 
