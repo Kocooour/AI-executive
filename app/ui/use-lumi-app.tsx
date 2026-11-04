@@ -30,7 +30,7 @@ import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
 import { copy } from "./copy";
-import { views } from "./navigation";
+import { mobileDesignV1Preview, views } from "./navigation";
 import { useAttention } from "./hooks/use-attention";
 import { eventTaskSpan } from "../../lib/calendar-decisions";
 import { restoreCalendarDecisions, useCalendarEvents, type CalendarDecisionUndo } from "./hooks/use-calendar-events";
@@ -1173,7 +1173,17 @@ export function useLumiApp() {
     const savedWriteWorkspace = localStorage.getItem(
       "ai-executive-write-workspace",
     );
-    if (savedView && views.includes(savedView)) {
+    // In the explicitly enabled visual preview, a phone without a typed URL
+    // starts on the first My Plan tab, backed by legacy Today only. Never
+    // activate the target My Plan read scope or overwrite an explicit link.
+    const previewMobileStart = mobileDesignV1Preview &&
+      window.matchMedia("(max-width: 700px)").matches &&
+      !new URLSearchParams(window.location.search).has("view") &&
+      !new URLSearchParams(window.location.search).has("task");
+    if (previewMobileStart) {
+      setStartupView("Today");
+      setViewState("Today");
+    } else if (savedView && views.includes(savedView)) {
       setStartupView(savedView);
       setView(savedView);
     }
