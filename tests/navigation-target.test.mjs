@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { targetFromSearch, searchForTarget } = await import("../lib/view-url.ts");
+const { targetFromSearch, searchForTarget, projectIdFromAddress } = await import("../lib/view-url.ts");
 const views = ["Home", "Inbox", "Today", "Upcoming", "Projects", "Notes", "Settings"];
 
 test("view, project, task and note targets encode to stable typed URLs", () => {
@@ -52,4 +52,13 @@ test("task/notes cannot claim a parent project outside the Projects view", () =>
   assert.deepEqual(targetFromSearch("?view=Projects&projectId=p&noteId=n", views, "Home"), {
     kind: "note", id: "n", view: "Projects", projectId: "p",
   });
+});
+
+
+test("legacy history marker is accepted only on a valid Projects list address", () => {
+  assert.equal(projectIdFromAddress("?view=Projects", "prior-project", views, "Home"), "prior-project");
+  assert.equal(projectIdFromAddress("?view=Projects&projectId=linked", "prior-project", views, "Home"), "linked");
+  assert.equal(projectIdFromAddress("?view=Today", "prior-project", views, "Home"), null);
+  assert.equal(projectIdFromAddress("?view=Projects&projectId=x&unknown=1", "prior-project", views, "Home"), null);
+  assert.equal(projectIdFromAddress("?view=Projects", "\u0000invalid", views, "Home"), null);
 });
