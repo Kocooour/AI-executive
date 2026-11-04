@@ -1,5 +1,8 @@
 "use client";
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { mobileDesignV1Preview } from "../navigation";
+import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
+import { MobileProjectRowV1 } from "./mobile-project-row-v1";
 import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
 import { taskRowValue } from "../task-row-value";
 import { summarizeProject, type ProjectSummary } from "../../../lib/project-summary";
@@ -61,6 +64,16 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
+  const [mobileViewport, setMobileViewport] = useState(false);
+  useEffect(() => {
+    if (!mobileDesignV1Preview) return;
+    const media = window.matchMedia("(max-width: 700px)");
+    const sync = () => setMobileViewport(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  const mobileProjectPreview = mobileDesignV1Preview && mobileViewport && view === "Projects" && !app.openProject;
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
   const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
@@ -77,6 +90,10 @@ export function EntityList({ app }: { app: LumiApp }) {
   // `dragScope`: the ordering a drag changes, when it is not the one of the view (the tasks and notes of a project page).
   const renderRow = (x: Entity, index: number, rows: Entity[], dragScope?: string) => {
       const projectSummary = x.type === "project" ? projectSummaries.get(x.id) : undefined;
+      if (mobileProjectPreview && x.type === "project" && projectSummary) {
+        return <MobileProjectRowV1 key={x.id} app={app} project={x} summary={projectSummary}
+          dragScope={dragScope ?? "project:all"} />;
+      }
       let meta = taskRowValue(x, language, today, {
         held: heldReasons.has(x.id),
         unsent: unsent.has(x.id),
@@ -267,10 +284,13 @@ export function EntityList({ app }: { app: LumiApp }) {
               >
                 {view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
                 {view === "Projects" && projectGroups.length > 0 && (
-                  <div className="projectGroups" aria-label={tr("projectsByArea")}>
+                  <div className="projectGroups" aria-label={tr("projectsByArea")}
+                    data-projects-preview={mobileProjectPreview ? "lumi-v1" : undefined}>
                     {projectGroups.map((group) => (
-                      <section key={group.key} className="projectGroup" data-project-group={group.area ? group.area.id : "none"} aria-labelledby={`project-group-${group.key}`}>
-                        <h2 id={`project-group-${group.key}`} className="projectGroupHeading">
+                      <section key={group.key} className="projectGroup" data-project-group={group.area ? group.area.id : "none"}
+                        data-preview-area-tone={mobileProjectPreview ? projectAreaPreviewTone(group.area) : undefined}
+                        aria-labelledby={`project-group-${group.key}`}>
+                        <h2 id={`project-group-${group.key}`} className={`projectGroupHeading${mobileProjectPreview ? " v1ProjectA11yOnly" : ""}`}>
                           {group.area ? (group.area.title || tr("untitledItem")) : tr("noAreaGroup")}
                           {activeWorkspaceId === "all" && group.area && (
                             <span className="workspaceBadge">{workspaces.find((workspace) => workspace.workspaceId === group.area?.workspaceId)?.title || group.area.workspaceId}</span>
