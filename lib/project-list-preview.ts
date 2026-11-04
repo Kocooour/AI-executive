@@ -17,6 +17,15 @@ export function projectAreaPreviewTone(area: Pick<Entity, "id" | "title"> | null
   return (["extra-a", "extra-b", "extra-c"] as const)[hash % 3];
 }
 
+/** Legacy preview only: no cross-workspace quick writes or writes while a row is pending/held. */
+export function projectPreviewCanToggle(
+  project: Pick<Entity, "type" | "status" | "workspaceId">,
+  activeWorkspaceId: string, blocked: boolean,
+): boolean {
+  return project.type === "project" && activeWorkspaceId === project.workspaceId &&
+    (project.status === "active" || project.status === "completed") && !blocked;
+}
+
 export function projectPreviewTone(project: Pick<Entity, "status">, summary: ProjectSummary): ProjectPreviewTone {
   if (project.status === "completed") return "complete";
   if (summary.projectOverdue || summary.attention?.kind === "overdue") return "danger";
