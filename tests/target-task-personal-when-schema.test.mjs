@@ -171,7 +171,12 @@ test("completed tasks and membership loss purge only affected actors' plans",()=
   db.prepare("UPDATE tasks SET status='completed',completed_at_ms=1793900000000 WHERE id='shared-bob'").run();
   assert.equal(get(db,"bob","shared-bob"),undefined);
   assert.ok(get(db,"bob","shared-child"));
-  db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='shared-child'").run();
+  // Even completed tasks retain assignees; the canonical membership policy
+  // requires every shared assignment to be cleared before demotion.
+  assert.throws(()=>db.prepare(
+    "UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run(),
+    /unassign tasks before downgrading membership/);
+  db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE assignee_user_id='bob'").run();
   db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
   assert.equal(get(db,"bob","shared-child"),undefined);
   assert.ok(get(db,"bob","bob-private"));
