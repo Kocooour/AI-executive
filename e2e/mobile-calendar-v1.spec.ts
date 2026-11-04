@@ -11,8 +11,10 @@ const today = () => {
   }).formatToParts(new Date()).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day}`;
 };
-async function mockDays(page: Page, dates: string[]) {
+async function mockDays(page: Page, dates: string[], failOnceOnDay?: string) {
   const reads: Array<{ from: number; to: number; workspaceId: string }> = [];
+  const failWindow = failOnceOnDay ? calendarLocalDayRange(failOnceOnDay, 1, zone) : null;
+  let failedOnce = false;
   const now = Date.now();
   const events = dates.map((day, i) => ({
     id: `ui04a-${i}`, uid: `ui04a-${i}`, title: `Událost dne ${i}`,
@@ -27,6 +29,11 @@ async function mockDays(page: Page, dates: string[]) {
     const from = Number(query.get("from")), to = Number(query.get("to"));
     const workspaceId = query.get("workspaceId") || "";
     reads.push({ from, to, workspaceId });
+    if (failWindow && from === failWindow.start && to === failWindow.end && !failedOnce) {
+      failedOnce = true;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Service temporarily unavailable" }) });
+      return;
+    }
     // Match the real server's half-open time window. Unrelated days are NOT
     // returned just because the test fixture knows those events.
     const filtered = events.filter((event) =>
@@ -100,4 +107,21 @@ test("the gated calendar keeps the desktop overview and future agenda intact", a
   await expect(page.locator(".mobileCalendarPicker")).toHaveCount(0);
   await expect(page.locator("#calendar-today-title")).toBeVisible();
   await expect(page.locator("#calendar-near-term-title")).toBeVisible();
+});
+
+test("day fetch errors never masquerade as an empty day; retry re-requests its exact window", async ({ page }) => {
+  test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "Mobile design preview disabled");
+  const base = today(), target = addCalendarDays(base, 2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const reads = await mockDays(page, [base, target], target);
+  await page.goto("/?view=Calendar");
+  await waitUntilSynced(page);
+  await page.locator(`[data-date="${target}"]`).click();
+  await expect(page.locator('[data-calendar-day-state="error"]')).toBeVisible();
+  await expect(page.locator('[data-timeline-item="event:ui04a-1"]')).toHaveCount(0);
+  await page.locator('[data-calendar-day-state="error"] button').click();
+  await expect(page.locator('[data-timeline-item="event:ui04a-1"]')).toBeVisible();
+  await expect(page.locator('[data-calendar-day-state="error"]')).toHaveCount(0);
+  const range = calendarLocalDayRange(target, 1, zone);
+  await expect.poll(() => reads.filter((r) => r.from === range.start && r.to === range.end).length).toBeGreaterThanOrEqual(2);
 });
