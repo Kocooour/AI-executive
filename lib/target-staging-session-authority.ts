@@ -64,6 +64,10 @@ import {
   writePreflightedTemporalTaskStatus, validTargetStagingTemporalStatusCommand,
   type TargetStagingTemporalStatusCommand, type TargetStagingTemporalStatusResult,
 } from "./target-task-temporal-status-writer";
+import {
+  writePreflightedTemporalDueOn, validTargetStagingTemporalDueOnCommand,
+  type TargetStagingTemporalDueOnCommand, type TargetStagingTemporalDueOnResult,
+} from "./target-task-temporal-due-on-writer";
 import { editPreflightedTargetNote, validTargetStagingNoteEditRequest } from "./target-note-staging-writer";
 import type { TargetStagingNoteEditRequest, TargetStagingNoteEditResult } from "./target-note-staging-writer";
 import { deletePreflightedTargetNote, validTargetStagingNoteDeleteRequest } from "./target-note-delete-writer";
@@ -766,6 +770,23 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedTemporalTaskStatus(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /**
+   * R2d.3i.1: isolated, staging-only date-only dueOn mutation, not HTTP.
+   * A writable authority token is mandatory; the pinned writer checks live
+   * ACL, optional durable-session revocation and task/Area CAS under lock.
+   */
+  changeTemporalDueOn(
+    sessionToken: string, command: TargetStagingTemporalDueOnCommand,
+    durableSessionTokenHash?: string,
+  ): TargetStagingTemporalDueOnResult {
+    const credential = this.#credential(sessionToken, true);
+    if (!credential) return { ok: false, reason: "unauthorized" };
+    if (!validTargetStagingTemporalDueOnCommand(command))
+      return { ok: false, reason: "invalid_request" };
+    return writePreflightedTemporalDueOn(
+      this.#store, credential, command, durableSessionTokenHash);
   }
 
   /** Read-only current-write-ACL-bound receipt check, no mutation. */

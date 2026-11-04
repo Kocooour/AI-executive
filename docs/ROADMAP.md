@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-03 po sloučení R2d.3h.1 (#214); rozpracováno R2d.3h.2 (default-off HTTP dokončení úkolu a bezpečné ověření příkazu).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-03 po sloučení R2d.3h.2 (#215); rozpracováno R2d.3i.1 (server-only změna termínu `dueOn`).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -211,6 +211,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3f (#212):** samostatně default-off HTTP seznam časových údajů úkolů s přísným DTO allowlistem, izolovaným procesem, podepsaným kurzorem a živým ověřením Area ACL. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md). Bez aktivace UI, zápisu a produkčního cutoveru.
 - **Sloučeno R2d.3g (#213):** izolované default-off HTTP čtení detailu úkolu se současným ověřením session, Area ACL, revize úkolu a případného rodiče; žádný zápis a UI. [Kontrakt](R2D-TASK-TEMPORAL-HTTP.md).
 - **Sloučeno R2d.3h.1 (#214):** server-only idempotentní complete/reopen s kontrolou write ACL, Area/generace, per-item CAS, potvrzením příkazu a anonymním journal auditem.
-- **R2d.3h.2 (probíhá):** staging-only a default-off HTTP preflight/PATCH pro dokončení a znovuotevření, samostatný read-only POST pro kontrolu potvrzení příkazu. Striktní autentizace, Origin/protokol, izolovaný child proces, live oprávnění a bezpečná odmítnutí. Bez produkčních zápisů. Následuje změna termínu.
+- **Sloučeno R2d.3h.2 (#215):** staging-only a default-off HTTP preflight/PATCH complete/reopen a read-only potvrzení příkazu; aktuální write ACL, samostatné procesy, ochrana session a Area. Produkční zápis stále vypnutý.
+- **R2d.3i.1 (probíhá):** pouze interní idempotentní změna datového termínu `dueOn` (datum ISO YYYY-MM-DD, případně null) v izolovaném stagingu, live write ACL, CAS, oddělený receipt a anonymní antirollback journal. Bez HTTP/UI, osobního `today/when` a nasazení. Následuje samostatný opt-in HTTP adaptér.
 
 R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. R3 aktivace UI a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
