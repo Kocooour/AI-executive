@@ -63,3 +63,9 @@ export const mobileV1MoreViews = mobileV1MoreGroups.flatMap((group) => group.vie
 export function mobileV1Destination(tab: (typeof mobileV1Tabs)[number]): string | null {
   return tab === "More" ? null : tab === "MyPlanPreview" ? "Today" : tab;
 }
+
+/** A development-only view URL, not a new data scope or a record locator. */
+export function mobileV1IsPlanPreviewRoute(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return [...params.keys()].length === 1 && params.get("view") === "MyPlanPreview";
+}
