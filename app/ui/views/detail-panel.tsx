@@ -132,10 +132,19 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
   const [mobileViewport, setMobileViewport] = useState(false);
+  const [taskMoreOpen, setTaskMoreOpen] = useState(false);
+  const lastMobileMatch = useRef<boolean | null>(null);
+  useEffect(() => { setTaskMoreOpen(false); }, [selected?.id]);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const media = window.matchMedia("(max-width: 700px)");
-    const sync = () => setMobileViewport(media.matches);
+    const sync = () => {
+      // Do not hide a focused secondary field when rotating from desktop to phone:
+      // its draft may persist only on blur (e.g. WaitingForInput).
+      if (media.matches && lastMobileMatch.current === false) setTaskMoreOpen(true);
+      lastMobileMatch.current = media.matches;
+      setMobileViewport(media.matches);
+    };
     sync();
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
@@ -372,7 +381,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               </section>
             )}
             {selected.type === "task" && (
-              <div className="fields">
+              <div className="fields taskDetailFields" data-task-more-open={taskMoreOpen ? "true" : "false"}>
+                <div className="taskDetailMoreGroup taskDetailMoreList" id={`task-more-list-${selected.id}`}>
                 <label>
                   {tr("list")}
                   <select
@@ -402,6 +412,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <option value="Someday">{tr("Someday")}</option>
                   </select>
                 </label>
+                </div>
+                <div className="taskDetailEssentials">
                 <div className="scheduleField">
                   <span>{tr("when")}</span>
                   <div className="scheduleChoices" role="group" aria-label={tr("when")}>
@@ -487,6 +499,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     </select>
                   </label>
                 )}
+                </div>
+                <div className="taskDetailMoreGroup taskDetailMoreOptions" id={`task-more-options-${selected.id}`}>
                 <label>
                   {tr("priority")}
                   <select
@@ -606,6 +620,8 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     {tr("nextWorkday")}
                   </button>
                 )}
+                </div>
+                <div className="taskDetailNotes">
                 <label>
                   {tr("taskNotes")}
                   <textarea
@@ -674,6 +690,19 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     >{tr("add")}</button>
                   </div>
                 </div>
+                </div>
+                <button type="button" className="taskDetailMoreToggle"
+                  aria-controls={`task-more-list-${selected.id} task-more-options-${selected.id} task-more-actions-${selected.id}`}
+                  aria-expanded={taskMoreOpen}
+                  onClick={() => setTaskMoreOpen((open) => !open)}>
+                  {language === "cs" ? "Další vlastnosti" : "More details"}
+                  <span aria-hidden="true">{taskMoreOpen ? "⌃" : "⌄"}</span>
+                </button>
+                {mobileTaskPreview && activeTaskSession && (
+                  <button type="button" className="primaryAction taskDetailWorkFinish"
+                    onClick={() => void done(selected.id)}>{tr("workFinish")}</button>
+                )}
+                <div className="taskDetailMoreGroup taskDetailMoreActions" id={`task-more-actions-${selected.id}`}>
                 <label>
                   {tr("repeat")}
                   <select
@@ -772,7 +801,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {(!mobileTaskPreview || activeTaskSession) && (selected.status === "completed" ? (
+                {!mobileTaskPreview && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
@@ -780,6 +809,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <button className="danger" disabled={isFallbackArea(selected, app.items)} onClick={() => remove(selected)}>
                   {tr("delete")}
                 </button>
+                </div>
               </div>
             )}
           </aside>
