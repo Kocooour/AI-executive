@@ -4,7 +4,6 @@ import type { Page } from "@playwright/test";
 
 // Preview-only coverage: uses the normal synthetic legacy store and cleans up.
 async function storeChange(page: Page, entities: Record<string, unknown>[], relations: Record<string, unknown>[], remove: string[] = []) {
-  const ids = new Set(remove);
   await expect.poll(async () => page.evaluate(async ({ entities, relations, remove }) => {
     const gone = new Set(remove);
     const snapshot = await fetch("/api/store", { cache: "no-store" }).then((r) => r.json());
@@ -55,7 +54,6 @@ test("gated mobile detail puts tasks before collapsible context, preserving edit
     const tasks = project.locator(".projectTaskList");
     const context = project.locator("[data-project-context-fold]");
     const notes = project.locator(".projectNoteList");
-    const details = project.locator("[data-project-details]");
     await expect(tasks.getByText(`Domluvit dopravu ${stamp}`)).toBeVisible();
     await expect(notes.getByText(`Podklady pro cestu ${stamp}`)).toBeVisible();
     await expect(context).not.toHaveAttribute("open", "");
