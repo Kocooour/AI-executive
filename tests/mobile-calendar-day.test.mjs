@@ -17,10 +17,10 @@ test("Czech date bubbles include weekday over date without timezone drift", () =
 
 test("only the requested day contains midnight-crossing, all-day and timed events", () => {
   const events = [
-    { id: "night", start: "2026-10-24T22:30:00.000Z", end: "2026-10-25T02:30:00.000Z", allDay: false },
+    { id: "night", start: "2026-10-24T21:30:00.000Z", end: "2026-10-25T02:30:00.000Z", allDay: false },
     { id: "all-day", start: "2026-10-25T00:00:00.000Z", end: "2026-10-26T00:00:00.000Z", allDay: true },
     { id: "other", start: "2026-10-26T13:00:00.000Z", end: "2026-10-26T14:00:00.000Z", allDay: false },
-    { id: "edge", start: "2026-10-25T23:00:00.000Z", end: "2026-10-26T00:00:00.000Z", allDay: false },
+    { id: "edge", start: "2026-10-25T21:00:00.000Z", end: "2026-10-25T23:00:00.000Z", allDay: false },
   ];
   assert.deepEqual(mobileCalendarEventsForDay(events, "2026-10-25", "Europe/Prague").map((e) => e.id), ["night", "all-day", "edge"]);
   assert.deepEqual(mobileCalendarEventsForDay(events, "2026-10-26", "Europe/Prague").map((e) => e.id), ["other"]);
