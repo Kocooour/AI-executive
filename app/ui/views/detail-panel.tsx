@@ -13,6 +13,7 @@ import { heldBackReason } from "./held-back";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { entityConflicts } from "../../../lib/field-merge";
+import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
 // they start: comparing a new value with the stored one would skip a change back to it (A → B →
@@ -141,11 +142,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   }, []);
   const selectedTask = selected?.type === "task" ? selected : null;
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
-  const taskPreviewCanToggle = Boolean(selectedTask && app.activeWorkspaceId === selectedTask.workspaceId &&
-    app.activeWorkspaceId !== "all" && !isFallbackArea(selectedTask, app.items) &&
-    !unsent.has(selectedTask.id) && !heldBack.some((item) => item.id === selectedTask.id) &&
-    entityConflicts(selectedTask).length === 0 &&
-    (selectedTask.status === "open" || selectedTask.status === "completed"));
+  const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
+    Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
+      unsent.has(selectedTask.id) || heldBack.some((item) => item.id === selectedTask.id) ||
+      entityConflicts(selectedTask).length > 0)));
   const taskProjectId = selectedTask ? targets(selectedTask.id, "belongs_to_project")[0] : null;
   const taskProject = selectedTask && taskProjectId
     ? projects.find((project) => project.id === taskProjectId && project.workspaceId === selectedTask.workspaceId)
@@ -191,9 +191,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   aria-label={selectedTask.status === "completed"
                     ? `${tr("reopen")}: ${selectedTask.title}`
                     : `${tr("complete")}: ${selectedTask.title}`}
-                  disabled={!taskPreviewCanToggle}
+                  disabled={!taskPreviewMayToggle}
                   onClick={() => {
-                    if (!taskPreviewCanToggle) return;
+                    if (!taskPreviewMayToggle) return;
                     if (selectedTask.status === "completed") void reopenTask(selectedTask);
                     else void done(selectedTask.id);
                   }}>
