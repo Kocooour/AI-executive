@@ -1,0 +1,86 @@
+/* UI-04b: one status control across preview task/project lists and Calendar.
+   Scoping is mandatory: all pre-existing non-preview controls remain unchanged. */
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--v1-neutral-stroke);
+  cursor: pointer;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .lumiCompletionShape {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 23px;
+  height: 23px;
+  border: 2px solid var(--v1-neutral-stroke);
+  border-radius: 5px;
+  box-shadow: none;
+  background: transparent;
+  color: transparent;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 750;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-kind="project"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .lumiCompletionShape {
+  border-radius: 50%;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="warning"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="warning"] .lumiCompletionShape {
+  border-color: var(--v1-attention-orange);
+  background: transparent;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="danger"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="danger"] .lumiCompletionShape {
+  border-color: var(--v1-attention-red);
+  background: transparent;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="complete"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="complete"] .lumiCompletionShape {
+  border-color: var(--v1-completed-fill);
+  background: var(--v1-completed-fill);
+  color: var(--v1-on-accent);
+  box-shadow: none;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:focus-visible {
+  outline: 2px solid var(--v1-accent);
+  outline-offset: 1px;
+}
+.appShell[data-design-system="lumi-v1"] [data-completion-tone="complete"] + .taskRowMain strong,
+.appShell[data-design-system="lumi-v1"] [data-completion-tone="complete"] + .taskRowMain .taskRowOpen {
+  color: var(--v1-completed-text) !important;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--v1-neutral-stroke) 12%, transparent);
+}
+/* Preview list controls are not movable unless an explicit edit mode is entered. */
+.appShell[data-design-system="lumi-v1"] .v1ReorderToggle {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.appShell[data-design-system="lumi-v1"] .v1ReorderToggle:focus-visible {
+  outline: 2px solid var(--v1-accent);
+  outline-offset: 2px;
+}
