@@ -28,12 +28,13 @@ test("R3 My Plan two-day cursor authenticates both positions, actor and date",()
     assert.deepEqual(verifyMyPlanSliceCursor({...context,...drift},token,101),
       {ok:false,reason:"invalid"});
   }
-  assert.deepEqual(verifyMyPlanSliceCursor(context,token.slice(0,-1)+"x",101),
+  assert.deepEqual(verifyMyPlanSliceCursor(context,token.slice(0,-1)+(token.endsWith("A")?"B":"A"),101),
     {ok:false,reason:"invalid"});
   assert.deepEqual(verifyMyPlanSliceCursor(context,token,1000),
     {ok:false,reason:"expired"});
-  assert.equal(signMyPlanSliceCursor(context,revision,positions,1000,101),token===null?null:
-    signMyPlanSliceCursor(context,revision,positions,1000,101));
+  const retained=signMyPlanSliceCursor(context,revision,positions,1000,101);
+  assert.ok(retained);
+  assert.equal(verifyMyPlanSliceCursor(context,retained,102).ok,true);
 });
 
 test("refuse malformed, empty, oversized or improperly encoded cursors",()=>{
