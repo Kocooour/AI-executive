@@ -73,6 +73,21 @@ test("rapid hidden to visible transition always triggers reauthorization",()=>{
     "clock moving backwards must revalidate");
 });
 
+test("pagehide/pageshow BFCache restore forces recheck with or without visibilitychange",()=>{
+  const first=consumeMyPlanWake(initialMyPlanWakeGate(),10_000);
+  assert.equal(first.reload,true);
+  // No visibilitychange occurred. pagehide must still mark the old result invalid.
+  const hidden=invalidateMyPlanWakeGate(first.gate);
+  const restored=consumeMyPlanWake(hidden,10_100);
+  assert.equal(restored.reload,true,"BFCache return under 350ms must refresh ACL");
+  assert.equal(restored.gate.requiresReauthorization,false);
+  // Some BFCache restores fire pageshow(persisted) even without pagehide callback.
+  const persisted=consumeMyPlanWake(first.gate,10_100,true);
+  assert.equal(persisted.reload,true,"persisted pageshow must force recheck");
+  // Normal duplicate pageshow/focus without navigation remains coalesced.
+  assert.equal(consumeMyPlanWake(restored.gate,10_140).reload,false);
+});
+
 test("lifecycle hooks abort and hide old actor data, revalidate after resume",()=>{
   const root=path.join(import.meta.dirname,"..");
   const ui=readFileSync(path.join(root,
@@ -80,7 +95,10 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
   const required=[
     'document.addEventListener("visibilitychange",visibility)',
     'window.addEventListener("focus",foreground)',
-    'window.addEventListener("pageshow",foreground)',
+    'window.addEventListener("pagehide",pagehide)',
+    'window.addEventListener("pageshow",pageshow)',
+    'const pagehide=()=>hide()',
+    'const pageshow=(event:PageTransitionEvent)=>wake(event.persisted)',
     'window.addEventListener("offline",offline)',
     'window.addEventListener("online",online)',
     'msUntilNextLocalMyPlanDay()',
@@ -102,7 +120,8 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
   assert.match(ui,/if\(!navigator.onLine\)\{/);
   assert.match(ui,/clearTimeout\(clockTimer\)/);
   assert.match(ui,/removeEventListener\("visibilitychange",visibility\)/);
-  assert.match(ui,/removeEventListener\("pageshow",foreground\)/);
+  assert.match(ui,/removeEventListener\("pagehide",pagehide\)/);
+  assert.match(ui,/removeEventListener\("pageshow",pageshow\)/);
   assert.match(ui,/setDate\(chosen.evaluationDate\)/);
   assert.match(ui,/invalidate\("stale",true\)/);
   assert.match(ui,/if\(refreshing\)setState\(\{status:"loading"\}\)/);
