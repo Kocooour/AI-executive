@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LumiApp } from "../use-lumi-app";
 import type { AIProposal } from "../types";
+import { proposalApprovalGate } from "../../../lib/ai-proposal-gate";
 
 function ProposalImpact({ proposal, tr }: { proposal: AIProposal; tr: (key: string) => string }) {
   const reviewFields = proposal.review?.fields || proposal.changes.map((item) => ({ label: item.label, before: "—", after: item.value }));
@@ -59,6 +60,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
   const proposal = review?.proposal;
   const closeRef = useRef<HTMLButtonElement>(null);
   const reviewTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastAssistantResultRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!assistantOpen) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -67,7 +69,13 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
   useEffect(() => {
     if (!reviewId) return;
     closeRef.current?.focus();
-    return () => { if (reviewTriggerRef.current?.isConnected) reviewTriggerRef.current.focus(); };
+    return () => {
+      // A completed proposal removes its review button. Return to the new result
+      // message in that case, never to an unmounted dialog or document.body.
+      const trigger = reviewTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else lastAssistantResultRef.current?.focus();
+    };
   }, [reviewId]);
   useEffect(() => { if (!assistantOpen || review?.resolved) setReviewId(null); }, [assistantOpen, review?.resolved]);
   useEffect(() => {
@@ -86,7 +94,16 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [reviewId]);
-  const unavailable = proposal ? review?.blocked || (now >= proposal.expiresAt ? tr("approvalExpired") : proposal.workspaceId !== writeWorkspaceId ? tr("approvalWorkspaceChanged") : "") : "";
+  const approvalGate = proposal ? proposalApprovalGate(proposal, writeWorkspaceId, now, review?.blocked) : null;
+  const unavailable = approvalGate === "conflict" ? review?.blocked || tr("aiActionFailed")
+    : approvalGate === "expired" ? tr("approvalExpired")
+      : approvalGate === "workspace" ? tr("approvalWorkspaceChanged") : "";
+  const approve = () => {
+    // An explicit review is required on every viewport. Never dispatch a stale
+    // approval from a queued click: the server still validates the proposal.
+    if (!proposal || !review || review.resolved || aiBusy || proposalApprovalGate(proposal, writeWorkspaceId, Date.now(), review.blocked)) return;
+    void resolveAIProposal(proposal.id, "confirm");
+  };
   return (
     <>
       {assistantOpen && (
@@ -112,19 +129,25 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
             )}
             {messages.map((m, i) => (
               <div key={i} className={"assistantTurn " + m.role}>
-                <div className={"msg " + m.role}>{m.content}</div>
+                <div className={"msg " + m.role}
+                  ref={m.role === "assistant" && i === messages.length - 1 ? lastAssistantResultRef : undefined}
+                  tabIndex={m.role === "assistant" && i === messages.length - 1 ? -1 : undefined}>
+                  {m.content}
+                </div>
                 {m.proposal && (
                   <div className={`aiProposal ${m.resolved ? "resolved" : ""}`}>
+                    <span className="proposalOrigin"><span aria-hidden="true">✦</span> {tr("approvalLumiProposal")}</span>
                     <strong>{m.proposal.summary}</strong>
                     <div className="desktopProposalImpact"><ProposalImpact proposal={m.proposal} tr={tr} /></div>
                     {m.blocked && <p className="proposalConflict" role="alert">{m.blocked}</p>}
                     {!m.resolved && (
                       <>
-                        <button className="mobileProposalReview" onClick={(event) => { reviewTriggerRef.current = event.currentTarget; setReviewId(m.proposal!.id); }}>{tr("approvalReview")}</button>
-                        <div className="aiProposalActions">
-                          <button className="primaryAction" disabled={aiBusy || Boolean(m.blocked) || now >= m.proposal.expiresAt || m.proposal.workspaceId !== writeWorkspaceId} onClick={() => resolveAIProposal(m.proposal!.id, "confirm")}>{tr("confirm")}</button>
-                          <button disabled={aiBusy} onClick={() => resolveAIProposal(m.proposal!.id, "cancel")}>{tr("reject")}</button>
-                        </div>
+                        <button type="button" className="mobileProposalReview"
+                          aria-haspopup="dialog" aria-expanded={reviewId === m.proposal.id}
+                          aria-controls={reviewId === m.proposal.id ? "lumi-proposal-review" : undefined}
+                          onClick={(event) => { reviewTriggerRef.current = event.currentTarget; setReviewId(m.proposal!.id); }}>
+                          {tr("approvalReview")}
+                        </button>
                       </>
                     )}
                   </div>
@@ -151,15 +174,16 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
             <button onClick={() => askAI()} disabled={aiBusy || !aiText.trim()}>{tr("send")}</button>
           </div>
           {proposal && review && !review.resolved && <div className="mobileApprovalBackdrop" onClick={() => setReviewId(null)}>
-            <section className="mobileApprovalSheet" role="dialog" aria-modal="true" aria-label={tr("approvalReview")} onClick={(event) => event.stopPropagation()}>
+            <section className="mobileApprovalSheet" id="lumi-proposal-review" role="dialog" aria-modal="true" aria-label={tr("approvalReview")} onClick={(event) => event.stopPropagation()}>
               <header><h2>{tr("approvalReview")}</h2><button ref={closeRef} aria-label={tr("close")} onClick={() => setReviewId(null)}>×</button></header>
               <div className="mobileApprovalBody">
+                <span className="proposalOrigin"><span aria-hidden="true">✦</span> {tr("approvalLumiProposal")}</span>
                 <strong>{proposal.summary}</strong>
                 <ProposalImpact proposal={proposal} tr={tr} />
                 {unavailable && <p className="proposalConflict" role="alert">{unavailable} {tr("approvalAskAgain")}</p>}
               </div>
               <div className="mobileApprovalActions">
-                <button className="primaryAction" disabled={aiBusy || Boolean(unavailable)} onClick={() => resolveAIProposal(proposal.id, "confirm")}>{tr("approvalApprove")}</button>
+                <button className="primaryAction" disabled={aiBusy || Boolean(unavailable)} onClick={approve}>{tr("approvalApprove")}</button>
                 <button disabled={aiBusy} onClick={() => resolveAIProposal(proposal.id, "cancel")}>{tr("reject")}</button>
               </div>
             </section>

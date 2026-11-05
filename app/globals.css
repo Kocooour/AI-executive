@@ -1484,7 +1484,17 @@ article {
 .proposalMore summary { cursor: pointer; padding: 8px 0; font-weight: 650; }
 .proposalMore ul { margin: 4px 0 0; padding-left: 20px; }
 .proposalConflict { margin: 0; padding: 10px; border-radius: 8px; background: var(--surface-subtle); color: var(--danger); }
-.mobileProposalReview, .mobileApprovalBackdrop { display: none; }
+.proposalOrigin { display: inline-flex; align-items: center; gap: 5px; width: fit-content; color: var(--accent); font-size: 12px; font-weight: 750; }
+.mobileProposalReview { display: block; min-height: 44px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font-weight: 700; cursor: pointer; }
+.mobileApprovalBackdrop { display: flex; position: fixed; inset: 0; z-index: 90; align-items: center; justify-content: center; padding: 18px; background: #0008; }
+.mobileApprovalSheet { display: flex; flex-direction: column; width: min(560px, 100%); max-height: calc(100dvh - 36px); border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 -10px 35px #0003; }
+.mobileApprovalSheet header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.mobileApprovalSheet h2 { margin: 0; font-size: 18px; }
+.mobileApprovalSheet header button { min-width: 44px; min-height: 44px; font-size: 24px; }
+.mobileApprovalBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 14px; padding: 18px; }
+.mobileApprovalActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); }
+.mobileApprovalActions button { min-height: 48px; padding: 10px; }
+.mobileApprovalActions button:disabled { opacity: .55; cursor: not-allowed; }
 .aiProposalActions {
   display: flex;
   gap: 8px;
@@ -1531,16 +1541,9 @@ article {
     bottom: 64px;
   }
   .desktopProposalImpact, .aiProposalActions { display: none; }
-  .mobileProposalReview { display: block; min-height: 44px; width: 100%; }
-  .mobileApprovalBackdrop { display: flex; position: fixed; inset: 0; z-index: 90; align-items: flex-end; background: #0008; }
-  .mobileApprovalSheet { display: flex; flex-direction: column; width: 100%; max-height: 100dvh; padding-top: env(safe-area-inset-top); border-radius: 18px 18px 0 0; background: var(--surface); color: var(--text); box-shadow: 0 -10px 35px #0003; }
-  .mobileApprovalSheet header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); }
-  .mobileApprovalSheet h2 { margin: 0; font-size: 18px; }
-  .mobileApprovalSheet header button { min-width: 44px; min-height: 44px; font-size: 24px; }
-  .mobileApprovalBody { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 14px; padding: 18px; }
-  .mobileApprovalActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
-  .mobileApprovalActions button { min-height: 48px; padding: 10px; }
-  .mobileApprovalActions button:disabled { opacity: .55; cursor: not-allowed; }
+  .mobileApprovalBackdrop { align-items: flex-end; padding: 0; }
+  .mobileApprovalSheet { width: 100%; max-height: 100dvh; padding-top: env(safe-area-inset-top); border-radius: 18px 18px 0 0; }
+  .mobileApprovalActions { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 }
 
 /* Visual system — calm, compact and content-first. */
