@@ -29,6 +29,7 @@ import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
+import { buildMyPlanPreview, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -3876,6 +3877,15 @@ export function useLumiApp() {
     : view === "Today"
       ? [...visible.filter((x) => !isEveningTask(x, today)), ...visible.filter((x) => isEveningTask(x, today))]
       : visible;
+  // UI-04c: the visible Dnes/Zítra Area blocks, not the old Today/Upcoming
+  // membership lists, define keyboard and drag reorder peers in My Plan.
+  // The legacy list behavior must be identical outside this opt-in route.
+  const planReorderSections = mobileDesignV1Preview && mobilePlanPreviewActive &&
+    view === "Today" && activeWorkspaceId !== "all"
+    ? buildMyPlanPreview({ entities: items, relations: scopedRelations,
+      workspaceId: activeWorkspaceId, today, excludeTimelineIds: todayTimelineTaskIds,
+      priorityFilter, sortBy })
+    : null;
   const batchAllowed = view === "Inbox" && authState === "ready" && syncStatus === "synced" &&
     activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
   const batchCandidates = batchAllowed ? collection.filter((task) =>
@@ -4037,6 +4047,10 @@ export function useLumiApp() {
   async function completeDrop(sourceId: string, target: string, scope = dragScopeRef.current) {
     const source = items.find((entity) => entity.id === sourceId);
     if (!source || !target) return;
+    // My Plan's rows may only change manual rank inside their current visible
+    // day + Area. Dragging onto a legacy section must not reschedule them.
+    const planTaskDrag = planReorderSections !== null && source.type === "task";
+    if (planTaskDrag && target.startsWith("section:")) return;
     if (target.startsWith("section:")) {
       await moveTaskToSection(source, target.slice("section:".length));
       return;
@@ -4045,9 +4059,14 @@ export function useLumiApp() {
     const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
-      let peers = source.type === "project" && scope === "project:all" ? projectGroupPeers(source) : peersForScope(scope, source.workspaceId);
-      // Dropping onto a row of the other Today group (regular / evening) is not a reorder.
-      if (view === "Today" && scope === "task:Today" && source.type === "task") {
+      const planPeers = planTaskDrag
+        ? previewReorderPeers(planReorderSections!, source.id, scope, targetEntity.id)
+        : null;
+      if (planTaskDrag && !planPeers) return; // no fallback to legacy membership
+      let peers = planTaskDrag ? planPeers! :
+        source.type === "project" && scope === "project:all" ? projectGroupPeers(source) : peersForScope(scope, source.workspaceId);
+      // Legacy Today keeps the separate evening group; My Plan groups by Area instead.
+      if (!planTaskDrag && view === "Today" && scope === "task:Today" && source.type === "task") {
         const evening = isEveningTask(source, today);
         if (isEveningTask(targetEntity, today) !== evening) return;
         peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
@@ -4062,6 +4081,7 @@ export function useLumiApp() {
       await persistManualOrder(peers, source.id, scope);
       return;
     }
+    if (planTaskDrag) return; // cross-type drops cannot mutate relations here
     if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {
       await relate(source.id, targetEntity.id, "belongs_to_project");
     } else if (source.type === "project" && targetEntity.type === "area") {
@@ -4111,12 +4131,16 @@ export function useLumiApp() {
   }
 
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
-    let peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
+    const planKeyboard = planReorderSections !== null && entity.type === "task";
+    const planPeers = planKeyboard ? previewReorderPeers(planReorderSections!, entity.id, scope) : null;
+    if (planKeyboard && !planPeers) return;
+    let peers = planKeyboard ? planPeers! :
+      view === "Home" && scope === "task:Today" ? homeTodayTasks
         : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
           : entity.type === "project" && scope === "project:all" ? projectGroupPeers(entity)
             : peersForScope(scope, entity.workspaceId);
     // Today shows its evening tasks as a group of their own: a task moves within its own group only.
-    if (view === "Today" && scope === "task:Today") {
+    if (!planKeyboard && view === "Today" && scope === "task:Today") {
       const evening = isEveningTask(entity, today);
       peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
     }
