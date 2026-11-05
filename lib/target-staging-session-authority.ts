@@ -23,6 +23,7 @@ import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from ".
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
+import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -48,6 +49,7 @@ import {
   readPreflightedGlobalTaskPage,
   readPreflightedGlobalProjectPage,
   readPreflightedGlobalNotePage,
+  readPreflightedGlobalCombinedPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -425,6 +427,21 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.3m.7: unified Vše/Osobní/Sdílené from a single
+   * actor-bound SQLite read snapshot; INTERNAL ONLY, no HTTP admission. */
+  readGlobalCombinedPage(
+    actorUserId:string,scope:TargetGlobalTaskScope,limit:number,
+    positions:GlobalCombinedPositions,
+  ):TargetGlobalCombinedPage|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedGlobalCombinedPage(this.#store,credential,{
+        scope,limit,positions,
       }):null;
     }catch{return null;}
   }
