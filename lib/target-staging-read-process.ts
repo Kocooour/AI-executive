@@ -1258,6 +1258,35 @@ export async function readStagingMyPlanDayInChild(
   return parsed;
 }
 
+/** R3-slice/BE-02: exactly one subprocess / pinned transaction for two days.
+ * The existing strict per-day DTO parser remains the only task allowlist.
+ * Internal epochs are returned only for the HTTP live release guard. */
+export async function readStagingMyPlanTwoDayInChild(
+  config:StagingPersonalReadConfig,areaFilter:MyPlanTaskAreaFilter,
+  evaluationDate:string,nextDate:string,limit:number,
+  positions:{today:number;tomorrow:number},
+):Promise<{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null>{
+  const payload=await runChild(config,"target-staging-my-plan-slice-child.mjs",[
+    areaFilter,evaluationDate,nextDate,String(limit),
+    String(positions.today),String(positions.tomorrow),
+  ]);
+  if(!payload||typeof payload!=="object"||Array.isArray(payload))return null;
+  const p=payload as Record<string,unknown>;
+  if(Object.keys(p).sort().join(",")!=="ok,today,tomorrow"||
+    p.ok!==true)return null;
+  const today=parseStagingMyPlanDayPage(
+    p.today,areaFilter,"today",evaluationDate,null,limit);
+  const tomorrow=parseStagingMyPlanDayPage(
+    p.tomorrow,areaFilter,"upcoming",evaluationDate,nextDate,limit);
+  if(!today||!tomorrow||today.privateEpoch!==tomorrow.privateEpoch||
+    JSON.stringify(today.linearization)!==JSON.stringify(tomorrow.linearization)||
+    JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs)){
+    logStagingFailure("my_plan_slice","invalid_atomic_child_dto");
+    return null;
+  }
+  return {today,tomorrow};
+}
+
 /** A private when command preview transports no task title or another
  * actor's plan. Its Area+task+epoch witnesses remain internal to the server. */
 export type StagingPersonalWhenPreviewResult=
