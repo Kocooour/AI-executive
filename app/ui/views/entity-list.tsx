@@ -1,6 +1,8 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
+import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { LumiCompletionControl } from "./lumi-completion-control";
 import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
 import { MobileProjectRowV1 } from "./mobile-project-row-v1";
 import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
@@ -65,6 +67,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     workspaces,
   } = app;
   const [mobileViewport, setMobileViewport] = useState(false);
+  const [reorderPreview, setReorderPreview] = useState(false);
+  useEffect(() => { setReorderPreview(false); }, [view, activeWorkspaceId]);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const media = window.matchMedia("(max-width: 700px)");
@@ -92,7 +96,7 @@ export function EntityList({ app }: { app: LumiApp }) {
       const projectSummary = x.type === "project" ? projectSummaries.get(x.id) : undefined;
       if (mobileProjectPreview && x.type === "project" && projectSummary) {
         return <MobileProjectRowV1 key={x.id} app={app} project={x} summary={projectSummary}
-          dragScope={dragScope ?? "project:all"} />;
+          dragScope={dragScope ?? "project:all"} reorderEnabled={reorderPreview} />;
       }
       let meta = taskRowValue(x, language, today, {
         held: heldReasons.has(x.id),
@@ -130,17 +134,26 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
+          {(!mobileDesignV1Preview || reorderPreview) && dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
-            <button
-              type="button"
-              className="check"
-              aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                done(x.id);
-              }}
-            >○</button>
+            mobileDesignV1Preview ? (
+              <LumiCompletionControl kind="task"
+                tone={taskPreviewCompletionTone(x, today)}
+                complete={x.status === "completed"}
+                stateLabel={taskPreviewStateText(taskPreviewCompletionTone(x, today), language)}
+                actionLabel={`${tr(x.status === "completed" ? "reopen" : "complete")} ${x.title || tr("untitledItem")}`}
+                blockedReason={language === "cs" ? "Zvolte konkrétní prostor a vyčkejte na synchronizaci." : "Select a workspace and finish synchronization."}
+                disabled={activeWorkspaceId === "all" || heldReasons.has(x.id) || unsent.has(x.id)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (x.status === "completed") void app.reopenTask(x);
+                  else void done(x.id);
+                }} />
+            ) : (
+              <button type="button" className="check"
+                aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
+                onClick={(event) => { event.stopPropagation(); void done(x.id); }}>○</button>
+            )
           ) : (
             <span className={`entityIcon ${x.type}Icon`} aria-hidden="true">
               {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : <ViewIcon name="Notes" />}
@@ -152,7 +165,8 @@ export function EntityList({ app }: { app: LumiApp }) {
               className="taskRowOpen"
               onClick={(event) => { event.stopPropagation(); void inspect(x); }}
             >{x.title || tr("untitledItem")}</button></strong>
-            {view === "Today" && x.type === "task" && (
+            {view === "Today" && x.type === "task" &&
+              (!mobileDesignV1Preview || (typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0)) && (
               <small className="taskRowEstimate" data-row-estimate>{typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0 ? tr("timelineMinutes").replace("{n}", String(x.properties.estimatedMinutes)) : tr("timelineNoEstimate")}</small>
             )}
             {projectSummary && (
@@ -276,6 +290,14 @@ export function EntityList({ app }: { app: LumiApp }) {
                 </div>
               )}
               <InboxBatchTriage app={app} />
+              {mobileDesignV1Preview && (view === "Today" || (view === "Projects" && !app.openProject)) && (
+                <button type="button" className="v1ReorderToggle"
+                  aria-pressed={reorderPreview} data-v1-reorder-toggle=""
+                  onClick={() => setReorderPreview((value) => !value)}>
+                  {reorderPreview ? (language === "cs" ? "Hotovo s řazením" : "Finish reordering")
+                    : (language === "cs" ? "Upravit pořadí" : "Reorder")}
+                </button>
+              )}
               <div
                 className={
                   "list taskRowList " +
