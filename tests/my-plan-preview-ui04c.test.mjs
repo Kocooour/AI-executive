@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
 
 const day = "2026-11-05";
 const entity = (id, type, workspaceId = "personal", properties = {}, status = type === "task" ? "open" : "active") => ({
@@ -139,4 +139,70 @@ test("UI-04c: My Plan preview stays opt-in and preserves legacy Today/other view
   assert.match(css, /\.appShell\[data-my-plan-preview="true"\]/);
   assert.match(css, /var\(--v1-area-personal\)/);
   assert.match(css, /var\(--v1-neutral-stroke\)/);
+});
+
+
+test("UI-04c: keyboard and drag reorder use only rendered peers in the same day and Area", () => {
+  const work = entity("work", "area"); work.title = "Práce";
+  const home = entity("home", "area"); home.title = "Osobní";
+  const project = entity("project", "project");
+  const tasks = [
+    entity("deadline-only", "task", "personal", { deadline: day, when: "2026-12-01" }),
+    entity("today-sibling", "task", "personal", { when: day }),
+    entity("different-area", "task", "personal", { when: day }),
+    entity("tomorrow-only", "task", "personal", { when: "2026-12-01", deadline: "2026-11-06" }),
+    entity("tomorrow-sibling", "task", "personal", { when: "2026-11-06" }),
+    entity("far-future", "task", "personal", { when: "2026-12-01" }),
+    entity("timeline", "task", "personal", { when: day }),
+    entity("filtered", "task", "personal", { when: day, priority: "low" }),
+  ];
+  const links = [
+    relation("deadline-only", project.id, "belongs_to_project"),
+    relation(project.id, work.id, "belongs_to_area"),
+    relation("today-sibling", work.id, "belongs_to_area"),
+    relation("different-area", home.id, "belongs_to_area"),
+    relation("tomorrow-only", work.id, "belongs_to_area"),
+    relation("tomorrow-sibling", work.id, "belongs_to_area"),
+    relation("far-future", work.id, "belongs_to_area"),
+    relation("timeline", work.id, "belongs_to_area"),
+    relation("filtered", work.id, "belongs_to_area"),
+  ];
+  const sections = buildMyPlanPreview({
+    workspaceId: "personal", today: day, entities: [work, home, project, ...tasks],
+    relations: links, priorityFilter: "high", excludeTimelineIds: new Set(["timeline"]),
+  });
+  // Priority filtering is an existing live feature. Make the two visible tasks
+  // high-priority while unrelated rows remain excluded.
+  assert.equal(sections[0].count, 0);
+  const visible = buildMyPlanPreview({
+    workspaceId: "personal", today: day, entities: [work, home, project, ...tasks],
+    relations: links, excludeTimelineIds: new Set(["timeline"]),
+  });
+  const todayPeers = previewReorderPeers(visible, "deadline-only", "task:Today");
+  assert.deepEqual(todayPeers?.map((x) => x.id), ["deadline-only", "today-sibling", "filtered"]);
+  assert.deepEqual(previewReorderPeers(visible, "tomorrow-only", "task:Upcoming")?.map((x) => x.id),
+    ["tomorrow-only", "tomorrow-sibling"]);
+  assert.equal(previewReorderPeers(visible, "deadline-only", "task:Today", "different-area"), null);
+  assert.equal(previewReorderPeers(visible, "deadline-only", "task:Today", "tomorrow-only"), null);
+  assert.equal(previewReorderPeers(visible, "deadline-only", "task:Upcoming", "today-sibling"), null);
+  assert.equal(previewReorderPeers(visible, "tomorrow-only", "task:Today", "tomorrow-sibling"), null);
+  assert.equal(previewReorderPeers(visible, "deadline-only", "task:Today", "timeline"), null);
+  assert.equal(previewReorderPeers(visible, "far-future", "task:Upcoming", "tomorrow-sibling"), null);
+  assert.equal(previewReorderPeers(visible, "deadline-only", "task:Anytime"), null);
+  assert.deepEqual(previewReorderPeers(sections, "deadline-only", "task:Today"), null);
+});
+
+test("UI-04c: preview reorder never falls back to legacy Today/Upcoming or changes Area/date", () => {
+  const app = readFileSync(new URL("../app/ui/use-lumi-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /const planReorderSections = mobileDesignV1Preview && mobilePlanPreviewActive/);
+  assert.match(app, /buildMyPlanPreview\(\{ entities: items, relations: scopedRelations,/);
+  assert.match(app, /excludeTimelineIds: todayTimelineTaskIds,/);
+  assert.match(app, /const planPeers = planTaskDrag[\s\S]*?previewReorderPeers\(planReorderSections!, source\.id, scope, targetEntity\.id\)/);
+  assert.match(app, /if \(planTaskDrag && !planPeers\) return/);
+  assert.match(app, /if \(planTaskDrag\) return; \/\/ cross-type drops/);
+  assert.match(app, /if \(planTaskDrag && target\.startsWith\("section:"\)\) return/);
+  assert.match(app, /const planPeers = planKeyboard \? previewReorderPeers\(planReorderSections!, entity\.id, scope\)/);
+  assert.match(app, /if \(planKeyboard && !planPeers\) return/);
+  assert.match(app, /if \(!planTaskDrag && view === "Today"/);
+  assert.match(app, /if \(!planKeyboard && view === "Today"/);
 });
