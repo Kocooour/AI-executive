@@ -19,7 +19,7 @@
     min-width: 0;
   }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
-    --v1-area-color: #f1f5f9;
+    --v1-area-color: var(--v1-surface-subtle);
     display: grid;
     gap: 0;
     min-width: 0;
@@ -28,9 +28,9 @@
     background: color-mix(in srgb, var(--v1-area-color) 72%, var(--surface));
     border: 1px solid color-mix(in srgb, var(--v1-area-color) 42%, var(--line));
   }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: #dcfce7; }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="work"] { --v1-area-color: #dbeafe; }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="family"] { --v1-area-color: #fce7f3; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: var(--v1-area-personal); }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="work"] { --v1-area-color: var(--v1-area-work); }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="family"] { --v1-area-color: var(--v1-area-family); }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: #f3e8ff; }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: #fef3c7; }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: #cffafe; }
