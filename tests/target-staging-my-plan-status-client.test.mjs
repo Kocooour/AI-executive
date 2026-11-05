@@ -131,19 +131,35 @@ test("503 or malformed success never triggers an automatic retry",async()=>{
     async()=>good({status:"other"})),{kind:"unknown",reason:"invalid-response"});
 });
 
-test("409 CAS and lost ACL never reach receipt or report committed",async()=>{
-  for(const [status,reason] of [[409,"stale"],[401,"signed-out"],
-    [403,"signed-out"],[404,"unavailable"],[400,"invalid-request"]]){
+test("409 CAS and malformed request are definitive refusals without retry",async()=>{
+  for(const [status,reason] of [[409,"stale"],[400,"invalid-request"]]){
     let calls=0;
     const result=await dispatchMyPlanStatus(command,async()=>{calls++;return failures(status);});
     assert.deepEqual(result,{kind:"rejected",reason},String(status));
     assert.equal(calls,1);
   }
-  const uncertain=await dispatchMyPlanStatus(command,async(_url,opts)=>{
+});
+
+test("revocation after commit is uncertain until an authorized receipt confirms",async()=>{
+  for(const status of [401,403,404]){
+    const methods=[];
+    const result=await dispatchMyPlanStatus(command,async(_url,opts)=>{
+      methods.push(opts.method);
+      return failures(status);
+    });
+    assert.deepEqual(result,{kind:"uncertain",command},String(status));
+    assert.deepEqual(methods,["PATCH","POST"]);
+  }
+  const lost=await dispatchMyPlanStatus(command,async(_url,opts)=>{
     if(opts.method==="PATCH")throw Error("lost");
     return failures(401);
   });
-  assert.deepEqual(uncertain,{kind:"rejected",reason:"signed-out"});
+  assert.deepEqual(lost,{kind:"uncertain",command});
+  const confirmed=await dispatchMyPlanStatus(command,async(_url,opts)=>{
+    if(opts.method==="PATCH")return failures(401);
+    return good({status:"committed"});
+  });
+  assert.deepEqual(confirmed,{kind:"committed",command});
 });
 
 test("aborted PATCH is uncertain, aborted preview never writes",async()=>{
