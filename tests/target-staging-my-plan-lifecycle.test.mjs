@@ -4,6 +4,7 @@ import path from "node:path";
 import {test} from "node:test";
 import {
   msUntilNextLocalMyPlanDay,resumeMyPlanDate,
+  initialMyPlanWakeGate,invalidateMyPlanWakeGate,consumeMyPlanWake,
 } from "../lib/target-staging-my-plan-lifecycle.ts";
 import {localMyPlanDate} from "../lib/target-staging-my-plan-client.ts";
 
@@ -49,6 +50,29 @@ test("only follow-today date automatically advances after midnight",()=>{
   });
 });
 
+test("rapid hidden to visible transition always triggers reauthorization",()=>{
+  let gate=initialMyPlanWakeGate();
+  const initial=consumeMyPlanWake(gate,10_000);
+  assert.equal(initial.reload,true);
+  gate=initial.gate;
+  const sameFocus=consumeMyPlanWake(gate,10_100);
+  assert.equal(sameFocus.reload,false,"duplicate focus without a hide is coalesced");
+  gate=invalidateMyPlanWakeGate(sameFocus.gate);
+  assert.equal(gate.requiresReauthorization,true);
+  const shown=consumeMyPlanWake(gate,10_120);
+  assert.equal(shown.reload,true,"hide/show within 120ms must reauthorize");
+  assert.equal(shown.gate.requiresReauthorization,false);
+  const visibleFocus=consumeMyPlanWake(shown.gate,10_140);
+  assert.equal(visibleFocus.reload,false,"visibility+focus pair reuses new read");
+  gate=invalidateMyPlanWakeGate(visibleFocus.gate);
+  const secondHide=consumeMyPlanWake(gate,10_145);
+  assert.equal(secondHide.reload,true,"each new hidden cycle requires a read");
+  assert.equal(consumeMyPlanWake(secondHide.gate,10_150,true).reload,true,
+    "explicit online/midnight wake cannot be debounced");
+  assert.equal(consumeMyPlanWake(secondHide.gate,9_999).reload,true,
+    "clock moving backwards must revalidate");
+});
+
 test("lifecycle hooks abort and hide old actor data, revalidate after resume",()=>{
   const root=path.join(import.meta.dirname,"..");
   const ui=readFileSync(path.join(root,
@@ -60,6 +84,10 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
     'window.addEventListener("offline",offline)',
     'window.addEventListener("online",online)',
     'msUntilNextLocalMyPlanDay()',
+    'const attempt=consumeMyPlanWake(wakeGate,Date.now(),force)',
+    'wakeGate=invalidateMyPlanWakeGate(wakeGate)',
+    'if(document.visibilityState==="hidden")hide()',
+    'if(!attempt.reload)return',
     'const chosen=resumeMyPlanDate(date,followToday,new Date())',
     'current.current?.abort()',
     'setState({status:"error",reason})',
@@ -69,6 +97,9 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
   ];
   for(const fragment of required)
     assert.ok(ui.includes(fragment),fragment);
+  assert.doesNotMatch(ui,/now-lastAwake<350/);
+  assert.match(ui,/const hide=\(\)=>\{/);
+  assert.match(ui,/if\(!navigator.onLine\)\{/);
   assert.match(ui,/clearTimeout\(clockTimer\)/);
   assert.match(ui,/removeEventListener\("visibilitychange",visibility\)/);
   assert.match(ui,/removeEventListener\("pageshow",foreground\)/);
