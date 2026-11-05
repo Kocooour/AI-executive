@@ -3,6 +3,8 @@ import { useState } from "react";
 import { pluralText } from "../../../lib/plural";
 import { planItemsOutsideToday, planMinutesForTasks, roundedPlanHours } from "../../../lib/today-plan";
 import { pickSummarySuggestion } from "../../../lib/today-summary";
+import { buildMyPlanPreview } from "../../../lib/my-plan-preview";
+import { mobileDesignV1Preview } from "../navigation";
 import { inSentenceDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { PopoverMenu } from "./popover-menu";
@@ -28,7 +30,16 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
   const shown = collection.filter((task) => task.type === "task");
   const minutes = planMinutesForTasks(visibleDayPlan, new Set(shown.map((task) => task.id)));
   const hours = minutes ? roundedPlanHours(minutes) : 0;
-  const summary = [
+  const planPreviewActive = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const previewDays = planPreviewActive ? buildMyPlanPreview({
+    entities: app.items, relations: app.scopedRelations,
+    workspaceId: app.activeWorkspaceId, today: app.today, priorityFilter, sortBy,
+  }) : null;
+  const summary = planPreviewActive
+    ? app.activeWorkspaceId === "all"
+      ? (language === "cs" ? "Vyberte prostor" : "Select a workspace")
+      : `${language === "cs" ? "Dnes" : "Today"}: ${previewDays?.[0]?.count ?? 0} · ${language === "cs" ? "Zítra" : "Tomorrow"}: ${previewDays?.[1]?.count ?? 0}`
+    : [
     priorityFilter !== "all" && shown.length !== todayTasks.length
       ? fill(tr("todayFilteredCount"), { shown: shown.length, total: todayTasks.length })
       : pluralText(language, shown.length, tr("todayTaskForms")),
@@ -77,6 +88,7 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
 export function TodayTop({ app }: { app: LumiApp }) {
   const { calendarDayEvents, calendarFresh, calendarSources, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanUndo, nextDayPlanBlock,
     tr, undoDayPlanBlock, visibleDayPlan } = app;
+  const planPreview = mobileDesignV1Preview && app.mobilePlanPreviewActive;
   const canUndo = Boolean(visibleDayPlan && dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date);
   const stripShowsStale = calendarDayEvents.length > 0 && !calendarFresh;
   // The plan's own calendar state, said once for the whole list (the rows only show their times).
@@ -93,6 +105,12 @@ export function TodayTop({ app }: { app: LumiApp }) {
       <WorkNowCard app={app} compact />
       {/* Outside the calendar section: the event that became a task may have been the day's last one. */}
       <CalendarEventNotice app={app} />
+      {planPreview && calendarDayEvents.length > 0 && (
+        <h2 className="myPlanV1EventsTitle">
+          <span className="myPlanV1EventIcon" aria-hidden="true">▦</span>
+          {app.language === "cs" ? "Dnešní události" : "Today's events"}
+        </h2>
+      )}
       <DayTimeline app={app} mode="today" />
       {(planState || overloaded || currentDayPlanBlock || nextDayPlanBlock) && (
         <div className="todayPlanState" data-today-plan-state>
@@ -154,9 +172,13 @@ export function TodayFooter({ app }: { app: LumiApp }) {
         <p className="todayOutside" data-today-outside>{fill(tr(outsideKey), { n: outside })} — <button type="button" className="textAction" onClick={() => setView("Home")}>{tr("todayOutsideLink")}</button></p>
       )}
       {picked && sentence && (
-        <section className="todaySuggestion" aria-label={tr("todaySuggestLabel")} data-today-suggestion={picked.task.id}>
+        <section className="todaySuggestion"
+          aria-label={mobileDesignV1Preview && app.mobilePlanPreviewActive
+            ? (language === "cs" ? "Návrh Lumi" : "Lumi proposal") : tr("todaySuggestLabel")}
+          data-today-suggestion={picked.task.id}>
           <p>
-            <span className="deferLumi"><span aria-hidden="true">✦ </span>{tr("deferLumi")}:</span> {sentence}{" "}
+            <span className="deferLumi"><span aria-hidden="true">✦ </span>{mobileDesignV1Preview && app.mobilePlanPreviewActive
+              ? (language === "cs" ? "Návrh Lumi" : "Lumi proposal") : tr("deferLumi")}:</span> {sentence}{" "}
             <b>{fill(tr("todaySuggestMove"), { title: picked.task.title || tr("untitledItem"), date: picked.suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(picked.suggestion.target, language) })}</b>
           </p>
           <div className="todaySuggestionActions">
