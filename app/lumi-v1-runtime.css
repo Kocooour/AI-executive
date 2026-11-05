@@ -1,0 +1,31 @@
+/* UI-T: Lumi Design v1.0 runtime palette, gated by the existing design preview.
+   The legacy workspace model and default UI keep their original tokens.
+   Color never grants permissions; UI-09/R3 remains the authority boundary. */
+.appShell[data-design-system="lumi-v1"] {
+  --app-bg: var(--v1-app-bg);
+  --surface-subtle: var(--v1-surface-subtle);
+  --text: var(--v1-text);
+  --muted: var(--v1-muted);
+  --muted-light: var(--v1-muted);
+  --accent: var(--v1-accent);
+  --accent-soft: var(--v1-accent-soft);
+  --on-accent: var(--v1-on-accent);
+  --on-accent-soft: var(--v1-on-accent-soft);
+  --focus-ring: var(--v1-accent);
+  --proposal: var(--v1-proposal-stroke);
+  /* These two legacy tone names map to the corresponding read-scope colors.
+     Work and family stay legacy workspace tones, not additional target spaces. */
+  --ws-personal: var(--v1-scope-personal);
+  --ws-personal-soft: var(--v1-area-personal);
+  --ws-all: var(--v1-scope-all);
+  --ws-all-soft: var(--v1-accent-soft);
+}
+
+/* The same typography for task/project titles in the gated v1 preview.
+   Shared completion visuals and states are delivered separately in UI-04b. */
+.appShell[data-design-system="lumi-v1"] .taskRowList .taskRowMain strong,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectName {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  font-weight: 650;
+}

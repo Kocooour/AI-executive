@@ -40,7 +40,7 @@ export default function App() {
     );
   }
   return (
-    <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-workspace-tone={app.activeWorkspaceTone}>
+    <main className={`appShell view-${view.toLowerCase()}${app.selected ? " inspectorOpen" : ""}${view === "Projects" && app.openProject ? " projectPageOpen" : ""}`} data-design-system={mobileDesignV1Preview ? "lumi-v1" : undefined} data-workspace-tone={app.activeWorkspaceTone}>
       <Sidebar app={app} />
       <section className="appPane">
         {app.offlineView && (

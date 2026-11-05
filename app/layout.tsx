@@ -3,6 +3,7 @@ import Script from "next/script";
 import "./globals.css";
 // Runtime uses the same generated tokens as the design-system previews.
 import "../docs/design-system/tokens.css";
+import "./lumi-v1-runtime.css";
 import "./lumi-navigation.css";
 import "./lumi-home.css";
 import "./lumi-task-row.css";

@@ -88,3 +88,90 @@ test("color aliases point to existing color tokens", () => {
     }
   }
 });
+
+const targetV1 = JSON.parse(readFileSync(path.join(path.dirname(tokensPath), "lumi-v1-target-tokens.json"), "utf8"));
+
+test("Lumi v1 light tokens track approved target", () => {
+  const expected = {
+    "v1-app-bg": targetV1.color.surface.background,
+    "v1-text": targetV1.color.surface.textPrimary,
+    "v1-muted": targetV1.color.surface.textSecondary,
+    "v1-surface-subtle": targetV1.color.surface.neutralSurface,
+    "v1-scope-all-base": targetV1.color.readScope.all.base,
+    "v1-scope-personal-base": targetV1.color.readScope.personal.base,
+    "v1-scope-shared-base": targetV1.color.readScope.shared.base,
+    "v1-scope-all": targetV1.color.readScope.all.accessibleTextOnWhite,
+    "v1-scope-personal": targetV1.color.readScope.personal.accessibleTextOnWhite,
+    "v1-scope-shared": targetV1.color.readScope.shared.accessibleTextOnWhite,
+    "v1-area-personal": targetV1.color.areaGroupLight.personal,
+    "v1-area-work": targetV1.color.areaGroupLight.work,
+    "v1-area-family": targetV1.color.areaGroupLight.family,
+    "v1-attention-red": targetV1.color.attention.contrastSafeStrokeRedOnLight,
+    "v1-attention-orange": targetV1.color.attention.contrastSafeStrokeOrangeOnLight,
+    "v1-neutral-stroke": targetV1.color.attention.neutralStroke,
+    "v1-completed-fill": targetV1.color.completed.accessibleFillOnLight,
+    "v1-completed-text": targetV1.color.completed.text,
+    "v1-proposal-stroke": targetV1.color.proposal.accent,
+    "v1-proposal-surface": targetV1.color.proposal.surface,
+    "v1-on-proposal": targetV1.color.readScope.all.accessibleTextOnWhite,
+  };
+  for (const [name, expectedColor] of Object.entries(expected)) {
+    assert.equal(color(name, "light").toLowerCase(), expectedColor.toLowerCase(), name);
+  }
+  assert.equal(targetV1.shape.attention, "colored-outline-no-fill-no-check");
+  assert.equal(targetV1.shape.completed, "gray-fill-with-check");
+  const css = buildCss(tokens);
+  assert.match(css, /\.lumi-v1-item-title \{[^}]*font-size: 17px;[^}]*font-weight: 650;/s);
+  assert.match(css, /\.lumi-v1-section-title \{[^}]*font-size: 20px;[^}]*font-weight: 700;/s);
+});
+
+test("Lumi v1 typography and semantic colors keep accessible contrast in light and dark", () => {
+  const textPairs = [
+    ["v1-text", "v1-app-bg"],
+    ["v1-muted", "v1-app-bg"],
+    ["v1-accent", "v1-app-bg"],
+    ["v1-scope-all", "v1-app-bg"],
+    ["v1-scope-personal", "v1-app-bg"],
+    ["v1-scope-shared", "v1-app-bg"],
+    ["v1-on-accent", "v1-accent"],
+    ["v1-on-accent-soft", "v1-accent-soft"],
+    ["v1-on-proposal", "v1-proposal-surface"],
+    ...["v1-area-personal", "v1-area-work", "v1-area-family"]
+      .flatMap((background) => [["v1-text", background], ["v1-completed-text", background]]),
+  ];
+  const strokePairs = [
+    ["v1-neutral-stroke", "v1-app-bg"],
+    ["v1-neutral-stroke", "v1-surface-subtle"],
+    ["v1-proposal-stroke", "v1-proposal-surface"],
+    ...["v1-app-bg", "v1-area-personal", "v1-area-work", "v1-area-family"]
+      .flatMap((background) => [
+        ["v1-attention-red", background],
+        ["v1-attention-orange", background],
+        ["v1-neutral-stroke", background],
+        ["v1-completed-fill", background],
+      ]),
+  ];
+  for (const theme of ["light", "dark"]) {
+    for (const [foreground, background] of textPairs) {
+      const ratio = contrast(color(foreground, theme), color(background, theme));
+      assert.ok(ratio >= 4.5, `${theme}: ${foreground} on ${background} is only ${ratio.toFixed(2)}:1`);
+    }
+    for (const [foreground, background] of strokePairs) {
+      const ratio = contrast(color(foreground, theme), color(background, theme));
+      assert.ok(ratio >= 3, `${theme}: ${foreground} on ${background} is only ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
+test("Lumi v1 runtime palette remains behind the existing preview flag", () => {
+  const root = path.join(path.dirname(tokensPath), "..", "..");
+  const page = readFileSync(path.join(root, "app", "page.tsx"), "utf8");
+  const css = readFileSync(path.join(root, "app", "lumi-v1-runtime.css"), "utf8");
+  const layout = readFileSync(path.join(root, "app", "layout.tsx"), "utf8");
+  assert.match(page, /data-design-system=\{mobileDesignV1Preview \? "lumi-v1" : undefined\}/);
+  assert.match(css, /\.appShell\[data-design-system="lumi-v1"\] \{/);
+  assert.doesNotMatch(css, /(^|\n)\s*(:root|body|\.appShell)\s*\{/);
+  assert.match(layout, /import "\.\/lumi-v1-runtime\.css";/);
+  assert.match(css, /--ws-personal:\s*var\(--v1-scope-personal\)/);
+  assert.match(css, /--ws-all:\s*var\(--v1-scope-all\)/);
+});
