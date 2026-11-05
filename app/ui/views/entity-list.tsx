@@ -77,6 +77,10 @@ export function EntityList({ app }: { app: LumiApp }) {
   // Shared project rows render identically on desktop and phone.
   const projectListPreview = mobileDesignV1Preview && view === "Projects" && !app.openProject;
   const myPlanPreview = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
+  // When the user changes the sort option while editing, remove handles before
+  // another pointer or keyboard gesture can persist a rank against that order.
+  useEffect(() => { if (myPlanPreview && sortBy !== "manual") setReorderPreview(false); },
+    [myPlanPreview, sortBy]);
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
   const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
@@ -142,6 +146,7 @@ export function EntityList({ app }: { app: LumiApp }) {
             </label>
           )}
           {v1DragHandleVisible(view, mobileDesignV1Preview, reorderPreview) &&
+            (!myPlanPreview || sortBy === "manual") &&
             dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
             mobileDesignV1Preview ? (
@@ -303,9 +308,17 @@ export function EntityList({ app }: { app: LumiApp }) {
               {mobileDesignV1Preview && reorderableView && !app.openProject && (
                 <button type="button" className="v1ReorderToggle"
                   aria-pressed={reorderPreview} data-v1-reorder-toggle=""
-                  onClick={() => setReorderPreview((value) => !value)}>
+                  onClick={() => {
+                    // Explicitly enter manual sorting before exposing reorder
+                    // handles. The list redraws in its actual persisted order,
+                    // rather than interpolating ranks from a priority/date view.
+                    if (myPlanPreview && !reorderPreview && sortBy !== "manual") setSortBy("manual");
+                    setReorderPreview((value) => !value);
+                  }}>
                   {reorderPreview ? (language === "cs" ? "Hotovo s řazením" : "Finish reordering")
-                    : (language === "cs" ? "Upravit pořadí" : "Reorder")}
+                    : myPlanPreview && sortBy !== "manual"
+                      ? (language === "cs" ? "Upravit pořadí ručně" : "Reorder manually")
+                      : (language === "cs" ? "Upravit pořadí" : "Reorder")}
                 </button>
               )}
               <div
