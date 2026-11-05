@@ -241,3 +241,42 @@ export function previewRankWritesAllowed(
   }
   return true;
 }
+
+
+/** Build *every* next task snapshot before rank writes. The old tasks may be
+ * sendable while adding manualOrders and a history event crosses the exact
+ * server 250k-properties limit. Return null for the whole batch rather than
+ * partially writing or leaving an unsendable task in the local store.
+ */
+export function previewRankNextRecords(
+  updates: readonly PreviewRankUpdate[], records: readonly Entity[], scope: string, timestamp: number,
+): Entity[] | null {
+  if (!updates.length || !Number.isFinite(timestamp)) return null;
+  const byId = new Map(records.map((item) => [item.id, item]));
+  const ids = new Set<string>();
+  const next: Entity[] = [];
+  for (const { id, rank } of updates) {
+    const current = byId.get(id);
+    if (!current || ids.has(id) || !Number.isFinite(rank) ||
+        current.type !== "task" || current.status !== "open") return null;
+    ids.add(id);
+    const orders = current.properties.manualOrders;
+    const manualOrders = orders && typeof orders === "object" && !Array.isArray(orders)
+      ? { ...(orders as Record<string, unknown>) } : {};
+    manualOrders[`${current.workspaceId}:${scope}`] = rank;
+    const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+    const updated: Entity = {
+      ...current,
+      properties: {
+        ...current.properties, manualOrders,
+        activity: [...activity, { at: timestamp, action: "reordered" }].slice(-50),
+      },
+      updatedAt: timestamp,
+    };
+    // The same validation used for deciding what sync can send. Validate the
+    // newly constructed object, not only the old record.
+    if (!isSendable(updated)) return null;
+    next.push(updated);
+  }
+  return next;
+}
