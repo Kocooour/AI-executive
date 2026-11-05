@@ -257,10 +257,10 @@ test("calendar rollover is local-day based across year end and leap day",async()
   const year=await ok(get(query({evaluationDate:"2026-12-31"}),bob));
   assert.deepEqual(ids(year.today),["b-overdue","b-today","b-next"]);
   assert.deepEqual(ids(year.tomorrow),["b-next2","s-bob"]);
+  f.db.prepare("INSERT INTO tasks(id,area_id,title,due_on) VALUES ('b-leap','bob-private','Leap-day task','2028-02-29')").run();
   const leap=await ok(get(query({evaluationDate:"2028-02-28"}),bob));
-  assert.ok(ids(leap.today).includes("b-next2"));
-  assert.deepEqual(ids(leap.tomorrow),[]);
+  assert.deepEqual(ids(leap.tomorrow),["b-leap"]);
   const month=await ok(get(query({evaluationDate:"2028-02-29"}),bob));
-  assert.ok(ids(month.today).includes("s-bob"));
+  assert.ok(ids(month.today).includes("b-leap"));
   assert.deepEqual(ids(month.tomorrow),[]);
 });
