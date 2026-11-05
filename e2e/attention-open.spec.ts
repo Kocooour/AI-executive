@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { expectOnServer, serverEntities, waitUntilSynced } from "./helpers";
+import { expectOnServer, seeded, serverEntities, waitUntilSynced } from "./helpers";
 
 const pragueDate = (page: Page, days: number) => page.evaluate((offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Prague" })
   .format(new Date(Date.now() + offset * 86_400_000)), days);
@@ -38,6 +38,31 @@ test("a task whose planned day has passed is shown as needing attention", async 
   await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === tomorrow, true);
   await expect(await attentionItem(page, title)).toHaveCount(0);
+});
+
+// An Attention-origin date popover can already be open when the browser loses
+// its last valid evaluation. It must not remain a way to act on old evidence.
+test("a quick date dialog opened from Attention closes when its evaluation becomes stale", async ({ page }) => {
+  const item = await attentionItem(page, seeded.overdueTask);
+  const chip = item.locator(".deferChip");
+  await expect(chip).toBeVisible();
+  await chip.click();
+  await expect(page.locator(".deferPopover")).toBeVisible();
+
+  // This is the same browser offline signal the Attention hook listens for.
+  // No reload: the pre-existing popover has to be revoked in place.
+  await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  await expect(item.locator(".attentionRowStale")).toBeVisible();
+  await expect(page.locator(".deferPopover")).toHaveCount(0);
+  await expect(page.locator(".deferChoice, .deferApply")).toHaveCount(0);
+  await expect(chip).toHaveCount(0);
+  await expect(item.getByRole("button", { name: `Otevřít: ${seeded.overdueTask}` })).toBeVisible();
+
+  // Once a fresh evaluation is available, the old dialog must not reopen.
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(page.locator(".attentionStale")).toHaveCount(0);
+  await expect(page.locator(".deferPopover")).toHaveCount(0);
+  await expect(item.locator(".deferChip")).toHaveAttribute("aria-expanded", "false");
 });
 
 // The last evaluation is kept in this browser: when the server cannot evaluate after a restart,
