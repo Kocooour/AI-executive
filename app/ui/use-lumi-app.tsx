@@ -1920,6 +1920,12 @@ export function useLumiApp() {
   const captureItemsRef = useRef(items);
   captureItemsRef.current = items;
   const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
+  // A prior approval cannot be reused if the user switches away from a shared
+  // target and then returns, including when the AI suggestion changes the project.
+  useEffect(() => {
+    setCaptureSharedConsentKey("");
+  }, [captureType, captureWriteWorkspaceId, captureProjectId, captureAreaId,
+      captureProjectAction, captureSuggestion?.projectId, useCaptureSuggestion]);
   // Without access to the server (an offline start) there is no suggestion to wait for: asking would
   // only keep the add button disabled until the request is given up.
   const captureServerUnavailable = authState === "unavailable";
@@ -2072,6 +2078,7 @@ export function useLumiApp() {
   // A manual area choice in quick capture; a later suggestion no longer replaces it.
   function chooseCaptureArea(areaId: string) {
     captureAreaTouched.current = true;
+    setCaptureSharedConsentKey("");
     setCaptureAreaId(areaId);
   }
   function captureKey(type: "task" | "note", workspaceId: string, projectId = "") {
@@ -2094,6 +2101,7 @@ export function useLumiApp() {
   function chooseCaptureType(type: "task" | "note") {
     if (type === captureType || captureProjectId) return;
     replaceCaptureScope(type, captureWriteWorkspaceId);
+    setCaptureSharedConsentKey("");
     setCaptureType(type);
     setCaptureAreaId("");
     captureAreaTouched.current = false;
@@ -2113,6 +2121,7 @@ export function useLumiApp() {
   function selectCaptureWriteWorkspace(workspaceId: string) {
     if (workspaceId === captureWriteWorkspaceId || !workspaces.some((workspace) => workspace.workspaceId === workspaceId)) return;
     replaceCaptureScope(captureType, workspaceId);
+    setCaptureSharedConsentKey("");
     // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
     setCaptureAreaId("");
     captureAreaTouched.current = false;
