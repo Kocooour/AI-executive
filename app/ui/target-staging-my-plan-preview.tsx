@@ -164,6 +164,9 @@ export function TargetStagingMyPlanPreview(){
       else wake();
     };
     const foreground=()=>wake();
+    // Back/Forward Cache navigation does not guarantee visibilitychange.
+    const pagehide=()=>hide();
+    const pageshow=(event:PageTransitionEvent)=>wake(event.persisted);
     const offline=()=>{
       wakeGate=invalidateMyPlanWakeGate(wakeGate);
       invalidate("offline");
@@ -171,7 +174,8 @@ export function TargetStagingMyPlanPreview(){
     const online=()=>wake(true);
     document.addEventListener("visibilitychange",visibility);
     window.addEventListener("focus",foreground);
-    window.addEventListener("pageshow",foreground);
+    window.addEventListener("pagehide",pagehide);
+    window.addEventListener("pageshow",pageshow);
     window.addEventListener("offline",offline);
     window.addEventListener("online",online);
     armClock();
@@ -179,7 +183,8 @@ export function TargetStagingMyPlanPreview(){
       if(clockTimer!==undefined)clearTimeout(clockTimer);
       document.removeEventListener("visibilitychange",visibility);
       window.removeEventListener("focus",foreground);
-      window.removeEventListener("pageshow",foreground);
+      window.removeEventListener("pagehide",pagehide);
+      window.removeEventListener("pageshow",pageshow);
       window.removeEventListener("offline",offline);
       window.removeEventListener("online",online);
     };
