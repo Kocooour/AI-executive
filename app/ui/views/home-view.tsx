@@ -146,7 +146,7 @@ export function HomeView({ app }: { app: LumiApp }) {
             >
               {!mobileDesignV1Preview && dragHandle(task, "task:Today")}
               {mobileDesignV1Preview ? (
-                <LumiCompletionControl kind="task"
+                <LumiCompletionControl className="check" kind="task"
                   tone={taskPreviewCompletionTone(task, today)} complete={false}
                   stateLabel={taskPreviewStateText(taskPreviewCompletionTone(task, today), language)}
                   actionLabel={`${tr("complete")} ${task.title || tr("untitledItem")}`}
