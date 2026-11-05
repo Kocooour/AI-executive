@@ -26,6 +26,11 @@ const reasons:Record<MyPlanReadFailure,string>={
 const humanDate=(day:string)=>new Intl.DateTimeFormat("cs-CZ",{
   day:"numeric",month:"long",year:"numeric",
 }).format(new Date(day+"T12:00:00"));
+const nextHumanDate=(day:string)=>{
+  const following=new Date(day+"T12:00:00.000Z");
+  following.setUTCDate(following.getUTCDate()+1);
+  return humanDate(following.toISOString().slice(0,10));
+};
 
 function PlanDay({label,tasks,date}:{
   label:string;tasks:MyPlanSliceTask[];date:string;
@@ -148,8 +153,7 @@ export function TargetStagingMyPlanPreview(){
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
     {state.status==="ready"&&date&&<>
       <PlanDay label="Dnes a dřívější" date={date} tasks={state.page.today.tasks}/>
-      <PlanDay label={"Zítra · "+humanDate(new Date(date+"T00:00:00.000Z")
-        .toISOString().slice(0,10).replace(/(.*)/,v=>v))}
+      <PlanDay label={"Zítra · "+nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}/>
       {state.page.hasMore&&
         <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
