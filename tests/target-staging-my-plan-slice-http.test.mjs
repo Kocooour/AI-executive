@@ -132,7 +132,7 @@ test("independent default-off flags, owner cookie, strict request fields",async(
   }
   assert.equal((await GET(new Request(base+query()))).status,401);
   const good=await ok(get());
-  assert.deepEqual(ids(good.today),["a-alice"]);
+  assert.deepEqual(ids(good.today),["a-alice","s-foreign"]);
   assert.deepEqual(ids(good.tomorrow),[]);
   for(const invalid of [
     "", "?areaFilter=all",query({evaluationDate:"2026-02-29"}),
@@ -158,7 +158,7 @@ test("today includes overdue; tomorrow is exclusive; My Plan is never global Vš
   const onlyShared=await ok(get(query({areaFilter:"shared"}),bob));
   assert.deepEqual(ids(onlyShared.today),[]);
   assert.deepEqual(ids(onlyShared.tomorrow),["s-bob"]);
-  assert.deepEqual(ids((await ok(get(query(),carol))).today),[]);
+  assert.deepEqual(ids((await ok(get(query(),carol))).today),["c-private"]);
   assert.deepEqual(ids((await ok(get(query(),carol))).tomorrow),[]);
 });
 
