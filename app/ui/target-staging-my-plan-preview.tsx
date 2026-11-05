@@ -109,13 +109,15 @@ export function TargetStagingMyPlanPreview(){
     return()=>controller.abort();
   },[date,areaFilter,refresh]);
 
-  /** Discard tasks synchronously in state before any new authorization read. */
-  function invalidate(reason:MyPlanReadFailure){
+  /** Cancel old reads; show loading for deliberate revalidation, not a false
+   * conflict warning. In either case prior task contents leave render state. */
+  function invalidate(reason:MyPlanReadFailure,refreshing=false){
     requestSequence.current++;
     current.current?.abort();
     moreInFlight.current=false;
     setMoreBusy(false);
-    setState({status:"error",reason});
+    if(refreshing)setState({status:"loading"});
+    else setState({status:"error",reason});
   }
 
   // Reactivating a tab always requires a new server ACL/session/epoch witness.
@@ -142,7 +144,7 @@ export function TargetStagingMyPlanPreview(){
       lastAwake=now;
       if(!navigator.onLine){invalidate("offline");return;}
       const chosen=resumeMyPlanDate(date,followToday,new Date());
-      invalidate("stale");
+      invalidate("stale",true);
       if(chosen.changed)setDate(chosen.evaluationDate);
       else setRefresh(value=>value+1);
       armClock();
@@ -209,13 +211,13 @@ export function TargetStagingMyPlanPreview(){
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
             setFollowToday(false); // A manual date remains pinned at midnight.
-            if(chosen!==date){invalidate("stale");setDate(chosen);}
+            if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
       <label>Moje práce
         <select value={areaFilter}
           onChange={event=>{
-            invalidate("stale");
+            invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
           }}>
           <option value="all">Osobní i přiřazené sdílené</option>
@@ -225,13 +227,13 @@ export function TargetStagingMyPlanPreview(){
       </label>
       <button type="button" onClick={()=>{
         const chosen=localMyPlanDate();
-        invalidate("stale");
+        invalidate("stale",true);
         setFollowToday(true);
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
       }}>Aktuální den</button>
       <button type="button" onClick={()=>{
-        invalidate("stale");
+        invalidate("stale",true);
         setRefresh(n=>n+1);
       }}>Obnovit</button>
     </div>
