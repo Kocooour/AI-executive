@@ -141,7 +141,7 @@ test("independent default-off flags, owner cookie, strict request fields",async(
     query({areaFilter:"vse"}),query({limit:"0"}),query({limit:"01"}),
     query({limit:"101"}),query({cursor:"bad"}),
     query()+"&actor=bob",query()+"&evaluationDate=2026-11-05",
-    query()+"&areaFilter=shared",
+    query({areaFilter:"personal"})+"&areaFilter=shared",
   ])assert.equal((await get(invalid)).status,400,invalid);
 });
 
@@ -193,7 +193,7 @@ test("cursor cannot cross session, filter, date, limit or a changed private plan
     {areaFilter:"personal",limit:"1",cursor},
     {evaluationDate:"2026-11-05",limit:"1",cursor},
     {limit:"2",cursor},
-    {limit:"1",cursor:cursor.slice(0,-1)+"_"},
+    {limit:"1",cursor:cursor.slice(0,-1)+(cursor.endsWith("A")?"B":"A")},
   ])assert.equal((await get(query(extra),bob)).status,400,JSON.stringify(extra));
   const otherSession=login(f,"bob");
   assert.equal((await get(query({limit:"1",cursor}),otherSession)).status,400);
