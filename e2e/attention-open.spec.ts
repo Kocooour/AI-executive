@@ -30,7 +30,7 @@ test("a task whose planned day has passed is shown as needing attention", async 
   await expectOnServer(page, (entity) => entity.id === id && entity.properties?.when === yesterday, true);
   const item = await attentionItem(page, title);
   await expect(item).toContainText("Naplánovaný den včera uplynul a úkol není hotový");
-  await expect(item).toContainText("naplánovaný den");
+  await expect(item.getByRole("button", { name: /^Proč\?:/ })).toBeVisible();
   // Planned for tomorrow, it no longer needs attention.
   await page.goto(`/?task=${id}`);
   await waitUntilSynced(page);
