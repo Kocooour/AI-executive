@@ -38,7 +38,7 @@ import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
-import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
+import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage, temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
@@ -450,6 +450,42 @@ export function readPreflightedMyPlanDayTaskPage(
       return actorUserId?readAuthorizedMyPlanDayTaskPage(db,{
         ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
       }):null;
+    },()=>null));
+}
+
+/** R3-slice/BE-02: both days from the SAME actor-bound, preflighted SQLite
+ * read transaction. No independent snapshots can be accidentally composed. */
+export function readPreflightedMyPlanTwoDayTaskPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{areaFilter:MyPlanTaskAreaFilter;evaluationDate:string;nextDate:string;
+    limit:number;offsetToday:number;offsetTomorrow:number},
+):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null {
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      if(!actorUserId)return null;
+      const common={actorUserId,areaFilter:request.areaFilter,
+        evaluationDate:request.evaluationDate,limit:request.limit,
+        restoreGeneration:store.expectedRestoreGeneration};
+      const today=readAuthorizedMyPlanDayTaskPage(db,{
+        ...common,window:"today",throughDate:null,offset:request.offsetToday,
+      });
+      if(!today)return null;
+      const tomorrow=readAuthorizedMyPlanDayTaskPage(db,{
+        ...common,window:"upcoming",throughDate:request.nextDate,
+        offset:request.offsetTomorrow,
+      });
+      // Dates are parsed by the canonical model. The child must not provide a
+      // non-adjacent second day, even if both windows would otherwise be valid.
+      const adjacent=temporalCalendarOrdinal(request.evaluationDate);
+      const next=temporalCalendarOrdinal(request.nextDate);
+      if(!tomorrow||adjacent===null||next===null||next-adjacent!==1||
+        today.privateEpoch!==tomorrow.privateEpoch||
+        JSON.stringify(today.linearization)!==JSON.stringify(tomorrow.linearization)||
+        JSON.stringify(today.areaEpochs)!==JSON.stringify(tomorrow.areaEpochs))
+        return null;
+      return {today,tomorrow};
     },()=>null));
 }
 
