@@ -1,5 +1,6 @@
 /* UI-04b: one status control across preview task/project lists and Calendar.
    Scoping is mandatory: all pre-existing non-preview controls remain unchanged. */
+.appShell[data-design-system="lumi-v1"] .taskRowList .taskRow .lumiCompletionControl,
 .appShell[data-design-system="lumi-v1"] .lumiCompletionControl {
   display: grid;
   place-items: center;
