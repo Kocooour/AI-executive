@@ -94,8 +94,8 @@ export function TargetStagingMyPlanPreview(){
       evaluationDate:date,areaFilter,signal:controller.signal,
     }).then(result=>{
       if(controller.signal.aborted||requestSequence.current!==id)return;
-      setState(result.ok?{status:"ready",page:result.page}:
-        {status:"error",reason:result.reason});
+      if(result.ok===true)setState({status:"ready",page:result.page});
+      else setState({status:"error",reason:result.reason});
     });
     return()=>controller.abort();
   },[date,areaFilter,refresh]);
@@ -116,7 +116,7 @@ export function TargetStagingMyPlanPreview(){
     if(controller.signal.aborted||requestSequence.current!==id)return;
     moreInFlight.current=false;
     setMoreBusy(false);
-    if(!result.ok){
+    if(result.ok===false){
       // On any error discard ALL previously displayed sensitive data.
       setState({status:"error",reason:result.reason});
       return;
@@ -146,12 +146,13 @@ export function TargetStagingMyPlanPreview(){
           <option value="shared">Přiřazené sdílené</option>
         </select>
       </label>
-      <button type="button" onClick={()=>setRefresh(n=>n+1)}>Obnovit</button>
+      <button type="button" onClick={()=>{setState({status:"loading"});setRefresh(n=>n+1);}}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
-    {state.status==="ready"&&date&&<>
+    {state.status==="ready"&&date&&
+      state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
       <PlanDay label="Dnes a dřívější" date={date} tasks={state.page.today.tasks}/>
       <PlanDay label={"Zítra · "+nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}/>
