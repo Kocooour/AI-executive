@@ -1166,7 +1166,13 @@ test("a kill after the restore intent (before COMMIT) leaves the store blocked; 
   const sidecar = fx.databasePath + "-journal";
   if (existsSync(sidecar)) {
     assert.deepEqual([...readFileSync(sidecar).subarray(0, 8)], [0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store), { ok: false, reason: "unavailable" });
+    // A regular rollback journal after SIGKILL is observationally indistinguishable
+    // from an in-flight writer. The pinned restore must refuse it as retryable
+    // write_failed without opening SQLite, changing the DB, or removing the sidecar.
+    assert.deepEqual(restoreLib.restoreTargetStagingFromBackup(fx.store),
+      { ok: false, reason: "write_failed" });
+    assert.deepEqual(readFileSync(fx.databasePath), dbBefore, "failed restore must not mutate DB");
+    assert.equal(existsSync(sidecar), true, "failed restore must not remove rollback journal");
     unlinkSync(sidecar);
   }
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "restore_pending");
