@@ -20,4 +20,4 @@
 
 ## Navazující práce
 
-Pořadí UI práce z revize: runtime tokeny Lumi v1 → sdílený ovladač dokončení (čtverec/kruh) a řádek → Můj plán Dnes/Zítra se skupinami Oblastí → kalendář bez technických údajů → desktop shell → vertikální řez Můj plán. Viz [ROADMAP](../ROADMAP.md).
+Pořadí sloučení UI práce z revize: runtime tokeny Lumi v1 → sdílený ovladač dokončení (čtverec/kruh) a řádek → Můj plán Dnes/Zítra se skupinami Oblastí → kalendář bez technických údajů → desktop shell → vertikální řez Můj plán. Pořadí neblokuje souběžnou práci: desktop shell a serverová část vertikálního řezu mohou začít hned. Závislosti a paralelní proudy uvádí [ROADMAP](../ROADMAP.md#rozhodnutí-2026-11-05--revize-ui-a-první-vertikální-řez).
