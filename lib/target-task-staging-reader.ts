@@ -49,6 +49,7 @@ import {readAuthorizedGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import {readAuthorizedGlobalCombinedPage} from "./target-global-combined-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
+import {readAuthorizedTitleSearchPage,type AuthorizedSearchPage} from "./target-authorized-title-search";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter}
   from "./target-my-plan-day-task-read-model";
 import {readAuthorizedPersonalWhenCommandPreview,
@@ -779,6 +780,22 @@ export function readPreflightedPrivateProjectDetail(
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
   );
+}
+
+/** R2d.4a: signed actor + canonical preflight + one pinned read transaction.
+ * Internal only. HTTP must live-check full Area and note epoch witnesses. */
+export function readPreflightedAuthorizedTitleSearchPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{scope:TargetGlobalTaskScope;query:string;limit:number;offset:number},
+):AuthorizedSearchPage|null{
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedTitleSearchPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
 }
 
 /** R2d.3m.7 — one canonical preflight, one signed actor, ONE pinned
