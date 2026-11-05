@@ -18,7 +18,10 @@ type RenderRow = (entity: Entity, index: number, rows: Entity[], dragScope?: str
 // A project opened as the main view of Projects (B1, proposal §4.4, owner decision 2026-10-22): header with the context,
 // the tasks and the notes of the project, and the collapsed details. A task or note opened from here uses the inspector
 // on the right. Rows are the ordinary list rows of the app (`renderRow` of the entity list), so every row action works here.
-export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project: Entity; renderRow: RenderRow }) {
+export function ProjectPage({ app, project, renderRow, reorderPreview = false, onToggleReorder }: {
+  app: LumiApp; project: Entity; renderRow: RenderRow;
+  reorderPreview?: boolean; onToggleReorder?: () => void;
+}) {
   const { activeWorkspaceId, areas, askConfirm, closeProjectPage, contextClaims, contextPredicateLabel, heldBack, items, language,
     openCapture, patch, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
   const t = labelsFor(language);
@@ -142,6 +145,14 @@ export function ProjectPage({ app, project, renderRow }: { app: LumiApp; project
       </div>
 
       <section className="projectSection" aria-labelledby="project-tasks-heading">
+        {mobileDesignV1Preview && onToggleReorder && (
+          <button type="button" className="v1ReorderToggle" data-v1-project-reorder-toggle=""
+            aria-pressed={reorderPreview} onClick={onToggleReorder}>
+            {reorderPreview
+              ? (language === "cs" ? "Hotovo s řazením" : "Finish reordering")
+              : (language === "cs" ? "Upravit pořadí" : "Reorder")}
+          </button>
+        )}
         <h2 id="project-tasks-heading" className="projectSectionHeading">{t.tasks}</h2>
         <div className="list taskRowList projectTaskList">
           {openTasks.map((task, index) => renderRow(task, index, openTasks, `task:project:${project.id}`))}
