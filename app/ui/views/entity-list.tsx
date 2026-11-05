@@ -3,6 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
 import { v1DragHandleVisible, v1ReorderAvailable } from "../../../lib/lumi-reorder-preview";
+import { buildMyPlanPreview } from "../../../lib/my-plan-preview";
 import { LumiCompletionControl } from "./lumi-completion-control";
 import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
 import { MobileProjectRowV1 } from "./mobile-project-row-v1";
@@ -75,6 +76,7 @@ export function EntityList({ app }: { app: LumiApp }) {
     [view, activeWorkspaceId, app.mobilePlanPreviewActive, app.openProject?.id]);
   // Shared project rows render identically on desktop and phone.
   const projectListPreview = mobileDesignV1Preview && view === "Projects" && !app.openProject;
+  const myPlanPreview = mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today";
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
   const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
@@ -88,8 +90,15 @@ export function EntityList({ app }: { app: LumiApp }) {
   // Tasks made from today's events are rows of the day timeline, not of this list (the header still counts them).
   const listed = view === "Today" ? collection.filter((x) => !app.todayTimelineTaskIds.has(x.id)) : collection;
   const planSlots = view === "Today" ? planSlotsByTask(visibleDayPlan) : null;
+  // Presentation-only legacy workspace rows. The server-authorized multi-space
+  // My Plan is a separate R3-slice integration, not this selection.
+  const previewDays = myPlanPreview ? buildMyPlanPreview({
+    entities: items, relations: scopedRelations, workspaceId: activeWorkspaceId,
+    today, priorityFilter, sortBy, excludeTimelineIds: app.todayTimelineTaskIds,
+  }) : [];
   // `dragScope`: the ordering a drag changes, when it is not the one of the view (the tasks and notes of a project page).
-  const renderRow = (x: Entity, index: number, rows: Entity[], dragScope?: string) => {
+  const renderRow = (x: Entity, index: number, rows: Entity[], dragScope?: string,
+    previewDay?: "today" | "tomorrow") => {
       const projectSummary = x.type === "project" ? projectSummaries.get(x.id) : undefined;
       if (projectListPreview && x.type === "project" && projectSummary) {
         return <MobileProjectRowV1 key={x.id} app={app} project={x} summary={projectSummary}
@@ -106,7 +115,7 @@ export function EntityList({ app }: { app: LumiApp }) {
       const projectWhy = projectContext ? firstSentence(projectContext.why) : "";
       const projectAttention = projectSummary ? attentionText(language, projectSummary.attention) : "";
       // Today lists evening tasks last, under their own heading (the collection is already ordered that way).
-      const startsEvening = view === "Today" && isEveningTask(x, today) && (index === 0 || !isEveningTask(rows[index - 1], today));
+      const startsEvening = view === "Today" && !myPlanPreview && isEveningTask(x, today) && (index === 0 || !isEveningTask(rows[index - 1], today));
       return (
         <Fragment key={x.id}>
         {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
@@ -164,7 +173,7 @@ export function EntityList({ app }: { app: LumiApp }) {
               className="taskRowOpen"
               onClick={(event) => { event.stopPropagation(); void inspect(x); }}
             >{x.title || tr("untitledItem")}</button></strong>
-            {view === "Today" && x.type === "task" &&
+            {view === "Today" && x.type === "task" && previewDay !== "tomorrow" &&
               (!mobileDesignV1Preview || (typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0)) && (
               <small className="taskRowEstimate" data-row-estimate>{typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0 ? tr("timelineMinutes").replace("{n}", String(x.properties.estimatedMinutes)) : tr("timelineNoEstimate")}</small>
             )}
@@ -186,8 +195,8 @@ export function EntityList({ app }: { app: LumiApp }) {
               </span>
             )}
           </div>
-          {planSlots && x.type === "task" && <TodayTimeCell app={app} task={x} slot={planSlots.get(x.id)} />}
-          {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" ? (
+          {planSlots && x.type === "task" && previewDay !== "tomorrow" && <TodayTimeCell app={app} task={x} slot={planSlots.get(x.id)} />}
+          {x.type === "task" && x.status === "open" && activeWorkspaceId !== "all" && meta.kind !== "sync" && previewDay !== "tomorrow" ? (
             <DeferChip app={app} task={x} />
           ) : meta.text && (
             <span className={`taskRowMeta ${meta.tone === "danger" ? "danger" : meta.tone === "warning" ? "pending" : ""}`.trim()} data-meta-kind={meta.kind}>
@@ -305,7 +314,45 @@ export function EntityList({ app }: { app: LumiApp }) {
                   (view === "Home" || view === "Search" ? "secondary" : "")
                 }
               >
-                {view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
+                {myPlanPreview ? (
+                  <div className="myPlanV1Sections" data-my-plan-days="legacy-preview">
+                    {activeWorkspaceId === "all" && (
+                      <p className="myPlanV1ScopeNotice" role="status" data-my-plan-aggregate-blocked>
+                        {language === "cs"
+                          ? "Pro tento vývojový náhled vyberte konkrétní prostor. Autorizovaný plán napříč prostory zatím není zapnutý."
+                          : "Select a single workspace for this development preview. Actor-authorized combined My Plan is not enabled."}
+                      </p>
+                    )}
+                    {activeWorkspaceId !== "all" && previewDays.map((section) => (
+                      <section key={section.day} className="myPlanV1Day" data-plan-day={section.day}
+                        aria-labelledby={`my-plan-day-${section.day}`}>
+                        <h2 id={`my-plan-day-${section.day}`} className="myPlanV1DayTitle">
+                          {section.day === "today" ? (language === "cs" ? "Dnes" : "Today")
+                            : (language === "cs" ? "Zítra" : "Tomorrow")}
+                          <span className="myPlanV1DayCount">{section.count}</span>
+                        </h2>
+                        {section.count === 0 ? (
+                          <p className="myPlanV1Empty">
+                            {language === "cs" ? "Žádné naplánované úkoly" : "No scheduled tasks"}
+                          </p>
+                        ) : (
+                          <div className="myPlanV1Areas">
+                            {section.groups.map((group) => (
+                              <div key={group.key} role="group" aria-label={group.accessibleLabel}
+                                className="myPlanV1Area" data-plan-area={group.areaId ?? "unassigned"}
+                                data-preview-area-tone={group.tone}>
+                                <div className="list taskRowList">
+                                  {group.tasks.map((task, index) => renderRow(task, index, group.tasks,
+                                    section.day === "today" ? "task:Today" : "task:Upcoming", section.day))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                ) : view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
                 {view === "Projects" && projectGroups.length > 0 && (
                   <div className="projectGroups" aria-label={tr("projectsByArea")}
                     data-projects-preview={projectListPreview ? "lumi-v1" : undefined}>
@@ -326,7 +373,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                     ))}
                   </div>
                 )}
-                {collection.length === 0 && view !== "Home" && view !== "Search" && (
+                {!myPlanPreview && collection.length === 0 && view !== "Home" && view !== "Search" && (
                   <div className="empty">{tr("nothingHere")}</div>
                 )}
               </div>
