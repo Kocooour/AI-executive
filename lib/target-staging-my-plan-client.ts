@@ -75,7 +75,8 @@ function parseDay(
 ):MyPlanSliceDay|null {
   if(!record(value)||!exactKeys(value,["tasks","hasMore"])||
     !Array.isArray(value.tasks)||value.tasks.length>limit||
-    typeof value.hasMore!=="boolean")return null;
+    typeof value.hasMore!=="boolean"||
+    (value.hasMore&&value.tasks.length===0))return null;
   const tasks:MyPlanSliceTask[]=[];
   let previousDate:string|null=null;
   for(const item of value.tasks){
