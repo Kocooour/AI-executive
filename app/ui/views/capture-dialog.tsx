@@ -104,7 +104,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             )}
             <p className="captureDestination" data-testid="capture-destination">
               {tr("captureDestination")}: <strong>{destinationWorkspace?.title || tr("captureUnknownDestination")}</strong>
-              {captureType === "task" && (
+              {(captureType === "task" || targetsProject) && (
                 <span> · {targetsProject
                   ? `${tr("project")}: ${selectedProject?.title || tr("captureUnknownDestination")}`
                   : `${tr("area")}: ${selectedArea?.title || defaultAreaTitle}`}</span>
