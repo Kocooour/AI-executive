@@ -85,3 +85,111 @@
   outline: 2px solid var(--v1-accent);
   outline-offset: 2px;
 }
+
+/* The same project row/controller is used on desktop. UI-05a's original
+   project-list styling covers phones only, so keep the desktop structure here. */
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 60px;
+  min-width: 0;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectMain {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  gap: 2px;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectName {
+  min-width: 0;
+  max-width: 100%;
+  font-weight: 650;
+  color: var(--text);
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectName .taskRowOpen {
+  min-height: 44px;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectSecondary {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectDrag {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  min-width: 44px;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectDrag .dragHandle {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* The old Today grid reserves 32px for a handle even when it is hidden,
+   and constrains the old circular control to a 34px track. V1 instead
+   assigns real 44px columns for every focusable completion target. */
+@media (max-width: 700px) {
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] {
+    grid-template-columns: 44px minmax(0, 1fr) auto auto;
+    column-gap: 4px;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .lumiCompletionControl {
+    box-sizing: border-box;
+    grid-column: 1;
+    grid-row: 1;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .taskRowMain {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .todayTime {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .taskRowMeta,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .deferGroup,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] .deferChip {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .deadlineBadge {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] {
+    grid-template-columns: 44px 44px minmax(0, 1fr) auto auto;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .dragHandle {
+    grid-column: 1;
+    grid-row: 1;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .lumiCompletionControl { grid-column: 2; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .taskRowMain { grid-column: 3; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .todayTime { grid-column: 4; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .taskRowMeta,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .deferGroup,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] .deferChip {
+    grid-column: 5;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .deadlineBadge { grid-column: 3; }
+}
