@@ -75,7 +75,7 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await expect(urgent.locator(".projectRowWhy, .projectRowNext, .taskRowMeta")).toHaveCount(0);
     await expect(urgent.locator(".v1ProjectCircle")).toHaveText("");
     await expect(urgent.locator(".v1ProjectCircle")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(urgent.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(239, 68, 68)");
+    await expect(urgent.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(185, 28, 28)");
     await expect(urgent.locator(".v1ProjectName")).toHaveCSS("font-weight", "650");
     const completed = group.locator(`[data-project-preview-row="${ids.finished}"]`);
     await expect(completed).toHaveAttribute("data-project-tone", "complete");
@@ -84,7 +84,7 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     const empty = group.locator(`[data-project-preview-row="${ids.empty}"]`);
     await expect(empty).toHaveAttribute("data-project-tone", "warning");
     await expect(empty.locator("[data-project-summary]")).toHaveText("Chybí další krok");
-    await expect(empty.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(245, 158, 11)");
+    await expect(empty.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(180, 83, 9)");
     const circle = urgent.locator(`[data-project-status-control="${ids.overdue}"]`);
     expect((await circle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     const drag = urgent.locator(".dragHandle");
@@ -121,3 +121,85 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await cleanPreview(page, ids);
   }
 });
+
+/** Inspect the real browser-computed colors, including CSS color-mix() output.
+ * Unlike the token-only tests, this catches overrides from the live cascade. */
+async function computedContrast(page: Page, foregroundSelector: string,
+  foregroundProperty: "borderTopColor" | "backgroundColor" | "color",
+  backgroundSelector: string): Promise<number> {
+  return page.evaluate(({ foregroundSelector, foregroundProperty, backgroundSelector }) => {
+    const foreground = document.querySelector(foregroundSelector);
+    const background = document.querySelector(backgroundSelector);
+    if (!foreground || !background) throw new Error("Missing rendered contrast target");
+    const parse = (raw: string) => {
+      const rgb = /^rgba?\(([^)]+)\)$/.exec(raw);
+      if (rgb) return rgb[1].split(/[\s,/]+/).filter(Boolean).slice(0, 3).map(Number);
+      const srgb = /^color\(srgb ([^)]+)\)$/.exec(raw);
+      if (srgb) return srgb[1].split(/[\s/]+/).filter(Boolean).slice(0, 3).map((x) => Number(x) * 255);
+      throw new Error("Unexpected computed CSS color: " + raw);
+    };
+    const luminance = (raw: string) => {
+      const channels = parse(raw);
+      return channels.reduce((sum, channel, index) => {
+        const v = channel / 255;
+        const linear = v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+        return sum + linear * [0.2126, 0.7152, 0.0722][index];
+      }, 0);
+    };
+    const fg = luminance(getComputedStyle(foreground)[foregroundProperty]);
+    const bg = luminance(getComputedStyle(background).backgroundColor);
+    return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+  }, { foregroundSelector, foregroundProperty, backgroundSelector });
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test("real mobile v1 project and calendar contrast in " + theme + " theme", async ({ page }) => {
+    test.skip(process.env.NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW !== "1", "UI v1 preview disabled");
+    await page.addInitScript((chosen) => localStorage.setItem("ai-executive-theme", chosen), theme);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const suffix = stamp();
+    const ids = {
+      area: "ui05a-contrast-area-" + suffix, overdue: "ui05a-contrast-overdue-" + suffix,
+      finished: "ui05a-contrast-finished-" + suffix, empty: "ui05a-contrast-empty-" + suffix,
+      task: "ui05a-contrast-task-" + suffix,
+    };
+    await page.goto("/?view=Projects");
+    await waitUntilSynced(page);
+    await seedPreview(page, ids);
+    try {
+      await page.reload();
+      await waitUntilSynced(page);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await expect(page.locator('.appShell')).toHaveAttribute("data-design-system", "lumi-v1");
+      const groupSelector = '[data-project-group="' + ids.area + '"]';
+      const group = page.locator(groupSelector);
+      await expect(group).toBeVisible();
+      const border = await computedContrast(page, groupSelector, "borderTopColor", groupSelector);
+      expect(border, theme + ": rendered Area group border must reach 3:1").toBeGreaterThanOrEqual(3);
+      for (const [projectId, label] of [
+        [ids.overdue, "danger"], [ids.empty, "warning"], [ids.finished, "complete"],
+      ]) {
+        const row = group.locator('[data-project-preview-row="' + projectId + '"]');
+        await expect(row).toHaveAttribute("data-project-tone", label);
+        const shape = groupSelector + ' [data-project-preview-row="' + projectId + '"] .v1ProjectCircle';
+        const statusBorder = await computedContrast(page, shape, "borderTopColor", groupSelector);
+        expect(statusBorder, theme + ": " + label + " status outline").toBeGreaterThanOrEqual(3);
+        if (label === "complete") {
+          const check = await computedContrast(page, shape, "color", shape);
+          expect(check, theme + ": completed checkmark").toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      // Validate a real selected day in the same theme, not a sampled token pair.
+      await page.goto("/?view=Calendar");
+      await waitUntilSynced(page);
+      const bubble = '.mobileCalendarDateBubble[data-selected="true"]';
+      await expect(page.locator(bubble)).toBeVisible();
+      for (const sub of [".mobileCalendarWeekday", ".mobileCalendarDateNumber"]) {
+        const textRatio = await computedContrast(page, bubble + " " + sub, "color", bubble);
+        expect(textRatio, theme + ": calendar " + sub).toBeGreaterThanOrEqual(4.5);
+      }
+    } finally {
+      await cleanPreview(page, ids);
+    }
+  });
+}

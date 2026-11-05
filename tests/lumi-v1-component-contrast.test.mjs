@@ -85,6 +85,23 @@ test("dark Area groups are visibly distinguishable, including system-theme fallb
   }
 });
 
+test("Area grouping border meets non-text contrast on all six real pastel mixes", () => {
+  assert.match(rule(css, group), /border: 1px solid var\(--v1-neutral-stroke\);/);
+  const darkExplicit = rule(css, `html[data-theme="dark"] ${group}`);
+  const darkSystem = rule(css, `html:not([data-theme]) ${group}`);
+  assert.doesNotMatch(darkExplicit, /border-color:/, "dark theme must not override safe edge");
+  assert.doesNotMatch(darkSystem, /border-color:/, "system dark theme must keep safe edge");
+  for (const [tone, token] of cases) {
+    for (const theme of ["light", "dark"]) {
+      const background = theme === "light"
+        ? mix(color(token, theme), color("surface", theme), 0.72)
+        : mix(color(token, theme), color("v1-muted", theme), 0.82);
+      const ratio = contrast(color("v1-neutral-stroke", theme), background);
+      assert.ok(ratio >= 3, `${theme}/${tone} group boundary only ${ratio.toFixed(2)}:1 (minimum 3:1)`);
+    }
+  }
+});
+
 test("project controls use semantic outline/fill tokens with contrast on actual mixed group surfaces", () => {
   assert.match(rule(css, circle), /border: 2px solid var\(--v1-neutral-stroke\);/);
   assert.match(rule(css, `${row}[data-project-tone="warning"] .v1ProjectCircle`), /border-color: var\(--v1-attention-orange\);/);
