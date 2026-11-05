@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewManualRankUpdates, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { byManualOrder, manualOrder } from "../lib/task-views.ts";
 import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../lib/today-summary.ts";
 
 const day = "2026-11-05";
@@ -346,4 +347,105 @@ test("UI-04c: reorder edit enters manual sorting before handles appear and close
   assert.match(hook, /if \(planTaskDrag && \(sortBy !== "manual" \|\| target\.startsWith\("section:"\)\)\) return/);
   assert.match(hook, /previewReorderPeers\(planReorderSections!, entity\.id, scope, undefined, sortBy\)/);
   assert.match(helper, /if \(sortBy !== "manual"\) return null/);
+});
+
+
+// Both keyboard (ArrowDown) and native/pointer drag call completeDrop, which
+// computes this same list before calling previewManualRankUpdates.
+const moveAfter = (peers, sourceId, targetId) => {
+  const moved = [...peers];
+  const sourceIndex = moved.findIndex((item) => item.id === sourceId);
+  const targetIndex = moved.findIndex((item) => item.id === targetId);
+  const [item] = moved.splice(sourceIndex, 1);
+  const insertionIndex = moved.findIndex((row) => row.id === targetId);
+  moved.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, item);
+  return moved;
+};
+const applyRanks = (peers, updates, scope) => peers.map((task) => {
+  const update = updates.find(({ id }) => id === task.id);
+  return update ? { ...task, properties: { ...task.properties,
+    manualOrders: { ...task.properties.manualOrders, [`${task.workspaceId}:${scope}`]: update.rank },
+  } } : task;
+});
+
+test("UI-04c: identical manual ranks remain movable by ArrowDown and drag without silent no-op", () => {
+  const tasks = ["A", "B", "C"].map((id) => {
+    const task = entity(id, "task", "personal", { when: day });
+    task.createdAt = 1000; // same-timestamp imports use ID as final sort tie-breaker
+    return task;
+  });
+  for (const way of ["keyboard", "pointer-or-native-drag"]) {
+    const preview = buildMyPlanPreview({ entities: tasks, relations: [], workspaceId: "personal", today: day });
+    const peers = previewReorderPeers(preview, "A", "task:Today", "B", "manual");
+    assert.deepEqual(peers?.map((task) => task.id), ["A", "B", "C"]);
+    const targetId = way === "keyboard" ? peers[1].id : "B";
+    const ordered = moveAfter(peers, "A", targetId);
+    assert.deepEqual(ordered.map((task) => task.id), ["B", "A", "C"]);
+    const updates = previewManualRankUpdates(ordered, peers, "A", "task:Today");
+    assert.ok(updates?.length);
+    const persisted = applyRanks(tasks, updates, "task:Today").sort(byManualOrder("task:Today"));
+    assert.deepEqual(persisted.map((task) => task.id), ["B", "A", "C"]);
+    assert.equal(new Set(persisted.map((task) => manualOrder(task, "task:Today"))).size, 3);
+  }
+});
+
+test("UI-04c: fallback retains hidden/timeline peer slots and never writes another Area", () => {
+  const personal = entity("area-personal", "area"); personal.title = "Osobní";
+  const work = entity("area-work", "area"); work.title = "Práce";
+  const tasks = ["A", "H", "B", "C", "W"].map((id, i) => {
+    const task = entity(id, "task", "personal", { when: day,
+      priority: id === "H" ? "low" : "high" });
+    task.createdAt = 1000 + i;
+    return task;
+  });
+  const relations = tasks.map((task) => relation(task.id,
+    task.id === "W" ? work.id : personal.id, "belongs_to_area"));
+  const source = { entities: [personal, work, ...tasks], relations, workspaceId: "personal", today: day };
+  const filtered = buildMyPlanPreview({ ...source, priorityFilter: "high" });
+  const full = buildMyPlanPreview({ ...source, priorityFilter: "all" });
+  const visible = previewReorderPeers(filtered, "A", "task:Today", "B", "manual");
+  const allPeers = previewReorderPeers(full, "A", "task:Today", undefined, "manual");
+  assert.deepEqual(visible.map((row) => row.id), ["A", "B", "C"]);
+  assert.deepEqual(allPeers.map((row) => row.id), ["A", "H", "B", "C"]);
+  const desired = moveAfter(visible, "A", "B");
+  const updates = previewManualRankUpdates(desired, allPeers, "A", "task:Today");
+  assert.ok(updates?.length);
+  assert.ok(updates.every((entry) => entry.id !== "W"));
+  const applied = applyRanks(tasks, updates, "task:Today");
+  const changed = buildMyPlanPreview({ ...source, entities: [personal, work, ...applied] });
+  assert.deepEqual(changed[0].groups.find((g) => g.areaId === personal.id).tasks.map((row) => row.id),
+    ["B", "H", "A", "C"]);
+  assert.deepEqual(buildMyPlanPreview({
+    ...source, entities: [personal, work, ...applied], priorityFilter: "high",
+  })[0].groups.find((g) => g.areaId === personal.id).tasks.map((row) => row.id),
+    ["B", "A", "C"]);
+  assert.equal(applied.find((row) => row.id === "W").updatedAt, tasks[4].updatedAt);
+  assert.equal(applied.find((row) => row.id === "W").properties.manualOrders, undefined);
+});
+
+test("UI-04c: only the moved rank is written when manual neighbours have a real gap", () => {
+  const tasks = ["A", "B", "C"].map((id, i) => entity(id, "task", "personal", {
+    when: day, manualOrders: { "personal:task:Today": (i + 1) * 1000 },
+  }));
+  const before = buildMyPlanPreview({ entities: tasks, relations: [], workspaceId: "personal", today: day });
+  const peers = previewReorderPeers(before, "A", "task:Today");
+  const moved = moveAfter(peers, "A", "B");
+  const updates = previewManualRankUpdates(moved, peers, "A", "task:Today");
+  assert.deepEqual(updates, [{ id: "A", rank: 2500 }]);
+  assert.deepEqual(applyRanks(tasks, updates, "task:Today").sort(byManualOrder("task:Today")).map((row) => row.id), ["B", "A", "C"]);
+  assert.deepEqual(previewManualRankUpdates(peers, peers, "A", "task:Today"), []);
+  assert.equal(previewManualRankUpdates(moved, peers.slice(1), "A", "task:Today"), null);
+});
+
+test("UI-04c: app persists collision-recovery ranks atomically and preserves legacy path", () => {
+  const app = readFileSync(new URL("../app/ui/use-lumi-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /previewManualRankUpdates\(ordered, allAreaPeers, movedId, scope\)/);
+  assert.match(app, /db\.transaction\("rw", db\.entities, async \(\) => \{/);
+  assert.match(app, /db\.entities\.bulkGet\(allAreaPeers\.map/);
+  assert.match(app, /task\.updatedAt !== allAreaPeers\[index\]\.updatedAt/);
+  assert.match(app, /await db\.entities\.update\(id, \{/);
+  assert.match(app, /if \(saved\) \{ await syncToServer\(\); await load\(\); \}/);
+  assert.match(app, /previewReorderPeers\(fullPlan, source\.id, scope, undefined, "manual"\)/);
+  assert.match(app, /await persistManualOrder\(peers, source\.id, scope, allAreaPeers\)/);
+  assert.match(app, /await persistManualOrder\(peers, source\.id, scope\);/);
 });
