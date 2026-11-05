@@ -10,10 +10,9 @@ import { PopoverMenu } from "./popover-menu";
 
 type Candidate = AttentionResponse["items"][number];
 
-// One attention item on Home: the title, one line saying why, and one primary action on the right
-// (the task's date chip, or "Open"). Snooze, Dismiss, Sources and (when the chip is primary) Open are
-// in the item's "⋯" menu. The reason, source and evaluation time stay available: the evaluation time
-// is in the section header once and in the expanded sources.
+// One attention item on Home: title, human reason and one primary action.
+// "Proč?" directly reveals the local source evidence and evaluation instant;
+// Snooze and Dismiss remain in the item's "⋯" menu. No new authority or ACL.
 export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: Candidate }) {
   const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, inspect, items, language, scopedRelations, setAttentionError, tr, workspaces } = app;
   const [sourcesOpen, setSourcesOpen] = useState(false);
