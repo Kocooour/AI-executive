@@ -47,6 +47,8 @@ import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-mode
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import {readAuthorizedGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
+import {readAuthorizedGlobalCombinedPage} from "./target-global-combined-read-model";
+import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter}
   from "./target-my-plan-day-task-read-model";
 import {readAuthorizedPersonalWhenCommandPreview,
@@ -777,6 +779,22 @@ export function readPreflightedPrivateProjectDetail(
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
   );
+}
+
+/** R2d.3m.7 — one canonical preflight, one signed actor, ONE pinned
+ * SQLite snapshot across tasks, projects and note titles. Internal only. */
+export function readPreflightedGlobalCombinedPage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{scope:TargetGlobalTaskScope;limit:number;positions:GlobalCombinedPositions},
+):TargetGlobalCombinedPage|null{
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedGlobalCombinedPage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
 }
 
 /** R2d.3m.5: internal global note-title index; one canonical pinned,
