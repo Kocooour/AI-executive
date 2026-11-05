@@ -445,6 +445,24 @@ test("an active SQLite rollback lock beyond busy_timeout is retryable, not denie
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("sidecar release around lock timeout stays retryable, not a trust denial", async () => {
+  const fx = makeFixture();
+  const gate = mkdtempSync(path.join(root, "sidecar-timeout-boundary-"));
+  const holding = runChild(fx, "hold-sidecar-boundary", gate);
+  for (let i = 0; i < 200 && !existsSync(path.join(gate, "ready")); i++) await sleep(5);
+  assert.ok(existsSync(path.join(gate, "ready")), "child holds a real SQLite rollback journal");
+  const outcome = pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed", 200);
+  const holder = await holding.done;
+  assert.equal(holder.code, 0, JSON.stringify(holder));
+  assert.notEqual(outcome, "denied", "a completing SQLite writer is not untrusted storage");
+  assert.equal(pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed"), "ok");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
   const fx = makeFixture();
   const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
