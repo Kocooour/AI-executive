@@ -114,4 +114,6 @@ test("UI-04b review P2: real Today control width remains 44px with and without r
   assert.match(css,/grid-template-columns: 44px 44px minmax\(0, 1fr\) auto auto;/);
   assert.match(css,/\.taskRow\[data-entity-type="task"\] > \.lumiCompletionControl \{[\s\S]*?width: 44px;[\s\S]*?min-width: 44px;[\s\S]*?height: 44px;[\s\S]*?min-height: 44px;/);
   assert.match(css,/\.taskRow\[data-v1-reorder="true"\]\[data-entity-type="task"\] > \.lumiCompletionControl \{ grid-column: 2; \}/);
+  assert.match(css,/\.taskRow\[data-entity-type="task"\] > \.dragHandle::before \{\s*content: none;/,
+    "the old oversized touch pseudo-element cannot overlap the new 44px button");
 });
