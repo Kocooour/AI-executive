@@ -6,17 +6,19 @@ import type { ProjectSummary } from "../../../lib/project-summary";
 import { projectPreviewCanToggle, projectPreviewSummary, projectPreviewTone } from "../../../lib/project-list-preview";
 import type { LumiApp } from "../use-lumi-app";
 import { RecordMarks } from "./held-back";
+import { LumiCompletionControl } from "./lumi-completion-control";
 
 /**
  * UI-05a is a gated presentation of the existing legacy-scoped Projects list.
  * It does not activate the R3 global All/Personal/Shared scope or grant write
  * permission. Target-model authorization still belongs to later R3 work.
  */
-export function MobileProjectRowV1({ app, project, summary, dragScope }: {
+export function MobileProjectRowV1({ app, project, summary, dragScope, reorderEnabled = false }: {
   app: LumiApp;
   project: Entity;
   summary: ProjectSummary;
   dragScope: string;
+  reorderEnabled?: boolean;
 }) {
   const { activeWorkspaceId, askConfirm, dragHandle, draggingId, dragTarget, heldReasons, inspect, setProjectStatus,
     setActiveDragTarget, acceptNativeDrop, unsent, language, tr, workspaces } = app;
@@ -76,12 +78,11 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => acceptNativeDrop(event, `entity:${project.id}`)}
       onClick={() => { void inspect(project); }}>
-      <button type="button" className="v1ProjectStatusButton" data-project-status-control={project.id}
-        disabled={!canToggle} aria-pressed={completed} aria-label={canToggle ? changeLabel : `${state}. ${writeHint}`}
-        title={canToggle ? changeLabel : writeHint}
-        onClick={(event) => { event.stopPropagation(); void toggle(); }}>
-        <span className="v1ProjectCircle" aria-hidden="true">{completed ? "✓" : ""}</span>
-      </button>
+      <LumiCompletionControl kind="project" tone={tone} complete={completed}
+        actionLabel={changeLabel} stateLabel={state} blockedReason={writeHint}
+        className="v1ProjectStatusButton" shapeClassName="v1ProjectCircle"
+        data-project-status-control={project.id} disabled={!canToggle}
+        onClick={(event) => { event.stopPropagation(); void toggle(); }} />
       <div className="taskRowMain v1ProjectMain">
         <strong className="v1ProjectName">
           <button type="button" className="taskRowOpen" onClick={(event) => { event.stopPropagation(); void inspect(project); }}>
@@ -93,7 +94,7 @@ export function MobileProjectRowV1({ app, project, summary, dragScope }: {
         <RecordMarks app={app} entity={project} />
         {error && <span className="v1ProjectError" role="alert">{error}</span>}
       </div>
-      <span className="v1ProjectDrag">{dragHandle(project, dragScope)}</span>
+      {reorderEnabled && <span className="v1ProjectDrag">{dragHandle(project, dragScope)}</span>}
     </article>
   );
 }
