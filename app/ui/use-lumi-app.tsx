@@ -25,6 +25,7 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { deferTargets } from "../../lib/defer-suggestion";
+import { todayProposalTaskSignature } from "../../lib/today-summary";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
@@ -3259,7 +3260,7 @@ export function useLumiApp() {
   // one open there (a save that finishes after the panel was closed must not reopen it).
   // `properties` may be a function of the stored properties, for a change that depends on them
   // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
-  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false) {
+  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false, expectedTaskSnapshot?: string) {
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     localDataVersion.current += 1;
@@ -3267,7 +3268,13 @@ export function useLumiApp() {
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
     // The write marker is released even if the write fails (sign-out waits for it).
     try { await db.transaction("rw", db.entities, async () => {
-      const current = (await db.entities.get(e.id)) || e;
+      const loaded = await db.entities.get(e.id);
+      // Confirm against the live record inside the read/write transaction.
+      // This closes the race between tapping Approve and an intervening edit.
+      if (expectedTaskSnapshot &&
+        (!loaded || todayProposalTaskSignature(loaded) !== expectedTaskSnapshot))
+        throw new Error("Reviewed task changed");
+      const current = loaded || e;
       const activity = Array.isArray(current.properties.activity)
         ? current.properties.activity
         : [];
@@ -3708,6 +3715,7 @@ export function useLumiApp() {
     task: Entity,
     choice: "today" | "evening" | "tomorrow" | "weekend" | "nextWeek" | "someday" | "clear" | string,
     via: "manual" | "lumi",
+    expectedTaskSnapshot?: string,
   ): Promise<boolean> {
     if (activeWorkspaceId === "all" || isAdopting() || deferInFlight.current) return false;
     // One choice at a time: a second one while the first is being saved would replace its Undo snapshot.
@@ -3715,8 +3723,9 @@ export function useLumiApp() {
     setDeferBusy(true);
     setDeferError(false);
     try {
-      const stored = (await db.entities.get(task.id)) || task;
-      if (stored.type !== "task" || stored.status !== "open") return false;
+      const stored = (await db.entities.get(task.id)) || (expectedTaskSnapshot ? null : task);
+      if (!stored || stored.type !== "task" || stored.status !== "open" ||
+        (expectedTaskSnapshot && todayProposalTaskSignature(stored) !== expectedTaskSnapshot)) return false;
       const targets = deferTargets(ymd());
       const when = choice === "today" || choice === "evening" ? targets.today
         : choice === "tomorrow" ? targets.tomorrow
@@ -3750,7 +3759,7 @@ export function useLumiApp() {
           evening: choice === "evening",
           ...(previous !== next ? { deferHistory: [...history, { from: previous, to: next, at: Date.now(), via }].slice(-10) } : {}),
         };
-      }, `deferred ${choice}`);
+      }, `deferred ${choice}`, false, expectedTaskSnapshot);
       // The previous state becomes the Undo step only once the change is written.
       setUndo(stored);
       setUndoRelations([]);
