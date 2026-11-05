@@ -30,7 +30,7 @@ import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
-import { buildMyPlanPreview, previewManualRankUpdates, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
+import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -3987,12 +3987,15 @@ export function useLumiApp() {
         Boolean(updates && previewRankWritesAllowed(
           updates, records, workspaceId, new Set(heldReasons.keys()), unsent,
         ));
-      // Preflight before any write or local data-version bump.
-      if (!updates || !writableScope() || !eligible(allAreaPeers)) {
+      // Validate both the old records and their full post-write snapshots
+      // before any mutation. A formerly valid large task can become held
+      // after manualOrders/activity increases its properties size.
+      const timestamp = writeTime();
+      if (!updates || !writableScope() || !eligible(allAreaPeers) ||
+          !previewRankNextRecords(updates, allAreaPeers, scope, timestamp)) {
         setPlanReorderError(true);
         return;
       }
-      const timestamp = writeTime();
       let saved = false;
       localDataVersion.current += 1;
       try {
@@ -4008,20 +4011,14 @@ export function useLumiApp() {
             JSON.stringify(task.properties) !== JSON.stringify(allAreaPeers[index].properties))) return;
           const fresh = latest.filter((task): task is Entity => Boolean(task));
           if (!eligible(fresh)) return;
-          const byId = new Map(fresh.map((task) => [task.id, task]));
-          for (const { id, rank } of updates) {
-            const current = byId.get(id)!;
-            const orders = current.properties.manualOrders;
-            const manualOrders = orders && typeof orders === "object" && !Array.isArray(orders)
-              ? { ...(orders as Record<string, unknown>) } : {};
-            manualOrders[`${current.workspaceId}:${scope}`] = rank;
-            const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
-            await db.entities.update(id, {
-              properties: {
-                ...current.properties, manualOrders,
-                activity: [...activity, { at: timestamp, action: "reordered" }].slice(-50),
-              },
-              updatedAt: timestamp,
+          // Build and validate ALL successor records before the first update:
+          // a rejection must leave the whole Area untouched.
+          const nextRecords = previewRankNextRecords(updates, fresh, scope, timestamp);
+          if (!nextRecords) return;
+          for (const next of nextRecords) {
+            await db.entities.update(next.id, {
+              properties: next.properties,
+              updatedAt: next.updatedAt,
             });
           }
           saved = true;
