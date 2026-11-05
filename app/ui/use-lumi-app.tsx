@@ -89,7 +89,7 @@ export function useLumiApp() {
     [captureProjectAction, setCaptureProjectAction] = useState<CaptureProjectAction>("none"),
     [undo, setUndo] = useState<Entity | null>(null),
     // The task whose "When" popover is open and the control it hangs from (one popover for the whole app).
-    [deferOpen, setDeferOpen] = useState<{ taskId: string; anchor: HTMLElement; origin?: "attention" } | null>(null),
+    [deferOpen, setDeferOpen] = useState<{ taskId: string; anchor: HTMLElement; origin?: "attention"; attention?: { key: string; fingerprint: string; workspaceId: string } } | null>(null),
     [deferBusy, setDeferBusy] = useState(false),
     [deferError, setDeferError] = useState(false),
     [undoRelations, setUndoRelations] = useState<Relation[]>([]),
