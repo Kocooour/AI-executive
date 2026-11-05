@@ -19,7 +19,7 @@
 
 Podle [rozhodnutí vlastníka 2026-11-05](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md): Návrh Lumi má ikonu jiskry ✦ (hvězda zůstává Mému plánu), přepínač motivu je jen v Nastavení a Quick Capture je plovoucí tlačítko na telefonu i desktopu. **Prvním vertikálním řezem je Můj plán pro jednu identitu**, zařazený **před R2d.4 a R2d.5**: UI nad cílovými staging endpointy (#215, #229, #233) pro čtení dne, dokončení/obnovení, „Kdy“ dnes/zítra a Undo. Řez je **staging a default-off**; produkční aktivace dál vyžaduje UI-09/R3, R4 brány a samostatný souhlas.
 
-Revize náhledu v1 našla porušení invariant, která se opraví před dalšími obrazovkami. Čísla určují pořadí **sloučení**, nikoli zákaz souběžné práce:
+Revize náhledu v1 našla porušení invariant, která se opraví před dalšími obrazovkami. Čísla určují doporučené pořadí jen v rámci sloupce „Závisí na“; iterace bez vzájemné závislosti se vyvíjejí i slučují nezávisle (například UI-03 se může sloučit před UI-04c):
 
 | Pořadí | Iterace | Rozsah a akceptace | Závisí na | Souběžně s |
 |---|---|---|---|---|
