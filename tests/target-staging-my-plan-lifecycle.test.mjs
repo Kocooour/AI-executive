@@ -18,15 +18,20 @@ test("midnight deadline uses the NEXT local calendar date across month/year",()=
   }
 });
 
-test("midnight calculation honors local timezone offset changes",()=>{
-  for(const [year,month,day] of [[2026,2,29],[2026,9,25]]){
-    const start=new Date(year,month,day,0,0,0);
-    const tomorrow=new Date(year,month,day+1,0,0,0);
-    // A 23h or 25h day differs from a fixed 24h increment in TZ=Europe/Prague.
-    assert.equal(msUntilNextLocalMyPlanDay(start),
-      tomorrow.getTime()-start.getTime());
-    assert.ok(msUntilNextLocalMyPlanDay(start)>=23*3600_000);
-    assert.ok(msUntilNextLocalMyPlanDay(start)<=25*3600_000);
+test("midnight calculation handles 23-hour spring and 25-hour autumn in Prague",()=>{
+  const original=process.env.TZ;
+  process.env.TZ="Europe/Prague";
+  try{
+    for(const [year,month,day,hours] of [[2026,2,29,23],[2026,9,25,25]]){
+      const start=new Date(year,month,day,0,0,0);
+      const tomorrow=new Date(year,month,day+1,0,0,0);
+      assert.equal(msUntilNextLocalMyPlanDay(start),
+        tomorrow.getTime()-start.getTime());
+      assert.equal(msUntilNextLocalMyPlanDay(start),hours*3600_000);
+    }
+  }finally{
+    if(original===undefined)delete process.env.TZ;
+    else process.env.TZ=original;
   }
 });
 
