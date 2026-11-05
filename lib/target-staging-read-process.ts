@@ -11,6 +11,7 @@ import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./targe
 import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
+import type {TargetGlobalNotePage,TargetGlobalNote,GlobalNoteAreaEpoch} from "./target-global-note-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -81,6 +82,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_NOTES_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
@@ -729,6 +732,105 @@ export async function readStagingPersonalWhenInChild(
   ]);
   const parsed=parseStagingPersonalWhenPage(payload,window,evaluationDate,throughDate,limit);
   if(payload!==null&&!parsed)logStagingFailure("personal_when","invalid_child_dto");
+  return parsed;
+}
+
+/** R2d.3m.6 — exact global note-title DTO, no note body or foreign members.
+ * Both the complete Area epochs AND all note-specific revisions are
+ * mandatory inputs to the live release guard; never expose either witness. */
+export function parseStagingGlobalNotePage(
+  value:unknown,scope:TargetGlobalTaskScope,limit:number,
+):TargetGlobalNotePage|null{
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(scope)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const p=value as Record<string,unknown>;
+  if(Object.keys(p).sort().join(",")!==
+      "areaEpochs,hasMore,linearization,noteAreaEpochs,notes,ok,revision,scope"||
+    p.ok!==true||p.scope!==scope||
+    typeof p.revision!=="string"||!REVISION.test(p.revision)||
+    typeof p.hasMore!=="boolean"||!Array.isArray(p.notes)||
+    p.notes.length>limit||(p.hasMore&&p.notes.length!==limit)||
+    !Array.isArray(p.areaEpochs)||!Array.isArray(p.noteAreaEpochs))return null;
+  const notes:TargetGlobalNote[]=[];
+  const rowAreas=new Map<string,"private"|"shared">();
+  const safeRevision=(x:unknown)=>typeof x==="number"&&
+    Number.isSafeInteger(x)&&x>=0;
+  const validNoteId=(x:unknown)=>isReadableStagingProjectId(x)&&
+    typeof x==="string"&&x.trim()===x;
+  for(const raw of p.notes){
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const n=raw as Record<string,unknown>;
+    if(Object.keys(n).sort().join(",")!==
+       "areaId,areaKind,id,projectId,revision,title"||
+      !validNoteId(n.id)||
+      (n.projectId!==null&&!validNoteId(n.projectId))||
+      typeof n.title!=="string"||!n.title.trim()||
+      Buffer.byteLength(n.title,"utf8")>4096||
+      typeof n.areaId!=="string"||!validNoteId(n.areaId)||
+      (n.areaKind!=="private"&&n.areaKind!=="shared")||
+      !safeRevision(n.revision)||
+      (scope==="personal"&&n.areaKind!=="private")||
+      (scope==="shared"&&n.areaKind!=="shared")||
+      (rowAreas.has(n.areaId)&&rowAreas.get(n.areaId)!==n.areaKind))
+      return null;
+    const prev=notes[notes.length-1];
+    if(prev&&Buffer.compare(Buffer.from(prev.id),Buffer.from(n.id as string))>=0)
+      return null;
+    rowAreas.set(n.areaId,n.areaKind as "private"|"shared");
+    notes.push({
+      id:n.id as string,title:n.title,projectId:n.projectId as string|null,
+      areaId:n.areaId,areaKind:n.areaKind as "private"|"shared",
+      revision:n.revision as number,
+    });
+  }
+  const linearization=parseLinearization(p.linearization,rowAreas);
+  if(!linearization||
+    p.areaEpochs.length!==linearization.areas.length||
+    p.noteAreaEpochs.length!==linearization.areas.length)
+    return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  const noteAreaEpochs:GlobalNoteAreaEpoch[]=[];
+  for(let i=0;i<linearization.areas.length;i++){
+    const a=p.areaEpochs[i],e=p.noteAreaEpochs[i];
+    if(!a||typeof a!=="object"||Array.isArray(a)||
+      !e||typeof e!=="object"||Array.isArray(e))return null;
+    const v=a as Record<string,unknown>,note=e as Record<string,unknown>;
+    const w=linearization.areas[i];
+    if(Object.keys(v).sort().join(",")!==
+       "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+      v.areaId!==w.areaId||v.areaKind!==w.areaKind||
+      v.access!==w.access||v.policyRevision!==w.policyRevision||
+      !safeRevision(v.contentRevision)||!safeRevision(v.projectContentRevision)||
+      Object.keys(note).sort().join(",")!=="areaId,noteSyncRevision"||
+      note.areaId!==w.areaId||!safeRevision(note.noteSyncRevision)||
+      (scope==="personal"&&w.areaKind!=="private")||
+      (scope==="shared"&&w.areaKind!=="shared"))
+      return null;
+    if(i>0&&Buffer.compare(
+      Buffer.from(linearization.areas[i-1].areaId),Buffer.from(w.areaId))>=0)
+      return null;
+    areaEpochs.push({
+      areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,contentRevision:v.contentRevision as number,
+      projectContentRevision:v.projectContentRevision as number,
+    });
+    noteAreaEpochs.push({areaId:w.areaId,
+      noteSyncRevision:note.noteSyncRevision as number});
+  }
+  return {scope,notes,hasMore:p.hasMore as boolean,revision:p.revision,
+    linearization,areaEpochs,noteAreaEpochs};
+}
+
+export async function readStagingGlobalNotePageInChild(
+  config:StagingPersonalReadConfig,scope:TargetGlobalTaskScope,
+  limit:number,offset:number,
+):Promise<TargetGlobalNotePage|null>{
+  const payload=await runChild(config,"target-staging-global-note-child.mjs",[
+    scope,String(limit),String(offset),
+  ]);
+  const parsed=parseStagingGlobalNotePage(payload,scope,limit);
+  if(payload!==null&&!parsed)logStagingFailure("global_notes","invalid_child_dto");
   return parsed;
 }
 
