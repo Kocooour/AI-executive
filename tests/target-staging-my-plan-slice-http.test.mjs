@@ -211,3 +211,56 @@ test("live role revocation invalidates continuation; fresh request hides old sha
   const fresh=await ok(get(query(),bob));
   assert.deepEqual(ids(fresh.tomorrow),["b-next","b-next2"]);
 });
+
+test("two-day atomic child keeps one complete epoch witness and live guard detects a race",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const {readStagingMyPlanTwoDayInChild}=
+    await import("../lib/target-staging-read-process.ts");
+  const {verifyStagingReadBeforeRelease}=
+    await import("../lib/target-staging-http-identity.ts");
+  const hash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const read=()=>readStagingMyPlanTwoDayInChild({
+    stagingDirectory:f.stage.directory,
+    expectedRestoreGeneration:f.stage.restoreGeneration,
+    ownerUserId:"alice",sessionTokenHash:hash,
+  },"all","2026-11-04","2026-11-05",2,{today:0,tomorrow:0});
+  const page=await read();
+  assert.ok(page);
+  assert.deepEqual(ids(page.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(page.tomorrow),["b-next","b-next2"]);
+  assert.deepEqual(page.today.linearization,page.tomorrow.linearization);
+  assert.deepEqual(page.today.areaEpochs,page.tomorrow.areaEpochs);
+  assert.equal(page.today.privateEpoch,page.tomorrow.privateEpoch);
+  const verify=p=>verifyStagingReadBeforeRelease(
+    new Request(base+query(),{headers:{cookie:bob}}),
+    {kind:"session",tokenHash:hash},f.store,"alice",p.today.linearization,
+    undefined,undefined,undefined,undefined,undefined,
+    {areas:p.today.areaEpochs,scope:"my-plan"},undefined,
+    {privateEpoch:p.today.privateEpoch},
+  );
+  assert.equal(verify(page),"ok");
+  // Mutate only the upcoming bucket AFTER the pinned child released it.
+  // The live guard must not release the old combined response.
+  f.db.prepare("UPDATE tasks SET due_on='2026-11-06' WHERE id='b-next'").run();
+  assert.equal(verify(page),"stale");
+  const refreshed=await read();
+  assert.ok(refreshed);
+  assert.equal(verify(refreshed),"ok");
+  assert.deepEqual(ids(refreshed.tomorrow),["b-next2","s-bob"]);
+});
+
+test("calendar rollover is local-day based across year end and leap day",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  f.db.prepare("UPDATE tasks SET due_on='2026-12-31' WHERE id='b-next'").run();
+  f.db.prepare("UPDATE tasks SET due_on='2027-01-01' WHERE id='b-next2'").run();
+  f.db.prepare("UPDATE tasks SET due_on='2027-01-01' WHERE id='s-bob'").run();
+  const year=await ok(get(query({evaluationDate:"2026-12-31"}),bob));
+  assert.deepEqual(ids(year.today),["b-overdue","b-today","b-next"]);
+  assert.deepEqual(ids(year.tomorrow),["b-next2","s-bob"]);
+  const leap=await ok(get(query({evaluationDate:"2028-02-28"}),bob));
+  assert.ok(ids(leap.today).includes("b-next2"));
+  assert.deepEqual(ids(leap.tomorrow),[]);
+  const month=await ok(get(query({evaluationDate:"2028-02-29"}),bob));
+  assert.ok(ids(month.today).includes("s-bob"));
+  assert.deepEqual(ids(month.tomorrow),[]);
+});
