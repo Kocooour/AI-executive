@@ -199,3 +199,34 @@
   }
   .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .deadlineBadge { grid-column: 3; }
 }
+
+/* Desktop Projects reuse the same Area-group treatment as the 390px preview.
+   UI-05a's group pastels live only in the mobile media query; hiding the
+   headings on desktop without extending the surfaces loses Area grouping. */
+@media (min-width: 701px) {
+  .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] { gap: 12px; }
+  .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    --v1-area-color: var(--v1-surface-subtle);
+    display: grid;
+    gap: 0;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--v1-area-color) 72%, var(--surface));
+    border: 1px solid var(--v1-neutral-stroke);
+  }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: var(--v1-area-personal); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="work"] { --v1-area-color: var(--v1-area-work); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="family"] { --v1-area-color: var(--v1-area-family); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: var(--v1-area-extra-a); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: var(--v1-area-extra-b); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: var(--v1-area-extra-c); }
+  html[data-theme="dark"] .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme]) .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+      background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+    }
+  }
+}
