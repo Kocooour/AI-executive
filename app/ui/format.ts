@@ -8,13 +8,15 @@ export function attentionReason(item: AttentionItem, language: Language): string
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const last = item.reasonFacts.lastActivityAt
     ? new Date(item.reasonFacts.lastActivityAt).toLocaleString(locale, { timeZone: item.timezone }) : "";
+  // A timed deadline must retain the event's local clock time and DST offset,
+  // but never expose the internal IANA zone key (e.g. "Europe/Prague").
+  // Intl supplies human-facing localized zone names such as SEČ/SELČ or CET/CEST.
   const date = item.reasonFacts.deadlineAllDay ? inSentenceDate(item.relevantDate, language, item.timezone)
-    : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone });
-  const zone = item.reasonFacts.deadlineAllDay ? "" : ` (${item.timezone})`;
+    : new Date(item.relevantAt).toLocaleString(locale, { timeZone: item.timezone, timeZoneName: "short" });
   if (language === "cs") {
     switch (item.reasonCode) {
-      case "deadline_overdue": return `Termín ${date}${zone} již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
-      case "deadline_soon": return `Termín ${date}${zone} je v příštích 48 hodinách.`;
+      case "deadline_overdue": return `Termín ${date} již uplynul${item.reasonFacts.deadlineAllDay ? " po konci místního dne" : ""}.`;
+      case "deadline_soon": return `Termín ${date} je v příštích 48 hodinách.`;
       case "waiting_follow_up": return item.reasonFacts.followUpDate
         ? `Nastal den připomenutí ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)}${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`
         : `Čeká alespoň 7 dní bez data připomenutí${item.reasonFacts.waitingFor ? ` (čeká na: ${item.reasonFacts.waitingFor})` : ""}.`;
@@ -24,8 +26,8 @@ export function attentionReason(item: AttentionItem, language: Language): string
     }
   }
   switch (item.reasonCode) {
-    case "deadline_overdue": return `Deadline ${date}${zone} has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
-    case "deadline_soon": return `Deadline ${date}${zone} is within 48 hours.`;
+    case "deadline_overdue": return `Deadline ${date} has passed${item.reasonFacts.deadlineAllDay ? " after the end of its local day" : ""}.`;
+    case "deadline_soon": return `Deadline ${date} is within 48 hours.`;
     case "waiting_follow_up": return item.reasonFacts.followUpDate
       ? `The follow-up date ${inSentenceDate(item.reasonFacts.followUpDate, language, item.timezone)} has come${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`
       : `Waiting for at least 7 days without a follow-up date${item.reasonFacts.waitingFor ? ` (waiting for: ${item.reasonFacts.waitingFor})` : ""}.`;
