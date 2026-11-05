@@ -1,0 +1,19 @@
+# R3-slice / UI-03a — bezpečný klientský transport dokončení a obnovení
+
+**Stav:** samostatný neaktivní klientský transport pro první vertikální řez Mého plánu. Navazuje na sloučené BE-01/#258, BE-02/#260, UI-01/#261 a UI-02/#262. Nepřipojuje žádný klikací ovladač ani produkční store, neaktivuje žádný endpoint.
+
+## Přesný stávající serverový kontrakt
+
+- Staging CAS je na `GET/PATCH /api/target-staging/task-temporal/status`, potvrzení na **read-only** `POST /api/target-staging/task-temporal/status/receipt`. Server si odvozuje identitu z ověřené session; klient nikdy neposílá actor ID.
+- **Každé** dokončení a budoucí Undo musí před zápisem udělat nové GET CAS preview. Odpověď musí mít **přesně** `{expectedRevision,writeAreaId,restoreGeneration}` a `writeAreaId` se musí shodovat s aktuální Oblastí řádku. Klient neposílá role ani Area epochy jako důkaz oprávnění. Aktuální oprávnění a stav úkolu vždy znovu ověřuje atomický backend writer.
+- PATCH přijímá **přesně šest polí**: `commandId` (nový UUID), `taskId`, `status: completed|open`, `expectedRevision`, `writeAreaId`, `restoreGeneration`. Používá `x-lumi-target-protocol: 1` a výhradně same-origin `credentials: same-origin`, `cache: no-store`; prohlížeč automaticky přidává `Origin` pro zápis. Nikdy nepotřebuje ani neodhaluje uživatelské tokeny/actor ID.
+- **Jistý úspěch** jen po striktní 200 JSON `{ok:true}` / `{ok:true,replayed:true}` nebo po potvrzeném `receipt: committed`. Při 400/409 je známý pre-commit zákaz/konflikt. Při síťové chybě, 503, chybném 200 nebo nejasné 401/403/404 (možná ztráta session po commit) se **nikdy automaticky neodešle PATCH znovu**. Klient provede pouze read-only receipt s **původním přesným příkazem**, včetně command UUID a revize. `not_recorded` není záruka, že souběžný zápis neproběhne později: výsledek zůstává **nejistý/pending**.
+- Po přerušení příkazu nebo nedostupném receipt se nesmí ukazovat optimistické dokončení či akci opakovat bez ověření. Undo je **zcela nový reverzní CAS příkaz** s novým UUID a novým preview; žádné slepé znovuodeslání či přehrání originálního PATCH.
+- Klientská validace přísně odmítá neznámá metadata, cizí Area, neplatný UUID/revizi, rozbitý UTF-16, NUL a příliš dlouhá task ID. Nepoužívá IndexedDB, localStorage, sessionStorage, vlastní cache ani legacy sync queue.
+
+## Bezpečnostní izolace a následující UI
+
+- Nové funkce jsou pouze v `lib/target-staging-my-plan-status-client.ts`. **Žádná komponenta je nyní nevolá.** Dosavadní `/target-staging/my-plan/preview` zůstává read-only, výchozím nastavením vypnutý. Umožnění zápisu později vyžaduje další **samostatný serverový feature flag UI** a současně čtyři stávající, default-off endpoint flagy `AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED`, `AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED`. Client flag není zdroj ACL.
+- Budoucí UI musí ukazovat explicitní pending/offline/konflikt, přestat zobrazovat původní řádky po ztrátě identity, mít aktérovu aktuální session, autoritativně znovu načíst My Plan po potvrzené změně a u nejistých výsledků uživatelsky nabídnout pouze nové read-only ověření receipt (nikoli opakovat PATCH). Undo musí být znovu autorizováno z čerstvého preview.
+- UI-03a **nezavádí** nové serverové API, skutečný task status v read-only My Plan DTO, časované `whenOn`, kalendář ani definitivní rozhraní. Zápisy a dokončení v aplikaci zatím nejsou aktivované.
+- Test `tests/target-staging-my-plan-status-client.test.mjs` používá výhradně syntetické mock odpovědi a zahrnuje CAS, přísný protokol, chybné odpovědi a ACL, síťovou nejistotu, receipt, zákaz auto-retry, revokaci po commit, Unicode ID a čerstvé Undo. Browser E2E proběhne až jako release gate na přesném produkčním SHA; žádný deploy, DB reset, migrace či přepnutí produkce.
