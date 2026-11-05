@@ -72,7 +72,7 @@ function fixture(){
     ["c-private","carol-private","Carol secret",null,"2026-11-04"],
     ["s-bob","family-area","Bob assigned tomorrow","bob","2026-11-05"],
     ["s-unassigned","family-area","Shared unassigned",null,"2026-11-04"],
-    ["s-foreign","family-area","Carol assigned","carol","2026-11-04"],
+    ["s-foreign","family-area","Alice assigned","alice","2026-11-04"],
   ])add.run(...row);
   Object.assign(process.env,{
     AI_EXECUTIVE_TARGET_STAGING_DIRECTORY:stage.directory,
@@ -154,7 +154,7 @@ test("today includes overdue; tomorrow is exclusive; My Plan is never global Vš
   assert.equal(page.nextCursor,null);
   assert.equal(JSON.stringify(page).includes("Alice secret"),false);
   assert.equal(JSON.stringify(page).includes("Shared unassigned"),false);
-  assert.equal(JSON.stringify(page).includes("Carol assigned"),false);
+  assert.equal(JSON.stringify(page).includes("Alice assigned"),false);
   const onlyShared=await ok(get(query({areaFilter:"shared"}),bob));
   assert.deepEqual(ids(onlyShared.today),[]);
   assert.deepEqual(ids(onlyShared.tomorrow),["s-bob"]);
@@ -205,6 +205,7 @@ test("live role revocation invalidates continuation; fresh request hides old sha
   const f=fixture(),bob=login(f,"bob");
   const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
   assert.ok(cursor);
+  f.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'").run();
   f.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
   assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
   const fresh=await ok(get(query(),bob));
