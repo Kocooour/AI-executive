@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewManualRankUpdates, previewRankWritesAllowed, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
 import { byManualOrder, manualOrder } from "../lib/task-views.ts";
 import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../lib/today-summary.ts";
 
@@ -443,7 +443,7 @@ test("UI-04c: app persists collision-recovery ranks atomically and preserves leg
   assert.match(app, /db\.transaction\("rw", db\.entities, async \(\) => \{/);
   assert.match(app, /db\.entities\.bulkGet\(allAreaPeers\.map/);
   assert.match(app, /task\.updatedAt !== allAreaPeers\[index\]\.updatedAt/);
-  assert.match(app, /await db\.entities\.update\(id, \{/);
+  assert.match(app, /await db\.entities\.update\(next\.id, \{/);
   assert.match(app, /if \(!saved\) \{\s*setPlanReorderError\(true\);\s*return;\s*\}/);
   assert.match(app, /setPlanReorderError\(false\);\s*await syncToServer\(\);\s*await load\(\);/);
   assert.match(app, /previewReorderPeers\(fullPlan, source\.id, scope, undefined, "manual"\)/);
@@ -518,12 +518,85 @@ test("UI-04c: all protected peer checks run before first atomic reorder update",
   assert.match(collision, /new Set\(heldReasons\.keys\(\)\), unsent/);
   assert.match(collision, /authState === "ready" && syncStatus === "synced"/);
   assert.match(collision, /activeWorkspaceRef\.current === workspaceId && writeWorkspaceId === workspaceId/);
-  assert.match(collision, /if \(!updates \|\| !writableScope\(\) \|\| !eligible\(allAreaPeers\)\)/);
+  assert.match(collision, /if \(!updates \|\| !writableScope\(\) \|\| !eligible\(allAreaPeers\) \|\|/);
+  assert.match(collision, /!previewRankNextRecords\(updates, allAreaPeers, scope, timestamp\)/);
   assert.match(collision, /await db\.transaction\("rw", db\.entities, async \(\) => \{/);
   assert.match(collision, /if \(!writableScope\(\) \|\| latest\.some\(/);
   assert.match(collision, /if \(!eligible\(fresh\)\) return;/);
-  assert.ok(collision.indexOf('if (!eligible(fresh)) return;') < collision.indexOf('await db.entities.update(id, {'));
+  assert.match(collision, /const nextRecords = previewRankNextRecords\(updates, fresh, scope, timestamp\)/);
+  assert.match(collision, /if \(!nextRecords\) return;/);
+  assert.ok(collision.indexOf('if (!nextRecords) return;') < collision.indexOf('await db.entities.update(next.id, {'));
   assert.match(collision, /if \(!saved\) \{\s*setPlanReorderError\(true\);/);
   assert.match(ui, /role="alert" data-plan-reorder-refused/);
   assert.match(ui, /app\.setPlanReorderError\(false\)/);
+});
+
+
+test("UI-04c: single rank change checks the full successor at the exact 250k property boundary", () => {
+  const scope = "task:Today", timestamp = 1793900000000;
+  const updates = [{ id: "large", rank: 2500 }];
+  const template = entity("large", "task", "personal", { when: day, notes: "" });
+  const templateNext = previewRankNextRecords(updates, [template], scope, timestamp);
+  assert.ok(templateNext);
+  // Derive the boundary from the real serialized successor, including the
+  // manualOrders key and activity event. Do not change the server limit.
+  const maxNoteLength = 250000 - JSON.stringify(templateNext[0].properties).length;
+  const fits = { ...template, properties: { ...template.properties, notes: "x".repeat(maxNoteLength) } };
+  const tooLargeAfter = { ...template, properties: { ...template.properties, notes: "x".repeat(maxNoteLength + 1) } };
+  assert.ok(JSON.stringify(tooLargeAfter.properties).length < 250000);
+  const empty = new Set();
+  assert.equal(previewRankWritesAllowed(updates, [fits], "personal", empty, empty), true);
+  assert.equal(previewRankWritesAllowed(updates, [tooLargeAfter], "personal", empty, empty), true);
+  const successor = previewRankNextRecords(updates, [fits], scope, timestamp);
+  assert.ok(successor);
+  assert.equal(JSON.stringify(successor[0].properties).length, 250000);
+  assert.equal(successor[0].updatedAt, timestamp);
+  assert.deepEqual(successor[0].properties.manualOrders, { "personal:task:Today": 2500 });
+  assert.deepEqual(successor[0].properties.activity, [{ at: timestamp, action: "reordered" }]);
+  assert.equal(previewRankNextRecords(updates, [tooLargeAfter], scope, timestamp), null);
+  assert.equal(tooLargeAfter.properties.manualOrders, undefined);
+  assert.equal(tooLargeAfter.updatedAt, template.updatedAt);
+});
+
+test("UI-04c: near-limit member aborts all equal-rank normalization before any peer changes", () => {
+  const tasks = ["A", "B", "C"].map((id) => {
+    const task = entity(id, "task", "personal", { when: day });
+    task.createdAt = 1000;
+    return task;
+  });
+  const plan = buildMyPlanPreview({ entities: tasks, relations: [], workspaceId: "personal", today: day });
+  const peers = previewReorderPeers(plan, "A", "task:Today", "B", "manual");
+  const proposedOrder = moveAfter(peers, "A", "B");
+  const updates = previewManualRankUpdates(proposedOrder, peers, "A", "task:Today");
+  assert.deepEqual(updates.map((entry) => entry.id), ["A", "C"]);
+  const empty = new Set();
+  // C is an unrelated neighbour. Its original data is valid, but adding a
+  // manual rank and activity entry makes it un-sendable. A must not change.
+  const heavy = tasks.map((task) => task.id === "C"
+    ? { ...task, properties: { ...task.properties, notes: "z".repeat(249880) } }
+    : task);
+  assert.equal(previewRankWritesAllowed(updates, heavy, "personal", empty, empty), true);
+  const before = JSON.stringify(heavy);
+  assert.equal(previewRankNextRecords(updates, heavy, "task:Today", 1793900000000), null);
+  assert.equal(JSON.stringify(heavy), before);
+  const valid = previewRankNextRecords(updates, tasks, "task:Today", 1793900000000);
+  assert.ok(valid);
+  assert.deepEqual(valid.map((task) => task.id), ["A", "C"]);
+  const records = tasks.map((task) => valid.find((next) => next.id === task.id) || task);
+  assert.deepEqual(records.sort(byManualOrder("task:Today")).map((task) => task.id), ["B", "A", "C"]);
+});
+
+test("UI-04c: prospective batch rejects missing records and keeps clipped activity logs", () => {
+  const task = entity("task", "task", "personal", {
+    when: day, activity: Array.from({ length: 60 }, (_, at) => ({ at, action: "old" })),
+  });
+  assert.equal(previewRankNextRecords([{ id: "absent", rank: 1 }], [task], "task:Today", 3), null);
+  assert.equal(previewRankNextRecords([{ id: "task", rank: NaN }], [task], "task:Today", 3), null);
+  assert.equal(previewRankNextRecords([{ id: "task", rank: 1 }], [task], "task:Today", Infinity), null);
+  assert.equal(previewRankNextRecords([{ id: "task", rank: 1 }, { id: "task", rank: 2 }], [task], "task:Today", 3), null);
+  const next = previewRankNextRecords([{ id: "task", rank: 1 }], [task], "task:Today", 3);
+  assert.ok(next);
+  assert.equal(next[0].properties.activity.length, 50);
+  assert.deepEqual(next[0].properties.activity.at(-1), { at: 3, action: "reordered" });
+  assert.equal(task.properties.activity.length, 60); // pure helper; no mutation
 });
