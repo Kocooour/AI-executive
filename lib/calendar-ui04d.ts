@@ -16,3 +16,32 @@ export function calendarV1SurfaceState({
   if (selectedOtherDay) return "selected-day";
   return fresh ? "fresh" : "stale";
 }
+
+
+/** A manual refresh error belongs to the exact workspace, screen visit and
+ * load generation that produced it. A newer successful background load must
+ * always suppress an older failure, even if its result data looks identical.
+ */
+export interface CalendarV1RefreshFailure {
+  workspaceId: string;
+  requestVersion: number;
+  contextEpoch: number;
+}
+
+export function calendarV1RefreshFailureVisible(
+  failure: CalendarV1RefreshFailure | null,
+  current: {
+    workspaceId: string;
+    requestVersion: number;
+    successVersion: number;
+    contextEpoch: number;
+    view: string;
+    authenticated: boolean;
+  },
+): boolean {
+  return failure !== null && current.authenticated && current.view === "Calendar" &&
+    failure.workspaceId === current.workspaceId &&
+    failure.contextEpoch === current.contextEpoch &&
+    failure.requestVersion === current.requestVersion &&
+    failure.requestVersion > current.successVersion;
+}
