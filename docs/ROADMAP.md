@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-05 po sloučení R2d.3m.7 (#246), zahájení R2d.3m.8 (bezpečné HTTP pro kombinované Vše) a souběžné UI roadmapě podle [Lumi Design v1.0 / PR #225](https://github.com/Kocooour/AI-executive/pull/225).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-05 po sloučení R2d.3m.7 (#246), zahájení R2d.3m.8 (bezpečné HTTP pro kombinované Vše), [rozhodnutí o revizi UI a prvním vertikálním řezu](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a souběžné UI roadmapě podle [Lumi Design v1.0 / PR #225](https://github.com/Kocooour/AI-executive/pull/225).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -14,6 +14,21 @@
 | **R3 — Integrace cílových rozsahů s UI** | **Neaktivováno; připravovat UI souběžně s R2d** | Čtecí selektor #103 a přepínač #108 existují, ale nejsou bezpečně propojené s běžnou aplikací. UI-01 až UI-08 se mohou vyvíjet odděleně nad legacy/mock adaptérem; teprve UI-09/R3 smí po splnění R2d bariér aktivovat **jeden globální Vše / Osobní / Sdílené** a osobní výchozí obrazovku **Můj plán**. Vše zahrnuje všechny serverově oprávněné položky; připravený interní `my-plan` selektor není implementace tohoto rozsahu. |
 | **R4 — Cutover a release** | **Nespouštěno** | Vyžaduje dokončené bezpečnostní brány, inventuru, ověřenou archivní zálohu/restore a **samostatný výslovný souhlas** s přesným rozsahem případného resetu. |
 | **R5 — Rozšířená spolupráce a asistence** | **Navazující vývoj** | Pozvánky, víceuživatelské sdílení a rozšířené integrace až po úplném identity/ACL/sync/revokačním kontraktu. |
+
+### Rozhodnutí 2026-11-05 — revize UI a první vertikální řez
+
+Podle [rozhodnutí vlastníka 2026-11-05](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md): Návrh Lumi má ikonu jiskry ✦ (hvězda zůstává Mému plánu), přepínač motivu je jen v Nastavení a Quick Capture je plovoucí tlačítko na telefonu i desktopu. **Prvním vertikálním řezem je Můj plán pro jednu identitu**, zařazený **před R2d.4 a R2d.5**: UI nad cílovými staging endpointy (#215, #229, #233) pro čtení dne, dokončení/obnovení, „Kdy“ dnes/zítra a Undo. Řez je **staging a default-off**; produkční aktivace dál vyžaduje UI-09/R3, R4 brány a samostatný souhlas.
+
+Revize náhledu v1 našla porušení invariant, která se opraví před dalšími obrazovkami:
+
+| Pořadí | Iterace | Rozsah a akceptace |
+|---|---|---|
+| 1 | **UI-T** — runtime tokeny Lumi v1 | Povýšit `lumi-v1-target-tokens.json` do `tokens.json`, vygenerovat `tokens.css`, kontrastní test světlého režimu; tmavý režim až po ověření. Žádný modrý legacy akcent na plochách v1. |
+| 2 | **UI-04b** — sdílený ovladač dokončení a řádek | Jedna komponenta čtverec (úkol) / kruh (projekt) × běžný / pozornost / hotovo s textovým důvodem; v seznamech Mého plánu, Kalendáře, projektu i Home (dnes `app/lumi-task-row.css` kreslí úkol jako kruh). Úchyty řazení jen v režimu úprav, nezobrazovat prázdná pole („bez odhadu“). |
+| 3 | **UI-04c** — Můj plán Dnes/Zítra | Zahrnout úkoly s termínem dnes i po termínu, oddíl Zítra, pastelové nenadepsané skupiny Oblastí (osobní zelená, ne fialová), události s ikonou, Návrh Lumi s jiskrou. |
+| 4 | **UI-04d** — Kalendář bez technických údajů | Bez názvu časové zóny a protichůdných stavů připojení; bez duplicitních ‹ ›; FAB nepřekrývá akce řádku. |
+| 5 | **UI-03** — desktop shell | Sidebar s přímými cíli a projekty, hlavička Hledat + Lumi, plovoucí Quick Capture se zkratkou, inspektor sdílený s mobilním detailem, motiv v Nastavení. |
+| 6 | **R3-slice** — vertikální řez Můj plán | Jedna identita, cílové staging endpointy za příznakem, pending/offline/konflikt/revokace pravdivě; žádné produkční přepnutí. |
 
 ### Paralelní implementační větev UI — schválený Lumi Design v1.0 / PR #225 (2026-11-04)
 
@@ -266,4 +281,4 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - **Sloučeno R2d.3m.7 (#246):** jediný **interní** autorizovaný kombinovaný seznam projektů, úkolů a názvů poznámek pro Vše / Osobní / Sdílené. Tři druhové SQL selektory se vyhodnocují **v jednom připnutém snapshotu** pod jedním podepsaným aktérem; stabilní BINARY pořadí ID a typový tie-break, samostatné pozice typu, společná revize všech Area ACL/content/project-content/note_sync epoch a kompletní svědectví pro atomickou živou kontrolu před pozdějším HTTP. Bez HTTP, produkčního UI nebo zapnutí dat. [Kontrakt](R2D-GLOBAL-COMBINED-READ.md).
 - **R2d.3m.8 (probíhá):** samostatně **default-off** staging HTTP `/api/target-staging/global-index` pro kombinovaný autorizovaný index úkolů, projektů a názvů poznámek. Jediný actor-bound pinned snapshot v izolovaném child, přísný typový DTO allowlist, podepsaný multi-position HMAC kurzor, úplný **live** Area ACL/content/project-content/note_sync epoch guard před odpovědí. Nejde o dokončený klientský Vše / UI-09/R3. [Kontrakt](R2D-GLOBAL-COMBINED-HTTP.md).
 
-R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat. UI-01 až UI-08 lze vyvíjet souběžně s R2d; bezpečné propojení globálního Vše / Osobní / Sdílené v UI-09/R3 a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.
+R2d.4 Search/AI a R2d.5 attention/push následují až po dokončení příslušných ACL a stavových dat **a po prvním vertikálním řezu Můj plán** (rozhodnutí 2026-11-05). UI-01 až UI-08 lze vyvíjet souběžně s R2d; bezpečné propojení globálního Vše / Osobní / Sdílené v UI-09/R3 a R4 produkční cutover jsou stále blokovány bezpečnostními a release branami; Browser E2E se spouští jako gate před produkčním nasazením, ne před každým PR.

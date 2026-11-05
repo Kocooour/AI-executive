@@ -56,7 +56,7 @@
       "accent": "#8B5CF6",
       "surface": "#F3E8FF",
       "label": "Návrh Lumi",
-      "icon": "star",
+      "icon": "sparkle-four-point",
       "requiresApproval": true
     }
   },
@@ -96,6 +96,8 @@
     ],
     "defaultLanding": "Můj plán",
     "searchPlacement": "header",
+    "quickCapture": "floating-action-button",
+    "themeToggle": "settings-only",
     "calendar": {
       "layout": "single-day-only",
       "dateStrip": "weekday-abbreviation-above-date-bubble",
@@ -103,6 +105,11 @@
       "selected": "purple-even-if-past",
       "pastDateDoesNotMeanEventCompleted": true
     }
+  },
+  "desktop": {
+    "quickCapture": "floating-action-button",
+    "headerActions": ["search", "lumiChat"],
+    "themeToggle": "settings-only"
   },
   "projects": {
     "areaGroupHeadingsVisible": false,

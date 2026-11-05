@@ -9,12 +9,12 @@
 - **Oblasti ve skupinách:** osobní jemná zelená **#DCFCE7**, práce jemná modrá **#DBEAFE**, rodina jemná růžová **#FCE7F3**. Jiné Oblasti mají konzistentně jemné pozadí. Barva Oblasti **nikdy** nerozhoduje o barvě dokončovací ikony.
 - **Nedokončená běžná položka:** neutrální **prázdný obrys bez fajfky**. Priorita / vyžaduje pozornost: **pouze červená #EF4444 nebo oranžová #F59E0B kontura prázdné ikony, bez výplně a bez fajfky**, se srozumitelným důvodem v dostupném textu. Hotovo: **šedá #94A3B8 s fajfkou**, text i ikona tlumené a případně přeškrtnuté, ale stále dostatečně kontrastní. **Žádný stav „úkol v akci“ či „rozpracováno“.**
 - **Úkol = vždy čtverec. Projekt = vždy kruh.** Platí pro otevřený, urgentní i hotový stav a pro všechny obrazovky. Dokončený projekt je **šedý kruh s fajfkou**, ne čtverec; nedokončený projekt nikdy nemá fajfku. Kruh projektu umožňuje explicitní dokončení projektu, nikoli automatické skryté dokončení všech jeho úkolů.
-- **Návrh Lumi:** výrazná fialová/fialovorůžová plocha, původní ikona hvězdy, popis **„Návrh Lumi“** a dostupné **„Posoudit“**. Návrh je jiný než potvrzená rezervace a nikdy se netváří jako provedená změna.
+- **Návrh Lumi:** výrazná fialová/fialovorůžová plocha, **čtyřcípá jiskra ✦** (od [rozhodnutí 2026-11-05](../decisions/2026-11-05-ui-revize-a-vertikalni-rez.md); hvězda zůstává ikoně Mého plánu), popis **„Návrh Lumi“** a dostupné **„Posoudit“**. Návrh je jiný než potvrzená rezervace a nikdy se netváří jako provedená změna.
 - Zachovat ostatní dosavadní sémantické ikony Lumi (kalendář, hledání, spodní navigace), měnit jen definované stavové ikony. Zde uvedené barvy jsou **cílové hodnoty designu**; současné CSS a design tokeny se neprohlašují za již upravené. Ověřit kontrast světlého i tmavého režimu.
 
 ## Navigace
 
-Mobil začíná obrazovkou **Můj plán**, pevné spodní menu má právě čtyři položky: **Můj plán · Kalendář · Projekty · Více**. **Hledání není pátou záložkou**, je dostupné v horní liště. Horní **globální přepínač rozsahu má volby `Vše / Osobní / Sdílené`**, stav je stejný v Projektech a dalších pracovních pohledech. Můj plán má jako úvodní pohled vlastní osobní výběr položek; volby Osobní/Sdílené ho pouze zužují, při Vše zůstává souhrnem **mých** úkolů. Quick Capture, Lumi Chat a oznámení zůstávají snadno dosažitelné.
+Mobil začíná obrazovkou **Můj plán**, pevné spodní menu má právě čtyři položky: **Můj plán · Kalendář · Projekty · Více**. **Hledání není pátou záložkou**, je dostupné v horní liště. Horní **globální přepínač rozsahu má volby `Vše / Osobní / Sdílené`**, stav je stejný v Projektech a dalších pracovních pohledech. Můj plán má jako úvodní pohled vlastní osobní výběr položek; volby Osobní/Sdílené ho pouze zužují, při Vše zůstává souhrnem **mých** úkolů. Lumi Chat a oznámení zůstávají snadno dosažitelné; **Quick Capture je plovoucí tlačítko** na telefonu i desktopu a přepínač motivu je v Nastavení ([rozhodnutí 2026-11-05](../decisions/2026-11-05-ui-revize-a-vertikalni-rez.md)).
 
 **Více** je rolovatelný seznam sekundárních cílů: Domů / Denní brief, Doručené, Dnes, Nadcházející, Poznámky, Oblasti, uložené filtry, e-maily, integrace, nastavení a pomoc. **Projekty** mají vlastní záložku a úplný autorizovaný seznam bez umělého limitu. Desktop zachová trvalý levý sidebar, horní hledání a chat, samostatnou stránku projektu a pravý inspektor úkolu/poznámky; mobilní spodní lišta se na desktop nepřenáší.
 
@@ -25,7 +25,7 @@ Přímý odkaz na projekt, úkol či poznámku obsahuje neprůhledný identifik�
 **Dnes** a **Zítra** jsou jasně oddělené časové části. Úkoly jsou uvnitř rozdělené podle Oblastí do **jemně podbarvených bloků, bez jejich viditelných názvů a bez štítků Oblasti u úkolů**. Oblast lze otevřít v detailu a čtečka ji oznamuje jako název skupiny; sdílení či cílový zápis vždy zobrazuje textově plné oprávnění, protože barva sama nestačí.
 
 ~~~text
-Můj plán                    [Vše ▾]           Hledat  ✦  ＋
+Můj plán                    [Vše ▾]           Hledat  Lumi
 Dnes · St 4. 11. 2026
 
   [jemně zelený blok – bez viditelného názvu Oblasti]
@@ -71,7 +71,7 @@ Můj plán     Kalendář     Projekty     Více
 
 Na šířce 390 px jsou názvy a data bublinek čitelné, dotykové cíle alespoň 44 px, řádek lze horizontálně posunout **bez horizontálního posunu celé stránky**; čtečka oznámí celý den, datum a stav vybráno/dnes. Desktopový Kalendář může mít širší vícedenní zobrazení, toto rozhodnutí se týká jen mobilu.
 
-Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace je výslovně „Rezervováno“; návrh Lumi má hvězdu, jiný akcent a výzvu k posouzení. Skrytá událost zůstává pouze v Kalendáři jako „Skryto“, lze ji obnovit, a její vliv na kapacitu se řídí kalendářovým kontraktem. Odpojený nebo zastaralý kalendář nikdy nepředstírá přesnou kapacitu; nabízí Připojit či Obnovit a uvádí stáří dostupných dat.
+Události mají jemné časové bloky a čitelné názvy. Potvrzená rezervace je výslovně „Rezervováno“; návrh Lumi má jiskru ✦, jiný akcent a výzvu k posouzení. Skrytá událost zůstává pouze v Kalendáři jako „Skryto“, lze ji obnovit, a její vliv na kapacitu se řídí kalendářovým kontraktem. Odpojený nebo zastaralý kalendář nikdy nepředstírá přesnou kapacitu; nabízí Připojit či Obnovit a uvádí stáří dostupných dat.
 
 ## Projekty: pastelové skupiny bez nadpisů, stejné písmo, kruhové stavy
 
