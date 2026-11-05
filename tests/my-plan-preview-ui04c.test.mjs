@@ -444,7 +444,8 @@ test("UI-04c: app persists collision-recovery ranks atomically and preserves leg
   assert.match(app, /db\.entities\.bulkGet\(allAreaPeers\.map/);
   assert.match(app, /task\.updatedAt !== allAreaPeers\[index\]\.updatedAt/);
   assert.match(app, /await db\.entities\.update\(id, \{/);
-  assert.match(app, /if \(saved\) \{ await syncToServer\(\); await load\(\); \}/);
+  assert.match(app, /if \(!saved\) \{\s*setPlanReorderError\(true\);\s*return;\s*\}/);
+  assert.match(app, /setPlanReorderError\(false\);\s*await syncToServer\(\);\s*await load\(\);/);
   assert.match(app, /previewReorderPeers\(fullPlan, source\.id, scope, undefined, "manual"\)/);
   assert.match(app, /await persistManualOrder\(peers, source\.id, scope, allAreaPeers\)/);
   assert.match(app, /await persistManualOrder\(peers, source\.id, scope\);/);
