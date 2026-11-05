@@ -137,7 +137,8 @@ export function TodayFooter({ app }: { app: LumiApp }) {
   // Hidden for the day: kept in this browser per workspace, and in memory when storage is unavailable.
   const [hiddenHere, setHiddenHere] = useState<string[]>([]);
   const [reviewedProposal, setReviewedProposal] = useState<string | null>(null);
-  useEffect(() => { setReviewedProposal(null); },
+  const [proposalFailed, setProposalFailed] = useState(false);
+  useEffect(() => { setReviewedProposal(null); setProposalFailed(false); },
     [activeWorkspaceId, today, app.mobilePlanPreviewActive]);
   const storedHidden = (() => { try { return localStorage.getItem(hiddenKey(activeWorkspaceId)) || ""; } catch { return ""; } })();
   const hiddenDay = storedHidden === today || hiddenHere.includes(`${activeWorkspaceId}|${today}`) ? today : "";
@@ -178,6 +179,7 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     dayCount: picked.suggestion.params.dayCount,
   });
   const hide = () => {
+    setProposalFailed(false);
     setHiddenHere((current) => [...current, `${activeWorkspaceId}|${today}`]);
     try { localStorage.setItem(hiddenKey(activeWorkspaceId), today); } catch { /* storage unavailable: hidden until reload */ }
   };
@@ -202,7 +204,7 @@ export function TodayFooter({ app }: { app: LumiApp }) {
           <div className="todaySuggestionActions">
             {previewProposal && !proposalReviewed ? (
               <button type="button" className="primaryAction" data-plan-proposal-review=""
-                onClick={() => { if (proposalKey) setReviewedProposal(proposalKey); }}>
+                onClick={() => { if (proposalKey) { setProposalFailed(false); setReviewedProposal(proposalKey); } }}>
                 {language === "cs" ? "Posoudit" : "Review"}
               </button>
             ) : (
@@ -224,8 +226,11 @@ export function TodayFooter({ app }: { app: LumiApp }) {
                     if (!proposalReviewed || !proposalKey ||
                       reviewedProposal !== todayProposalReviewKey(picked, activeWorkspaceId, today)) return;
                     setReviewedProposal(null);
+                    setProposalFailed(false);
                     void deferTask(picked.task, picked.suggestion.target, "lumi",
-                      todayProposalTaskSignature(picked.task));
+                      todayProposalTaskSignature(picked.task))
+                      .then((saved) => { if (!saved) setProposalFailed(true); })
+                      .catch(() => setProposalFailed(true));
                   }}>
                   {previewProposal ? (language === "cs" ? "Schválit" : "Approve") : tr("deferApply")}
                 </button>
@@ -236,6 +241,13 @@ export function TodayFooter({ app }: { app: LumiApp }) {
               </>
             )}
           </div>
+          {previewProposal && proposalFailed && (
+            <p className="dayPlanWarning" role="status" data-plan-proposal-retry>
+              {language === "cs"
+                ? "Návrh se změnil nebo jej nebylo možné uložit. Zkontrolujte ho znovu."
+                : "The proposal changed or could not be saved. Review it again."}
+            </p>
+          )}
         </section>
       )}
       {noCalendar && <p className="homeNotice todayCalendarNote">{tr("calendarDisconnectedNote")} <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}
