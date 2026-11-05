@@ -119,3 +119,18 @@ html[data-theme="dark"] .appShell[data-my-plan-preview="true"] .myPlanV1Area {
   .appShell[data-my-plan-preview="true"] .myPlanV1Area { padding: 5px 8px; }
   .appShell[data-my-plan-preview="true"] .myPlanV1Sections { gap: 16px; }
 }
+
+.appShell[data-my-plan-preview="true"] .myPlanV1ProposalImpact {
+  flex: 0 0 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--v1-accent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-review],
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-approve],
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-reject] {
+  min-height: 44px;
+}
