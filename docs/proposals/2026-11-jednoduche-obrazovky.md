@@ -44,6 +44,7 @@ Dnes · St 4. 11. 2026
 
 Zítra · Čt 5. 11. 2026
   ...
+                                                       (＋)  ← plovoucí Quick Capture
 ────────────────────────────────────────────────────────
 Můj plán            Kalendář             Projekty            Více
 ~~~
