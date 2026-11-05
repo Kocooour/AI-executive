@@ -10,7 +10,7 @@ import { NoteEditor } from "./note-editor";
 import { DeferChip } from "./defer-popover";
 import { InboxTriage } from "./inbox-triage";
 import { heldBackReason } from "./held-back";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { entityConflicts } from "../../../lib/field-merge";
 import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
@@ -132,14 +132,44 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
   const [mobileViewport, setMobileViewport] = useState(false);
+  const [taskMoreOpen, setTaskMoreOpen] = useState(false);
+  const lastMobileMatch = useRef<boolean | null>(null);
+  const resizeFocus = useRef<{ element: HTMLElement; start: number | null; end: number | null } | null>(null);
+  useEffect(() => { setTaskMoreOpen(false); }, [selected?.id]);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const media = window.matchMedia("(max-width: 700px)");
-    const sync = () => setMobileViewport(media.matches);
+    const sync = () => {
+      if (lastMobileMatch.current !== null && lastMobileMatch.current !== media.matches) {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.closest(".taskDetailFields")) {
+          let start: number | null = null;
+          let end: number | null = null;
+          if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+            try { start = active.selectionStart; end = active.selectionEnd; } catch { /* date input */ }
+          }
+          resizeFocus.current = { element: active, start, end };
+        }
+      }
+      // Keep edited secondary fields visible on desktop-to-mobile rotation.
+      if (media.matches && lastMobileMatch.current === false) setTaskMoreOpen(true);
+      lastMobileMatch.current = media.matches;
+      setMobileViewport(media.matches);
+    };
     sync();
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
+  useLayoutEffect(() => {
+    const saved = resizeFocus.current;
+    resizeFocus.current = null;
+    if (!saved?.element.isConnected || !saved.element.getClientRects().length) return;
+    if (document.activeElement !== saved.element) saved.element.focus({ preventScroll: true });
+    if (document.activeElement === saved.element && saved.start !== null && saved.end !== null &&
+      (saved.element instanceof HTMLInputElement || saved.element instanceof HTMLTextAreaElement)) {
+      try { saved.element.setSelectionRange(saved.start, saved.end); } catch { /* unsupported input */ }
+    }
+  }, [mobileViewport]);
   const selectedTask = selected?.type === "task" ? selected : null;
   const activeTaskSession = Boolean(selectedTask && workSession?.taskId === selectedTask.id);
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
@@ -371,8 +401,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 }}>{language === "cs" ? "Otevřít zdrojovou zprávu" : "Open source message"}</button>
               </section>
             )}
-            {selected.type === "task" && (
-              <div className="fields">
+            {selected.type === "task" && (() => {
+              // Move keyed sections instead of replacing editable nodes on resize.
+              const listSection = (
+                <div key="list" className="taskDetailMoreGroup taskDetailMoreList" id={`task-more-list-${selected.id}`}>
                 <label>
                   {tr("list")}
                   <select
@@ -402,6 +434,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     <option value="Someday">{tr("Someday")}</option>
                   </select>
                 </label>
+                </div>
+              );
+              const essentialsSection = (
+                <div key="essentials" className="taskDetailEssentials">
                 <div className="scheduleField">
                   <span>{tr("when")}</span>
                   <div className="scheduleChoices" role="group" aria-label={tr("when")}>
@@ -487,6 +523,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     </select>
                   </label>
                 )}
+                </div>
+              );
+              const optionsSection = (
+                <div key="options" className="taskDetailMoreGroup taskDetailMoreOptions" id={`task-more-options-${selected.id}`}>
                 <label>
                   {tr("priority")}
                   <select
@@ -606,6 +646,10 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     {tr("nextWorkday")}
                   </button>
                 )}
+                </div>
+              );
+              const notesSection = (
+                <div key="notes" className="taskDetailNotes">
                 <label>
                   {tr("taskNotes")}
                   <textarea
@@ -674,6 +718,23 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                     >{tr("add")}</button>
                   </div>
                 </div>
+                </div>
+              );
+              const moreButton = (
+                <button key="toggle" type="button" className="taskDetailMoreToggle"
+                  aria-controls={`task-more-list-${selected.id} task-more-options-${selected.id} task-more-actions-${selected.id}`}
+                  aria-expanded={taskMoreOpen}
+                  onClick={() => setTaskMoreOpen((open) => !open)}>
+                  {language === "cs" ? "Další vlastnosti" : "More details"}
+                  <span aria-hidden="true">{taskMoreOpen ? "⌃" : "⌄"}</span>
+                </button>
+              );
+              const workButton = mobileTaskPreview && activeTaskSession ? (
+                  <button key="work-finish" type="button" className="primaryAction taskDetailWorkFinish"
+                    onClick={() => void done(selected.id)}>{tr("workFinish")}</button>
+              ) : null;
+              const actionsSection = (
+                <div key="actions" className="taskDetailMoreGroup taskDetailMoreActions" id={`task-more-actions-${selected.id}`}>
                 <label>
                   {tr("repeat")}
                   <select
@@ -772,7 +833,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {(!mobileTaskPreview || activeTaskSession) && (selected.status === "completed" ? (
+                {!mobileTaskPreview && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
@@ -780,8 +841,16 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                 <button className="danger" disabled={isFallbackArea(selected, app.items)} onClick={() => remove(selected)}>
                   {tr("delete")}
                 </button>
-              </div>
-            )}
+                </div>
+              );
+              return (
+                <div className="fields taskDetailFields" data-task-more-open={taskMoreOpen ? "true" : "false"}>
+                  {mobileTaskPreview
+                    ? [essentialsSection, notesSection, workButton, moreButton, listSection, optionsSection, actionsSection]
+                    : [listSection, essentialsSection, optionsSection, notesSection, moreButton, workButton, actionsSection]}
+                </div>
+              );
+            })()}
           </aside>
         </div>
       )}
