@@ -73,6 +73,8 @@ test("lifecycle hooks abort and hide old actor data, revalidate after resume",()
   assert.match(ui,/removeEventListener\("visibilitychange",visibility\)/);
   assert.match(ui,/removeEventListener\("pageshow",foreground\)/);
   assert.match(ui,/setDate\(chosen.evaluationDate\)/);
+  assert.match(ui,/invalidate\("stale",true\)/);
+  assert.match(ui,/if\(refreshing\)setState\(\{status:"loading"\}\)/);
   // Only read GET in both the old and hardened view.
   assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|POST|PUT|DELETE)/);
 });
