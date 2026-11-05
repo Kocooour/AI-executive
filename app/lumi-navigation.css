@@ -463,3 +463,31 @@
 /* The list controls sit tucked under the page title; below the Inbox tabs they need their own space. */
 .inboxTabs + .listControls,
 .inboxTabs ~ .listControls { margin-top: 0; }
+
+/* UI-01c: a missing or inaccessible record is indistinguishable from a deleted
+   link. The notice never interpolates IDs, titles, workspace or ACL details. */
+.appShell .navigationUnavailableNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.appShell .navigationUnavailableNotice p { margin: 0; }
+.appShell .navigationUnavailableNotice button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  background: var(--workspace-soft);
+}
+.appShell .navigationUnavailableNotice button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
