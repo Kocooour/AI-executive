@@ -14,7 +14,7 @@ type Candidate = AttentionResponse["items"][number];
 // "Proč?" directly reveals the local source evidence and evaluation instant;
 // Snooze and Dismiss remain in the item's "⋯" menu. No new authority or ACL.
 export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: Candidate }) {
-  const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, inspect, items, language, scopedRelations, setAttentionError, tr, workspaces } = app;
+  const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, attentionStale, inspect, items, language, scopedRelations, setAttentionError, tr, workspaces } = app;
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const whyId = useId();
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
@@ -30,7 +30,9 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
   const subject = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
   // A row evaluated before the user edited its subject on this device may no longer hold.
   const changedSince = attentionActionsBlocked && Boolean(subject && Number(subject.updatedAt) > candidate.evaluatedAt);
-  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all");
+  // Never offer the quick date edit from an old Attention recommendation. A user
+  // can still open the underlying task and review its current local data.
+  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all" && !attentionActionsBlocked);
   const open = () => {
     if (subject) void inspect(subject);
     else setAttentionError(tr("attentionDetailMissing"));
@@ -60,6 +62,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
           <span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span>
           {candidate.confidence === "limited" && <> · <strong>{tr("attentionLimited")}</strong></>}
           {activeWorkspaceId === "all" && workspaceTitle && <> · {workspaceTitle}</>}
+          {attentionStale && <> · <span className="attentionRowStale">{tr("attentionStale")}</span></>}
           {changedSince && <> · <strong>{tr("attentionChangedSince")}</strong></>}
           {" "}
           <button type="button" className="attentionWhyToggle"
@@ -84,6 +87,10 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
         </PopoverMenu>
       </div>
       <div className="attentionMore" id={whyId} hidden={!sourcesOpen}>
+          {/* Cached or outdated recommendations are evidence from an earlier evaluation,
+              never a statement about the current task. */}
+          {attentionStale && <p className="attentionMeta attentionExplanationStale">{tr("attentionStaleWhy")}</p>}
+          {changedSince && <p className="attentionMeta attentionExplanationChanged">{tr("attentionChangedSinceWhy")}</p>}
           {/* Locally visible source names only: no internal IDs or time-zone keys. */}
           <p className="attentionMeta">{tr("attentionEvaluatedAt")}: <time>{evaluatedTime}</time>
             {activeWorkspaceId === "all" && workspaceTitle ? " · " + workspaceTitle : ""}</p>
