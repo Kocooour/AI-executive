@@ -208,6 +208,18 @@ for (const theme of ["light", "dark"] as const) {
         const textRatio = await computedContrast(page, bubble + " " + sub, "color", bubble);
         expect(textRatio, theme + ": calendar " + sub).toBeGreaterThanOrEqual(4.5);
       }
+      // The same Area groups are now rendered on desktop; no headings are
+      // visible, so their pastel surface and strong boundary must persist.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto("/?view=Projects");
+      await waitUntilSynced(page);
+      const desktopGroup = page.locator(groupSelector);
+      await expect(desktopGroup).toBeVisible();
+      await expect(page.locator('.projectGroups[data-projects-preview="lumi-v1"]')).toBeVisible();
+      await expect(desktopGroup.locator(".projectGroupHeading")).toHaveCSS("clip-path", "inset(50%)");
+      const desktopBorder = await computedContrast(page, groupSelector, "borderTopColor", groupSelector);
+      expect(desktopBorder, theme + ": desktop Area group border").toBeGreaterThanOrEqual(3);
+      await expect(desktopGroup.locator('[data-project-preview-row="' + ids.overdue + '"] .v1ProjectCircle')).toBeVisible();
     } finally {
       await cleanPreview(page, ids);
     }
