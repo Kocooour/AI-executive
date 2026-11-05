@@ -145,6 +145,12 @@
     grid-template-columns: 44px minmax(0, 1fr) auto auto;
     column-gap: 4px;
   }
+  /* Old 34px cells extended their hit targets into adjacent cells through
+     pseudo-elements. Real 44px controls must not overlap one another. */
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .lumiCompletionControl::before,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .dragHandle::before {
+    content: none;
+  }
   .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .lumiCompletionControl {
     box-sizing: border-box;
     grid-column: 1;
