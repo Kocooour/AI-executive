@@ -30,7 +30,7 @@ import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
-import { buildMyPlanPreview, previewReorderPeers } from "../../lib/my-plan-preview";
+import { buildMyPlanPreview, previewManualRankUpdates, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -3967,7 +3967,50 @@ export function useLumiApp() {
     setActiveDragTarget(targetAtPoint(event.clientX, event.clientY));
   }
 
-  async function persistManualOrder(ordered: Entity[], movedId: string, scope: string) {
+  async function persistManualOrder(ordered: Entity[], movedId: string, scope: string, allAreaPeers?: Entity[]) {
+    if (allAreaPeers) {
+      // The visible UI-04c Area group may omit filtered/timeline tasks. Keep
+      // their existing slots; renormalize only this Area if equal ranks mean
+      // one moved rank cannot represent the requested position.
+      const updates = previewManualRankUpdates(ordered, allAreaPeers, movedId, scope);
+      if (!updates || updates.length === 0) return;
+      const timestamp = writeTime();
+      const byId = new Map(allAreaPeers.map((task) => [task.id, task]));
+      let saved = false;
+      localDataVersion.current += 1;
+      try {
+        await db.transaction("rw", db.entities, async () => {
+          const latest = await db.entities.bulkGet(allAreaPeers.map((task) => task.id));
+          // Do not overwrite a concurrent change, even on a hidden peer. All
+          // writes occur only after every snapshot has been validated.
+          if (latest.some((task, index) => !task ||
+            task.updatedAt !== allAreaPeers[index].updatedAt ||
+            task.workspaceId !== allAreaPeers[index].workspaceId ||
+            task.status !== allAreaPeers[index].status)) return;
+          for (const { id, rank } of updates) {
+            const current = latest.find((item) => item?.id === id);
+            if (!current || !byId.has(id)) return;
+            const orders = current.properties.manualOrders;
+            const manualOrders = orders && typeof orders === "object" && !Array.isArray(orders)
+              ? { ...(orders as Record<string, unknown>) } : {};
+            manualOrders[`${current.workspaceId}:${scope}`] = rank;
+            const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+            await db.entities.update(id, {
+              properties: {
+                ...current.properties, manualOrders,
+                activity: [...activity, { at: timestamp, action: "reordered" }].slice(-50),
+              },
+              updatedAt: timestamp,
+            });
+          }
+          saved = true;
+        });
+      } finally {
+        localDataVersion.current += 1;
+      }
+      if (saved) { await syncToServer(); await load(); }
+      return;
+    }
     const timestamp = writeTime();
     const movedIndex = ordered.findIndex((entity) => entity.id === movedId);
     const moved = ordered[movedIndex];
@@ -4086,8 +4129,21 @@ export function useLumiApp() {
       const [moved] = peers.splice(sourceIndex, 1);
       const insertionIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       peers.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, moved);
-      if (source.type === "task") setSortBy("manual");
-      await persistManualOrder(peers, source.id, scope);
+      if (planTaskDrag) {
+        // The source/target are visible, but rank collision recovery must also
+        // preserve filtered and timeline-linked rows of the same Area/day.
+        const fullPlan = buildMyPlanPreview({
+          entities: items, relations: scopedRelations,
+          workspaceId: source.workspaceId, today, priorityFilter: "all",
+          sortBy: "manual",
+        });
+        const allAreaPeers = previewReorderPeers(fullPlan, source.id, scope, undefined, "manual");
+        if (!allAreaPeers) return;
+        await persistManualOrder(peers, source.id, scope, allAreaPeers);
+      } else {
+        if (source.type === "task") setSortBy("manual");
+        await persistManualOrder(peers, source.id, scope);
+      }
       return;
     }
     if (planTaskDrag) return; // cross-type drops cannot mutate relations here
