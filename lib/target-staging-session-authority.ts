@@ -24,6 +24,7 @@ import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-t
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
+import type {AuthorizedSearchPage} from "./target-authorized-title-search";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -50,6 +51,7 @@ import {
   readPreflightedGlobalProjectPage,
   readPreflightedGlobalNotePage,
   readPreflightedGlobalCombinedPage,
+  readPreflightedAuthorizedTitleSearchPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -428,6 +430,20 @@ export class TargetStagingSessionAuthority {
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
       }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.4a: internal title-only search of the authorized global scope.
+   * No HTTP, client-supplied identity, or production search activation. */
+  readAuthorizedTitleSearchPage(
+    actorUserId:string,scope:TargetGlobalTaskScope,query:string,
+    limit:number,offset:number,
+  ):AuthorizedSearchPage|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedAuthorizedTitleSearchPage(
+        this.#store,credential,{scope,query,limit,offset}):null;
     }catch{return null;}
   }
 
