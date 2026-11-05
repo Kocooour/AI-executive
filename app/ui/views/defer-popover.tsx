@@ -2,7 +2,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import { addDays, deferTargets, suggestDeferral } from "../../../lib/defer-suggestion";
-import { attentionEvidenceIsVisible } from "../../../lib/home-today";
+import { attentionEvidenceIsVisible, attentionSubjectChangedSinceEvaluation } from "../../../lib/home-today";
 import { ymd } from "../../../lib/local-dates";
 import { pluralText } from "../../../lib/plural";
 import { isEveningTask, taskDueTone } from "../../../lib/task-views";
@@ -33,7 +33,7 @@ export function CalendarIcon() {
 export function DeferChip({ app, task, fromAttention }: {
   app: LumiApp;
   task: Entity;
-  fromAttention?: { key: string; fingerprint: string; workspaceId: string };
+  fromAttention?: { key: string; fingerprint: string; workspaceId: string; evaluatedAt: number };
 }) {
   const { deferOpen, language, setDeferError, setDeferOpen, today, tr } = app;
   const props = task.properties;
@@ -93,8 +93,9 @@ export function DeferPopover({ app }: { app: LumiApp }) {
   // the rendered list after a successful refresh, including "Show fewer".
   const currentEvidence = !deferOpen || deferOpen.origin !== "attention" || Boolean(evidence &&
     attentionEvidenceIsVisible({ ...evidence, taskId: deferOpen.taskId }, visibleAttention, showAllAttention));
+  const locallyChanged = Boolean(evidence && attentionSubjectChangedSinceEvaluation(task, evidence.evaluatedAt));
   const revoked = Boolean(deferOpen?.origin === "attention" &&
-    (attentionActionsBlocked || !currentEvidence || !deferOpen.anchor.isConnected));
+    (attentionActionsBlocked || !currentEvidence || locallyChanged || !deferOpen.anchor.isConnected));
 
   // Check the anchor again *after* React commits. During a successful Attention
   // refresh it can still be connected in render and then be removed in commit,
@@ -109,13 +110,14 @@ export function DeferPopover({ app }: { app: LumiApp }) {
   });
 
   if (!deferOpen || !task || task.type !== "task" || task.status !== "open" || activeWorkspaceId === "all" || revoked) return null;
-  return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} fromAttention={deferOpen.origin === "attention"} />;
+  return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} fromAttention={deferOpen.origin === "attention" ? evidence : undefined} />;
 }
 
-function DeferDialog({ app, task, anchor, fromAttention }: { app: LumiApp; task: Entity; anchor: HTMLElement; fromAttention: boolean }) {
+function DeferDialog({ app, task, anchor, fromAttention }: { app: LumiApp; task: Entity; anchor: HTMLElement; fromAttention?: { evaluatedAt: number } }) {
   const { attentionActionsBlocked, calendarToday, deferBusy, deferError, deferTask, items, language, setDeferOpen, today, tr, visibleDayPlan } = app;
   // A second guard for event handlers already queued when freshness changes.
-  const revoked = fromAttention && (attentionActionsBlocked || !anchor.isConnected);
+  const revoked = Boolean(fromAttention && (attentionActionsBlocked || !anchor.isConnected ||
+    attentionSubjectChangedSinceEvaluation(task, fromAttention.evaluatedAt)));
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const popRef = useRef<HTMLDivElement>(null);
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);

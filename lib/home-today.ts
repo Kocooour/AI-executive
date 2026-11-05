@@ -26,6 +26,16 @@ export function homeTodayList({ todayTasks, attentionItems, limit }: {
 // the reason gets its date chip (the same "When" popover as in the lists) when the task is in local
 // data, still open and the workspace is writable; everything else (waiting follow-ups, projects, a
 // task not in local data, the read-only aggregate) gets "Open".
+// A successful store sync does not guarantee Attention has re-evaluated the same
+// task yet. Compare the local task timestamp to the evidence timestamp even
+// while syncStatus is already "synced".
+export function attentionSubjectChangedSinceEvaluation(
+  subject: Pick<Entity, "updatedAt"> | undefined,
+  evaluatedAt: number,
+): boolean {
+  return Boolean(subject && Number(subject.updatedAt) > evaluatedAt);
+}
+
 export function attentionPrimaryAction(
   candidate: { subjectType: "task" | "project"; ruleId: string },
   subject: Pick<Entity, "type" | "status"> | undefined,

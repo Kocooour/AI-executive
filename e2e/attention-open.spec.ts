@@ -40,6 +40,53 @@ test("a task whose planned day has passed is shown as needing attention", async 
   await expect(await attentionItem(page, title)).toHaveCount(0);
 });
 
+// A local task edit can finish syncing before Attention's GET returns. The old
+// evidence must never regain its date chip during that green-sync interval.
+test("a synced task edit disables stale quick actions while Attention refresh is delayed", async ({ page }) => {
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  const title = `Zastaralý podklad ${Date.now()}`;
+  await page.locator(".capture input").fill(title);
+  await page.locator(".capture input").press("Enter");
+  let taskId = "";
+  await expect.poll(async () => (taskId = (await serverEntities(page)).find((entity) => entity.title === title)?.id || ""), { timeout: 20_000 }).not.toBe("");
+  await page.goto(`/?task=${taskId}`);
+  await waitUntilSynced(page);
+  const yesterday = await pragueDate(page, -1);
+  await page.locator(".detail input[type=date][aria-label='Kdy']").fill(yesterday);
+  await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === yesterday, true);
+  const item = await attentionItem(page, title);
+  await expect(item.locator(".deferChip")).toBeVisible();
+
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let intercepted = 0;
+  await page.route("**/api/attention?**", async (route) => { intercepted++; await held; await route.continue(); });
+  try {
+    await item.locator(".attentionTitleButton").click();
+    await expect(page.locator(".detail input[type=date][aria-label='Kdy']")).toBeVisible();
+    const tomorrow = await pragueDate(page, 1);
+    await page.locator(".detail input[type=date][aria-label='Kdy']").fill(tomorrow);
+    await expectOnServer(page, (entity) => entity.id === taskId && entity.properties?.when === tomorrow, true);
+    await expect.poll(() => page.evaluate(() => [localStorage.getItem("ai-executive-server-synced"), localStorage.getItem("ai-executive-pending-sync")]), { timeout: 20_000 }).toEqual(["1", null]);
+    await page.getByRole("button", { name: "Zavřít", exact: true }).click();
+    const refresh = page.getByRole("button", { name: "Obnovit" }).first();
+    await expect(refresh).toBeEnabled(); // Sync is green, even though the Attention GET is held.
+    await refresh.click();
+    await expect.poll(() => intercepted).toBeGreaterThan(0);
+    await expect(item.locator(".attentionRowStale")).toContainText("Neaktuální");
+    await expect(item.locator(".deferChip")).toHaveCount(0);
+    await expect(item.getByRole("button", { name: `Otevřít: ${title}` })).toBeVisible();
+    await item.getByRole("button", { name: `Proč?: ${title}` }).click();
+    await expect(item.locator(".attentionExplanationChanged")).toContainText("od vyhodnocení změnil");
+    await expect(page.locator(".deferPopover")).toHaveCount(0);
+  } finally {
+    release();
+    await page.unroute("**/api/attention?**");
+  }
+  await expect(item).toHaveCount(0);
+});
+
 // An Attention-origin date popover can already be open when the browser loses
 // its last valid evaluation. It must not remain a way to act on old evidence.
 test("a quick date dialog opened from Attention closes when its evaluation becomes stale", async ({ page }) => {

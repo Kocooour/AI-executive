@@ -1,7 +1,7 @@
 "use client";
 import { describeAttentionSources } from "../../../lib/attention-sources";
 import { useId, useState } from "react";
-import { attentionPrimaryAction } from "../../../lib/home-today";
+import { attentionPrimaryAction, attentionSubjectChangedSinceEvaluation } from "../../../lib/home-today";
 import { attentionReason } from "../format";
 import type { AttentionResponse } from "../types";
 import type { LumiApp } from "../use-lumi-app";
@@ -29,15 +29,16 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
   const sourceTypeKey = (type: string) => ["task", "project", "note", "area"].includes(type) ? type : "attentionSourceRecord";
   const subject = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
   // A row evaluated before the user edited its subject on this device may no longer hold.
-  const changedSince = attentionActionsBlocked && Boolean(subject && Number(subject.updatedAt) > candidate.evaluatedAt);
+  const changedSince = attentionSubjectChangedSinceEvaluation(subject, candidate.evaluatedAt);
+  const rowStale = attentionStale || changedSince;
   // Never offer the quick date edit from an old Attention recommendation. A user
   // can still open the underlying task and review its current local data.
-  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all", attentionActionsBlocked);
+  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all", attentionActionsBlocked || changedSince);
   const open = () => {
     if (subject) void inspect(subject);
     else setAttentionError(tr("attentionDetailMissing"));
   };
-  const busy = Boolean(attentionBusyKey) || attentionActionsBlocked;
+  const busy = Boolean(attentionBusyKey) || attentionActionsBlocked || changedSince;
 
   // The snoozed or dismissed item leaves the list; keyboard focus moves to the item now in its place
   // (or the one before it, or the section heading) instead of falling back to the page.
@@ -62,7 +63,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
           <span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span>
           {candidate.confidence === "limited" && <> · <strong>{tr("attentionLimited")}</strong></>}
           {activeWorkspaceId === "all" && workspaceTitle && <> · {workspaceTitle}</>}
-          {attentionStale && <> · <span className="attentionRowStale">{tr("attentionStale")}</span></>}
+          {rowStale && <> · <span className="attentionRowStale">{tr("attentionStale")}</span></>}
           {changedSince && <> · <strong>{tr("attentionChangedSince")}</strong></>}
           {" "}
           <button type="button" className="attentionWhyToggle"
@@ -73,7 +74,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
       </div>
       <div className="attentionRowActions">
         {primary === "defer" && subject
-          ? <DeferChip app={app} task={subject} fromAttention={{ key: candidate.attentionKey, fingerprint: candidate.sourceFingerprint, workspaceId: candidate.workspaceId }} />
+          ? <DeferChip app={app} task={subject} fromAttention={{ key: candidate.attentionKey, fingerprint: candidate.sourceFingerprint, workspaceId: candidate.workspaceId, evaluatedAt: candidate.evaluatedAt }} />
           : <button type="button" className="attentionOpen attentionOpenAction" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={open}>{tr("attentionOpen")}</button>}
         <PopoverMenu label={`${tr("attentionMoreActions")}: ${candidate.title}`} triggerLabel={`${tr("attentionMoreActions")}: ${candidate.title}`}
           triggerClassName="attentionMenuButton" triggerData={{ "data-attention-menu": "" }} triggerContent={<span aria-hidden="true">⋯</span>}>
@@ -89,7 +90,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
       <div className="attentionMore" id={whyId} hidden={!sourcesOpen}>
           {/* Cached or outdated recommendations are evidence from an earlier evaluation,
               never a statement about the current task. */}
-          {attentionStale && <p className="attentionMeta attentionExplanationStale">{tr("attentionStaleWhy")}</p>}
+          {rowStale && <p className="attentionMeta attentionExplanationStale">{tr("attentionStaleWhy")}</p>}
           {changedSince && <p className="attentionMeta attentionExplanationChanged">{tr("attentionChangedSinceWhy")}</p>}
           {/* Locally visible source names only: no internal IDs or time-zone keys. */}
           <p className="attentionMeta">{tr("attentionEvaluatedAt")}: <time>{evaluatedTime}</time>

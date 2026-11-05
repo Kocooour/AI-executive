@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { attentionPrimaryAction, attentionEvidenceIsVisible } = await import("../lib/home-today.ts");
+const { attentionPrimaryAction, attentionEvidenceIsVisible, attentionSubjectChangedSinceEvaluation } = await import("../lib/home-today.ts");
 
 const overdue = { subjectType: "task", ruleId: "deadline_overdue" };
 const openTask = { type: "task", status: "open" };
@@ -14,6 +14,24 @@ test("a fresh writable task can use the date chip", () => {
 test("a stale, cached or unsynced attention evaluation cannot offer a quick date edit", () => {
   assert.equal(attentionPrimaryAction(overdue, openTask, true, true), "open");
   assert.equal(attentionPrimaryAction({ ...overdue, ruleId: "deadline_soon" }, openTask, true, true), "open");
+});
+
+test("a synced task changed after evaluation invalidates that recommendation", () => {
+  const evidenceAt = 1_000;
+  assert.equal(attentionSubjectChangedSinceEvaluation({ updatedAt: 1_001 }, evidenceAt), true);
+  assert.equal(attentionSubjectChangedSinceEvaluation({ updatedAt: 1_000 }, evidenceAt), false);
+  assert.equal(attentionSubjectChangedSinceEvaluation({ updatedAt: 999 }, evidenceAt), false);
+  assert.equal(attentionSubjectChangedSinceEvaluation(undefined, evidenceAt), false);
+  // This is independent of sync status: stale evidence must not offer an edit.
+  const changed = attentionSubjectChangedSinceEvaluation({ updatedAt: 1_001 }, evidenceAt);
+  assert.equal(attentionPrimaryAction(overdue, openTask, true, changed), "open");
+  // A modal opened before the task edit must also fail its evidence-time guard.
+  const current = { workspaceId: "personal", items: [
+    { attentionKey: "rule-1", sourceFingerprint: "same", subjectId: "task-1" },
+  ] };
+  const source = { key: "rule-1", fingerprint: "same", workspaceId: "personal", taskId: "task-1" };
+  assert.equal(attentionEvidenceIsVisible(source, current, true), true);
+  assert.equal(changed, true);
 });
 
 test("read-only, missing, completed, project and waiting subjects still open details", () => {
