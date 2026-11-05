@@ -10,6 +10,7 @@ import {
 } from "../../lib/target-staging-my-plan-client";
 import {
   msUntilNextLocalMyPlanDay,resumeMyPlanDate,
+  initialMyPlanWakeGate,invalidateMyPlanWakeGate,consumeMyPlanWake,
 } from "../../lib/target-staging-my-plan-lifecycle";
 
 type ReadState=
@@ -125,24 +126,33 @@ export function TargetStagingMyPlanPreview(){
   useEffect(()=>{
     if(!date)return;
     let clockTimer:ReturnType<typeof setTimeout>|undefined;
-    let lastAwake=0;
+    let wakeGate=initialMyPlanWakeGate();
+    const hide=()=>{
+      wakeGate=invalidateMyPlanWakeGate(wakeGate);
+      invalidate("stale");
+    };
     const armClock=()=>{
       if(clockTimer!==undefined)clearTimeout(clockTimer);
       clockTimer=setTimeout(()=>{
         if(document.visibilityState==="visible")wake(true);
         else{
-          invalidate("stale");
+          hide();
           armClock();
         }
       },msUntilNextLocalMyPlanDay());
     };
     const wake=(force=false)=>{
       if(document.visibilityState!=="visible")return;
-      const now=Date.now();
-      // Focus and visibilitychange commonly arrive as a pair.
-      if(!force&&now-lastAwake<350)return;
-      lastAwake=now;
-      if(!navigator.onLine){invalidate("offline");return;}
+      // A real hide/show invalidation must bypass focus event coalescing.
+      // Only duplicate wake events with no intervening hide/offline are skipped.
+      const attempt=consumeMyPlanWake(wakeGate,Date.now(),force);
+      wakeGate=attempt.gate;
+      if(!attempt.reload)return;
+      if(!navigator.onLine){
+        wakeGate=invalidateMyPlanWakeGate(wakeGate);
+        invalidate("offline");
+        return;
+      }
       const chosen=resumeMyPlanDate(date,followToday,new Date());
       invalidate("stale",true);
       if(chosen.changed)setDate(chosen.evaluationDate);
@@ -150,11 +160,14 @@ export function TargetStagingMyPlanPreview(){
       armClock();
     };
     const visibility=()=>{
-      if(document.visibilityState==="hidden")invalidate("stale");
+      if(document.visibilityState==="hidden")hide();
       else wake();
     };
     const foreground=()=>wake();
-    const offline=()=>invalidate("offline");
+    const offline=()=>{
+      wakeGate=invalidateMyPlanWakeGate(wakeGate);
+      invalidate("offline");
+    };
     const online=()=>wake(true);
     document.addEventListener("visibilitychange",visibility);
     window.addEventListener("focus",foreground);
