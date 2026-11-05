@@ -201,11 +201,11 @@ test("UI-04c: preview reorder never falls back to legacy Today/Upcoming or chang
   assert.match(app, /const planReorderSections = mobileDesignV1Preview && mobilePlanPreviewActive/);
   assert.match(app, /buildMyPlanPreview\(\{ entities: items, relations: scopedRelations,/);
   assert.match(app, /excludeTimelineIds: todayTimelineTaskIds,/);
-  assert.match(app, /const planPeers = planTaskDrag[\s\S]*?previewReorderPeers\(planReorderSections!, source\.id, scope, targetEntity\.id\)/);
+  assert.match(app, /const planPeers = planTaskDrag[\s\S]*?previewReorderPeers\(planReorderSections!, source\.id, scope, targetEntity\.id, sortBy\)/);
   assert.match(app, /if \(planTaskDrag && !planPeers\) return/);
   assert.match(app, /if \(planTaskDrag\) return; \/\/ cross-type drops/);
-  assert.match(app, /if \(planTaskDrag && target\.startsWith\("section:"\)\) return/);
-  assert.match(app, /const planPeers = planKeyboard \? previewReorderPeers\(planReorderSections!, entity\.id, scope\)/);
+  assert.match(app, /if \(planTaskDrag && \(sortBy !== "manual" \|\| target\.startsWith\("section:"\)\)\) return/);
+  assert.match(app, /const planPeers = planKeyboard \? previewReorderPeers\(planReorderSections!, entity\.id, scope, undefined, sortBy\)/);
   assert.match(app, /if \(planKeyboard && !planPeers\) return/);
   assert.match(app, /if \(!planTaskDrag && view === "Today"/);
   assert.match(app, /if \(!planKeyboard && view === "Today"/);
@@ -310,4 +310,40 @@ test("UI-04c: approve enforces the reviewed signature inside local write transac
   assert.match(app, /db\.transaction\("rw", db\.entities, async \(\) => \{/);
   assert.match(app, /!loaded \|\| todayProposalTaskSignature\(loaded\) !== expectedTaskSnapshot/);
   assert.match(app, /}, `deferred \$\{choice\}`, false, expectedTaskSnapshot\)/);
+});
+
+
+test("UI-04c: switching from priority sorting before manual reorder avoids rank corruption", () => {
+  const a = entity("A", "task", "personal", { when: day, priority: "high",
+    manualOrders: { "personal:task:Today": 3000 } });
+  const b = entity("B", "task", "personal", { when: day, priority: "medium",
+    manualOrders: { "personal:task:Today": 1000 } });
+  const c = entity("C", "task", "personal", { when: day, priority: "low",
+    manualOrders: { "personal:task:Today": 2000 } });
+  const input = { entities: [a, b, c], relations: [], workspaceId: "personal", today: day };
+  const priority = buildMyPlanPreview({ ...input, sortBy: "priority" });
+  const manual = buildMyPlanPreview({ ...input, sortBy: "manual" });
+  assert.deepEqual(priority[0].groups[0].tasks.map((task) => task.id), ["A", "B", "C"]);
+  assert.deepEqual(manual[0].groups[0].tasks.map((task) => task.id), ["B", "C", "A"]);
+  // Before the fix, moving B below C in priority mode assigned B a rank of
+  // 3000, then switched to manual and displayed C,A,B instead of A,C,B.
+  // No drag or keyboard helper may accept non-manually sorted neighbours.
+  for (const mode of ["priority", "date", "created"]) {
+    assert.equal(previewReorderPeers(priority, "B", "task:Today", "C", mode), null);
+    assert.equal(previewReorderPeers(priority, "B", "task:Today", undefined, mode), null);
+  }
+  assert.deepEqual(previewReorderPeers(manual, "B", "task:Today", "C", "manual")?.map((task) => task.id), ["B", "C", "A"]);
+});
+
+test("UI-04c: reorder edit enters manual sorting before handles appear and closes on sort change", () => {
+  const ui = readFileSync(new URL("../app/ui/views/entity-list.tsx", import.meta.url), "utf8");
+  const hook = readFileSync(new URL("../app/ui/use-lumi-app.tsx", import.meta.url), "utf8");
+  const helper = readFileSync(new URL("../lib/my-plan-preview.ts", import.meta.url), "utf8");
+  assert.match(ui, /if \(myPlanPreview && !reorderPreview && sortBy !== "manual"\) setSortBy\("manual"\)/);
+  assert.match(ui, /if \(myPlanPreview && sortBy !== "manual"\) setReorderPreview\(false\)/);
+  assert.match(ui, /\(!myPlanPreview \|\| sortBy === "manual"\)/);
+  assert.match(ui, /Upravit pořadí ručně/);
+  assert.match(hook, /if \(planTaskDrag && \(sortBy !== "manual" \|\| target\.startsWith\("section:"\)\)\) return/);
+  assert.match(hook, /previewReorderPeers\(planReorderSections!, entity\.id, scope, undefined, sortBy\)/);
+  assert.match(helper, /if \(sortBy !== "manual"\) return null/);
 });
