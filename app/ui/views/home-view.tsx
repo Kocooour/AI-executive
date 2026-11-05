@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { taskDueTone, taskMatchesView } from "../../../lib/task-views";
+import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { mobileDesignV1Preview } from "../navigation";
+import { LumiCompletionControl } from "./lumi-completion-control";
 import { attentionReason, taskDueSummary } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { AttentionItemRow } from "./attention-item";
@@ -141,8 +144,19 @@ export function HomeView({ app }: { app: LumiApp }) {
               onDrop={(event) => acceptNativeDrop(event, `entity:${task.id}`)}
               onClick={() => inspect(task)}
             >
-              {dragHandle(task, "task:Today")}
-              <button className="check" aria-label={`Complete ${task.title}`} onClick={(event) => { event.stopPropagation(); done(task.id); }}>○</button>
+              {!mobileDesignV1Preview && dragHandle(task, "task:Today")}
+              {mobileDesignV1Preview ? (
+                <LumiCompletionControl kind="task"
+                  tone={taskPreviewCompletionTone(task, today)} complete={false}
+                  stateLabel={taskPreviewStateText(taskPreviewCompletionTone(task, today), language)}
+                  actionLabel={`${tr("complete")} ${task.title || tr("untitledItem")}`}
+                  blockedReason={language === "cs" ? "Zvolte konkrétní prostor a vyčkejte na synchronizaci." : "Select a workspace and finish synchronization."}
+                  disabled={activeWorkspaceId === "all" || app.unsent.has(task.id) || app.heldReasons.has(task.id)}
+                  onClick={(event) => { event.stopPropagation(); void done(task.id); }} />
+              ) : (
+                <button type="button" className="check" aria-label={`Complete ${task.title}`}
+                  onClick={(event) => { event.stopPropagation(); void done(task.id); }}>○</button>
+              )}
               <div><strong>{task.title || tr("untitledItem")}<RecordMarks app={app} entity={task} /></strong><small>{taskDueSummary(task, today, language) || (task.properties.priority && task.properties.priority !== "none" ? tr(String(task.properties.priority)) : tr("Today"))}</small></div>
               {activeWorkspaceId !== "all" && <DeferChip app={app} task={task} />}
             </article>
