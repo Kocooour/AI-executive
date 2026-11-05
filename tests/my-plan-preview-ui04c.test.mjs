@@ -130,6 +130,8 @@ test("UI-04c: My Plan preview stays opt-in and preserves legacy Today/other view
   assert.match(today, /myPlanV1EventsTitle/);
   assert.match(today, /data-plan-proposal-review/);
   assert.match(today, /data-plan-proposal-impact/);
+  assert.match(today, /aktualizují se jeho značky Dnes/);
+  assert.match(today, /Its deadline, workspace, Area and other tasks stay unchanged/);
   assert.match(today, /data-plan-proposal-approve/);
   assert.match(today, /data-plan-proposal-reject/);
   assert.match(today, /previewProposal && !proposalReviewed/);
