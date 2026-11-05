@@ -3875,9 +3875,9 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
   }
   /* Selection wins over past-day muting even after DST/week changes. */
   .mobileCalendarDateBubble[data-selected="true"] {
-    color: #fff;
-    background: #8b5cf6;
-    border-color: #8b5cf6;
+    color: var(--v1-on-accent);
+    background: var(--v1-accent);
+    border-color: var(--v1-accent);
   }
   .mobileCalendarDateBubble:focus-visible,
   .mobileCalendarPickerHead button:focus-visible {
