@@ -97,7 +97,9 @@ test("UI-04b review P2: same project status row on phone and desktop, guarded by
   assert.match(list,/const projectListPreview = mobileDesignV1Preview && view === "Projects" && !app.openProject;/);
   assert.doesNotMatch(list,/mobileViewport/, "project row must not be gated by <=700px");
   assert.match(project,/<LumiCompletionControl kind="project"/);
-  assert.match(project,/entityConflicts\(project\)\.length > 0/);
+  assert.match(project,/const hasConflict = entityConflicts\(project\)\.length > 0/);
+  assert.match(project,/heldReasons\.has\(project\.id\) \|\| hasConflict \|\| busy/);
+  assert.match(project,/Resolve the project conflict before changing status/);
   assert.match(css,/\.appShell\[data-design-system="lumi-v1"\] \.taskRowList \.v1ProjectRow \{/);
   assert.match(css,/\.v1ProjectRow \.v1ProjectMain/);
 });
