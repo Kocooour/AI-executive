@@ -4059,7 +4059,7 @@ export function useLumiApp() {
     // My Plan's rows may only change manual rank inside their current visible
     // day + Area. Dragging onto a legacy section must not reschedule them.
     const planTaskDrag = planReorderSections !== null && source.type === "task";
-    if (planTaskDrag && target.startsWith("section:")) return;
+    if (planTaskDrag && (sortBy !== "manual" || target.startsWith("section:"))) return;
     if (target.startsWith("section:")) {
       await moveTaskToSection(source, target.slice("section:".length));
       return;
@@ -4069,7 +4069,7 @@ export function useLumiApp() {
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
       const planPeers = planTaskDrag
-        ? previewReorderPeers(planReorderSections!, source.id, scope, targetEntity.id)
+        ? previewReorderPeers(planReorderSections!, source.id, scope, targetEntity.id, sortBy)
         : null;
       if (planTaskDrag && !planPeers) return; // no fallback to legacy membership
       let peers = planTaskDrag ? planPeers! :
@@ -4141,7 +4141,7 @@ export function useLumiApp() {
 
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
     const planKeyboard = planReorderSections !== null && entity.type === "task";
-    const planPeers = planKeyboard ? previewReorderPeers(planReorderSections!, entity.id, scope) : null;
+    const planPeers = planKeyboard ? previewReorderPeers(planReorderSections!, entity.id, scope, undefined, sortBy) : null;
     if (planKeyboard && !planPeers) return;
     let peers = planKeyboard ? planPeers! :
       view === "Home" && scope === "task:Today" ? homeTodayTasks
