@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { pluralText } from "../../../lib/plural";
 import { planItemsOutsideToday, planMinutesForTasks, roundedPlanHours } from "../../../lib/today-plan";
-import { pickSummarySuggestion } from "../../../lib/today-summary";
+import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../../../lib/today-summary";
 import { buildMyPlanPreview } from "../../../lib/my-plan-preview";
 import { mobileDesignV1Preview } from "../navigation";
 import { inSentenceDate } from "../format";
@@ -34,6 +34,7 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
   const previewDays = planPreviewActive ? buildMyPlanPreview({
     entities: app.items, relations: app.scopedRelations,
     workspaceId: app.activeWorkspaceId, today: app.today, priorityFilter, sortBy,
+    excludeTimelineIds: app.todayTimelineTaskIds, language,
   }) : null;
   const summary = planPreviewActive
     ? app.activeWorkspaceId === "all"
@@ -140,6 +141,17 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     [activeWorkspaceId, today, app.mobilePlanPreviewActive]);
   const storedHidden = (() => { try { return localStorage.getItem(hiddenKey(activeWorkspaceId)) || ""; } catch { return ""; } })();
   const hiddenDay = storedHidden === today || hiddenHere.includes(`${activeWorkspaceId}|${today}`) ? today : "";
+  // Derive the proposal candidates from the same scoped, filtered, rendered
+  // Area groups as EntityList. Calendar-linked tasks are in the timeline,
+  // not this Dnes list. Legacy Today keeps its own selection unchanged.
+  const previewProposal = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const visibleToday = previewProposal ? buildMyPlanPreview({
+    entities: items, relations: app.scopedRelations, workspaceId: activeWorkspaceId,
+    today, priorityFilter: app.priorityFilter, sortBy: app.sortBy,
+    excludeTimelineIds: app.todayTimelineTaskIds, language,
+  })[0] : null;
+  const previewTodayTasks = visibleToday?.groups.flatMap((group) => group.tasks) ?? [];
+  const previewTodayTaskIds = previewProposal ? new Set(previewTodayTasks.map((task) => task.id)) : undefined;
   const todayIds = new Set(todayTasks.map((task) => task.id));
 
   // Plan items for tasks that are not planned for today are not rows; one quiet line counts them.
@@ -151,14 +163,14 @@ export function TodayFooter({ app }: { app: LumiApp }) {
   const calendarOverloaded = Boolean(visibleDayPlan && visibleDayPlan.calendar === "ready" && visibleDayPlan.overloaded &&
     visibleDayPlan.date === calendarToday && calendarToday === today);
   const picked = activeWorkspaceId === "all" || hiddenDay === today ? null : pickSummarySuggestion({
-    ordered: collection.filter((task) => task.type === "task"),
-    todayCount: todayTasks.length,
+    ordered: previewProposal ? previewTodayTasks : collection.filter((task) => task.type === "task"),
+    todayCount: previewProposal ? previewTodayTasks.length : todayTasks.length,
     openTasks: items.filter((item) => item.type === "task" && item.status === "open" && item.workspaceId === activeWorkspaceId),
     today,
     calendarOverloaded,
+    todayTaskIds: previewTodayTaskIds,
   });
-  const proposalKey = picked ? `${picked.task.id}:${picked.suggestion.target}` : null;
-  const previewProposal = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const proposalKey = picked ? todayProposalReviewKey(picked, activeWorkspaceId, today) : null;
   const proposalReviewed = previewProposal && proposalKey !== null && reviewedProposal === proposalKey;
   const sentence = picked && fill(tr(picked.suggestion.reason), {
     todayCount: picked.suggestion.params.todayCount,
@@ -190,7 +202,7 @@ export function TodayFooter({ app }: { app: LumiApp }) {
           <div className="todaySuggestionActions">
             {previewProposal && !proposalReviewed ? (
               <button type="button" className="primaryAction" data-plan-proposal-review=""
-                onClick={() => setReviewedProposal(proposalKey)}>
+                onClick={() => { if (proposalKey) setReviewedProposal(proposalKey); }}>
                 {language === "cs" ? "Posoudit" : "Review"}
               </button>
             ) : (
@@ -204,7 +216,17 @@ export function TodayFooter({ app }: { app: LumiApp }) {
                 )}
                 <button type="button" className="primaryAction" disabled={deferBusy}
                   data-plan-proposal-approve={previewProposal ? picked.task.id : undefined}
-                  onClick={() => void deferTask(picked.task, picked.suggestion.target, "lumi")}>
+                  onClick={() => {
+                    if (!previewProposal) { void deferTask(picked.task, picked.suggestion.target, "lumi"); return; }
+                    // Recheck the exact reviewed evidence at click time, then
+                    // require the latest stored task snapshot to still match
+                    // inside the transactional write path.
+                    if (!proposalReviewed || !proposalKey ||
+                      reviewedProposal !== todayProposalReviewKey(picked, activeWorkspaceId, today)) return;
+                    setReviewedProposal(null);
+                    void deferTask(picked.task, picked.suggestion.target, "lumi",
+                      todayProposalTaskSignature(picked.task));
+                  }}>
                   {previewProposal ? (language === "cs" ? "Schválit" : "Approve") : tr("deferApply")}
                 </button>
                 <button type="button" data-plan-proposal-reject={previewProposal ? picked.task.id : undefined}
