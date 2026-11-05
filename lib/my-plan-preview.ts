@@ -3,6 +3,8 @@
  */
 import type { Entity, Relation } from "./db";
 import { byManualOrder, manualOrder } from "./task-views";
+import { entityConflicts } from "./field-merge";
+import { isSendable } from "./sendable";
 import { projectAreaPreviewTone, type ProjectAreaTone } from "./project-list-preview";
 
 export interface PreviewAreaGroup {
@@ -213,4 +215,29 @@ export function previewManualRankUpdates(
   if (planned.some((item) => !Number.isFinite(item.rank))) return null;
   return planned.filter(({ id, rank }) =>
     manualOrder(allAreaPeers.find((item) => item.id === id)!, scope) !== rank);
+}
+
+
+/** Preview-only write gate, evaluated before and again inside the Dexie
+ * transaction. Every entity that would receive a new rank must be writable;
+ * a blocked hidden peer must invalidate the *entire* move, never be skipped.
+ * This is not an ACL substitute: the caller must separately verify its active
+ * writable workspace and session.
+ */
+export function previewRankWritesAllowed(
+  updates: readonly PreviewRankUpdate[], records: readonly Entity[], workspaceId: string,
+  heldIds: ReadonlySet<string>, unsentIds: ReadonlySet<string>,
+): boolean {
+  if (!updates.length || !workspaceId || workspaceId === "all") return false;
+  const recordsById = new Map(records.map((item) => [item.id, item]));
+  const ids = new Set<string>();
+  for (const { id, rank } of updates) {
+    const item = recordsById.get(id);
+    if (!item || ids.has(id) || !Number.isFinite(rank) ||
+      item.type !== "task" || item.status !== "open" ||
+      item.workspaceId !== workspaceId || heldIds.has(id) || unsentIds.has(id) ||
+      !isSendable(item) || entityConflicts(item).length > 0) return false;
+    ids.add(id);
+  }
+  return true;
 }
