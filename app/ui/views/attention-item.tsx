@@ -84,8 +84,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
           </>}
         </PopoverMenu>
       </div>
-      {sourcesOpen && (
-        <div className="attentionMore" id={whyId}>
+      <div className="attentionMore" id={whyId} hidden={!sourcesOpen}>
           {/* Locally visible source names only: no internal IDs or time-zone keys. */}
           <p className="attentionMeta">{tr("attentionEvaluatedAt")}: <time>{evaluatedTime}</time>
             {activeWorkspaceId === "all" && workspaceTitle ? " · " + workspaceTitle : ""}</p>
@@ -95,8 +94,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
             {sourceMissing > 0 && <li>{tr("attentionSourceMissing")}{sourceMissing > 1 ? ` (${sourceMissing})` : ""}</li>}
             {sourceRecords.length === 0 && sourceClaims === 0 && sourceMissing === 0 && <li>{tr("attentionSourceUnknown")}</li>}
           </ul>
-        </div>
-      )}
+      </div>
     </article>
   );
 }
