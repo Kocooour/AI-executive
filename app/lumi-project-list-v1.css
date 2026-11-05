@@ -26,7 +26,9 @@
     padding: 10px 12px;
     border-radius: 16px;
     background: color-mix(in srgb, var(--v1-area-color) 72%, var(--surface));
-    border: 1px solid color-mix(in srgb, var(--v1-area-color) 42%, var(--line));
+    /* Unlabeled Areas need a visible structural edge in both themes.
+       The neutral outline is >= 3:1 against every light/dark pastel fill. */
+    border: 1px solid var(--v1-neutral-stroke);
   }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: var(--v1-area-personal); }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="work"] { --v1-area-color: var(--v1-area-work); }
@@ -40,12 +42,12 @@
      light text and the status controls accessible. */
   html[data-theme="dark"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
     background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
-    border-color: color-mix(in srgb, var(--v1-area-color) 65%, var(--v1-muted) 35%);
+    /* Keep the contrast-safe group border inherited from the base rule. */
   }
   @media (prefers-color-scheme: dark) {
     html:not([data-theme]) .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
       background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
-      border-color: color-mix(in srgb, var(--v1-area-color) 65%, var(--v1-muted) 35%);
+      /* Keep the contrast-safe group border inherited from the base rule. */
     }
   }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup > .taskRowList {
