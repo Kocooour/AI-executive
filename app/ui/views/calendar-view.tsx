@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { mobileCalendarDateParts, mobileCalendarReadWindow } from "../../../lib/mobile-calendar-day";
+import { calendarV1SurfaceState } from "../../../lib/calendar-ui04d";
 import { MobileCalendarDateStrip } from "./mobile-calendar-date-strip";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import type { CalendarEvent } from "../types";
@@ -17,6 +18,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [mobileViewport, setMobileViewport] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<string | null>(null);
+  const [previewRefreshFailed, setPreviewRefreshFailed] = useState(false);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 700px)");
     const update = () => setMobileViewport(query.matches);
@@ -24,12 +26,16 @@ export function CalendarView({ app }: { app: LumiApp }) {
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  const mobileDayMode = mobileDesignV1Preview && mobileViewport;
+  const previewCalendar = mobileDesignV1Preview;
+  const mobileDayMode = previewCalendar && mobileViewport;
   // No pinned day follows calendarToday across midnight and timezone changes.
   const shownDay = selectedCalendarDay ?? calendarToday;
   const [dayReload, setDayReload] = useState(0);
   const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
   const remoteDay = mobileDayMode && view === "Calendar" && shownDay !== calendarToday;
+  const v1Status = calendarV1SurfaceState({
+    connectedSources: calendarSources.length, fresh: calendarFresh, selectedOtherDay: remoteDay,
+  });
   const dayRange = remoteDay ? mobileCalendarReadWindow(shownDay, calendarToday, calendarTimezone) : null;
   // A source refresh or workspace switch invalidates an earlier loaded day.
   const sourceVersion = calendarSources.map((source) => `${source.id}:${source.revision}:${source.lastSuccessAt}`).join("|");
@@ -68,8 +74,12 @@ export function CalendarView({ app }: { app: LumiApp }) {
   }, [dayKey, dayRange?.from, dayRange?.to, workspaceId]);
   const selectedDayRead = dayRead?.key === dayKey ? dayRead : null;
   const refreshCalendar = () => {
+    setPreviewRefreshFailed(false);
     if (remoteDay) setDayReload((value) => value + 1);
-    void loadCalendar().catch(() => setCalendarStatus(tr("calendarCouldNotBe")));
+    void loadCalendar().catch(() => {
+      setCalendarStatus(tr("calendarCouldNotBe"));
+      setPreviewRefreshFailed(true);
+    });
   };
   const eventCard = (event: CalendarEvent, includeDate = false) => {
     const isOpen = openEventId === event.id;
@@ -107,11 +117,24 @@ export function CalendarView({ app }: { app: LumiApp }) {
   };
   return view === "Calendar" ? <section className="calendarView homeSection" aria-labelledby="calendar-view-title">
     <div className="homeSectionHead"><span id="calendar-view-title"><span className="sectionDot todayDot" />{tr("todaySCalendar")}</span><button type="button" onClick={refreshCalendar}>{tr("refresh")}</button></div>
-    <p className="attentionMeta">{tr("sourceConnectedReadOnly")} · {calendarTimezone}</p>
-    <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
-    {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty" role="status">{tr("calendarStale")} {tr("freeWindowsAreHidden")}</p>}
+    {previewCalendar ? (
+      v1Status === "selected-day" ? null : (
+        <p role="status" data-calendar-v1-status={v1Status}
+          className={`calendarFreshness ${v1Status === "fresh" ? "fresh" : v1Status}`}>
+          {v1Status === "disconnected" ? tr("calendarDisconnected")
+            : v1Status === "stale" ? `${tr("calendarStale")} ${tr("freeWindowsAreHidden")}`
+              : `${freeHours.toFixed(1)} ${tr("freeHours")}`}
+        </p>
+      )
+    ) : (
+      <>
+        <p className="attentionMeta">{tr("sourceConnectedReadOnly")} · {calendarTimezone}</p>
+        <p role="status" className={`calendarFreshness ${calendarSources.length === 0 ? "disconnected" : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? "fresh" : "stale"}`}>{calendarSources.length === 0 ? tr("calendarDisconnected") : calendarFresh && (!mobileDayMode || shownDay === calendarToday) ? `${freeHours.toFixed(1)} ${tr("freeHours")}` : tr("capacityUnknown")}</p>
+        {!calendarFresh && calendarSources.length > 0 && <p className="attentionEmpty" role="status">{tr("calendarStale")} {tr("freeWindowsAreHidden")}</p>}
+        {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
+      </>
+    )}
     <CalendarEventNotice app={app} />
-    {calendarSources.map((source) => <p className="attentionMeta" key={source.id}>{source.label} · {source.lastSuccessAt ? `${tr("lastSync")} ${new Date(source.lastSuccessAt).toLocaleString(language === "cs" ? "cs-CZ" : "en-GB")}` : tr("capacityUnknown")}</p>)}
     {mobileDayMode ? (
       <section className="mobileCalendarDay" aria-labelledby="mobile-calendar-day-heading">
         <MobileCalendarDateStrip selectedDay={shownDay} today={calendarToday} language={language}
@@ -158,6 +181,9 @@ export function CalendarView({ app }: { app: LumiApp }) {
         <section className="calendarOverview" aria-labelledby="calendar-near-term-title"><h3 id="calendar-near-term-title">{tr("calendarNearTerm")}</h3>{nearbyCalendarEventsAll.length === 0 ? <p className="attentionEmpty">{calendarSources.length === 0 ? tr("calendarDisconnected") : tr("noEventsInThe")}</p> : <div className="calendarAgenda">{nearbyCalendarEventsAll.map((event) => eventCard(event, true))}</div>}</section>
       </>
     )}
-    <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{calendarStatus && <p role="status">{calendarStatus}</p>}
+    <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{!previewCalendar && calendarStatus && <p role="status">{calendarStatus}</p>}
+    {previewCalendar && previewRefreshFailed && <p role="alert" data-calendar-v1-refresh-failed>
+      {language === "cs" ? "Obnovení kalendáře se nepodařilo. Zkuste to znovu." : "Calendar refresh failed. Try again."}
+    </p>}
   </section> : null;
 }
