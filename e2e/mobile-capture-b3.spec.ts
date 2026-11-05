@@ -222,8 +222,11 @@ test.describe("B3 mobile Quick Capture", () => {
     await approve.check();
     await modal.getByRole("button", { name: "Přidat úkol" }).click();
     await expect(modal).toHaveCount(0);
-    await expectOnServer(page, (item) =>
-      item.type === "task" && item.title === title && item.workspaceId === workspaceId, true);
+    await expect.poll(() => page.evaluate(async ({ title, workspaceId }) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.entities.some((item: { type: string; title: string; workspaceId: string }) =>
+        item.type === "task" && item.title === title && item.workspaceId === workspaceId);
+    }, { title, workspaceId })).toBe(true);
   });
 
   test("UI-08a: renaming a proposed shared project requires new consent", async ({ page }) => {
@@ -259,9 +262,12 @@ test.describe("B3 mobile Quick Capture", () => {
     await approve.check();
     await modal.getByRole("button", { name: "Přidat úkol" }).click();
     await expect(modal).toHaveCount(0);
-    await expectOnServer(page, (item) =>
-      item.type === "project" && item.title === "Nový sdílený projekt" &&
-      item.workspaceId === workspaceId, true);
+    await expect.poll(() => page.evaluate(async ({ workspaceId }) => {
+      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+      return snapshot.entities.some((item: { type: string; title: string; workspaceId: string }) =>
+        item.type === "project" && item.title === "Nový sdílený projekt" &&
+        item.workspaceId === workspaceId);
+    }, { workspaceId })).toBe(true);
   });
 
   test("saving a captured task clears its draft instead of offering a duplicate", async ({ page }) => {
