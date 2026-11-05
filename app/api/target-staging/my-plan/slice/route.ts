@@ -74,7 +74,7 @@ export async function GET(request:Request):Promise<Response>{
     const next=evaluationDate===null?null:followingDay(evaluationDate);
     const areaFilter=params.get("areaFilter")??"all";
     const rawLimit=params.get("limit");
-    if(!next||!["all","personal","shared"].includes(areaFilter)||
+    if(evaluationDate===null||!next||!["all","personal","shared"].includes(areaFilter)||
       (rawLimit!==null&&!/^(?:[1-9]|[1-9][0-9]|100)$/.test(rawLimit)))
       return answer(400,"Invalid request");
     const limit=rawLimit===null?50:Number(rawLimit);
