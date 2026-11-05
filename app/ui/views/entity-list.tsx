@@ -324,8 +324,8 @@ export function EntityList({ app }: { app: LumiApp }) {
               {myPlanPreview && app.planReorderError && (
                 <p className="myPlanV1ScopeNotice" role="alert" data-plan-reorder-refused>
                   {language === "cs"
-                    ? "Pořadí nebylo změněno. Některý dotčený úkol čeká na synchronizaci, je blokovaný nebo má konflikt. Nejprve dokončete synchronizaci či vyřešte konflikt."
-                    : "Order was not changed. An affected task is pending sync, blocked, or conflicted. Complete synchronization or resolve the conflict first."}
+                    ? "Pořadí nebylo změněno. Některý dotčený úkol čeká na synchronizaci, má konflikt nebo by změnou překročil datový limit. Zkontrolujte synchronizaci, konflikt či velikost úkolu."
+                    : "Order was not changed. An affected task is pending sync, conflicted, or would exceed the data size limit. Check synchronization, conflicts, or task size."}
                 </p>
               )}
               <div
