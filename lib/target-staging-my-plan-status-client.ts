@@ -149,8 +149,9 @@ export async function dispatchMyPlanStatus(
   catch{/* A network interruption cannot establish whether the writer committed. */}
   if(signal?.aborted)return {kind:"uncertain",command};
   if(response){
-    // Auth/scope, syntax and CAS rejections are explicit server refusals.
-    if([400,401,403,404,409].includes(response.status))
+    // 400/409 are pre-commit refusals. A post-commit owner-session check
+    // can return 401, so 401/403/404 do NOT prove absence of a commit.
+    if(response.status===400||response.status===409)
       return {kind:"rejected",reason:errorStatus(response.status)};
     if(response.status===200&&safeResponse(response)){
       try{
@@ -166,9 +167,7 @@ export async function dispatchMyPlanStatus(
   const receipt=await checkMyPlanStatusReceipt(command,fetchImpl,signal);
   return receipt.kind==="committed"
     ?{kind:"committed",command}
-    :receipt.kind==="unknown"&&receipt.reason==="signed-out"
-      ?{kind:"rejected",reason:"signed-out"}
-      :{kind:"uncertain",command};
+    :{kind:"uncertain",command}; // Including denied receipt: never infer no commit.
 }
 
 /** Caller chooses status explicitly. Undo must call this anew with 'open',
