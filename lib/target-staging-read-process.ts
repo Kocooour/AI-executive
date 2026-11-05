@@ -762,10 +762,10 @@ export function parseStagingGlobalCombinedPage(
   if(p.hasMore!== (p.nextPositions!==null))return null;
   const safeNumber=(x:unknown)=>typeof x==="number"&&
     Number.isSafeInteger(x)&&x>=0;
-  const safeId=(x:unknown)=>isReadableStagingProjectId(x)&&
-    typeof x==="string"&&x.trim()===x;
-  const validTitle=(x:unknown)=>typeof x==="string"&&!!x.trim()&&
-    Buffer.byteLength(x,"utf8")<=4096;
+  const safeId=(x:unknown):x is string=>typeof x==="string"&&
+    isReadableStagingProjectId(x)&&x.trim()===x;
+  const validTitle=(x:unknown):x is string=>typeof x==="string"&&
+    !!x.trim()&&Buffer.byteLength(x,"utf8")<=4096;
   const kindRank={project:0,task:1,note:2} as const;
   const items:GlobalCombinedItem[]=[];
   const rowAreas=new Map<string,"private"|"shared">();
