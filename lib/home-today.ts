@@ -30,7 +30,11 @@ export function attentionPrimaryAction(
   candidate: { subjectType: "task" | "project"; ruleId: string },
   subject: Pick<Entity, "type" | "status"> | undefined,
   writable: boolean,
+  evaluationBlocked = false,
 ): "defer" | "open" {
+  // Do not offer the quick date editor from an outdated Attention evaluation.
+  // The source task remains available via "Open" for explicit review.
+  if (evaluationBlocked) return "open";
   if (candidate.subjectType !== "task" || candidate.ruleId === "waiting_follow_up") return "open";
   return writable && subject && subject.type === "task" && subject.status === "open" ? "defer" : "open";
 }
