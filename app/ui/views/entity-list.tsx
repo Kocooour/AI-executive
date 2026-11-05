@@ -68,7 +68,9 @@ export function EntityList({ app }: { app: LumiApp }) {
   } = app;
   const [mobileViewport, setMobileViewport] = useState(false);
   const [reorderPreview, setReorderPreview] = useState(false);
-  useEffect(() => { setReorderPreview(false); }, [view, activeWorkspaceId]);
+  // The edit affordance is per list, not shared across Today/My Plan or a project detail.
+  useEffect(() => { setReorderPreview(false); },
+    [view, activeWorkspaceId, app.mobilePlanPreviewActive, app.openProject?.id]);
   useEffect(() => {
     if (!mobileDesignV1Preview) return;
     const media = window.matchMedia("(max-width: 700px)");
