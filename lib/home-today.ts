@@ -38,3 +38,19 @@ export function attentionPrimaryAction(
   if (candidate.subjectType !== "task" || candidate.ruleId === "waiting_follow_up") return "open";
   return writable && subject && subject.type === "task" && subject.status === "open" ? "defer" : "open";
 }
+
+/** A quick action may continue only while its exact recommendation is present.
+ * Comparing the source fingerprint matters: another rule about the same task
+ * or a new evaluation with different evidence must not inherit the old popover.
+ */
+export function attentionEvidenceIsVisible(
+  evidence: { key: string; fingerprint: string; workspaceId: string; taskId: string },
+  current: { workspaceId: string; items: Array<{ attentionKey: string; sourceFingerprint: string; subjectId: string }> } | null,
+  showAll: boolean,
+): boolean {
+  return Boolean(current && current.workspaceId === evidence.workspaceId &&
+    current.items.slice(0, showAll ? undefined : 5).some((candidate) =>
+      candidate.attentionKey === evidence.key &&
+      candidate.sourceFingerprint === evidence.fingerprint &&
+      candidate.subjectId === evidence.taskId));
+}
