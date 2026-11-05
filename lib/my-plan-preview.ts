@@ -2,7 +2,7 @@
  * The R3-slice target My Plan is the only source of server-authorized membership.
  */
 import type { Entity, Relation } from "./db";
-import { byManualOrder } from "./task-views";
+import { byManualOrder, manualOrder } from "./task-views";
 import { projectAreaPreviewTone, type ProjectAreaTone } from "./project-list-preview";
 
 export interface PreviewAreaGroup {
@@ -152,4 +152,65 @@ export function previewReorderPeers(
     return [...group.tasks];
   }
   return null;
+}
+
+
+export interface PreviewRankUpdate {
+  id: string;
+  rank: number;
+}
+
+/** Produce the visible user's move in the full same-day/Area order, retaining
+ * filtered/timeline rows in their existing slots. Prefer one changed rank;
+ * renumber this Area group only when ties make that rank insufficient.
+ * A null result means the supplied visible/full group snapshots disagree.
+ */
+export function previewManualRankUpdates(
+  orderedVisible: readonly Entity[], allAreaPeers: readonly Entity[], movedId: string, scope: string,
+): PreviewRankUpdate[] | null {
+  if (!orderedVisible.length || !allAreaPeers.length) return null;
+  const visibleIds = new Set(orderedVisible.map((item) => item.id));
+  const fullIds = new Set(allAreaPeers.map((item) => item.id));
+  if (!visibleIds.has(movedId) || visibleIds.size !== orderedVisible.length ||
+    fullIds.size !== allAreaPeers.length || orderedVisible.some((item) => !fullIds.has(item.id))) return null;
+  const allInOneWorkspace = allAreaPeers.every((item) => item.workspaceId === allAreaPeers[0].workspaceId);
+  if (!allInOneWorkspace) return null;
+
+  let cursor = 0;
+  const expected = allAreaPeers.map((item) => visibleIds.has(item.id) ? orderedVisible[cursor++] : item);
+  const sameOrder = expected.every((item, i) => item.id === allAreaPeers[i].id);
+  if (sameOrder) return [];
+  const index = expected.findIndex((item) => item.id === movedId);
+  const moved = expected[index];
+  const before = index > 0 ? manualOrder(expected[index - 1], scope) : null;
+  const after = index + 1 < expected.length ? manualOrder(expected[index + 1], scope) : null;
+  const proposed = before === null ? (after === null ? 1000 : after - 1000)
+    : after === null ? before + 1000 : before + (after - before) / 2;
+  const key = `${moved.workspaceId}:${scope}`;
+  const updated = (entity: Entity, rank: number): Entity => {
+    const original = entity.properties.manualOrders;
+    const orders = original && typeof original === "object" && !Array.isArray(original)
+      ? { ...(original as Record<string, unknown>) } : {};
+    return { ...entity, properties: { ...entity.properties, manualOrders: { ...orders, [key]: rank } } };
+  };
+  if (Number.isFinite(proposed)) {
+    const candidate = allAreaPeers.map((item) => item.id === movedId ? updated(item, proposed) : item)
+      .sort(byManualOrder(scope));
+    if (candidate.every((item, i) => item.id === expected[i].id)) {
+      return [{ id: movedId, rank: proposed }];
+    }
+  }
+
+  // Equal/descending neighbour ranks cannot encode the desired order with a
+  // single interpolation. Normalize only the current Area group, not every
+  // task in this workspace/Today scope, and skip unchanged rows.
+  const ranks = allAreaPeers.map((item) => manualOrder(item, scope));
+  const origin = Math.min(...ranks);
+  const spacing = 1000;
+  const planned = expected.map((item, i) => ({
+    id: item.id, rank: origin + (i * spacing),
+  }));
+  if (planned.some((item) => !Number.isFinite(item.rank))) return null;
+  return planned.filter(({ id, rank }) =>
+    manualOrder(allAreaPeers.find((item) => item.id === id)!, scope) !== rank);
 }
