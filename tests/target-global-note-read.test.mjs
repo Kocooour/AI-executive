@@ -127,8 +127,10 @@ test("note-specific revisions invalidate correct scopes, without exposing body",
   const revision=page(f).revision;
   f.db.prepare("UPDATE notes SET title='Inherited shared note' WHERE id='s-child'").run();
   assert.notEqual(page(f).revision,revision,"content ABA must advance note epoch");
+  const beforeParent=page(f,"bob","shared").revision;
   f.db.prepare("UPDATE projects SET title='Parent changed' WHERE id='family-project'").run();
-  assert.notEqual(page(f,"bob","shared").revision,page(f,"bob","personal").revision);
+  assert.notEqual(page(f,"bob","shared").revision,beforeParent,
+    "a project mutation affects the inherited parent witness");
 });
 
 test("malformed parameters fail closed",()=>{
