@@ -137,7 +137,7 @@ export function EntityList({ app }: { app: LumiApp }) {
           {(!mobileDesignV1Preview || reorderPreview) && dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
             mobileDesignV1Preview ? (
-              <LumiCompletionControl kind="task"
+              <LumiCompletionControl className="check" kind="task"
                 tone={taskPreviewCompletionTone(x, today)}
                 complete={x.status === "completed"}
                 stateLabel={taskPreviewStateText(taskPreviewCompletionTone(x, today), language)}
