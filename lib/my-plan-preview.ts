@@ -72,11 +72,11 @@ export function previewAreaForTask(
  */
 export function buildMyPlanPreview({
   entities, relations, workspaceId, today, excludeTimelineIds = new Set<string>(),
-  priorityFilter = "all", language = "cs",
+  priorityFilter = "all", sortBy = "manual", language = "cs",
 }: {
   entities: Entity[]; relations: Relation[]; workspaceId: string; today: string;
   excludeTimelineIds?: ReadonlySet<string>;
-  priorityFilter?: string; language?: string;
+  priorityFilter?: string; sortBy?: "manual" | "date" | "priority" | "created"; language?: string;
 }): PreviewDaySection[] {
   const tomorrow = tomorrowOf(today);
   const days = ["today", "tomorrow"] as const;
@@ -86,7 +86,25 @@ export function buildMyPlanPreview({
   );
   return days.map((day) => {
     const date = day === "today" ? today : tomorrow;
-    const order = byManualOrder(day === "today" ? "task:Today" : "task:Upcoming");
+    const manual = byManualOrder(day === "today" ? "task:Today" : "task:Upcoming");
+    const rank: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
+    const order = (a: Entity, b: Entity) => {
+      if (sortBy === "created") return b.createdAt - a.createdAt || manual(a, b);
+      if (sortBy === "priority") {
+        const diff = (rank[String(a.properties.priority || "none")] ?? 3) -
+          (rank[String(b.properties.priority || "none")] ?? 3);
+        return diff || manual(a, b);
+      }
+      if (sortBy === "date") {
+        const when = (item: Entity) => {
+          const deadline = item.properties.deadline;
+          const planned = item.properties.when;
+          return isoDay(deadline) ? deadline : isoDay(planned) ? planned : "9999-12-31";
+        };
+        return when(a).localeCompare(when(b)) || manual(a, b);
+      }
+      return manual(a, b);
+    };
     const tasks = selected.filter((item) =>
       previewDayForTask(item, today, tomorrow) === day && !(day === "today" && excludeTimelineIds.has(item.id))
     ).sort(order);
