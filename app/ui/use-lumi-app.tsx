@@ -139,6 +139,9 @@ export function useLumiApp() {
     [calendarUrl, setCalendarUrl] = useState(""),
     [calendarBusy, setCalendarBusy] = useState(false),
     [calendarStatus, setCalendarStatus] = useState(""),
+    // Only current-scope, accepted reads mark a successful Calendar refresh;
+    // a stale/ignored response must never clear a newer request's error.
+    [calendarLoadSucceededVersion, setCalendarLoadSucceededVersion] = useState(0),
     [durableContext, setDurableContext] = useState<DurableContextItem[]>([]),
     [contextScope, setContextScope] = useState<DurableContextItem["scope"]>("me"),
     [contextSensitivity, setContextSensitivity] = useState<DurableContextItem["sensitivity"]>("normal"),
@@ -715,6 +718,7 @@ export function useLumiApp() {
     setCalendarSources(Array.isArray(data.sources) ? data.sources : []);
     setCalendarEvents(Array.isArray(data.events) ? data.events : []);
     setCalendarFreshNow(Date.now());
+    setCalendarLoadSucceededVersion(loadVersion);
   }
 
   async function calendarAction(action: "connect" | "refresh" | "disconnect", sourceId?: string) {
@@ -4340,6 +4344,8 @@ export function useLumiApp() {
     calendarLabel,
     calendarSources,
     calendarStatus,
+    calendarLoadSucceededVersion,
+    getCalendarLoadGeneration: () => calendarLoadVersion.current,
     calendarTimezone,
     calendarToday,
     calendarUrl,
