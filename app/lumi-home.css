@@ -122,6 +122,12 @@
   font-size: 13px;
   line-height: 1.4;
 }
+/* A stale explanation is visible on its own row, not only in the section header.
+   This does not pretend that the recommendation was re-evaluated. */
+.appShell .attentionItem .attentionRowStale { color: var(--warning); font-weight: 650; }
+.appShell .attentionItem .attentionExplanationStale,
+.appShell .attentionItem .attentionExplanationChanged { color: var(--warning); }
+
 .appShell .attentionRowActions {
   display: flex;
   align-items: center;
