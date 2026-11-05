@@ -4,6 +4,8 @@ import { type CaptureSuggestion } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import { DurationInput } from "./duration-input";
 import { fallbackAreaTitle } from "../../../lib/area-ids";
+import { personalWorkspaceId } from "../../../lib/db";
+import { captureDestinationKey, captureNeedsShareConsent } from "../../../lib/capture-destination";
 
 export function CaptureDialog({ app }: { app: LumiApp }) {
   const {
@@ -12,6 +14,9 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    captureWriteWorkspaceId,
+    captureSharedConsentKey,
+    setCaptureSharedConsentKey,
     chooseCaptureType,
     editCaptureDraft,
     discardCaptureDraft,
@@ -35,14 +40,25 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     tr,
     useCaptureSuggestion,
     workspaces,
-    writeWorkspaceId,
   } = app;
   // A task added to a project goes to the project's workspace, so its area has to come from there.
-  const captureWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
-  // The task goes into a project (opened from one, or an accepted suggested one): it takes the project's Area, so no
-  // Area is chosen here (the save would drop it).
-  const targetsProject = Boolean(captureProjectId) ||
-    (captureType === "task" && useCaptureSuggestion && captureProjectAction === "existing" && Boolean(captureSuggestion?.projectId));
+  const effectiveProjectId = captureProjectId ||
+    (captureType === "task" && useCaptureSuggestion && captureProjectAction === "existing" ? captureSuggestion?.projectId || "" : "");
+  const selectedProject = items.find((item) => item.id === effectiveProjectId && item.type === "project");
+  const captureWorkspaceId = selectedProject?.workspaceId || captureWriteWorkspaceId;
+  // A task in a project inherits its Area. The destination cannot be changed by picking
+  // an unrelated Area in the same form.
+  const targetsProject = Boolean(effectiveProjectId);
+  const destinationWorkspace = workspaces.find((workspace) => workspace.workspaceId === captureWorkspaceId);
+  const selectedArea = items.find((item) => item.id === captureAreaId && item.type === "area" &&
+    item.status === "active" && item.workspaceId === captureWorkspaceId);
+  const defaultAreaTitle = fallbackAreaTitle(destinationWorkspace?.properties.kind === "shared" ? "shared" : "personal");
+  const sharedDestination = captureNeedsShareConsent(captureWorkspaceId, personalWorkspaceId);
+  const consentKey = captureDestinationKey({
+    type: captureType, workspaceId: captureWorkspaceId,
+    projectId: effectiveProjectId, areaId: captureType === "task" ? captureAreaId : "",
+    projectAction: captureProjectAction,
+  });
   return (
     <>
       {capture && (
@@ -75,7 +91,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
               <label className="captureWorkspace">
                 {tr("workspace")}
                 <select
-                  value={writeWorkspaceId}
+                  value={captureWriteWorkspaceId}
                   onChange={(event) => selectCaptureWriteWorkspace(event.target.value)}
                 >
                   {workspaces.map((workspace) => (
@@ -86,6 +102,14 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                 </select>
               </label>
             )}
+            <p className="captureDestination" data-testid="capture-destination">
+              {tr("captureDestination")}: <strong>{destinationWorkspace?.title || tr("captureUnknownDestination")}</strong>
+              {captureType === "task" && (
+                <span> · {targetsProject
+                  ? `${tr("project")}: ${selectedProject?.title || tr("captureUnknownDestination")}`
+                  : `${tr("area")}: ${selectedArea?.title || defaultAreaTitle}`}</span>
+              )}
+            </p>
             <input
               className="captureTitleInput"
               autoFocus
@@ -104,7 +128,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                 {tr("area")}
                 <select value={captureAreaId} onChange={(event) => chooseCaptureArea(event.target.value)}>
                   {/* 2a part 4: without a choice a standalone task goes to the workspace's fallback Area. */}
-                  <option value="">{fallbackAreaTitle(workspaces.find((workspace) => workspace.workspaceId === captureWorkspaceId)?.properties.kind === "shared" ? "shared" : "personal")}</option>
+                  <option value="">{defaultAreaTitle}</option>
                   {items.filter((item) => item.type === "area" && item.status === "active" && item.workspaceId === captureWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                     <option key={item.id} value={item.id}>{item.title}</option>
                   ))}
@@ -190,7 +214,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                             }}
                           >
                             <option value="">—</option>
-                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === captureWriteWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                               <option key={item.id} value={item.id}>{item.title}</option>
                             ))}
                           </select>
@@ -292,6 +316,14 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                   </div>
                 )}
               </>
+            )}
+            {sharedDestination && (
+              <label className="captureSharedConfirm" key={consentKey}>
+                <input type="checkbox" required
+                  checked={captureSharedConsentKey === consentKey}
+                  onChange={(event) => setCaptureSharedConsentKey(event.target.checked ? consentKey : "")} />
+                <span>{tr("captureShareApproval")}</span>
+              </label>
             )}
             {draft.trim() && (
               <div className="captureDraftControls">
