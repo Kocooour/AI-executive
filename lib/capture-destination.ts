@@ -11,17 +11,19 @@ export type CaptureDestination = {
   projectId?: string;
   areaId?: string;
   projectAction?: string;
+  newProjectTitle?: string;
 };
 
 export function captureDestinationKey(destination: CaptureDestination): string {
   // A consent is valid only for this exact target, never a different workspace,
-  // type, project or Area selected by the user or suggested asynchronously.
+  // type, project, proposed new-project name, or Area selected by the user or suggested asynchronously.
   return JSON.stringify([
     destination.type,
     destination.workspaceId,
     destination.projectId || "",
     destination.areaId || "",
     destination.projectAction || "none",
+    destination.projectAction === "new" ? (destination.newProjectTitle || "").trim() : "",
   ]);
 }
 
