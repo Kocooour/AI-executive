@@ -23,7 +23,9 @@
 
 **Práce může začít hned**, paralelně s R2d. Nejdřív UI shell a každodenní pracovní plochy, potom bezpečné napojení na cílová data. Na větvích UI-01–UI-08 se **nesmí** vydávat legacy agregované „Vše moje práce“ za cílový autorizovaný globální filtr **Vše** ani za osobní obrazovku `Můj plán`, simulovat produkční práva `viewer/editor/admin`, zapnout default-off staging API nebo sdílet soukromá data na základě klientského filtru. Legacy čtení/zápis může být dočasný vývojový adaptér, nikoli autorita cílového ACL; příznaky pro přepnutí UX nesmějí přepnout produkční store. Tam, kde zatím neexistuje bezpečný endpoint, zůstane funkce vypnutá či pravdivě označená jako nepřístupná.
 
-**UI-06 stav (2026-11-04):** UI-06a je sloučeno v #238 (opt-in mobilní čtverec, souhrn termínu/projektu a stabilní uložení názvu přes breakpoint). UI-06b je rozpracováno v draftu #240: primární poznámky/checklist a jedno rozbalení vedlejších vlastností; navazující review, CI a browser E2E ještě nejsou uzavřeny. Obě části zůstávají default-off a nejsou aktivací R3 oprávnění.
+**UI-06 stav (2026-11-05):** UI-06a (#238) i UI-06b (#240) jsou sloučeny. Mobilní preview má jeden čtvercový ovladač, plánování, poznámky a checklist a jediné rozbalení dalších údajů; DOM/tab pořadí odpovídá zobrazení. Zůstává default-off a nejde o aktivaci R3 oprávnění. Povinné PR CI proběhlo; browser E2E je součástí brány před produkčním deployem.
+
+**UI-07a (rozpracováno, 2026-11-05):** Home má klidný řádek doporučení s lidským důvodem a samostatným přístupným „Proč?“; rozbalení obsahuje známé zdroje a skutečný čas vyhodnocení. Neznámý zdroj je označen jako neznámý, ne technickým ID. Stale/offline/conflict signály a existující menu akcí zůstávají. Bez serverového propojení R3 a bez tvrzení o cílovém ACL.
 
 | Iterace / priorita | Rozsah a hlavní soubory | Předpoklady a akceptace |
 |---|---|---|
