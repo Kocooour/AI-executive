@@ -74,3 +74,28 @@
     flex: 0 0 auto;
   }
 }
+
+/* UI-08a: clear destination and intentional shared-write confirmation. */
+.captureModal > .captureDestination {
+  margin: 4px 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted, var(--text));
+}
+.captureModal > .captureDestination strong {
+  color: var(--text);
+}
+.captureModal > .captureSharedConfirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  min-height: 44px;
+  line-height: 1.45;
+}
+.captureModal > .captureSharedConfirm input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
