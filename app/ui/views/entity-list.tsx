@@ -72,7 +72,7 @@ export function EntityList({ app }: { app: LumiApp }) {
   // The same edit state also controls both task and note handles on ProjectPage.
   const reorderableView = v1ReorderAvailable(view);
   // The edit affordance is per list, not shared across Today/My Plan or a project detail.
-  useEffect(() => { setReorderPreview(false); },
+  useEffect(() => { setReorderPreview(false); app.setPlanReorderError(false); },
     [view, activeWorkspaceId, app.mobilePlanPreviewActive, app.openProject?.id]);
   // Shared project rows render identically on desktop and phone.
   const projectListPreview = mobileDesignV1Preview && view === "Projects" && !app.openProject;
@@ -320,6 +320,13 @@ export function EntityList({ app }: { app: LumiApp }) {
                       ? (language === "cs" ? "Upravit pořadí ručně" : "Reorder manually")
                       : (language === "cs" ? "Upravit pořadí" : "Reorder")}
                 </button>
+              )}
+              {myPlanPreview && app.planReorderError && (
+                <p className="myPlanV1ScopeNotice" role="alert" data-plan-reorder-refused>
+                  {language === "cs"
+                    ? "Pořadí nebylo změněno. Některý dotčený úkol čeká na synchronizaci, je blokovaný nebo má konflikt. Nejprve dokončete synchronizaci či vyřešte konflikt."
+                    : "Order was not changed. An affected task is pending sync, blocked, or conflicted. Complete synchronization or resolve the conflict first."}
+                </p>
               )}
               <div
                 className={
