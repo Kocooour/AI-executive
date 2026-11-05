@@ -2,6 +2,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import { addDays, deferTargets, suggestDeferral } from "../../../lib/defer-suggestion";
+import { attentionEvidenceIsVisible } from "../../../lib/home-today";
 import { ymd } from "../../../lib/local-dates";
 import { pluralText } from "../../../lib/plural";
 import { isEveningTask, taskDueTone } from "../../../lib/task-views";
@@ -90,12 +91,8 @@ export function DeferPopover({ app }: { app: LumiApp }) {
   // The popover may outlive its Attention row. Confirm that the *same* evidence
   // (not merely another recommendation about the same task) still appears in
   // the rendered list after a successful refresh, including "Show fewer".
-  const currentEvidence = deferOpen?.origin !== "attention" || Boolean(evidence &&
-    visibleAttention?.workspaceId === evidence.workspaceId &&
-    visibleAttention.items.slice(0, showAllAttention ? undefined : 5).some((candidate) =>
-      candidate.attentionKey === evidence.key &&
-      candidate.sourceFingerprint === evidence.fingerprint &&
-      candidate.subjectId === deferOpen.taskId));
+  const currentEvidence = !deferOpen || deferOpen.origin !== "attention" || Boolean(evidence &&
+    attentionEvidenceIsVisible({ ...evidence, taskId: deferOpen.taskId }, visibleAttention, showAllAttention));
   const revoked = Boolean(deferOpen?.origin === "attention" &&
     (attentionActionsBlocked || !currentEvidence || !deferOpen.anchor.isConnected));
 
