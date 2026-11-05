@@ -128,6 +128,12 @@ test("UI-04c: My Plan preview stays opt-in and preserves legacy Today/other view
   assert.match(list, /data-my-plan-aggregate-blocked/);
   assert.match(today, /Návrh Lumi/);
   assert.match(today, /myPlanV1EventsTitle/);
+  assert.match(today, /data-plan-proposal-review/);
+  assert.match(today, /data-plan-proposal-impact/);
+  assert.match(today, /data-plan-proposal-approve/);
+  assert.match(today, /data-plan-proposal-reject/);
+  assert.match(today, /previewProposal && !proposalReviewed/);
+  assert.match(today, /useEffect\(\(\) => \{ setReviewedProposal\(null\); \}/);
   assert.match(timeline, /entry\.kind === "event"/);
   assert.match(timeline, /myPlanV1EventIcon/);
   assert.match(css, /\.appShell\[data-my-plan-preview="true"\]/);
