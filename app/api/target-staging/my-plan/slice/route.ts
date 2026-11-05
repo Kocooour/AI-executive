@@ -1,4 +1,4 @@
-/** R3-slice/BE-01: default-off, single-identity My Plan today + tomorrow task read. */
+/** R3-slice/BE-02: default-off, atomic single-identity My Plan two-day read. */
 import {createHash} from "node:crypto";
 import path from "node:path";
 import {authenticationBinding} from "../../../../../lib/auth";
@@ -10,7 +10,7 @@ import {
   stagingIdentityRefusal,verifyStagingIdentityBeforeRelease,verifyStagingReadBeforeRelease,
 } from "../../../../../lib/target-staging-http-identity";
 import {temporalCalendarOrdinal} from "../../../../../lib/target-task-temporal-read-model";
-import {readStagingMyPlanDayInChild} from "../../../../../lib/target-staging-read-process";
+import {readStagingMyPlanTwoDayInChild} from "../../../../../lib/target-staging-read-process";
 import {
   signMyPlanSliceCursor,verifyMyPlanSliceCursor,
 } from "../../../../../lib/target-staging-my-plan-slice-cursor";
@@ -38,7 +38,7 @@ function followingDay(date:string):string|null{
   const result=next.toISOString().slice(0,10);
   return temporalCalendarOrdinal(result)===null?null:result;
 }
-/** Two bounded reads are accepted only from the same complete Area/private epoch. */
+/** Reject a malformed combined child result unless both full epoch witnesses agree. */
 function sameSnapshot(today:MyPlanDayTaskPage,tomorrow:MyPlanDayTaskPage):boolean{
   return today.privateEpoch===tomorrow.privateEpoch&&
     JSON.stringify(today.linearization)===JSON.stringify(tomorrow.linearization)&&
@@ -98,12 +98,12 @@ export async function GET(request:Request):Promise<Response>{
     const offsets=prior?.ok===true?prior.positions:{today:0,tomorrow:0};
     const child={stagingDirectory,expectedRestoreGeneration,ownerUserId,
       ...stagingChildSessionConfig(identity)};
-    // Every read has the same actor, filter and calendar anchor. Their complete
-    // epoch witnesses must agree; otherwise no cross-snapshot composition.
-    const today=await readStagingMyPlanDayInChild(child,filter,"today",
-      evaluationDate,null,limit,offsets.today);
-    const tomorrow=await readStagingMyPlanDayInChild(child,filter,"upcoming",
-      evaluationDate,next,limit,offsets.tomorrow);
+    // One child, one pinned preflighted SQLite read transaction for BOTH days.
+    // Still verify the complete witness against the live store before release.
+    const page=await readStagingMyPlanTwoDayInChild(
+      child,filter,evaluationDate,next,limit,offsets);
+    const today=page?.today??null;
+    const tomorrow=page?.tomorrow??null;
     const release=today&&tomorrow&&sameSnapshot(today,tomorrow)
       ?verifyStagingReadBeforeRelease(
         request,identity,store,ownerUserId,today.linearization,
