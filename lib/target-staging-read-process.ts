@@ -10,6 +10,7 @@ import { temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import type {PersonalWhenWindow,PersonalWhenPage,PersonalWhenItem} from "./target-personal-when-read-model";
 import type {MyPlanTaskDayWindow,MyPlanTaskAreaFilter,MyPlanDayTask,MyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTask,TargetGlobalTaskScope} from "./target-global-task-read-model";
+import type {TargetGlobalProjectPage,TargetGlobalProject} from "./target-global-project-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type { TemporalScope, TemporalStatus, TemporalTask, TemporalTaskPage, TemporalTaskDetail, TargetTemporalTaskLiveGuard, TemporalDueWindow, TemporalDueWindowPage } from "./target-task-temporal-read-model";
 import type { TargetPrivateProjectPage, TargetReadableProject } from "./target-project-read-model";
@@ -78,6 +79,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_TASKS_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_GLOBAL_PROJECTS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_DIRECTORY: config.stagingDirectory,
@@ -732,6 +735,85 @@ export async function readStagingPersonalWhenInChild(
 /** R2d.3m.2: exact private-safe child DTO for global task Vše.
  * Validate the full Area witness, including Areas with no returned tasks.
  * The witness is never part of the public HTTP response. */
+/** R2d.3m.4: fail-closed child DTO for global project index.
+ * Complete Area epochs are internal and must pass a live policy/content check. */
+export function parseStagingGlobalProjectPage(
+  value:unknown,scope:TargetGlobalTaskScope,limit:number,
+):TargetGlobalProjectPage|null{
+  if(!value||typeof value!=="object"||Array.isArray(value)||
+    !["all","personal","shared"].includes(scope)||
+    !Number.isSafeInteger(limit)||limit<1||limit>100)return null;
+  const p=value as Record<string,unknown>;
+  if(Object.keys(p).sort().join(",")!==
+       "areaEpochs,hasMore,linearization,ok,projects,revision,scope"||
+    p.ok!==true||p.scope!==scope||
+    typeof p.revision!=="string"||!REVISION.test(p.revision)||
+    typeof p.hasMore!=="boolean"||!Array.isArray(p.projects)||
+    p.projects.length>limit||(p.hasMore&&p.projects.length!==limit)||
+    !Array.isArray(p.areaEpochs))return null;
+  const projects:TargetGlobalProject[]=[];
+  const rowAreas=new Map<string,"private"|"shared">();
+  for(const raw of p.projects){
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const project=raw as Record<string,unknown>;
+    if(Object.keys(project).sort().join(",")!=="areaId,areaKind,id,title"||
+      !isReadableStagingProjectId(project.id)||typeof project.title!=="string"||
+      typeof project.areaId!=="string"||!project.areaId||
+      (project.areaKind!=="private"&&project.areaKind!=="shared")||
+      (scope==="personal"&&project.areaKind!=="private")||
+      (scope==="shared"&&project.areaKind!=="shared")||
+      (rowAreas.has(project.areaId)&&rowAreas.get(project.areaId)!==project.areaKind))
+      return null;
+    const id=project.id as string;
+    const prev=projects[projects.length-1];
+    if(prev&&Buffer.compare(Buffer.from(prev.id),Buffer.from(id))>=0)
+      return null;
+    rowAreas.set(project.areaId,project.areaKind as "private"|"shared");
+    projects.push({id,title:project.title as string,
+      areaId:project.areaId,areaKind:project.areaKind as "private"|"shared"});
+  }
+  const linearization=parseLinearization(p.linearization,rowAreas);
+  if(!linearization||p.areaEpochs.length!==linearization.areas.length)
+    return null;
+  const areaEpochs:HomeSummaryAreaEpoch[]=[];
+  for(let i=0;i<p.areaEpochs.length;i++){
+    const raw=p.areaEpochs[i];
+    if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+    const a=raw as Record<string,unknown>,w=linearization.areas[i];
+    if(Object.keys(a).sort().join(",")!==
+       "access,areaId,areaKind,contentRevision,policyRevision,projectContentRevision"||
+       a.areaId!==w?.areaId||a.areaKind!==w.areaKind||
+       a.access!==w.access||a.policyRevision!==w.policyRevision||
+       !Number.isSafeInteger(a.contentRevision)||(a.contentRevision as number)<0||
+       !Number.isSafeInteger(a.projectContentRevision)||
+       (a.projectContentRevision as number)<0||
+       (scope==="personal"&&w.areaKind!=="private")||
+       (scope==="shared"&&w.areaKind!=="shared"))return null;
+    if(i>0&&Buffer.compare(
+      Buffer.from(linearization.areas[i-1].areaId),Buffer.from(w.areaId))>=0)
+      return null;
+    areaEpochs.push({
+      areaId:w.areaId,areaKind:w.areaKind,access:w.access,
+      policyRevision:w.policyRevision,contentRevision:a.contentRevision as number,
+      projectContentRevision:a.projectContentRevision as number,
+    });
+  }
+  return {scope,projects,hasMore:p.hasMore as boolean,revision:p.revision,
+    linearization,areaEpochs};
+}
+
+export async function readStagingGlobalProjectPageInChild(
+  config:StagingPersonalReadConfig,scope:TargetGlobalTaskScope,
+  limit:number,offset:number,
+):Promise<TargetGlobalProjectPage|null>{
+  const payload=await runChild(config,"target-staging-global-project-child.mjs",[
+    scope,String(limit),String(offset),
+  ]);
+  const parsed=parseStagingGlobalProjectPage(payload,scope,limit);
+  if(payload!==null&&!parsed)logStagingFailure("global_projects","invalid_child_dto");
+  return parsed;
+}
+
 export function parseStagingGlobalTaskPage(
   value:unknown,scope:TargetGlobalTaskScope,limit:number,
 ):TargetGlobalTaskPage|null{
