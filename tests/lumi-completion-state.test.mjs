@@ -119,3 +119,17 @@ test("UI-04b review P2: real Today control width remains 44px with and without r
   assert.match(css,/\.taskRow\[data-entity-type="task"\] > \.dragHandle::before \{\s*content: none;/,
     "the old oversized touch pseudo-element cannot overlap the new 44px button");
 });
+
+
+test("UI-04b: desktop Projects keep accessible Area blocks in every preview theme",()=>{
+  const css=readFileSync(new URL("../app/lumi-completion-v1.css",import.meta.url),"utf8");
+  assert.match(css,/@media \(min-width: 701px\)/);
+  assert.match(css,/\.projectGroups\[data-projects-preview="lumi-v1"\] > \.projectGroup \{/);
+  assert.match(css,/border: 1px solid var\(--v1-neutral-stroke\);/);
+  for(const area of ["personal","work","family","extra-a","extra-b","extra-c"]){
+    assert.ok(css.includes(`[data-preview-area-tone="${area}"] { --v1-area-color: var(--v1-area-${area}); }`),
+      `desktop missing ${area} Area tone`);
+  }
+  assert.match(css,/html\[data-theme="dark"\] \.appShell\[data-design-system="lumi-v1"\] \.projectGroups/);
+  assert.match(css,/html:not\(\[data-theme\]\) \.appShell\[data-design-system="lumi-v1"\] \.projectGroups/);
+});
