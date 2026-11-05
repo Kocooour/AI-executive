@@ -1,0 +1,39 @@
+/* Isolated read-only staging preview. Never changes legacy Lumi surfaces. */
+.stagingMyPlanPreview{box-sizing:border-box;max-width:880px;margin:0 auto;padding:28px 18px 80px;
+  display:grid;gap:22px;font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+  color:var(--text,#213023);background:var(--surface,#fff);}
+.stagingMyPlanPreview h1{font-size:clamp(27px,4vw,38px);margin:4px 0 8px;}
+.stagingMyPlanPreview h2{margin:0 0 10px;font-size:19px;display:flex;gap:10px;align-items:center;}
+.stagingMyPlanPreview header p{margin:0 0 8px;line-height:1.5;}
+.stagingMyPlanEyebrow{letter-spacing:.08em;text-transform:uppercase;font-size:12px;font-weight:650;}
+.stagingMyPlanToolbar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;padding:12px 0;
+  border-block:1px solid var(--border,#dadfdd);}
+.stagingMyPlanToolbar label{display:flex;flex-direction:column;gap:5px;font-weight:650;font-size:13px;}
+.stagingMyPlanToolbar input,.stagingMyPlanToolbar select,.stagingMyPlanPreview button{
+  font:inherit;font-size:15px;min-height:44px;border:1px solid var(--border,#9da99e);
+  border-radius:10px;padding:8px 12px;color:inherit;background:var(--surface,#fff);}
+.stagingMyPlanPreview button{cursor:pointer;}
+.stagingMyPlanPreview button:disabled{cursor:wait;opacity:.7;}
+.stagingMyPlanPreview :is(button,input,select):focus-visible{outline:3px solid #6e54b9;outline-offset:2px;}
+.stagingMyPlanDay{display:grid;gap:8px;}
+.stagingMyPlanCount{font-size:12px;min-width:25px;min-height:25px;border-radius:99px;
+  background:var(--muted-surface,#e9ece9);display:grid;place-items:center;}
+.stagingMyPlanGroups{display:grid;gap:12px;}
+.stagingMyPlanArea{border:1px solid var(--border,#9da99e);border-radius:16px;padding:8px 12px;
+  background:color-mix(in srgb,var(--surface,#fff) 52%,#d3ead6 48%);}
+.stagingMyPlanArea[data-area-kind="shared"]{background:color-mix(in srgb,var(--surface,#fff) 52%,#d9e7f8 48%);}
+.stagingMyPlanArea ul{list-style:none;padding:0;margin:0;}
+.stagingMyPlanArea li{display:flex;align-items:start;gap:12px;padding:11px 2px;min-width:0;}
+.stagingMyPlanArea li+li{border-top:1px solid var(--border,#cad2cd);}
+.stagingMyPlanSquare{flex:0 0 20px;width:20px;height:20px;border:2px solid currentColor;
+  border-radius:5px;margin-top:2px;box-sizing:border-box;}
+.stagingMyPlanTask{min-width:0;display:grid;gap:3px;overflow-wrap:anywhere;}
+.stagingMyPlanTask strong{font-size:15px;font-weight:650;}
+.stagingMyPlanTask small{font-size:12px;color:var(--muted,#516055);}
+.stagingMyPlanEmpty,.stagingMyPlanScope{font-size:14px;line-height:1.5;color:var(--muted,#516055);}
+.stagingMyPlanWarning{padding:14px;border-radius:10px;border:1px solid #93664c;
+  background:color-mix(in srgb,var(--surface,#fff) 88%,#ecb391);}
+@media(max-width:600px){.stagingMyPlanPreview{padding:20px 12px 85px;}
+  .stagingMyPlanToolbar{align-items:stretch;}
+  .stagingMyPlanToolbar label{flex:1 1 150px;}
+  .stagingMyPlanArea{padding:7px 9px;}}
