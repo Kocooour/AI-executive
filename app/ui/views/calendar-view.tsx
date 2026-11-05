@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { mobileCalendarDateParts, mobileCalendarReadWindow } from "../../../lib/mobile-calendar-day";
-import { calendarV1SurfaceState } from "../../../lib/calendar-ui04d";
+import { calendarV1RefreshFailureVisible, calendarV1SurfaceState, type CalendarV1RefreshFailure } from "../../../lib/calendar-ui04d";
 import { MobileCalendarDateStrip } from "./mobile-calendar-date-strip";
 import { calendarEventDisplay } from "../../../lib/calendar-event-display";
 import type { CalendarEvent } from "../types";
@@ -14,11 +14,13 @@ const fill = (text: string, values: Record<string, string>) => text.replace(/\{(
 
 export function CalendarView({ app }: { app: LumiApp }) {
   const { calendarEventTasks, calendarFresh, createCalendarEventTask, isCalendarEventHidden, nearbyCalendarEventsAll, unhideCalendarEvent, calendarSources, calendarStatus, calendarTimezone, dayPlanStatus, freeHours, freeWindows,
-    activeWorkspaceId, writeWorkspaceId, calendarToday, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
+    activeWorkspaceId, writeWorkspaceId, authState, calendarToday, calendarLoadSucceededVersion, getCalendarLoadGeneration,
+    calendarWorkspaceSelection, language, loadCalendar, setCalendarStatus, setSettingsSection, setView, tr, view } = app;
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [mobileViewport, setMobileViewport] = useState(false);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<string | null>(null);
-  const [previewRefreshFailed, setPreviewRefreshFailed] = useState(false);
+  const [previewRefreshFailure, setPreviewRefreshFailure] = useState<CalendarV1RefreshFailure | null>(null);
+  const refreshContextEpoch = useRef(0);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 700px)");
     const update = () => setMobileViewport(query.matches);
@@ -32,6 +34,18 @@ export function CalendarView({ app }: { app: LumiApp }) {
   const shownDay = selectedCalendarDay ?? calendarToday;
   const [dayReload, setDayReload] = useState(0);
   const workspaceId = activeWorkspaceId === "all" ? writeWorkspaceId : activeWorkspaceId;
+  // CalendarView remains mounted after navigation. End the previous request's
+  // right to show an error on any workspace, auth or screen change.
+  useEffect(() => {
+    refreshContextEpoch.current += 1;
+    setPreviewRefreshFailure(null);
+  }, [workspaceId, view, authState]);
+  const showPreviewRefreshFailure = calendarV1RefreshFailureVisible(previewRefreshFailure, {
+    workspaceId, requestVersion: getCalendarLoadGeneration(),
+    successVersion: calendarLoadSucceededVersion,
+    contextEpoch: refreshContextEpoch.current,
+    view, authenticated: authState === "ready",
+  });
   const remoteDay = mobileDayMode && view === "Calendar" && shownDay !== calendarToday;
   const v1Status = calendarV1SurfaceState({
     connectedSources: calendarSources.length, fresh: calendarFresh, selectedOtherDay: remoteDay,
@@ -74,11 +88,25 @@ export function CalendarView({ app }: { app: LumiApp }) {
   }, [dayKey, dayRange?.from, dayRange?.to, workspaceId]);
   const selectedDayRead = dayRead?.key === dayKey ? dayRead : null;
   const refreshCalendar = () => {
-    setPreviewRefreshFailed(false);
     if (remoteDay) setDayReload((value) => value + 1);
-    void loadCalendar().catch(() => {
-      setCalendarStatus(tr("calendarCouldNotBe"));
-      setPreviewRefreshFailed(true);
+    if (!previewCalendar) {
+      // Preserve legacy status/error handling unchanged.
+      void loadCalendar().catch(() => setCalendarStatus(tr("calendarCouldNotBe")));
+      return;
+    }
+    setPreviewRefreshFailure(null);
+    const contextEpoch = refreshContextEpoch.current;
+    const request = loadCalendar(workspaceId);
+    // loadCalendar increments this synchronously, before its first await.
+    // It is also used by background/Settings reads, not just this button.
+    const requestVersion = getCalendarLoadGeneration();
+    void request.catch(() => {
+      // A newer read, workspace/auth/navigation transition or successful load
+      // supersedes this failure. Never attach the error to another workspace.
+      if (refreshContextEpoch.current !== contextEpoch ||
+          calendarWorkspaceSelection.current !== workspaceId ||
+          getCalendarLoadGeneration() !== requestVersion) return;
+      setPreviewRefreshFailure({ workspaceId, requestVersion, contextEpoch });
     });
   };
   const eventCard = (event: CalendarEvent, includeDate = false) => {
@@ -182,7 +210,7 @@ export function CalendarView({ app }: { app: LumiApp }) {
       </>
     )}
     <button type="button" className="textAction" onClick={() => setView("Today")}>{tr("openTodaySWork")} →</button><button type="button" className="textAction" onClick={() => { setSettingsSection("calendar"); setView("Settings"); }}>{tr("manageCalendars")} →</button>{!previewCalendar && calendarStatus && <p role="status">{calendarStatus}</p>}
-    {previewCalendar && previewRefreshFailed && <p role="alert" data-calendar-v1-refresh-failed>
+    {previewCalendar && showPreviewRefreshFailure && <p role="alert" data-calendar-v1-refresh-failed>
       {language === "cs" ? "Obnovení kalendáře se nepodařilo. Zkuste to znovu." : "Calendar refresh failed. Try again."}
     </p>}
   </section> : null;
