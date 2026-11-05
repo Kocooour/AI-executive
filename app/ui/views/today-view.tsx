@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { pluralText } from "../../../lib/plural";
 import { planItemsOutsideToday, planMinutesForTasks, roundedPlanHours } from "../../../lib/today-plan";
 import { pickSummarySuggestion } from "../../../lib/today-summary";
@@ -135,6 +135,9 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     setView, today, todayTasks, tr, visibleDayPlan } = app;
   // Hidden for the day: kept in this browser per workspace, and in memory when storage is unavailable.
   const [hiddenHere, setHiddenHere] = useState<string[]>([]);
+  const [reviewedProposal, setReviewedProposal] = useState<string | null>(null);
+  useEffect(() => { setReviewedProposal(null); },
+    [activeWorkspaceId, today, app.mobilePlanPreviewActive]);
   const storedHidden = (() => { try { return localStorage.getItem(hiddenKey(activeWorkspaceId)) || ""; } catch { return ""; } })();
   const hiddenDay = storedHidden === today || hiddenHere.includes(`${activeWorkspaceId}|${today}`) ? today : "";
   const todayIds = new Set(todayTasks.map((task) => task.id));
@@ -154,6 +157,9 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     today,
     calendarOverloaded,
   });
+  const proposalKey = picked ? `${picked.task.id}:${picked.suggestion.target}` : null;
+  const previewProposal = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const proposalReviewed = previewProposal && proposalKey !== null && reviewedProposal === proposalKey;
   const sentence = picked && fill(tr(picked.suggestion.reason), {
     todayCount: picked.suggestion.params.todayCount,
     date: inSentenceDate(String(picked.suggestion.params.date), language),
@@ -182,8 +188,31 @@ export function TodayFooter({ app }: { app: LumiApp }) {
             <b>{fill(tr("todaySuggestMove"), { title: picked.task.title || tr("untitledItem"), date: picked.suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(picked.suggestion.target, language) })}</b>
           </p>
           <div className="todaySuggestionActions">
-            <button type="button" className="primaryAction" disabled={deferBusy} onClick={() => void deferTask(picked.task, picked.suggestion.target, "lumi")}>{tr("deferApply")}</button>
-            <button type="button" onClick={hide}>{tr("todaySuggestHide")}</button>
+            {previewProposal && !proposalReviewed ? (
+              <button type="button" className="primaryAction" data-plan-proposal-review=""
+                onClick={() => setReviewedProposal(proposalKey)}>
+                {language === "cs" ? "Posoudit" : "Review"}
+              </button>
+            ) : (
+              <>
+                {previewProposal && (
+                  <p className="myPlanV1ProposalImpact" data-plan-proposal-impact>
+                    {language === "cs"
+                      ? "Dopad: změní se pouze naplánované datum tohoto úkolu, nikoli jeho prostor, Oblast ani ostatní úkoly."
+                      : "Impact: only this task's planned date changes, not its workspace, Area or other tasks."}
+                  </p>
+                )}
+                <button type="button" className="primaryAction" disabled={deferBusy}
+                  data-plan-proposal-approve={previewProposal ? picked.task.id : undefined}
+                  onClick={() => void deferTask(picked.task, picked.suggestion.target, "lumi")}>
+                  {previewProposal ? (language === "cs" ? "Schválit" : "Approve") : tr("deferApply")}
+                </button>
+                <button type="button" data-plan-proposal-reject={previewProposal ? picked.task.id : undefined}
+                  onClick={hide}>
+                  {previewProposal ? (language === "cs" ? "Odmítnout" : "Reject") : tr("todaySuggestHide")}
+                </button>
+              </>
+            )}
           </div>
         </section>
       )}
