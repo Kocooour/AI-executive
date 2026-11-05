@@ -73,7 +73,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
       </div>
       <div className="attentionRowActions">
         {primary === "defer" && subject
-          ? <DeferChip app={app} task={subject} />
+          ? <DeferChip app={app} task={subject} fromAttention />
           : <button type="button" className="attentionOpen attentionOpenAction" aria-label={`${tr("attentionOpen")}: ${candidate.title}`} onClick={open}>{tr("attentionOpen")}</button>}
         <PopoverMenu label={`${tr("attentionMoreActions")}: ${candidate.title}`} triggerLabel={`${tr("attentionMoreActions")}: ${candidate.title}`}
           triggerClassName="attentionMenuButton" triggerData={{ "data-attention-menu": "" }} triggerContent={<span aria-hidden="true">⋯</span>}>
