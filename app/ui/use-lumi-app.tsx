@@ -1650,7 +1650,9 @@ export function useLumiApp() {
   useEffect(() => {
     if (!addressReady || (authState !== "ready" && !offlineViewRef.current)) return;
     const hasRecordLink = new URLSearchParams(window.location.search).has("task");
-    if (hasRecordLink && !deepLinkDone) return;
+    // Even an invalid/ambiguous typed link must survive until the initial
+    // authenticated snapshot has been checked and the generic notice queued.
+    if ((hasRecordLink || requestsTypedRecord(window.location.search)) && !deepLinkDone) return;
     const route = targetFromSearch(window.location.search, addressableViews, startupView);
     // Preserve a direct record URL while local records and the first server
     // synchronization are still loading. Do not publish a transient empty list.
