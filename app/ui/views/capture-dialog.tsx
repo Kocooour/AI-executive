@@ -6,6 +6,7 @@ import { DurationInput } from "./duration-input";
 import { fallbackAreaTitle } from "../../../lib/area-ids";
 import { personalWorkspaceId } from "../../../lib/db";
 import { captureDestinationKey, captureNeedsShareConsent } from "../../../lib/capture-destination";
+import { verifiedProjectAreaTitle } from "../../../lib/capture-area-preview";
 
 export function CaptureDialog({ app }: { app: LumiApp }) {
   const {
@@ -53,6 +54,18 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
   const selectedArea = items.find((item) => item.id === captureAreaId && item.type === "area" &&
     item.status === "active" && item.workspaceId === captureWorkspaceId);
   const defaultAreaTitle = fallbackAreaTitle(destinationWorkspace?.properties.kind === "shared" ? "shared" : "personal");
+  // Only one active Area in the same workspace is a verifiable inherited target.
+  // A missing/ambiguous legacy link is not evidence for a guessed fallback Area.
+  const inheritedAreaTitle = targetsProject ? verifiedProjectAreaTitle(
+    selectedProject,
+    selectedProject ? app.targets(selectedProject.id, "belongs_to_area") : [],
+    items,
+  ) : null;
+  const proposedNewProjectTitle = captureType === "task" && useCaptureSuggestion &&
+    captureProjectAction === "new" ? captureSuggestion?.newProjectSuggestion?.title.trim() || "" : "";
+  const destinationProjectTitle = targetsProject
+    ? selectedProject?.title || tr("captureUnknownDestination")
+    : proposedNewProjectTitle;
   const sharedDestination = captureNeedsShareConsent(captureWorkspaceId, personalWorkspaceId);
   const consentKey = captureDestinationKey({
     type: captureType, workspaceId: captureWorkspaceId,
@@ -106,9 +119,10 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
             )}
             <p className="captureDestination" data-testid="capture-destination">
               {tr("captureDestination")}: <strong>{destinationWorkspace?.title || tr("captureUnknownDestination")}</strong>
-              {(captureType === "task" || targetsProject) && (
+              {destinationProjectTitle && <span> · {tr("project")}: {destinationProjectTitle}</span>}
+              {captureType === "task" && (
                 <span> · {targetsProject
-                  ? `${tr("project")}: ${selectedProject?.title || tr("captureUnknownDestination")}`
+                  ? tr("areaFromProject").replace("{name}", inheritedAreaTitle || tr("captureAreaUnverified"))
                   : `${tr("area")}: ${selectedArea?.title || defaultAreaTitle}`}</span>
               )}
             </p>
