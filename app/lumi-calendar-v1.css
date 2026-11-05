@@ -1,0 +1,16 @@
+/* UI-04d — opt-in Lumi v1 Calendar cleanup. Legacy calendar remains unchanged. */
+@media (max-width: 700px) {
+  .appShell[data-design-system="lumi-v1"].view-calendar .mobileCalendarPickerHead {
+    justify-content: flex-end;
+  }
+
+  /* The Quick Capture FAB is fixed above the bottom navigation. Keep the last
+     timeline/menu action scrollable completely clear of its hit target. */
+  .appShell[data-design-system="lumi-v1"].view-calendar .calendarView {
+    padding-block-end: calc(116px + env(safe-area-inset-bottom));
+  }
+
+  .appShell[data-design-system="lumi-v1"].view-calendar .calendarView :is(button, a):focus-visible {
+    scroll-margin-block-end: calc(152px + env(safe-area-inset-bottom));
+  }
+}
