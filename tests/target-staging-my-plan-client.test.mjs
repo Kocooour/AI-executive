@@ -1,0 +1,157 @@
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import path from "node:path";
+import {test} from "node:test";
+import {
+  appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,
+  parseMyPlanSlice,validMyPlanDate,
+} from "../lib/target-staging-my-plan-client.ts";
+
+const date="2026-11-05";
+const task=(id,on,areaKind="private")=>({
+  taskId:id,title:"Task "+id,projectId:null,
+  areaId:areaKind==="private"?"area-a":"shared-a",
+  areaKind,dueOn:on,whenOn:null,attentionOn:on,
+  ...(areaKind==="shared"?{assignedToMe:true}:{})
+});
+const page=(today,tomorrow,opts={})=>({
+  evaluationDate:date,areaFilter:"all",
+  today:{tasks:today,hasMore:opts.todayMore??false},
+  tomorrow:{tasks:tomorrow,hasMore:opts.tomorrowMore??false},
+  hasMore:(opts.todayMore??false)||(opts.tomorrowMore??false),
+  nextCursor:opts.cursor??null,
+});
+const current=()=>page([task("old","2026-11-04")],
+  [task("shared","2026-11-06","shared")]);
+const params={evaluationDate:date,areaFilter:"all",limit:2};
+const goodResponse=body=>Response.json(body,{
+  headers:{"cache-control":"no-store"},
+});
+
+test("reads real public slice DTO with strict allowlist and both day buckets",async()=>{
+  const expected=current();
+  const result=parseMyPlanSlice(expected,params);
+  assert.deepEqual(result,expected);
+  const r=await fetchMyPlanSlice(params,async(url,opts)=>{
+    assert.equal(opts.method,"GET");
+    assert.equal(opts.credentials,"same-origin");
+    assert.equal(opts.cache,"no-store");
+    assert.equal(opts.redirect,"error");
+    assert.match(String(url),/^\/api\/target-staging\/my-plan\/slice\?/);
+    const q=new URL("http://localhost"+url).searchParams;
+    assert.equal(q.get("evaluationDate"),date);
+    assert.equal(q.get("areaFilter"),"all");
+    assert.equal(q.get("limit"),"2");
+    assert.equal(q.has("cursor"),false);
+    return goodResponse(expected);
+  });
+  assert.deepEqual(r,{ok:true,page:expected});
+});
+
+test("rejects unexpected actor/revision fields, duplicate task, wrong scope and day",()=>{
+  const fixture=current();
+  for(const [name,mutate] of [
+    ["actor leak",x=>{x.today.tasks[0].userId="bob";}],
+    ["raw epochs",x=>{x.areaEpochs=[{areaId:"secret"}];}],
+    ["duplicate",x=>{x.tomorrow.tasks.push({...x.today.tasks[0]});}],
+    ["wrong window",x=>{x.tomorrow.tasks[0].attentionOn=date;
+      x.tomorrow.tasks[0].dueOn=date;}],
+    ["viewer shared",x=>{delete x.tomorrow.tasks[0].assignedToMe;}],
+    ["wrong cursor",x=>{x.nextCursor="not-signed";x.hasMore=true;
+      x.tomorrow.hasMore=true;}],
+    ["unknown area",x=>{x.today.tasks[0].areaKind="world";}],
+    ["secret id",x=>{x.today.tasks[0].taskId="x\0y";}],
+  ]){
+    const item=structuredClone(fixture);
+    mutate(item);
+    assert.equal(parseMyPlanSlice(item,params),null,name);
+  }
+  const personal={...current(),areaFilter:"personal"};
+  assert.equal(parseMyPlanSlice(personal,{...params,areaFilter:"personal"}),null);
+  assert.equal(parseMyPlanSlice(current(),{...params,evaluationDate:"2026-11-06"}),null);
+});
+
+test("bounded cursor pages append without duplicates, reordering or changed scope",()=>{
+  const first=parseMyPlanSlice(page(
+    [task("a","2026-11-04")],[task("b","2026-11-06")],
+    {todayMore:true,tomorrowMore:true,cursor:"abc.def"}),{...params,limit:1});
+  const next=parseMyPlanSlice(page(
+    [task("c","2026-11-05")],[task("d","2026-11-06")]),{...params,limit:1});
+  assert.ok(first&&next);
+  const combined=appendMyPlanSlice(first,next);
+  assert.ok(combined);
+  assert.deepEqual(combined.today.tasks.map(t=>t.taskId),["a","c"]);
+  assert.deepEqual(combined.tomorrow.tasks.map(t=>t.taskId),["b","d"]);
+  assert.equal(combined.hasMore,false);
+  assert.equal(combined.nextCursor,null);
+  assert.equal(appendMyPlanSlice(first,first),null);
+  assert.equal(appendMyPlanSlice(next,first),null);
+  const wrong=structuredClone(next);
+  wrong.evaluationDate="2026-11-06";
+  assert.equal(appendMyPlanSlice(first,wrong),null);
+  const reordered=structuredClone(next);
+  reordered.today.tasks[0].attentionOn="2026-11-03";
+  assert.equal(appendMyPlanSlice(first,reordered),null);
+});
+
+test("401/403 revoke, 409 stale, disabled and network loss never serve old data",async()=>{
+  for(const [status,reason] of [[401,"signed-out"],[403,"signed-out"],
+    [409,"stale"],[404,"unavailable"],[429,"unavailable"],[503,"unavailable"],
+    [400,"invalid-request"]]){
+    const result=await fetchMyPlanSlice(params,async()=>new Response(
+      JSON.stringify(current()),{status,headers:{"cache-control":"no-store"}}));
+    assert.deepEqual(result,{ok:false,reason},String(status));
+  }
+  assert.deepEqual(await fetchMyPlanSlice(params,async()=>{throw Error("offline");}),
+    {ok:false,reason:"offline"});
+  const controller=new AbortController();
+  controller.abort();
+  assert.deepEqual(await fetchMyPlanSlice({...params,signal:controller.signal},
+    async()=>goodResponse(current())),{ok:false,reason:"aborted"});
+});
+
+test("client rejects non-no-store responses, redirects and malformed success",async()=>{
+  const noCache=Response.json(current());
+  assert.deepEqual(await fetchMyPlanSlice(params,async()=>noCache),
+    {ok:false,reason:"invalid-response"});
+  const extra=structuredClone(current());
+  extra.today.privateEpoch=4;
+  assert.deepEqual(await fetchMyPlanSlice(params,async()=>goodResponse(extra)),
+    {ok:false,reason:"invalid-response"});
+  assert.deepEqual(await fetchMyPlanSlice(params,
+    async()=>new Response("not-json",{status:200,headers:{
+      "cache-control":"no-store","content-type":"application/json",
+    }})),{ok:false,reason:"invalid-response"});
+});
+
+test("calendar anchor is strictly local and rejects invalid/leaking input",async()=>{
+  assert.equal(localMyPlanDate(new Date("2026-12-31T12:00:00Z")),
+    new Date("2026-12-31T12:00:00Z").getFullYear()+"-"+String(
+      new Date("2026-12-31T12:00:00Z").getMonth()+1).padStart(2,"0")+"-"+String(
+      new Date("2026-12-31T12:00:00Z").getDate()).padStart(2,"0"));
+  assert.equal(validMyPlanDate("2028-02-29"),true);
+  assert.equal(validMyPlanDate("2026-02-29"),false);
+  assert.equal(validMyPlanDate("2026-11-05T00:00Z"),false);
+  for(const bad of ["2026-02-29","2026-12-31T23:00Z","9999-12-31"]){
+    const result=await fetchMyPlanSlice({...params,evaluationDate:bad},
+      async()=>{throw Error("must not call fetch");});
+    assert.deepEqual(result,{ok:false,reason:"invalid-request"},bad);
+  }
+});
+
+test("preview is hidden behind server-only gate and has no write controls",()=>{
+  const root=path.join(import.meta.dirname,"..");
+  const source=readFileSync(path.join(root,
+    "app/target-staging/my-plan/preview/page.tsx"),"utf8");
+  const ui=readFileSync(path.join(root,
+    "app/ui/target-staging-my-plan-preview.tsx"),"utf8");
+  for(const name of [
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
+    "AI_EXECUTIVE_TARGET_STAGING_MY_PLAN_CLIENT_PREVIEW_ENABLED",
+  ])assert.ok(source.includes(name),name);
+  assert.match(source,/notFound\(\)/);
+  assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|POST|PUT|DELETE)/);
+  assert.doesNotMatch(ui,/indexedDB|localStorage|sessionStorage|serviceWorker/);
+});
