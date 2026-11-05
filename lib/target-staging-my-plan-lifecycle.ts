@@ -20,3 +20,27 @@ export function resumeMyPlanDate(
     ?{evaluationDate:today,changed:true}
     :{evaluationDate,changed:false};
 }
+
+
+/** An authorization invalidation is never coalesced with a previous focus
+ * event. The 350ms window is ONLY for duplicate wake events with no intervening
+ * visibility/offline transition. This gate holds no task or identity data. */
+export type MyPlanWakeGate={
+  lastWakeAt:number;
+  requiresReauthorization:boolean;
+};
+export const initialMyPlanWakeGate=():MyPlanWakeGate=>({
+  lastWakeAt:0,requiresReauthorization:false,
+});
+export function invalidateMyPlanWakeGate(gate:MyPlanWakeGate):MyPlanWakeGate{
+  return {...gate,requiresReauthorization:true};
+}
+export function consumeMyPlanWake(
+  gate:MyPlanWakeGate,now:number,force=false,
+):{reload:boolean;gate:MyPlanWakeGate}{
+  const reload=force||gate.requiresReauthorization||
+    now<gate.lastWakeAt||now-gate.lastWakeAt>=350;
+  return {reload,gate:reload
+    ?{lastWakeAt:now,requiresReauthorization:false}
+    :gate};
+}
