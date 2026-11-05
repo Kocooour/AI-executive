@@ -31,12 +31,22 @@
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: var(--v1-area-personal); }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="work"] { --v1-area-color: var(--v1-area-work); }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="family"] { --v1-area-color: var(--v1-area-family); }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: #f3e8ff; }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: #fef3c7; }
-  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: #cffafe; }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: var(--v1-area-extra-a); }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: var(--v1-area-extra-b); }
+  .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: var(--v1-area-extra-c); }
+  /* The v1 dark Area tokens are already dark surfaces. Mixing just 16% of
+     them into the surrounding surface made groups effectively invisible.
+     A restrained amount of light muted color raises separation while keeping
+     light text and the status controls accessible. */
   html[data-theme="dark"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
-    background: color-mix(in srgb, var(--v1-area-color) 16%, var(--surface));
-    border-color: color-mix(in srgb, var(--v1-area-color) 22%, var(--line));
+    background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+    border-color: color-mix(in srgb, var(--v1-area-color) 65%, var(--v1-muted) 35%);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme]) .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+      background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+      border-color: color-mix(in srgb, var(--v1-area-color) 65%, var(--v1-muted) 35%);
+    }
   }
   .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup > .taskRowList {
     display: grid;
@@ -79,7 +89,7 @@
     place-items: center;
     width: 23px;
     height: 23px;
-    border: 2px solid #64748b;
+    border: 2px solid var(--v1-neutral-stroke);
     border-radius: 50%;
     background: transparent;
     color: transparent;
@@ -88,17 +98,15 @@
     font-weight: 750;
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="warning"] .v1ProjectCircle {
-    border-color: #f59e0b;
-    box-shadow: inset 0 0 0 1px #92400e;
+    border-color: var(--v1-attention-orange);
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="danger"] .v1ProjectCircle {
-    border-color: #ef4444;
-    box-shadow: inset 0 0 0 1px #991b1b;
+    border-color: var(--v1-attention-red);
   }
   .appShell .taskRowList .v1ProjectRow[data-project-tone="complete"] .v1ProjectCircle {
-    border-color: #94a3b8;
-    background: #94a3b8;
-    color: #172033;
+    border-color: var(--v1-completed-fill);
+    background: var(--v1-completed-fill);
+    color: var(--v1-on-accent);
   }
   .appShell .taskRowList .v1ProjectRow .v1ProjectMain {
     display: flex;
