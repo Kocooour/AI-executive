@@ -1,6 +1,6 @@
 "use client";
 import { describeAttentionSources } from "../../../lib/attention-sources";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { attentionPrimaryAction } from "../../../lib/home-today";
 import { attentionReason } from "../format";
 import type { AttentionResponse } from "../types";
@@ -10,18 +10,21 @@ import { PopoverMenu } from "./popover-menu";
 
 type Candidate = AttentionResponse["items"][number];
 
-// One attention item on Home: the title, one line saying why, and one primary action on the right
-// (the task's date chip, or "Open"). Snooze, Dismiss, Sources and (when the chip is primary) Open are
-// in the item's "⋯" menu. The reason, source and evaluation time stay available: the evaluation time
-// is in the section header once and in the expanded sources.
+// One attention item on Home: title, human reason and one primary action.
+// "Proč?" directly reveals the local source evidence and evaluation instant;
+// Snooze and Dismiss remain in the item's "⋯" menu. No new authority or ACL.
 export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: Candidate }) {
   const { actOnAttention, activeWorkspaceId, attentionActionsBlocked, attentionBusyKey, inspect, items, language, scopedRelations, setAttentionError, tr, workspaces } = app;
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const whyId = useId();
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
-  const workspaceTitle = (workspaceId: string) => workspaces.find((workspace) => workspace.workspaceId === workspaceId)?.title || workspaceId;
-  const shortTime = (value: number, timeZone?: string) =>
-    new Date(value).toLocaleString(locale, { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone });
-  const deviceTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Never display a raw workspace ID when the local label is unavailable.
+  const workspaceTitle = workspaces.find((workspace) => workspace.workspaceId === candidate.workspaceId)?.title;
+  const evaluationDate = new Date(candidate.evaluatedAt);
+  // Format the instant in the viewer's local time, not a technical IANA time-zone name.
+  const evaluatedTime = Number.isFinite(evaluationDate.getTime())
+    ? evaluationDate.toLocaleString(locale, { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
+    : tr("attentionUnknown");
   const { records: sourceRecords, claims: sourceClaims, missing: sourceMissing } = describeAttentionSources(candidate.sourceIds, candidate.workspaceId, items, scopedRelations);
   const sourceTypeKey = (type: string) => ["task", "project", "note", "area"].includes(type) ? type : "attentionSourceRecord";
   const subject = items.find((item) => item.id === candidate.subjectId && item.workspaceId === candidate.workspaceId);
@@ -52,8 +55,18 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
     <article className="attentionItem" data-attention-rule={candidate.ruleId}>
       <div className="attentionBody">
         <strong><button type="button" className="attentionOpen attentionTitleButton" onClick={open}>{candidate.title}</button></strong>
-        {/* One line: why, from what (the time of the evaluation is in the section header). */}
-        <p className="attentionWhy"><span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span> · {candidate.confidence === "limited" ? tr("attentionLimited") : candidate.ruleId === "waiting_follow_up" ? tr("attentionRecordedWaiting") : candidate.ruleId === "planned_date_passed" ? tr("attentionRecordedPlanned") : tr("attentionRecorded")}{activeWorkspaceId === "all" && <> · {workspaceTitle(candidate.workspaceId)}</>}{changedSince && <> · <b>{tr("attentionChangedSince")}</b></>}</p>
+        {/* Explain the source and time on demand, without overloading the ordinary row. */}
+        <p className="attentionWhy">
+          <span className="attentionReason">{attentionReason(candidate, language).replace(/\.$/, "")}</span>
+          {candidate.confidence === "limited" && <> · <strong>{tr("attentionLimited")}</strong></>}
+          {activeWorkspaceId === "all" && workspaceTitle && <> · {workspaceTitle}</>}
+          {changedSince && <> · <strong>{tr("attentionChangedSince")}</strong></>}
+          {" "}
+          <button type="button" className="attentionWhyToggle"
+            aria-label={tr("attentionWhyAction") + ": " + candidate.title}
+            aria-controls={whyId} aria-expanded={sourcesOpen}
+            onClick={() => setSourcesOpen((value) => !value)}>{tr("attentionWhyAction")}</button>
+        </p>
       </div>
       <div className="attentionRowActions">
         {primary === "defer" && subject
@@ -67,24 +80,20 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "snooze"); close(false); }}>{tr("attentionSnooze")}</button>
             <button type="button" role="menuitem" aria-label={`${tr("attentionDismiss")}: ${candidate.title}`} disabled={busy}
               onClick={(event) => { void actAndKeepFocus(event.currentTarget, "dismiss"); close(false); }}>{tr("attentionDismiss")}</button>
-            <button type="button" role="menuitem" aria-expanded={sourcesOpen} onClick={() => { setSourcesOpen((current) => !current); close(true); }}>{tr("attentionSourceDetails")}</button>
           </>}
         </PopoverMenu>
       </div>
-      {sourcesOpen && (
-        <div className="attentionMore">
-          {/* What a person can act on: when it was evaluated and which records it rests on, by name.
-              Internal IDs and revision numbers stay out of the view. */}
-          <p className="attentionMeta">{tr("attentionEvaluatedAt")} {shortTime(candidate.evaluatedAt, candidate.timezone)}
-            {activeWorkspaceId === "all" ? ` · ${workspaceTitle(candidate.workspaceId)}` : ""}
-            {candidate.timezone && candidate.timezone !== deviceTimeZone ? ` (${candidate.timezone})` : ""}</p>
+      <div className="attentionMore" id={whyId} hidden={!sourcesOpen}>
+          {/* Locally visible source names only: no internal IDs or time-zone keys. */}
+          <p className="attentionMeta">{tr("attentionEvaluatedAt")}: <time>{evaluatedTime}</time>
+            {activeWorkspaceId === "all" && workspaceTitle ? " · " + workspaceTitle : ""}</p>
           <ul className="attentionSources" aria-label={tr("attentionSourceDetails")}>
             {sourceRecords.map((source) => <li key={source.id}>{tr(sourceTypeKey(source.type))}: {source.title || tr("untitledItem")}</li>)}
             {sourceClaims > 0 && <li>{tr("attentionSourceContext").replace("{n}", String(sourceClaims))}</li>}
             {sourceMissing > 0 && <li>{tr("attentionSourceMissing")}{sourceMissing > 1 ? ` (${sourceMissing})` : ""}</li>}
+            {sourceRecords.length === 0 && sourceClaims === 0 && sourceMissing === 0 && <li>{tr("attentionSourceUnknown")}</li>}
           </ul>
-        </div>
-      )}
+      </div>
     </article>
   );
 }

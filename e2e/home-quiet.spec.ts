@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { heading, seeded, waitUntilSynced } from "./helpers";
+import { heading, removeTasks, seedTasks, seeded, waitUntilSynced } from "./helpers";
 
 // The quiet Home of docs/design-system: a plain title, no status chips while all is well, and
 // every recommendation says why, from what and when on its own line (docs/UX-UI.md, LUMI-UX-001).
@@ -39,7 +39,7 @@ test("workspace context stays visible away from Home", async ({ page }) => {
   await expect(page.locator(".pageIntro .eyebrow")).toContainText("PERSONAL");
 });
 
-test("a recommendation shows reason, source and evaluation time without opening anything", async ({ page }) => {
+test("a recommendation has a calm reason and a keyboard-accessible Why disclosure", async ({ page }) => {
   await page.goto("/");
   await waitUntilSynced(page);
   const item = page.locator(".attentionItem", { hasText: seeded.overdueTask }).first();
@@ -47,22 +47,58 @@ test("a recommendation shows reason, source and evaluation time without opening 
   const why = item.locator(".attentionWhy");
   await expect(why).toBeVisible();
   await expect(why).toContainText("uplynul");
-  await expect(why).toContainText("zaznamenaný termín");
+  await expect(why).not.toContainText("zaznamenaný termín");
   // The evaluation time is shown once, in the section header, not on every item.
   await expect(why).not.toContainText("vyhodnoceno");
   await expect(page.locator(".attentionSection .attentionUpdated")).toHaveCount(1);
   await expect(page.locator(".attentionSection .attentionUpdated")).toContainText(/Aktualizováno \d{1,2}:\d{2}/);
-  // The sources stay one step away, in the item's own Zdroje (in its "⋯" menu), with the evaluation time:
-  // named records, not internal ids or revision numbers.
+  // Source and precise evaluation time are accessed directly via "Proč?".
+  const whyButton = item.getByRole("button", { name: `Proč?: ${seeded.overdueTask}` });
+  await expect(whyButton).toBeVisible();
+  await expect(whyButton).toHaveAttribute("aria-expanded", "false");
+  const panelId = await whyButton.getAttribute("aria-controls");
+  expect(panelId).toBeTruthy();
+  await expect(item.locator(".attentionMore")).toHaveAttribute("id", panelId!);
   await expect(item.locator(".attentionSources")).toBeHidden();
-  await item.getByRole("button", { name: /^Další akce/ }).click();
-  await item.getByRole("menuitem", { name: "Zdroje" }).click();
+  await whyButton.press("Enter");
+  await expect(whyButton).toHaveAttribute("aria-expanded", "true");
   await expect(item.locator(".attentionSources")).toBeVisible();
-  await expect(item.locator(".attentionMore")).toContainText(/vyhodnoceno/i);
+  await expect(item.locator(".attentionMore")).toContainText(/Vyhodnoceno:/i);
   await expect(item.locator(".attentionSources")).toContainText(`Úkol: ${seeded.overdueTask}`);
-  await expect(item.locator(".attentionMore")).not.toContainText("rev.");
+  await expect(item.locator(".attentionMore")).not.toContainText("Europe/Prague");
   await expect(item.locator(".attentionMore")).not.toContainText("revize dat");
   await expect(item.locator(".attentionSources code")).toHaveCount(0);
+  await whyButton.press("Enter");
+  await expect(whyButton).toHaveAttribute("aria-expanded", "false");
+  await expect(item.locator(".attentionSources")).toBeHidden();
+});
+
+test("timed deadline shows its correct local time without exposing an IANA zone", async ({ page }) => {
+  const stamp = Date.now().toString(36);
+  const id = `ui07a-timed-${stamp}`;
+  const title = `Časovaný termín UI07a ${stamp}`;
+  const deadline = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ id, title, properties: { deadline } }]);
+  try {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    const more = page.locator(".attentionSection button.textAction", { hasText: "Zobrazit dalších" });
+    if (await more.count()) await more.click();
+    const item = page.locator(".attentionItem", { hasText: title });
+    await expect(item).toBeVisible();
+    const reason = item.locator(".attentionReason");
+    await expect(reason).toContainText("Termín");
+    // A timed deadline needs an actual clock time and a human time-zone label.
+    await expect(reason).toContainText(/\d{1,2}:\d{2}/);
+    await expect(reason).toContainText(/SEČ|SELČ|CET|CEST|GMT[+-]/);
+    await expect(reason).not.toContainText(/Europe\/Prague/);
+    await item.getByRole("button", { name: `Proč?: ${title}` }).press("Enter");
+    await expect(item.locator(".attentionMore")).toContainText("Vyhodnoceno:");
+  } finally {
+    await removeTasks(page, [id]);
+  }
 });
 
 test("snooze and dismiss are in the item's menu, reachable by mouse and keyboard", async ({ page }) => {
@@ -70,14 +106,14 @@ test("snooze and dismiss are in the item's menu, reachable by mouse and keyboard
   await waitUntilSynced(page);
   const item = page.locator(".attentionItem").first();
   await expect(item).toBeVisible();
-  // Closed: only the primary action and the "⋯" button; snooze and dismiss are not on the row.
+  // Snooze/dismiss remain in the menu; source explanation is a separate visible control.
   await expect(item.getByRole("menuitem")).toHaveCount(0);
   const menuButton = item.getByRole("button", { name: /^Další akce/ });
   await menuButton.focus();
   await page.keyboard.press("Enter");
   await expect(item.getByRole("menuitem", { name: /^Odložit o 24 h/ })).toBeVisible();
   await expect(item.getByRole("menuitem", { name: /^Skrýt/ })).toBeVisible();
-  await expect(item.getByRole("menuitem", { name: "Zdroje" })).toBeVisible();
+  await expect(item.getByRole("menuitem", { name: "Zdroje" })).toHaveCount(0);
   // The first entry has focus; arrows move, Esc closes and gives focus back to the "⋯" button.
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Escape");
@@ -160,6 +196,10 @@ test.describe("on a touch phone", () => {
     const item = page.locator(".attentionItem").first();
     const menuButton = item.getByRole("button", { name: /^Další akce/ });
     await expect(menuButton).toBeVisible();
+    const why = item.getByRole("button", { name: /^Proč\?:/ });
+    await expect(why).toBeVisible();
+    const whyBox = await why.boundingBox();
+    expect(whyBox!.height).toBeGreaterThanOrEqual(44);
     const box = await menuButton.boundingBox();
     expect(box!.height).toBeGreaterThanOrEqual(44);
     expect(box!.width).toBeGreaterThanOrEqual(44);

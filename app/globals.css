@@ -3882,3 +3882,34 @@ input::placeholder, textarea::placeholder { color: var(--muted-light); opacity: 
     outline-offset: 2px;
   }
 }
+
+/* UI-07a: explain recommendations without turning the ordinary row into a
+   diagnostic readout. The source disclosure is always keyboard-accessible. */
+.attentionItem .attentionWhyToggle {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin: -4px 0 -4px 2px;
+  padding: 4px 8px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.attentionItem .attentionWhyToggle:hover {
+  border-color: transparent;
+  color: var(--accent);
+}
+.attentionItem .attentionWhyToggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.attentionItem .attentionMore[hidden] { display: none; }
+@media (max-width: 700px) {
+  .attentionItem .attentionWhyToggle { min-height: 44px; }
+}
