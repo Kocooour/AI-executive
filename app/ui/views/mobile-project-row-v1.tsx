@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { entityConflicts } from "../../../lib/field-merge";
 import type { Entity } from "../../../lib/db";
 import type { ProjectSummary } from "../../../lib/project-summary";
 import { projectPreviewCanToggle, projectPreviewSummary, projectPreviewTone } from "../../../lib/project-list-preview";
@@ -32,7 +33,7 @@ export function MobileProjectRowV1({ app, project, summary, dragScope, reorderEn
   // The current legacy store has no target Area role enforcement here.
   // Never silently mutate a project selected through the aggregated All view.
   const canToggle = projectPreviewCanToggle(project, activeWorkspaceId,
-    unsent.has(project.id) || heldReasons.has(project.id) || busy);
+    unsent.has(project.id) || heldReasons.has(project.id) || entityConflicts(project).length > 0 || busy);
   const changeLabel = `${completed ? tr("reopen") : tr("complete")} ${name}`;
   const writeHint = cs ? "Pro změnu zvolte konkrétní prostor a vyčkejte na synchronizaci." :
     "Select a specific workspace and finish pending synchronization before changing status.";
