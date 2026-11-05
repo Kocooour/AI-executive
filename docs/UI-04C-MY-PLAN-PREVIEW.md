@@ -10,7 +10,7 @@
 - Oblast projektového úkolu se vyhodnocuje ze **stejného workspace** přes `belongs_to_project` a teprve poté přes `belongs_to_area`. Zastaralý přímý odkaz na Oblast u úkolu v projektu nemůže změnit dědičnost. Konfliktní vazby končí v nezařazené skupině. Ignorují se vazby na jiný prostor, neaktivní Oblasti a legacy vlastnosti `areaId`/`projectId`.
 - Kalendářní události dnes zůstávají ve stávajícím interaktivním timeline, ale dostávají jednoduchou značku `▦` (včetně celodenních). Úkol již vykreslený jako položka timeline se v Dnes neopakuje.
 - Existující návrh ze shrnutí dne má viditelný štítek **✦ Návrh Lumi**, tlačítko **Posoudit**, text popisující dopad a až poté explicitní **Schválit/Odmítnout**. Vypnutí náhledu zachová původní akce.
-- Ovládání dokončení a přístupné 44px plochy jsou převzaté z UI-04b. Řazení vyžaduje vstup do režimu úprav; datum a prostor se pouhým řazením nemění. Zítra nepoužívá Today time cell ani rychlé odložení.
+- Ovládání dokončení a přístupné 44px plochy jsou převzaté z UI-04b. Řazení vyžaduje vstup do režimu úprav a **klávesnice i dotykové / HTML drag-and-drop vybírají sousedy pouze z viditelného oddílu dne a stejné zděděné Oblasti**; deadline-only úkoly v Dnes a zítřejší úkoly se řadí stejně jako jiné viditelné položky. Přesun mezi dny, Oblastmi, skrytými položkami nebo do legacy sekce je v náhledu blokován, nikoli fallback na původní Today/Upcoming seznam. Datum, prostor a vazby se pouhým řazením nemění. Zítra nepoužívá Today time cell ani rychlé odložení.
 
 ## Hranice oprávnění a dat
 
