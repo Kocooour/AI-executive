@@ -280,7 +280,7 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
                 <li key={task.id} className="dayTimelineUntimedRow" data-untimed-task={task.id}
                   style={mobileDesignV1Preview ? undefined : { minHeight: untimedRowHeight(estimate, pxPerMinute) }}>
                   {mobileDesignV1Preview ? (
-                    <LumiCompletionControl kind="task" tone={taskPreviewCompletionTone(task, app.today)} complete={false}
+                    <LumiCompletionControl className="check" kind="task" tone={taskPreviewCompletionTone(task, app.today)} complete={false}
                       stateLabel={taskPreviewStateText(taskPreviewCompletionTone(task, app.today), language)}
                       actionLabel={`${tr("complete")} ${task.title || tr("untitledItem")}`}
                       blockedReason={language === "cs" ? "Zvolte konkrétní prostor a vyčkejte na synchronizaci." : "Select a workspace and finish synchronization."}
