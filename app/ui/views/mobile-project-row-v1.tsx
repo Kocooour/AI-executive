@@ -32,11 +32,14 @@ export function MobileProjectRowV1({ app, project, summary, dragScope, reorderEn
   const cs = language === "cs";
   // The current legacy store has no target Area role enforcement here.
   // Never silently mutate a project selected through the aggregated All view.
+  const hasConflict = entityConflicts(project).length > 0;
   const canToggle = projectPreviewCanToggle(project, activeWorkspaceId,
-    unsent.has(project.id) || heldReasons.has(project.id) || entityConflicts(project).length > 0 || busy);
+    unsent.has(project.id) || heldReasons.has(project.id) || hasConflict || busy);
   const changeLabel = `${completed ? tr("reopen") : tr("complete")} ${name}`;
-  const writeHint = cs ? "Pro změnu zvolte konkrétní prostor a vyčkejte na synchronizaci." :
-    "Select a specific workspace and finish pending synchronization before changing status.";
+  const writeHint = hasConflict
+    ? cs ? "Nejdříve vyřešte konflikt projektu." : "Resolve the project conflict before changing status."
+    : cs ? "Pro změnu zvolte konkrétní prostor a vyčkejte na synchronizaci." :
+      "Select a specific workspace and finish pending synchronization before changing status.";
 
   const toggle = async () => {
     if (!canToggle) return;
