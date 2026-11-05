@@ -45,6 +45,8 @@ import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
+import {readAuthorizedGlobalNotePage} from "./target-global-note-read-model";
+import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter}
   from "./target-my-plan-day-task-read-model";
 import {readAuthorizedPersonalWhenCommandPreview,
@@ -775,6 +777,23 @@ export function readPreflightedPrivateProjectDetail(
       return project ? { ok: true, project } : { ok: false, reason: "unavailable" };
     }, denied),
   );
+}
+
+/** R2d.3m.5: internal global note-title index; one canonical pinned,
+ * actor-bound read. Future HTTP MUST pass the note-sync Area epochs to
+ * the atomic live guard before returning any title. */
+export function readPreflightedGlobalNotePage(
+  store:TargetStagingReadStore,access:TargetStagingReadCredential,
+  request:{scope:TargetGlobalTaskScope;limit:number;offset:number},
+):TargetGlobalNotePage|null{
+  return withPreflightedStore(store,()=>null,(db,preflight)=>
+    inReadSnapshot(db,()=>{
+      if(!preflight(db))return null;
+      const actorUserId=verifiedActor(db,access);
+      return actorUserId?readAuthorizedGlobalNotePage(db,{
+        ...request,actorUserId,restoreGeneration:store.expectedRestoreGeneration,
+      }):null;
+    },()=>null));
 }
 
 /** R2d.3m.3: one canonical pinned, actor-bound global project index.
