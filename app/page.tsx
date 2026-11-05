@@ -56,6 +56,16 @@ export default function App() {
           </div>
         )}
         <Topbar app={app} />
+        {app.navigationUnavailable && (
+          <div className="navigationUnavailableNotice" role="status" data-testid="navigation-unavailable">
+            <p>{language === "cs"
+              ? "Odkaz nelze otevřít. Položka není v aktuálních datech dostupná."
+              : "This link cannot be opened. The item is not available in the current data."}</p>
+            <button type="button" onClick={app.dismissNavigationUnavailable}>
+              {language === "cs" ? "Skrýt upozornění" : "Dismiss notice"}
+            </button>
+          </div>
+        )}
         {mobileDesignV1Preview && app.mobilePlanPreviewActive && view === "Today" && (
           <p className="mobileV1PreviewNotice" role="status" data-plan-source="legacy-today">
             {language === "cs"
