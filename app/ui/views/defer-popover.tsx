@@ -29,7 +29,11 @@ export function CalendarIcon() {
 // The chip is the "When" control: it always shows the planned day. The deadline, which this control
 // never changes, is a separate badge next to it. Rows with a sync/held state keep that state instead
 // (the caller decides).
-export function DeferChip({ app, task, fromAttention = false }: { app: LumiApp; task: Entity; fromAttention?: boolean }) {
+export function DeferChip({ app, task, fromAttention }: {
+  app: LumiApp;
+  task: Entity;
+  fromAttention?: { key: string; fingerprint: string; workspaceId: string };
+}) {
   const { deferOpen, language, setDeferError, setDeferOpen, today, tr } = app;
   const props = task.properties;
   const when = typeof props.when === "string" && DAY.test(props.when) ? props.when : "";
@@ -68,7 +72,7 @@ export function DeferChip({ app, task, fromAttention = false }: { app: LumiApp; 
         onClick={(event) => {
           event.stopPropagation();
           setDeferError(false);
-          setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget, ...(fromAttention ? { origin: "attention" as const } : {}) });
+          setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget, ...(fromAttention ? { origin: "attention" as const, attention: fromAttention } : {}) });
         }}
       >
         {!planned && <CalendarIcon />}
@@ -80,16 +84,33 @@ export function DeferChip({ app, task, fromAttention = false }: { app: LumiApp; 
 
 // Rendered once by the app shell.
 export function DeferPopover({ app }: { app: LumiApp }) {
-  const { activeWorkspaceId, attentionActionsBlocked, deferOpen, items, setDeferOpen } = app;
+  const { activeWorkspaceId, attentionActionsBlocked, deferOpen, items, setDeferOpen, showAllAttention, visibleAttention } = app;
   const task = deferOpen ? items.find((item) => item.id === deferOpen.taskId) : undefined;
-  // Unlike date chips in ordinary task lists, an Attention-origin popover must stop
-  // immediately when the recommendation is no longer fresh. Checking the origin
-  // also works after React has detached the original button from the DOM.
+  const evidence = deferOpen?.attention;
+  // The popover may outlive its Attention row. Confirm that the *same* evidence
+  // (not merely another recommendation about the same task) still appears in
+  // the rendered list after a successful refresh, including "Show fewer".
+  const currentEvidence = deferOpen?.origin !== "attention" || Boolean(evidence &&
+    visibleAttention?.workspaceId === evidence.workspaceId &&
+    visibleAttention.items.slice(0, showAllAttention ? undefined : 5).some((candidate) =>
+      candidate.attentionKey === evidence.key &&
+      candidate.sourceFingerprint === evidence.fingerprint &&
+      candidate.subjectId === deferOpen.taskId));
   const revoked = Boolean(deferOpen?.origin === "attention" &&
-    (attentionActionsBlocked || !deferOpen.anchor.isConnected));
-  useEffect(() => {
-    if (revoked) setDeferOpen((current) => current === deferOpen ? null : current);
-  }, [revoked, deferOpen, setDeferOpen]);
+    (attentionActionsBlocked || !currentEvidence || !deferOpen.anchor.isConnected));
+
+  // Check the anchor again *after* React commits. During a successful Attention
+  // refresh it can still be connected in render and then be removed in commit,
+  // while neither the task nor synchronization state changes.
+  useLayoutEffect(() => {
+    if (deferOpen?.origin !== "attention") return;
+    if (!revoked && deferOpen.anchor.isConnected) return;
+    setDeferOpen((current) => current === deferOpen ? null : current);
+    // The old chip may have been removed with the row. Restore keyboard focus
+    // to the stable Home section heading rather than leaving it on <body>.
+    document.getElementById("attention-title")?.focus();
+  });
+
   if (!deferOpen || !task || task.type !== "task" || task.status !== "open" || activeWorkspaceId === "all" || revoked) return null;
   return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} fromAttention={deferOpen.origin === "attention"} />;
 }
