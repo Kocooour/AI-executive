@@ -10,7 +10,7 @@ Dílčí změna rozhraní nad existujícím legacy kalendářovým zdrojem. Je d
 - U vybraného jiného dne zůstává jediná pravdivá zpráva o nejisté úplnosti kalendáře, existující přechodové stavy Načítám/Chyba/Mimo dostupný rozsah, explicitní Retry a jedna časová osa. Kalendářové filtry, události přes půlnoc, celodenní data a časová zóna pro výpočty se nemění.
 - Datový pás má **zkratku dne nad číslem data**, vybraný den fialový, minulé nevybrané dny šedé, `aria-pressed` a plné datum pro čtečku. Vybírá vždy **jeden den**, bez přepínače 1/3/7. Zrušené duplicitní šipky ‹ › nahrazuje posun pásu a jediný přístupný návrat **Dnes**; výběr okrajové bublinky rozšíří zobrazené datumy dál.
 - Plovoucí Quick Capture se neschovává. Mobilní kalendář s náhledem v1 rezervuje spodní odsazení a `scroll-margin` pro fokus, aby poslední řádky a akce šly odrolovat mimo překryv tlačítkem a spodním menu. Beze změny pozice či chování v legacy UI.
-- Ruční obnovení kalendáře oznámí případné selhání samostatnou dostupnou zprávou. Staré texty typu „připojeno“ se v náhledu nekombinují s odpojeným nebo zastaralým stavem.
+- Ruční obnovení kalendáře oznámí případné selhání samostatnou dostupnou zprávou. Chyba je svázaná s právě vybraným prostorem, návštěvou obrazovky a generací požadavku. Přepnutí prostoru nebo obrazovky a nové úspěšné načtení kalendáře (včetně obnovení na pozadí či v Nastavení) starou chybu skryjí; pozdní zamítnutí staršího souběžného požadavku nesmí přepsat novější výsledek. Staré texty typu „připojeno“ se v náhledu nekombinují s odpojeným nebo zastaralým stavem.
 
 ## Ověření
 
