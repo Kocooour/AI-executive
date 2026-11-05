@@ -136,7 +136,7 @@ test("UI-04c: My Plan preview stays opt-in and preserves legacy Today/other view
   assert.match(today, /data-plan-proposal-approve/);
   assert.match(today, /data-plan-proposal-reject/);
   assert.match(today, /previewProposal && !proposalReviewed/);
-  assert.match(today, /useEffect\(\(\) => \{ setReviewedProposal\(null\); \}/);
+  assert.match(today, /useEffect\(\(\) => \{ setReviewedProposal\(null\); setProposalFailed\(false\); \}/);
   assert.match(timeline, /entry\.kind === "event"/);
   assert.match(timeline, /myPlanV1EventIcon/);
   assert.match(css, /\.appShell\[data-my-plan-preview="true"\]/);
@@ -303,6 +303,8 @@ test("UI-04c: approve enforces the reviewed signature inside local write transac
   assert.match(view, /todayProposalReviewKey\(picked, activeWorkspaceId, today\)/);
   assert.match(view, /!proposalReviewed \|\| !proposalKey/);
   assert.match(view, /todayProposalTaskSignature\(picked\.task\)/);
+  assert.match(view, /data-plan-proposal-retry/);
+  assert.match(view, /if \(!saved\) setProposalFailed\(true\)/);
   assert.match(app, /expectedTaskSnapshot\?: string/);
   assert.match(app, /todayProposalTaskSignature\(stored\) !== expectedTaskSnapshot/);
   assert.match(app, /db\.transaction\("rw", db\.entities, async \(\) => \{/);
