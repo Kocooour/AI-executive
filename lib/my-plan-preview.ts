@@ -136,7 +136,12 @@ export function buildMyPlanPreview({
  */
 export function previewReorderPeers(
   sections: readonly PreviewDaySection[], sourceId: string, scope: string, targetId?: string,
+  sortBy: "manual" | "date" | "priority" | "created" = "manual",
 ): Entity[] | null {
+  // Manual rank interpolation is valid only against manually ordered peers.
+  // Otherwise the moved row can jump to an unrelated position after the UI
+  // switches sorting modes; fail closed even if a stale drag reaches this helper.
+  if (sortBy !== "manual") return null;
   const day = scope === "task:Today" ? "today" : scope === "task:Upcoming" ? "tomorrow" : null;
   if (!day) return null;
   const section = sections.find((candidate) => candidate.day === day);
