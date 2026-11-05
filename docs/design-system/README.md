@@ -5,8 +5,8 @@
 ## Zdroj pravdy, verze a implementační hranice
 
 - [lumi-v1-target-tokens.json](lumi-v1-target-tokens.json): **schválená cílová referenční paleta a stavové invarianty**, oddělená od kódu. Je výchozím podkladem pro implementační PR a kontrastní testy.
-- [tokens.json](tokens.json): **současné legacy runtime tokeny** (původní modrý `accent`, `ws-work`, `ws-family`, `ws-all`) pro stále běžící staré UI. **Nejsou závaznou paletou pro nové obrazovky.**
-- [tokens.css](tokens.css): vygenerovaný výstup ze současného `tokens.json` příkazem `node scripts/design-tokens.mjs`. **Nikdy neupravovat ručně.** Povýšení Lumi v1 do runtime je samostatné cílené UI PR s úpravou kanonických tokenů, regenerací, kontrastními kontrolami a ověřením obou témat. Samotná změna dokumentů nemění běžící vzhled.
+- [tokens.json](tokens.json): **runtime tokeny včetně schválených `v1-*` barev a typografických tříd**, vedle původních legacy tokenů. Nová paleta se aplikuje jen na existující vývojový náhled (`NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1`, atribut `data-design-system="lumi-v1"`); běžné legacy obrazovky se nemění. Barvy prostoru/práce/rodiny ve staré navigaci zatím neznamenají cílové ACL.
+- [tokens.css](tokens.css): **vygenerovaný výstup** příkazem `node scripts/design-tokens.mjs`; **nikdy neupravovat ručně**. UI-T doplnilo v1 semantiku (světlé schválené hodnoty a kontrastně ověřenou prozatímní tmavou paletu), `app/lumi-v1-runtime.css` ji omezuje na opt-in náhled. Kompletní cílové UI, ovladače stavů a aktivace R3 jsou samostatné iterace.
 - `components/<Název>/README.md` a `preview.html`: ilustrativní pravidla a statické ukázky. Mají odrážet cílový Lumi v1, ale **nejsou důkazem dodaného React UI**. Přístup ke skutečné autorizační policy ověřuje server, ne CSS ani ukázka.
 - [zmeny-ui.md](zmeny-ui.md): **historický plán a audit před v1.0**, není konkurenčním návrhem. Cíl je určen UX/UI a tímto dokumentem.
 
