@@ -128,8 +128,10 @@ export function TargetStagingMyPlanPreview(){
       if(clockTimer!==undefined)clearTimeout(clockTimer);
       clockTimer=setTimeout(()=>{
         if(document.visibilityState==="visible")wake(true);
-        else invalidate("stale");
-        armClock();
+        else{
+          invalidate("stale");
+          armClock();
+        }
       },msUntilNextLocalMyPlanDay());
     };
     const wake=(force=false)=>{
