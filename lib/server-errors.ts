@@ -146,6 +146,9 @@ export const serverErrorKeys: Record<string, string> = {
 // Server messages a user does not meet in normal use: requests the app never sends, broken or
 // tampered data, configuration errors, internal markers. They are shown as they are.
 export const developerOnly: ReadonlySet<string> = new Set([
+  // UI-04c internal pure day helper: the caller provides a trusted ISO day;
+  // malformed input is a programmer error, never sent by an API or shown in UI.
+  "Invalid preview day",
   // R2c.3 staging write contract (lib/target-staging-write-contract.ts): staging-only, no UI yet.
   "Resync required",
   "Revision conflict",
