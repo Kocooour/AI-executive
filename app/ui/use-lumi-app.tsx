@@ -1925,7 +1925,8 @@ export function useLumiApp() {
   useEffect(() => {
     setCaptureSharedConsentKey("");
   }, [captureType, captureWriteWorkspaceId, captureProjectId, captureAreaId,
-      captureProjectAction, captureSuggestion?.projectId, useCaptureSuggestion]);
+      captureProjectAction, captureSuggestion?.projectId,
+      captureSuggestion?.newProjectSuggestion?.title, useCaptureSuggestion]);
   // Without access to the server (an offline start) there is no suggestion to wait for: asking would
   // only keep the add button disabled until the request is given up.
   const captureServerUnavailable = authState === "unavailable";
@@ -2618,7 +2619,7 @@ export function useLumiApp() {
     const destinationConsentKey = captureDestinationKey({
       type: captureType, workspaceId: destinationWorkspaceId,
       projectId: suggestedProjectId, areaId: captureType === "task" ? captureAreaId : "",
-      projectAction: captureProjectAction,
+      projectAction: captureProjectAction, newProjectTitle: suggestedNewProjectTitle,
     });
     if (captureNeedsShareConsent(destinationWorkspaceId, personalWorkspaceId) &&
         captureSharedConsentKey !== destinationConsentKey) {
