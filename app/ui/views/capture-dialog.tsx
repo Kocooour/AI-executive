@@ -58,6 +58,8 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
     type: captureType, workspaceId: captureWorkspaceId,
     projectId: effectiveProjectId, areaId: captureType === "task" ? captureAreaId : "",
     projectAction: captureProjectAction,
+    newProjectTitle: captureType === "task" && useCaptureSuggestion && captureProjectAction === "new"
+      ? captureSuggestion?.newProjectSuggestion?.title.trim() || "" : "",
   });
   return (
     <>
@@ -186,12 +188,15 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                             <input
                               value={captureSuggestion.newProjectSuggestion.title}
                               maxLength={120}
-                              onChange={(event) => setCaptureSuggestion({
+                              onChange={(event) => {
+                                setCaptureSharedConsentKey("");
+                                setCaptureSuggestion({
                                 ...captureSuggestion,
                                 newProjectSuggestion: captureSuggestion.newProjectSuggestion
                                   ? { ...captureSuggestion.newProjectSuggestion, title: event.target.value }
                                   : null,
-                              })}
+                                });
+                              }}
                             />
                           </label>
                         )}
