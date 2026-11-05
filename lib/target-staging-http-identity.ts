@@ -123,7 +123,8 @@ export function verifyStagingReadBeforeRelease(
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
-  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope | "global-all" },
+  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope | "global-all";
+    noteAreaEpochs?: {areaId:string;noteSyncRevision:number}[] },
   temporalTaskGuard?: TargetTemporalTaskLiveGuard,
   /** Server-derived actor-private epoch; never accept it from HTTP input. */
   personalPlanGuard?: {privateEpoch:number},
