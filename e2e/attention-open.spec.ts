@@ -61,7 +61,14 @@ test("the last attention evaluation is shown out of date when the server cannot 
   await page.reload();
   await waitUntilSynced(page);
   await expect(page.locator(".attentionStale")).toBeVisible();
-  await expect(page.locator(".attentionItem", { hasText: title }).first()).toBeVisible();
+  const cached = page.locator(".attentionItem", { hasText: title }).first();
+  await expect(cached).toBeVisible();
+  // The stale label must be on the recommendation as well as in the section header.
+  await expect(cached.locator(".attentionRowStale")).toContainText("Neaktuální");
+  await expect(cached.locator(".deferChip")).toHaveCount(0);
+  await expect(cached.getByRole("button", { name: `Otevřít: ${title}` })).toBeVisible();
+  await cached.getByRole("button", { name: `Proč?: ${title}` }).press("Enter");
+  await expect(cached.locator(".attentionExplanationStale")).toContainText("staršího vyhodnocení");
   await page.locator(".attentionItem").first().getByRole("button", { name: /^Další akce/ }).click();
   await expect(page.locator(".attentionItem").first().getByRole("menuitem", { name: /^Skrýt/ })).toBeDisabled();
   await page.unroute("**/api/attention**");
@@ -82,5 +89,6 @@ test("a start without connection shows the last attention evaluation marked as o
   await expect(page.locator(".offlineStart")).toBeVisible();
   await expect(page.locator(".attentionStale")).toContainText("Jste offline");
   await expect(page.locator(".attentionItem", { hasText: title }).first()).toBeVisible();
+  await expect(page.locator(".attentionItem", { hasText: title }).first().locator(".attentionRowStale")).toBeVisible();
   await page.unroute("**/api/**");
 });
