@@ -445,6 +445,48 @@ test("an active SQLite rollback lock beyond busy_timeout is retryable, not denie
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
 });
 
+test("regular rollback sidecar without an observable writer lock is retryable, never denied", () => {
+  const fx = makeFixture();
+  const sidecar = fx.databasePath + "-journal";
+  const original = { anchor: anchorOf(fx), journal: journalText(fx) };
+  // Deterministic model of the lock-release / journal-unlink gap: an SQLite
+  // rollback sidecar exists with no current lock. A journal left by a crashed
+  // process is observationally identical. The old /proc/locks heuristic
+  // returned "denied" on Linux; the writer must fail closed as "failed".
+  writeFileSync(sidecar, Buffer.alloc(512));
+  let enteredBody = false;
+  const attempt = pinned.withPinnedTargetStagingWrite(fx.store,
+    () => { enteredBody = true; return "ok"; },
+    () => "denied", () => "failed", 0);
+  assert.equal(attempt, "failed", "ambiguous sidecar is retryable, never a trust denial");
+  assert.equal(enteredBody, false, "never open SQLite or execute the write body");
+  assert.deepEqual({ anchor: anchorOf(fx), journal: journalText(fx) }, original,
+    "no canonical data or irreversible journal changed");
+  assert.equal(existsSync(sidecar), true, "no implicit SQLite rollback or sidecar removal");
+  // Once an operator has removed the sidecar, a new independent write succeeds.
+  unlinkSync(sidecar);
+  assert.equal(pinned.withPinnedTargetStagingWrite(fx.store,
+    context => { context.commit({ kind: "compaction", payload: { floor: 0 } }); return "ok"; },
+    () => "denied", () => "failed"), "ok");
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
+test("symlinked SQLite rollback sidecar is still a strict boundary denial", () => {
+  const fx = makeFixture();
+  const sidecar = fx.databasePath + "-journal";
+  const target = path.join(root, `${fx.name}-sidecar-target`);
+  writeFileSync(target, "untouched");
+  symlinkSync(target, sidecar);
+  let enteredBody = false;
+  assert.equal(pinned.withPinnedTargetStagingWrite(fx.store,
+    () => { enteredBody = true; return "ok"; },
+    () => "denied", () => "failed", 0), "denied");
+  assert.equal(enteredBody, false);
+  assert.equal(readFileSync(target, "utf8"), "untouched");
+  unlinkSync(sidecar);
+  assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok");
+});
+
 test("six un-retried concurrent writers at the original 6x80 load never confuse contention with trust denial", async () => {
   const fx = makeFixture();
   const workers = Array.from({ length: 6 }, () => runChild(fx, "raw-many", "", 80));
@@ -522,11 +564,11 @@ test("crash after the intent but before COMMIT: reads stay ok, the next writer a
   opener.prepare("SELECT COUNT(*) FROM metadata").get();
   opener.close();
   assert.equal(existsSync(sidecar), true, "a normal open does not clear it");
-  // Linux /proc/locks proves that the killed writer no longer holds a lock;
-  // where lock visibility is unavailable we fail closed with retryable timeout.
-  const staleReason = process.platform === "linux" ? "unavailable" : "write_failed";
+  // Even a crashed writer's regular journal cannot be proven orphaned from
+  // the writer's view: fail closed with retryable timeout on every platform.
+  // The operator must still inspect/remove the non-hot sidecar manually.
   assert.deepEqual(durable.issueDurableTargetStagingSession(fx.store, "bob", 600),
-    { ok: false, reason: staleReason });
+    { ok: false, reason: "write_failed" });
   assert.equal((await routes["tasks list"](ownerCookie())).status, 503);
   assert.equal(durable.checkTargetStagingAnchorLive(fx.store), "ok", "still no restore state");
   recoverHotJournal(fx); // documented runbook: header magic is zero -> remove it

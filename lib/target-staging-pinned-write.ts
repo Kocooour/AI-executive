@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync, constants, fstatSync, lstatSync, openSync, readSync,
-  readFileSync, readdirSync, realpathSync,
+  readdirSync, realpathSync,
 } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -112,38 +112,13 @@ export function noTargetStagingSidecars(
 }
 
 /**
- * Best-effort, read-only distinction between an active SQLite rollback-journal
- * writer and a leftover journal after the bounded sidecar wait. On Linux,
- * SQLite's POSIX RESERVED/EXCLUSIVE write lock is visible in /proc/locks; the
- * pinned fd supplies the actual main database inode (no path-following).
- *
- * A positive result is sufficient to classify a TIMEOUT as retryable, never to
- * permit a database open. On platforms without /proc/locks the owner cannot
- * safely distinguish a stalled writer from a stale regular sidecar: return
- * unknown, and still refuse the write (retryable, not an auth denial).
+ * A regular SQLite rollback sidecar at busy-timeout cannot be proved orphaned
+ * without an atomic observation of both the journal and its writer. Even two
+ * lock-free /proc/locks samples can race the unlink after a legitimate COMMIT.
+ * Refuse the write as retryable contention, WITHOUT opening SQLite or touching
+ * either DB or journal. The separate structural checks still deny symlinks,
+ * hard links, invalid file types, WAL/SHM and replaced database inodes.
  */
-function activeSQLiteWriterLock(databaseFd: number): boolean | null {
-  if (process.platform !== "linux") return null;
-  try {
-    const file = fstatSync(databaseFd, { bigint: true });
-    const dev = file.dev;
-    // BigInt() rather than bigint literals: the project's TS target is < ES2020.
-    const major = ((dev & BigInt(0xfff00)) >> BigInt(8)) |
-      ((dev >> BigInt(32)) & BigInt(0xfffff000));
-    const minor = (dev & BigInt(0xff)) |
-      ((dev >> BigInt(12)) & BigInt(0xffffff00));
-    const ino = file.ino;
-    for (const line of readFileSync("/proc/locks", "utf8").split("\n")) {
-      // Ignore waiting lock requests (prefixed "->"), SHARED readers and
-      // unrelated inodes. A live writer holds a POSIX WRITE byte-range lock.
-      const match = /^\d+:\s+(?:POSIX|OFDLCK)\s+ADVISORY\s+WRITE\s+\S+\s+([0-9a-f]+):([0-9a-f]+):(\d+)\s+\d+\s+(?:\d+|EOF)$/.exec(line);
-      if (match && BigInt("0x" + match[1]) === major &&
-          BigInt("0x" + match[2]) === minor && BigInt(match[3]) === ino) return true;
-    }
-    return false;
-  } catch { return null; } // absent /proc or restricted lock visibility
-}
-
 /** A numeric fd can be reused after another file closes: prove a net-new
  * pinned-inode handle, rather than a numeric fd absent from the first scan. */
 export function hasNewPinnedReadDescriptor(
@@ -428,10 +403,11 @@ function runPinnedTargetStagingTransaction<T, C>(
       }
       const remaining = sidecarDeadline - Date.now();
       if (remaining <= 0) {
-        // A verified active SQLite writer is contention, not an untrusted
-        // store. Without a reliable lock probe remain fail-closed, but classify
-        // a bounded wait as retryable. A confirmed stale journal stays denied.
-        return activeSQLiteWriterLock(files.databaseFd) === false ? denied() : failed();
+        // No finite sample of journal metadata or /proc/locks can prove
+        // the writer is gone: unlock and journal unlink are not atomic.
+        // A valid regular sidecar is always retryable contention, not an
+        // authorization/trust denial. Do NOT open SQLite or mutate either file.
+        return failed();
       }
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
     }
