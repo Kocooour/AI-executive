@@ -144,6 +144,46 @@ function activeSQLiteWriterLock(databaseFd: number): boolean | null {
   } catch { return null; } // absent /proc or restricted lock visibility
 }
 
+/**
+ * At the rollback-sidecar timeout a single /proc/locks sample is NOT proof
+ * that the file is orphaned: the holder may have just committed and released
+ * its lock while SQLite is removing the journal. Under contention this used
+ * to turn a retryable timeout into a false trust/authorization denial.
+ *
+ * Never open SQLite here. Only classify a journal as stale if the SAME regular
+ * single-linked inode remains with unchanged size/mtime across two lock-free
+ * observations. Any disappearing/changing journal or unknown/active writer is
+ * retryable; unsafe file types or changed main DB identity still fail closed.
+ */
+function confirmedOrphanedRollbackJournal(
+  files: PinnedTargetStagingFiles,
+): boolean {
+  const sidecar = files.databasePath + "-journal";
+  let first: ReturnType<typeof lstatSync>;
+  try {
+    first = lstatSync(sidecar);
+    if (!first.isFile() || first.isSymbolicLink() || first.nlink !== 1) return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+  if (activeSQLiteWriterLock(files.databaseFd) !== false) return false;
+  // A bounded second observation closes the lock-release/unlink race. This
+  // never grants access: both outcomes refuse the current write attempt.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  if (!files.stillPinned() ||
+      !noTargetStagingSidecars(files.databasePath, ["-wal", "-shm"])) return true;
+  try {
+    const second = lstatSync(sidecar);
+    if (!second.isFile() || second.isSymbolicLink() || second.nlink !== 1) return true;
+    if (second.dev !== first.dev || second.ino !== first.ino ||
+        second.size !== first.size || second.mtimeMs !== first.mtimeMs ||
+        second.ctimeMs !== first.ctimeMs) return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+  return activeSQLiteWriterLock(files.databaseFd) === false;
+}
+
 /** A numeric fd can be reused after another file closes: prove a net-new
  * pinned-inode handle, rather than a numeric fd absent from the first scan. */
 export function hasNewPinnedReadDescriptor(
@@ -428,10 +468,10 @@ function runPinnedTargetStagingTransaction<T, C>(
       }
       const remaining = sidecarDeadline - Date.now();
       if (remaining <= 0) {
-        // A verified active SQLite writer is contention, not an untrusted
-        // store. Without a reliable lock probe remain fail-closed, but classify
-        // a bounded wait as retryable. A confirmed stale journal stays denied.
-        return activeSQLiteWriterLock(files.databaseFd) === false ? denied() : failed();
+        // A lone lock-free sample can race the holder's journal removal.
+        // Refuse this attempt either way; only a stable, twice-observed
+        // orphaned inode is a trust denial. Transient contention is retryable.
+        return confirmedOrphanedRollbackJournal(files) ? denied() : failed();
       }
       Atomics.wait(sidecarSleep, 0, 0, Math.min(5, remaining));
     }
