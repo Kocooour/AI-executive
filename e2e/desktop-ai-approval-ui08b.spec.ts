@@ -38,6 +38,9 @@ test.describe("UI-08b desktop Lumi proposal review", () => {
     expect(confirms).toBe(0);
     await review.getByRole("button", { name: "Schválit změnu" }).click();
     await expect(page.locator(".assistantMessages")).toContainText("Hotovo.");
+    const result = page.locator(".assistantTurn").last().locator(".msg");
+    await expect(result).toContainText("Hotovo.");
+    await expect(result).toBeFocused(); // The review trigger is gone after approval.
     expect(confirms).toBe(1);
   });
 
@@ -64,5 +67,36 @@ test.describe("UI-08b desktop Lumi proposal review", () => {
     await expect(review.getByRole("alert")).toContainText("Platnost návrhu skončila");
     await expect(review.getByRole("button", { name: "Odmítnout" })).toBeEnabled();
     expect(confirms).toBe(0);
+    await review.getByRole("button", { name: "Odmítnout" }).click();
+    const result = page.locator(".assistantTurn").last().locator(".msg");
+    await expect(result).toContainText("Návrh jsem zahodil");
+    await expect(result).toBeFocused(); // Reject also removes its trigger.
+    expect(confirms).toBe(0);
+  });
+});
+
+
+test.describe("UI-08b keyboard return on dismissed review", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  test("Escape closes the mobile review and returns focus to its still-present trigger", async ({ page }) => {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    await page.route("**/api/ai", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      message: "Připravil jsem návrh.",
+      proposal: { id: "ffffffff-ffff-4fff-8fff-ffffffffffff", summary: "Naplánovat úkol", workspaceId: "personal", expiresAt: Date.now() + 60_000,
+        changes: [], review: { target: "Úkol", workspace: "Personal", fields: [], related: [], sideEffects: [] } },
+    }) }));
+    await page.getByRole("button", { name: "Zeptat se AI" }).click();
+    await page.locator(".assistantComposer input").fill("Naplánuj úkol");
+    await page.locator(".assistantComposer input").press("Enter");
+    const trigger = page.getByRole("button", { name: "Zkontrolovat návrh" });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Zkontrolovat návrh" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Zavřít" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
   });
 });

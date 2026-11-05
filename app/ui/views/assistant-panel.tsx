@@ -60,6 +60,7 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
   const proposal = review?.proposal;
   const closeRef = useRef<HTMLButtonElement>(null);
   const reviewTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastAssistantResultRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!assistantOpen) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -68,7 +69,13 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
   useEffect(() => {
     if (!reviewId) return;
     closeRef.current?.focus();
-    return () => { if (reviewTriggerRef.current?.isConnected) reviewTriggerRef.current.focus(); };
+    return () => {
+      // A completed proposal removes its review button. Return to the new result
+      // message in that case, never to an unmounted dialog or document.body.
+      const trigger = reviewTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else lastAssistantResultRef.current?.focus();
+    };
   }, [reviewId]);
   useEffect(() => { if (!assistantOpen || review?.resolved) setReviewId(null); }, [assistantOpen, review?.resolved]);
   useEffect(() => {
@@ -122,7 +129,11 @@ export function AssistantPanel({ app }: { app: LumiApp }) {
             )}
             {messages.map((m, i) => (
               <div key={i} className={"assistantTurn " + m.role}>
-                <div className={"msg " + m.role}>{m.content}</div>
+                <div className={"msg " + m.role}
+                  ref={m.role === "assistant" && i === messages.length - 1 ? lastAssistantResultRef : undefined}
+                  tabIndex={m.role === "assistant" && i === messages.length - 1 ? -1 : undefined}>
+                  {m.content}
+                </div>
                 {m.proposal && (
                   <div className={`aiProposal ${m.resolved ? "resolved" : ""}`}>
                     <span className="proposalOrigin"><span aria-hidden="true">✦</span> {tr("approvalLumiProposal")}</span>
