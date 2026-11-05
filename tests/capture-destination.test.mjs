@@ -41,3 +41,16 @@ test("UI-08a: an accepted suggested new project has a distinct consent target", 
     captureDestinationKey({ ...base, projectAction: "none" }),
   );
 });
+
+test("UI-08a: new-project approval binds the exact normalized proposed title", () => {
+  const target = { type: "task", workspaceId: "shared-family", projectAction: "new", newProjectTitle: "Projekt A" };
+  const approved = captureDestinationKey(target);
+  assert.equal(approved, captureDestinationKey({ ...target, newProjectTitle: "  Projekt A  " }));
+  assert.notEqual(approved, captureDestinationKey({ ...target, newProjectTitle: "Projekt B" }));
+  assert.notEqual(approved, captureDestinationKey({ ...target, newProjectTitle: "" }));
+  // A suggested name does not affect consent when no new project will be created.
+  assert.equal(
+    captureDestinationKey({ ...target, projectAction: "none" }),
+    captureDestinationKey({ ...target, projectAction: "none", newProjectTitle: "Projekt B" }),
+  );
+});
