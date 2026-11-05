@@ -32,7 +32,7 @@ export function AttentionItemRow({ app, candidate }: { app: LumiApp; candidate: 
   const changedSince = attentionActionsBlocked && Boolean(subject && Number(subject.updatedAt) > candidate.evaluatedAt);
   // Never offer the quick date edit from an old Attention recommendation. A user
   // can still open the underlying task and review its current local data.
-  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all" && !attentionActionsBlocked);
+  const primary = attentionPrimaryAction(candidate, subject, activeWorkspaceId !== "all", attentionActionsBlocked);
   const open = () => {
     if (subject) void inspect(subject);
     else setAttentionError(tr("attentionDetailMissing"));
