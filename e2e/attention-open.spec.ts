@@ -65,6 +65,52 @@ test("a quick date dialog opened from Attention closes when its evaluation becom
   await expect(item.locator(".deferChip")).toHaveAttribute("aria-expanded", "false");
 });
 
+// A successful server GET (sync stays green) can remove or replace the evidence
+// behind a previously opened date chip. Neither case may leave a working modal.
+for (const change of ["removed", "fingerprint-changed"] as const) {
+  test(`a fresh Attention refresh with ${change} evidence revokes the open dialog and restores focus`, async ({ page }) => {
+    const item = await attentionItem(page, seeded.overdueTask);
+    const chip = item.locator(".deferChip");
+    await expect(chip).toBeVisible();
+    const taskId = await chip.getAttribute("data-defer-chip");
+    expect(taskId).toBeTruthy();
+    await chip.click();
+    await expect(page.locator(".deferPopover")).toBeVisible();
+
+    let found = false;
+    await page.route("**/api/attention?**", async (route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      const matched = data.items.filter((candidate: { subjectId: string }) => candidate.subjectId === taskId);
+      found = found || matched.length > 0;
+      const items = change === "removed"
+        ? data.items.filter((candidate: { subjectId: string }) => candidate.subjectId !== taskId)
+        : data.items.map((candidate: { subjectId: string; sourceFingerprint: string }) =>
+          candidate.subjectId === taskId
+            ? { ...candidate, sourceFingerprint: `${candidate.sourceFingerprint}-changed` }
+            : candidate);
+      await route.fulfill({ response, json: { ...data, items } });
+    });
+    try {
+      await page.getByRole("button", { name: "Obnovit" }).first().click();
+      await expect(page.locator(".deferPopover")).toHaveCount(0);
+      expect(found).toBe(true);
+      await expect(page.locator(".deferChoice, .deferApply, .deferClear")).toHaveCount(0);
+      await expect(page.locator("#attention-title")).toBeFocused();
+      if (change === "removed") {
+        await expect(page.locator(".attentionItem", { hasText: seeded.overdueTask })).toHaveCount(0);
+      } else {
+        await expect(page.locator(".attentionItem", { hasText: seeded.overdueTask })).toBeVisible();
+        await expect(page.locator(".attentionItem", { hasText: seeded.overdueTask }).locator(".deferChip")).toHaveAttribute("aria-expanded", "false");
+      }
+      // Even another React render must not resurrect the old open dialog.
+      await expect(page.locator(".deferPopover")).toHaveCount(0);
+    } finally {
+      await page.unroute("**/api/attention?**");
+    }
+  });
+}
+
 // The last evaluation is kept in this browser: when the server cannot evaluate after a restart,
 // Home shows it marked as out of date, and snooze and dismiss wait.
 test("the last attention evaluation is shown out of date when the server cannot evaluate", async ({ page }) => {
