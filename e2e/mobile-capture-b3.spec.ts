@@ -1,5 +1,87 @@
 import { test, expect } from "./fixtures";
 import { expectOnServer, waitUntilSynced } from "./helpers";
+import type { Page } from "@playwright/test";
+
+// A unique, synthetic legacy workspace for each scenario. The isolated E2E server is
+// shared by all browser scenarios within a run, so every fixture must be torn down.
+async function seedSharedCaptureWorkspace(page: Page, workspaceId: string, areaId: string) {
+  await expect.poll(() => page.evaluate(async ({ workspaceId, areaId }) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((r) => r.json());
+    const now = Date.now();
+    const entities = [
+      { id: `workspace:${workspaceId}`, type: "workspace", title: "B3 druhý prostor",
+        status: "active", workspaceId, properties: {
+          kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }],
+        }, createdAt: now, updatedAt: now },
+      // Choosing this explicit Area for new tasks/projects avoids creating a
+      // protected system fallback Area that the server correctly forbids deleting.
+      { id: areaId, type: "area", title: "B3 testovací oblast",
+        status: "active", workspaceId, properties: { kind: "shared" },
+        createdAt: now, updatedAt: now },
+    ];
+    const response = await fetch("/api/store", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: [...snapshot.entities, ...entities], relations: snapshot.relations,
+        deletedIds: [], revivedIds: [],
+      }),
+    });
+    if (response.status === 409) return false;
+    if (!response.ok) throw new Error(`B3 workspace fixture: ${response.status}`);
+    return true;
+  }, { workspaceId, areaId }), { timeout: 15_000 }).toBe(true);
+}
+
+async function cleanSharedCaptureWorkspace(page: Page, workspaceId: string) {
+  // Remove exactly this scenario's workspace and all its contents, including
+  // tasks, projects, explicit Areas and every relation referencing them.
+  // Never alter the Personal space or another scenario's records.
+  await expect.poll(() => page.evaluate(async (workspaceId) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((r) => r.json());
+    const removed = snapshot.entities.filter((entity: { workspaceId: string }) => entity.workspaceId === workspaceId);
+    const removedIds = new Set(removed.map((entity: { id: string }) => entity.id));
+    const removedRelations = snapshot.relations.filter((relation: {
+      workspaceId: string; sourceEntityId: string; targetEntityId: string;
+    }) => relation.workspaceId === workspaceId ||
+      removedIds.has(relation.sourceEntityId) || removedIds.has(relation.targetEntityId));
+    if (!removed.length && !removedRelations.length) return true;
+    const removedRelationIds = new Set(removedRelations.map((relation: { id: string }) => relation.id));
+    const response = await fetch("/api/store", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
+        entities: snapshot.entities.filter((entity: { id: string }) => !removedIds.has(entity.id)),
+        relations: snapshot.relations.filter((relation: { id: string }) => !removedRelationIds.has(relation.id)),
+        deletedIds: [...removedIds, ...removedRelationIds], revivedIds: [],
+      }),
+    });
+    if (response.status === 409) return false;
+    if (!response.ok) throw new Error(`B3 workspace cleanup: ${response.status}`);
+    return true;
+  }, workspaceId), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => page.evaluate(async (workspaceId) => {
+    const snapshot = await fetch("/api/store", { cache: "no-store" }).then((r) => r.json());
+    return !snapshot.entities.some((entity: { workspaceId: string }) => entity.workspaceId === workspaceId) &&
+      !snapshot.relations.some((relation: { workspaceId: string }) => relation.workspaceId === workspaceId);
+  }, workspaceId)).toBe(true);
+}
+
+async function withSharedCaptureWorkspace(
+  page: Page, run: (fixture: { workspaceId: string; areaId: string }) => Promise<void>,
+) {
+  const workspaceId = `e2e-b3-workspace-${crypto.randomUUID()}`;
+  const areaId = `e2e-b3-area-${crypto.randomUUID()}`;
+  try {
+    await seedSharedCaptureWorkspace(page, workspaceId, areaId);
+    await page.reload();
+    await waitUntilSynced(page);
+    await run({ workspaceId, areaId });
+  } finally {
+    // Also when seeding/reloading or the browser assertions fail.
+    await cleanSharedCaptureWorkspace(page, workspaceId);
+  }
+}
 
 test.describe("B3 mobile Quick Capture", () => {
   test.beforeEach(async ({ page }) => {
@@ -147,45 +229,104 @@ test.describe("B3 mobile Quick Capture", () => {
   });
 
   test("workspace switching never copies an unsaved draft into another workspace", async ({ page }) => {
-    const workspaceId = await page.evaluate(async () => {
-      const snapshot = await fetch("/api/store", { cache: "no-store" }).then((r) => r.json());
-      const now = Date.now(), id = `e2e-b3-workspace-${now}`;
-      const record = {
-        id: `workspace:${id}`, type: "workspace", title: "B3 druhý prostor",
-        status: "active", workspaceId: id, properties: {
-          kind: "shared", role: "owner", members: [{ id: "owner", role: "owner" }],
-        }, createdAt: now, updatedAt: now,
-      };
-      const result = await fetch("/api/store", {
-        method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          baseRevision: snapshot.revision, restoreGeneration: snapshot.restoreGeneration,
-          entities: [...snapshot.entities, record], relations: snapshot.relations,
-          deletedIds: [], revivedIds: [],
-        }),
-      });
-      if (!result.ok) throw new Error(`B3 workspace fixture: ${result.status}`);
-      return id;
+    await withSharedCaptureWorkspace(page, async ({ workspaceId }) => {
+      const modal = page.locator(".captureModal");
+      await page.locator(".mobileCaptureButton").click();
+      const destination = modal.getByLabel("Workspace");
+      await expect(destination).toHaveValue("personal");
+      await modal.getByRole("textbox", { name: "Název úkolu" }).fill("Soukromý rozepsaný úkol B3");
+      await destination.selectOption(workspaceId);
+      await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("");
+      await modal.getByRole("textbox", { name: "Název úkolu" }).fill("Sdílený rozepsaný úkol B3");
+      await destination.selectOption("personal");
+      await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Soukromý rozepsaný úkol B3");
+      await destination.selectOption(workspaceId);
+      await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Sdílený rozepsaný úkol B3");
+      await modal.getByRole("button", { name: "Zrušit" }).click();
+      await page.locator(".mobileCaptureButton").click();
+      // UI-08a: every standalone open is private, but each workspace keeps its
+      // own in-memory draft until reload or sign-out.
+      await expect(modal.getByLabel("Workspace")).toHaveValue("personal");
+      await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Soukromý rozepsaný úkol B3");
+      await modal.getByLabel("Workspace").selectOption(workspaceId);
+      await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Sdílený rozepsaný úkol B3");
     });
-    await page.reload();
-    await waitUntilSynced(page);
-    const modal = page.locator(".captureModal");
-    await page.locator(".mobileCaptureButton").click();
-    const destination = modal.getByLabel("Workspace");
-    await expect(destination).toHaveValue("personal");
-    await modal.getByRole("textbox", { name: "Název úkolu" }).fill("Soukromý rozepsaný úkol B3");
-    await destination.selectOption(workspaceId);
-    await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("");
-    await modal.getByRole("textbox", { name: "Název úkolu" }).fill("Sdílený rozepsaný úkol B3");
-    await destination.selectOption("personal");
-    await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Soukromý rozepsaný úkol B3");
-    await destination.selectOption(workspaceId);
-    await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Sdílený rozepsaný úkol B3");
-    await modal.getByRole("button", { name: "Zrušit" }).click();
-    await page.locator(".mobileCaptureButton").click();
-    // The write workspace remains selected, without leaking the other title.
-    await expect(modal.getByLabel("Workspace")).toHaveValue(workspaceId);
-    await expect(modal.getByRole("textbox", { name: "Název úkolu" })).toHaveValue("Sdílený rozepsaný úkol B3");
+  });
+
+  test("UI-08a: shared capture needs consent and switching away and back clears it", async ({ page }) => {
+    await withSharedCaptureWorkspace(page, async ({ workspaceId, areaId }) => {
+      await page.route("**/api/task-suggestions", (route) =>
+        route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"unavailable"}' }));
+      const modal = page.locator(".captureModal");
+      await page.locator(".mobileCaptureButton").click();
+      const destination = modal.getByLabel("Workspace");
+      await expect(destination).toHaveValue("personal");
+      await destination.selectOption(workspaceId);
+      const approve = modal.getByRole("checkbox", { name: /Potvrzuji, že se tato položka má uložit do sdíleného prostoru/ });
+      await expect(approve).toBeVisible();
+      await expect(approve).not.toBeChecked();
+      await approve.check();
+      await destination.selectOption("personal");
+      await expect(approve).toHaveCount(0);
+      await destination.selectOption(workspaceId);
+      await expect(approve).not.toBeChecked();
+      const title = `UI-08a explicit shared task ${Date.now()}`;
+      await modal.getByRole("textbox", { name: "Název úkolu" }).fill(title);
+      await modal.locator(".captureArea select").selectOption(areaId);
+      await modal.getByRole("button", { name: "Přidat úkol" }).click();
+      await expect(modal).toBeVisible(); // browser validation must not permit unapproved sharing
+      await approve.check();
+      await modal.getByRole("button", { name: "Přidat úkol" }).click();
+      await expect(modal).toHaveCount(0);
+      await expect.poll(() => page.evaluate(async ({ title, workspaceId }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+        return snapshot.entities.some((item: { type: string; title: string; workspaceId: string }) =>
+          item.type === "task" && item.title === title && item.workspaceId === workspaceId);
+      }, { title, workspaceId })).toBe(true);
+    });
+  });
+
+  test("UI-08a: renaming a proposed shared project requires new consent", async ({ page }) => {
+    await withSharedCaptureWorkspace(page, async ({ workspaceId, areaId }) => {
+      await page.route("**/api/task-suggestions", (route) => route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ suggestion: {
+          projectId: "", projectTitle: "", areaId: "", areaTitle: "",
+          priority: "none", estimatedMinutes: 0, scheduledStart: "",
+          scheduledEnd: "", scheduledDate: "", scheduledOptions: [],
+          confidence: "medium", reasons: [], constraints: [],
+          newProjectSuggestion: {
+            title: "Původní návrh", areaId: "", areaTitle: "",
+            confidence: "medium", reason: "Společný projekt",
+          },
+        } }),
+      }));
+      const modal = page.locator(".captureModal");
+      await page.locator(".mobileCaptureButton").click();
+      await modal.getByLabel("Workspace").selectOption(workspaceId);
+      await modal.getByRole("textbox", { name: "Název úkolu" }).fill("Úkol pro sdílený projekt");
+      await expect(modal.getByRole("radio", { name: /Vytvořit nový projekt a přiřadit/ })).toBeVisible();
+      await modal.getByRole("radio", { name: /Vytvořit nový projekt a přiřadit/ }).check();
+      await modal.locator(".captureArea select").selectOption(areaId);
+      const projectName = modal.getByRole("textbox", { name: "Název nového projektu" });
+      await expect(projectName).toHaveValue("Původní návrh");
+      const approve = modal.getByRole("checkbox", { name: /Potvrzuji, že se tato položka má uložit do sdíleného prostoru/ });
+      await approve.check();
+      await projectName.fill("Nový sdílený projekt");
+      await expect(approve).not.toBeChecked();
+      await projectName.fill("Původní návrh");
+      await expect(approve).not.toBeChecked(); // returning to an earlier name cannot replay consent
+      await projectName.fill("Nový sdílený projekt");
+      await approve.check();
+      await modal.getByRole("button", { name: "Přidat úkol" }).click();
+      await expect(modal).toHaveCount(0);
+      await expect.poll(() => page.evaluate(async ({ workspaceId }) => {
+        const snapshot = await fetch("/api/store", { cache: "no-store" }).then((response) => response.json());
+        return snapshot.entities.some((item: { type: string; title: string; workspaceId: string }) =>
+          item.type === "project" && item.title === "Nový sdílený projekt" &&
+          item.workspaceId === workspaceId);
+      }, { workspaceId })).toBe(true);
+    });
   });
 
   test("saving a captured task clears its draft instead of offering a duplicate", async ({ page }) => {
