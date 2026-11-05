@@ -1,6 +1,9 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
+import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { v1DragHandleVisible, v1ReorderAvailable } from "../../../lib/lumi-reorder-preview";
+import { LumiCompletionControl } from "./lumi-completion-control";
 import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
 import { MobileProjectRowV1 } from "./mobile-project-row-v1";
 import { byManualOrder, isEveningTask, taskDueTone } from "../../../lib/task-views";
@@ -64,16 +67,14 @@ export function EntityList({ app }: { app: LumiApp }) {
     view,
     workspaces,
   } = app;
-  const [mobileViewport, setMobileViewport] = useState(false);
-  useEffect(() => {
-    if (!mobileDesignV1Preview) return;
-    const media = window.matchMedia("(max-width: 700px)");
-    const sync = () => setMobileViewport(media.matches);
-    sync();
-    media.addEventListener("change", sync);
-    return () => media.removeEventListener("change", sync);
-  }, []);
-  const mobileProjectPreview = mobileDesignV1Preview && mobileViewport && view === "Projects" && !app.openProject;
+  const [reorderPreview, setReorderPreview] = useState(false);
+  // The same edit state also controls both task and note handles on ProjectPage.
+  const reorderableView = v1ReorderAvailable(view);
+  // The edit affordance is per list, not shared across Today/My Plan or a project detail.
+  useEffect(() => { setReorderPreview(false); },
+    [view, activeWorkspaceId, app.mobilePlanPreviewActive, app.openProject?.id]);
+  // Shared project rows render identically on desktop and phone.
+  const projectListPreview = mobileDesignV1Preview && view === "Projects" && !app.openProject;
   // Only Projects shows this metadata. The relation graph, not a legacy projectId property,
   // owns membership; aggregate rows still count tasks in their own workspace only.
   const batchEligibleIds = new Set(batchCandidates.map(item => item.id));
@@ -90,9 +91,9 @@ export function EntityList({ app }: { app: LumiApp }) {
   // `dragScope`: the ordering a drag changes, when it is not the one of the view (the tasks and notes of a project page).
   const renderRow = (x: Entity, index: number, rows: Entity[], dragScope?: string) => {
       const projectSummary = x.type === "project" ? projectSummaries.get(x.id) : undefined;
-      if (mobileProjectPreview && x.type === "project" && projectSummary) {
+      if (projectListPreview && x.type === "project" && projectSummary) {
         return <MobileProjectRowV1 key={x.id} app={app} project={x} summary={projectSummary}
-          dragScope={dragScope ?? "project:all"} />;
+          dragScope={dragScope ?? "project:all"} reorderEnabled={reorderPreview} />;
       }
       let meta = taskRowValue(x, language, today, {
         held: heldReasons.has(x.id),
@@ -110,10 +111,11 @@ export function EntityList({ app }: { app: LumiApp }) {
         <Fragment key={x.id}>
         {startsEvening && <h2 className="eveningHeading" id="today-evening-heading">{tr("deferEveningGroup")}</h2>}
         <article
-          style={view === "Today" && x.type === "task" ? { minHeight: untimedRowHeight(typeof x.properties.estimatedMinutes === "number" ? x.properties.estimatedMinutes : null) } : undefined}
+          style={view === "Today" && x.type === "task" && !mobileDesignV1Preview ? { minHeight: untimedRowHeight(typeof x.properties.estimatedMinutes === "number" ? x.properties.estimatedMinutes : null) } : undefined}
           className={`taskRow ${draggingId === x.id ? "isDragging" : ""} ${dragTarget === `entity:${x.id}` ? "dropActive" : ""} ${taskDueTone(x, today)}`.trim()}
           data-drop-entity={x.id}
           data-entity-type={x.type}
+          data-v1-reorder={mobileDesignV1Preview && view === "Today" ? String(reorderPreview) : undefined}
           onDragEnter={() => setActiveDragTarget(`entity:${x.id}`)}
           onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
           onDrop={(event) => acceptNativeDrop(event, `entity:${x.id}`)}
@@ -130,17 +132,27 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
+          {v1DragHandleVisible(view, mobileDesignV1Preview, reorderPreview) &&
+            dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
-            <button
-              type="button"
-              className="check"
-              aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                done(x.id);
-              }}
-            >○</button>
+            mobileDesignV1Preview ? (
+              <LumiCompletionControl className="check" kind="task"
+                tone={taskPreviewCompletionTone(x, today)}
+                complete={x.status === "completed"}
+                stateLabel={taskPreviewStateText(taskPreviewCompletionTone(x, today), language)}
+                actionLabel={`${tr(x.status === "completed" ? "reopen" : "complete")} ${x.title || tr("untitledItem")}`}
+                blockedReason={language === "cs" ? "Zvolte konkrétní prostor a vyčkejte na synchronizaci." : "Select a workspace and finish synchronization."}
+                disabled={activeWorkspaceId === "all" || heldReasons.has(x.id) || unsent.has(x.id)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (x.status === "completed") void app.reopenTask(x);
+                  else void done(x.id);
+                }} />
+            ) : (
+              <button type="button" className="check"
+                aria-label={`${tr("complete")} ${x.title || tr("untitledItem")}`}
+                onClick={(event) => { event.stopPropagation(); void done(x.id); }}>○</button>
+            )
           ) : (
             <span className={`entityIcon ${x.type}Icon`} aria-hidden="true">
               {x.type === "project" ? <ProjectIcon /> : x.type === "area" ? "●" : <ViewIcon name="Notes" />}
@@ -152,7 +164,8 @@ export function EntityList({ app }: { app: LumiApp }) {
               className="taskRowOpen"
               onClick={(event) => { event.stopPropagation(); void inspect(x); }}
             >{x.title || tr("untitledItem")}</button></strong>
-            {view === "Today" && x.type === "task" && (
+            {view === "Today" && x.type === "task" &&
+              (!mobileDesignV1Preview || (typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0)) && (
               <small className="taskRowEstimate" data-row-estimate>{typeof x.properties.estimatedMinutes === "number" && x.properties.estimatedMinutes > 0 ? tr("timelineMinutes").replace("{n}", String(x.properties.estimatedMinutes)) : tr("timelineNoEstimate")}</small>
             )}
             {projectSummary && (
@@ -189,7 +202,9 @@ export function EntityList({ app }: { app: LumiApp }) {
   // The Calendar page shows its own planned work; it does not repeat every open task as a list.
   if (view === "Calendar") return null;
   // A project opened from the list or the sidebar is the main view of Projects (B1); its rows are these same rows.
-  if (view === "Projects" && app.openProject) return <ProjectPage key={app.openProject.id} app={app} project={app.openProject} renderRow={renderRow} />;
+  if (view === "Projects" && app.openProject) return <ProjectPage key={app.openProject.id}
+    app={app} project={app.openProject} renderRow={renderRow}
+    reorderPreview={reorderPreview} onToggleReorder={() => setReorderPreview((value) => !value)} />;
   return (
     <>
           {view !== "Settings" && view !== "Agents" && view !== "Context" && (
@@ -276,6 +291,14 @@ export function EntityList({ app }: { app: LumiApp }) {
                 </div>
               )}
               <InboxBatchTriage app={app} />
+              {mobileDesignV1Preview && reorderableView && !app.openProject && (
+                <button type="button" className="v1ReorderToggle"
+                  aria-pressed={reorderPreview} data-v1-reorder-toggle=""
+                  onClick={() => setReorderPreview((value) => !value)}>
+                  {reorderPreview ? (language === "cs" ? "Hotovo s řazením" : "Finish reordering")
+                    : (language === "cs" ? "Upravit pořadí" : "Reorder")}
+                </button>
+              )}
               <div
                 className={
                   "list taskRowList " +
@@ -285,12 +308,12 @@ export function EntityList({ app }: { app: LumiApp }) {
                 {view === "Projects" ? null : listed.map((x, index) => renderRow(x, index, listed))}
                 {view === "Projects" && projectGroups.length > 0 && (
                   <div className="projectGroups" aria-label={tr("projectsByArea")}
-                    data-projects-preview={mobileProjectPreview ? "lumi-v1" : undefined}>
+                    data-projects-preview={projectListPreview ? "lumi-v1" : undefined}>
                     {projectGroups.map((group) => (
                       <section key={group.key} className="projectGroup" data-project-group={group.area ? group.area.id : "none"}
-                        data-preview-area-tone={mobileProjectPreview ? projectAreaPreviewTone(group.area) : undefined}
+                        data-preview-area-tone={projectListPreview ? projectAreaPreviewTone(group.area) : undefined}
                         aria-labelledby={`project-group-${group.key}`}>
-                        <h2 id={`project-group-${group.key}`} className={`projectGroupHeading${mobileProjectPreview ? " v1ProjectA11yOnly" : ""}`}>
+                        <h2 id={`project-group-${group.key}`} className={`projectGroupHeading${projectListPreview ? " v1ProjectA11yOnly" : ""}`}>
                           {group.area ? (group.area.title || tr("untitledItem")) : tr("noAreaGroup")}
                           {activeWorkspaceId === "all" && group.area && (
                             <span className="workspaceBadge">{workspaces.find((workspace) => workspace.workspaceId === group.area?.workspaceId)?.title || group.area.workspaceId}</span>

@@ -1,0 +1,232 @@
+/* UI-04b: one status control across preview task/project lists and Calendar.
+   Scoping is mandatory: all pre-existing non-preview controls remain unchanged. */
+.appShell[data-design-system="lumi-v1"] .taskRowList .taskRow .lumiCompletionControl,
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--v1-neutral-stroke);
+  cursor: pointer;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .lumiCompletionShape {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 23px;
+  height: 23px;
+  border: 2px solid var(--v1-neutral-stroke);
+  border-radius: 5px;
+  box-shadow: none;
+  background: transparent;
+  color: transparent;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 750;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-kind="project"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .lumiCompletionShape {
+  border-radius: 50%;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="warning"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="warning"] .lumiCompletionShape {
+  border-color: var(--v1-attention-orange);
+  background: transparent;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="danger"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="danger"] .lumiCompletionShape {
+  border-color: var(--v1-attention-red);
+  background: transparent;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl[data-completion-tone="complete"] .lumiCompletionShape,
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow[data-project-tone="complete"] .lumiCompletionShape {
+  border-color: var(--v1-completed-fill);
+  background: var(--v1-completed-fill);
+  color: var(--v1-on-accent);
+  box-shadow: none;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:focus-visible {
+  outline: 2px solid var(--v1-accent);
+  outline-offset: 1px;
+}
+.appShell[data-design-system="lumi-v1"] [data-completion-tone="complete"] + .taskRowMain strong,
+.appShell[data-design-system="lumi-v1"] [data-completion-tone="complete"] + .taskRowMain .taskRowOpen {
+  color: var(--v1-completed-text) !important;
+}
+.appShell[data-design-system="lumi-v1"] .lumiCompletionControl:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--v1-neutral-stroke) 12%, transparent);
+}
+/* Preview list controls are not movable unless an explicit edit mode is entered. */
+.appShell[data-design-system="lumi-v1"] .v1ReorderToggle {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.appShell[data-design-system="lumi-v1"] .v1ReorderToggle:focus-visible {
+  outline: 2px solid var(--v1-accent);
+  outline-offset: 2px;
+}
+
+/* The same project row/controller is used on desktop. UI-05a's original
+   project-list styling covers phones only, so keep the desktop structure here. */
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 60px;
+  min-width: 0;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectMain {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  gap: 2px;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectName {
+  min-width: 0;
+  max-width: 100%;
+  font-weight: 650;
+  color: var(--text);
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectName .taskRowOpen {
+  min-height: 44px;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectSecondary {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectDrag {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  min-width: 44px;
+}
+.appShell[data-design-system="lumi-v1"] .taskRowList .v1ProjectRow .v1ProjectDrag .dragHandle {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* The old Today grid reserves 32px for a handle even when it is hidden,
+   and constrains the old circular control to a 34px track. V1 instead
+   assigns real 44px columns for every focusable completion target. */
+@media (max-width: 700px) {
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] {
+    grid-template-columns: 44px minmax(0, 1fr) auto auto;
+    column-gap: 4px;
+  }
+  /* Old 34px cells extended their hit targets into adjacent cells through
+     pseudo-elements. Real 44px controls must not overlap one another. */
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .lumiCompletionControl::before,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .dragHandle::before {
+    content: none;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .lumiCompletionControl {
+    box-sizing: border-box;
+    grid-column: 1;
+    grid-row: 1;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .taskRowMain {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .todayTime {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .taskRowMeta,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .deferGroup,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] .deferChip {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-entity-type="task"] > .deadlineBadge {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] {
+    grid-template-columns: 44px 44px minmax(0, 1fr) auto auto;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .dragHandle {
+    grid-column: 1;
+    grid-row: 1;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .lumiCompletionControl { grid-column: 2; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .taskRowMain { grid-column: 3; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .todayTime { grid-column: 4; }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .taskRowMeta,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .deferGroup,
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] .deferChip {
+    grid-column: 5;
+  }
+  .appShell[data-design-system="lumi-v1"].view-today .taskRowList .taskRow[data-v1-reorder="true"][data-entity-type="task"] > .deadlineBadge { grid-column: 3; }
+}
+
+/* Desktop Projects reuse the same Area-group treatment as the 390px preview.
+   UI-05a's group pastels live only in the mobile media query; hiding the
+   headings on desktop without extending the surfaces loses Area grouping. */
+@media (min-width: 701px) {
+  .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] { gap: 12px; }
+  .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    --v1-area-color: var(--v1-surface-subtle);
+    display: grid;
+    gap: 0;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--v1-area-color) 72%, var(--surface));
+    border: 1px solid var(--v1-neutral-stroke);
+  }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="personal"] { --v1-area-color: var(--v1-area-personal); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="work"] { --v1-area-color: var(--v1-area-work); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="family"] { --v1-area-color: var(--v1-area-family); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-a"] { --v1-area-color: var(--v1-area-extra-a); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-b"] { --v1-area-color: var(--v1-area-extra-b); }
+  .appShell[data-design-system="lumi-v1"] .projectGroup[data-preview-area-tone="extra-c"] { --v1-area-color: var(--v1-area-extra-c); }
+  html[data-theme="dark"] .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+    background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+  }
+  @media (prefers-color-scheme: dark) {
+    html:not([data-theme]) .appShell[data-design-system="lumi-v1"] .projectGroups[data-projects-preview="lumi-v1"] > .projectGroup {
+      background: color-mix(in srgb, var(--v1-area-color) 82%, var(--v1-muted) 18%);
+    }
+  }
+}

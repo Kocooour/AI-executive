@@ -87,9 +87,18 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await expect(empty.locator(".v1ProjectCircle")).toHaveCSS("border-top-color", "rgb(180, 83, 9)");
     const circle = urgent.locator(`[data-project-status-control="${ids.overdue}"]`);
     expect((await circle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    // Drag handles are intentionally hidden until the user enters reorder mode.
     const drag = urgent.locator(".dragHandle");
+    await expect(drag).toHaveCount(0);
+    const reorderToggle = page.locator('[data-v1-reorder-toggle]');
+    await expect(reorderToggle).toHaveAttribute("aria-pressed", "false");
+    await reorderToggle.click();
+    await expect(reorderToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(drag).toBeVisible();
     expect((await drag.boundingBox())!.width).toBeGreaterThanOrEqual(44);
     expect((await drag.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await reorderToggle.click();
+    await expect(drag).toHaveCount(0);
     await circle.click();
     const confirm = page.locator("dialog.confirmDialog");
     await expect(confirm).toBeVisible();
@@ -111,12 +120,13 @@ test("phone project list has accessible pastel Areas, one issue, circular status
     await expect(urgent).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 
-    // Responsive preview never replaces the original desktop project list.
+    // UI-04b shares the same preview project row and completion circle on desktop.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await expect(page.locator('.projectGroups[data-projects-preview="lumi-v1"]')).toHaveCount(0);
-    await expect(group.locator(".projectGroupHeading")).toBeVisible();
-    await expect(group.locator(`[data-project-preview-row="${ids.overdue}"]`)).toHaveCount(0);
-    await expect(group.locator(".taskRowMeta").first()).toBeVisible();
+    await expect(page.locator('.projectGroups[data-projects-preview="lumi-v1"]')).toBeVisible();
+    await expect(group.locator(".projectGroupHeading")).toHaveCSS("clip-path", "inset(50%)");
+    await expect(group.locator(`[data-project-preview-row="${ids.overdue}"]`)).toBeVisible();
+    await expect(group.locator(`[data-project-status-control="${ids.overdue}"]`)).toBeVisible();
+    await expect(group.locator(".taskRowMeta")).toHaveCount(0);
   } finally {
     await cleanPreview(page, ids);
   }
@@ -198,6 +208,18 @@ for (const theme of ["light", "dark"] as const) {
         const textRatio = await computedContrast(page, bubble + " " + sub, "color", bubble);
         expect(textRatio, theme + ": calendar " + sub).toBeGreaterThanOrEqual(4.5);
       }
+      // The same Area groups are now rendered on desktop; no headings are
+      // visible, so their pastel surface and strong boundary must persist.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto("/?view=Projects");
+      await waitUntilSynced(page);
+      const desktopGroup = page.locator(groupSelector);
+      await expect(desktopGroup).toBeVisible();
+      await expect(page.locator('.projectGroups[data-projects-preview="lumi-v1"]')).toBeVisible();
+      await expect(desktopGroup.locator(".projectGroupHeading")).toHaveCSS("clip-path", "inset(50%)");
+      const desktopBorder = await computedContrast(page, groupSelector, "borderTopColor", groupSelector);
+      expect(desktopBorder, theme + ": desktop Area group border").toBeGreaterThanOrEqual(3);
+      await expect(desktopGroup.locator('[data-project-preview-row="' + ids.overdue + '"] .v1ProjectCircle')).toBeVisible();
     } finally {
       await cleanPreview(page, ids);
     }

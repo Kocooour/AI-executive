@@ -9,6 +9,9 @@ import {
 } from "../../../lib/day-timeline";
 import type { Entity } from "../../../lib/db";
 import { planSlotsByTask } from "../../../lib/today-plan";
+import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { mobileDesignV1Preview } from "../navigation";
+import { LumiCompletionControl } from "./lumi-completion-control";
 import type { CalendarEvent, DayPlanItem } from "../types";
 import type { LumiApp } from "../use-lumi-app";
 import { CalendarEventActions } from "./calendar-event-actions";
@@ -274,11 +277,22 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
             {untimed.map((task) => {
               const estimate = typeof task.properties.estimatedMinutes === "number" && task.properties.estimatedMinutes > 0 ? task.properties.estimatedMinutes : null;
               return (
-                <li key={task.id} className="dayTimelineUntimedRow" data-untimed-task={task.id} style={{ minHeight: untimedRowHeight(estimate, pxPerMinute) }}>
-                  <button type="button" className="check" aria-label={`${tr("complete")} ${task.title || tr("untitledItem")}`} onClick={() => void app.done(task.id)}>○</button>
+                <li key={task.id} className="dayTimelineUntimedRow" data-untimed-task={task.id}
+                  style={mobileDesignV1Preview ? undefined : { minHeight: untimedRowHeight(estimate, pxPerMinute) }}>
+                  {mobileDesignV1Preview ? (
+                    <LumiCompletionControl className="check" kind="task" tone={taskPreviewCompletionTone(task, app.today)} complete={false}
+                      stateLabel={taskPreviewStateText(taskPreviewCompletionTone(task, app.today), language)}
+                      actionLabel={`${tr("complete")} ${task.title || tr("untitledItem")}`}
+                      blockedReason={language === "cs" ? "Zvolte konkrétní prostor a vyčkejte na synchronizaci." : "Select a workspace and finish synchronization."}
+                      disabled={app.activeWorkspaceId === "all" || app.unsent.has(task.id) || app.heldReasons.has(task.id)}
+                      onClick={() => void app.done(task.id)} />
+                  ) : (
+                    <button type="button" className="check" aria-label={`${tr("complete")} ${task.title || tr("untitledItem")}`}
+                      onClick={() => void app.done(task.id)}>○</button>
+                  )}
                   <span className="dayTimelineUntimedMain">
                     <button type="button" className="taskRowOpen" onClick={() => void inspect(task)}>{task.title || tr("untitledItem")}</button>
-                    <small data-timeline-estimate>{estimate ? minutesText(estimate) : tr("timelineNoEstimate")}</small>
+                    {(!mobileDesignV1Preview || estimate) && <small data-timeline-estimate>{estimate ? minutesText(estimate) : tr("timelineNoEstimate")}</small>}
                   </span>
                   {/* Today's plan feedback must not appear on a different selected day. */}
                   {isCurrentDay && <TodayTimeCell app={app} task={task} slot={planSlots.get(task.id)} />}
