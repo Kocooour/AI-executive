@@ -76,7 +76,18 @@ test("phone day bubbles select one civil day, mute earlier dates and never reuse
   const selectedPast = picker.locator(`[data-date="${past}"]`);
   await expect(selectedPast).toHaveAttribute("aria-pressed", "true");
   await expect(selectedPast).not.toHaveAttribute("data-past", "true");
-  expect(await selectedPast.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe("rgb(139, 92, 246)");
+  // The selected bubble uses the contrast-safe v1 token in either theme; do not
+  // lock the browser check to the previous lower-contrast hex color.
+  const selectedColor = await selectedPast.evaluate((node) => {
+    const actual = getComputedStyle(node).backgroundColor;
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = "var(--v1-accent)";
+    node.appendChild(probe);
+    const expected = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { actual, expected };
+  });
+  expect(selectedColor.actual).toBe(selectedColor.expected);
   await expect(page.locator('[data-timeline-item="event:ui04a-0"]')).toBeVisible();
   await expect(page.locator('[data-timeline-item="event:ui04a-2"]')).toHaveCount(0);
   const pastRange = calendarLocalDayRange(past, 1, zone);
