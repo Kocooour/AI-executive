@@ -1,0 +1,136 @@
+/* UI-04c: legacy workspace presentation, strictly behind v1 My Plan preview.
+   Area tint carries organization, completion contour carries attention. */
+.appShell[data-my-plan-preview="true"] .myPlanV1Sections {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Day {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1DayTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: var(--text);
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1DayCount {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-width: 25px;
+  min-height: 25px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--v1-surface-subtle);
+  color: var(--v1-neutral-stroke);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Areas {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Area {
+  --v1-plan-area-color: var(--v1-surface-subtle);
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--v1-neutral-stroke);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--v1-plan-area-color) 72%, var(--surface));
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="personal"] { --v1-plan-area-color: var(--v1-area-personal); }
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="work"] { --v1-plan-area-color: var(--v1-area-work); }
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="family"] { --v1-plan-area-color: var(--v1-area-family); }
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="extra-a"] { --v1-plan-area-color: var(--v1-area-extra-a); }
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="extra-b"] { --v1-plan-area-color: var(--v1-area-extra-b); }
+.appShell[data-my-plan-preview="true"] .myPlanV1Area[data-preview-area-tone="extra-c"] { --v1-plan-area-color: var(--v1-area-extra-c); }
+html[data-theme="dark"] .appShell[data-my-plan-preview="true"] .myPlanV1Area {
+  background: color-mix(in srgb, var(--v1-plan-area-color) 82%, var(--v1-muted) 18%);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .appShell[data-my-plan-preview="true"] .myPlanV1Area {
+    background: color-mix(in srgb, var(--v1-plan-area-color) 82%, var(--v1-muted) 18%);
+  }
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Area > .taskRowList {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Area .taskRow {
+  min-width: 0;
+  margin: 0;
+  background: transparent !important;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Area .taskRow + .taskRow {
+  border-top: 1px solid color-mix(in srgb, var(--v1-neutral-stroke) 45%, transparent);
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1Empty,
+.appShell[data-my-plan-preview="true"] .myPlanV1ScopeNotice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: var(--muted);
+  background: var(--v1-surface-subtle);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1EventsTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.appShell[data-my-plan-preview="true"] .myPlanV1EventIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--v1-neutral-stroke);
+  border: 1px solid currentColor;
+  font-size: 12px;
+  line-height: 1;
+}
+.appShell[data-my-plan-preview="true"] .todaySuggestion {
+  border: 1px solid var(--v1-accent);
+  background: var(--v1-accent-soft);
+  color: var(--v1-on-accent-soft);
+}
+@media (max-width: 700px) {
+  .appShell[data-my-plan-preview="true"] .myPlanV1Area { padding: 5px 8px; }
+  .appShell[data-my-plan-preview="true"] .myPlanV1Sections { gap: 16px; }
+}
+
+.appShell[data-my-plan-preview="true"] .myPlanV1ProposalImpact {
+  flex: 0 0 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--v1-accent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-review],
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-approve],
+.appShell[data-my-plan-preview="true"] [data-plan-proposal-reject] {
+  min-height: 44px;
+}

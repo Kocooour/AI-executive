@@ -25,10 +25,12 @@ import { fetchClientAuthStatus } from "../../lib/client-auth-status";
 import { addLocalDays, fromLocalDateTime, toLocalDateTime, ymd, zonedDateTimeToIso } from "../../lib/local-dates";
 import { addCalendarDays, calendarEventOverlapsLocalRange, calendarLocalDayRange } from "../../lib/calendar-event-display";
 import { deferTargets } from "../../lib/defer-suggestion";
+import { todayProposalTaskSignature } from "../../lib/today-summary";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
+import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -67,6 +69,9 @@ export function useLumiApp() {
     [navigationUnavailable, setNavigationUnavailable] = useState(false),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
+    // Only the opt-in Můj plán reorder displays this; never silently treat a
+    // rejected multi-record write as a successful move.
+    [planReorderError, setPlanReorderError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
     // B5 selections belong to exactly one workspace and never survive a navigation
     // or authentication change. IDs are re-filtered against live Inbox rows below.
@@ -3258,7 +3263,7 @@ export function useLumiApp() {
   // one open there (a save that finishes after the panel was closed must not reopen it).
   // `properties` may be a function of the stored properties, for a change that depends on them
   // (a checklist item ticked): it is then computed from the stored record, not from what is shown.
-  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false) {
+  async function patch(e: Entity, properties: Record<string, unknown> | ((stored: Record<string, unknown>) => Record<string, unknown>), action = "updated", onlyIfOpen = false, expectedTaskSnapshot?: string) {
     // Restored data is being adopted and the page reloads: nothing typed against the replaced data is saved (lib/adoption.ts).
     if (isAdopting()) return;
     localDataVersion.current += 1;
@@ -3266,7 +3271,13 @@ export function useLumiApp() {
     // example leaving the notes field by ticking a checklist item) must not overwrite each other.
     // The write marker is released even if the write fails (sign-out waits for it).
     try { await db.transaction("rw", db.entities, async () => {
-      const current = (await db.entities.get(e.id)) || e;
+      const loaded = await db.entities.get(e.id);
+      // Confirm against the live record inside the read/write transaction.
+      // This closes the race between tapping Approve and an intervening edit.
+      if (expectedTaskSnapshot &&
+        (!loaded || todayProposalTaskSignature(loaded) !== expectedTaskSnapshot))
+        throw new Error("Reviewed task changed");
+      const current = loaded || e;
       const activity = Array.isArray(current.properties.activity)
         ? current.properties.activity
         : [];
@@ -3707,6 +3718,7 @@ export function useLumiApp() {
     task: Entity,
     choice: "today" | "evening" | "tomorrow" | "weekend" | "nextWeek" | "someday" | "clear" | string,
     via: "manual" | "lumi",
+    expectedTaskSnapshot?: string,
   ): Promise<boolean> {
     if (activeWorkspaceId === "all" || isAdopting() || deferInFlight.current) return false;
     // One choice at a time: a second one while the first is being saved would replace its Undo snapshot.
@@ -3714,8 +3726,9 @@ export function useLumiApp() {
     setDeferBusy(true);
     setDeferError(false);
     try {
-      const stored = (await db.entities.get(task.id)) || task;
-      if (stored.type !== "task" || stored.status !== "open") return false;
+      const stored = (await db.entities.get(task.id)) || (expectedTaskSnapshot ? null : task);
+      if (!stored || stored.type !== "task" || stored.status !== "open" ||
+        (expectedTaskSnapshot && todayProposalTaskSignature(stored) !== expectedTaskSnapshot)) return false;
       const targets = deferTargets(ymd());
       const when = choice === "today" || choice === "evening" ? targets.today
         : choice === "tomorrow" ? targets.tomorrow
@@ -3749,7 +3762,7 @@ export function useLumiApp() {
           evening: choice === "evening",
           ...(previous !== next ? { deferHistory: [...history, { from: previous, to: next, at: Date.now(), via }].slice(-10) } : {}),
         };
-      }, `deferred ${choice}`);
+      }, `deferred ${choice}`, false, expectedTaskSnapshot);
       // The previous state becomes the Undo step only once the change is written.
       setUndo(stored);
       setUndoRelations([]);
@@ -3876,6 +3889,15 @@ export function useLumiApp() {
     : view === "Today"
       ? [...visible.filter((x) => !isEveningTask(x, today)), ...visible.filter((x) => isEveningTask(x, today))]
       : visible;
+  // UI-04c: the visible Dnes/Zítra Area blocks, not the old Today/Upcoming
+  // membership lists, define keyboard and drag reorder peers in My Plan.
+  // The legacy list behavior must be identical outside this opt-in route.
+  const planReorderSections = mobileDesignV1Preview && mobilePlanPreviewActive &&
+    view === "Today" && activeWorkspaceId !== "all"
+    ? buildMyPlanPreview({ entities: items, relations: scopedRelations,
+      workspaceId: activeWorkspaceId, today, excludeTimelineIds: todayTimelineTaskIds,
+      priorityFilter, sortBy })
+    : null;
   const batchAllowed = view === "Inbox" && authState === "ready" && syncStatus === "synced" &&
     activeWorkspaceId !== "all" && writeWorkspaceId === activeWorkspaceId;
   const batchCandidates = batchAllowed ? collection.filter((task) =>
@@ -3948,7 +3970,74 @@ export function useLumiApp() {
     setActiveDragTarget(targetAtPoint(event.clientX, event.clientY));
   }
 
-  async function persistManualOrder(ordered: Entity[], movedId: string, scope: string) {
+  async function persistManualOrder(ordered: Entity[], movedId: string, scope: string, allAreaPeers?: Entity[]) {
+    if (allAreaPeers) {
+      // Reordering a filtered My Plan group can require renumbering hidden
+      // neighbours. None of the records about to change may be held, pending,
+      // conflicted or outside the explicit currently writable workspace.
+      const updates = previewManualRankUpdates(ordered, allAreaPeers, movedId, scope);
+      if (updates?.length === 0) return;
+      const workspaceId = allAreaPeers[0]?.workspaceId ?? "";
+      const writableScope = () =>
+        authState === "ready" && syncStatus === "synced" &&
+        activeWorkspaceRef.current === workspaceId && writeWorkspaceId === workspaceId &&
+        workspaceId !== "all" && !isAdopting() && !offlineRecoveryIsHeld() &&
+        !signedOut.current && !signingOutElsewhere;
+      const eligible = (records: Entity[]) =>
+        Boolean(updates && previewRankWritesAllowed(
+          updates, records, workspaceId, new Set(heldReasons.keys()), unsent,
+        ));
+      // Validate both the old records and their full post-write snapshots
+      // before any mutation. A formerly valid large task can become held
+      // after manualOrders/activity increases its properties size.
+      const timestamp = writeTime();
+      if (!updates || !writableScope() || !eligible(allAreaPeers) ||
+          !previewRankNextRecords(updates, allAreaPeers, scope, timestamp)) {
+        setPlanReorderError(true);
+        return;
+      }
+      let saved = false;
+      localDataVersion.current += 1;
+      try {
+        await db.transaction("rw", db.entities, async () => {
+          const latest = await db.entities.bulkGet(allAreaPeers.map((task) => task.id));
+          // Repeat the write gate inside the transaction against actual stored
+          // records. All checks precede the first update, so an ineligible
+          // hidden/conflicted/pending peer aborts the entire move.
+          if (!writableScope() || latest.some((task, index) => !task ||
+            task.updatedAt !== allAreaPeers[index].updatedAt ||
+            task.workspaceId !== allAreaPeers[index].workspaceId ||
+            task.status !== allAreaPeers[index].status ||
+            JSON.stringify(task.properties) !== JSON.stringify(allAreaPeers[index].properties))) return;
+          const fresh = latest.filter((task): task is Entity => Boolean(task));
+          if (!eligible(fresh)) return;
+          // Build and validate ALL successor records before the first update:
+          // a rejection must leave the whole Area untouched.
+          const nextRecords = previewRankNextRecords(updates, fresh, scope, timestamp);
+          if (!nextRecords) return;
+          for (const next of nextRecords) {
+            await db.entities.update(next.id, {
+              properties: next.properties,
+              updatedAt: next.updatedAt,
+            });
+          }
+          saved = true;
+        });
+      } catch {
+        setPlanReorderError(true);
+        return;
+      } finally {
+        localDataVersion.current += 1;
+      }
+      if (!saved) {
+        setPlanReorderError(true);
+        return;
+      }
+      setPlanReorderError(false);
+      await syncToServer();
+      await load();
+      return;
+    }
     const timestamp = writeTime();
     const movedIndex = ordered.findIndex((entity) => entity.id === movedId);
     const moved = ordered[movedIndex];
@@ -4037,6 +4126,10 @@ export function useLumiApp() {
   async function completeDrop(sourceId: string, target: string, scope = dragScopeRef.current) {
     const source = items.find((entity) => entity.id === sourceId);
     if (!source || !target) return;
+    // My Plan's rows may only change manual rank inside their current visible
+    // day + Area. Dragging onto a legacy section must not reschedule them.
+    const planTaskDrag = planReorderSections !== null && source.type === "task";
+    if (planTaskDrag && (sortBy !== "manual" || target.startsWith("section:"))) return;
     if (target.startsWith("section:")) {
       await moveTaskToSection(source, target.slice("section:".length));
       return;
@@ -4045,9 +4138,14 @@ export function useLumiApp() {
     const targetEntity = items.find((entity) => entity.id === target.slice("entity:".length));
     if (!targetEntity || targetEntity.id === source.id || targetEntity.workspaceId !== source.workspaceId) return;
     if (source.type === targetEntity.type) {
-      let peers = source.type === "project" && scope === "project:all" ? projectGroupPeers(source) : peersForScope(scope, source.workspaceId);
-      // Dropping onto a row of the other Today group (regular / evening) is not a reorder.
-      if (view === "Today" && scope === "task:Today" && source.type === "task") {
+      const planPeers = planTaskDrag
+        ? previewReorderPeers(planReorderSections!, source.id, scope, targetEntity.id, sortBy)
+        : null;
+      if (planTaskDrag && !planPeers) return; // no fallback to legacy membership
+      let peers = planTaskDrag ? planPeers! :
+        source.type === "project" && scope === "project:all" ? projectGroupPeers(source) : peersForScope(scope, source.workspaceId);
+      // Legacy Today keeps the separate evening group; My Plan groups by Area instead.
+      if (!planTaskDrag && view === "Today" && scope === "task:Today" && source.type === "task") {
         const evening = isEveningTask(source, today);
         if (isEveningTask(targetEntity, today) !== evening) return;
         peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
@@ -4058,10 +4156,24 @@ export function useLumiApp() {
       const [moved] = peers.splice(sourceIndex, 1);
       const insertionIndex = peers.findIndex((entity) => entity.id === targetEntity.id);
       peers.splice(insertionIndex + (sourceIndex < targetIndex ? 1 : 0), 0, moved);
-      if (source.type === "task") setSortBy("manual");
-      await persistManualOrder(peers, source.id, scope);
+      if (planTaskDrag) {
+        // The source/target are visible, but rank collision recovery must also
+        // preserve filtered and timeline-linked rows of the same Area/day.
+        const fullPlan = buildMyPlanPreview({
+          entities: items, relations: scopedRelations,
+          workspaceId: source.workspaceId, today, priorityFilter: "all",
+          sortBy: "manual",
+        });
+        const allAreaPeers = previewReorderPeers(fullPlan, source.id, scope, undefined, "manual");
+        if (!allAreaPeers) return;
+        await persistManualOrder(peers, source.id, scope, allAreaPeers);
+      } else {
+        if (source.type === "task") setSortBy("manual");
+        await persistManualOrder(peers, source.id, scope);
+      }
       return;
     }
+    if (planTaskDrag) return; // cross-type drops cannot mutate relations here
     if ((source.type === "task" || source.type === "note") && targetEntity.type === "project") {
       await relate(source.id, targetEntity.id, "belongs_to_project");
     } else if (source.type === "project" && targetEntity.type === "area") {
@@ -4111,12 +4223,16 @@ export function useLumiApp() {
   }
 
   async function moveWithKeyboard(entity: Entity, direction: -1 | 1, scope: string) {
-    let peers = view === "Home" && scope === "task:Today" ? homeTodayTasks
+    const planKeyboard = planReorderSections !== null && entity.type === "task";
+    const planPeers = planKeyboard ? previewReorderPeers(planReorderSections!, entity.id, scope, undefined, sortBy) : null;
+    if (planKeyboard && !planPeers) return;
+    let peers = planKeyboard ? planPeers! :
+      view === "Home" && scope === "task:Today" ? homeTodayTasks
         : scope === `task:${view}` ? collection.filter((candidate) => candidate.workspaceId === entity.workspaceId)
           : entity.type === "project" && scope === "project:all" ? projectGroupPeers(entity)
             : peersForScope(scope, entity.workspaceId);
     // Today shows its evening tasks as a group of their own: a task moves within its own group only.
-    if (view === "Today" && scope === "task:Today") {
+    if (!planKeyboard && view === "Today" && scope === "task:Today") {
       const evening = isEveningTask(entity, today);
       peers = peers.filter((candidate) => isEveningTask(candidate, today) === evening && !todayTimelineTaskIds.has(candidate.id));
     }
@@ -4511,6 +4627,8 @@ export function useLumiApp() {
     batchCandidates,
     batchIds,
     setBatchIds,
+    planReorderError,
+    setPlanReorderError,
     testAppBadge,
     testNotification,
     text,

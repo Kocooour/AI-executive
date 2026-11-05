@@ -221,7 +221,8 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
               <li key={entry.id}>
                 <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineItemMenu"), { title: entry.title })} triggerLabel={label}
                   triggerClassName={classes(entry) + " isAllDay"} triggerData={{ "data-timeline-item": entry.id }}
-                  triggerContent={<><span className="dtTitle">{entry.title}</span><span className="dtMeta">{tr("timelineAllDay")}</span></>}>
+                  triggerContent={<>{mode === "today" && mobileDesignV1Preview && app.mobilePlanPreviewActive && entry.kind === "event" &&
+                    <span className="myPlanV1EventIcon" aria-hidden="true">▦</span>}<span className="dtTitle">{entry.title}</span><span className="dtMeta">{tr("timelineAllDay")}</span></>}>
                   {(close) => panel(entry, tr("timelineAllDay"), close)}
                 </PopoverMenu>
               </li>
@@ -260,7 +261,8 @@ export function DayTimeline({ app, mode, empty, day, dayEvents }: {
                   <PopoverMenu role="group" className="dayTimelineItemMenu" label={fill(tr("timelineItemMenu"), { title: entry.title })} triggerLabel={label}
                     triggerClassName={`${classes(entry)} ${placed.height < 40 ? "isCompact" : ""}`.trim()}
                     triggerData={{ "data-timeline-item": entry.id, "data-timeline-minutes": String(minutes), "data-timeline-kind": entry.kind }}
-                    triggerContent={<><span className="dtTitle">{entry.title}</span><span className="dtMeta">{when} · {minutesText(minutes)}</span><span className="dtDur" aria-hidden="true">· {minutesText(minutes)}</span></>}>
+                    triggerContent={<>{mode === "today" && mobileDesignV1Preview && app.mobilePlanPreviewActive && entry.kind === "event" &&
+                      <span className="myPlanV1EventIcon" aria-hidden="true">▦</span>}<span className="dtTitle">{entry.title}</span><span className="dtMeta">{when} · {minutesText(minutes)}</span><span className="dtDur" aria-hidden="true">· {minutesText(minutes)}</span></>}>
                     {(close) => panel(entry, `${when} · ${minutesText(minutes)}`, close)}
                   </PopoverMenu>
                 </li>

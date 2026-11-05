@@ -1,8 +1,10 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { pluralText } from "../../../lib/plural";
 import { planItemsOutsideToday, planMinutesForTasks, roundedPlanHours } from "../../../lib/today-plan";
-import { pickSummarySuggestion } from "../../../lib/today-summary";
+import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../../../lib/today-summary";
+import { buildMyPlanPreview } from "../../../lib/my-plan-preview";
+import { mobileDesignV1Preview } from "../navigation";
 import { inSentenceDate } from "../format";
 import type { LumiApp } from "../use-lumi-app";
 import { PopoverMenu } from "./popover-menu";
@@ -28,7 +30,17 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
   const shown = collection.filter((task) => task.type === "task");
   const minutes = planMinutesForTasks(visibleDayPlan, new Set(shown.map((task) => task.id)));
   const hours = minutes ? roundedPlanHours(minutes) : 0;
-  const summary = [
+  const planPreviewActive = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const previewDays = planPreviewActive ? buildMyPlanPreview({
+    entities: app.items, relations: app.scopedRelations,
+    workspaceId: app.activeWorkspaceId, today: app.today, priorityFilter, sortBy,
+    excludeTimelineIds: app.todayTimelineTaskIds, language,
+  }) : null;
+  const summary = planPreviewActive
+    ? app.activeWorkspaceId === "all"
+      ? (language === "cs" ? "Vyberte prostor" : "Select a workspace")
+      : `${language === "cs" ? "Dnes" : "Today"}: ${previewDays?.[0]?.count ?? 0} · ${language === "cs" ? "Zítra" : "Tomorrow"}: ${previewDays?.[1]?.count ?? 0}`
+    : [
     priorityFilter !== "all" && shown.length !== todayTasks.length
       ? fill(tr("todayFilteredCount"), { shown: shown.length, total: todayTasks.length })
       : pluralText(language, shown.length, tr("todayTaskForms")),
@@ -77,6 +89,7 @@ export function TodayHeaderMeta({ app }: { app: LumiApp }) {
 export function TodayTop({ app }: { app: LumiApp }) {
   const { calendarDayEvents, calendarFresh, calendarSources, currentDayPlanBlock, dayPlanBusy, dayPlanStatus, dayPlanUndo, nextDayPlanBlock,
     tr, undoDayPlanBlock, visibleDayPlan } = app;
+  const planPreview = mobileDesignV1Preview && app.mobilePlanPreviewActive;
   const canUndo = Boolean(visibleDayPlan && dayPlanUndo?.workspaceId === visibleDayPlan.workspaceId && dayPlanUndo.date === visibleDayPlan.date);
   const stripShowsStale = calendarDayEvents.length > 0 && !calendarFresh;
   // The plan's own calendar state, said once for the whole list (the rows only show their times).
@@ -93,6 +106,12 @@ export function TodayTop({ app }: { app: LumiApp }) {
       <WorkNowCard app={app} compact />
       {/* Outside the calendar section: the event that became a task may have been the day's last one. */}
       <CalendarEventNotice app={app} />
+      {planPreview && calendarDayEvents.length > 0 && (
+        <h2 className="myPlanV1EventsTitle">
+          <span className="myPlanV1EventIcon" aria-hidden="true">▦</span>
+          {app.language === "cs" ? "Dnešní události" : "Today's events"}
+        </h2>
+      )}
       <DayTimeline app={app} mode="today" />
       {(planState || overloaded || currentDayPlanBlock || nextDayPlanBlock) && (
         <div className="todayPlanState" data-today-plan-state>
@@ -117,8 +136,23 @@ export function TodayFooter({ app }: { app: LumiApp }) {
     setView, today, todayTasks, tr, visibleDayPlan } = app;
   // Hidden for the day: kept in this browser per workspace, and in memory when storage is unavailable.
   const [hiddenHere, setHiddenHere] = useState<string[]>([]);
+  const [reviewedProposal, setReviewedProposal] = useState<string | null>(null);
+  const [proposalFailed, setProposalFailed] = useState(false);
+  useEffect(() => { setReviewedProposal(null); setProposalFailed(false); },
+    [activeWorkspaceId, today, app.mobilePlanPreviewActive]);
   const storedHidden = (() => { try { return localStorage.getItem(hiddenKey(activeWorkspaceId)) || ""; } catch { return ""; } })();
   const hiddenDay = storedHidden === today || hiddenHere.includes(`${activeWorkspaceId}|${today}`) ? today : "";
+  // Derive the proposal candidates from the same scoped, filtered, rendered
+  // Area groups as EntityList. Calendar-linked tasks are in the timeline,
+  // not this Dnes list. Legacy Today keeps its own selection unchanged.
+  const previewProposal = mobileDesignV1Preview && app.mobilePlanPreviewActive;
+  const visibleToday = previewProposal ? buildMyPlanPreview({
+    entities: items, relations: app.scopedRelations, workspaceId: activeWorkspaceId,
+    today, priorityFilter: app.priorityFilter, sortBy: app.sortBy,
+    excludeTimelineIds: app.todayTimelineTaskIds, language,
+  })[0] : null;
+  const previewTodayTasks = visibleToday?.groups.flatMap((group) => group.tasks) ?? [];
+  const previewTodayTaskIds = previewProposal ? new Set(previewTodayTasks.map((task) => task.id)) : undefined;
   const todayIds = new Set(todayTasks.map((task) => task.id));
 
   // Plan items for tasks that are not planned for today are not rows; one quiet line counts them.
@@ -130,18 +164,22 @@ export function TodayFooter({ app }: { app: LumiApp }) {
   const calendarOverloaded = Boolean(visibleDayPlan && visibleDayPlan.calendar === "ready" && visibleDayPlan.overloaded &&
     visibleDayPlan.date === calendarToday && calendarToday === today);
   const picked = activeWorkspaceId === "all" || hiddenDay === today ? null : pickSummarySuggestion({
-    ordered: collection.filter((task) => task.type === "task"),
-    todayCount: todayTasks.length,
+    ordered: previewProposal ? previewTodayTasks : collection.filter((task) => task.type === "task"),
+    todayCount: previewProposal ? previewTodayTasks.length : todayTasks.length,
     openTasks: items.filter((item) => item.type === "task" && item.status === "open" && item.workspaceId === activeWorkspaceId),
     today,
     calendarOverloaded,
+    todayTaskIds: previewTodayTaskIds,
   });
+  const proposalKey = picked ? todayProposalReviewKey(picked, activeWorkspaceId, today) : null;
+  const proposalReviewed = previewProposal && proposalKey !== null && reviewedProposal === proposalKey;
   const sentence = picked && fill(tr(picked.suggestion.reason), {
     todayCount: picked.suggestion.params.todayCount,
     date: inSentenceDate(String(picked.suggestion.params.date), language),
     dayCount: picked.suggestion.params.dayCount,
   });
   const hide = () => {
+    setProposalFailed(false);
     setHiddenHere((current) => [...current, `${activeWorkspaceId}|${today}`]);
     try { localStorage.setItem(hiddenKey(activeWorkspaceId), today); } catch { /* storage unavailable: hidden until reload */ }
   };
@@ -154,15 +192,62 @@ export function TodayFooter({ app }: { app: LumiApp }) {
         <p className="todayOutside" data-today-outside>{fill(tr(outsideKey), { n: outside })} — <button type="button" className="textAction" onClick={() => setView("Home")}>{tr("todayOutsideLink")}</button></p>
       )}
       {picked && sentence && (
-        <section className="todaySuggestion" aria-label={tr("todaySuggestLabel")} data-today-suggestion={picked.task.id}>
+        <section className="todaySuggestion"
+          aria-label={mobileDesignV1Preview && app.mobilePlanPreviewActive
+            ? (language === "cs" ? "Návrh Lumi" : "Lumi proposal") : tr("todaySuggestLabel")}
+          data-today-suggestion={picked.task.id}>
           <p>
-            <span className="deferLumi"><span aria-hidden="true">✦ </span>{tr("deferLumi")}:</span> {sentence}{" "}
+            <span className="deferLumi"><span aria-hidden="true">✦ </span>{mobileDesignV1Preview && app.mobilePlanPreviewActive
+              ? (language === "cs" ? "Návrh Lumi" : "Lumi proposal") : tr("deferLumi")}:</span> {sentence}{" "}
             <b>{fill(tr("todaySuggestMove"), { title: picked.task.title || tr("untitledItem"), date: picked.suggestion.target === "someday" ? tr("scheduleSomeday") : inSentenceDate(picked.suggestion.target, language) })}</b>
           </p>
           <div className="todaySuggestionActions">
-            <button type="button" className="primaryAction" disabled={deferBusy} onClick={() => void deferTask(picked.task, picked.suggestion.target, "lumi")}>{tr("deferApply")}</button>
-            <button type="button" onClick={hide}>{tr("todaySuggestHide")}</button>
+            {previewProposal && !proposalReviewed ? (
+              <button type="button" className="primaryAction" data-plan-proposal-review=""
+                onClick={() => { if (proposalKey) { setProposalFailed(false); setReviewedProposal(proposalKey); } }}>
+                {language === "cs" ? "Posoudit" : "Review"}
+              </button>
+            ) : (
+              <>
+                {previewProposal && (
+                  <p className="myPlanV1ProposalImpact" data-plan-proposal-impact>
+                    {language === "cs"
+                      ? "Dopad: úkol bude přeplánován a aktualizují se jeho značky Dnes, Večer nebo Doručené. Termín, prostor, Oblast a ostatní úkoly se nemění."
+                      : "Impact: reschedules this task and updates its Today, Evening or Inbox markers. Its deadline, workspace, Area and other tasks stay unchanged."}
+                  </p>
+                )}
+                <button type="button" className="primaryAction" disabled={deferBusy}
+                  data-plan-proposal-approve={previewProposal ? picked.task.id : undefined}
+                  onClick={() => {
+                    if (!previewProposal) { void deferTask(picked.task, picked.suggestion.target, "lumi"); return; }
+                    // Recheck the exact reviewed evidence at click time, then
+                    // require the latest stored task snapshot to still match
+                    // inside the transactional write path.
+                    if (!proposalReviewed || !proposalKey ||
+                      reviewedProposal !== todayProposalReviewKey(picked, activeWorkspaceId, today)) return;
+                    setReviewedProposal(null);
+                    setProposalFailed(false);
+                    void deferTask(picked.task, picked.suggestion.target, "lumi",
+                      todayProposalTaskSignature(picked.task))
+                      .then((saved) => { if (!saved) setProposalFailed(true); })
+                      .catch(() => setProposalFailed(true));
+                  }}>
+                  {previewProposal ? (language === "cs" ? "Schválit" : "Approve") : tr("deferApply")}
+                </button>
+                <button type="button" data-plan-proposal-reject={previewProposal ? picked.task.id : undefined}
+                  onClick={hide}>
+                  {previewProposal ? (language === "cs" ? "Odmítnout" : "Reject") : tr("todaySuggestHide")}
+                </button>
+              </>
+            )}
           </div>
+          {previewProposal && proposalFailed && (
+            <p className="dayPlanWarning" role="status" data-plan-proposal-retry>
+              {language === "cs"
+                ? "Návrh se změnil nebo jej nebylo možné uložit. Zkontrolujte ho znovu."
+                : "The proposal changed or could not be saved. Review it again."}
+            </p>
+          )}
         </section>
       )}
       {noCalendar && <p className="homeNotice todayCalendarNote">{tr("calendarDisconnectedNote")} <button type="button" className="textAction" onClick={() => setView("Calendar")}>{tr("homeConnectCalendar")}</button></p>}

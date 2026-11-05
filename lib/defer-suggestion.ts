@@ -46,6 +46,9 @@ export type DeferSuggestionInput = {
   openTasks: Entity[];
   today: string;
   calendarOverloaded?: boolean;
+  /** Preview-only override for the actually displayed Dnes rows. Legacy Today
+   * membership remains unchanged when omitted. */
+  todayTaskIds?: ReadonlySet<string>;
 };
 
 export const OVERLOADED_TODAY_TASKS = 6;
@@ -71,7 +74,7 @@ export const deferralCount = (task: Entity) => {
 const withProperties = (entity: Entity): Entity =>
   entity.properties && typeof entity.properties === "object" ? entity : { ...entity, properties: {} };
 
-export function suggestDeferral({ task: given, openTasks, today, calendarOverloaded = false }: DeferSuggestionInput): DeferSuggestion | null {
+export function suggestDeferral({ task: given, openTasks, today, calendarOverloaded = false, todayTaskIds }: DeferSuggestionInput): DeferSuggestion | null {
   if (!given || given.type !== "task" || given.status !== "open") return null;
   const task = withProperties(given);
   const { tomorrow, nextWeek } = deferTargets(today);
@@ -108,8 +111,9 @@ export function suggestDeferral({ task: given, openTasks, today, calendarOverloa
   if (count >= REPEATED_DEFERRALS && !deadline) return { target: "someday", reason: "deferRepeated", params: { n: count } };
 
   // 4. Today is overloaded (a calendar that says so, or more than six tasks): the nearest quieter day.
-  if (taskMatchesView(task, "Today", today)) {
-    const todayCount = open.filter((candidate) => taskMatchesView(candidate, "Today", today)).length;
+  if (todayTaskIds ? todayTaskIds.has(task.id) : taskMatchesView(task, "Today", today)) {
+    const todayCount = open.filter((candidate) =>
+      todayTaskIds ? todayTaskIds.has(candidate.id) : taskMatchesView(candidate, "Today", today)).length;
     if (calendarOverloaded || todayCount > OVERLOADED_TODAY_TASKS) {
       for (let offset = 1; offset <= 13; offset += 1) {
         const day = addDays(today, offset);
