@@ -2,6 +2,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { mobileDesignV1Preview } from "../navigation";
 import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { v1DragHandleVisible, v1ReorderAvailable } from "../../../lib/lumi-reorder-preview";
 import { LumiCompletionControl } from "./lumi-completion-control";
 import { projectAreaPreviewTone } from "../../../lib/project-list-preview";
 import { MobileProjectRowV1 } from "./mobile-project-row-v1";
@@ -67,10 +68,8 @@ export function EntityList({ app }: { app: LumiApp }) {
     workspaces,
   } = app;
   const [reorderPreview, setReorderPreview] = useState(false);
-  // A visible edit mode accompanies every v1 work list that supports reordering.
-  // The project detail uses the same state via an explicit toolbar.
-  const reorderableView = ["Today", "Inbox", "Upcoming", "Overdue", "Anytime",
-    "Someday", "Completed", "Areas", "Notes", "Projects"].includes(view);
+  // The same edit state also controls both task and note handles on ProjectPage.
+  const reorderableView = v1ReorderAvailable(view);
   // The edit affordance is per list, not shared across Today/My Plan or a project detail.
   useEffect(() => { setReorderPreview(false); },
     [view, activeWorkspaceId, app.mobilePlanPreviewActive, app.openProject?.id]);
@@ -133,7 +132,7 @@ export function EntityList({ app }: { app: LumiApp }) {
                   ? [...batchIds, x.id] : batchIds.filter(id => id !== x.id))}/>
             </label>
           )}
-          {(!mobileDesignV1Preview || (view !== "Home" && (!reorderableView || reorderPreview))) &&
+          {v1DragHandleVisible(view, mobileDesignV1Preview, reorderPreview) &&
             dragHandle(x, dragScope ?? (x.type === "task" ? `task:${view}` : `${x.type}:all`))}
           {x.type === "task" ? (
             mobileDesignV1Preview ? (
