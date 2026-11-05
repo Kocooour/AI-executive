@@ -30,7 +30,7 @@ import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
-import { buildMyPlanPreview, previewManualRankUpdates, previewReorderPeers } from "../../lib/my-plan-preview";
+import { buildMyPlanPreview, previewManualRankUpdates, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
 import { findActiveProjectWithTitle } from "../../lib/project-title";
 import { type AIProposal, type AssistantMessage, type CalendarEvent, type CalendarSourceState, type CaptureProjectAction, type CaptureSuggestion, type ConfirmRequest, type ContextClaimItem, type ContextHistoryState, type ContextHistoryStep, type ContextInboxProposal, type ContextInboxTaskDraft, type DayPlanItem, type DurableContextItem, type Language, type NotificationState, type PACTAgentResult, type PACTAgentRunSummary, type PACTAgentSummary, type StandaloneSubjectItem, type ThemeMode } from "./types";
@@ -69,6 +69,9 @@ export function useLumiApp() {
     [navigationUnavailable, setNavigationUnavailable] = useState(false),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
+    // Only the opt-in Můj plán reorder displays this; never silently treat a
+    // rejected multi-record write as a successful move.
+    [planReorderError, setPlanReorderError] = useState(false),
     [selected, setSelected] = useState<Entity | null>(null),
     // B5 selections belong to exactly one workspace and never survive a navigation
     // or authentication change. IDs are re-filtered against live Inbox rows below.
@@ -3969,27 +3972,45 @@ export function useLumiApp() {
 
   async function persistManualOrder(ordered: Entity[], movedId: string, scope: string, allAreaPeers?: Entity[]) {
     if (allAreaPeers) {
-      // The visible UI-04c Area group may omit filtered/timeline tasks. Keep
-      // their existing slots; renormalize only this Area if equal ranks mean
-      // one moved rank cannot represent the requested position.
+      // Reordering a filtered My Plan group can require renumbering hidden
+      // neighbours. None of the records about to change may be held, pending,
+      // conflicted or outside the explicit currently writable workspace.
       const updates = previewManualRankUpdates(ordered, allAreaPeers, movedId, scope);
-      if (!updates || updates.length === 0) return;
+      if (updates?.length === 0) return;
+      const workspaceId = allAreaPeers[0]?.workspaceId ?? "";
+      const writableScope = () =>
+        authState === "ready" && syncStatus === "synced" &&
+        activeWorkspaceRef.current === workspaceId && writeWorkspaceId === workspaceId &&
+        workspaceId !== "all" && !isAdopting() && !offlineRecoveryIsHeld() &&
+        !signedOut.current && !signingOutElsewhere;
+      const eligible = (records: Entity[]) =>
+        Boolean(updates && previewRankWritesAllowed(
+          updates, records, workspaceId, new Set(heldReasons.keys()), unsent,
+        ));
+      // Preflight before any write or local data-version bump.
+      if (!updates || !writableScope() || !eligible(allAreaPeers)) {
+        setPlanReorderError(true);
+        return;
+      }
       const timestamp = writeTime();
-      const byId = new Map(allAreaPeers.map((task) => [task.id, task]));
       let saved = false;
       localDataVersion.current += 1;
       try {
         await db.transaction("rw", db.entities, async () => {
           const latest = await db.entities.bulkGet(allAreaPeers.map((task) => task.id));
-          // Do not overwrite a concurrent change, even on a hidden peer. All
-          // writes occur only after every snapshot has been validated.
-          if (latest.some((task, index) => !task ||
+          // Repeat the write gate inside the transaction against actual stored
+          // records. All checks precede the first update, so an ineligible
+          // hidden/conflicted/pending peer aborts the entire move.
+          if (!writableScope() || latest.some((task, index) => !task ||
             task.updatedAt !== allAreaPeers[index].updatedAt ||
             task.workspaceId !== allAreaPeers[index].workspaceId ||
-            task.status !== allAreaPeers[index].status)) return;
+            task.status !== allAreaPeers[index].status ||
+            JSON.stringify(task.properties) !== JSON.stringify(allAreaPeers[index].properties))) return;
+          const fresh = latest.filter((task): task is Entity => Boolean(task));
+          if (!eligible(fresh)) return;
+          const byId = new Map(fresh.map((task) => [task.id, task]));
           for (const { id, rank } of updates) {
-            const current = latest.find((item) => item?.id === id);
-            if (!current || !byId.has(id)) return;
+            const current = byId.get(id)!;
             const orders = current.properties.manualOrders;
             const manualOrders = orders && typeof orders === "object" && !Array.isArray(orders)
               ? { ...(orders as Record<string, unknown>) } : {};
@@ -4005,10 +4026,19 @@ export function useLumiApp() {
           }
           saved = true;
         });
+      } catch {
+        setPlanReorderError(true);
+        return;
       } finally {
         localDataVersion.current += 1;
       }
-      if (saved) { await syncToServer(); await load(); }
+      if (!saved) {
+        setPlanReorderError(true);
+        return;
+      }
+      setPlanReorderError(false);
+      await syncToServer();
+      await load();
       return;
     }
     const timestamp = writeTime();
@@ -4600,6 +4630,8 @@ export function useLumiApp() {
     batchCandidates,
     batchIds,
     setBatchIds,
+    planReorderError,
+    setPlanReorderError,
     testAppBadge,
     testNotification,
     text,
