@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../lib/today-summary.ts";
 
 const day = "2026-11-05";
 const entity = (id, type, workspaceId = "personal", properties = {}, status = type === "task" ? "open" : "active") => ({
@@ -208,4 +209,103 @@ test("UI-04c: preview reorder never falls back to legacy Today/Upcoming or chang
   assert.match(app, /if \(planKeyboard && !planPeers\) return/);
   assert.match(app, /if \(!planTaskDrag && view === "Today"/);
   assert.match(app, /if \(!planKeyboard && view === "Today"/);
+});
+
+
+test("UI-04c: suggestions count visible overdue deadlines but never defer a protected deadline", () => {
+  // Deadline-only work is shown in Dnes even though legacy Today excludes it.
+  // Seven overdue tasks make the day overloaded, but none may be deferred.
+  const protectedTasks = Array.from({ length: 7 }, (_, index) =>
+    entity(`overdue-${index}`, "task", "personal", {
+      deadline: "2026-11-01", when: "2026-12-01",
+    }));
+  const ordinary = entity("can-defer", "task", "personal", { when: day });
+  const all = [...protectedTasks, ordinary];
+  const visible = buildMyPlanPreview({
+    workspaceId: "personal", today: day, entities: all, relations: [],
+  })[0].groups.flatMap((group) => group.tasks);
+  assert.equal(visible.length, 8);
+  const selected = pickSummarySuggestion({
+    ordered: visible, todayCount: visible.length, openTasks: all, today: day,
+    calendarOverloaded: false, todayTaskIds: new Set(visible.map((task) => task.id)),
+  });
+  assert.equal(selected?.task.id, "can-defer");
+  assert.equal(selected?.suggestion.reason, "deferOverloaded");
+  assert.equal(selected?.suggestion.params.todayCount, 8);
+  // The former legacy picker counted a single Today task and had no proposal.
+  assert.equal(pickSummarySuggestion({
+    ordered: [ordinary], todayCount: 1, openTasks: all, today: day,
+    calendarOverloaded: false,
+  }), null);
+});
+
+test("UI-04c: proposal candidates exclude timeline-linked and priority-filtered rows", () => {
+  const normal = Array.from({ length: 8 }, (_, i) =>
+    entity(`task-${i}`, "task", "personal", { when: day, priority: i < 7 ? "high" : "low" }));
+  const visible = buildMyPlanPreview({
+    workspaceId: "personal", today: day, entities: normal, relations: [],
+    priorityFilter: "high", excludeTimelineIds: new Set(["task-6"]),
+  })[0].groups.flatMap((group) => group.tasks);
+  assert.deepEqual(visible.map((task) => task.id),
+    ["task-0", "task-1", "task-2", "task-3", "task-4", "task-5"]);
+  const picked = pickSummarySuggestion({
+    ordered: visible, todayCount: visible.length, openTasks: normal,
+    today: day, calendarOverloaded: false,
+    todayTaskIds: new Set(visible.map((task) => task.id)),
+  });
+  assert.equal(picked, null); // six visible rows, so no overloaded-day suggestion
+  const forced = pickSummarySuggestion({
+    ordered: visible, todayCount: visible.length, openTasks: normal,
+    today: day, calendarOverloaded: true,
+    todayTaskIds: new Set(visible.map((task) => task.id)),
+  });
+  assert.ok(forced);
+  assert.notEqual(forced.task.id, "task-6");
+  assert.notEqual(forced.task.id, "task-7");
+  assert.equal(forced.suggestion.params.todayCount, 6);
+});
+
+test("UI-04c: reviewing task+target must not authorize changed revisions, fields or proposal evidence", () => {
+  const task = entity("proposal", "task", "personal", { when: day, priority: "low" });
+  task.title = "Original";
+  task.updatedAt = 1234;
+  const suggestion = {
+    task, suggestion: { target: "2026-11-06", reason: "deferOverloaded",
+      params: { todayCount: 8, dayCount: 1, date: "2026-11-06" } },
+  };
+  const original = todayProposalReviewKey(suggestion, "personal", day);
+  assert.equal(todayProposalReviewKey(suggestion, "personal", day), original);
+  assert.notEqual(todayProposalReviewKey(suggestion, "personal", "2026-11-06"), original);
+  assert.notEqual(todayProposalReviewKey(suggestion, "shared", day), original);
+  assert.notEqual(todayProposalReviewKey({ ...suggestion, task: { ...task, updatedAt: 1235 } }, "personal", day), original);
+  assert.notEqual(todayProposalReviewKey({ ...suggestion, task: { ...task, title: "Edited" } }, "personal", day), original);
+  assert.notEqual(todayProposalReviewKey({ ...suggestion, task: {
+    ...task, properties: { ...task.properties, priority: "high" },
+  } }, "personal", day), original);
+  assert.notEqual(todayProposalReviewKey({ ...suggestion, suggestion: {
+    ...suggestion.suggestion, reason: "deferBusyWeek",
+  } }, "personal", day), original);
+  assert.notEqual(todayProposalReviewKey({ ...suggestion, suggestion: {
+    ...suggestion.suggestion, params: { ...suggestion.suggestion.params, todayCount: 7 },
+  } }, "personal", day), original);
+  assert.notEqual(todayProposalTaskSignature(task), todayProposalTaskSignature({
+    ...task, properties: { ...task.properties, when: "2026-11-07" },
+  }));
+});
+
+test("UI-04c: approve enforces the reviewed signature inside local write transaction", () => {
+  const view = readFileSync(new URL("../app/ui/views/today-view.tsx", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../app/ui/use-lumi-app.tsx", import.meta.url), "utf8");
+  assert.match(view, /ordered: previewProposal \? previewTodayTasks : collection/);
+  assert.match(view, /todayCount: previewProposal \? previewTodayTasks\.length : todayTasks\.length/);
+  assert.match(view, /todayTaskIds: previewTodayTaskIds/);
+  assert.match(view, /excludeTimelineIds: app\.todayTimelineTaskIds, language/);
+  assert.match(view, /todayProposalReviewKey\(picked, activeWorkspaceId, today\)/);
+  assert.match(view, /!proposalReviewed \|\| !proposalKey/);
+  assert.match(view, /todayProposalTaskSignature\(picked\.task\)/);
+  assert.match(app, /expectedTaskSnapshot\?: string/);
+  assert.match(app, /todayProposalTaskSignature\(stored\) !== expectedTaskSnapshot/);
+  assert.match(app, /db\.transaction\("rw", db\.entities, async \(\) => \{/);
+  assert.match(app, /!loaded \|\| todayProposalTaskSignature\(loaded\) !== expectedTaskSnapshot/);
+  assert.match(app, /}, `deferred \$\{choice\}`, false, expectedTaskSnapshot\)/);
 });
