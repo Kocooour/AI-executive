@@ -25,7 +25,9 @@
 
 **UI-06 stav (2026-11-05):** UI-06a (#238) i UI-06b (#240) jsou sloučeny. Mobilní preview má jeden čtvercový ovladač, plánování, poznámky a checklist a jediné rozbalení dalších údajů; DOM/tab pořadí odpovídá zobrazení. Zůstává default-off a nejde o aktivaci R3 oprávnění. Povinné PR CI proběhlo; browser E2E je součástí brány před produkčním deployem.
 
-**UI-07a (rozpracováno, 2026-11-05):** Home má klidný řádek doporučení s lidským důvodem a samostatným přístupným „Proč?“; rozbalení obsahuje známé zdroje a skutečný čas vyhodnocení. Neznámý zdroj je označen jako neznámý, ne technickým ID. Stale/offline/conflict signály a existující menu akcí zůstávají. Bez serverového propojení R3 a bez tvrzení o cílovém ACL.
+**UI-07a sloučeno (#242, 2026-11-05):** Home má klidný řádek s lidským důvodem a samostatným přístupným „Proč?“; rozbalení obsahuje dostupné lokální zdroje a skutečný čas vyhodnocení. Časované termíny mají správný místní čas bez technických IANA ID. Bez aktivace R3/ACL.
+
+**UI-07b (rozpracováno, 2026-11-05):** Zastaralé nebo cached doporučení se označí přímo na řádku i ve vysvětlení. Rychlý datumový čip se při neaktuálním vyhodnocení nenabízí; uživatel může otevřít podkladový úkol a zkontrolovat aktuální stav. Odložení/skrytí zůstává serverově blokované do obnovy vyhodnocení. Žádné nové sdílení, oprávnění ani produkční integrace.
 
 | Iterace / priorita | Rozsah a hlavní soubory | Předpoklady a akceptace |
 |---|---|---|
