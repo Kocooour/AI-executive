@@ -47,6 +47,7 @@ import {
   readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
+  readPreflightedMyPlanTwoDayTaskPage,
   readPreflightedGlobalTaskPage,
   readPreflightedGlobalProjectPage,
   readPreflightedGlobalNotePage,
@@ -511,6 +512,21 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedMyPlanDayTaskPage(this.#store,credential,{
         areaFilter,window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R3-slice/BE-02: one pinned actor snapshot for Today and Tomorrow. */
+  readMyPlanTwoDayTaskPage(
+    actorUserId:string,areaFilter:MyPlanTaskAreaFilter,
+    evaluationDate:string,nextDate:string,limit:number,
+    offsetToday:number,offsetTomorrow:number,
+  ):{today:MyPlanDayTaskPage;tomorrow:MyPlanDayTaskPage}|null {
+    if(this.#closed)return null;
+    try {
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedMyPlanTwoDayTaskPage(this.#store,credential,{
+        areaFilter,evaluationDate,nextDate,limit,offsetToday,offsetTomorrow,
       }):null;
     }catch{return null;}
   }
