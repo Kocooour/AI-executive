@@ -198,8 +198,8 @@ export function TodayFooter({ app }: { app: LumiApp }) {
                 {previewProposal && (
                   <p className="myPlanV1ProposalImpact" data-plan-proposal-impact>
                     {language === "cs"
-                      ? "Dopad: změní se pouze naplánované datum tohoto úkolu, nikoli jeho prostor, Oblast ani ostatní úkoly."
-                      : "Impact: only this task's planned date changes, not its workspace, Area or other tasks."}
+                      ? "Dopad: úkol bude přeplánován a aktualizují se jeho značky Dnes, Večer nebo Doručené. Termín, prostor, Oblast a ostatní úkoly se nemění."
+                      : "Impact: reschedules this task and updates its Today, Evening or Inbox markers. Its deadline, workspace, Area and other tasks stay unchanged."}
                   </p>
                 )}
                 <button type="button" className="primaryAction" disabled={deferBusy}
