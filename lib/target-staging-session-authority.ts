@@ -22,6 +22,7 @@ import type { PersonalWhenWindow, PersonalWhenPage } from "./target-personal-whe
 import type {MyPlanDayTaskPage,MyPlanTaskDayWindow,MyPlanTaskAreaFilter} from "./target-my-plan-day-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import type {TargetGlobalProjectPage} from "./target-global-project-read-model";
+import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
 import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
 import type {
@@ -46,6 +47,7 @@ import {
   readPreflightedMyPlanDayTaskPage,
   readPreflightedGlobalTaskPage,
   readPreflightedGlobalProjectPage,
+  readPreflightedGlobalNotePage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
   readPreflightedTemporalStatusReceipt, readPreflightedTemporalDueOnReceipt,
   readPreflightedAuthorizedProjectStructuralRelations,
@@ -423,6 +425,19 @@ export class TargetStagingSessionAuthority {
       const credential=this.#oneShotReadCredential(actorUserId);
       return credential?readPreflightedPersonalWhenPage(this.#store,credential,{
         window,evaluationDate,throughDate,limit,offset,
+      }):null;
+    }catch{return null;}
+  }
+
+  /** R2d.3m.5: note titles only; body and foreign member IDs never released. */
+  readGlobalNotePage(
+    actorUserId:string,scope:TargetGlobalTaskScope,limit:number,offset:number,
+  ):TargetGlobalNotePage|null{
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential?readPreflightedGlobalNotePage(this.#store,credential,{
+        scope,limit,offset,
       }):null;
     }catch{return null;}
   }

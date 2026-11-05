@@ -438,7 +438,9 @@ export function verifyTargetStagingReadLive(
   noteGuard?: TargetNoteReadLiveGuard,
   noteSyncGuard?: TargetNoteSyncLiveGuard,
   taskBacklinkGuard?: TargetTaskBacklinkLiveGuard,
-  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope | "global-all" },
+  homeSummaryGuard?: { areas: HomeSummaryAreaEpoch[]; scope?: TargetHomeScope | "global-all";
+    /** R2d.3m.5: include note_sync_revision for EVERY eligible Area, even empty. */
+    noteAreaEpochs?: {areaId:string;noteSyncRevision:number}[] },
   temporalTaskGuard?: TargetTemporalTaskLiveGuard,
   /** R2d.3k.2: server-only actor-private planned-day epoch. */
   personalPlanGuard?: { privateEpoch: number },
@@ -494,7 +496,15 @@ export function verifyTargetStagingReadLive(
         !Number.isSafeInteger(row.projectContentRevision) ||
           row.projectContentRevision < 0) ||
       new Set(homeSummaryGuard.areas.map(a => a.areaId)).size !==
-        homeSummaryGuard.areas.length
+        homeSummaryGuard.areas.length ||
+      (homeSummaryGuard.noteAreaEpochs !== undefined && (
+        !Array.isArray(homeSummaryGuard.noteAreaEpochs) ||
+        homeSummaryGuard.noteAreaEpochs.length !== homeSummaryGuard.areas.length ||
+        homeSummaryGuard.noteAreaEpochs.some((row,i)=>
+          !row || !validNoteGuardId(row.areaId) ||
+          row.areaId !== homeSummaryGuard.areas[i]?.areaId ||
+          !Number.isSafeInteger(row.noteSyncRevision) || row.noteSyncRevision < 0)
+      ))
     )) return unavailable;
   if (noteGuard && (
       !validNoteGuardId(noteGuard.noteId) || !validNoteGuardId(noteGuard.areaId) ||
@@ -620,6 +630,15 @@ export function verifyTargetStagingReadLive(
             before.contentRevision !== after.contentRevision ||
             before.projectContentRevision !== after.projectContentRevision)
           return { ok: false, reason: "stale" };
+      }
+      if (homeSummaryGuard.noteAreaEpochs !== undefined) {
+        const noteEpoch=db.prepare(
+          "SELECT note_sync_revision AS revision FROM areas WHERE id=?");
+        for(const entry of homeSummaryGuard.noteAreaEpochs){
+          const live=noteEpoch.get(entry.areaId) as {revision:number}|undefined;
+          if(!live||live.revision!==entry.noteSyncRevision)
+            return {ok:false,reason:"stale"};
+        }
       }
     }
     if (projectGuard) {
