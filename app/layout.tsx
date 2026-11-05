@@ -11,7 +11,6 @@ import "./lumi-mobile-more.css";
 import "./lumi-inspector.css";
 import "./lumi-project-overview.css";
 import "./lumi-project-list-v1.css";
-import "./lumi-completion-v1.css";
 import "./lumi-project-detail-v1.css";
 import "./lumi-task-detail-v1.css";
 import "./lumi-capture-b3.css";
@@ -21,6 +20,7 @@ import "./lumi-search.css";
 import "./lumi-inbox-b4.css";
 import "./lumi-inbox-b5.css";
 import "./lumi-defer.css";
+import "./lumi-completion-v1.css";
 import { PWARegister } from "./pwa-register";
 
 export const metadata: Metadata = {
