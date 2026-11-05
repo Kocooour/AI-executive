@@ -156,6 +156,7 @@ test("UI-04c: keyboard and drag reorder use only rendered peers in the same day 
     entity("timeline", "task", "personal", { when: day }),
     entity("filtered", "task", "personal", { when: day, priority: "low" }),
   ];
+  tasks.forEach((task, index) => { task.createdAt = index * 1000; });
   const links = [
     relation("deadline-only", project.id, "belongs_to_project"),
     relation(project.id, work.id, "belongs_to_area"),
