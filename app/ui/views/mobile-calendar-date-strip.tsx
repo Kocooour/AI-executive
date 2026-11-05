@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useMemo, useRef } from "react";
-import { addCalendarDays } from "../../../lib/calendar-event-display";
 import { mobileCalendarDateParts, mobileCalendarStripDays } from "../../../lib/mobile-calendar-day";
 
 export function MobileCalendarDateStrip({ selectedDay, today, language, onSelect }: {
@@ -22,13 +21,12 @@ export function MobileCalendarDateStrip({ selectedDay, today, language, onSelect
   const cs = language === "cs";
   return <div className="mobileCalendarPicker" data-mobile-calendar-day={selectedDay}>
     <div className="mobileCalendarPickerHead">
-      <button type="button" className="mobileCalendarWeekJump" onClick={() => onSelect(addCalendarDays(selectedDay, -7))}
-        aria-label={cs ? "Předchozí týden" : "Previous week"}>‹</button>
-      <button type="button" className="mobileCalendarTodayJump" onClick={() => onSelect(today)}>
+      {/* One direct return-to-today control. Swipe or select an edge bubble to
+          navigate farther; duplicate previous/next-week chevrons are omitted. */}
+      <button type="button" className="mobileCalendarTodayJump" data-calendar-v1-today-jump
+        onClick={() => onSelect(today)} aria-label={cs ? "Přejít na dnešek" : "Go to today"}>
         {cs ? "Dnes" : "Today"}
       </button>
-      <button type="button" className="mobileCalendarWeekJump" onClick={() => onSelect(addCalendarDays(selectedDay, 7))}
-        aria-label={cs ? "Následující týden" : "Next week"}>›</button>
     </div>
     <div className="mobileCalendarDateStrip" ref={stripRef} role="group" aria-label={cs ? "Vyberte den kalendáře" : "Select a calendar day"}>
       {days.map((day) => {
