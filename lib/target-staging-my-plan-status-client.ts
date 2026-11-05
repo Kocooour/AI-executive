@@ -178,6 +178,6 @@ export async function changeMyPlanStatus(
   fetchImpl:typeof fetch=fetch,
 ):Promise<MyPlanStatusDispatch>{
   const prepared=await prepareMyPlanStatus(params,fetchImpl);
-  if(!prepared.ok)return {kind:"rejected",reason:prepared.reason};
+  if(prepared.ok===false)return {kind:"rejected",reason:prepared.reason};
   return dispatchMyPlanStatus(prepared.command,fetchImpl,params.signal);
 }
