@@ -1722,7 +1722,16 @@ export function useLumiApp() {
       const destination = record ?? project;
       // A typed URL never discloses whether the record was deleted or its access
       // changed. Treat both outcomes identically and keep the safe list view.
-      setNavigationUnavailable(showUnavailableLink(window.location.search, Boolean(destination)));
+      const unavailableTarget = showUnavailableLink(window.location.search, Boolean(destination));
+      setNavigationUnavailable(unavailableTarget);
+      if (unavailableTarget) {
+        // Back/Forward may keep the same list view, so the view-sync effect
+        // need not rerun. Replace this history entry explicitly: a revoked or
+        // missing record ID should not remain as the displayed page address.
+        try {
+          window.history.replaceState(null, "", `${window.location.pathname}${searchForView(nextView, startupView)}`);
+        } catch { /* The safe list view remains usable if History API is blocked. */ }
+      }
       // Nothing from the previous inspector should stay open while Back/Forward
       // resolves a new record; stale async context requests are invalidated.
       closeDetail();
