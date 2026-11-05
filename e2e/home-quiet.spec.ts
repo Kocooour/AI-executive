@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
-import { heading, seeded, waitUntilSynced } from "./helpers";
+import { heading, removeTasks, seedTasks, seeded, waitUntilSynced } from "./helpers";
 
 // The quiet Home of docs/design-system: a plain title, no status chips while all is well, and
 // every recommendation says why, from what and when on its own line (docs/UX-UI.md, LUMI-UX-001).
@@ -71,6 +71,34 @@ test("a recommendation has a calm reason and a keyboard-accessible Why disclosur
   await whyButton.press("Enter");
   await expect(whyButton).toHaveAttribute("aria-expanded", "false");
   await expect(item.locator(".attentionSources")).toBeHidden();
+});
+
+test("timed deadline shows its correct local time without exposing an IANA zone", async ({ page }) => {
+  const stamp = Date.now().toString(36);
+  const id = `ui07a-timed-${stamp}`;
+  const title = `Časovaný termín UI07a ${stamp}`;
+  const deadline = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  await page.goto("/?view=Inbox");
+  await waitUntilSynced(page);
+  await seedTasks(page, [{ id, title, properties: { deadline } }]);
+  try {
+    await page.goto("/");
+    await waitUntilSynced(page);
+    const more = page.locator(".attentionSection button.textAction", { hasText: "Zobrazit dalších" });
+    if (await more.count()) await more.click();
+    const item = page.locator(".attentionItem", { hasText: title });
+    await expect(item).toBeVisible();
+    const reason = item.locator(".attentionReason");
+    await expect(reason).toContainText("Termín");
+    // A timed deadline needs an actual clock time and a human time-zone label.
+    await expect(reason).toContainText(/\\d{1,2}:\\d{2}/);
+    await expect(reason).toContainText(/SEČ|SELČ|CET|CEST|GMT[+-]/);
+    await expect(reason).not.toContainText(/Europe\\/Prague/);
+    await item.getByRole("button", { name: `Proč?: ${title}` }).press("Enter");
+    await expect(item.locator(".attentionMore")).toContainText("Vyhodnoceno:");
+  } finally {
+    await removeTasks(page, [id]);
+  }
 });
 
 test("snooze and dismiss are in the item's menu, reachable by mouse and keyboard", async ({ page }) => {
