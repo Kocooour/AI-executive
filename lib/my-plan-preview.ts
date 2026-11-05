@@ -125,3 +125,26 @@ export function buildMyPlanPreview({
     return { day, date, groups: [...groups.values()], count: tasks.length };
   });
 }
+
+
+/** A drag/keyboard move in UI-04c may reorder only tasks that the user can
+ * currently see in the *same* day and inherited Area block. Other lists and
+ * hidden/filtered tasks must never become insertion neighbours.
+ *
+ * Returning null means the move is forbidden (including a cross-day,
+ * cross-Area or stale target); callers must not fall back to legacy peers.
+ */
+export function previewReorderPeers(
+  sections: readonly PreviewDaySection[], sourceId: string, scope: string, targetId?: string,
+): Entity[] | null {
+  const day = scope === "task:Today" ? "today" : scope === "task:Upcoming" ? "tomorrow" : null;
+  if (!day) return null;
+  const section = sections.find((candidate) => candidate.day === day);
+  if (!section) return null;
+  for (const group of section.groups) {
+    if (!group.tasks.some((task) => task.id === sourceId)) continue;
+    if (targetId !== undefined && !group.tasks.some((task) => task.id === targetId)) return null;
+    return [...group.tasks];
+  }
+  return null;
+}
