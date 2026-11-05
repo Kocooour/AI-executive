@@ -1,6 +1,7 @@
 "use client";
 import { type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isFallbackArea } from "../../lib/area-write-invariants";
+import { captureDestinationKey, captureNeedsShareConsent, initialCaptureWorkspace } from "../../lib/capture-destination";
 import { areaKindOf, assignFallbackArea, dropTaskAreaLinks, taskIsInProject } from "../../lib/area-write-client";
 import { db, ensureDefaultWorkspace, migratePropertyRelations, personalWorkspaceId, readLocalWithBase, replaceSyncBase, seed, type Entity, type EntityType, type Relation } from "../../lib/db";
 import { clearLocalData, finishInterruptedWipe, hasUnsentChanges, markSignedIn, restoreGenerationKey, signedInKey, signedOutKey } from "../../lib/local-data";
@@ -81,6 +82,8 @@ export function useLumiApp() {
     [captureType, setCaptureType] = useState<"task" | "note">("task"),
     [captureProjectId, setCaptureProjectId] = useState(""),
     [captureAreaId, setCaptureAreaId] = useState(""),
+    [captureWriteWorkspaceId, setCaptureWriteWorkspaceId] = useState(personalWorkspaceId),
+    [captureSharedConsentKey, setCaptureSharedConsentKey] = useState(""),
     [draft, setDraft] = useState(""),
     [captureSuggestion, setCaptureSuggestion] = useState<CaptureSuggestion | null>(null),
     [captureSuggestionBusy, setCaptureSuggestionBusy] = useState(false),
@@ -1917,6 +1920,13 @@ export function useLumiApp() {
   const captureItemsRef = useRef(items);
   captureItemsRef.current = items;
   const captureProjectWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || "";
+  // A prior approval cannot be reused if the user switches away from a shared
+  // target and then returns, including when the AI suggestion changes the project.
+  useEffect(() => {
+    setCaptureSharedConsentKey("");
+  }, [captureType, captureWriteWorkspaceId, captureProjectId, captureAreaId,
+      captureProjectAction, captureSuggestion?.projectId,
+      captureSuggestion?.newProjectSuggestion?.title, useCaptureSuggestion]);
   // Without access to the server (an offline start) there is no suggestion to wait for: asking would
   // only keep the add button disabled until the request is given up.
   const captureServerUnavailable = authState === "unavailable";
@@ -1932,7 +1942,7 @@ export function useLumiApp() {
     const version = ++captureSuggestionVersion.current;
     // A task added to a project goes to the project's workspace; its suggestions (area, calendar
     // window) have to come from there too.
-    const workspaceId = captureProjectWorkspaceId || writeWorkspaceId;
+    const workspaceId = captureProjectWorkspaceId || captureWriteWorkspaceId;
     setCaptureSuggestion(null);
     setCaptureSuggestionBusy(true);
     setCaptureSuggestionError("");
@@ -1996,7 +2006,7 @@ export function useLumiApp() {
       window.clearTimeout(abortTimer);
       controller.abort();
     };
-  }, [capture, captureType, draft, activeWorkspaceId, writeWorkspaceId, captureProjectId, captureProjectWorkspaceId, language, captureServerUnavailable]);
+  }, [capture, captureType, draft, activeWorkspaceId, captureWriteWorkspaceId, captureProjectId, captureProjectWorkspaceId, language, captureServerUnavailable]);
 
   async function saveWorkspaceName() {
     const name = workspaceDraft.trim();
@@ -2069,6 +2079,7 @@ export function useLumiApp() {
   // A manual area choice in quick capture; a later suggestion no longer replaces it.
   function chooseCaptureArea(areaId: string) {
     captureAreaTouched.current = true;
+    setCaptureSharedConsentKey("");
     setCaptureAreaId(areaId);
   }
   function captureKey(type: "task" | "note", workspaceId: string, projectId = "") {
@@ -2090,7 +2101,8 @@ export function useLumiApp() {
   }
   function chooseCaptureType(type: "task" | "note") {
     if (type === captureType || captureProjectId) return;
-    replaceCaptureScope(type, writeWorkspaceId);
+    replaceCaptureScope(type, captureWriteWorkspaceId);
+    setCaptureSharedConsentKey("");
     setCaptureType(type);
     setCaptureAreaId("");
     captureAreaTouched.current = false;
@@ -2108,15 +2120,16 @@ export function useLumiApp() {
     setCaptureProjectAction(captureProjectId ? "existing" : "none");
   }
   function selectCaptureWriteWorkspace(workspaceId: string) {
-    if (workspaceId === writeWorkspaceId) return;
+    if (workspaceId === captureWriteWorkspaceId || !workspaces.some((workspace) => workspace.workspaceId === workspaceId)) return;
     replaceCaptureScope(captureType, workspaceId);
+    setCaptureSharedConsentKey("");
     // A manual choice belongs to the prior workspace. New suggestions may now fill the area.
     setCaptureAreaId("");
     captureAreaTouched.current = false;
     captureSuggestionVersion.current += 1;
     setCaptureSuggestion(null);
     setCaptureProjectAction("none");
-    selectWriteWorkspace(workspaceId);
+    setCaptureWriteWorkspaceId(workspaceId);
   }
 
   async function createWorkspace() {
@@ -2555,8 +2568,11 @@ export function useLumiApp() {
 
   function openCapture(type: "task" | "note" = "task", projectId = "") {
     captureOpener.current = document.activeElement as HTMLElement | null;
-    const workspaceId = (projectId && items.find((item) => item.id === projectId)?.workspaceId) || writeWorkspaceId;
+    const projectWorkspaceId = (projectId && items.find((item) => item.id === projectId && item.type === "project")?.workspaceId) || "";
+    const workspaceId = initialCaptureWorkspace(projectWorkspaceId, personalWorkspaceId);
     replaceCaptureScope(type, workspaceId, projectId);
+    setCaptureWriteWorkspaceId(workspaceId);
+    setCaptureSharedConsentKey("");
     setCaptureType(type);
     setCaptureProjectId(projectId);
     setCaptureAreaId("");
@@ -2599,17 +2615,28 @@ export function useLumiApp() {
       : "";
     // Only an area from the workspace the task goes to (a project's own workspace, otherwise the
     // chosen one) is kept; another one would be a cross-workspace link and the task could not be added.
-    const destinationWorkspaceId = (captureProjectId && items.find((item) => item.id === captureProjectId)?.workspaceId) || writeWorkspaceId;
+    const destinationWorkspaceId = (suggestedProjectId && items.find((item) => item.id === suggestedProjectId && item.type === "project")?.workspaceId) || captureWriteWorkspaceId;
+    const destinationConsentKey = captureDestinationKey({
+      type: captureType, workspaceId: destinationWorkspaceId,
+      projectId: suggestedProjectId, areaId: captureType === "task" ? captureAreaId : "",
+      projectAction: captureProjectAction, newProjectTitle: suggestedNewProjectTitle,
+    });
+    if (captureNeedsShareConsent(destinationWorkspaceId, personalWorkspaceId) &&
+        captureSharedConsentKey !== destinationConsentKey) {
+      setCaptureSuggestionError(tr("captureShareApprovalRequired"));
+      return;
+    }
     const suggestedAreaId = items.some((item) => item.id === captureAreaId && item.type === "area" && item.workspaceId === destinationWorkspaceId)
       ? captureAreaId
       : "";
     const suggestedDate = parsed.when || suggestion?.scheduledDate || "";
     const globalTask = captureType === "task" && !captureProjectId;
     setCapture(false);
-    if (!captureProjectId && activeWorkspaceId !== "all" && activeWorkspaceId !== writeWorkspaceId) {
-      setActiveWorkspaceId(writeWorkspaceId);
-      localStorage.setItem("ai-executive-active-workspace", writeWorkspaceId);
+    if (!captureProjectId && activeWorkspaceId !== "all" && activeWorkspaceId !== destinationWorkspaceId) {
+      setActiveWorkspaceId(destinationWorkspaceId);
+      localStorage.setItem("ai-executive-active-workspace", destinationWorkspaceId);
     }
+    selectWriteWorkspace(destinationWorkspaceId);
     if (globalTask) {
       closeDetail();
       setMoreOpen(false);
@@ -2617,6 +2644,7 @@ export function useLumiApp() {
     }
     try {
       await create(captureType, title, {
+        workspaceId: destinationWorkspaceId,
         ...(suggestedProjectId ? { projectId: suggestedProjectId } : {}),
         ...(suggestedNewProjectTitle ? { newProjectTitle: suggestedNewProjectTitle } : {}),
         ...(suggestedAreaId ? { areaId: suggestedAreaId } : {}),
@@ -2646,7 +2674,7 @@ export function useLumiApp() {
         return;
       }
       if (error instanceof Error && error.message === "PROJECT_ALREADY_EXISTS" && captureSuggestion?.newProjectSuggestion) {
-        const workspaceId = writeWorkspaceId;
+        const workspaceId = captureWriteWorkspaceId;
         const duplicate = findActiveProjectWithTitle(items, workspaceId, captureSuggestion.newProjectSuggestion.title);
         setCaptureSuggestion(duplicate ? {
           ...captureSuggestion,
@@ -4178,6 +4206,9 @@ export function useLumiApp() {
     captureProjectAction,
     captureProjectId,
     captureAreaId,
+    captureWriteWorkspaceId,
+    captureSharedConsentKey,
+    setCaptureSharedConsentKey,
     chooseCaptureArea,
     chooseCaptureType,
     editCaptureDraft,
