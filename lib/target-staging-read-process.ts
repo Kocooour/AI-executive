@@ -732,9 +732,6 @@ export async function readStagingPersonalWhenInChild(
   return parsed;
 }
 
-/** R2d.3m.2: exact private-safe child DTO for global task Vše.
- * Validate the full Area witness, including Areas with no returned tasks.
- * The witness is never part of the public HTTP response. */
 /** R2d.3m.4: fail-closed child DTO for global project index.
  * Complete Area epochs are internal and must pass a live policy/content check. */
 export function parseStagingGlobalProjectPage(
@@ -814,6 +811,9 @@ export async function readStagingGlobalProjectPageInChild(
   return parsed;
 }
 
+/** R2d.3m.2: exact private-safe child DTO for global task Vše.
+ * Validate the full Area witness, including Areas with no returned tasks.
+ * The witness is never part of the public HTTP response. */
 export function parseStagingGlobalTaskPage(
   value:unknown,scope:TargetGlobalTaskScope,limit:number,
 ):TargetGlobalTaskPage|null{
