@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewManualRankUpdates, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
+import { buildMyPlanPreview, previewAreaForTask, previewDayForTask, previewManualRankUpdates, previewRankWritesAllowed, previewReorderPeers, tomorrowOf } from "../lib/my-plan-preview.ts";
 import { byManualOrder, manualOrder } from "../lib/task-views.ts";
 import { pickSummarySuggestion, todayProposalReviewKey, todayProposalTaskSignature } from "../lib/today-summary.ts";
 
@@ -448,4 +448,81 @@ test("UI-04c: app persists collision-recovery ranks atomically and preserves leg
   assert.match(app, /previewReorderPeers\(fullPlan, source\.id, scope, undefined, "manual"\)/);
   assert.match(app, /await persistManualOrder\(peers, source\.id, scope, allAreaPeers\)/);
   assert.match(app, /await persistManualOrder\(peers, source\.id, scope\);/);
+});
+
+
+test("UI-04c: collision reindex is all-or-nothing when a changed peer is held, unsent or conflicted", () => {
+  const tasks = ["A", "B", "C"].map((id) => {
+    const task = entity(id, "task", "personal", { when: day });
+    task.createdAt = 1000;
+    return task;
+  });
+  const preview = buildMyPlanPreview({ workspaceId: "personal", today: day, entities: tasks, relations: [] });
+  const peers = previewReorderPeers(preview, "A", "task:Today", "B", "manual");
+  const reordered = moveAfter(peers, "A", "B");
+  const updates = previewManualRankUpdates(reordered, peers, "A", "task:Today");
+  assert.deepEqual(reordered.map((task) => task.id), ["B", "A", "C"]);
+  assert.deepEqual(updates.map((entry) => entry.id), ["A", "C"]);
+  const empty = new Set();
+  assert.equal(previewRankWritesAllowed(updates, tasks, "personal", empty, empty), true);
+  assert.equal(previewRankWritesAllowed(updates, tasks, "personal", new Set(["C"]), empty), false);
+  assert.equal(previewRankWritesAllowed(updates, tasks, "personal", empty, new Set(["C"])), false);
+  const conflicted = tasks.map((task) => task.id === "C" ? {
+    ...task, properties: { ...task.properties, syncConflicts: [
+      { id: "conflict-1", field: "title", lostValue: "prior version", at: 1000 },
+    ] },
+  } : task);
+  assert.equal(previewRankWritesAllowed(updates, conflicted, "personal", empty, empty), false);
+
+  // A filtered/blocked task not in the planned update set is never written.
+  assert.equal(previewRankWritesAllowed(updates, tasks, "personal", new Set(["B"]), empty), true);
+  // Simulate the integration's preflight: all rejected cases yield zero writes,
+  // leaving both moved and unrelated records untouched.
+  for (const [records, held, unsent] of [
+    [tasks, new Set(["C"]), empty],
+    [tasks, empty, new Set(["C"])],
+    [conflicted, empty, empty],
+  ]) {
+    const changed = previewRankWritesAllowed(updates, records, "personal", held, unsent)
+      ? applyRanks(records, updates, "task:Today") : records;
+    assert.deepEqual(changed, records);
+  }
+});
+
+test("UI-04c: guarded ranks reject missing, invalid, cross-workspace and non-open update targets", () => {
+  const good = entity("good", "task", "personal", { when: day });
+  const updates = [{ id: "good", rank: 2000 }];
+  const none = new Set();
+  assert.equal(previewRankWritesAllowed(updates, [good], "personal", none, none), true);
+  assert.equal(previewRankWritesAllowed(updates, [good], "all", none, none), false);
+  assert.equal(previewRankWritesAllowed(updates, [good], "shared", none, none), false);
+  assert.equal(previewRankWritesAllowed(updates, [], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed([], [good], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed([{ id: "missing", rank: 1 }], [good], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed([{ id: "good", rank: Infinity }], [good], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed([updates[0], updates[0]], [good], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed(updates, [{ ...good, status: "completed" }], "personal", none, none), false);
+  assert.equal(previewRankWritesAllowed(updates, [{ ...good, title: "" }], "personal", none, none), false);
+});
+
+test("UI-04c: all protected peer checks run before first atomic reorder update", () => {
+  const app = readFileSync(new URL("../app/ui/use-lumi-app.tsx", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("../app/ui/views/entity-list.tsx", import.meta.url), "utf8");
+  const start = app.indexOf('if (allAreaPeers) {', app.indexOf('async function persistManualOrder('));
+  const end = app.indexOf('    const timestamp = writeTime();', app.indexOf('      return;', start));
+  const collision = app.slice(start, app.indexOf('    const timestamp = writeTime();\n    const movedIndex', start));
+  assert.ok(collision.length > 0);
+  assert.match(collision, /previewManualRankUpdates\(ordered, allAreaPeers, movedId, scope\)/);
+  assert.match(collision, /previewRankWritesAllowed\(/);
+  assert.match(collision, /new Set\(heldReasons\.keys\(\)\), unsent/);
+  assert.match(collision, /authState === "ready" && syncStatus === "synced"/);
+  assert.match(collision, /activeWorkspaceRef\.current === workspaceId && writeWorkspaceId === workspaceId/);
+  assert.match(collision, /if \(!updates \|\| !writableScope\(\) \|\| !eligible\(allAreaPeers\)\)/);
+  assert.match(collision, /await db\.transaction\("rw", db\.entities, async \(\) => \{/);
+  assert.match(collision, /if \(!writableScope\(\) \|\| latest\.some\(/);
+  assert.match(collision, /if \(!eligible\(fresh\)\) return;/);
+  assert.ok(collision.indexOf('if (!eligible(fresh)) return;') < collision.indexOf('await db.entities.update(id, {'));
+  assert.match(collision, /if \(!saved\) \{\s*setPlanReorderError\(true\);/);
+  assert.match(ui, /role="alert" data-plan-reorder-refused/);
+  assert.match(ui, /app\.setPlanReorderError\(false\)/);
 });
