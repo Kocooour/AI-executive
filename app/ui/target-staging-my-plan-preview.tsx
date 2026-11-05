@@ -8,6 +8,9 @@ import {
   type MyPlanReadFailure,type MyPlanSliceFilter,
   type MyPlanSlicePage,type MyPlanSliceTask,
 } from "../../lib/target-staging-my-plan-client";
+import {
+  msUntilNextLocalMyPlanDay,resumeMyPlanDate,
+} from "../../lib/target-staging-my-plan-lifecycle";
 
 type ReadState=
   |{status:"loading"}
@@ -67,6 +70,7 @@ function PlanDay({label,tasks,date}:{
 }
 export function TargetStagingMyPlanPreview(){
   const [date,setDate]=useState<string|null>(null);
+  const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
@@ -83,6 +87,11 @@ export function TargetStagingMyPlanPreview(){
 
   useEffect(()=>{
     if(!date)return;
+    // A backgrounded/offline tab may not display an old actor's sensitive rows.
+    if(document.visibilityState==="hidden"||!navigator.onLine){
+      setState({status:"error",reason:navigator.onLine?"stale":"offline"});
+      return;
+    }
     const id=++requestSequence.current;
     current.current?.abort();
     const controller=new AbortController();
@@ -99,6 +108,65 @@ export function TargetStagingMyPlanPreview(){
     });
     return()=>controller.abort();
   },[date,areaFilter,refresh]);
+
+  /** Discard tasks synchronously in state before any new authorization read. */
+  function invalidate(reason:MyPlanReadFailure){
+    requestSequence.current++;
+    current.current?.abort();
+    moreInFlight.current=false;
+    setMoreBusy(false);
+    setState({status:"error",reason});
+  }
+
+  // Reactivating a tab always requires a new server ACL/session/epoch witness.
+  // Track the local-day boundary separately from user-selected historical days.
+  useEffect(()=>{
+    if(!date)return;
+    let clockTimer:ReturnType<typeof setTimeout>|undefined;
+    let lastAwake=0;
+    const armClock=()=>{
+      if(clockTimer!==undefined)clearTimeout(clockTimer);
+      clockTimer=setTimeout(()=>{
+        if(document.visibilityState==="visible")wake(true);
+        else invalidate("stale");
+        armClock();
+      },msUntilNextLocalMyPlanDay());
+    };
+    const wake=(force=false)=>{
+      if(document.visibilityState!=="visible")return;
+      const now=Date.now();
+      // Focus and visibilitychange commonly arrive as a pair.
+      if(!force&&now-lastAwake<350)return;
+      lastAwake=now;
+      if(!navigator.onLine){invalidate("offline");return;}
+      const chosen=resumeMyPlanDate(date,followToday,new Date());
+      invalidate("stale");
+      if(chosen.changed)setDate(chosen.evaluationDate);
+      else setRefresh(value=>value+1);
+      armClock();
+    };
+    const visibility=()=>{
+      if(document.visibilityState==="hidden")invalidate("stale");
+      else wake();
+    };
+    const foreground=()=>wake();
+    const offline=()=>invalidate("offline");
+    const online=()=>wake(true);
+    document.addEventListener("visibilitychange",visibility);
+    window.addEventListener("focus",foreground);
+    window.addEventListener("pageshow",foreground);
+    window.addEventListener("offline",offline);
+    window.addEventListener("online",online);
+    armClock();
+    return()=>{
+      if(clockTimer!==undefined)clearTimeout(clockTimer);
+      document.removeEventListener("visibilitychange",visibility);
+      window.removeEventListener("focus",foreground);
+      window.removeEventListener("pageshow",foreground);
+      window.removeEventListener("offline",offline);
+      window.removeEventListener("online",online);
+    };
+  },[date,followToday]);
 
   async function more(){
     if(moreInFlight.current||state.status!=="ready"||
@@ -135,26 +203,45 @@ export function TargetStagingMyPlanPreview(){
     <div className="stagingMyPlanToolbar">
       <label>Den
         <input type="date" value={date??""}
-          onChange={event=>{if(validMyPlanDate(event.target.value))
-            setDate(event.target.value);}}/>
+          onChange={event=>{
+            const chosen=event.target.value;
+            if(!validMyPlanDate(chosen))return;
+            setFollowToday(false); // A manual date remains pinned at midnight.
+            if(chosen!==date){invalidate("stale");setDate(chosen);}
+          }}/>
       </label>
       <label>Moje práce
         <select value={areaFilter}
-          onChange={event=>setAreaFilter(event.target.value as MyPlanSliceFilter)}>
+          onChange={event=>{
+            invalidate("stale");
+            setAreaFilter(event.target.value as MyPlanSliceFilter);
+          }}>
           <option value="all">Osobní i přiřazené sdílené</option>
           <option value="personal">Osobní</option>
           <option value="shared">Přiřazené sdílené</option>
         </select>
       </label>
-      <button type="button" onClick={()=>{setState({status:"loading"});setRefresh(n=>n+1);}}>Obnovit</button>
+      <button type="button" onClick={()=>{
+        const chosen=localMyPlanDate();
+        invalidate("stale");
+        setFollowToday(true);
+        if(chosen===date)setRefresh(n=>n+1);
+        else setDate(chosen);
+      }}>Aktuální den</button>
+      <button type="button" onClick={()=>{
+        invalidate("stale");
+        setRefresh(n=>n+1);
+      }}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
-      <PlanDay label="Dnes a dřívější" date={date} tasks={state.page.today.tasks}/>
-      <PlanDay label={"Zítra · "+nextHumanDate(date)}
+      <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
+        date={date} tasks={state.page.today.tasks}/>
+      <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
+        nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}/>
       {state.page.hasMore&&
         <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
