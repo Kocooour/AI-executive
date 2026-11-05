@@ -14,6 +14,14 @@
 - Náhled používá lokální kalendářní datum zařízení (ne serverový čas), filtr **osobního Mého plánu** `all|personal|shared` (nikdy globální Vše) a zobrazuje Dnes včetně minulých otevřených úkolů a Zítra. Úkoly jsou blokově skupinovány podle aktuální Oblasti bez názvu a ID; sdílená práce pouze přiřazená aktuálnímu aktérovi.
 - Je to **pouze čtecí** pohled na úkoly: bez událostí, doplňkových AI návrhů, CAS dokončení, přesunu `whenOn` ani Undo. Tyto interakce naváže příští fáze až po bezpečném preview+receipt kontraktu. Neprezentovat statickou rozpracovanou stránku jako kompletní cílové UI.
 
+## UI-02 — aktuálnost kalendáře a opětovná autorizace po návratu
+
+- Základní režim **Aktuální den** sleduje místní datum v zařízení; denní timer používá následující **místní půlnoc** (ne přičítání pevně 24 hodin, což by selhávalo při změnách letního času). Dnes/Zítra se po půlnoci automaticky přepočítají a znovu načtou ze serveru.
+- Ručně vybraný den přepíná náhled do režimu **pevného data**. Půlnoc mu datum nezmění, ale znovu ověří čerstvost a oprávnění. Popisky nepředstírají, že libovolné historické datum je „Dnes“; tlačítko **Aktuální den** vrací živý režim.
+- Při přepnutí karty na pozadí nebo přechodu offline se citlivý přehled **okamžitě odstraní z React stavu** a probíhající požadavek se zruší. Po návratu na viditelnou kartu, `focus`, `pageshow` nebo `online` se výsledky musí znovu potvrdit přes serverový ACL/session/epoch guard; stará data se bez něj neobnovují.
+- Zůstává **read-only**, bez trvalého klientského úložiště, nových cookies, zápisů, pokusu o oprávnění z UI ani zapnutí feature flags. Šlo o zpevnění náhledu před pozdějším napojením s UI-04c.
+- Testy: `tests/target-staging-my-plan-lifecycle.test.mjs` pro přechod měsíc/rok/přestupný den, místní půlnoc včetně letního/zimního času, ruční datum a statické ověření životního cyklu. Plné browser E2E s revokací session a mobilním zobrazením zůstává podmínkou před produkčním nasazením.
+
 ## Ochrana soukromí a stavů
 
 - Browser požadavky pouze **same-origin GET**, `credentials: same-origin`, `cache: no-store`, žádná trvalá cache/IndexedDB/localStorage ani optimistická mutace.
