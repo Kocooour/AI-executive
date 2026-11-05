@@ -2,6 +2,7 @@
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Entity } from "../../../lib/db";
 import { addDays, deferTargets, suggestDeferral } from "../../../lib/defer-suggestion";
+import { attentionEvidenceIsVisible, attentionSubjectChangedSinceEvaluation } from "../../../lib/home-today";
 import { ymd } from "../../../lib/local-dates";
 import { pluralText } from "../../../lib/plural";
 import { isEveningTask, taskDueTone } from "../../../lib/task-views";
@@ -29,7 +30,11 @@ export function CalendarIcon() {
 // The chip is the "When" control: it always shows the planned day. The deadline, which this control
 // never changes, is a separate badge next to it. Rows with a sync/held state keep that state instead
 // (the caller decides).
-export function DeferChip({ app, task }: { app: LumiApp; task: Entity }) {
+export function DeferChip({ app, task, fromAttention }: {
+  app: LumiApp;
+  task: Entity;
+  fromAttention?: { key: string; fingerprint: string; workspaceId: string; evaluatedAt: number };
+}) {
   const { deferOpen, language, setDeferError, setDeferOpen, today, tr } = app;
   const props = task.properties;
   const when = typeof props.when === "string" && DAY.test(props.when) ? props.when : "";
@@ -68,7 +73,7 @@ export function DeferChip({ app, task }: { app: LumiApp; task: Entity }) {
         onClick={(event) => {
           event.stopPropagation();
           setDeferError(false);
-          setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget });
+          setDeferOpen(open ? null : { taskId: task.id, anchor: event.currentTarget, ...(fromAttention ? { origin: "attention" as const, attention: fromAttention } : {}) });
         }}
       >
         {!planned && <CalendarIcon />}
@@ -80,14 +85,39 @@ export function DeferChip({ app, task }: { app: LumiApp; task: Entity }) {
 
 // Rendered once by the app shell.
 export function DeferPopover({ app }: { app: LumiApp }) {
-  const { activeWorkspaceId, deferOpen, items } = app;
+  const { activeWorkspaceId, attentionActionsBlocked, deferOpen, items, setDeferOpen, showAllAttention, visibleAttention } = app;
   const task = deferOpen ? items.find((item) => item.id === deferOpen.taskId) : undefined;
-  if (!deferOpen || !task || task.type !== "task" || task.status !== "open" || activeWorkspaceId === "all") return null;
-  return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} />;
+  const evidence = deferOpen?.attention;
+  // The popover may outlive its Attention row. Confirm that the *same* evidence
+  // (not merely another recommendation about the same task) still appears in
+  // the rendered list after a successful refresh, including "Show fewer".
+  const currentEvidence = !deferOpen || deferOpen.origin !== "attention" || Boolean(evidence &&
+    attentionEvidenceIsVisible({ ...evidence, taskId: deferOpen.taskId }, visibleAttention, showAllAttention));
+  const locallyChanged = Boolean(evidence && attentionSubjectChangedSinceEvaluation(task, evidence.evaluatedAt));
+  const revoked = Boolean(deferOpen?.origin === "attention" &&
+    (attentionActionsBlocked || !currentEvidence || locallyChanged || !deferOpen.anchor.isConnected));
+
+  // Check the anchor again *after* React commits. During a successful Attention
+  // refresh it can still be connected in render and then be removed in commit,
+  // while neither the task nor synchronization state changes.
+  useLayoutEffect(() => {
+    if (deferOpen?.origin !== "attention") return;
+    if (!revoked && deferOpen.anchor.isConnected) return;
+    setDeferOpen((current) => current === deferOpen ? null : current);
+    // The old chip may have been removed with the row. Restore keyboard focus
+    // to the stable Home section heading rather than leaving it on <body>.
+    document.getElementById("attention-title")?.focus();
+  });
+
+  if (!deferOpen || !task || task.type !== "task" || task.status !== "open" || activeWorkspaceId === "all" || revoked) return null;
+  return <DeferDialog key={task.id} app={app} task={task} anchor={deferOpen.anchor} fromAttention={deferOpen.origin === "attention" ? evidence : undefined} />;
 }
 
-function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor: HTMLElement }) {
-  const { calendarToday, deferBusy, deferError, deferTask, items, language, setDeferOpen, today, tr, visibleDayPlan } = app;
+function DeferDialog({ app, task, anchor, fromAttention }: { app: LumiApp; task: Entity; anchor: HTMLElement; fromAttention?: { evaluatedAt: number } }) {
+  const { attentionActionsBlocked, calendarToday, deferBusy, deferError, deferTask, items, language, setDeferOpen, today, tr, visibleDayPlan } = app;
+  // A second guard for event handlers already queued when freshness changes.
+  const revoked = Boolean(fromAttention && (attentionActionsBlocked || !anchor.isConnected ||
+    attentionSubjectChangedSinceEvaluation(task, fromAttention.evaluatedAt)));
   const locale = language === "cs" ? "cs-CZ" : "en-GB";
   const popRef = useRef<HTMLDivElement>(null);
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
@@ -180,6 +210,7 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
   }, [refocus, focusDay]);
 
   async function choose(choice: string, via: "manual" | "lumi" = "manual") {
+    if (revoked) { close(false); return; }
     if (deferBusy) return;
     if (await deferTask(task, choice, via)) close(true);
   }
@@ -275,12 +306,12 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
               {!keep && <b>{sentenceEnd(suggestion.target === "someday" ? tr("deferSuggestSomeday") : tr("deferSuggestTo").replace("{date}", () => longDate(suggestion.target)))} </b>}
               {sentence}
             </p>
-            <button type="button" className="deferApply" disabled={deferBusy} onClick={applySuggestion}>{tr(keep ? "deferKeepToday" : "deferApply")}</button>
+            <button type="button" className="deferApply" disabled={deferBusy || revoked} onClick={applySuggestion}>{tr(keep ? "deferKeepToday" : "deferApply")}</button>
           </section>
         )}
         <div className="deferChoices">
           {quick.map((choice) => (
-            <button key={choice.key} type="button" className="deferChoice" data-defer-choice={choice.key} disabled={deferBusy} onClick={() => void choose(choice.key)}>
+            <button key={choice.key} type="button" className="deferChoice" data-defer-choice={choice.key} disabled={deferBusy || revoked} onClick={() => void choose(choice.key)}>
               <span className="deferChoiceIcon" aria-hidden="true">{choice.icon}</span>
               <span className="deferChoiceText">
                 <span>{choice.label}</span>
@@ -316,11 +347,11 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
                         tabIndex={day === tabDay ? 0 : -1}
                         aria-label={`${fullDate(day)}${notes.length ? `, ${notes.join(", ")}` : ""}`}
                         aria-pressed={selected}
-                        aria-disabled={past || deferBusy ? true : undefined}
+                        aria-disabled={past || deferBusy || revoked ? true : undefined}
                         aria-current={day === today ? "date" : undefined}
                         onFocus={() => setFocusDay(day)}
                         onKeyDown={(event) => onDayKey(event, day)}
-                        onClick={() => { if (!past) void choose(day); }}
+                        onClick={() => { if (!past && !revoked) void choose(day); }}
                       >{Number(day.slice(8))}</button>
                     </span>
                   );
@@ -332,7 +363,7 @@ function DeferDialog({ app, task, anchor }: { app: LumiApp; task: Entity; anchor
         {deferError && <p role="alert" className="deferError">{tr("deferError")}</p>}
         <div className="deferFooter">
           {deadline ? <span className="deferDeadline">{tr("deferDeadlineNote").replace("{date}", () => fullDateShort(deadline, locale))}</span> : <span />}
-          <button type="button" className="deferClear" data-defer-choice="clear" disabled={deferBusy} onClick={() => void choose("clear")}>{tr("scheduleClear")}</button>
+          <button type="button" className="deferClear" data-defer-choice="clear" disabled={deferBusy || revoked} onClick={() => void choose("clear")}>{tr("scheduleClear")}</button>
         </div>
       </div>
     </>
