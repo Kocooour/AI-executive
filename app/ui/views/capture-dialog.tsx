@@ -245,7 +245,7 @@ export function CaptureDialog({ app }: { app: LumiApp }) {
                             }}
                           >
                             <option value="">—</option>
-                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === writeWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
+                            {items.filter((item) => item.type === "project" && item.status === "active" && item.workspaceId === captureWriteWorkspaceId).sort((a, b) => a.title.localeCompare(b.title)).map((item) => (
                               <option key={item.id} value={item.id}>{item.title}</option>
                             ))}
                           </select>
