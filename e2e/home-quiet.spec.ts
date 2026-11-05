@@ -91,9 +91,9 @@ test("timed deadline shows its correct local time without exposing an IANA zone"
     const reason = item.locator(".attentionReason");
     await expect(reason).toContainText("Termín");
     // A timed deadline needs an actual clock time and a human time-zone label.
-    await expect(reason).toContainText(/\\d{1,2}:\\d{2}/);
+    await expect(reason).toContainText(/\d{1,2}:\d{2}/);
     await expect(reason).toContainText(/SEČ|SELČ|CET|CEST|GMT[+-]/);
-    await expect(reason).not.toContainText(/Europe\\/Prague/);
+    await expect(reason).not.toContainText(/Europe\/Prague/);
     await item.getByRole("button", { name: `Proč?: ${title}` }).press("Enter");
     await expect(item.locator(".attentionMore")).toContainText("Vyhodnoceno:");
   } finally {
