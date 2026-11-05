@@ -23,10 +23,7 @@ test("UI-01c: invalid typed URL cannot open an inspector or disclose a target", 
   await expect(notice).not.toContainText("ui01c-one");
   await expect(notice).not.toContainText("ui01c-two");
   await expect(page).not.toHaveURL(/taskId=/);
-  await page.locator('.mobileNav button[data-nav-view="Projects"]:visible').count().then(async (count) => {
-    if (count) await page.locator('.mobileNav button[data-nav-view="Projects"]:visible').click();
-    else await page.locator('aside nav button[data-nav-view="Projects"]').click();
-  });
+  await page.locator('aside > nav button[data-nav-view="Projects"]').click();
   await expect(notice).toHaveCount(0);
 });
 
