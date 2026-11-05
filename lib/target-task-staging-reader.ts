@@ -38,10 +38,9 @@ import { readAuthorizedTargetParentBacklink, type TargetAuthorizedBacklink, type
 import { readAuthorizedProjectIndexPage } from "./target-authorized-project-index";
 import { readAuthorizedMyPlanHomeSummary, type AuthorizedMyPlanHomeSummary } from "./target-my-plan-home-summary";
 import { readAuthorizedScopedHomeSummary, type AuthorizedScopedHomeSummary, type TargetHomeScope } from "./target-scoped-home-summary";
-import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage } from "./target-task-temporal-read-model";
+import { readAuthorizedTemporalTaskPage, readAuthorizedTemporalTaskDetail, readAuthorizedTemporalDueWindowPage, temporalCalendarOrdinal } from "./target-task-temporal-read-model";
 import { readAuthorizedPersonalWhenPage } from "./target-personal-when-read-model";
 import {readAuthorizedMyPlanDayTaskPage} from "./target-my-plan-day-task-read-model";
-import {temporalCalendarOrdinal} from "./target-task-temporal-read-model";
 import {readAuthorizedGlobalTaskPage} from "./target-global-task-read-model";
 import type {TargetGlobalTaskPage,TargetGlobalTaskScope} from "./target-global-task-read-model";
 import {readAuthorizedGlobalProjectPage} from "./target-global-project-read-model";
