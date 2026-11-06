@@ -550,6 +550,27 @@ export function readPreflightedTemporalTaskDetail(
     }, () => null));
 }
 
+/** R3-slice BE-04: status CAS preview and its live-release task guard
+ * originate from the SAME preflighted SQLite read transaction. This is a
+ * read-only hint; the writer revalidates everything under BEGIN IMMEDIATE. */
+export function readPreflightedTemporalStatusPreview(
+  store: TargetStagingReadStore, access: TargetStagingReadCredential, taskId: string,
+): {detail: TemporalTaskDetail; expectedRevision: string} | null {
+  return withPreflightedStore(store, () => null, (db, preflight) =>
+    inReadSnapshot(db, () => {
+      if (!preflight(db)) return null;
+      const actor = verifiedActor(db, access);
+      if (!actor || !canEditIsolatedTargetTaskTitle(db, actor, taskId)) return null;
+      const detail = readAuthorizedTemporalTaskDetail(db, actor, taskId);
+      const revision = detail ? targetTaskTitleEditRevision(db, taskId) : null;
+      if (!detail || !revision || !/^[a-f0-9]{64}$/.test(revision) ||
+          detail.linearization.areas.length !== 1 ||
+          !["private-owner", "editor", "admin"].includes(detail.linearization.areas[0].access))
+        return null;
+      return {detail, expectedRevision: revision};
+    }, () => null));
+}
+
 /**
  * Dry-run per-item write authorization on a pinned preflighted snapshot. The
  * returned SHA-256 covers this task and its Area policy revision, not every
