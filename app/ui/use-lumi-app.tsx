@@ -68,6 +68,8 @@ export function useLumiApp() {
     // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
     [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [navigationUnavailable, setNavigationUnavailable] = useState(false),
+    // A failed preview sync must stay visible even after local deletion closes its detail page.
+    [projectSyncNotice, setProjectSyncNotice] = useState<"status" | "delete" | null>(null),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     // Only the opt-in Můj plán reorder displays this; never silently treat a
@@ -3249,10 +3251,18 @@ export function useLumiApp() {
     recordDeleted(localStorage, e.id);
     setUndo(e);
     setUndoRelations(linkedRelations);
-    await syncToServer();
+    // Local deletion is already committed. A network failure is not a rollback;
+    // finish navigation/Undo first, then report it in the persistent app-level alert.
+    let syncFailed = false;
+    try { await syncToServer({ reportFailure: Boolean(expectedPreview) }); }
+    catch { syncFailed = true; }
     if (inspectorSelectionRef.current?.id === e.id) closeDetail();
     if (openProjectIdRef.current === e.id) closeProjectPage();
-    load();
+    if (expectedPreview) await load(); else void load();
+    if (syncFailed) {
+      setProjectSyncNotice("delete");
+      throw new Error("project_preview_sync_pending");
+    }
   }
   async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: ProjectPreviewActionSnapshot) {
     if (project.type !== "project") return;
@@ -3294,10 +3304,18 @@ export function useLumiApp() {
       });
       localDataVersion.current += 1;
     }
-    await syncToServer();
+    // The local status has already changed. Keep it visible even if the server
+    // write failed, then report the unconfirmed sync to the preview UI.
+    let syncFailed = false;
+    try { await syncToServer({ reportFailure: Boolean(expectedPreview) }); }
+    catch { syncFailed = true; }
     await load();
     const saved = (await db.entities.get(project.id)) || null;
     setSelected((open) => open?.id === project.id ? saved : open);
+    if (syncFailed) {
+      setProjectSyncNotice("status");
+      throw new Error("project_preview_sync_pending");
+    }
   }
   async function restore() {
     if (!undo) return;
@@ -4410,6 +4428,8 @@ export function useLumiApp() {
     areas,
     projectPreviewActionSnapshot,
     trackProjectWrite,
+    projectSyncNotice,
+    dismissProjectSyncNotice: () => setProjectSyncNotice(null),
     askAI,
     assistantOpen,
     attentionTaskCount,
