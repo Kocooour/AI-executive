@@ -11,9 +11,7 @@ import {
   personalWhenHttpEnabled,personalWhenHttpConfig,personalWhenHttpUnchanged,
   personalWhenHttpAnswer,personalWhenHttpCommand,verifyPersonalWhenPreviewLive,
 } from "../../../../../../../lib/target-staging-personal-when-http";
-import {readStagingPersonalWhenPreviewInChild}
-  from "../../../../../../../lib/target-staging-read-process";
-import {readPersonalWhenReceiptInChild}
+import {readPersonalWhenAtomicReceiptInChild}
   from "../../../../../../../lib/target-staging-personal-when-http-process";
 import {
   targetProtocolRefusal,legacySnapshotRefusal,resyncRequiredResponse,
@@ -55,19 +53,18 @@ export async function POST(request:Request):Promise<Response> {
     if(before!=="ok")return stagingIdentityRefusal(before);
     if(!personalWhenHttpUnchanged(base))return refuse(503,"Staging unavailable");
 
-    const child={...base,...stagingChildSessionConfig(identity)};
-    const preview=await readStagingPersonalWhenPreviewInChild(child,command.taskId);
-    if(!personalWhenHttpUnchanged(base))return refuse(503,"Staging unavailable");
-    const result=preview?.ok===true
-      ? await readPersonalWhenReceiptInChild(child,command):null;
-    // Both receipt lookup and live release recheck current ACL/session.
-    const released=preview?.ok===true
-      ? verifyPersonalWhenPreviewLive(request,identity,base,preview.preview)
+    // Read current private epoch/ACL and the exact old command receipt in
+    // one pinned snapshot; never combine independent moments for Undo.
+    const snapshot=await readPersonalWhenAtomicReceiptInChild(
+      {...base,...stagingChildSessionConfig(identity)},command);
+    const released=snapshot?.ok===true
+      ? verifyPersonalWhenPreviewLive(request,identity,base,snapshot.preview)
       : verifyStagingIdentityBeforeRelease(request,identity,base);
     if(released!=="ok"&&released!=="stale")return stagingIdentityRefusal(released);
     if(!personalWhenHttpUnchanged(base))return refuse(503,"Staging unavailable");
-    if(released==="stale"||preview?.ok===false)return refuse(404,"Not found");
-    if(!preview||!result)return refuse(503,"Staging unavailable");
+    if(released==="stale"||snapshot?.ok===false)return refuse(404,"Not found");
+    if(!snapshot)return refuse(503,"Staging unavailable");
+    const result=snapshot.receipt;
     if(result.ok===false){
       if(result.reason==="unavailable")return refuse(404,"Not found");
       if(result.reason==="resync_required")return resyncRequiredResponse();
