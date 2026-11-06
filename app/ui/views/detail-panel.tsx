@@ -888,7 +888,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
               );
               return (
                 <div className="fields taskDetailFields" data-task-more-open={taskMoreOpen ? "true" : "false"}>
-                  {mobileTaskPreview
+                  {(mobileTaskPreview || desktopTaskPreview)
                     ? [essentialsSection, notesSection, workButton, moreButton, listSection, optionsSection, actionsSection]
                     : [listSection, essentialsSection, optionsSection, notesSection, moreButton, workButton, actionsSection]}
                 </div>
