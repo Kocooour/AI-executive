@@ -46,6 +46,15 @@
 }
 .stagingMyPlanWarning p{margin:0 0 10px;}
 .stagingMyPlanTask{min-width:0;display:grid;gap:3px;overflow-wrap:anywhere;}
+.stagingMyPlanWhenControls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.stagingMyPlanPreview .stagingMyPlanWhenControls button{
+  font-size:13px;min-height:44px;padding:7px 12px;
+  border-radius:10px;border:1px solid var(--border,#9da99e);
+  background:var(--surface,#fff);color:inherit;
+}
+.stagingMyPlanPreview .stagingMyPlanWhenControls button:hover{
+  background:var(--muted-surface,#f2f5f3);
+}
 .stagingMyPlanTask strong{font-size:15px;font-weight:650;}
 .stagingMyPlanTask small{font-size:12px;color:var(--muted,#516055);}
 .stagingMyPlanEmpty,.stagingMyPlanScope{font-size:14px;line-height:1.5;color:var(--muted,#516055);}

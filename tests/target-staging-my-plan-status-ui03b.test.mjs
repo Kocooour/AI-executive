@@ -51,7 +51,7 @@ test("task completion uses square control with screen reader label and large tou
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const css=source("app/target-staging/my-plan/preview/preview.css");
   assert.match(ui,/statusWriteEnabled=false/);
-  assert.match(ui,/\{statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
+  assert.match(ui,/statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
   assert.match(ui,/\{canComplete[\s\S]*?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"/);
   assert.match(ui,/aria-label=\{"Dokončit úkol: "\+task\.title\}/);
   assert.match(ui,/canComplete=\{canComplete\}/);
@@ -89,8 +89,8 @@ test("manual receipt verification never resends a PATCH and blocks new status co
   assert.match(method,/receipt\.reason==="signed-out"/);
   assert.match(method,/setAction\(\{kind:"uncertain"\}\)/);
   assert.match(ui,/const actionPending=action\.kind==="pending"\|\|action\.kind==="checking"\|\|\s*action\.kind==="uncertain"/);
-  assert.match(ui,/disabled=\{actionPending\}/);
-  assert.match(ui,/\{!actionPending&&<>[\s\S]*?<PlanDay/);
+  assert.match(ui,/disabled=\{anyPending\}/);
+  assert.match(ui,/\{!anyPending&&<>[\s\S]*?<PlanDay/);
   assert.match(ui,/Ověřit původní potvrzení/);
   assert.doesNotMatch(ui,/localStorage|indexedDB|sessionStorage|serviceWorker/);
 });
@@ -112,7 +112,7 @@ test("hide/offline abort active requests, discard confirmed Undo and reauthorize
 
 test("Undo is a fresh authorized open command, not an old PATCH replay",()=>{
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
-  assert.match(ui,/statusWriteEnabled&&action\.kind==="committed"/);
+  assert.match(ui,/statusWriteEnabled&&!anyPending&&action\.kind==="committed"/);
   assert.match(ui,/action\.status==="completed"&&/);
   assert.match(ui,/action\.taskId===task\.taskId&&action\.areaId===task\.areaId/);
   assert.match(ui,/Vrátit dokončení \(Undo\)/);
@@ -219,7 +219,7 @@ test("P1: failed-read recovery is visible outside ready state and never changes 
   assert.match(ui,/state\.status==="error"&&state\.reason!=="signed-out"/);
   assert.match(ui,/uncertainCommand\.current!==null&&/);
   assert.match(ui,/onClick=\{retryUncertainRead\}/);
-  assert.match(ui,/\{!actionPending&&<>/);
+  assert.match(ui,/\{!anyPending&&<>/);
 });
 
 test("P1: Undo receipt/preflight failures preserve same actor's completion instead of losing it",()=>{
@@ -228,16 +228,21 @@ test("P1: Undo receipt/preflight failures preserve same actor's completion inste
   const end=ui.indexOf("async function verifyUncertainReceipt()",start);
   assert.ok(start>0&&end>start);
   const method=ui.slice(start,end);
-  assert.match(method,/if\(!prior\)confirmedCommand\.current=null/);
+  assert.match(method,/const retainedStatusUndo=prior\?\?/);
+  assert.doesNotMatch(method,/if\(!prior\)confirmedCommand\.current=null/,
+    "a new status preflight must not discard a prior confirmed completion");
+  assert.match(method,/const restoreStatusUndoOnFailure=/);
+  assert.match(method,/setUndoFailure\(reason\)/);
+  assert.match(method,/setAction\(\{kind:"committed",taskId:retainedStatusUndo\.taskId/);
   assert.match(method,/const undo=await prepareConfirmedMyPlanUndo\(/);
   assert.match(method,/if\(undo\.kind!=="ready"\)\{/);
-  assert.match(method,/setUndoFailure\(undo\.reason\)/);
-  assert.match(method,/setAction\(\{kind:"committed",taskId:prior\.taskId/);
+  assert.match(method,/restoreStatusUndoOnFailure\(undo\.reason\)/);
+  assert.match(method,/restoreStatusUndoOnFailure\(prepared\.reason\)/);
+  assert.match(method,/restoreStatusUndoOnFailure\(result\.reason\)/);
   assert.match(method,/command=undo\.command/);
   assert.match(method,/op\.command=command/);
   assert.match(method,/confirmedCommand\.current=status==="completed"\?result\.command:null/);
   assert.match(method,/confirmedCommand\.current=null;\s*uncertainCommand\.current=result\.command/);
-  assert.match(method,/else if\(prior\)\{[\s\S]*?setUndoFailure\(result\.reason\)/);
   assert.match(method,/if\(undo\.kind==="signed-out"\)\{\s*confirmedCommand\.current=null/);
 });
 

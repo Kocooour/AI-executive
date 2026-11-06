@@ -231,13 +231,18 @@ test("clear or Undo is another fully authorized CAS with new UUID, never origina
   assert.equal(reverse.previousWhenOn,"2026-11-07");
 });
 
-test("transport is inactive in staging UI, not imported in production, and never persists actor data",()=>{
+test("transport is only accessed behind server-gated staging UI and never persists actor data",()=>{
   const root=path.join(import.meta.dirname,"..");
   const code=readFileSync(path.join(root,"lib/target-staging-my-plan-when-client.ts"),"utf8");
   const stage=readFileSync(path.join(root,
     "app/ui/target-staging-my-plan-preview.tsx"),"utf8");
   const prod=readFileSync(path.join(root,"app/page.tsx"),"utf8");
-  assert.doesNotMatch(stage,/target-staging-my-plan-when-client|changeMyPlanWhen/);
+  const stagingRoute=readFileSync(path.join(root,
+    "app/target-staging/my-plan/preview/page.tsx"),"utf8");
+  assert.match(stage,/whenWriteEnabled=false/);
+  assert.match(stage,/prepareMyPlanWhen/);
+  assert.match(stage,/dispatchMyPlanWhen/);
+  assert.match(stagingRoute,/myPlanStagingWhenUiEnabled\(process\.env\)/);
   assert.doesNotMatch(prod,/target-staging-my-plan-when-client|changeMyPlanWhen/);
   assert.doesNotMatch(code,/localStorage|sessionStorage|indexedDB|serviceWorker|actorId|userId/);
   assert.match(code,/method:"GET",credentials:"same-origin",cache:"no-store"/);
