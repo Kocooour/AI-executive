@@ -1,4 +1,4 @@
-# R3-slice / BE-01 + BE-02 + BE-03 — stagingový dvoudenní adaptér Mého plánu
+# R3-slice / BE-01 až BE-04 — stagingový Můj plán a CAS náhled
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -27,6 +27,13 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - `GET/PATCH /api/target-staging/task-temporal/personal-when/command` + odpovídající receipt pro soukromé `whenOn` dnes/zítra.
 - Před zápisem se vždy vyžaduje aktuální **serverový preview**, aktuální `writeAreaId`, restore generation a revize. Starý preview či revokace se nikdy automaticky znovu neodesílá. Po nejasném výsledku se použije read-only receipt; Undo je **nový reverzní CAS příkaz s novým preview**, ne opakování starého příkazu.
 - `409` = konflikt/stale a obnova dat; `401/404` = ztráta přístupu či nedostupnost; `503` = nejistý výsledek (nejprve receipt); offline nesmí vystupovat jako potvrzené dokončení. Pending se nesmí bez ověření zaměnit za úspěch.
+
+## BE-04 — atomický stavový CAS náhled
+
+- Stávající `GET /api/target-staging/task-temporal/status?taskId=...` nyní skládá `expectedRevision` a `writeAreaId` s interním task/parent/Area guardem z **jediné kanonicky preflightované, actor-bound, připnuté SQLite read transakce**. Původní dva oddělené podprocesy mohly přečíst rozdílné okamžiky.
+- Jeden krátký child vrací pouze interní striktně validovaný DTO; klient nadále vidí přesně `{expectedRevision,writeAreaId,restoreGeneration}`. Zůstává aktuální writer ACL, live session/task/parent/Area ověření před odpovědí, no-store, rate limit, Origin/protokol na PATCH a idempotentní receipt.
+- Preview je **pouze čtecí** a neautorizuje zápis: PATCH revaliduje aktuální write ACL, session, generaci a CAS znovu atomicky při commit. Výchozí čtyři staging write flagy zůstávají vypnuté, žádný produkční provoz se neaktivuje.
+- Regresní testy ověřují soulad revize s dosavadním API, viewer/cizí úkol, odmítnutí neplatného child DTO a změnu úkolu po snapshotu před live vydáním. Nezměnily se URL ani odpovědi používané klientem UI-03a/03b.
 
 ## Co zůstává mimo iteraci
 
