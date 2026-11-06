@@ -14,6 +14,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { mobileDesignV1Preview } from "../navigation";
 import { entityConflicts } from "../../../lib/field-merge";
 import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
+import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
+import { LumiCompletionControl } from "./lumi-completion-control";
 import { inspectorPreviewEscapeAllowed } from "../../../lib/desktop-inspector-ui03b";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
@@ -132,7 +134,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     workSession,
   } = app;
   const source = selected?.type === "task" ? gmailSource(selected.properties.mailSource) : null;
-  const [mobileViewport, setMobileViewport] = useState(false);
+  // Unknown until matchMedia runs. Never show desktop-only actions during the
+  // initial mobile hydration frame before the actual viewport is known.
+  const [mobileViewport, setMobileViewport] = useState<boolean | null>(null);
   const [taskMoreOpen, setTaskMoreOpen] = useState(false);
   const lastMobileMatch = useRef<boolean | null>(null);
   const resizeFocus = useRef<{ element: HTMLElement; start: number | null; end: number | null } | null>(null);
@@ -174,6 +178,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
   const selectedTask = selected?.type === "task" ? selected : null;
   const activeTaskSession = Boolean(selectedTask && workSession?.taskId === selectedTask.id);
   const mobileTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport && selectedTask);
+  // UI-06c: the Mac preview uses the same square completion affordance as the
+  // phone, while retaining the existing desktop field layout and write guards.
+  const desktopTaskPreview = Boolean(mobileDesignV1Preview && mobileViewport === false && selectedTask);
   const taskPreviewDueTone = selectedTask ? taskDueTone(selectedTask, today) : "";
   const taskPreviewMayToggle = taskPreviewCanToggle(selectedTask, app.activeWorkspaceId,
     Boolean(selectedTask && (isFallbackArea(selectedTask, app.items) ||
@@ -205,8 +212,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
         <div className="backdrop inspectorBackdrop" onClick={closeInspector}>
           <aside ref={inspectorRef} tabIndex={-1} className="detail inspectorDetail" aria-label={`${tr(selected.type)}: ${selected.title}`}
             data-task-detail-preview={mobileTaskPreview ? "lumi-v1" : undefined}
+            data-task-detail-desktop-preview={desktopTaskPreview ? "lumi-v1" : undefined}
             data-task-due-tone={mobileTaskPreview ? taskPreviewDueTone : undefined}
-            data-task-completed={mobileTaskPreview && selectedTask ? selectedTask.status === "completed" : undefined}
+            data-task-completed={(mobileTaskPreview || desktopTaskPreview) && selectedTask ? selectedTask.status === "completed" : undefined}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(event) => {
               if (!mobileDesignV1Preview) return;
@@ -232,6 +240,24 @@ export function DetailPanel({ app }: { app: LumiApp }) {
             </button>
             <p className="eyebrow">{tr(selected.type)}</p>
             <TaskPreviewTitle>
+              {desktopTaskPreview && selectedTask && (
+                <LumiCompletionControl kind="task" className="taskDetailDesktopCompletion"
+                  tone={taskPreviewCompletionTone(selectedTask, today)}
+                  complete={selectedTask.status === "completed"}
+                  actionLabel={`${tr(selectedTask.status === "completed" ? "reopen" : "complete")} ${selectedTask.title || tr("untitledItem")}`}
+                  stateLabel={taskPreviewStateText(taskPreviewCompletionTone(selectedTask, today), language)}
+                  blockedReason={activeTaskSession
+                    ? (language === "cs" ? "Nejdřív ukončete pracovní blok." : "Finish the work session first.")
+                    : (language === "cs"
+                      ? "Vyberte zapisovatelný prostor a vyřešte případnou synchronizaci nebo konflikt."
+                      : "Select a writable workspace and resolve any pending sync or conflict.")}
+                  disabled={!taskPreviewMayToggle}
+                  onClick={() => {
+                    if (!taskPreviewMayToggle) return;
+                    if (selectedTask.status === "completed") void reopenTask(selectedTask);
+                    else void done(selectedTask.id);
+                  }} />
+              )}
               {mobileTaskPreview && selectedTask && (
                 <button type="button" className="taskPreviewCheck" data-task-preview-check={selectedTask.id}
                   role="checkbox" aria-checked={selectedTask.status === "completed"}
@@ -744,7 +770,7 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   <span aria-hidden="true">{taskMoreOpen ? "⌃" : "⌄"}</span>
                 </button>
               );
-              const workButton = mobileTaskPreview && activeTaskSession ? (
+              const workButton = (mobileTaskPreview || desktopTaskPreview) && activeTaskSession ? (
                   <button key="work-finish" type="button" className="primaryAction taskDetailWorkFinish"
                     onClick={() => void done(selected.id)}>{tr("workFinish")}</button>
               ) : null;
@@ -848,7 +874,9 @@ export function DetailPanel({ app }: { app: LumiApp }) {
                   {tr("moveSomeday")}
                 </button>
                 {selected.status === "open" && app.activeWorkspaceId !== "all" && <DeferChip app={app} task={selected} />}
-                {!mobileTaskPreview && (selected.status === "completed" ? (
+                {/* The viewport is null until hydration. A preview must NEVER
+                    expose the legacy, unguarded completion in that gap. */}
+                {!mobileDesignV1Preview && (selected.status === "completed" ? (
                   <button onClick={() => reopenTask(selected)}>{tr("reopen")}</button>
                 ) : (
                   <button className="primaryAction" onClick={() => done(selected.id)}>{workSession?.taskId === selected.id ? tr("workFinish") : tr("complete")}</button>
