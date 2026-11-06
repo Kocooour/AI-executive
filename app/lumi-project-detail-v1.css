@@ -69,3 +69,57 @@
     cursor: default;
   }
 }
+
+/* UI-05c: desktop project preview has the same tasks-first hierarchy and
+   accessible, on-demand context as the phone; default-off/legacy untouched. */
+@media (min-width: 701px) {
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold {
+    min-width: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 650;
+    list-style: none;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::-webkit-details-marker {
+    display: none;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::before {
+    content: "›";
+    margin-inline-end: 9px;
+    color: var(--muted);
+    font-size: 20px;
+    transition: transform .15s ease;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold .projectContext {
+    min-width: 0;
+    margin-block-end: 14px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectActionError {
+    color: var(--danger);
+    font-size: 12px;
+  }
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectActions button:disabled {
+    opacity: .45;
+    cursor: default;
+  }
+}
+@media (min-width: 701px) and (prefers-reduced-motion: reduce) {
+  .projectPage[data-project-detail-preview="lumi-v1"] .projectContextFold > summary::before {
+    transition: none;
+  }
+}

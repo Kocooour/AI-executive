@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {randomUUID} from "node:crypto";
 import {mkdtempSync,mkdirSync,readFileSync,rmSync,writeFileSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,12 @@ const vars=[
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED",
+  "AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED",
   "AI_EXECUTIVE_TARGET_STAGING_DIRECTORY",
   "AI_EXECUTIVE_TARGET_STAGING_RESTORE_GENERATION",
   "AI_EXECUTIVE_TARGET_STAGING_OWNER_USER_ID",
@@ -28,11 +35,29 @@ Object.assign(process.env,{
   AI_EXECUTIVE_TARGET_STAGING_HTTP_ENABLED:"true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_DAY_ENABLED:"true",
   AI_EXECUTIVE_TARGET_STAGING_HTTP_MY_PLAN_SLICE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:"true",
+  AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED:"true",
 });
 const {bootstrapIsolatedTargetStore}=await import("../lib/target-store-bootstrap.ts");
 const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET}=await import("../app/api/target-staging/my-plan/slice/route.ts");
+const {GET:statusGET,PATCH:statusPATCH}=
+  await import("../app/api/target-staging/task-temporal/status/route.ts");
+const {POST:statusReceiptPOST}=
+  await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
+const {GET:dueGET,PATCH:duePATCH}=
+  await import("../app/api/target-staging/task-temporal/due-on/route.ts");
+const {POST:dueReceiptPOST}=
+  await import("../app/api/target-staging/task-temporal/due-on/receipt/route.ts");
+const {GET:whenGET,PATCH:whenPATCH}=
+  await import("../app/api/target-staging/task-temporal/personal-when/command/route.ts");
+const {POST:whenReceiptPOST}=
+  await import("../app/api/target-staging/task-temporal/personal-when/command/receipt/route.ts");
 let serial=0;const fixtures=[];
 after(()=>{
   for(const f of fixtures)f.db.close();
@@ -118,6 +143,373 @@ async function ok(request){
   }
   return body;
 }
+
+/** BE-09: exercise real HTTP route handlers with the SAME durable actor
+ * and isolated SQLite store; no mocks, external server or production data. */
+const statusURL="http://localhost:3001/api/target-staging/task-temporal/status";
+const dueURL="http://localhost:3001/api/target-staging/task-temporal/due-on";
+const whenURL="http://localhost:3001/api/target-staging/task-temporal/personal-when/command";
+async function writePreview(handler,url,taskId,cookie){
+  const response=await handler(new Request(url+"?taskId="+encodeURIComponent(taskId),{
+    headers:{cookie,"x-forwarded-for":"10.99.8.64"},
+  }));
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  return body;
+}
+function writeCommand(handler,url,command,cookie){
+  return handler(new Request(url,{
+    method:handler===statusPATCH||handler===whenPATCH||handler===duePATCH
+      ?"PATCH":"POST",
+    headers:{
+      cookie,"x-forwarded-for":"10.99.8.64",
+      "content-type":"application/json",
+      origin:"http://localhost:3001","x-lumi-target-protocol":"1",
+    },
+    body:JSON.stringify(command),
+  }));
+}
+async function accepted(handler,url,command,cookie,expected){
+  const response=await writeCommand(handler,url,command,cookie);
+  const body=await response.json();
+  assert.equal(response.status,200,JSON.stringify(body));
+  assert.equal(response.headers.get("cache-control"),"no-store");
+  assert.deepEqual(body,expected);
+}
+const unique=page=>new Set([...ids(page.today),...ids(page.tomorrow)]).size===
+  ids(page.today).length+ids(page.tomorrow).length;
+
+test("BE-09 My Plan -> private whenOn -> status -> receipts -> fresh Undo stays coherent",async()=>{
+  const f=fixture(),bob=login(f,"bob"),carol=login(f,"carol");
+  const initial=await ok(get(query(),bob));
+  assert.deepEqual(ids(initial.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(initial.tomorrow),["b-next","b-next2","s-bob"]);
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+
+  // Scheduling belongs to Bob, not the shared dueOn; it moves the task
+  // from Tomorrow into Today under a fresh private epoch and CAS.
+  const {whenOn:oldWhen,...whenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(oldWhen,null);
+  const schedule={...whenCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,schedule,bob,{ok:true});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",schedule,bob,
+    {status:"committed"});
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const moved=await ok(get(query(),bob));
+  assert.deepEqual(ids(moved.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(moved.tomorrow),["b-next2","s-bob"]);
+  assert.equal(unique(moved),true);
+
+  // Completion is a distinct shared task write, not a private plan write.
+  const statusCAS=await writePreview(statusGET,statusURL,"s-bob",bob);
+  const complete={...statusCAS,taskId:"s-bob",status:"completed",
+    commandId:randomUUID()};
+  await accepted(statusPATCH,statusURL,complete,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,
+    {status:"committed"});
+  const completed=await ok(get(query(),bob));
+  assert.deepEqual(ids(completed.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(completed.tomorrow),["b-next2"]);
+  assert.equal(unique(completed),true);
+
+  // Undo means fresh independently authorized CAS, not old command replay.
+  const {whenOn:planned,...currentWhenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(planned,"2026-11-04");
+  const clear={...currentWhenCAS,taskId:"b-next",whenOn:null,
+    commandId:randomUUID()};
+  assert.notEqual(clear.commandId,schedule.commandId);
+  await accepted(whenPATCH,whenURL,clear,bob,{ok:true});
+  const refreshed=await writePreview(statusGET,statusURL,"s-bob",bob);
+  const reopen={...refreshed,taskId:"s-bob",status:"open",commandId:randomUUID()};
+  assert.notEqual(reopen.commandId,complete.commandId);
+  await accepted(statusPATCH,statusURL,reopen,bob,{ok:true});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",reopen,bob,
+    {status:"committed"});
+
+  const restored=await ok(get(query(),bob));
+  assert.deepEqual(ids(restored.today),ids(initial.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(initial.tomorrow));
+  assert.equal(unique(restored),true);
+  // Old original receipts remain readable by the SAME current writer and
+  // cannot authorize a duplicate PATCH or leak to a different actor.
+  await accepted(whenReceiptPOST,whenURL+"/receipt",schedule,bob,
+    {status:"committed"});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",complete,bob,
+    {status:"committed"});
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    schedule,carol)).status,404);
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    complete,carol)).status,404);
+  const outsider=await ok(get(query(),carol));
+  assert.deepEqual(ids(outsider.today),["c-private"]);
+  assert.deepEqual(ids(outsider.tomorrow),[]);
+  assert.ok(!JSON.stringify(outsider).includes("Bob"));
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+});
+
+test("BE-09 role and session revocation invalidate old My Plan cursor and write receipts",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+  const savedStatus={...await writePreview(statusGET,statusURL,"s-bob",bob),
+    taskId:"s-bob",status:"completed",commandId:randomUUID()};
+  const {whenOn:ignored,...whenCAS}=await writePreview(
+    whenGET,whenURL,"s-bob",bob);
+  const savedWhen={...whenCAS,taskId:"s-bob",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  // Assignment must be revoked before role downgrade (SQLite invariant).
+  f.db.prepare("UPDATE tasks SET assignee_user_id=NULL WHERE id='s-bob'").run();
+  f.db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const fresh=await ok(get(query(),bob));
+  assert.deepEqual(ids(fresh.tomorrow),["b-next","b-next2"]);
+  for(const [handler,url] of [[statusGET,statusURL],[whenGET,whenURL]]){
+    const response=await handler(new Request(url+"?taskId=s-bob",{
+      headers:{cookie:bob},
+    }));
+    assert.equal(response.status,404);
+  }
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    savedStatus,bob)).status,404);
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    savedWhen,bob)).status,404);
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await get(query(),bob)).status,401);
+  const denied=await whenGET(new Request(whenURL+"?taskId=b-next",{
+    headers:{cookie:bob},
+  }));
+  assert.equal(denied.status,401);
+});
+
+test("BE-10 shared deadline and actor-private whenOn preserve earliest attention and CAS",async()=>{
+  const f=fixture(),alice=owner(),bob=login(f,"bob"),carol=login(f,"carol");
+  const baseline=await ok(get(query(),bob));
+  assert.deepEqual(ids(baseline.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(baseline.tomorrow),["b-next","b-next2","s-bob"]);
+  const initialDue=await writePreview(dueGET,dueURL,"s-bob",bob);
+  assert.equal(initialDue.dueOn,"2026-11-05");
+  const staleBobCommand={
+    ...(({dueOn,...cas})=>cas)(initialDue),
+    taskId:"s-bob",dueOn:"2026-11-06",commandId:randomUUID(),
+  };
+  const cursor=(await ok(get(query({limit:"1"}),bob))).nextCursor;
+  assert.ok(cursor);
+
+  // Bob moves his PERSONAL whenOn after the shared deadline. The earlier
+  // dueOn still determines his attention day; no duplicated row is allowed.
+  const {whenOn:prior,...privateCAS}=await writePreview(
+    whenGET,whenURL,"s-bob",bob);
+  assert.equal(prior,null);
+  const laterPlan={...privateCAS,taskId:"s-bob",whenOn:"2026-11-06",
+    commandId:randomUUID()};
+  await accepted(whenPATCH,whenURL,laterPlan,bob,{ok:true});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",laterPlan,bob,
+    {status:"committed"});
+  assert.equal((await get(query({limit:"1",cursor}),bob)).status,409);
+  const stillDue=await ok(get(query(),bob));
+  assert.deepEqual(ids(stillDue.today),ids(baseline.today));
+  assert.deepEqual(ids(stillDue.tomorrow),ids(baseline.tomorrow));
+  assert.equal(unique(stillDue),true);
+  const stillDueTask=stillDue.tomorrow.tasks.find(x=>x.taskId==="s-bob");
+  assert.equal(stillDueTask.whenOn,"2026-11-06");
+  assert.equal(stillDueTask.dueOn,"2026-11-05");
+  assert.equal(stillDueTask.attentionOn,"2026-11-05");
+  assert.equal((await writePreview(dueGET,dueURL,"s-bob",alice)).dueOn,
+    "2026-11-05","private whenOn cannot mutate shared dueOn");
+
+  // Alice may edit the shared deadline as an Area admin even though the task
+  // is assigned to Bob, not Alice. Bob's pre-Alice CAS must be rejected.
+  const {dueOn:oldDue,...aliceCAS}=await writePreview(
+    dueGET,dueURL,"s-bob",alice);
+  assert.equal(oldDue,"2026-11-05");
+  const bringForward={...aliceCAS,taskId:"s-bob",
+    dueOn:"2026-11-04",commandId:randomUUID()};
+  await accepted(duePATCH,dueURL,bringForward,alice,{ok:true});
+  await accepted(dueReceiptPOST,dueURL+"/receipt",bringForward,alice,
+    {status:"committed"});
+  const conflict=await writeCommand(duePATCH,dueURL,staleBobCommand,bob);
+  assert.equal(conflict.status,409,JSON.stringify(await conflict.clone().json()));
+  assert.equal(conflict.headers.get("cache-control"),"no-store");
+  await accepted(dueReceiptPOST,dueURL+"/receipt",staleBobCommand,bob,
+    {status:"not_recorded"});
+
+  const advanced=await ok(get(query(),bob));
+  assert.deepEqual(ids(advanced.today),["b-overdue","b-today","s-bob"]);
+  assert.deepEqual(ids(advanced.tomorrow),["b-next","b-next2"]);
+  assert.equal(unique(advanced),true);
+  const advancedTask=advanced.today.tasks.find(x=>x.taskId==="s-bob");
+  assert.equal(advancedTask.attentionOn,"2026-11-04");
+  assert.equal(advancedTask.whenOn,"2026-11-06");
+  assert.equal(advancedTask.dueOn,"2026-11-04");
+
+  // The editor's plan is actor-private, not a global list of shared tasks.
+  const alicePlan=await ok(get(query(),alice));
+  assert.equal([...ids(alicePlan.today),...ids(alicePlan.tomorrow)]
+    .includes("s-bob"),false);
+  assert.equal((await dueGET(new Request(
+    dueURL+"?taskId=s-bob",{headers:{cookie:carol}}
+  ))).status,404,"Area viewer cannot obtain writable dueOn CAS");
+  assert.equal((await writeCommand(dueReceiptPOST,dueURL+"/receipt",
+    bringForward,carol)).status,404,"viewer cannot inspect another actor receipt");
+
+  // Undo the shared deadline and Bob's private plan as two NEW actor-specific
+  // CAS commands. Neither operation replays an old request.
+  const {dueOn:forwarded,...revertCAS}=await writePreview(
+    dueGET,dueURL,"s-bob",alice);
+  assert.equal(forwarded,"2026-11-04");
+  const revert={...revertCAS,taskId:"s-bob",dueOn:"2026-11-05",
+    commandId:randomUUID()};
+  assert.notEqual(revert.commandId,bringForward.commandId);
+  await accepted(duePATCH,dueURL,revert,alice,{ok:true});
+  const {whenOn:planned,...clearCAS}=await writePreview(
+    whenGET,whenURL,"s-bob",bob);
+  assert.equal(planned,"2026-11-06");
+  const clear={...clearCAS,taskId:"s-bob",whenOn:null,
+    commandId:randomUUID()};
+  assert.notEqual(clear.commandId,laterPlan.commandId);
+  await accepted(whenPATCH,whenURL,clear,bob,{ok:true});
+  await accepted(dueReceiptPOST,dueURL+"/receipt",revert,alice,
+    {status:"committed"});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",clear,bob,
+    {status:"committed"});
+  const restored=await ok(get(query(),bob));
+  assert.deepEqual(ids(restored.today),ids(baseline.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(baseline.tomorrow));
+  assert.equal(unique(restored),true);
+  const current=restored.tomorrow.tasks.find(x=>x.taskId==="s-bob");
+  assert.equal(current.dueOn,"2026-11-05");
+  assert.equal(current.whenOn,null);
+  // Receipts refer to original commands, not current materialized values.
+  await accepted(dueReceiptPOST,dueURL+"/receipt",bringForward,alice,
+    {status:"committed"});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",laterPlan,bob,
+    {status:"committed"});
+  await accepted(dueReceiptPOST,dueURL+"/receipt",staleBobCommand,bob,
+    {status:"not_recorded"});
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+});
+
+test("BE-11 committed writes can be reconciled after lost responses and reauthentication",async()=>{
+  const f=fixture(),firstSession=login(f,"bob");
+  const baseline=await ok(get(query(),firstSession));
+  assert.deepEqual(ids(baseline.today),["b-overdue","b-today"]);
+  assert.deepEqual(ids(baseline.tomorrow),["b-next","b-next2","s-bob"]);
+
+  // The server receives the write but the client never observes its response.
+  // The next action is read-only reconciliation, NEVER a second PATCH.
+  const {whenOn:initialWhen,...whenCAS}=await writePreview(
+    whenGET,whenURL,"b-next",firstSession);
+  assert.equal(initialWhen,null);
+  const scheduling={...whenCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  await writeCommand(whenPATCH,whenURL,scheduling,firstSession);
+
+  // During a temporary feature-gate outage receipt is unavailable, NOT a
+  // reliable signal that a previous command was rolled back.
+  const oldWhenGate=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED;
+  try {
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED="false";
+    assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+      scheduling,firstSession)).status,404);
+  } finally {
+    if(oldWhenGate===undefined)
+      delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_WRITE_ENABLED=oldWhenGate;
+  }
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,firstSession,
+    {status:"committed"});
+  const scheduled=await ok(get(query(),firstSession));
+  assert.deepEqual(ids(scheduled.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(scheduled.tomorrow),["b-next2","s-bob"]);
+  assert.equal(unique(scheduled),true);
+
+  // A permanently revoked durable session cannot inspect receipts. The SAME
+  // actor with a freshly issued session can recover the original command.
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await writeCommand(whenReceiptPOST,whenURL+"/receipt",
+    scheduling,firstSession)).status,401);
+  assert.equal((await get(query(),firstSession)).status,401);
+  const secondSession=login(f,"bob");
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,secondSession,
+    {status:"committed"});
+
+  // Simulate a second lost response for shared completion, independently
+  // confirmed from its original exact six-field command.
+  const statusCAS=await writePreview(statusGET,statusURL,"s-bob",secondSession);
+  const completing={...statusCAS,taskId:"s-bob",status:"completed",
+    commandId:randomUUID()};
+  await writeCommand(statusPATCH,statusURL,completing,secondSession);
+  assert.equal(durable.revokeAllDurableTargetStagingSessionsForUser(f.store,"bob").ok,true);
+  assert.equal((await writeCommand(statusReceiptPOST,statusURL+"/receipt",
+    completing,secondSession)).status,401);
+  const thirdSession=login(f,"bob");
+  await accepted(statusReceiptPOST,statusURL+"/receipt",completing,thirdSession,
+    {status:"committed"});
+  const afterCompletion=await ok(get(query(),thirdSession));
+  assert.deepEqual(ids(afterCompletion.today),["b-overdue","b-next","b-today"]);
+  assert.deepEqual(ids(afterCompletion.tomorrow),["b-next2"]);
+  assert.equal(unique(afterCompletion),true);
+
+  // Both Undo mutations must obtain CURRENT CAS from the reauthenticated
+  // identity and use fresh IDs. Old original-command receipts stay committed.
+  const {whenOn:nowWhen,...clearCAS}=await writePreview(
+    whenGET,whenURL,"b-next",thirdSession);
+  assert.equal(nowWhen,"2026-11-04");
+  const clear={...clearCAS,taskId:"b-next",whenOn:null,
+    commandId:randomUUID()};
+  assert.notEqual(clear.commandId,scheduling.commandId);
+  await accepted(whenPATCH,whenURL,clear,thirdSession,{ok:true});
+  const reopenCAS=await writePreview(statusGET,statusURL,"s-bob",thirdSession);
+  const reopen={...reopenCAS,taskId:"s-bob",status:"open",
+    commandId:randomUUID()};
+  assert.notEqual(reopen.commandId,completing.commandId);
+  await accepted(statusPATCH,statusURL,reopen,thirdSession,{ok:true});
+
+  const restored=await ok(get(query(),thirdSession));
+  assert.deepEqual(ids(restored.today),ids(baseline.today));
+  assert.deepEqual(ids(restored.tomorrow),ids(baseline.tomorrow));
+  assert.equal(unique(restored),true);
+  await accepted(whenReceiptPOST,whenURL+"/receipt",scheduling,thirdSession,
+    {status:"committed"});
+  await accepted(statusReceiptPOST,statusURL+"/receipt",completing,thirdSession,
+    {status:"committed"});
+  assert.equal(readFileSync(path.join(legacy,"sentinel"),"utf8"),"unchanged");
+});
+
+test("BE-11 never-sent command stays not_recorded and does not mutate the plan",async()=>{
+  const f=fixture(),bob=login(f,"bob");
+  const baseline=await ok(get(query(),bob));
+  const {whenOn:before,...previewCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(before,null);
+  const lostBeforeDispatch={...previewCAS,taskId:"b-next",
+    whenOn:"2026-11-04",commandId:randomUUID()};
+  // The network fails BEFORE PATCH dispatch, so only the receipt is queried.
+  await accepted(whenReceiptPOST,whenURL+"/receipt",lostBeforeDispatch,bob,
+    {status:"not_recorded"});
+  const unchanged=await ok(get(query(),bob));
+  assert.deepEqual(unchanged,baseline);
+  // An explicit fresh action is distinct from a replay of an uncertain one.
+  const {whenOn:stillNull,...newCAS}=await writePreview(
+    whenGET,whenURL,"b-next",bob);
+  assert.equal(stillNull,null);
+  const explicit={...newCAS,taskId:"b-next",whenOn:"2026-11-04",
+    commandId:randomUUID()};
+  assert.notEqual(explicit.commandId,lostBeforeDispatch.commandId);
+  await accepted(whenPATCH,whenURL,explicit,bob,{ok:true});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",explicit,bob,
+    {status:"committed"});
+  await accepted(whenReceiptPOST,whenURL+"/receipt",lostBeforeDispatch,bob,
+    {status:"not_recorded"});
+  const changed=await ok(get(query(),bob));
+  assert.ok(ids(changed.today).includes("b-next"));
+  assert.equal(unique(changed),true);
+});
 
 test("independent default-off flags, owner cookie, strict request fields",async()=>{
   fixture();

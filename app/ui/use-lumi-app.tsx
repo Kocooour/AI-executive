@@ -29,6 +29,9 @@ import { todayProposalTaskSignature } from "../../lib/today-summary";
 import { homeTodayList } from "../../lib/home-today";
 import { groupProjectsByArea, projectsNeedAttention, activeSidebarProjects } from "../../lib/project-navigation";
 import { projectAcceptsNewItems } from "../../lib/project-summary";
+import { projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites, type ProjectPreviewActionSnapshot } from "../../lib/project-list-preview";
+import { projectSyncNoticeResolved, projectSyncNoticesAfterUndo, withProjectSyncNotice, withoutProjectSyncNotice,
+  withoutResolvedProjectSyncNotices, type ProjectSyncNotice, type ProjectSyncNotices } from "../../lib/project-sync-notice";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
 import { inSentenceDate } from "./format";
@@ -67,6 +70,8 @@ export function useLumiApp() {
     // The project page is resolved from the authorized current scope; the URL carries only its opaque ID.
     [openProjectId, setOpenProjectId] = useState<string | null>(null),
     [navigationUnavailable, setNavigationUnavailable] = useState(false),
+    // Independent pending warnings survive other projects' failures, Undo and page unmount.
+    [projectSyncNotices, setProjectSyncNotices] = useState<ProjectSyncNotices>({}),
     [text, setText] = useState(""),
     [rowError, setRowError] = useState(false),
     // Only the opt-in Můj plán reorder displays this; never silently treat a
@@ -203,6 +208,28 @@ export function useLumiApp() {
     recoveryHeld, recoveryPreparing, recoveryReady, recoveryError, recoveryOffline, recoveryDownloadRequested,
     recoveryInspecting, recoveryInspection, recoveryInspectionError, inspectOfflineRecoveryFile,
     prepareOfflineRecoveryDownload, downloadOfflineRecovery } = useSync();
+  // Reconcile each project independently against acknowledged base data and
+  // deletion markers. A successful sync of B must not dismiss failed A.
+  useEffect(() => {
+    const warnings = Object.values(projectSyncNotices);
+    if (!warnings.length) return;
+    let cancelled = false;
+    void db.transaction("r", db.entities, db.baseEntities, async () => {
+      const pendingDeletions = new Set(pendingDeletedIds());
+      const resolved: ProjectSyncNotice[] = [];
+      for (const warning of warnings) {
+        const local = await db.entities.get(warning.projectId);
+        const acknowledged = await db.baseEntities.get(warning.projectId);
+        if (projectSyncNoticeResolved(warning, local, acknowledged,
+          pendingDeletions.has(warning.projectId))) resolved.push(warning);
+      }
+      return resolved;
+    }).then((resolved) => {
+      if (cancelled || !resolved.length) return;
+      setProjectSyncNotices((current) => withoutResolvedProjectSyncNotices(current, resolved));
+    }, () => undefined);
+    return () => { cancelled = true; };
+  }, [projectSyncNotices, syncStatus, items]);
   // The translator reads the current language when it is called, so a message set after a request
   // that was started before a language change is shown in the new language.
   const languageRef = useRef(language);
@@ -320,6 +347,24 @@ export function useLumiApp() {
   inspectorSelectionRef.current = selected;
   const activeWorkspaceRef = useRef(activeWorkspaceId);
   activeWorkspaceRef.current = activeWorkspaceId;
+  // A confirmation outlives its render; hold the live pending/held state for commit-time checks.
+  const previewWriteGuardsRef = useRef({ unsent, heldBack });
+  previewWriteGuardsRef.current = { unsent, heldBack };
+  const pendingProjectWrites = useRef(new Map<string, Set<Promise<unknown>>>());
+  function trackProjectWrite(projectId: string, write: Promise<unknown>) {
+    const active = pendingProjectWrites.current.get(projectId) ?? new Set<Promise<unknown>>();
+    active.add(write);
+    pendingProjectWrites.current.set(projectId, active);
+    const settle = () => {
+      active.delete(write);
+      if (active.size === 0) pendingProjectWrites.current.delete(projectId);
+    };
+    void write.then(settle, settle);
+    return write;
+  }
+  async function waitForProjectWrites(projectId: string) {
+    await waitForProjectPreviewWrites(() => [...(pendingProjectWrites.current.get(projectId) ?? [])]);
+  }
   useEffect(() => {
     // A workspace transition makes any earlier inspection result ineligible.
     inspectionVersion.current += 1;
@@ -3162,60 +3207,144 @@ export function useLumiApp() {
       return typedSince ? { ...saved, title: open.title } : saved;
     });
   }
-  async function remove(e: Entity) {
+  // Build the confirmation baseline after the title/context blur writes settle.
+  async function projectPreviewActionSnapshot(projectId: string): Promise<ProjectPreviewActionSnapshot> {
+    await waitForProjectWrites(projectId);
+    return db.transaction("r", db.entities, db.relations, async () => {
+      const current = await db.entities.get(projectId);
+      if (!current) throw new Error("project_preview_changed");
+      assertPreviewProjectMutation(current, current);
+      const dependents = await projectPreviewDependencies(current);
+      return { project: current, dependents: dependents.signature, openTasks: dependents.openTaskCount };
+    });
+  }
+  async function projectPreviewDependencies(project: Entity) {
+    const entities = await db.entities.where("workspaceId").equals(project.workspaceId).toArray();
+    const relations = await db.relations.toArray();
+    return projectPreviewDependents(project, entities, relations);
+  }
+  // Recheck both the current in-scope snapshot and the IndexedDB row within the write lock.
+  function assertPreviewProjectMutation(expected: Entity, current: Entity | undefined): asserts current is Entity {
+    const guards = previewWriteGuardsRef.current;
+    const blocked = isAdopting() || signedOut.current || openProjectIdRef.current !== expected.id ||
+      guards.unsent.has(expected.id) ||
+      guards.heldBack.some((entity) => entity.id === expected.id) ||
+      (current ? entityConflicts(current).length > 0 : true);
+    const visible = latestItemsRef.current.find((entity) => entity.id === expected.id);
+    if (!current || !visible || visible.type !== "project" || visible.workspaceId !== expected.workspaceId ||
+        !projectPreviewCanCommit(expected, current, activeWorkspaceRef.current, blocked)) {
+      throw new Error("project_preview_changed");
+    }
+  }
+  async function remove(e: Entity, expectedPreview?: ProjectPreviewActionSnapshot) {
     if (isFallbackArea(e, items)) return;
-    const linkedRelations = (await db.relations.toArray()).filter(
+    let linkedRelations = expectedPreview ? [] as Relation[] : (await db.relations.toArray()).filter(
       (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
     );
     localDataVersion.current += 1;
-    await db.transaction("rw", db.entities, db.relations, async () => {
-      await db.entities.delete(e.id);
-      await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
-      // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
-      // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
-      if (e.type === "project") {
-        const memberIds = new Set(linkedRelations.filter((relation) => relation.relationType === "belongs_to_project" && relation.targetEntityId === e.id).map((relation) => relation.sourceEntityId));
-        const members = [...(await db.entities.where("workspaceId").equals(e.workspaceId).filter((task) => task.type === "task").toArray())]
-          .filter((task) => memberIds.has(task.id) || task.properties.projectId === e.id);
-        const stamp = writeTime();
-        for (const task of members) {
-          const properties = { ...task.properties };
-          delete properties.projectId;
-          const updated: Entity = { ...task, properties: { ...properties, relationsUpdatedAt: stamp }, updatedAt: Math.max(stamp, task.updatedAt + 1) };
-          await db.entities.put(updated);
-          await assignFallbackArea(updated, stamp);
+    try {
+      await db.transaction("rw", db.entities, db.relations, async () => {
+        if (expectedPreview) {
+          const current = await db.entities.get(e.id);
+          assertPreviewProjectMutation(expectedPreview.project, current);
+          if ((await projectPreviewDependencies(current)).signature !== expectedPreview.dependents)
+            throw new Error("project_preview_changed");
+          linkedRelations = (await db.relations.toArray()).filter(
+            (relation) => relation.sourceEntityId === e.id || relation.targetEntityId === e.id,
+          );
         }
-      }
-    });
-    localDataVersion.current += 1;
+        await db.entities.delete(e.id);
+        await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
+        // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
+        // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
+        if (e.type === "project") {
+          const memberIds = new Set(linkedRelations.filter((relation) => relation.relationType === "belongs_to_project" && relation.targetEntityId === e.id).map((relation) => relation.sourceEntityId));
+          const members = [...(await db.entities.where("workspaceId").equals(e.workspaceId).filter((task) => task.type === "task").toArray())]
+            .filter((task) => memberIds.has(task.id) || task.properties.projectId === e.id);
+          const stamp = writeTime();
+          for (const task of members) {
+            const properties = { ...task.properties };
+            delete properties.projectId;
+            const updated: Entity = { ...task, properties: { ...properties, relationsUpdatedAt: stamp }, updatedAt: Math.max(stamp, task.updatedAt + 1) };
+            await db.entities.put(updated);
+            await assignFallbackArea(updated, stamp);
+          }
+        }
+      });
+    } finally { localDataVersion.current += 1; }
     recordDeleted(localStorage, e.id);
     setUndo(e);
     setUndoRelations(linkedRelations);
-    await syncToServer();
+    // Local deletion is already committed. A network failure is not a rollback;
+    // finish navigation/Undo first, then report it in the persistent app-level alert.
+    let syncFailed = false;
+    try { await syncToServer({ reportFailure: Boolean(expectedPreview) }); }
+    catch { syncFailed = true; }
     if (inspectorSelectionRef.current?.id === e.id) closeDetail();
     if (openProjectIdRef.current === e.id) closeProjectPage();
-    load();
+    if (expectedPreview) await load(); else void load();
+    if (syncFailed) {
+      setProjectSyncNotices((current) => withProjectSyncNotice(current, { kind: "delete", projectId: e.id }));
+      throw new Error("project_preview_sync_pending");
+    }
+    if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, e.id));
   }
-  async function setProjectStatus(project: Entity, status: "active" | "completed") {
+  async function setProjectStatus(project: Entity, status: "active" | "completed", expectedPreview?: ProjectPreviewActionSnapshot) {
     if (project.type !== "project") return;
-    const current = (await db.entities.get(project.id)) || project;
-    const timestamp = writeTime();
-    const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
-    localDataVersion.current += 1;
-    await db.entities.update(project.id, {
-      status,
-      properties: {
-        ...current.properties,
-        completedAt: status === "completed" ? timestamp : null,
-        activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
-      },
-      updatedAt: timestamp,
-    });
-    localDataVersion.current += 1;
-    await syncToServer();
+    let committedAt = 0;
+    if (expectedPreview) {
+      localDataVersion.current += 1;
+      try {
+        await db.transaction("rw", db.entities, db.relations, async () => {
+          const current = await db.entities.get(project.id);
+          assertPreviewProjectMutation(expectedPreview.project, current);
+          if ((await projectPreviewDependencies(current)).signature !== expectedPreview.dependents)
+            throw new Error("project_preview_changed");
+          const timestamp = writeTime();
+          committedAt = timestamp;
+          const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+          await db.entities.update(project.id, {
+            status,
+            properties: {
+              ...current.properties,
+              completedAt: status === "completed" ? timestamp : null,
+              activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
+            },
+            updatedAt: timestamp,
+          });
+        });
+      } finally { localDataVersion.current += 1; }
+    } else {
+      // Default-off legacy mutation keeps its original behavior.
+      const current = (await db.entities.get(project.id)) || project;
+      const timestamp = writeTime();
+      const activity = Array.isArray(current.properties.activity) ? current.properties.activity : [];
+      localDataVersion.current += 1;
+      await db.entities.update(project.id, {
+        status,
+        properties: {
+          ...current.properties,
+          completedAt: status === "completed" ? timestamp : null,
+          activity: [...activity, { at: timestamp, action: status === "completed" ? "completed" : "reopened" }].slice(-50),
+        },
+        updatedAt: timestamp,
+      });
+      localDataVersion.current += 1;
+    }
+    // The local status has already changed. Keep it visible even if the server
+    // write failed, then report the unconfirmed sync to the preview UI.
+    let syncFailed = false;
+    try { await syncToServer({ reportFailure: Boolean(expectedPreview) }); }
+    catch { syncFailed = true; }
     await load();
     const saved = (await db.entities.get(project.id)) || null;
     setSelected((open) => open?.id === project.id ? saved : open);
+    if (syncFailed) {
+      setProjectSyncNotices((current) => withProjectSyncNotice(current,
+        { kind: "status", projectId: project.id, status, updatedAt: committedAt }));
+      throw new Error("project_preview_sync_pending");
+    }
+    if (expectedPreview) setProjectSyncNotices((current) => withoutProjectSyncNotice(current, project.id));
   }
   async function restore() {
     if (!undo) return;
@@ -3263,6 +3392,8 @@ export function useLumiApp() {
     });
     localDataVersion.current += 1;
     recordRevived(localStorage, undo.id);
+    // The old pending-delete banner is already false once Undo has recreated the record.
+    setProjectSyncNotices((current) => projectSyncNoticesAfterUndo(current, undo.id));
     await syncToServer();
     setUndo(null);
     setUndoRelations([]);
@@ -4326,6 +4457,11 @@ export function useLumiApp() {
     aiText,
     approveContextInbox,
     areas,
+    projectPreviewActionSnapshot,
+    trackProjectWrite,
+    projectSyncNotices: Object.values(projectSyncNotices),
+    dismissProjectSyncNotice: (projectId: string) =>
+      setProjectSyncNotices((current) => withoutProjectSyncNotice(current, projectId)),
     askAI,
     assistantOpen,
     attentionTaskCount,

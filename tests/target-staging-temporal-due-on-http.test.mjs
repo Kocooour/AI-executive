@@ -37,10 +37,16 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/due-on/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/due-on/receipt/route.ts");
-const {parseTemporalDueOnWriteReply,parseTemporalDueOnReceiptReply}=
-  await import("../lib/target-staging-temporal-due-on-http-process.ts");
-const {readStagingTemporalDetailInChild}=
-  await import("../lib/target-staging-read-process.ts");
+const {
+  parseTemporalDueOnWriteReply,parseTemporalDueOnReceiptReply,
+  parseTemporalDueOnAtomicReceiptReply,readTemporalDueOnAtomicReceiptInChild,
+}=await import("../lib/target-staging-temporal-due-on-http-process.ts");
+const {
+  readStagingTemporalDetailInChild,
+  readStagingTemporalDueOnPreviewInChild,parseStagingTemporalDueOnPreview,
+}=await import("../lib/target-staging-read-process.ts");
+const {targetTaskWriteRevision}=
+  await import("../lib/target-task-write-preflight.ts");
 const {verifyTemporalDueOnTaskLive}=
   await import("../lib/target-staging-temporal-due-on-http.ts");
 let counter=0;
@@ -159,6 +165,119 @@ test("four independent gates and authentication fail closed, preview validates I
   assert.equal((await query("p-alice")).status,200);
 });
 
+test("BE-08 dueOn child gate stays independent of status-write gate",async()=>{
+  const fx=fixture();
+  const oldStatus=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+  const oldDue=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+  const config={...fx.store,ownerUserId:"alice"};
+  try{
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED="false";
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="true";
+    const preview=await readStagingTemporalDueOnPreviewInChild(config,"p-alice");
+    assert.equal(preview?.ok,true,JSON.stringify(preview));
+    assert.equal((await query("p-alice")).status,200);
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="false";
+    assert.equal(await readStagingTemporalDueOnPreviewInChild(config,"p-alice"),null);
+    assert.equal((await query("p-alice")).status,404);
+  }finally{
+    if(oldStatus===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED=oldStatus;
+    if(oldDue===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED=oldDue;
+  }
+});
+
+test("BE-08 dueOn CAS, date and task guard share one pinned snapshot",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1])};
+  const captured=await readStagingTemporalDueOnPreviewInChild(config,"s-bob");
+  assert.equal(captured?.ok,true,JSON.stringify(captured));
+  assert.equal(captured.detail.task.areaId,"family-area");
+  assert.equal(captured.detail.task.dueOn,null);
+  assert.equal(captured.detail.linearization.areas[0].access,"editor");
+  assert.match(captured.expectedRevision,/^[a-f0-9]{64}$/);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{assert.equal(captured.expectedRevision,targetTaskWriteRevision(db,"s-bob"));}
+  finally{db.close();}
+  const live=()=>verifyTemporalDueOnTaskLive(
+    new Request(base+"?taskId=s-bob",{headers:{cookie:bob}}),
+    {kind:"session",tokenHash:config.sessionTokenHash},
+    {...fx.store,ownerUserId:"alice"},captured.detail);
+  assert.equal(live(),"ok");
+  const external=await preview("s-bob",bob);
+  assert.deepEqual(external,{
+    expectedRevision:captured.expectedRevision,
+    dueOn:captured.detail.task.dueOn,
+    writeAreaId:captured.detail.task.areaId,
+    restoreGeneration:fx.stage.restoreGeneration,
+  });
+  const viewer=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1]),
+  },"s-bob");
+  assert.deepEqual(viewer,{ok:false,reason:"inaccessible"});
+  assert.deepEqual(await readStagingTemporalDueOnPreviewInChild(config,"p-alice"),
+    {ok:false,reason:"inaccessible"});
+  const change=new DatabaseSync(fx.stage.databasePath);
+  try{change.prepare("UPDATE tasks SET due_on='2028-05-19' WHERE id='s-bob'").run();}
+  finally{change.close();}
+  assert.equal(live(),"stale","a task mutation after preview invalidates its guard");
+  const current=await readStagingTemporalDueOnPreviewInChild(config,"s-bob");
+  assert.equal(current?.ok,true,JSON.stringify(current));
+  assert.equal(current.detail.task.dueOn,"2028-05-19");
+  assert.notEqual(current.expectedRevision,captured.expectedRevision);
+  assert.equal((await preview("s-bob",bob)).expectedRevision,current.expectedRevision);
+  const revoke=new DatabaseSync(fx.stage.databasePath);
+  try{revoke.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();}
+  finally{revoke.close();}
+  assert.equal((await query("s-bob",bob)).status,404);
+  assert.deepEqual(await readStagingTemporalDueOnPreviewInChild(config,"s-bob"),
+    {ok:false,reason:"inaccessible"});
+});
+
+test("BE-08 strict dueOn preview DTO denies malformed or mismatched task witness",async()=>{
+  const fx=fixture();
+  const result=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+  },"p-alice");
+  assert.equal(result?.ok,true,JSON.stringify(result));
+  for(const malformed of [
+    {...result,expectedRevision:"bad"},
+    {...result,actorUserId:"alice"},
+    {...result,detail:{...result.detail,privatePlan:"secret"}},
+    {...result,detail:{...result.detail,guard:{
+      ...result.detail.guard,taskId:"p-bob",
+    }}},
+    {...result,detail:{...result.detail,task:{
+      ...result.detail.task,id:"p-bob",
+    }}},
+    {...result,detail:{...result.detail,linearization:{
+      ...result.detail.linearization,areas:[{
+        ...result.detail.linearization.areas[0],access:"viewer",
+      }],
+    }}},
+  ])assert.equal(parseStagingTemporalDueOnPreview(malformed,"p-alice"),null);
+});
+
+test("BE-08 dueOn preview accepts long title and preserves public four-field DTO",async()=>{
+  const fx=fixture();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title=? WHERE id='p-alice'").run("x".repeat(1800));}
+  finally{db.close();}
+  const snapshot=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+  },"p-alice");
+  assert.equal(snapshot?.ok,true,JSON.stringify(snapshot));
+  const response=await query("p-alice");
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  const data=await response.json();
+  assert.equal(data.expectedRevision,snapshot.expectedRevision);
+  assert.deepEqual(Object.keys(data).sort(),
+    ["dueOn","expectedRevision","restoreGeneration","writeAreaId"]);
+  assert.equal(JSON.stringify(data).includes("x".repeat(80)),false);
+});
+
 test("private dueOn set, replay, read-only receipt and clear are atomic",async()=>{
   const fx=fixture();
   const c=await command("p-alice","2028-02-29");
@@ -181,6 +300,91 @@ test("private dueOn set, replay, read-only receipt and clear are atomic",async()
   assert.equal(state(fx,"p-alice").completedAtMs,initial.completedAtMs);
   assert.equal(receiptCount(fx),2);
   assert.deepEqual(await (await call("POST",c)).json(),{status:"committed"});
+});
+
+test("BE-07 dueOn receipt and task/Area witness use one pinned snapshot",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const cmd=await command("s-bob","2028-04-15",bob);
+  const tokenHash=durable.hashTargetStagingSessionToken(bob.split("=")[1]);
+  const config={...fx.store,ownerUserId:"alice",sessionTokenHash:tokenHash};
+  const snapshot=()=>readTemporalDueOnAtomicReceiptInChild(config,cmd);
+  const before=await snapshot();
+  assert.equal(before?.ok,true,JSON.stringify(before));
+  assert.deepEqual(before.receipt,{ok:true,status:"not_recorded"});
+  assert.equal(before.detail.task.areaId,"family-area");
+  const identity={kind:"session",tokenHash};
+  const request=new Request(base+"/receipt",{
+    method:"POST",headers:{cookie:bob,origin:"http://localhost:3001"},body:"{}",
+  });
+  const live=witness=>verifyTemporalDueOnTaskLive(request,identity,{
+    ...fx.store,ownerUserId:"alice",
+  },witness.detail);
+  assert.equal(live(before),"ok");
+  assert.deepEqual(await (await call("PATCH",cmd,bob)).json(),{ok:true});
+  assert.equal(live(before),"stale","the original task revision cannot release a later receipt");
+  const committed=await snapshot();
+  assert.equal(committed?.ok,true,JSON.stringify(committed));
+  assert.deepEqual(committed.receipt,{ok:true,status:"committed"});
+  assert.equal(live(committed),"ok");
+  assert.deepEqual(await (await call("POST",cmd,bob)).json(),{status:"committed"});
+  const viewer=await readTemporalDueOnAtomicReceiptInChild({
+    ...config,sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1]),
+  },cmd);
+  assert.deepEqual(viewer,{ok:false,reason:"inaccessible"});
+  const foreign=await readTemporalDueOnAtomicReceiptInChild(config,
+    {...cmd,taskId:"p-alice"});
+  assert.deepEqual(foreign,{ok:false,reason:"inaccessible"});
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{
+    // This fixture contains no assigned shared tasks; the role transition
+    // satisfies the schema's membership downgrade integrity rule.
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  }finally{db.close();}
+  assert.equal(live(committed),"stale");
+  assert.deepEqual(await snapshot(),{ok:false,reason:"inaccessible"});
+  assert.equal((await call("POST",cmd,bob)).status,404);
+});
+
+test("BE-07 strict internal child rejects extra receipt or forged task witness",async()=>{
+  const fx=fixture(),cmd=await command("p-alice","2028-02-29");
+  const sample=await readTemporalDueOnAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },cmd);
+  assert.equal(sample?.ok,true,JSON.stringify(sample));
+  for(const broken of [
+    {...sample,actorUserId:"alice"},
+    {...sample,receipt:{ok:true,status:"committed",commandId:cmd.commandId}},
+    {...sample,receipt:{ok:true,status:"unknown"}},
+    {...sample,detail:{...sample.detail,secret:"untrusted"}},
+    {...sample,detail:{...sample.detail,guard:{
+      ...sample.detail.guard,areaId:"foreign",
+    }}},
+    {...sample,detail:{...sample.detail,task:{
+      ...sample.detail.task,id:"p-bob",
+    }}},
+    {...sample,detail:{...sample.detail,linearization:{
+      ...sample.detail.linearization,areas:[{
+        ...sample.detail.linearization.areas[0],access:"viewer",
+      }],
+    }}},
+    {ok:true,detail:sample.detail},
+  ])assert.equal(parseTemporalDueOnAtomicReceiptReply(broken,cmd.taskId),null);
+});
+
+test("BE-07 dueOn reconciliation accepts a bounded task title over 1 KiB",async()=>{
+  const fx=fixture();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title=? WHERE id='p-alice'").run("x".repeat(1800));}
+  finally{db.close();}
+  const cmd=await command("p-alice","2028-02-29");
+  const reply=await readTemporalDueOnAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },cmd);
+  assert.equal(reply?.ok,true,JSON.stringify(reply));
+  assert.deepEqual(reply.receipt,{ok:true,status:"not_recorded"});
+  const response=await call("POST",cmd);
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  assert.deepEqual(await response.json(),{status:"not_recorded"});
 });
 
 test("current private/shared ACL denies foreign users and shared viewers before receipt",async()=>{

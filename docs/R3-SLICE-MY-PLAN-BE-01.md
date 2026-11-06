@@ -1,4 +1,4 @@
-# R3-slice / BE-01 až BE-05 — stagingový Můj plán a bezpečné CAS
+# R3-slice / BE-01 až BE-11 — stagingový Můj plán a bezpečné CAS
 
 **Stav:** implementační podklad pro první vertikální řez, nikoli aktivovaný produkt. Navazuje na rozhodnutí [5. 11. 2026](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a existující task-only `R2d.3l.2` read endpoint.
 
@@ -41,6 +41,55 @@ BE-01/BE-02/BE-03 **nevytváří nový zápis** ani nerozšiřuje ACL. UI vertik
 - Nový bounded stdin worker má vlastní přísný vnitřní DTO: buď `inaccessible`, nebo současný task witness a jen povolený výsledek receiptu. Větší maximální odpověď je povolena **pouze** tomuto internímu procesu, ostatní write/receipt children zachovávají svůj původní 1 KiB limit. Nikdy se nevydává obsah úkolu klientovi.
 - Před odpovědí server dál atomicky ověřuje živou session, roli, task/parent/Area revizi i restore generation; při změně oprávnění nebo úkolu vrátí 401/404, nikoli potvrzení starého zápisu. Vnější odpověď zůstává `{status:"committed"|"not_recorded"}` a stejné chybové kódy. `not_recorded` není povolení opakovat příkaz.
 - Přidány syntetické regresní testy pro obě hodnoty receiptu, commit mezi snapshoty, viewer/foreign actor, role downgrade, tampered child DTO a dlouhý název úkolu. API status GET/PATCH, Undo i osobní `whenOn` se tímto PR nemění.
+
+## BE-06 — atomické potvrzení osobního dne „Kdy“
+
+- `POST /api/target-staging/task-temporal/personal-when/command/receipt` nyní čte **z jediného kanonicky preflightovaného, actor/session-bound SQLite snapshotu** aktuální oprávnění k úkolu a jeho přiřazení, soukromou plánovací epochu, task/parent/Area svědectví a přesný receipt původního příkazu. Dosavadní dvojice oddělených podprocesů již nemůže složit potvrzení z různých okamžiků.
+- Krátký read-only stdin worker přijímá pouze existující přesný příkaz a vrací interní `{preview,receipt}` s přísným typovým allowlistem; žádný detail úkolu, soukromá epocha ani actor ID nejdou do veřejné HTTP odpovědi. Výsledek zůstává `{status:"committed"|"not_recorded"}` nebo stejné chyby. `not_recorded` není povolení původní příkaz znovu odeslat.
+- Před odesláním je zachována **atomická živá kontrola** session, Area role, task/parent a actor-private plánovací epochy. Zastaralý snapshot či odebrání oprávnění → fail closed. Změna osobního dne jiného úkolu tedy konzervativně zneplatní staré svědectví.
+- Worker má samostatně omezený interní výstup (32 KiB) pro dlouhá ID a revizní svědectví; ostatní write/receipt procesy zůstávají na původním 1 KiB limitu, status BE-05 na své dosavadní výjimce. Bez změny GET/PATCH CAS, jiných klientských kontraktů, aktivace stagingu, migrace, resetu či deploye.
+- Izolované syntetické regrese ověřují `not_recorded`/commit, změnu soukromé epochy po snapshotu, viewer a neautorizované přidělení, downgrade role, padělané DTO a dlouhá ID.
+
+## BE-07 — atomické potvrzení změny `dueOn`
+
+- `POST /api/target-staging/task-temporal/due-on/receipt` nyní používá **jediné preflightované, actor-bound SQLite čtení** pro aktuální oprávnění zapisujícího, Area a task/parent revize i přesný potvrzovací receipt původního příkazu. Dva časově oddělené worker snapshoty již nemohou vytvořit nekonzistentní potvrzení.
+- Přísně omezený interní proces načítá původní nezměněný příkaz ze `stdin` (nikdy `argv`), přes existující podepsanou write-session authority získá jen interní `{detail,receipt}` nebo `inaccessible`. DTO se znovu striktně validuje před živou serverovou kontrolou. Zvýšený limit 64 KiB platí jen pro tento konkrétní worker, kvůli dlouhým názvům úkolů; žádný detail se klientovi nevrací.
+- Živý release guard znovu ověřuje session, Area policy a revize task/parent před odpovědí. Veřejné response schema a chybové kódy zůstávají stejné; `not_recorded` **neznamená povolení zopakovat PATCH**. Receipt jen kontroluje původní digest, nikdy nesrovnává starou očekávanou revizi s post-commit stavem.
+- Negativní syntetické regrese pokrývají private/shared write ACL, viewer a foreign task, změnu úkolu mezi snapshoty, downgrade editor role, podvržený child payload, dlouhý název a původní idempotentní set/clear kontrakt.
+- `GET/PATCH` statusu, `whenOn`, Undo ani globální `Vše` se nemění. Pouze **výchozí vypnutý staging**; bez migrace, produkčního přepnutí a nasazení.
+
+## BE-08 — atomický náhled CAS pro změnu `dueOn`
+
+- `GET /api/target-staging/task-temporal/due-on?taskId=...` nově vrací `expectedRevision`, `dueOn` a `writeAreaId` z **jediné actor-bound, kanonicky preflightované SQLite read transakce**. Dřívější oddělené čtení task/Area guardu a title-CAS tokenu mohlo smíchat dva okamžiky. Nový výsledek navazuje na BE-07 atomický receipt stejného `dueOn` zápisu.
+- Náhled sdílí existující kanonickou logiku BE-04 pro status: stejný task-write CAS hash, write role (private owner/editor/admin), aktuální projektové dědění Oblasti a task/parent/Area revize. Vlastní izolovaný child vyžaduje pouze `dueOn` staging flags a vrací striktní interní DTO s task guardem, nikoli žádná nová veřejná data.
+- HTTP nadále vydává přesně **čtyři** pole `{expectedRevision,dueOn,writeAreaId,restoreGeneration}`, pouze po živé kontrole session, Area policy, task/parent revize a staging konfigurace. `Cache-Control: no-store` a rate limiting zůstávají.
+- Náhled **neautorizuje pozdější zápis**: `PATCH` dál nezávisle v `BEGIN IMMEDIATE` kontroluje session, oprávnění, generaci a CAS. Syntetické regrese ověřují shodu revize s kanonickým hashováním, úpravu termínu mezi snapshotem a release, viewer/foreign actor, downgrade role, podvržené interní DTO a dlouhý název.
+- `dueOn` se nesmí zaměnit za soukromé `whenOn`. Beze změny ostatních endpointů, Undo, produkčních dat, migrací a aktivace funkcí; staging zůstává default-off.
+
+## BE-09 — syntetické integrační kontrakty vertikálního řezu
+
+- `tests/target-staging-my-plan-slice-http.test.mjs` ověřuje **jednu skutečnou identitu a jeden izolovaný SQLite staging** napříč `GET My Plan Dnes/Zítra`, `GET/PATCH/receipt personal-when` a `GET/PATCH/receipt status`. Volá skutečné Node HTTP route handlery i autentizační, podprocesové, CAS a live-release vrstvy; **žádné mockované endpointy** ani externí/serverová produkční data.
+- Scénář nejprve přesune Bobův soukromý úkol zítra na dnes (`whenOn`, nikoli sdílený `dueOn`) a ověří zneplatnění starého dvoudenního cursoru změnou jeho private epoch. Samostatně dokončí přiřazený sdílený úkol a ověří jeho zmizení. Následně provede **dvě nové reverzní CAS operace** (vyčištění soukromého dne, obnovení úkolu), každou s novým serverovým preview a UUID; výsledný Můj plán musí odpovídat původnímu a nesmí mít duplicity.
+- Každý úspěšný příkaz má read-only actor-bound receipt `committed`; starší potvrzení zůstane dohledatelné i po pozdějším reverzním příkazu, neznamená však povolení znovu odeslat původní PATCH. Jiný aktér se k němu nedostane a jeho Můj plán nezobrazuje Bobova data.
+- Revokační scénář ověřuje, že odebrání sdíleného přiřazení a role zneplatní cursor, skryje sdílený úkol a odmítne obě původní write preview a receipt cesty; po revokaci durable session nefunguje ani čtení osobního plánu.
+- Jde o **CI regresní bránu na syntetických datech** a integritu existujících default-off API, **nikoli** aktivaci klientského UI, produkčních příznaků, migraci, reset, deployment nebo kompletní browser E2E. BE-09 nepřidává nový endpoint ani nezměkčuje ACL.
+
+## BE-10 — současná sdílená lhůta a soukromé „Kdy“ (actor-bound integrace)
+
+- Samostatný integrační regresní scénář nad reálnými existujícími `GET/PATCH/receipt` handlery pro sdílené `dueOn`, soukromé `whenOn` a dvoudenní `Můj plán` používá **jednu izolovanou databázi a tři identity** (admin, editor/řešitel, viewer), bez mockování těchto hranic.
+- Bob může naplánovat osobní `whenOn` až za sdílený deadline. Výsledné `attentionOn` zůstane **dřívější `dueOn`** a úkol se ani při souběhu obou dat nezobrazí dvakrát. Samotné soukromé plánování nijak nemění sdílený deadline; podepsaný cursor se po změně jeho osobní epochy zneplatní (`409`).
+- Alice může jako admin změnit sdílený `dueOn` úkolu přiřazeného Bobovi, aniž by se tento nepřiřazený sdílený úkol objevil v *jejím* Mém plánu. Bobovi se dřívější termín propíše z *zítra* do *dnes*, ale jeho osobní plánovaný den zůstane soukromě nezměněný. Dříve pořízený Bobův `dueOn` CAS nesmí po zásahu Alice přepsat aktuální stav: `PATCH → 409`, read-only receipt původního nezapsaného příkazu → `not_recorded`.
+- Shared viewer nesmí získat zápisový `dueOn` preview ani cizí receipt. Obě změny se vracejí **novými, aktuálně potvrzenými CAS příkazy a novými UUID**, bez automatického opakování starého příkazu. Výsledné dvoudenní členění odpovídá počátečnímu; starší skutečně provedené příkazy stále mají `committed` receipt bez ohledu na současné datum.
+- Tato bezpečnostní a datově konzistentní smlouva je **pouze regresní CI test** na syntetických datech. BE-10 nezavádí API, databázové migrace, příznaky ani produkční aktivaci. Není to plné browser E2E ani důkaz dokončeného klientského UI.
+
+## BE-11 — ztracená odpověď, obnova přes receipt a nové přihlášení
+
+- Nové **integrační regresní scénáře** používají nezměněné autentizované HTTP route handlery, jednu izolovanou syntetickou SQLite databázi a **aktuální durable identitu**. Klientská simulace odesílá skutečný `PATCH` `whenOn` a poté `status`, ale **záměrně nečte obdrženou odpověď** (simulace ztracené odpovědi po dokončení handleru, nikoli skutečný síťový abort): samotný transportní výpadek nesmí být považován za rollback ani důvod zopakovat `PATCH`.
+- Dočasně vypnutý samostatný `personal-when` stagingový write flag vrací na receipt `404`, což při výpadku brány **nevyvrací předchozí commit**. Po obnovení brány vrací stejný přesný původní `commandId` s úplným CAS vstupem read-only `committed`; v `Mém plánu` se změna projeví právě jednou.
+- Po revokaci durable session původní cookie **nesmí** přečíst receipt ani Můj plán (`401`); **nové přihlášení stejného aktéra** může přečíst potvrzení jeho dřívějšího příkazu (receipt je vázán na aktéra a samotný příkaz, nikoli na konkrétní přihlášení). Totéž je ověřeno odděleně pro `status` dokončení. Předchozí povolený obsah nevytéká přes revokovanou session.
+- Undo není replay: po opětovné autentizaci vyžaduje obě aktuální CAS preview a **nová UUID**, obnoví původní denní výběry bez duplicit. Starší potvrzení `committed` se nezmění ani po Undo.
+- Protipříklad: když se původní `PATCH` **vůbec neodeslal**, jeho read-only receipt je `not_recorded` a žádná mutace se neprovede. Pozdější **výslovná nová** akce používá nové preview a UUID; starý nezapsaný příkaz zůstává `not_recorded`, bez automatického opakování.
+- BE-11 zavádí pouze testy a tento kontrakt, ne produkční API, úpravu soukromí/ACL, lokální offline frontu, feature flag, deployment, data cutover ani plné Browser E2E. Všechny staging write flagy v testu se vrací do původního stavu.
 
 ## Co zůstává mimo iteraci
 

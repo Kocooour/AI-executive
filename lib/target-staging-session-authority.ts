@@ -26,7 +26,8 @@ import type {TargetGlobalNotePage} from "./target-global-note-read-model";
 import type {TargetGlobalCombinedPage,GlobalCombinedPositions} from "./target-global-combined-read-model";
 import type {AuthorizedSearchPage} from "./target-authorized-title-search";
 import type {PersonalWhenCommandPreview} from "./target-personal-when-command-read";
-import type {TargetPersonalWhenReceiptResult} from "./target-task-staging-reader";
+import type {TargetPersonalWhenReceiptResult,TargetPersonalWhenReceiptSnapshot}
+  from "./target-task-staging-reader";
 import type {
   AuthenticatedTargetTaskDetailResult, AuthenticatedTargetTaskListResult,
   TargetStagingTaskDetailRequest, TargetStagingTaskListRequest,
@@ -44,7 +45,8 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
-  readPreflightedTemporalStatusPreview, readPreflightedTemporalDueWindowPage,
+  readPreflightedTemporalStatusPreview,
+  readPreflightedTemporalDueOnPreview, readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedMyPlanTwoDayTaskPage,
@@ -54,8 +56,10 @@ import {
   readPreflightedGlobalCombinedPage,
   readPreflightedAuthorizedTitleSearchPage,
   readPreflightedPersonalWhenCommandPreview,readPreflightedPersonalWhenReceipt,
+  readPreflightedPersonalWhenReceiptSnapshot,
   readPreflightedTemporalStatusReceipt,readPreflightedTemporalStatusReceiptSnapshot,
   readPreflightedTemporalDueOnReceipt,
+  readPreflightedTemporalDueOnReceiptSnapshot,
   readPreflightedAuthorizedProjectStructuralRelations,
   readPreflightedAuthorizedTargetParentBacklink,
   readPreflightedAuthorizedTargetNote,
@@ -75,7 +79,7 @@ import type { AuthorizedScopedHomeSummary, TargetHomeScope } from "./target-scop
 import type { TargetChangeFeedResult } from "./target-change-feed-read-model";
 import type { FeedClaims } from "./target-staging-feed-cursor";
 import type { TargetPrivateTaskTitleAuditResult } from "./target-task-read-model";
-import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult } from "./target-task-staging-reader";
+import type { TargetStagingTaskTitleCommandStatusResult, TargetTemporalStatusReceiptResult, TargetTemporalStatusReceiptSnapshot, TargetTemporalDueOnReceiptResult, TargetTemporalDueOnReceiptSnapshot } from "./target-task-staging-reader";
 import type { TargetNoteEditCommandStatus } from "./target-note-command-status";
 import type { TargetNoteDeleteCommandStatus } from "./target-note-delete-command-status";
 import { validTargetTaskTitleEditPreviewRequest } from "./target-task-write-preflight";
@@ -554,6 +558,20 @@ export class TargetStagingSessionAuthority {
     } catch { return null; }
   }
 
+  /** BE-08: one actor-bound dueOn CAS token and task/Area release guard.
+   * Preview is only a hint; PATCH authorizes again under BEGIN IMMEDIATE. */
+  readTemporalDueOnPreview(
+    actorUserId:string,taskId:string,
+  ):{detail:TemporalTaskDetail;expectedRevision:string}|null {
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedTemporalDueOnPreview(this.#store,credential,taskId)
+        : null;
+    }catch{return null;}
+  }
+
   /** R2d.1a: project detail and children on one pinned ACL-checked snapshot. */
   readAuthorizedProjectTasks(
     actorUserId: string, projectId: string, limit: number, offset: number,
@@ -960,6 +978,15 @@ export class TargetStagingSessionAuthority {
     }catch{return null;}
   }
 
+  /** BE-06: read-only private scheduling receipt and live-release witness. */
+  personalWhenReceiptSnapshot(
+    sessionToken:string,command:TargetStagingPersonalWhenCommand,
+  ):TargetPersonalWhenReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedPersonalWhenReceiptSnapshot(this.#store,credential,command);
+  }
+
   /** Read-only outcome reconciliation requires a WRITE credential and current
    * task/Area/assignee authorization before the receipt lookup. */
   personalWhenReceipt(
@@ -981,6 +1008,15 @@ export class TargetStagingSessionAuthority {
       return {ok:false,reason:"invalid_request"};
     return writePreflightedPersonalWhen(
       this.#store,credential,command,durableSessionTokenHash);
+  }
+
+  /** BE-07: current actor's pinned dueOn receipt and live-release witness. */
+  temporalDueOnReceiptSnapshot(
+    sessionToken:string,command:TargetStagingTemporalDueOnCommand,
+  ):TargetTemporalDueOnReceiptSnapshot {
+    const credential=this.#credential(sessionToken,true);
+    if(!credential)return {ok:false,reason:"inaccessible"};
+    return readPreflightedTemporalDueOnReceiptSnapshot(this.#store,credential,command);
   }
 
   /** R2d.3i.2: read-only command reconciliation with current live write ACL. */
