@@ -449,6 +449,191 @@ export function TargetStagingMyPlanPreview({
     refreshAfterStatus();
   }
 
+  /** Actor-private `whenOn`: one explicit operation, never a common dueOn edit.
+   * An uncertain command blocks BOTH mutation families until original receipt.
+   * The same privacy generation guards status and personal-plan operations. */
+  async function changeWhen(
+    task:{taskId:string;areaId:string},target:string|null,undo=false,
+  ){
+    if(!whenWriteEnabled||statusOperation.current||whenOperation.current||
+      action.kind==="pending"||action.kind==="checking"||
+      action.kind==="uncertain"||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    const prior=undo?confirmedWhen.current:null;
+    if(undo){
+      if(!prior||whenAction.kind!=="committed"||!whenAction.undoable||
+        prior.command.taskId!==task.taskId||
+        prior.command.writeAreaId!==task.areaId||
+        prior.previousWhenOn!==target)return;
+    }else{
+      const row=[...state.page.today.tasks,...state.page.tomorrow.tasks].find(
+        item=>item.taskId===task.taskId&&item.areaId===task.areaId);
+      const today=date?myPlanWhenTarget(date,"today"):null;
+      const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
+      if(!row||target===null||target!==today&&target!==tomorrow||
+        row.whenOn===target)return;
+    }
+    const op:WhenOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
+    };
+    whenOperation.current=op; // Synchronous cross-family submission lock.
+    uncertainWhen.current=null;
+    // A confirmed status operation is no longer undoable after this different
+    // explicit action; status cannot have been uncertain (guard above).
+    uncertainCommand.current=null;
+    confirmedCommand.current=null;
+    setUndoFailure(null);
+    setAction({kind:"idle"});
+    setWhenFailure(null);
+    setWhenAction({kind:"pending"});
+    invalidate("stale",true); // Hide potentially stale rows BEFORE preflight.
+
+    let command:MyPlanWhenCommand;
+    let previousWhenOn:string|null;
+    if(prior){
+      const prepared=await prepareConfirmedWhenUndo(
+        prior,fetch,op.controller.signal);
+      if(whenOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        whenOperation.current=null;
+        setWhenAction({kind:"idle"});
+        return;
+      }
+      if(prepared.kind!=="ready"){
+        whenOperation.current=null;
+        if(prepared.kind==="signed-out"){
+          confirmedWhen.current=null;
+          setWhenAction({kind:"idle"});
+          invalidate("signed-out");
+          return;
+        }
+        setWhenFailure(prepared.reason);
+        // No PATCH yet: previous completion of the private plan is intact.
+        setWhenAction({kind:"committed",taskId:prior.command.taskId,
+          areaId:prior.command.writeAreaId,whenOn:prior.command.whenOn,
+          previousWhenOn:prior.previousWhenOn,undoable:true});
+        refreshAfterStatus();
+        return;
+      }
+      command=prepared.command;
+      previousWhenOn=prior.command.whenOn;
+    }else{
+      const prepared=await prepareMyPlanWhen({
+        taskId:task.taskId,areaId:task.areaId,whenOn:target,
+        signal:op.controller.signal,
+      },fetch);
+      if(whenOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        whenOperation.current=null;
+        setWhenAction({kind:"idle"});
+        return;
+      }
+      if(prepared.ok===false){
+        whenOperation.current=null;
+        if(prepared.reason==="signed-out"){
+          setWhenAction({kind:"idle"});
+          invalidate("signed-out");
+        }else{
+          setWhenAction({kind:"error",reason:prepared.reason});
+          refreshAfterStatus();
+        }
+        return;
+      }
+      command=prepared.command;
+      previousWhenOn=prepared.previousWhenOn;
+    }
+
+    op.command=command;
+    const context:UncertainWhen={command,previousWhenOn,undo};
+    uncertainWhen.current=context; // In-memory only, before the first PATCH.
+    const result=await dispatchMyPlanWhen(command,fetch,op.controller.signal);
+    if(whenOperation.current!==op)return;
+    whenOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      // A possible commit across identity loss is ALWAYS uncertain, even if
+      // a stale network response says success. No old actor's Undo is offered.
+      confirmedWhen.current=null;
+      setWhenAction({kind:"uncertain"});
+      return;
+    }
+    if(result.kind==="committed"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=undo?null:{command,previousWhenOn};
+      setWhenAction({kind:"committed",taskId:task.taskId,
+        areaId:task.areaId,whenOn:command.whenOn,
+        previousWhenOn,undoable:!undo});
+    }else if(result.kind==="uncertain"){
+      confirmedWhen.current=null;
+      setWhenAction({kind:"uncertain"});
+    }else if(prior){
+      // Only a definite 400/409 PRE-COMMIT rejection can retain original Undo.
+      uncertainWhen.current=null;
+      setWhenFailure(result.reason);
+      setWhenAction({kind:"committed",taskId:prior.command.taskId,
+        areaId:prior.command.writeAreaId,whenOn:prior.command.whenOn,
+        previousWhenOn:prior.previousWhenOn,undoable:true});
+    }else{
+      uncertainWhen.current=null;
+      setWhenAction({kind:"error",reason:result.reason});
+    }
+    refreshAfterStatus(); // Always fresh actor/ACL/private epoch list GET.
+  }
+
+  /** Manual receipt lookup ONLY, for the original exact eight-field CAS.
+   * No automatic PATCH on `not_recorded` or transient failures. */
+  async function verifyUncertainWhenReceipt(){
+    const original=uncertainWhen.current;
+    if(!whenWriteEnabled||!original||whenOperation.current||
+      statusOperation.current||action.kind==="pending"||
+      action.kind==="checking"||action.kind==="uncertain"||
+      whenAction.kind!=="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    const op:WhenOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,
+      command:original.command,
+    };
+    whenOperation.current=op;
+    setWhenAction({kind:"checking"});
+    const receipt=await checkMyPlanWhenReceipt(
+      original.command,fetch,op.controller.signal);
+    if(whenOperation.current!==op)return;
+    whenOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      setWhenAction({kind:"uncertain"});
+      return;
+    }
+    if(receipt.kind==="committed"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=original.undo?null:{
+        command:original.command,previousWhenOn:original.previousWhenOn,
+      };
+      setWhenAction({kind:"committed",taskId:original.command.taskId,
+        areaId:original.command.writeAreaId,
+        whenOn:original.command.whenOn,
+        previousWhenOn:original.previousWhenOn,
+        undoable:!original.undo});
+      refreshAfterStatus();
+    }else if(receipt.kind==="unknown"&&receipt.reason==="signed-out"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=null;
+      setWhenAction({kind:"idle"});
+      invalidate("signed-out");
+    }else setWhenAction({kind:"uncertain"});
+  }
+
+  /** When the list GET fails after a possibly committed whenOn PATCH,
+   * reauthorize just the list first. Keep the original command for receipt. */
+  function retryUncertainWhenRead(){
+    if(!whenWriteEnabled||whenAction.kind!=="uncertain"||
+      state.status!=="error"||state.reason==="signed-out"||
+      !uncertainWhen.current||statusOperation.current||whenOperation.current||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    invalidate("stale",true);
+    setRefresh(n=>n+1);
+  }
+
   /** Manually recheck only the ORIGINAL command; never resend PATCH. */
   async function verifyUncertainReceipt(){
     const command=uncertainCommand.current;
