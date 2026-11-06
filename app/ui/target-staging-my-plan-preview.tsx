@@ -18,6 +18,16 @@ import {
   type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
 } from "../../lib/target-staging-my-plan-status-client";
 import {canRetryUncertainMyPlanRead} from "../../lib/target-staging-my-plan-status-recovery";
+import {myPlanToolbarChangeBlocked} from "../../lib/target-staging-my-plan-toolbar-lock";
+import {supersedesCrossFamilyUndo} from "../../lib/target-staging-my-plan-cross-family-undo";
+import {
+  myPlanWhenTarget,prepareMyPlanWhen,dispatchMyPlanWhen,checkMyPlanWhenReceipt,
+  type MyPlanWhenCommand,type MyPlanWhenFailure,
+} from "../../lib/target-staging-my-plan-when-client";
+import {
+  prepareConfirmedWhenUndo,keepConfirmedWhenOnRefresh,
+  type ConfirmedWhen,
+} from "../../lib/target-staging-my-plan-when-undo";
 import {
   prepareConfirmedMyPlanUndo,keepConfirmedMyPlanUndoOnRefresh,
 } from "../../lib/target-staging-my-plan-undo";
@@ -38,6 +48,26 @@ const statusReasons:Record<MyPlanStatusFailure,string>={
   "invalid-request":"Neplatné parametry zápisu; úkol nebyl potvrzen.",
   "offline":"Připojení selhalo. Neproběhl žádný automatický opakovaný zápis.",
   "aborted":"Operace byla přerušena. Aktuální stav je třeba znovu ověřit.",
+};
+
+type WhenAction=
+  |{kind:"idle"|"pending"|"checking"|"uncertain"}
+  |{kind:"committed";taskId:string;areaId:string;
+    whenOn:string|null;previousWhenOn:string|null;undoable:boolean}
+  |{kind:"error";reason:MyPlanWhenFailure};
+type WhenOperation={
+  controller:AbortController;privacyEpoch:number;command:MyPlanWhenCommand|null;
+};
+type UncertainWhen={command:MyPlanWhenCommand;previousWhenOn:string|null;undo:boolean};
+const whenReasons:Record<MyPlanWhenFailure,string>={
+  "signed-out":"Přístup k osobnímu plánu zanikl. Přihlaste se znovu.",
+  "stale":"Osobní plán nebo úkol se mezitím změnil. Načetl se aktuální přehled.",
+  "unavailable":"Osobní plánování na stagingu není dostupné nebo bylo vypnuto.",
+  "invalid-response":"Odpověď plánovacího endpointu nebyla bezpečně ověřena.",
+  "invalid-request":"Plánovací požadavek nesplňuje bezpečný kontrakt.",
+  "offline":"Spojení selhalo; žádný automatický zápis se neopakuje.",
+  "aborted":"Požadavek byl přerušen; stav je nutné znovu ověřit.",
+  "unchanged":"Zvolený osobní den už je nastavený.",
 };
 
 type ReadState=
@@ -63,9 +93,10 @@ const nextHumanDate=(day:string)=>{
   return humanDate(following.toISOString().slice(0,10));
 };
 
-function PlanDay({label,tasks,date,canComplete,onComplete}:{
+function PlanDay({label,tasks,date,canComplete,onComplete,canWhen,onWhen}:{
   label:string;tasks:MyPlanSliceTask[];date:string;
   canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
+  canWhen:boolean;onWhen:(task:MyPlanSliceTask,whenOn:string)=>void;
 }){
   const areas=new Map<string,{kind:"private"|"shared";tasks:MyPlanSliceTask[]}>();
   for(const task of tasks){
@@ -95,6 +126,20 @@ function PlanDay({label,tasks,date,canComplete,onComplete}:{
                     <small>Vyžaduje pozornost od {humanDate(task.attentionOn)}</small>}
                   {task.dueOn&&<small>Termín: {humanDate(task.dueOn)}</small>}
                   {task.whenOn&&<small>Naplánováno: {humanDate(task.whenOn)}</small>}
+                  {canWhen&&<div className="stagingMyPlanWhenControls" role="group"
+                    aria-label={"Osobní plán pro úkol: "+task.title}>
+                    {(["today","tomorrow"] as const).map(choice=>{
+                      const target=myPlanWhenTarget(date,choice);
+                      return target&&task.whenOn!==target
+                        ?<button key={choice} type="button"
+                            aria-label={choice==="today"
+                              ?"Naplánovat osobně na dnešek: "+task.title
+                              :"Naplánovat osobně na zítřek: "+task.title}
+                            onClick={()=>onWhen(task,target)}>
+                            {choice==="today"?"Kdy: Dnes":"Kdy: Zítra"}
+                          </button>:null;
+                    })}
+                  </div>}
                 </div>
               </li>)}</ul>
           </div>)}
@@ -102,8 +147,8 @@ function PlanDay({label,tasks,date,canComplete,onComplete}:{
   </section>;
 }
 export function TargetStagingMyPlanPreview({
-  statusWriteEnabled=false,
-}:{statusWriteEnabled?:boolean}){
+  statusWriteEnabled=false,whenWriteEnabled=false,
+}:{statusWriteEnabled?:boolean;whenWriteEnabled?:boolean}){
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
@@ -112,6 +157,11 @@ export function TargetStagingMyPlanPreview({
   const [moreBusy,setMoreBusy]=useState(false);
   const [action,setAction]=useState<StatusAction>({kind:"idle"});
   const [undoFailure,setUndoFailure]=useState<MyPlanStatusFailure|null>(null);
+  const [whenAction,setWhenAction]=useState<WhenAction>({kind:"idle"});
+  const [whenFailure,setWhenFailure]=useState<MyPlanWhenFailure|null>(null);
+  const confirmedWhen=useRef<ConfirmedWhen|null>(null);
+  const uncertainWhen=useRef<UncertainWhen|null>(null);
+  const whenOperation=useRef<WhenOperation|null>(null);
   // A command needed for read-only reconciliation is kept in volatile memory,
   // never in React-rendered state, browser storage, or a background queue.
   const uncertainCommand=useRef<MyPlanStatusCommand|null>(null);
@@ -129,6 +179,7 @@ export function TargetStagingMyPlanPreview({
     requestSequence.current++;
     current.current?.abort();
     statusOperation.current?.controller.abort();
+    whenOperation.current?.controller.abort();
   };},[]);
 
   useEffect(()=>{
@@ -155,6 +206,9 @@ export function TargetStagingMyPlanPreview({
           uncertainCommand.current=null;
           confirmedCommand.current=null;
           setAction({kind:"idle"});
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenAction({kind:"idle"});
         }
         setState({status:"error",reason:result.reason});
       }
@@ -178,6 +232,13 @@ export function TargetStagingMyPlanPreview({
    * Receipt may be checked only after a fresh authorized My Plan read. */
   function privacyChange(){
     privacyEpoch.current++;
+    confirmedWhen.current=null;
+    setWhenFailure(null);
+    whenOperation.current?.controller.abort();
+    setWhenAction(old=>old.kind==="committed"||old.kind==="error"
+      ?{kind:"idle"}:old.kind==="checking"?{kind:"uncertain"}:
+      old.kind==="pending"
+        ?whenOperation.current?.command?{kind:"uncertain"}:{kind:"idle"}:old);
     setUndoFailure(null);
     confirmedCommand.current=null;
     statusOperation.current?.controller.abort();
@@ -268,7 +329,9 @@ export function TargetStagingMyPlanPreview({
   async function changeStatus(
     task:{taskId:string;areaId:string},status:MyPlanStatus,
   ){
-    if(!statusWriteEnabled||statusOperation.current||
+    if(!statusWriteEnabled||statusOperation.current||whenOperation.current||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||
       action.kind==="pending"||action.kind==="checking"||
       action.kind==="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
@@ -281,14 +344,27 @@ export function TargetStagingMyPlanPreview({
     const prior= status==="open"?confirmedCommand.current:null;
     if(status==="open"&&(!prior||prior.taskId!==task.taskId||
       prior.writeAreaId!==task.areaId||prior.status!=="completed"))return;
+    // A second action of the SAME family must not discard an earlier committed
+    // Undo if its new read-only preflight (or definite PATCH refusal) fails.
+    const retainedStatusUndo=prior??(status==="completed"&&
+      keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current)
+        ?confirmedCommand.current:null);
+    const restoreStatusUndoOnFailure=(reason:MyPlanStatusFailure)=>{
+      if(retainedStatusUndo){
+        setUndoFailure(reason);
+        setAction({kind:"committed",taskId:retainedStatusUndo.taskId,
+          areaId:retainedStatusUndo.writeAreaId,status:"completed"});
+      }else setAction({kind:"error",reason});
+    };
     const op:StatusOperation={
       controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
     };
     statusOperation.current=op; // Synchronous mutex against double clicks.
+    // Do not erase the previously confirmed personal-plan Undo before a status
+    // PATCH: a failed read-only preflight must leave it recoverable.
     uncertainCommand.current=null;
-    // Never discard the original confirmed completion BEFORE a possible Undo.
-    // Receipt/preflight/400/409 failures cannot have reversed this task.
-    if(!prior)confirmedCommand.current=null;
+    // Preserve the prior confirmed command until an accepted or uncertain
+    // PATCH supersedes it. Read-only failures never erase the Undo.
     setUndoFailure(null);
     setAction({kind:"pending"});
     invalidate("stale",true); // No stale open row during a possible PATCH.
@@ -308,15 +384,16 @@ export function TargetStagingMyPlanPreview({
         statusOperation.current=null;
         if(undo.kind==="signed-out"){
           confirmedCommand.current=null;
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenFailure(null);
+          setWhenAction({kind:"idle"});
           setAction({kind:"idle"});
           invalidate("signed-out");
           return;
         }
-        // Only read-only work happened, so the original completion is still
-        // available for a manual retry after a freshly authorized list GET.
-        setUndoFailure(undo.reason);
-        setAction({kind:"committed",taskId:prior.taskId,
-          areaId:prior.writeAreaId,status:"completed"});
+        // Only read-only work happened; the original confirmed Undo survives.
+        restoreStatusUndoOnFailure(undo.reason);
         refreshAfterStatus();
         return;
       }
@@ -335,10 +412,15 @@ export function TargetStagingMyPlanPreview({
       if(prepared.ok===false){
         statusOperation.current=null;
         if(prepared.reason==="signed-out"){
+          confirmedCommand.current=null;
+          confirmedWhen.current=null;
+          uncertainWhen.current=null;
+          setWhenFailure(null);
+          setWhenAction({kind:"idle"});
           setAction({kind:"idle"});
           invalidate("signed-out");
         }else{
-          setAction({kind:"error",reason:prepared.reason});
+          restoreStatusUndoOnFailure(prepared.reason);
           refreshAfterStatus();
         }
         return;
@@ -359,6 +441,14 @@ export function TargetStagingMyPlanPreview({
       }else setAction({kind:"idle"});
       return;
     }
+    if(supersedesCrossFamilyUndo(result.kind)){
+      // Neither read-only preflight nor definitive PATCH refusal can discard
+      // the previously confirmed private-plan Undo.
+      confirmedWhen.current=null;
+      uncertainWhen.current=null;
+      setWhenAction({kind:"idle"});
+      setWhenFailure(null);
+    }
     if(result.kind==="committed"){
       confirmedCommand.current=status==="completed"?result.command:null;
       setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
@@ -371,22 +461,228 @@ export function TargetStagingMyPlanPreview({
     }else if(result.reason==="signed-out"){
       confirmedCommand.current=null;
       uncertainCommand.current=null;
+      confirmedWhen.current=null;
+      uncertainWhen.current=null;
+      setWhenFailure(null);
+      setWhenAction({kind:"idle"});
       setAction({kind:"idle"});
       invalidate("signed-out");
       return;
-    }else if(prior){
-      // Only a definite pre-commit refusal: original Undo remains available.
-      setUndoFailure(result.reason);
-      setAction({kind:"committed",taskId:prior.taskId,
-        areaId:prior.writeAreaId,status:"completed"});
-    }else setAction({kind:"error",reason:result.reason});
+    }else{
+      // A definite 400/409 did not write B; keep any confirmed A Undo.
+      restoreStatusUndoOnFailure(result.reason);
+    }
     refreshAfterStatus();
+  }
+
+  /** Actor-private `whenOn`: one explicit operation, never a common dueOn edit.
+   * An uncertain command blocks BOTH mutation families until original receipt.
+   * The same privacy generation guards status and personal-plan operations. */
+  async function changeWhen(
+    task:{taskId:string;areaId:string},target:string|null,undo=false,
+  ){
+    if(!whenWriteEnabled||statusOperation.current||whenOperation.current||
+      action.kind==="pending"||action.kind==="checking"||
+      action.kind==="uncertain"||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    const prior=undo?confirmedWhen.current:null;
+    const retainedWhenUndo=prior??(!undo&&
+      keepConfirmedWhenOnRefresh(whenAction,confirmedWhen.current)
+        ?confirmedWhen.current:null);
+    const restoreWhenUndoOnFailure=(reason:MyPlanWhenFailure)=>{
+      if(retainedWhenUndo){
+        setWhenFailure(reason);
+        setWhenAction({kind:"committed",taskId:retainedWhenUndo.command.taskId,
+          areaId:retainedWhenUndo.command.writeAreaId,
+          whenOn:retainedWhenUndo.command.whenOn,
+          previousWhenOn:retainedWhenUndo.previousWhenOn,undoable:true});
+      }else setWhenAction({kind:"error",reason});
+    };
+    if(undo){
+      if(!prior||whenAction.kind!=="committed"||!whenAction.undoable||
+        prior.command.taskId!==task.taskId||
+        prior.command.writeAreaId!==task.areaId||
+        prior.previousWhenOn!==target)return;
+    }else{
+      const row=[...state.page.today.tasks,...state.page.tomorrow.tasks].find(
+        item=>item.taskId===task.taskId&&item.areaId===task.areaId);
+      const today=date?myPlanWhenTarget(date,"today"):null;
+      const tomorrow=date?myPlanWhenTarget(date,"tomorrow"):null;
+      // "Dnes/Zítra" is never silently relative to a pinned historical day.
+      if(!followToday||date!==localMyPlanDate()||
+        !row||target===null||target!==today&&target!==tomorrow||
+        row.whenOn===target)return;
+    }
+    const op:WhenOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
+    };
+    whenOperation.current=op; // Synchronous cross-family submission lock.
+    uncertainWhen.current=null;
+    // Keep a confirmed status Undo while the new whenOn request performs only
+    // read-only receipt/preflight. Supersede it on accepted/uncertain PATCH.
+    setWhenFailure(null);
+    setWhenAction({kind:"pending"});
+    invalidate("stale",true); // Hide potentially stale rows BEFORE preflight.
+
+    let command:MyPlanWhenCommand;
+    let previousWhenOn:string|null;
+    if(prior){
+      const prepared=await prepareConfirmedWhenUndo(
+        prior,fetch,op.controller.signal);
+      if(whenOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        whenOperation.current=null;
+        setWhenAction({kind:"idle"});
+        return;
+      }
+      if(prepared.kind!=="ready"){
+        whenOperation.current=null;
+        if(prepared.kind==="signed-out"){
+          confirmedWhen.current=null;
+          confirmedCommand.current=null;
+          uncertainCommand.current=null;
+          setUndoFailure(null);
+          setAction({kind:"idle"});
+          setWhenAction({kind:"idle"});
+          invalidate("signed-out");
+          return;
+        }
+        // A failed read-only receipt/CAS cannot invalidate the earlier Undo.
+        restoreWhenUndoOnFailure(prepared.reason);
+        refreshAfterStatus();
+        return;
+      }
+      command=prepared.command;
+      previousWhenOn=prior.command.whenOn;
+    }else{
+      const prepared=await prepareMyPlanWhen({
+        taskId:task.taskId,areaId:task.areaId,whenOn:target,
+        signal:op.controller.signal,
+      },fetch);
+      if(whenOperation.current!==op)return;
+      if(op.privacyEpoch!==privacyEpoch.current){
+        whenOperation.current=null;
+        setWhenAction({kind:"idle"});
+        return;
+      }
+      if(prepared.ok===false){
+        whenOperation.current=null;
+        if(prepared.reason==="signed-out"){
+          confirmedWhen.current=null;
+          confirmedCommand.current=null;
+          uncertainCommand.current=null;
+          setUndoFailure(null);
+          setAction({kind:"idle"});
+          setWhenAction({kind:"idle"});
+          invalidate("signed-out");
+        }else{
+          restoreWhenUndoOnFailure(prepared.reason);
+          refreshAfterStatus();
+        }
+        return;
+      }
+      command=prepared.command;
+      previousWhenOn=prepared.previousWhenOn;
+    }
+
+    op.command=command;
+    const context:UncertainWhen={command,previousWhenOn,undo};
+    uncertainWhen.current=context; // In-memory only, before the first PATCH.
+    const result=await dispatchMyPlanWhen(command,fetch,op.controller.signal);
+    if(whenOperation.current!==op)return;
+    whenOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      // A possible commit across identity loss is ALWAYS uncertain, even if
+      // a stale network response says success. No old actor's Undo is offered.
+      confirmedWhen.current=null;
+      setWhenAction({kind:"uncertain"});
+      return;
+    }
+    if(supersedesCrossFamilyUndo(result.kind)){
+      // Previous status Undo remains until this different command actually
+      // commits or might have committed. A definite 400/409 retains it.
+      confirmedCommand.current=null;
+      uncertainCommand.current=null;
+      setUndoFailure(null);
+      setAction({kind:"idle"});
+    }
+    if(result.kind==="committed"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=undo?null:{command,previousWhenOn};
+      setWhenAction({kind:"committed",taskId:task.taskId,
+        areaId:task.areaId,whenOn:command.whenOn,
+        previousWhenOn,undoable:!undo});
+    }else if(result.kind==="uncertain"){
+      confirmedWhen.current=null;
+      setWhenAction({kind:"uncertain"});
+    }else{
+      // A definite 400/409 refused B; A's confirmed Undo remains valid.
+      uncertainWhen.current=null;
+      restoreWhenUndoOnFailure(result.reason);
+    }
+    refreshAfterStatus(); // Always fresh actor/ACL/private epoch list GET.
+  }
+
+  /** Manual receipt lookup ONLY, for the original exact eight-field CAS.
+   * No automatic PATCH on `not_recorded` or transient failures. */
+  async function verifyUncertainWhenReceipt(){
+    const original=uncertainWhen.current;
+    if(!whenWriteEnabled||!original||whenOperation.current||
+      statusOperation.current||action.kind==="pending"||
+      action.kind==="checking"||action.kind==="uncertain"||
+      whenAction.kind!=="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    const op:WhenOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,
+      command:original.command,
+    };
+    whenOperation.current=op;
+    setWhenAction({kind:"checking"});
+    const receipt=await checkMyPlanWhenReceipt(
+      original.command,fetch,op.controller.signal);
+    if(whenOperation.current!==op)return;
+    whenOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      setWhenAction({kind:"uncertain"});
+      return;
+    }
+    if(receipt.kind==="committed"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=original.undo?null:{
+        command:original.command,previousWhenOn:original.previousWhenOn,
+      };
+      setWhenAction({kind:"committed",taskId:original.command.taskId,
+        areaId:original.command.writeAreaId,
+        whenOn:original.command.whenOn,
+        previousWhenOn:original.previousWhenOn,
+        undoable:!original.undo});
+      refreshAfterStatus();
+    }else if(receipt.kind==="unknown"&&receipt.reason==="signed-out"){
+      uncertainWhen.current=null;
+      confirmedWhen.current=null;
+      setWhenAction({kind:"idle"});
+      invalidate("signed-out");
+    }else setWhenAction({kind:"uncertain"});
+  }
+
+  /** When the list GET fails after a possibly committed whenOn PATCH,
+   * reauthorize just the list first. Keep the original command for receipt. */
+  function retryUncertainWhenRead(){
+    if(!whenWriteEnabled||whenAction.kind!=="uncertain"||
+      state.status!=="error"||state.reason==="signed-out"||
+      !uncertainWhen.current||statusOperation.current||whenOperation.current||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    invalidate("stale",true);
+    setRefresh(n=>n+1);
   }
 
   /** Manually recheck only the ORIGINAL command; never resend PATCH. */
   async function verifyUncertainReceipt(){
     const command=uncertainCommand.current;
     if(!statusWriteEnabled||!command||statusOperation.current||
+      whenOperation.current||
       action.kind!=="uncertain"||state.status!=="ready"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
     const op:StatusOperation={
@@ -433,11 +729,24 @@ export function TargetStagingMyPlanPreview({
    * temporary slice failures. Context changes still call resetFeedback().
    * The list GET enforces current actor/ACL and clears old data on 401/403. */
   function refreshPlan(){
-    if(statusOperation.current||action.kind==="pending"||
+    if(statusOperation.current||whenOperation.current||
+      whenAction.kind==="pending"||whenAction.kind==="checking"||
+      whenAction.kind==="uncertain"||
+      action.kind==="pending"||
       action.kind==="checking"||action.kind==="uncertain"||
       document.visibilityState!=="visible"||!navigator.onLine)return;
-    if(!keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current))
-      resetFeedback();
+    if(!keepConfirmedMyPlanUndoOnRefresh(action,confirmedCommand.current)){
+      uncertainCommand.current=null;
+      confirmedCommand.current=null;
+      setUndoFailure(null);
+      setAction({kind:"idle"});
+    }
+    if(!keepConfirmedWhenOnRefresh(whenAction,confirmedWhen.current)){
+      uncertainWhen.current=null;
+      confirmedWhen.current=null;
+      setWhenFailure(null);
+      setWhenAction({kind:"idle"});
+    }
     invalidate("stale",true);
     setRefresh(n=>n+1);
   }
@@ -447,12 +756,27 @@ export function TargetStagingMyPlanPreview({
     confirmedCommand.current=null;
     setUndoFailure(null);
     setAction({kind:"idle"});
+    uncertainWhen.current=null;
+    confirmedWhen.current=null;
+    setWhenFailure(null);
+    setWhenAction({kind:"idle"});
   }
   const actionPending=action.kind==="pending"||action.kind==="checking"||
     action.kind==="uncertain";
-  const canComplete=statusWriteEnabled&&!actionPending;
+  const whenPending=whenAction.kind==="pending"||
+    whenAction.kind==="checking"||whenAction.kind==="uncertain";
+  const anyPending=actionPending||whenPending;
+  // Read the live synchronous refs from EACH handler, not just disabled state.
+  // A second event may arrive before React commits the pending render.
+  const toolbarChangeBlocked=()=>myPlanToolbarChangeBlocked({
+    anyPending,statusInFlight:statusOperation.current!==null,
+    whenInFlight:whenOperation.current!==null,
+  });
+  const canComplete=statusWriteEnabled&&!anyPending;
+  const canWhen=whenWriteEnabled&&!anyPending&&
+    followToday&&date!==null&&date===localMyPlanDate();
   async function more(){
-    if(statusOperation.current||actionPending||
+    if(statusOperation.current||whenOperation.current||anyPending||
       moreInFlight.current||state.status!=="ready"||
       !state.page.hasMore||!state.page.nextCursor||!date)return;
     moreInFlight.current=true;
@@ -481,26 +805,28 @@ export function TargetStagingMyPlanPreview({
     <header>
       <p className="stagingMyPlanEyebrow">Lumi · izolovaný staging</p>
       <h1>Můj plán</h1>
-      <p>{statusWriteEnabled
-        ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
-        :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
+      <p>{whenWriteEnabled
+        ?"Izolovaný stagingový Můj plán: osobní Kdy Dnes/Zítra s novým CAS a bezpečným Undo. Bez offline fronty a změn společných termínů."
+        :statusWriteEnabled
+          ?"Izolovaný stagingový náhled s dokončením a bezpečným Undo. Bez kalendářových událostí, přesunu dne a offline fronty."
+          :"Čtecí náhled cílového modelu. Jen úkoly; bez úprav, kalendářových událostí a offline ukládání."}</p>
     </header>
     <div className="stagingMyPlanToolbar">
       <label>Den
-        <input type="date" disabled={actionPending} value={date??""}
+        <input type="date" disabled={anyPending} value={date??""}
           onChange={event=>{
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
-            if(actionPending||statusOperation.current)return;
+            if(toolbarChangeBlocked())return;
             resetFeedback();
             setFollowToday(false); // A manual date remains pinned at midnight.
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
       <label>Moje práce
-        <select value={areaFilter} disabled={actionPending}
+        <select value={areaFilter} disabled={anyPending}
           onChange={event=>{
-            if(actionPending||statusOperation.current)return;
+            if(toolbarChangeBlocked())return;
             resetFeedback();
             invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
@@ -510,8 +836,8 @@ export function TargetStagingMyPlanPreview({
           <option value="shared">Přiřazené sdílené</option>
         </select>
       </label>
-      <button type="button" disabled={actionPending} onClick={()=>{
-        if(actionPending||statusOperation.current)return;
+      <button type="button" disabled={anyPending} onClick={()=>{
+        if(toolbarChangeBlocked())return;
         resetFeedback();
         const chosen=localMyPlanDate();
         invalidate("stale",true);
@@ -519,10 +845,14 @@ export function TargetStagingMyPlanPreview({
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
       }}>Aktuální den</button>
-      <button type="button" disabled={actionPending}
+      <button type="button" disabled={anyPending}
         onClick={refreshPlan}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
+    {whenWriteEnabled&&whenAction.kind==="pending"&&
+      <p role="status" className="stagingMyPlanMutation">Ověřuji osobní plán a ukládám změnu…</p>}
+    {whenWriteEnabled&&whenAction.kind==="checking"&&
+      <p role="status" className="stagingMyPlanMutation">Kontroluji původní potvrzení plánování…</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="pending"&&
       <p role="status" className="stagingMyPlanMutation">Ověřuji oprávnění a ukládám změnu…</p>}
     {statusWriteEnabled&&state.status!=="error"&&action.kind==="checking"&&
@@ -539,6 +869,26 @@ export function TargetStagingMyPlanPreview({
           Znovu načíst přehled (Undo zůstane)
         </button>
       </div>}
+    {whenWriteEnabled&&state.status==="error"&&
+      state.reason!=="signed-out"&&whenAction.kind==="committed"&&
+      whenAction.undoable&&confirmedWhen.current!==null&&
+      <div role="status" className="stagingMyPlanWarning">
+        <p>Osobní plán je potvrzený, ale načtení přehledu selhalo.
+          Undo bude dostupné po novém ověření oprávnění.</p>
+        <button type="button" onClick={refreshPlan}>
+          Znovu načíst osobní plán (Undo zůstane)
+        </button>
+      </div>}
+    {whenWriteEnabled&&whenAction.kind==="uncertain"&&
+      state.status==="error"&&state.reason!=="signed-out"&&
+      uncertainWhen.current!==null&&
+      <div role="alert" className="stagingMyPlanWarning">
+        <p>Výsledek osobního plánování je nejistý.
+          Znovu se načte pouze autorizovaný přehled, nikoli zápis.</p>
+        <button type="button" onClick={retryUncertainWhenRead}>
+          Znovu ověřit osobní přehled (bez zápisu)
+        </button>
+      </div>}
     {statusWriteEnabled&&action.kind==="uncertain"&&
       state.status==="error"&&state.reason!=="signed-out"&&
       uncertainCommand.current!==null&&
@@ -551,6 +901,29 @@ export function TargetStagingMyPlanPreview({
       </div>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
+      {whenWriteEnabled&&whenAction.kind==="uncertain"&&
+        <div role="alert" className="stagingMyPlanWarning">
+          <p>Předchozí osobní zápis nebyl potvrzen.
+            Další změny jsou zablokované; žádný PATCH se neopakuje.</p>
+          <button type="button" onClick={()=>{void verifyUncertainWhenReceipt();}}>
+            Ověřit původní osobní potvrzení
+          </button>
+        </div>}
+      {whenWriteEnabled&&whenAction.kind==="error"&&
+        <p role="alert" className="stagingMyPlanWarning">
+          {whenReasons[whenAction.reason]}
+        </p>}
+      {whenWriteEnabled&&!anyPending&&whenAction.kind==="committed"&&
+        <div role="status" className="stagingMyPlanMutation">
+          <span>Osobní plán potvrzen: {whenAction.whenOn
+            ?humanDate(whenAction.whenOn):"bez plánovaného dne"}.</span>
+          {whenFailure&&<span role="alert">Nová změna nebyla provedena:
+            {" "+whenReasons[whenFailure]} Předchozí plán zůstává potvrzený.</span>}
+          {whenAction.undoable&&
+            <button type="button" onClick={()=>{void changeWhen({
+              taskId:whenAction.taskId,areaId:whenAction.areaId,
+            },whenAction.previousWhenOn,true);}}>Vrátit osobní plán (Undo)</button>}
+        </div>}
       {statusWriteEnabled&&action.kind==="uncertain"&&
         <div role="alert" className="stagingMyPlanWarning">
           <p>Výsledek zápisu není potvrzen. Žádná další změna se neodešle automaticky.</p>
@@ -560,12 +933,12 @@ export function TargetStagingMyPlanPreview({
         </div>}
       {statusWriteEnabled&&action.kind==="error"&&
         <p role="alert" className="stagingMyPlanWarning">{statusReasons[action.reason]}</p>}
-      {statusWriteEnabled&&action.kind==="committed"&&
+      {statusWriteEnabled&&!anyPending&&action.kind==="committed"&&
         <div role="status" className="stagingMyPlanMutation">
           <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
           {action.status==="completed"&&undoFailure&&
-            <span role="alert">Undo nebylo provedeno: {statusReasons[undoFailure]}
-              Původní dokončení zůstává potvrzené; Undo můžete zkusit znovu.</span>}
+            <span role="alert">Nová změna nebyla provedena: {statusReasons[undoFailure]}
+              Předchozí dokončení zůstává potvrzené; Undo je stále dostupné.</span>}
           {action.status==="completed"&&
             <button type="button" onClick={()=>{void changeStatus({
               taskId:action.taskId,areaId:action.areaId,
@@ -573,22 +946,26 @@ export function TargetStagingMyPlanPreview({
         </div>}
       {/* During an uncertain write, a read could have raced the commit.
           Never render its potentially stale open-task list until confirmed. */}
-      {!actionPending&&<>
+      {!anyPending&&<>
       <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
         date={date} tasks={state.page.today.tasks}
-        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
       <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
         nextHumanDate(date)}
         date={date} tasks={state.page.tomorrow.tasks}
-        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}
+        canWhen={canWhen} onWhen={(task,on)=>{void changeWhen(task,on);}}/>
       {state.page.hasMore&&
-        <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
+        <button disabled={moreBusy||anyPending} type="button" onClick={()=>{void more();}}>
           {moreBusy?"Načítám…":"Načíst další úkoly"}
         </button>}
       </>}
-      <p className="stagingMyPlanScope">{statusWriteEnabled
-        ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
-        :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
+      <p className="stagingMyPlanScope">{whenWriteEnabled
+        ?"Osobní Kdy mění jen plán aktuálního uživatele, nikdy společný termín dueOn. Každý zápis vyžaduje nový CAS; žádná offline fronta."
+        :statusWriteEnabled
+          ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
+          :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
         {" "}Oprávnění se ověřují na serveru při každém načtení.</p>
     </>}
   </main>;

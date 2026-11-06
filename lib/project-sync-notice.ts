@@ -1,12 +1,43 @@
 import type { Entity } from "./db";
 
 /** A pending-sync warning belongs to one locally committed project operation. */
+type ProjectSyncNoticeIdentity = {
+  projectId: string;
+  projectTitle?: string;
+  workspaceId?: string;
+  workspaceTitle?: string;
+};
+
 export type ProjectSyncNotice =
-  | { kind: "delete"; projectId: string }
-  | { kind: "status"; projectId: string; status: string; updatedAt: number };
+  | (ProjectSyncNoticeIdentity & { kind: "delete" })
+  | (ProjectSyncNoticeIdentity & { kind: "status"; status: string; updatedAt: number });
 
 /** At most one outstanding warning per project; failures for other projects must survive. */
 export type ProjectSyncNotices = Record<string, ProjectSyncNotice>;
+
+/** The saved title is a display hint from the actor's own confirmed action, not ACL authority. */
+export function projectSyncNoticeTitle(notice: ProjectSyncNotice): string {
+  return notice.projectTitle?.trim() || notice.projectId;
+}
+
+/** Workspace comes from the same local action; it is a label, never an ACL decision. */
+function projectSyncNoticeWorkspaceTitle(notice: ProjectSyncNotice, language: string): string {
+  const title = notice.workspaceTitle?.trim();
+  // A not-yet-renamed personal workspace has one stored default name in both locales.
+  if (notice.workspaceId === "personal" && (!title || title === "Personal"))
+    return language === "cs" ? "Osobní" : "Personal";
+  return title || notice.workspaceId || (language === "cs" ? "Neznámý prostor" : "Unknown workspace");
+}
+
+/** Distinct visible AND accessible labels even with duplicate project/workspace titles. */
+export function projectSyncNoticeLabel(
+  notice: ProjectSyncNotice, notices: readonly ProjectSyncNotice[], language: string,
+): string {
+  const label = `${projectSyncNoticeTitle(notice)} (${projectSyncNoticeWorkspaceTitle(notice, language)})`;
+  const ambiguous = notices.some((other) => other.projectId !== notice.projectId &&
+    `${projectSyncNoticeTitle(other)} (${projectSyncNoticeWorkspaceTitle(other, language)})` === label);
+  return ambiguous ? `${label} · ${notice.projectId}` : label;
+}
 
 export function withProjectSyncNotice(current: ProjectSyncNotices, warning: ProjectSyncNotice): ProjectSyncNotices {
   return { ...current, [warning.projectId]: warning };

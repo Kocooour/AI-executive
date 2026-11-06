@@ -3,6 +3,7 @@
 import {notFound} from "next/navigation";
 import {TargetStagingMyPlanPreview} from "../../../ui/target-staging-my-plan-preview";
 import {myPlanStagingWriteUiEnabled} from "../../../../lib/target-staging-my-plan-ui-write-gate";
+import {myPlanStagingWhenUiEnabled} from "../../../../lib/target-staging-my-plan-when-ui-gate";
 import "./preview.css";
 
 export const dynamic="force-dynamic";
@@ -19,5 +20,8 @@ export default function StagingMyPlanPreviewPage(){
   // This is NOT authorization: the status endpoints independently enforce all
   // four write flags, current session, Area ACL and optimistic CAS.
   const statusWriteEnabled=myPlanStagingWriteUiEnabled(process.env);
-  return <TargetStagingMyPlanPreview statusWriteEnabled={statusWriteEnabled}/>;
+  const whenWriteEnabled=myPlanStagingWhenUiEnabled(process.env);
+  return <TargetStagingMyPlanPreview
+    statusWriteEnabled={statusWriteEnabled}
+    whenWriteEnabled={whenWriteEnabled}/>;
 }
