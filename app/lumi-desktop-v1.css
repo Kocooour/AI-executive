@@ -73,6 +73,15 @@
     overflow-y: auto;
     overscroll-behavior-y: contain;
   }
+  /* Current project and direct secondary destination are perceivable
+     visually and as aria-current=page. Neither style changes authorization
+     or selection state in the legacy app. */
+  .appShell[data-design-system="lumi-v1"] > aside .sidebarProjects button[data-current-project="true"],
+  .appShell[data-design-system="lumi-v1"] > aside .secondaryNav button[aria-current="page"] {
+    background: var(--workspace-soft);
+    color: var(--text);
+    font-weight: 650;
+  }
 }
 
 /* Removing theme from the preview topbar must not leave its empty grid column.
