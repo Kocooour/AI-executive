@@ -132,7 +132,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
         {mobileDesignV1Preview && (
           <div className="secondaryNav" id="sidebar-secondary-views" role="navigation"
             aria-label={tr("moreViews")} data-desktop-v1-direct-views>
-            {secondaryViews.map((x) => <button key={x} className={view === x ? "active" : ""} onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
+            {secondaryViews.map((x) => <button key={x} type="button" className={view === x ? "active" : ""}
+              data-nav-view={x} aria-current={view === x ? "page" : undefined}
+              onClick={() => { setView(x); closeDetail(); }}>{tr(x)}</button>)}
           </div>
         )}
         {sidebarProjects.length > 0 && (
@@ -141,7 +143,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
               <button
                 type="button"
                 key={project.id}
-                className={dragTarget === `entity:${project.id}` ? "dropActive" : ""}
+                className={`${dragTarget === `entity:${project.id}` ? "dropActive" : ""} ${mobileDesignV1Preview && app.openProject?.id === project.id ? "active" : ""}`.trim()}
+                aria-current={mobileDesignV1Preview && app.openProject?.id === project.id ? "page" : undefined}
+                data-current-project={mobileDesignV1Preview && app.openProject?.id === project.id ? "true" : undefined}
                 data-sidebar-project={project.id}
                 title={project.title || tr("untitledItem")}
                 data-drop-entity={project.id}
