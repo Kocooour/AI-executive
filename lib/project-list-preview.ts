@@ -26,6 +26,16 @@ export function projectPreviewCanToggle(
     (project.status === "active" || project.status === "completed") && !blocked;
 }
 
+/** Reject stale project confirmations at commit time, inside the local write transaction. */
+export function projectPreviewCanCommit(
+  expected: Entity, current: Entity | undefined, activeWorkspaceId: string, blocked: boolean,
+): boolean {
+  return !!current && current.id === expected.id && current.workspaceId === expected.workspaceId &&
+    current.status === expected.status && current.updatedAt === expected.updatedAt &&
+    projectPreviewCanToggle(current, activeWorkspaceId, blocked) &&
+    JSON.stringify(current) === JSON.stringify(expected);
+}
+
 export function projectPreviewTone(project: Pick<Entity, "status">, summary: ProjectSummary): ProjectPreviewTone {
   if (project.status === "completed") return "complete";
   if (summary.projectOverdue || summary.attention?.kind === "overdue") return "danger";
