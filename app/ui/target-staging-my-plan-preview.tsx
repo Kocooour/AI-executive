@@ -1,7 +1,8 @@
 "use client";
 
-/** R3-slice/UI-01: isolated read-only target preview, NEVER the legacy task view.
- * No writes, local cache, sync queue, optimistic completion or offline storage. */
+/** R3-slice/UI-03b: gated staging My Plan. Never the legacy task view.
+ * Status controls require an independent SERVER opt-in. No offline queue,
+ * optimistic status, persistent task cache or production UI integration. */
 import {useEffect,useRef,useState} from "react";
 import {
   appendMyPlanSlice,fetchMyPlanSlice,localMyPlanDate,validMyPlanDate,
@@ -12,6 +13,28 @@ import {
   msUntilNextLocalMyPlanDay,resumeMyPlanDate,
   initialMyPlanWakeGate,invalidateMyPlanWakeGate,consumeMyPlanWake,
 } from "../../lib/target-staging-my-plan-lifecycle";
+import {
+  prepareMyPlanStatus,dispatchMyPlanStatus,checkMyPlanStatusReceipt,
+  type MyPlanStatus,type MyPlanStatusCommand,type MyPlanStatusFailure,
+} from "../../lib/target-staging-my-plan-status-client";
+
+type StatusAction=
+  |{kind:"idle"}
+  |{kind:"pending"|"checking"|"uncertain"}
+  |{kind:"committed";taskId:string;areaId:string;status:MyPlanStatus}
+  |{kind:"error";reason:MyPlanStatusFailure};
+type StatusOperation={
+  controller:AbortController;privacyEpoch:number;command:MyPlanStatusCommand|null;
+};
+const statusReasons:Record<MyPlanStatusFailure,string>={
+  "signed-out":"Přístup k zápisu zanikl. Znovu se přihlaste.",
+  "stale":"Úkol byl změněn jiným zápisem. Načetl se aktuální přehled.",
+  "unavailable":"Stagingový zápis není dostupný nebo byl vypnut.",
+  "invalid-response":"Odpověď zápisového endpointu nebyla bezpečně ověřena.",
+  "invalid-request":"Neplatné parametry zápisu; úkol nebyl potvrzen.",
+  "offline":"Připojení selhalo. Neproběhl žádný automatický opakovaný zápis.",
+  "aborted":"Operace byla přerušena. Aktuální stav je třeba znovu ověřit.",
+};
 
 type ReadState=
   |{status:"loading"}
@@ -36,8 +59,9 @@ const nextHumanDate=(day:string)=>{
   return humanDate(following.toISOString().slice(0,10));
 };
 
-function PlanDay({label,tasks,date}:{
+function PlanDay({label,tasks,date,canComplete,onComplete}:{
   label:string;tasks:MyPlanSliceTask[];date:string;
+  canComplete:boolean;onComplete:(task:MyPlanSliceTask)=>void;
 }){
   const areas=new Map<string,{kind:"private"|"shared";tasks:MyPlanSliceTask[]}>();
   for(const task of tasks){
@@ -56,7 +80,11 @@ function PlanDay({label,tasks,date}:{
             role="group" key={id}>
             <ul>{group.tasks.map(task=>
               <li key={task.taskId}>
-                <span className="stagingMyPlanSquare" aria-hidden="true"/>
+                {canComplete
+                  ?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"
+                    aria-label={"Dokončit úkol: "+task.title}
+                    onClick={()=>onComplete(task)}/>
+                  :<span className="stagingMyPlanSquare" aria-hidden="true"/>}
                 <div className="stagingMyPlanTask">
                   <strong>{task.title}</strong>
                   {task.attentionOn<date&&
@@ -69,13 +97,21 @@ function PlanDay({label,tasks,date}:{
       </div>}
   </section>;
 }
-export function TargetStagingMyPlanPreview(){
+export function TargetStagingMyPlanPreview({
+  statusWriteEnabled=false,
+}:{statusWriteEnabled?:boolean}){
   const [date,setDate]=useState<string|null>(null);
   const [followToday,setFollowToday]=useState(true);
   const [areaFilter,setAreaFilter]=useState<MyPlanSliceFilter>("all");
   const [refresh,setRefresh]=useState(0);
   const [state,setState]=useState<ReadState>({status:"loading"});
   const [moreBusy,setMoreBusy]=useState(false);
+  const [action,setAction]=useState<StatusAction>({kind:"idle"});
+  // A command needed for read-only reconciliation is kept in volatile memory,
+  // never in React-rendered state, browser storage, or a background queue.
+  const uncertainCommand=useRef<MyPlanStatusCommand|null>(null);
+  const statusOperation=useRef<StatusOperation|null>(null);
+  const privacyEpoch=useRef(0);
   const requestSequence=useRef(0);
   const current=useRef<AbortController|null>(null);
   const moreInFlight=useRef(false);
@@ -84,6 +120,7 @@ export function TargetStagingMyPlanPreview(){
   useEffect(()=>{setDate(localMyPlanDate());return()=>{
     requestSequence.current++;
     current.current?.abort();
+    statusOperation.current?.controller.abort();
   };},[]);
 
   useEffect(()=>{
@@ -105,7 +142,13 @@ export function TargetStagingMyPlanPreview(){
     }).then(result=>{
       if(controller.signal.aborted||requestSequence.current!==id)return;
       if(result.ok===true)setState({status:"ready",page:result.page});
-      else setState({status:"error",reason:result.reason});
+      else{
+        if(result.reason==="signed-out"){
+          uncertainCommand.current=null;
+          setAction({kind:"idle"});
+        }
+        setState({status:"error",reason:result.reason});
+      }
     });
     return()=>controller.abort();
   },[date,areaFilter,refresh]);
@@ -121,6 +164,17 @@ export function TargetStagingMyPlanPreview(){
     else setState({status:"error",reason});
   }
 
+  /** No hidden/offline user or task state can remain on screen. A status PATCH
+   * interrupted after dispatch is conservatively uncertain, not rolled back.
+   * Receipt may be checked only after a fresh authorized My Plan read. */
+  function privacyChange(){
+    privacyEpoch.current++;
+    statusOperation.current?.controller.abort();
+    setAction(old=>old.kind==="committed"||old.kind==="error"
+      ?{kind:"idle"}
+      :old.kind==="checking"?{kind:"uncertain"}:old);
+  }
+
   // Reactivating a tab always requires a new server ACL/session/epoch witness.
   // Track the local-day boundary separately from user-selected historical days.
   useEffect(()=>{
@@ -128,6 +182,7 @@ export function TargetStagingMyPlanPreview(){
     let clockTimer:ReturnType<typeof setTimeout>|undefined;
     let wakeGate=initialMyPlanWakeGate();
     const hide=()=>{
+      privacyChange();
       wakeGate=invalidateMyPlanWakeGate(wakeGate);
       invalidate("stale");
     };
@@ -168,6 +223,7 @@ export function TargetStagingMyPlanPreview(){
     const pagehide=()=>hide();
     const pageshow=(event:PageTransitionEvent)=>wake(event.persisted);
     const offline=()=>{
+      privacyChange();
       wakeGate=invalidateMyPlanWakeGate(wakeGate);
       invalidate("offline");
     };
@@ -190,6 +246,106 @@ export function TargetStagingMyPlanPreview(){
     };
   },[date,followToday]);
 
+  function refreshAfterStatus(){
+    if(document.visibilityState!=="visible"||!navigator.onLine)return;
+    invalidate("stale",true);
+    setRefresh(n=>n+1); // Force a NEW actor/session/ACL-checked slice.
+  }
+
+  /** The list DTO contains only open tasks. Completed rows disappear after
+   * server refresh; a confirmed completion offers a distinct Undo action. */
+  async function changeStatus(
+    task:{taskId:string;areaId:string},status:MyPlanStatus,
+  ){
+    if(!statusWriteEnabled||statusOperation.current||
+      action.kind==="pending"||action.kind==="checking"||
+      action.kind==="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    if(status==="completed"&&
+      ![...state.page.today.tasks,...state.page.tomorrow.tasks].some(
+        row=>row.taskId===task.taskId&&row.areaId===task.areaId))return;
+    if(status==="open"&&
+      !(action.kind==="committed"&&action.status==="completed"&&
+        action.taskId===task.taskId&&action.areaId===task.areaId))return;
+    const op:StatusOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,command:null,
+    };
+    statusOperation.current=op; // Synchronous mutex against double clicks.
+    uncertainCommand.current=null;
+    setAction({kind:"pending"});
+    invalidate("stale",true); // No stale open row during an uncertain PATCH.
+    const prepared=await prepareMyPlanStatus({
+      taskId:task.taskId,areaId:task.areaId,status,signal:op.controller.signal,
+    });
+    if(statusOperation.current!==op)return;
+    const result=prepared.ok===false
+      ?{kind:"rejected" as const,reason:prepared.reason}
+      :await (async()=>{
+        op.command=prepared.command;
+        return dispatchMyPlanStatus(prepared.command,fetch,op.controller.signal);
+      })();
+    if(statusOperation.current!==op)return;
+    statusOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      // If pagehide/offline interrupted a possible write, don't expose
+      // the old actor's completion or retry it after the identity changes.
+      if(op.command){
+        uncertainCommand.current=op.command;
+        setAction({kind:"uncertain"});
+      }else setAction({kind:"idle"});
+      return;
+    }
+    if(result.kind==="committed"){
+      setAction({kind:"committed",taskId:task.taskId,areaId:task.areaId,status});
+    }else if(result.kind==="uncertain"){
+      uncertainCommand.current=result.command;
+      setAction({kind:"uncertain"});
+    }else if(result.reason==="signed-out"){
+      uncertainCommand.current=null;
+      setAction({kind:"idle"});
+      invalidate("signed-out");
+      return;
+    }else setAction({kind:"error",reason:result.reason});
+    refreshAfterStatus();
+  }
+
+  /** Manually recheck only the ORIGINAL command; never resend PATCH. */
+  async function verifyUncertainReceipt(){
+    const command=uncertainCommand.current;
+    if(!statusWriteEnabled||!command||statusOperation.current||
+      action.kind!=="uncertain"||state.status!=="ready"||
+      document.visibilityState!=="visible"||!navigator.onLine)return;
+    const op:StatusOperation={
+      controller:new AbortController(),privacyEpoch:privacyEpoch.current,command,
+    };
+    statusOperation.current=op;
+    setAction({kind:"checking"});
+    const receipt=await checkMyPlanStatusReceipt(command,fetch,op.controller.signal);
+    if(statusOperation.current!==op)return;
+    statusOperation.current=null;
+    if(op.privacyEpoch!==privacyEpoch.current){
+      setAction({kind:"uncertain"});
+      return;
+    }
+    if(receipt.kind==="committed"){
+      uncertainCommand.current=null;
+      setAction({kind:"committed",taskId:command.taskId,
+        areaId:command.writeAreaId,status:command.status});
+      refreshAfterStatus();
+    }else if(receipt.kind==="unknown"&&receipt.reason==="signed-out"){
+      uncertainCommand.current=null;
+      setAction({kind:"idle"});
+      invalidate("signed-out");
+    }else setAction({kind:"uncertain"});
+  }
+
+  function resetFeedback(){
+    uncertainCommand.current=null;
+    setAction({kind:"idle"});
+  }
+  const actionPending=action.kind==="pending"||action.kind==="checking"||
+    action.kind==="uncertain";
+  const canComplete=statusWriteEnabled&&!actionPending;
   async function more(){
     if(moreInFlight.current||state.status!=="ready"||
       !state.page.hasMore||!state.page.nextCursor||!date)return;
@@ -224,17 +380,20 @@ export function TargetStagingMyPlanPreview(){
     </header>
     <div className="stagingMyPlanToolbar">
       <label>Den
-        <input type="date" value={date??""}
+        <input type="date" disabled={actionPending} value={date??""}
           onChange={event=>{
             const chosen=event.target.value;
             if(!validMyPlanDate(chosen))return;
+            if(actionPending)return;
+            resetFeedback();
             setFollowToday(false); // A manual date remains pinned at midnight.
             if(chosen!==date){invalidate("stale",true);setDate(chosen);}
           }}/>
       </label>
       <label>Moje práce
-        <select value={areaFilter}
+        <select value={areaFilter} disabled={actionPending}
           onChange={event=>{
+            resetFeedback();
             invalidate("stale",true);
             setAreaFilter(event.target.value as MyPlanSliceFilter);
           }}>
@@ -243,34 +402,61 @@ export function TargetStagingMyPlanPreview(){
           <option value="shared">Přiřazené sdílené</option>
         </select>
       </label>
-      <button type="button" onClick={()=>{
+      <button type="button" disabled={actionPending} onClick={()=>{
+        resetFeedback();
         const chosen=localMyPlanDate();
         invalidate("stale",true);
         setFollowToday(true);
         if(chosen===date)setRefresh(n=>n+1);
         else setDate(chosen);
       }}>Aktuální den</button>
-      <button type="button" onClick={()=>{
+      <button type="button" disabled={actionPending} onClick={()=>{
+        resetFeedback();
         invalidate("stale",true);
         setRefresh(n=>n+1);
       }}>Obnovit</button>
     </div>
     {state.status==="loading"&&<p role="status">Načítám aktuální přehled…</p>}
+    {statusWriteEnabled&&state.status!=="error"&&action.kind==="pending"&&
+      <p role="status" className="stagingMyPlanMutation">Ověřuji oprávnění a ukládám změnu…</p>}
+    {statusWriteEnabled&&state.status!=="error"&&action.kind==="checking"&&
+      <p role="status" className="stagingMyPlanMutation">Ověřuji potvrzení předchozí operace…</p>}
     {state.status==="error"&&
       <p role="alert" className="stagingMyPlanWarning">{reasons[state.reason]}</p>}
     {state.status==="ready"&&date&&
       state.page.evaluationDate===date&&state.page.areaFilter===areaFilter&&<>
+      {statusWriteEnabled&&action.kind==="uncertain"&&
+        <div role="alert" className="stagingMyPlanWarning">
+          <p>Výsledek zápisu není potvrzen. Žádná další změna se neodešle automaticky.</p>
+          <button type="button" onClick={()=>{void verifyUncertainReceipt();}}>
+            Ověřit původní potvrzení
+          </button>
+        </div>}
+      {statusWriteEnabled&&action.kind==="error"&&
+        <p role="alert" className="stagingMyPlanWarning">{statusReasons[action.reason]}</p>}
+      {statusWriteEnabled&&action.kind==="committed"&&
+        <div role="status" className="stagingMyPlanMutation">
+          <span>{action.status==="completed"?"Dokončení potvrzeno.":"Obnovení potvrzeno."}</span>
+          {action.status==="completed"&&
+            <button type="button" onClick={()=>{void changeStatus({
+              taskId:action.taskId,areaId:action.areaId,
+            },"open");}}>Vrátit dokončení (Undo)</button>}
+        </div>}
       <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
-        date={date} tasks={state.page.today.tasks}/>
+        date={date} tasks={state.page.today.tasks}
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
       <PlanDay label={(followToday?"Zítra · ":"Následující den · ")+
         nextHumanDate(date)}
-        date={date} tasks={state.page.tomorrow.tasks}/>
+        date={date} tasks={state.page.tomorrow.tasks}
+        canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
       {state.page.hasMore&&
         <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
           {moreBusy?"Načítám…":"Načíst další úkoly"}
         </button>}
-      <p className="stagingMyPlanScope">Náhled neumožňuje dokončení, přesun ani Undo.
-        Oprávnění se ověřují na serveru při každém načtení.</p>
+      <p className="stagingMyPlanScope">{statusWriteEnabled
+        ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
+        :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
+        {" "}Oprávnění se ověřují na serveru při každém načtení.</p>
     </>}
   </main>;
 }
