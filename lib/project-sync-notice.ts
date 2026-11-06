@@ -5,6 +5,38 @@ export type ProjectSyncNotice =
   | { kind: "delete"; projectId: string }
   | { kind: "status"; projectId: string; status: string; updatedAt: number };
 
+/** At most one outstanding warning per project; failures for other projects must survive. */
+export type ProjectSyncNotices = Record<string, ProjectSyncNotice>;
+
+export function withProjectSyncNotice(current: ProjectSyncNotices, warning: ProjectSyncNotice): ProjectSyncNotices {
+  return { ...current, [warning.projectId]: warning };
+}
+
+export function withoutProjectSyncNotice(current: ProjectSyncNotices, projectId: string): ProjectSyncNotices {
+  if (!Object.prototype.hasOwnProperty.call(current, projectId)) return current;
+  const next = { ...current };
+  delete next[projectId];
+  return next;
+}
+
+/** Undo of B cannot erase another project's unsynchronized A. */
+export function projectSyncNoticesAfterUndo(current: ProjectSyncNotices, projectId: string): ProjectSyncNotices {
+  const warning = current[projectId];
+  return warning?.kind === "delete" ? withoutProjectSyncNotice(current, projectId) : current;
+}
+
+/** Reconcile independent acknowledgements without removing newer in-flight warnings. */
+export function withoutResolvedProjectSyncNotices(
+  current: ProjectSyncNotices, resolved: ProjectSyncNotice[],
+): ProjectSyncNotices {
+  let next = current;
+  for (const warning of resolved) {
+    if (sameProjectSyncNotice(next[warning.projectId] ?? null, warning))
+      next = withoutProjectSyncNotice(next, warning.projectId);
+  }
+  return next;
+}
+
 /** Prevent stale asynchronous reconciliation from clearing a newer warning. */
 export function sameProjectSyncNotice(a: ProjectSyncNotice | null, b: ProjectSyncNotice): boolean {
   return a !== null && a.kind === b.kind && a.projectId === b.projectId &&
