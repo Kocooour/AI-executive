@@ -17,6 +17,7 @@ import { taskPreviewCanToggle } from "../../../lib/task-detail-preview";
 import { taskPreviewCompletionTone, taskPreviewStateText } from "../../../lib/lumi-completion-state";
 import { LumiCompletionControl } from "./lumi-completion-control";
 import { inspectorPreviewEscapeAllowed } from "../../../lib/desktop-inspector-ui03b";
+import { advanceInspectorReturnFocus, type InspectorPendingReturn } from "../../../lib/inspector-return-focus";
 
 // What a field has sent and not yet seen come back as the stored value. Saves finish later than
 // they start: comparing a new value with the stored one would skip a change back to it (A → B →
@@ -191,21 +192,25 @@ export function DetailPanel({ app }: { app: LumiApp }) {
     ? projects.find((project) => project.id === taskProjectId && project.workspaceId === selectedTask.workspaceId)
     : null;
   const inspectorRef = useRef<HTMLElement>(null);
-  const returnFocusRef = useRef<HTMLElement | null>(null);
-  // Opening with the keyboard moves focus into the inspector; closing returns it to the
-  // row that opened it. Pointer-driven selection is left alone.
+  // Each selected entity owns its focus origin. A stale opener from task A
+  // must never be reused when task B is opened from another surface.
+  const returnFocusRef = useRef<InspectorPendingReturn | null>(null);
+  const lastFocusScopeRef = useRef({ workspaceId: app.activeWorkspaceId, view });
   useEffect(() => {
-    if (selected) {
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && active.matches(".taskRowOpen")) {
-        returnFocusRef.current = active;
-        inspectorRef.current?.focus();
-      }
-    } else if (returnFocusRef.current) {
-      if (returnFocusRef.current.isConnected) returnFocusRef.current.focus();
-      returnFocusRef.current = null;
-    }
-  }, [selected?.id]);
+    const previousScope = lastFocusScopeRef.current;
+    const scopeChanged = previousScope.workspaceId !== app.activeWorkspaceId || previousScope.view !== view;
+    lastFocusScopeRef.current = { workspaceId: app.activeWorkspaceId, view };
+    const active = document.activeElement;
+    returnFocusRef.current = advanceInspectorReturnFocus(
+      returnFocusRef.current,
+      selected?.id ?? null,
+      active instanceof HTMLElement ? active : null,
+      inspectorRef.current,
+      app.activeWorkspaceId,
+      view,
+      scopeChanged,
+    );
+  }, [selected?.id, app.activeWorkspaceId, view]);
   return (
     <>
       {selected && (
