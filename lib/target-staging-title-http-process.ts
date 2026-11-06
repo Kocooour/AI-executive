@@ -90,7 +90,7 @@ function parseStatus(value: unknown): Status | null {
 }
 
 async function run(config: StagingPersonalReadConfig, scriptName: string,
-  input: string): Promise<unknown | null> {
+  input: string, maxOutput = MAX_OUTPUT): Promise<unknown | null> {
   if (active >= 2 || Buffer.byteLength(input) > 192 * 1024) return null;
   active++;
   try {
@@ -135,12 +135,12 @@ async function run(config: StagingPersonalReadConfig, scriptName: string,
       let size = 0;
       child.stdout.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_OUTPUT) { failed = true; child.kill("SIGKILL"); }
+        if (size > maxOutput) { failed = true; child.kill("SIGKILL"); }
         else chunks.push(chunk);
       });
       child.on("error", () => { failed = true; finish(null); });
       child.on("close", code => {
-        if (failed || code !== 0 || size > MAX_OUTPUT) return finish(null);
+        if (failed || code !== 0 || size > maxOutput) return finish(null);
         try { finish(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
         catch { finish(null); }
       });
