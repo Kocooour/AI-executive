@@ -32,7 +32,7 @@ import { projectAcceptsNewItems } from "../../lib/project-summary";
 import { projectPreviewCanCommit, projectPreviewDependents, waitForProjectPreviewWrites, type ProjectPreviewActionSnapshot } from "../../lib/project-list-preview";
 import { projectSyncNoticeResolved, projectSyncNoticesAfterUndo, withProjectSyncNotice, withoutProjectSyncNotice,
   withoutResolvedProjectSyncNotices, type ProjectSyncNotice, type ProjectSyncNotices } from "../../lib/project-sync-notice";
-import { projectFocusReturnForHistory, shouldRestoreProjectFocus,
+import { knownProjectFocusPosition, projectFocusReturnForHistory, shouldRestoreProjectFocus,
   type ProjectFocusEntry } from "../../lib/project-return-focus";
 import { byManualOrder, isEveningTask, manualOrder, newTaskPlacement, parseCaptureText, taskDateSortKey, taskMatchesView } from "../../lib/task-views";
 import { buildMyPlanPreview, previewManualRankUpdates, previewRankNextRecords, previewRankWritesAllowed, previewReorderPeers } from "../../lib/my-plan-preview";
@@ -348,6 +348,8 @@ export function useLumiApp() {
   // UI-01d: each user-opened project history entry owns its own Back opener.
   // Keep the intents in memory only; a pasted/reloaded history state never grants access.
   const projectFocusEntriesRef = useRef(new Map<string, ProjectFocusEntry<HTMLElement>>());
+  // Includes list origins and direct-link origins, not only project destinations.
+  const knownProjectFocusPositionsRef = useRef(new Set<string>());
   const activeProjectFocusEntryRef = useRef<string | null>(null);
   const pendingProjectFocusRef = useRef<ProjectFocusEntry<HTMLElement> | null>(null);
   const inspectorSelectionRef = useRef(selected);
@@ -537,18 +539,36 @@ export function useLumiApp() {
         // Re-opening the same history entry is not a new Back origin.
         window.history.replaceState(window.history.state ?? { lumiProject: project.id }, "", projectAddress);
       } else {
-        const focusEntryId = opener ? crypto.randomUUID() : null;
+        const focusEntryId = mobileDesignV1Preview ? crypto.randomUUID() : null;
         const originSearch = window.location.search;
         const originProjectId = openProjectIdRef.current;
+        let originPositionId: string | null = null;
+        if (mobileDesignV1Preview) {
+          // Mark the *origin* entry too, including the Projects list. Unlike a
+          // URL, this position distinguishes A₁ from a later visit to A₂.
+          originPositionId = knownProjectFocusPosition(
+            window.history.state, knownProjectFocusPositionsRef.current);
+          if (!originPositionId) {
+            originPositionId = crypto.randomUUID();
+            const originalState = window.history.state;
+            window.history.replaceState({
+              ...(originalState && typeof originalState === "object" ? originalState : {}),
+              lumiFocusEntry: originPositionId,
+            }, "", window.location.href);
+            knownProjectFocusPositionsRef.current.add(originPositionId);
+          }
+        }
         window.history.pushState({
           lumiProject: project.id,
           ...(focusEntryId ? { lumiFocusEntry: focusEntryId } : {}),
         }, "", projectAddress);
+        if (focusEntryId) knownProjectFocusPositionsRef.current.add(focusEntryId);
         activeProjectFocusEntryRef.current = focusEntryId;
-        if (focusEntryId && opener) {
+        if (focusEntryId && originPositionId && opener) {
           projectFocusEntriesRef.current.set(focusEntryId, {
             intent: { projectId: project.id, workspaceId: activeWorkspaceRef.current, view,
-              source: opener.closest("aside") ? "sidebar" : "content", originSearch, originProjectId },
+              source: opener.closest("aside") ? "sidebar" : "content",
+              originSearch, originProjectId, originPositionId },
             opener,
           });
         }
@@ -579,6 +599,8 @@ export function useLumiApp() {
     // An intervening navigation or a revoked typed destination invalidates
     // the pending return; no search/ID is a source of ACL authority.
     if (window.location.search !== pending.intent.originSearch ||
+        knownProjectFocusPosition(window.history.state, knownProjectFocusPositionsRef.current) !==
+          pending.intent.originPositionId ||
         (authState !== "ready" && !offlineViewRef.current)) {
       pendingProjectFocusRef.current = null;
       return;
@@ -591,7 +613,8 @@ export function useLumiApp() {
     const visible = visibleProjectsRef.current.some((item) =>
       item.id === pending.intent.projectId && item.workspaceId === pending.intent.workspaceId);
     if (!shouldRestoreProjectFocus(pending.intent,
-      { openProjectId, workspaceId: activeWorkspaceId, view, search: window.location.search }, visible)) return;
+      { openProjectId, workspaceId: activeWorkspaceId, view, search: window.location.search,
+        positionId: knownProjectFocusPosition(window.history.state, knownProjectFocusPositionsRef.current) }, visible)) return;
     const eligible = (button: HTMLElement) =>
       button.isConnected && button.dataset.projectOpen === pending.intent.projectId &&
       button.getClientRects().length > 0;
@@ -1836,10 +1859,12 @@ export function useLumiApp() {
       if (mobileDesignV1Preview) {
         // popstate exposes the *destination* history state. The departing
         // entry ID is saved separately so Back B→A resolves B, not A.
+        const destinationFocusId = knownProjectFocusPosition(
+          window.history.state, knownProjectFocusPositionsRef.current);
         pendingProjectFocusRef.current = projectFocusReturnForHistory(
-          activeProjectFocusEntryRef.current, projectFocusEntriesRef.current, window.location.search);
-        const destinationFocusId = window.history.state?.lumiFocusEntry;
-        activeProjectFocusEntryRef.current = typeof destinationFocusId === "string" ? destinationFocusId : null;
+          activeProjectFocusEntryRef.current, projectFocusEntriesRef.current,
+          destinationFocusId, window.location.search);
+        activeProjectFocusEntryRef.current = destinationFocusId;
       }
       const previewRoute = mobileDesignV1Preview && window.matchMedia("(max-width: 700px)").matches &&
         mobileV1IsPlanPreviewRoute(window.location.search);
