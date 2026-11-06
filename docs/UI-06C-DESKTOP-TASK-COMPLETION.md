@@ -13,3 +13,7 @@ Navazuje na již sloučené UI-06a/06b a na UI-01d. V opt-in design preview `NEX
 ## Ověření
 
 Nové cílené testy kontrolují jedinou akci, zdroj pravdivého stavu, částečné blokace a styly pro desktop/legacy. PR checks: typecheck, cílené testy a build. Browser klávesnice/VoiceOver a plné E2E zůstávají v předprodukční bráně.
+
+## Oprava P2 — úvodní render při neznámé šířce
+
+Do vyhodnocení `matchMedia` je `mobileViewport=null`, takže se nezobrazuje ani mobilní, ani desktopový preview checkbox. Původní nezabezpečená legacy akce dokončení se proto nesmí použít jako náhradní prvek: je nyní vykreslena **pouze při zcela vypnutém** `NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW`, nikoliv podle dvou viewportových booleanů. Tím nelze při prvním renderu obejít preview guard pro prostor Vše, fallback, konflikty, čekající synchronizaci nebo pracovní blok. Testy kontrolují neznámou šířku, mobilní i desktopový preview a zachování vypnutého legacy režimu.
