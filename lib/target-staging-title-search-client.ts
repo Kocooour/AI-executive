@@ -93,6 +93,33 @@ export function parseTitleSearchPage(
   return {query:expected.query,scope:expected.scope,items,
     hasMore:value.hasMore,nextCursor:value.nextCursor as string|null};
 }
+/** Require a real stand-alone no-store directive, never an accidental
+ * substring in another token or a quoted directive parameter. */
+function hasNoStoreDirective(header:string|null):boolean{
+  if(header===null)return false;
+  const directives:string[]=[];
+  let quoted=false,escaped=false,start=0;
+  for(let i=0;i<header.length;i++){
+    const char=header[i];
+    if(escaped){escaped=false;continue;}
+    if(quoted&&char==="\\"){escaped=true;continue;}
+    if(char==='"'){quoted=!quoted;continue;}
+    if(char===","&&!quoted){
+      directives.push(header.slice(start,i).trim());
+      start=i+1;
+    }
+  }
+  if(quoted||escaped)return false;
+  directives.push(header.slice(start).trim());
+  return directives.some(directive=>/^no-store$/i.test(directive));
+}
+/** MIME type must be JSON itself; mentioning JSON as a charset or parameter
+ * on a different response type is not sufficient. */
+function isJsonContentType(header:string|null):boolean{
+  if(header===null)return false;
+  const [mediaType]=header.split(";");
+  return mediaType.trim().toLowerCase()==="application/json";
+}
 function reasonForStatus(status:number):TitleSearchFailure{
   if(status===401||status===403)return "signed-out";
   if(status===409)return "stale";
@@ -130,8 +157,8 @@ export async function loadStagingTitleSearchPage(
   if(options.signal?.aborted)return {ok:false,reason:"aborted"};
   if(response.status!==200)return {ok:false,reason:reasonForStatus(response.status)};
   if(response.redirected||
-    response.headers.get("cache-control")?.toLowerCase().includes("no-store")!==true||
-    response.headers.get("content-type")?.toLowerCase().includes("application/json")!==true)
+    !hasNoStoreDirective(response.headers.get("cache-control"))||
+    !isJsonContentType(response.headers.get("content-type")))
     return {ok:false,reason:"invalid-response"};
   try{
     const payload:unknown=await response.json();
