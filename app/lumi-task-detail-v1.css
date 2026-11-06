@@ -149,3 +149,32 @@
     display: none;
   }
 }
+
+/* UI-06c: desktop task inspector preview uses the same square/contour
+   completion component as task rows. Only opt-in preview is affected.
+   Mobile keeps its proven UI-06a layout and legacy stays unchanged. */
+@media (min-width: 701px) {
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskPreviewTitleRow {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+    margin: 0;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskPreviewTitleRow .titleEdit {
+    width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"][data-task-completed="true"] .taskPreviewTitleRow .titleEdit {
+    color: var(--v1-completed-text);
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailDesktopCompletion {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    justify-self: start;
+  }
+}
