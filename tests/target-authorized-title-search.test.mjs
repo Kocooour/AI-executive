@@ -149,6 +149,38 @@ test("literal wildcard escaping, deterministic BINARY pagination and case",()=>{
   }
 });
 
+test("R2d.4b conjunctive multi-term title search ignores term order but preserves ACL",()=>{
+  const f=fixture();
+  const projects=["project:s-empty","project:s-shared"];
+  assert.deepEqual(labels(page(f,"bob","all","project Shared")),projects);
+  assert.deepEqual(labels(page(f,"bob","all","Shared project")),projects);
+  assert.deepEqual(labels(page(f,"bob","all","Shared    project")),projects);
+  assert.deepEqual(labels(page(f,"bob","all","Bob task")),["task:b-bob"]);
+  assert.deepEqual(labels(page(f,"bob","all","task Bob")),["task:b-bob"]);
+  assert.deepEqual(labels(page(f,"bob","all","Shared inherited")),["note:s-shared"]);
+  assert.deepEqual(labels(page(f,"bob","all","Shared 100%")),["task:wild"]);
+  assert.deepEqual(labels(page(f,"bob","all","_plan! Shared")),["task:wild"]);
+  assert.deepEqual(labels(page(f,"bob","all","Shared secret")),[]);
+  assert.deepEqual(labels(page(f,"bob","all","Erin hidden")),[],
+    "AND terms must not leak foreign project/task/note titles");
+  assert.deepEqual(labels(page(f,"bob","shared","Bob task")),[]);
+  // SQL LIMIT/OFFSET remain after ACL and the full AND-of-terms filter.
+  const first=page(f,"bob","all","project Shared",{limit:1,offset:0});
+  const second=page(f,"bob","all","project Shared",{limit:1,offset:1});
+  assert.deepEqual(labels(first),projects.slice(0,1));
+  assert.deepEqual(labels(second),projects.slice(1));
+  assert.equal(first.hasMore,true);
+  assert.equal(first.nextOffset,1);
+  assert.equal(second.hasMore,false);
+  assert.equal(second.nextOffset,null);
+  assert.equal(first.revision,second.revision);
+  assert.notEqual(first.revision,page(f,"bob","all","Shared project").revision,
+    "revision remains tied to the original query for future bound cursors");
+  assert.equal(validAuthorizedTitleQuery("a b c d e f g h"),true);
+  assert.equal(validAuthorizedTitleQuery("a b c d e f g h i"),false);
+  assert.equal(page(f,"bob","all","a b c d e f g h i"),null);
+});
+
 test("strict input validation and no direct actor-based HTTP exposure",()=>{
   const f=fixture();
   for(const q of ["","x"," Shared","Shared ","a".repeat(81),

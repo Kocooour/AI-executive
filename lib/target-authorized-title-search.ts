@@ -30,6 +30,9 @@ const ACTOR=/^[A-Za-z0-9_.:@-]{1,120}$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL=/[\u0000-\u001f\u007f]/u;
 const MAX_OFFSET=1_000_000;
+const MAX_SEARCH_TERMS=8;
+/** User input only determines the bounded number of bind placeholders. */
+const searchTerms=(q:string)=>q.split(/\s+/u);
 const rank:Record<AuthorizedSearchItem["kind"],number>={
   project:0,task:1,note:2,
 };
@@ -39,7 +42,8 @@ export function validAuthorizedTitleQuery(q:unknown):q is string{
   return typeof q==="string"&&q===q.trim()&&
     q.length>=2&&q.length<=80&&
     Buffer.byteLength(q,"utf8")<=256&&
-    Buffer.from(q,"utf8").toString("utf8")===q&&!CONTROL.test(q);
+    Buffer.from(q,"utf8").toString("utf8")===q&&!CONTROL.test(q)&&
+    searchTerms(q).length<=MAX_SEARCH_TERMS;
 }
 /** SQLite LIKE treats % and _ as patterns. Search terms must be literal. */
 function patternFor(q:string):string{
@@ -81,7 +85,7 @@ const SQL=[
   " AND id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')",
   " AND (kind!='note' OR id=trim(id))",
   " AND length(trim(title))>0 AND length(CAST(title AS BLOB))<=4096",
-  " AND title LIKE ? ESCAPE '!'",
+  " /*BOUNDED_TITLE_TERMS*/",
   "ORDER BY id COLLATE BINARY ASC,rank ASC LIMIT ? OFFSET ?",
 ].join("\n");
 type SearchRow=AuthorizedSearchItem&{projectId:string|null};
@@ -115,9 +119,17 @@ export function readAuthorizedTitleSearchPage(
       noteAreaEpochs.push({areaId:area.areaId,
         noteSyncRevision:epoch.noteSyncRevision});
     }
-    const rows=db.prepare(SQL).all(
+    // Every search term must appear in the SAME authorized title. This
+    // broadens contiguous phrase matching to order-independent word terms,
+    // without exposing a search of note bodies or skipping the SQL ACL.
+    // Only a fixed, validated count of placeholder fragments is interpolated;
+    // user text is always bound as values with literal LIKE escaping.
+    const terms=searchTerms(request.query);
+    const tokenWhere=terms.map(()=>" AND title LIKE ? ESCAPE '!'").join("\n");
+    const sql=SQL.replace("/*BOUNDED_TITLE_TERMS*/",tokenWhere);
+    const rows=db.prepare(sql).all(
       request.actorUserId,request.scope,request.scope,request.scope,
-      patternFor(request.query),request.limit+1,request.offset,
+      ...terms.map(patternFor),request.limit+1,request.offset,
     ) as unknown as SearchRow[];
     const allowed=new Map(areaEpochs.map(a=>[a.areaId,a.areaKind]));
     let previous:SearchRow|null=null;
