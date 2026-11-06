@@ -21,8 +21,11 @@ export function DesktopCaptureFab({ app }: { app: LumiApp }) {
       const editable = Boolean(target?.closest(
         'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
       ) || (target as HTMLElement | null)?.isContentEditable);
+      // A selected item is displayed in a NONMODAL desktop inspector; its
+      // sidebar remains accessible. Allow capture via shortcut, while real
+      // modal/dialog overlays continue to block global keyboard commands.
       const blocked = Boolean(state.capture || state.assistantOpen || state.moreOpen ||
-        state.selected || state.confirmRequest || document.querySelector('[aria-modal="true"]'));
+        state.confirmRequest || document.querySelector('[aria-modal="true"]'));
       if (!desktopCaptureShortcut(event, editable, blocked)) return;
       event.preventDefault();
       state.openCapture();
