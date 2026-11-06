@@ -143,9 +143,9 @@ export function Sidebar({ app }: { app: LumiApp }) {
               <button
                 type="button"
                 key={project.id}
-                className={`${dragTarget === `entity:${project.id}` ? "dropActive" : ""} ${mobileDesignV1Preview && app.openProjectId === project.id ? "active" : ""}`.trim()}
-                aria-current={mobileDesignV1Preview && app.openProjectId === project.id ? "page" : undefined}
-                data-current-project={mobileDesignV1Preview && app.openProjectId === project.id ? "true" : undefined}
+                className={`${dragTarget === `entity:${project.id}` ? "dropActive" : ""} ${mobileDesignV1Preview && app.openProject?.id === project.id ? "active" : ""}`.trim()}
+                aria-current={mobileDesignV1Preview && app.openProject?.id === project.id ? "page" : undefined}
+                data-current-project={mobileDesignV1Preview && app.openProject?.id === project.id ? "true" : undefined}
                 data-sidebar-project={project.id}
                 title={project.title || tr("untitledItem")}
                 data-drop-entity={project.id}
