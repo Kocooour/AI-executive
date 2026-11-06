@@ -3169,7 +3169,8 @@ export function useLumiApp() {
   // Recheck both the current in-scope snapshot and the IndexedDB row within the write lock.
   function assertPreviewProjectMutation(expected: Entity, current: Entity | undefined): asserts current is Entity {
     const guards = previewWriteGuardsRef.current;
-    const blocked = isAdopting() || signedOut.current || guards.unsent.has(expected.id) ||
+    const blocked = isAdopting() || signedOut.current || openProjectIdRef.current !== expected.id ||
+      guards.unsent.has(expected.id) ||
       guards.heldBack.some((entity) => entity.id === expected.id) ||
       (current ? entityConflicts(current).length > 0 : true);
     const visible = latestItemsRef.current.find((entity) => entity.id === expected.id);
@@ -3194,22 +3195,22 @@ export function useLumiApp() {
           );
         }
         await db.entities.delete(e.id);
-      await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
-      // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
-      // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
-      if (e.type === "project") {
-        const memberIds = new Set(linkedRelations.filter((relation) => relation.relationType === "belongs_to_project" && relation.targetEntityId === e.id).map((relation) => relation.sourceEntityId));
-        const members = [...(await db.entities.where("workspaceId").equals(e.workspaceId).filter((task) => task.type === "task").toArray())]
-          .filter((task) => memberIds.has(task.id) || task.properties.projectId === e.id);
-        const stamp = writeTime();
-        for (const task of members) {
-          const properties = { ...task.properties };
-          delete properties.projectId;
-          const updated: Entity = { ...task, properties: { ...properties, relationsUpdatedAt: stamp }, updatedAt: Math.max(stamp, task.updatedAt + 1) };
-          await db.entities.put(updated);
-          await assignFallbackArea(updated, stamp);
+        await db.relations.bulkDelete(linkedRelations.map((relation) => relation.id));
+        // Deleting a project: its member tasks become standalone tasks, which have exactly one Area (the fallback), and
+        // no longer point at the project (2a part 4; the server does the same for a write that removes a project).
+        if (e.type === "project") {
+          const memberIds = new Set(linkedRelations.filter((relation) => relation.relationType === "belongs_to_project" && relation.targetEntityId === e.id).map((relation) => relation.sourceEntityId));
+          const members = [...(await db.entities.where("workspaceId").equals(e.workspaceId).filter((task) => task.type === "task").toArray())]
+            .filter((task) => memberIds.has(task.id) || task.properties.projectId === e.id);
+          const stamp = writeTime();
+          for (const task of members) {
+            const properties = { ...task.properties };
+            delete properties.projectId;
+            const updated: Entity = { ...task, properties: { ...properties, relationsUpdatedAt: stamp }, updatedAt: Math.max(stamp, task.updatedAt + 1) };
+            await db.entities.put(updated);
+            await assignFallbackArea(updated, stamp);
+          }
         }
-      }
       });
     } finally { localDataVersion.current += 1; }
     recordDeleted(localStorage, e.id);
