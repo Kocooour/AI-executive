@@ -41,8 +41,12 @@ const {
   parseTemporalDueOnWriteReply,parseTemporalDueOnReceiptReply,
   parseTemporalDueOnAtomicReceiptReply,readTemporalDueOnAtomicReceiptInChild,
 }=await import("../lib/target-staging-temporal-due-on-http-process.ts");
-const {readStagingTemporalDetailInChild}=
-  await import("../lib/target-staging-read-process.ts");
+const {
+  readStagingTemporalDetailInChild,
+  readStagingTemporalDueOnPreviewInChild,parseStagingTemporalDueOnPreview,
+}=await import("../lib/target-staging-read-process.ts");
+const {targetTaskWriteRevision}=
+  await import("../lib/target-task-write-preflight.ts");
 const {verifyTemporalDueOnTaskLive}=
   await import("../lib/target-staging-temporal-due-on-http.ts");
 let counter=0;
@@ -159,6 +163,119 @@ test("four independent gates and authentication fail closed, preview validates I
   // dueOn has an independent flag; status writes are not enabled by it.
   process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED="false";
   assert.equal((await query("p-alice")).status,200);
+});
+
+test("BE-08 dueOn child gate stays independent of status-write gate",async()=>{
+  const fx=fixture();
+  const oldStatus=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+  const oldDue=process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+  const config={...fx.store,ownerUserId:"alice"};
+  try{
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED="false";
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="true";
+    const preview=await readStagingTemporalDueOnPreviewInChild(config,"p-alice");
+    assert.equal(preview?.ok,true,JSON.stringify(preview));
+    assert.equal((await query("p-alice")).status,200);
+    process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED="false";
+    assert.equal(await readStagingTemporalDueOnPreviewInChild(config,"p-alice"),null);
+    assert.equal((await query("p-alice")).status,404);
+  }finally{
+    if(oldStatus===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED=oldStatus;
+    if(oldDue===undefined)delete process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED;
+    else process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED=oldDue;
+  }
+});
+
+test("BE-08 dueOn CAS, date and task guard share one pinned snapshot",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1])};
+  const captured=await readStagingTemporalDueOnPreviewInChild(config,"s-bob");
+  assert.equal(captured?.ok,true,JSON.stringify(captured));
+  assert.equal(captured.detail.task.areaId,"family-area");
+  assert.equal(captured.detail.task.dueOn,null);
+  assert.equal(captured.detail.linearization.areas[0].access,"editor");
+  assert.match(captured.expectedRevision,/^[a-f0-9]{64}$/);
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{assert.equal(captured.expectedRevision,targetTaskWriteRevision(db,"s-bob"));}
+  finally{db.close();}
+  const live=()=>verifyTemporalDueOnTaskLive(
+    new Request(base+"?taskId=s-bob",{headers:{cookie:bob}}),
+    {kind:"session",tokenHash:config.sessionTokenHash},
+    {...fx.store,ownerUserId:"alice"},captured.detail);
+  assert.equal(live(),"ok");
+  const external=await preview("s-bob",bob);
+  assert.deepEqual(external,{
+    expectedRevision:captured.expectedRevision,
+    dueOn:captured.detail.task.dueOn,
+    writeAreaId:captured.detail.task.areaId,
+    restoreGeneration:fx.stage.restoreGeneration,
+  });
+  const viewer=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1]),
+  },"s-bob");
+  assert.deepEqual(viewer,{ok:false,reason:"inaccessible"});
+  assert.deepEqual(await readStagingTemporalDueOnPreviewInChild(config,"p-alice"),
+    {ok:false,reason:"inaccessible"});
+  const change=new DatabaseSync(fx.stage.databasePath);
+  try{change.prepare("UPDATE tasks SET due_on='2028-05-19' WHERE id='s-bob'").run();}
+  finally{change.close();}
+  assert.equal(live(),"stale","a task mutation after preview invalidates its guard");
+  const current=await readStagingTemporalDueOnPreviewInChild(config,"s-bob");
+  assert.equal(current?.ok,true,JSON.stringify(current));
+  assert.equal(current.detail.task.dueOn,"2028-05-19");
+  assert.notEqual(current.expectedRevision,captured.expectedRevision);
+  assert.equal((await preview("s-bob",bob)).expectedRevision,current.expectedRevision);
+  const revoke=new DatabaseSync(fx.stage.databasePath);
+  try{revoke.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();}
+  finally{revoke.close();}
+  assert.equal((await query("s-bob",bob)).status,404);
+  assert.deepEqual(await readStagingTemporalDueOnPreviewInChild(config,"s-bob"),
+    {ok:false,reason:"inaccessible"});
+});
+
+test("BE-08 strict dueOn preview DTO denies malformed or mismatched task witness",async()=>{
+  const fx=fixture();
+  const result=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+  },"p-alice");
+  assert.equal(result?.ok,true,JSON.stringify(result));
+  for(const malformed of [
+    {...result,expectedRevision:"bad"},
+    {...result,actorUserId:"alice"},
+    {...result,detail:{...result.detail,privatePlan:"secret"}},
+    {...result,detail:{...result.detail,guard:{
+      ...result.detail.guard,taskId:"p-bob",
+    }}},
+    {...result,detail:{...result.detail,task:{
+      ...result.detail.task,id:"p-bob",
+    }}},
+    {...result,detail:{...result.detail,linearization:{
+      ...result.detail.linearization,areas:[{
+        ...result.detail.linearization.areas[0],access:"viewer",
+      }],
+    }}},
+  ])assert.equal(parseStagingTemporalDueOnPreview(malformed,"p-alice"),null);
+});
+
+test("BE-08 dueOn preview accepts long title and preserves public four-field DTO",async()=>{
+  const fx=fixture();
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title=? WHERE id='p-alice'").run("x".repeat(1800));}
+  finally{db.close();}
+  const snapshot=await readStagingTemporalDueOnPreviewInChild({
+    ...fx.store,ownerUserId:"alice",
+  },"p-alice");
+  assert.equal(snapshot?.ok,true,JSON.stringify(snapshot));
+  const response=await query("p-alice");
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  const data=await response.json();
+  assert.equal(data.expectedRevision,snapshot.expectedRevision);
+  assert.deepEqual(Object.keys(data).sort(),
+    ["dueOn","expectedRevision","restoreGeneration","writeAreaId"]);
+  assert.equal(JSON.stringify(data).includes("x".repeat(80)),false);
 });
 
 test("private dueOn set, replay, read-only receipt and clear are atomic",async()=>{

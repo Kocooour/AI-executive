@@ -78,6 +78,8 @@ export function createStagingReadRunner(
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_WRITE_ENABLED || "",
+        AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED:
+          process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_ON_WRITE_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED:
           process.env.AI_EXECUTIVE_TARGET_STAGING_HTTP_TEMPORAL_DUE_WINDOWS_ENABLED || "",
         AI_EXECUTIVE_TARGET_STAGING_HTTP_PERSONAL_WHEN_ENABLED:
@@ -1438,6 +1440,22 @@ export async function readStagingTemporalStatusPreviewInChild(
   const payload=await runChild(config,"target-staging-temporal-status-preview-child.mjs",[taskId]);
   const parsed=parseStagingTemporalStatusPreview(payload,taskId);
   if(payload!==null&&!parsed)logStagingFailure("temporal_status_preview","invalid_atomic_child_dto");
+  return parsed;
+}
+
+/** BE-08: exact same strict task CAS/guard DTO as BE-04, but the
+ * dueOn endpoint has independent gating and its own dedicated worker. */
+export type StagingTemporalDueOnPreviewResult=StagingTemporalStatusPreviewResult;
+
+export const parseStagingTemporalDueOnPreview=parseStagingTemporalStatusPreview;
+
+export async function readStagingTemporalDueOnPreviewInChild(
+  config:StagingPersonalReadConfig,taskId:string,
+):Promise<StagingTemporalDueOnPreviewResult|null> {
+  const payload=await runChild(config,"target-staging-temporal-due-on-preview-child.mjs",[taskId]);
+  const parsed=parseStagingTemporalDueOnPreview(payload,taskId);
+  if(payload!==null&&!parsed)
+    logStagingFailure("temporal_due_on_preview","invalid_atomic_child_dto");
   return parsed;
 }
 

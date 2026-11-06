@@ -45,7 +45,8 @@ import {
   readPreflightedMyPlanHomeSummary,
   readPreflightedScopedHomeSummary,
   readPreflightedTemporalTaskPage, readPreflightedTemporalTaskDetail,
-  readPreflightedTemporalStatusPreview, readPreflightedTemporalDueWindowPage,
+  readPreflightedTemporalStatusPreview,
+  readPreflightedTemporalDueOnPreview, readPreflightedTemporalDueWindowPage,
   readPreflightedPersonalWhenPage,
   readPreflightedMyPlanDayTaskPage,
   readPreflightedMyPlanTwoDayTaskPage,
@@ -555,6 +556,20 @@ export class TargetStagingSessionAuthority {
         this.#store, credential, taskId,
       ) : null;
     } catch { return null; }
+  }
+
+  /** BE-08: one actor-bound dueOn CAS token and task/Area release guard.
+   * Preview is only a hint; PATCH authorizes again under BEGIN IMMEDIATE. */
+  readTemporalDueOnPreview(
+    actorUserId:string,taskId:string,
+  ):{detail:TemporalTaskDetail;expectedRevision:string}|null {
+    if(this.#closed)return null;
+    try{
+      const credential=this.#oneShotReadCredential(actorUserId);
+      return credential
+        ? readPreflightedTemporalDueOnPreview(this.#store,credential,taskId)
+        : null;
+    }catch{return null;}
   }
 
   /** R2d.1a: project detail and children on one pinned ACL-checked snapshot. */
