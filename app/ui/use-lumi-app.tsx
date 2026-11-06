@@ -2252,7 +2252,12 @@ export function useLumiApp() {
   };
   // The sidebar shows counts for Inbox and Today only; Projects gets a dot when a project needs attention.
   const projectsAttention = projectsNeedAttention(scopedItems, projects, scopedRelations, today);
-  const sidebarProjects = activeSidebarProjects(projects, activeWorkspaceId);
+  // UI-03a: the v1 desktop sidebar is a complete project navigation list,
+  // not the legacy seven-project shortcut. Scope filtering remains in the
+  // existing pure helper; aggregate does not infer new permissions.
+  const sidebarProjects = activeSidebarProjects(
+    projects, activeWorkspaceId, mobileDesignV1Preview ? Number.POSITIVE_INFINITY : undefined,
+  );
   // Leaving the Inbox returns it to its tasks, so the sidebar entry always opens the task list.
   useEffect(() => { if (view !== "Inbox") setInboxTab("tasks"); }, [view]);
   // A message to open belongs to the mail tab only; it is dropped when that tab is not shown.
