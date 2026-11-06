@@ -442,6 +442,9 @@ export function TargetStagingMyPlanPreview({
               taskId:action.taskId,areaId:action.areaId,
             },"open");}}>Vrátit dokončení (Undo)</button>}
         </div>}
+      {/* During an uncertain write, a read could have raced the commit.
+          Never render its potentially stale open-task list until confirmed. */}
+      {!actionPending&&<>
       <PlanDay label={followToday?"Dnes a dřívější":"Do vybraného dne včetně"}
         date={date} tasks={state.page.today.tasks}
         canComplete={canComplete} onComplete={task=>{void changeStatus(task,"completed");}}/>
@@ -453,6 +456,7 @@ export function TargetStagingMyPlanPreview({
         <button disabled={moreBusy} type="button" onClick={()=>{void more();}}>
           {moreBusy?"Načítám…":"Načíst další úkoly"}
         </button>}
+      </>}
       <p className="stagingMyPlanScope">{statusWriteEnabled
         ?"Izolované dokončení a Undo používají nové serverové CAS, nikoli offline synchronizaci. Přesun dne zůstává vypnutý."
         :"Náhled je pouze pro čtení: dokončení, přesun a Undo nejsou zapnuté."}
