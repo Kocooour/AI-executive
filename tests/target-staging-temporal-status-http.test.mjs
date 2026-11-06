@@ -37,8 +37,10 @@ const durable=await import("../lib/target-staging-durable-session.ts");
 const {createSessionToken,sessionCookieName}=await import("../lib/auth.ts");
 const {GET,PATCH}=await import("../app/api/target-staging/task-temporal/status/route.ts");
 const {POST}=await import("../app/api/target-staging/task-temporal/status/receipt/route.ts");
-const {parseTemporalStatusWriteReply,parseTemporalStatusReceiptReply}=
-  await import("../lib/target-staging-temporal-status-http-process.ts");
+const {
+  parseTemporalStatusWriteReply,parseTemporalStatusReceiptReply,
+  readTemporalStatusAtomicReceiptInChild,parseTemporalStatusAtomicReceiptReply,
+}=await import("../lib/target-staging-temporal-status-http-process.ts");
 const {
   readStagingTemporalDetailInChild,readStagingTemporalStatusPreviewInChild,
   parseStagingTemporalStatusPreview,
@@ -221,6 +223,75 @@ test("private complete, replay, read-only receipt and reopen are atomic",async()
   assert.equal(state(fx,"p-alice").completedAtMs,null);
   assert.equal(receiptCount(fx),2);
   assert.deepEqual(await (await call("POST",c)).json(),{status:"committed"});
+});
+
+test("BE-05 atomic receipt and task guard agree on commit, role, and live changes",async()=>{
+  const fx=fixture(),bob=login(fx,"bob"),carol=login(fx,"carol");
+  const commandToCheck=await command("s-bob","completed",bob);
+  const config={...fx.store,ownerUserId:"alice",
+    sessionTokenHash:durable.hashTargetStagingSessionToken(bob.split("=")[1])};
+  const snapshot=()=>readTemporalStatusAtomicReceiptInChild(config,commandToCheck);
+  const before=await snapshot();
+  assert.equal(before?.ok,true,JSON.stringify(before));
+  assert.deepEqual(before.receipt,{ok:true,status:"not_recorded"});
+  assert.equal(before.detail.task.areaId,"family-area");
+  const identity={kind:"session",tokenHash:config.sessionTokenHash};
+  const request=new Request(base+"/receipt",{
+    method:"POST",headers:{cookie:bob,origin:"http://localhost:3001"},body:"{}",
+  });
+  const live=captured=>verifyTemporalStatusTaskLive(
+    request,identity,{...fx.store,ownerUserId:"alice"},captured.detail);
+  assert.equal(live(before),"ok");
+  assert.equal((await call("PATCH",commandToCheck,bob)).status,200);
+  assert.equal(live(before),"stale","a committed update makes the prior witness stale");
+  const committed=await snapshot();
+  assert.equal(committed?.ok,true);
+  assert.deepEqual(committed.receipt,{ok:true,status:"committed"});
+  assert.equal(live(committed),"ok");
+  assert.deepEqual(await (await call("POST",commandToCheck,bob)).json(),
+    {status:"committed"});
+  const viewer=await readTemporalStatusAtomicReceiptInChild({
+    ...config,sessionTokenHash:durable.hashTargetStagingSessionToken(carol.split("=")[1]),
+  },commandToCheck);
+  assert.deepEqual(viewer,{ok:false,reason:"inaccessible"});
+  const other=await readTemporalStatusAtomicReceiptInChild(config,
+    {...commandToCheck,taskId:"p-alice"});
+  assert.deepEqual(other,{ok:false,reason:"inaccessible"});
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try {
+    db.prepare("UPDATE area_members SET role='viewer' WHERE area_id='family-area' AND user_id='bob'").run();
+  }finally{db.close();}
+  assert.equal(live(committed),"stale");
+  assert.equal((await call("POST",commandToCheck,bob)).status,404);
+});
+
+test("BE-05 combined child refuses spoofed receipt, task guard and extra data",async()=>{
+  const fx=fixture();
+  const c=await command("p-alice","completed");
+  const sample=await readTemporalStatusAtomicReceiptInChild({
+    ...fx.store,ownerUserId:"alice",
+  },c);
+  assert.equal(sample?.ok,true,JSON.stringify(sample));
+  for(const invalid of [
+    {...sample,actorUserId:"alice"},
+    {...sample,receipt:{ok:true,status:"committed",commandId:c.commandId}},
+    {...sample,receipt:{ok:true,status:"unknown"}},
+    {...sample,detail:{...sample.detail,clientSecret:"untrusted"}},
+    {...sample,detail:{...sample.detail,guard:{...sample.detail.guard,areaId:"foreign"}}},
+    {...sample,detail:{...sample.detail,task:{...sample.detail.task,id:"foreign"}}},
+    {ok:true,detail:sample.detail},
+  ])assert.equal(parseTemporalStatusAtomicReceiptReply(invalid,c.taskId),null);
+});
+
+test("BE-05 receipt worker supports title-bearing witnesses beyond 1KiB",async()=>{
+  const fx=fixture();
+  const commandToCheck=await command("p-alice","completed");
+  const db=new DatabaseSync(fx.stage.databasePath);
+  try{db.prepare("UPDATE tasks SET title=? WHERE id='p-alice'").run("x".repeat(1800));}
+  finally{db.close();}
+  const response=await call("POST",commandToCheck);
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  assert.deepEqual(await response.json(),{status:"not_recorded"});
 });
 
 test("current private/shared ACL denies foreign users and shared viewers before receipt",async()=>{
