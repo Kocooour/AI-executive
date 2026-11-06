@@ -178,3 +178,48 @@
     justify-self: start;
   }
 }
+
+/* UI-06d: on opt-in desktop, retain the mobile task hierarchy and one
+   disclosure without changing legacy or 390px styles. The keyed sections
+   remain mounted while closed, preserving typed values and React state.
+   DOM order, rather than a CSS order rule, matches keyboard traversal. */
+@media (min-width: 701px) {
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields > .taskDetailEssentials,
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields > .taskDetailNotes,
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreGroup {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields > .taskDetailMoreToggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-subtle);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailMoreToggle:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .appShell[data-design-system="lumi-v1"] .inspectorDetail[data-task-detail-desktop-preview="lumi-v1"] .taskDetailFields[data-task-more-open="false"] > .taskDetailMoreGroup {
+    display: none;
+  }
+}
