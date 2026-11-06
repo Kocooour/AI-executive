@@ -1,6 +1,6 @@
 # Lumi — aktuální roadmapa vývoje
 
-**Aktualizováno 2026-11-06 na `main` @ `6fc2828`: dokončeny iterace UI-T, UI-04b, UI-04c, UI-04d a UI-03 z [rozhodnutí o revizi UI a prvním vertikálním řezu](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a většina vertikálního řezu Můj plán (R3-slice BE-01–BE-06, UI-01–UI-04a); sloučena izolovaná příprava R2d.4a (#252). Souběžná UI roadmapa podle [Lumi Design v1.0 / PR #225](https://github.com/Kocooour/AI-executive/pull/225).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
+**Aktualizováno 2026-11-06 na `main` @ `2d4cb9d`: dokončeny iterace UI-T, UI-04b, UI-04c, UI-04d a UI-03 z [rozhodnutí o revizi UI a prvním vertikálním řezu](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md) a většina vertikálního řezu Můj plán (R3-slice BE-01–BE-07, UI-01–UI-04a); sloučena izolovaná příprava R2d.4a (#252). Souběžná UI roadmapa podle [Lumi Design v1.0 / PR #225](https://github.com/Kocooour/AI-executive/pull/225).** Schválený směr: [čistý start cílového modelu](decisions/2026-10-26-cisty-start-d3.md) podle [LUMI-FR-013](PRODUCT.md#lumi-fr-013). Bez autorizace resetu či změny produkčních dat.
 
 ## Aktuální pozice
 
@@ -32,7 +32,7 @@ Revize náhledu v1 našla porušení invariant, která se opraví před dalším
 
 **Paralelní proudy.** (A) **Mobilní invarianty:** UI-T → UI-04b → UI-04c; UI-04d může začít hned u textů a ovládání a řádek převezme z UI-04b. (B) **Desktop:** UI-03 začíná hned a nečeká na Můj plán; dočasně používá legacy tokeny a sdílené komponenty převezme po sloučení UI-T a UI-04b. (C) **Řez Můj plán:** serverový adaptér, příznak a negativní testy nad existujícími endpointy začínají hned; klientské propojení navazuje na UI-04c. Každý proud má vlastní větev, worktree a port dle [DEVELOPMENT.md](DEVELOPMENT.md). Změny sdílených souborů (`tokens.json`, řádek úkolu, `use-lumi-app.tsx`) se před sloučením ověří v integrační větvi.
 
-**Stav k 2026-11-06 (`main` @ `6fc2828`).** Všechny položky jsou jen v náhledu `NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1` nebo na stagingu za výchozím vypnutím; produkční UI se nezměnilo.
+**Stav k 2026-11-06 (`main` @ `2d4cb9d`).** Všechny položky jsou jen v náhledu `NEXT_PUBLIC_LUMI_DESIGN_V1_PREVIEW=1` nebo na stagingu za výchozím vypnutím; produkční UI se nezměnilo.
 
 | Iterace | Stav | PR |
 |---|---|---|
@@ -41,10 +41,10 @@ Revize náhledu v1 našla porušení invariant, která se opraví před dalším
 | **UI-04c** — Můj plán Dnes/Zítra | Sloučeno | [#259](https://github.com/Kocooour/AI-executive/pull/259) ([kontrakt](UI-04C-MY-PLAN-PREVIEW.md)) |
 | **UI-04d** — Kalendář bez technických údajů | Sloučeno | [#263](https://github.com/Kocooour/AI-executive/pull/263) ([kontrakt](UI-04D-CALENDAR-CLEANUP.md)) |
 | **UI-03** — desktop shell | Sloučeno (UI-03a, UI-03b); detail projektu UI-05c otevřený | [#266](https://github.com/Kocooour/AI-executive/pull/266), [#269](https://github.com/Kocooour/AI-executive/pull/269) ([shell](UI-03A-DESKTOP-SHELL.md), [inspektor](UI-03B-DESKTOP-INSPECTOR-NAV.md)); otevřené [#272](https://github.com/Kocooour/AI-executive/pull/272) |
-| **R3-slice** — server | BE-01–BE-06 sloučeno; BE-07 (atomické potvrzení `dueOn`) otevřené | [#258](https://github.com/Kocooour/AI-executive/pull/258), [#260](https://github.com/Kocooour/AI-executive/pull/260), [#265](https://github.com/Kocooour/AI-executive/pull/265), [#268](https://github.com/Kocooour/AI-executive/pull/268), [#270](https://github.com/Kocooour/AI-executive/pull/270), [#271](https://github.com/Kocooour/AI-executive/pull/271) ([BE-01](R3-SLICE-MY-PLAN-BE-01.md)); otevřené [#275](https://github.com/Kocooour/AI-executive/pull/275) |
+| **R3-slice** — server | BE-01–BE-07 sloučeno (BE-07: atomické potvrzení `dueOn`) | [#258](https://github.com/Kocooour/AI-executive/pull/258), [#260](https://github.com/Kocooour/AI-executive/pull/260), [#265](https://github.com/Kocooour/AI-executive/pull/265), [#268](https://github.com/Kocooour/AI-executive/pull/268), [#270](https://github.com/Kocooour/AI-executive/pull/270), [#271](https://github.com/Kocooour/AI-executive/pull/271), [#275](https://github.com/Kocooour/AI-executive/pull/275) ([BE-01](R3-SLICE-MY-PLAN-BE-01.md)) |
 | **R3-slice** — klient | UI-01–UI-04a sloučeno: čtení dvou dnů, přechod dne s reautorizací, dokončení s Undo, klient osobního „Kdy“; tlačítka „Kdy: Dnes/Zítra“ s Undo (R3 UI-04b, odlišné od iterace UI-04b výše) otevřené | [#261](https://github.com/Kocooour/AI-executive/pull/261), [#262](https://github.com/Kocooour/AI-executive/pull/262), [#264](https://github.com/Kocooour/AI-executive/pull/264), [#267](https://github.com/Kocooour/AI-executive/pull/267), [#273](https://github.com/Kocooour/AI-executive/pull/273) ([UI-01](R3-SLICE-MY-PLAN-UI-01.md), [UI-03a](R3-SLICE-MY-PLAN-UI-03A.md), [UI-03b](R3-SLICE-MY-PLAN-UI-03B.md), [UI-04a](R3-SLICE-MY-PLAN-UI-04A.md)); otevřené [#274](https://github.com/Kocooour/AI-executive/pull/274) |
 
-Po sloučení #274 a #275 má řez celý schválený rozsah (čtení dne, dokončení/obnovení, osobní „Kdy“ dnes/zítra a Undo). Před uzavřením řezu ještě společné ověření v integrační větvi podle jeho akceptace (pending, offline, konflikt, revokace) a teprve pak přechod na R2d.4/R2d.5. Plná Browser E2E zůstává bránou před produkčním nasazením.
+Po sloučení #274 má řez celý schválený rozsah (čtení dne, dokončení/obnovení, osobní „Kdy“ dnes/zítra a Undo). Před uzavřením řezu ještě společné ověření v integrační větvi podle jeho akceptace (pending, offline, konflikt, revokace) a teprve pak přechod na R2d.4/R2d.5. Plná Browser E2E zůstává bránou před produkčním nasazením.
 
 ### Paralelní implementační větev UI — schválený Lumi Design v1.0 / PR #225 (2026-11-04)
 
@@ -264,7 +264,7 @@ Iterace 2–4 lze rozdělit do menších reviewovatelných PR, ale jejich výsle
 - Před případným resetem: explicitně schválený rozsah, ověřená archivní záloha, test obnovy, inventura zařízení a konektorů. Nespouštět pozvánky ani skutečné sdílení před bezpečnostními branami.
 - Product contract: jen dva uživatelské datové prostory **Osobní / Sdílený**; tři **globální** čtecí rozsahy **Vše / Osobní / Sdílené**; **Můj plán** je samostatná osobní úvodní obrazovka, nikoli další globální rozsah. Oblast je jediný organizační štítek a zdroj viditelnosti projektů a samostatných úkolů; žádné implicitní sdílení.
 
-**Nejbližší práce (2026-11-06, `main` @ `6fc2828`):** dokončit vertikální řez Můj plán — [#274](https://github.com/Kocooour/AI-executive/pull/274) (tlačítka „Kdy“ s Undo) a [#275](https://github.com/Kocooour/AI-executive/pull/275) (BE-07) — a desktopový detail projektu [#272](https://github.com/Kocooour/AI-executive/pull/272); poté integrační ověření řezu a R2d.4 Search/AI a R2d.5 attention/push podle [rozhodnutí 2026-11-05](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md). Stav jednotlivých iterací je v [tabulce výše](#rozhodnutí-2026-11-05--revize-ui-a-první-vertikální-řez). **UI ani produkční cutover tím nejsou aktivovány.**
+**Nejbližší práce (2026-11-06, `main` @ `2d4cb9d`):** dokončit vertikální řez Můj plán — [#274](https://github.com/Kocooour/AI-executive/pull/274) (tlačítka „Kdy“ s Undo; serverové BE-07 #275 je sloučené) — a desktopový detail projektu [#272](https://github.com/Kocooour/AI-executive/pull/272); poté integrační ověření řezu a R2d.4 Search/AI a R2d.5 attention/push podle [rozhodnutí 2026-11-05](decisions/2026-11-05-ui-revize-a-vertikalni-rez.md). Stav jednotlivých iterací je v [tabulce výše](#rozhodnutí-2026-11-05--revize-ui-a-první-vertikální-řez). **UI ani produkční cutover tím nejsou aktivovány.**
 
 ## Aktualizace R2d.3 (2026-11-03)
 
