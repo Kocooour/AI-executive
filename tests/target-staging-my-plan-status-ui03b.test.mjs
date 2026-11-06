@@ -69,7 +69,7 @@ test("exact CAS is prepared before dispatch; a synchronous mutex blocks double s
   const method=ui.slice(start,end);
   assert.ok(method.indexOf("prepareMyPlanStatus(")<method.indexOf("dispatchMyPlanStatus("));
   assert.match(method,/invalidate\("stale",true\); \/\/ No stale open row/);
-  assert.match(method,/op\.command=prepared\.command/);
+  assert.match(method,/op\.command=command/);
   assert.match(method,/result\.kind==="committed"/);
   assert.match(method,/result\.kind==="uncertain"/);
   assert.match(method,/result\.reason==="signed-out"/);
@@ -205,7 +205,7 @@ test("P1: recovery policy refuses hidden, offline, signed-out, absent-command or
 test("P1: failed-read recovery is visible outside ready state and never changes the original command",()=>{
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const start=ui.indexOf("function retryUncertainRead()");
-  const end=ui.indexOf("function resetFeedback()",start);
+  const end=ui.indexOf("function refreshPlan()",start);
   assert.ok(start>0&&end>start);
   const retry=ui.slice(start,end);
   assert.match(retry,/canRetryUncertainMyPlanRead\(\{/);
@@ -220,4 +220,40 @@ test("P1: failed-read recovery is visible outside ready state and never changes 
   assert.match(ui,/uncertainCommand\.current!==null&&/);
   assert.match(ui,/onClick=\{retryUncertainRead\}/);
   assert.match(ui,/\{!actionPending&&<>/);
+});
+
+test("P1: Undo receipt/preflight failures preserve same actor's completion instead of losing it",()=>{
+  const ui=source("app/ui/target-staging-my-plan-preview.tsx");
+  const start=ui.indexOf("async function changeStatus(");
+  const end=ui.indexOf("async function verifyUncertainReceipt()",start);
+  assert.ok(start>0&&end>start);
+  const method=ui.slice(start,end);
+  assert.match(method,/if\(!prior\)confirmedCommand\.current=null/);
+  assert.match(method,/const undo=await prepareConfirmedMyPlanUndo\(/);
+  assert.match(method,/if\(undo\.kind!=="ready"\)\{/);
+  assert.match(method,/setUndoFailure\(undo\.reason\)/);
+  assert.match(method,/setAction\(\{kind:"committed",taskId:prior\.taskId/);
+  assert.match(method,/command=undo\.command/);
+  assert.match(method,/op\.command=command/);
+  assert.match(method,/confirmedCommand\.current=status==="completed"\?result\.command:null/);
+  assert.match(method,/confirmedCommand\.current=null;\s*uncertainCommand\.current=result\.command/);
+  assert.match(method,/else if\(prior\)\{[\s\S]*?setUndoFailure\(result\.reason\)/);
+  assert.match(method,/if\(undo\.kind==="signed-out"\)\{\s*confirmedCommand\.current=null/);
+});
+
+test("P1: manual Refresh retains confirmed Undo across list 503 but still reauthorizes",()=>{
+  const ui=source("app/ui/target-staging-my-plan-preview.tsx");
+  const start=ui.indexOf("function refreshPlan()");
+  const end=ui.indexOf("function resetFeedback()",start);
+  assert.ok(start>0&&end>start);
+  const refresh=ui.slice(start,end);
+  assert.match(refresh,/keepConfirmedMyPlanUndoOnRefresh\(action,confirmedCommand\.current\)/);
+  assert.match(refresh,/invalidate\("stale",true\)/);
+  assert.match(refresh,/setRefresh\(n=>n\+1\)/);
+  assert.doesNotMatch(refresh,/dispatchMyPlanStatus|prepareMyPlanStatus/);
+  assert.match(ui,/onClick=\{refreshPlan\}>Obnovit/);
+  assert.match(ui,/state\.status==="error"&&[\s\S]*?action\.kind==="committed"&&/);
+  assert.match(ui,/Znovu načíst přehled \(Undo zůstane\)/);
+  assert.match(ui,/undoFailure&&/);
+  assert.match(ui,/setUndoFailure\(null\)/);
 });
