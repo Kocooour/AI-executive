@@ -48,6 +48,7 @@ test("task completion uses square control with screen reader label and large tou
   const ui=source("app/ui/target-staging-my-plan-preview.tsx");
   const css=source("app/target-staging/my-plan/preview/preview.css");
   assert.match(ui,/statusWriteEnabled=false/);
+  assert.match(ui,/\{statusWriteEnabled\s*\?\s*"Izolovaný stagingový náhled s dokončením/);
   assert.match(ui,/\{canComplete[\s\S]*?<button type="button" className="stagingMyPlanSquare stagingMyPlanComplete"/);
   assert.match(ui,/aria-label=\{"Dokončit úkol: "\+task\.title\}/);
   assert.match(ui,/canComplete=\{canComplete\}/);
