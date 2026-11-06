@@ -1405,6 +1405,38 @@ export async function readStagingTemporalDetailInChild(
   return result;
 }
 
+/** BE-04: strict worker DTO; the CAS hash and task guard are from one read. */
+export type StagingTemporalStatusPreviewResult =
+  | {ok:true;detail:TemporalTaskDetail;expectedRevision:string}
+  | {ok:false;reason:"inaccessible"};
+
+export function parseStagingTemporalStatusPreview(
+  value:unknown,taskId:string,
+):StagingTemporalStatusPreviewResult|null {
+  if(!value||typeof value!=="object"||Array.isArray(value))return null;
+  const v=value as Record<string,unknown>;
+  if(Object.keys(v).sort().join(",")==="ok,reason"&&
+    v.ok===false&&v.reason==="inaccessible")
+    return {ok:false,reason:"inaccessible"};
+  if(v.ok!==true||Object.keys(v).sort().join(",")!=="detail,expectedRevision,ok"||
+    typeof v.expectedRevision!=="string"||!REVISION.test(v.expectedRevision)||
+    !v.detail||typeof v.detail!=="object"||Array.isArray(v.detail))return null;
+  const parsed=parseStagingTemporalDetail({ok:true,...v.detail},taskId);
+  if(!parsed||parsed.ok!==true)return null;
+  const access=parsed.detail.linearization.areas[0]?.access;
+  if(access!=="private-owner"&&access!=="editor"&&access!=="admin")return null;
+  return {ok:true,detail:parsed.detail,expectedRevision:v.expectedRevision};
+}
+
+export async function readStagingTemporalStatusPreviewInChild(
+  config:StagingPersonalReadConfig,taskId:string,
+):Promise<StagingTemporalStatusPreviewResult|null>{
+  const payload=await runChild(config,"target-staging-temporal-status-preview-child.mjs",[taskId]);
+  const parsed=parseStagingTemporalStatusPreview(payload,taskId);
+  if(payload!==null&&!parsed)logStagingFailure("temporal_status_preview","invalid_atomic_child_dto");
+  return parsed;
+}
+
 export type StagingTaskDetailResult =
   | StagingPersonalDetailResult
   | { ok: true; scope: "shared"; task: TargetScopedReadableTask; linearization: TargetReadLinearization;
