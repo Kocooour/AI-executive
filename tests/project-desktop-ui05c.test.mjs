@@ -245,7 +245,7 @@ test("UI-05c: pending deletion warning requires deletion receipt; Undo cancels t
 
 test("UI-05c: status and deletion warnings reconcile on successful retry and matching Undo", () => {
   const app = read("../app/ui/use-lumi-app.tsx");
-  assert.match(app, /if \(!projectSyncNotice \|\| syncStatus !== "synced"\) return;/);
+  assert.match(app, /if \(!projectSyncNotice\) return;/);
   assert.match(app, /db\.transaction\("r", db\.entities, db\.baseEntities, async \(\) => \{/);
   assert.match(app, /projectSyncNoticeResolved\(warning, local, acknowledged,/);
   assert.match(app, /pendingDeletedIds\(\)\.includes\(warning\.projectId\)/);
