@@ -2,11 +2,16 @@ import type { Entity } from "./db";
 
 /** A pending-sync warning belongs to one locally committed project operation. */
 export type ProjectSyncNotice =
-  | { kind: "delete"; projectId: string }
-  | { kind: "status"; projectId: string; status: string; updatedAt: number };
+  | { kind: "delete"; projectId: string; projectTitle?: string }
+  | { kind: "status"; projectId: string; projectTitle?: string; status: string; updatedAt: number };
 
 /** At most one outstanding warning per project; failures for other projects must survive. */
 export type ProjectSyncNotices = Record<string, ProjectSyncNotice>;
+
+/** The saved title is a display hint from the actor's own confirmed action, not ACL authority. */
+export function projectSyncNoticeTitle(notice: ProjectSyncNotice): string {
+  return notice.projectTitle?.trim() || notice.projectId;
+}
 
 export function withProjectSyncNotice(current: ProjectSyncNotices, warning: ProjectSyncNotice): ProjectSyncNotices {
   return { ...current, [warning.projectId]: warning };
