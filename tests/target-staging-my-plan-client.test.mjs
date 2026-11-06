@@ -139,7 +139,7 @@ test("calendar anchor is strictly local and rejects invalid/leaking input",async
   }
 });
 
-test("preview is hidden behind server-only gate and has no write controls",()=>{
+test("preview stays server-gated and direct HTTP writes are isolated in the transport",()=>{
   const root=path.join(import.meta.dirname,"..");
   const source=readFileSync(path.join(root,
     "app/target-staging/my-plan/preview/page.tsx"),"utf8");
@@ -152,6 +152,8 @@ test("preview is hidden behind server-only gate and has no write controls",()=>{
     "AI_EXECUTIVE_TARGET_STAGING_MY_PLAN_CLIENT_PREVIEW_ENABLED",
   ])assert.ok(source.includes(name),name);
   assert.match(source,/notFound\(\)/);
+  assert.match(source,/myPlanStagingWriteUiEnabled\(process\.env\)/);
+  assert.match(ui,/statusWriteEnabled=false/);
   assert.doesNotMatch(ui,/method:\s*["'](?:PATCH|POST|PUT|DELETE)/);
   assert.doesNotMatch(ui,/indexedDB|localStorage|sessionStorage|serviceWorker/);
 });

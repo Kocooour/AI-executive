@@ -1,4 +1,4 @@
-/* Isolated read-only staging preview. Never changes legacy Lumi surfaces. */
+/* Isolated staging preview. Write UI appears only with explicit SERVER gate. */
 .stagingMyPlanPreview{box-sizing:border-box;max-width:880px;margin:0 auto;padding:28px 18px 80px;
   display:grid;gap:22px;font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
   color:var(--text,#213023);background:var(--surface,#fff);}
@@ -27,6 +27,24 @@
 .stagingMyPlanArea li+li{border-top:1px solid var(--border,#cad2cd);}
 .stagingMyPlanSquare{flex:0 0 20px;width:20px;height:20px;border:2px solid currentColor;
   border-radius:5px;margin-top:2px;box-sizing:border-box;}
+.stagingMyPlanPreview button.stagingMyPlanComplete{
+  width:44px;height:44px;min-height:44px;flex:0 0 44px;padding:0;
+  display:grid;place-items:center;cursor:pointer;border:0;
+  background:transparent;color:inherit;margin-top:-8px;
+}
+.stagingMyPlanPreview button.stagingMyPlanComplete::before{
+  content:"";display:block;width:20px;height:20px;box-sizing:border-box;
+  border:2px solid currentColor;border-radius:5px;
+}
+.stagingMyPlanPreview button.stagingMyPlanComplete:hover::before{
+  background:color-mix(in srgb,currentColor 9%,transparent);
+}
+.stagingMyPlanMutation{
+  border:1px solid var(--border,#9da99e);border-radius:12px;
+  padding:12px;display:flex;align-items:center;flex-wrap:wrap;gap:12px;
+  background:var(--muted-surface,#f5f5f7);font-size:14px;
+}
+.stagingMyPlanWarning p{margin:0 0 10px;}
 .stagingMyPlanTask{min-width:0;display:grid;gap:3px;overflow-wrap:anywhere;}
 .stagingMyPlanTask strong{font-size:15px;font-weight:650;}
 .stagingMyPlanTask small{font-size:12px;color:var(--muted,#516055);}
