@@ -23,7 +23,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
   reorderPreview?: boolean; onToggleReorder?: () => void;
 }) {
   const { activeWorkspaceId, areas, askConfirm, closeProjectPage, contextClaims, contextPredicateLabel, heldBack, items, language,
-    openCapture, patch, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
+    openCapture, patch, projectPreviewActionSnapshot, trackProjectWrite, relate, remove, rename, scopedRelations, setProjectStatus, targets, today, tr, unsent } = app;
   const t = labelsFor(language);
   const { tasks, notes } = projectTasks(project, items, scopedRelations);
   const summary = summarizeProject(project, items, scopedRelations, today);
@@ -80,8 +80,9 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     actionInFlight.current = true;
     setActionBusy(true); setActionError("");
     try {
-      const completed = project.status === "completed";
-      const count = openTasks.length;
+      const snapshot = await projectPreviewActionSnapshot(project.id);
+      const completed = snapshot.project.status === "completed";
+      const count = snapshot.openTasks;
       const notice = !completed && count > 0
         ? language === "cs"
           ? `Projekt má ${count} ${count === 1 ? "otevřený úkol" : count < 5 ? "otevřené úkoly" : "otevřených úkolů"}. Dokončení projektu stav těchto úkolů nezmění.`
@@ -90,11 +91,11 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
       const confirmed = await askConfirm({
         title: completed ? (language === "cs" ? "Znovu otevřít projekt?" : "Reopen project?")
           : (language === "cs" ? "Dokončit projekt?" : "Complete project?"),
-        message: `${project.title}${notice ? `\n\n${notice}` : ""}`,
+        message: `${snapshot.project.title}${notice ? `\n\n${notice}` : ""}`,
         confirmLabel: tr(completed ? "reopen" : "complete"),
       });
       if (!confirmed) return;
-      await setProjectStatus(project, completed ? "active" : "completed", project);
+      await setProjectStatus(snapshot.project, completed ? "active" : "completed", snapshot);
     } catch (error) { reportPreviewActionError(error); }
     finally { actionInFlight.current = false; setActionBusy(false); }
   }
@@ -103,11 +104,12 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
     actionInFlight.current = true;
     setActionBusy(true); setActionError("");
     try {
+      const snapshot = await projectPreviewActionSnapshot(project.id);
       const confirmed = await askConfirm({ title: tr("projectDeleteTitle"),
-        message: tr("projectDeleteConfirm").replace("{title}", () => project.title),
+        message: tr("projectDeleteConfirm").replace("{title}", () => snapshot.project.title),
         confirmLabel: tr("delete"), danger: true });
       if (!confirmed) return;
-      await remove(project, project);
+      await remove(snapshot.project, snapshot);
     } catch (error) { reportPreviewActionError(error); }
     finally { actionInFlight.current = false; setActionBusy(false); }
   }
@@ -148,7 +150,7 @@ export function ProjectPage({ app, project, renderRow, reorderPreview = false, o
               titleFocused.current = false;
               const next = event.target.value;
               if (!next.trim()) { setTitle(project.title); return; }
-              void rename(project, next);
+              void trackProjectWrite(project.id, rename(project, next));
             }}
           />
         </h1>
